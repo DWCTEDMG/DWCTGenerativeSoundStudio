@@ -13,6 +13,7 @@ const APP_NAME = "EDMG Studio";
 const IS_DEV = !app.isPackaged;
 const IS_WINDOWS = process.platform === "win32";
 const BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json";
+const IGNORABLE_WRITE_ERROR_CODES = new Set(["EPIPE", "ERR_STREAM_DESTROYED"]);
 
 const BACKEND_HOST = process.env.EDMG_STUDIO_BACKEND_HOST ?? "127.0.0.1";
 let BACKEND_PORT = Number(process.env.EDMG_STUDIO_BACKEND_PORT ?? "7863");
@@ -78,7 +79,52 @@ const STORAGE_SETTINGS_ENV_KEYS = Object.freeze({
   externalDir: "EDMG_STUDIO_EXTERNAL_DIR",
 });
 
+function isIgnorableWriteError(error) {
+  if (!error || typeof error !== "object") return false;
+  const code = typeof error.code === "string" ? error.code : "";
+  if (IGNORABLE_WRITE_ERROR_CODES.has(code)) return true;
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  return message.includes("broken pipe");
+}
+
+function suppressPipeError(error) {
+  if (isIgnorableWriteError(error)) return true;
+  throw error;
+}
+
+function installSafeProcessLogging() {
+  for (const name of ["log", "info", "warn", "error", "debug"]) {
+    const original = console[name];
+    if (typeof original !== "function") continue;
+    console[name] = (...args) => {
+      try {
+        return original.apply(console, args);
+      } catch (error) {
+        if (suppressPipeError(error)) return undefined;
+        return undefined;
+      }
+    };
+  }
+
+  for (const stream of [process.stdout, process.stderr]) {
+    if (!stream || typeof stream.on !== "function") continue;
+    stream.on("error", (error) => {
+      suppressPipeError(error);
+    });
+  }
+}
+
+function safeStreamWrite(stream, chunk) {
+  if (!stream || typeof stream.write !== "function") return;
+  try {
+    stream.write(chunk);
+  } catch (error) {
+    suppressPipeError(error);
+  }
+}
+
 let currentBackendUrl = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+installSafeProcessLogging();
 console.log(`EDMG_currentBackendUrl=${currentBackendUrl}`);
 
 let mainWindow = null;
@@ -959,11 +1005,11 @@ async function startBackendIfNeeded() {
   }
 
   backendProc.stdout?.on("data", (chunk) => {
-    process.stdout.write(`[backend] ${chunk}`);
+    safeStreamWrite(process.stdout, `[backend] ${chunk}`);
   });
 
   backendProc.stderr?.on("data", (chunk) => {
-    process.stderr.write(`[backend] ${chunk}`);
+    safeStreamWrite(process.stderr, `[backend] ${chunk}`);
   });
 
   backendProc.on("error", (error) => {
