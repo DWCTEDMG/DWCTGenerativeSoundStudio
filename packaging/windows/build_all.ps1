@@ -5,11 +5,34 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$SupportedPythonMin = [Version]"3.10"
+$SupportedPythonMaxExclusive = [Version]"3.14"
 
 function Assert-Command($name) {
   if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
     throw "Missing required command: $name"
   }
+}
+
+function Get-PythonVersion($PythonCommand, [string[]]$ExtraArgs = @()) {
+  $versionOutput = & $PythonCommand @ExtraArgs -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to query Python version using: $PythonCommand"
+  }
+  try {
+    return [Version]($versionOutput.Trim())
+  } catch {
+    throw "Could not parse Python version output '$versionOutput' from $PythonCommand"
+  }
+}
+
+function Assert-SupportedPythonVersion($PythonCommand, [string[]]$ExtraArgs = @(), [string]$Label = "Python") {
+  $version = Get-PythonVersion $PythonCommand $ExtraArgs
+  if ($version -lt $SupportedPythonMin -or $version -ge $SupportedPythonMaxExclusive) {
+    throw ($Label + " " + $version + " is unsupported for Studio release builds. Use Python >= " + $SupportedPythonMin + " and < " + $SupportedPythonMaxExclusive + ".")
+  }
+  Write-Host ("[info] " + $Label + " version OK: " + $version) -ForegroundColor Cyan
+  return $version
 }
 
 function Invoke-Checked($label, [scriptblock]$action) {
@@ -210,6 +233,7 @@ function Migrate-LegacyData($RepoRoot, $StudioDir, $PyBackendDir) {
 
 Assert-Command $PythonExe
 Assert-Command $NpmExe
+Assert-SupportedPythonVersion $PythonExe @() "Bootstrap Python" | Out-Null
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $StudioDir = Join-Path $RepoRoot "studio/edmg-studio"
@@ -239,6 +263,7 @@ $VenvPython = Join-Path $PyBackendDir "venv\Scripts\python.exe"
 if (-not (Test-Path $VenvPython)) {
   throw "Virtual environment python not found: $VenvPython"
 }
+Assert-SupportedPythonVersion $VenvPython @() "Backend venv Python" | Out-Null
 
 Invoke-Checked "upgrade backend packaging tools" {
   & $VenvPython -m pip install -U pip wheel setuptools

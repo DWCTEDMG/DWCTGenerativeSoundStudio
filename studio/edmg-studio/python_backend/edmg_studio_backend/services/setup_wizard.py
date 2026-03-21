@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -80,6 +81,10 @@ class SetupTaskManager:
 
 # ------------------------------ Ollama ------------------------------
 
+def _env_truthy(name: str) -> bool:
+    value = str(os.environ.get(name, "")).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
 def _ollama_base(url: str) -> str:
     return (url or "http://127.0.0.1:11434").rstrip("/")
 
@@ -100,6 +105,7 @@ def _find_ollama_exe(external_dir: Path | None = None) -> str:
     if env and Path(env).exists():
         return env
 
+    ignore_system = _env_truthy("EDMG_SETUP_IGNORE_SYSTEM_OLLAMA")
     candidates: list[Path] = []
     if external_dir is not None:
         external_root = external_dir.expanduser().resolve()
@@ -110,7 +116,7 @@ def _find_ollama_exe(external_dir: Path | None = None) -> str:
             ]
         )
 
-    if platform.system() == "Windows":
+    if platform.system() == "Windows" and not ignore_system:
         local_appdata = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
         candidates.extend(
             [
@@ -123,9 +129,10 @@ def _find_ollama_exe(external_dir: Path | None = None) -> str:
         if candidate.exists():
             return str(candidate)
 
-    which = shutil.which("ollama") or shutil.which("ollama.exe")
-    if which:
-        return which
+    if not ignore_system:
+        which = shutil.which("ollama") or shutil.which("ollama.exe")
+        if which:
+            return which
 
     raise RuntimeError("Ollama executable not found. Install Ollama or set EDMG_OLLAMA_PATH.")
 
@@ -250,62 +257,101 @@ class OllamaManagedProcess:
                 pass
 
 
-def download_and_run_ollama_installer(
+def download_and_install_ollama(
     task: SetupTask,
     dest_dir: Path,
     external_dir: Path | None = None,
     models_dir: Path | None = None,
     ollama_url: str | None = None,
 ) -> None:
-    """Downloads OllamaSetup.exe and launches it (interactive installer)."""
+    """Install Ollama silently into the Studio-managed external-tools root."""
 
     if platform.system().lower() != "windows":
-        raise RuntimeError("Ollama installer automation is only implemented for Windows.")
+        raise RuntimeError("Managed Ollama install is only implemented for Windows.")
+    if external_dir is None:
+        raise RuntimeError("Managed Ollama install requires a Studio external tools directory.")
 
-    url = "https://ollama.com/download/OllamaSetup.exe"
+    dest_dir = dest_dir.expanduser().resolve()
+    external_dir = external_dir.expanduser().resolve()
+    install_dir = (external_dir / "ollama").resolve()
     dest_dir.mkdir(parents=True, exist_ok=True)
-    out = dest_dir / "OllamaSetup.exe"
+    install_dir.mkdir(parents=True, exist_ok=True)
 
-    SetupTaskManager.log(task, f"Downloading Ollama installer…")
-    with requests.get(url, stream=True, timeout=60) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("content-length") or 0)
+    version = str(os.environ.get("EDMG_OLLAMA_VERSION", "")).strip()
+    release_url = (
+        f"https://api.github.com/repos/ollama/ollama/releases/tags/{version}"
+        if version
+        else "https://api.github.com/repos/ollama/ollama/releases/latest"
+    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "EDMG-Studio",
+    }
+    SetupTaskManager.log(task, "Resolving official Ollama standalone archive…")
+    release = requests.get(release_url, headers=headers, timeout=60)
+    release.raise_for_status()
+    release_data = release.json()
+    assets = release_data.get("assets") or []
+
+    requested_asset = str(os.environ.get("EDMG_OLLAMA_ASSET", "")).strip().lower()
+    machine = platform.machine().lower()
+    preferred_names = []
+    if requested_asset:
+        preferred_names.append(requested_asset)
+    if "arm" in machine:
+        preferred_names.append("ollama-windows-arm64.zip")
+    else:
+        preferred_names.append("ollama-windows-amd64.zip")
+
+    asset = None
+    for preferred_name in preferred_names:
+        asset = next((entry for entry in assets if str(entry.get("name", "")).lower() == preferred_name), None)
+        if asset:
+            break
+    if asset is None:
+        raise RuntimeError(f"Could not locate a supported Ollama standalone zip in release assets: {preferred_names}")
+
+    asset_name = str(asset.get("name") or "ollama-windows.zip")
+    asset_url = str(asset.get("browser_download_url") or "").strip()
+    if not asset_url:
+        raise RuntimeError("Selected Ollama release asset is missing a download URL.")
+
+    archive_path = dest_dir / asset_name
+    SetupTaskManager.log(task, f"Downloading {asset_name}…")
+    with requests.get(asset_url, headers=headers, stream=True, timeout=60) as response:
+        response.raise_for_status()
+        total = int(response.headers.get("content-length") or 0)
         got = 0
-        with open(out, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
+        with open(archive_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if not chunk:
                     continue
                 f.write(chunk)
                 got += len(chunk)
                 if total:
-                    SetupTaskManager.set_progress(task, min(0.99, got / total))
-                    SetupTaskManager.log(task, f"Downloading Ollama installer… {int((got/total)*100)}%")
+                    SetupTaskManager.set_progress(task, min(0.8, got / total))
 
-    SetupTaskManager.set_progress(task, 1.0)
-    SetupTaskManager.log(task, "Launching Ollama installer…")
+    SetupTaskManager.log(task, f"Extracting {asset_name} into {install_dir}…")
+    with zipfile.ZipFile(archive_path) as archive:
+        archive.extractall(install_dir)
+    SetupTaskManager.set_progress(task, 0.9)
 
-    if external_dir is not None and models_dir is not None:
-        try:
-            script_path = write_managed_ollama_launch_script(
-                external_dir,
-                models_dir,
-                ollama_url or "http://127.0.0.1:11434",
-            )
-            SetupTaskManager.log(task, f"Prepared Studio Ollama helper: {script_path}")
-        except Exception:
-            pass
-
-    # Launch interactively.
-    subprocess.Popen([str(out)], cwd=str(dest_dir))
+    exe = _find_ollama_exe(external_dir)
     if models_dir is not None:
+        script_path = write_managed_ollama_launch_script(
+            external_dir,
+            models_dir,
+            ollama_url or "http://127.0.0.1:11434",
+            exe,
+        )
         models_root = _managed_ollama_models_dir(models_dir)
         SetupTaskManager.log(
             task,
-            f"Ollama installer launched. Finish the installer, then return here and click Refresh. "
-            f"Studio-managed Ollama models live under {models_root}.",
+            f"Ollama is installed at {exe}. Studio-managed models live under {models_root}. Helper script: {script_path}"
         )
     else:
-        SetupTaskManager.log(task, "Ollama installer launched. Finish the installer, then return here and click Refresh.")
+        SetupTaskManager.log(task, f"Ollama is installed at {exe}.")
+    SetupTaskManager.set_progress(task, 1.0)
 
 
 def pull_ollama_model(task: SetupTask, ollama_url: str, model: str) -> None:
@@ -448,6 +494,7 @@ def _find_7z_exe(external_dir: Path, data_dir: Path | None = None) -> str:
     if env and Path(env).exists():
         return env
 
+    ignore_system = _env_truthy("EDMG_SETUP_IGNORE_SYSTEM_7Z")
     bundled_names = ("7z.exe", "7za.exe", "7zr.exe", "7zz.exe") if platform.system() == "Windows" else ("7zz", "7za", "7zr")
     for bundled_name in bundled_names:
         bundled = (external_dir / "bin" / bundled_name).resolve()
@@ -462,7 +509,7 @@ def _find_7z_exe(external_dir: Path, data_dir: Path | None = None) -> str:
                 return str(legacy_bundled)
 
     candidates = []
-    if platform.system() == "Windows":
+    if platform.system() == "Windows" and not ignore_system:
         candidates += [
             Path(r"C:\Program Files\7-Zip\7z.exe"),
             Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
@@ -471,9 +518,10 @@ def _find_7z_exe(external_dir: Path, data_dir: Path | None = None) -> str:
         if c.exists():
             return str(c)
 
-    which = shutil.which("7z") or shutil.which("7z.exe") or shutil.which("7zz") or shutil.which("7zz.exe")
-    if which:
-        return which
+    if not ignore_system:
+        which = shutil.which("7z") or shutil.which("7z.exe") or shutil.which("7zz") or shutil.which("7zz.exe")
+        if which:
+            return which
 
     raise RuntimeError("7-Zip CLI not found. Install 7-Zip or bundle 7z.exe and/or set EDMG_7Z_PATH.")
 

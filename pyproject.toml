@@ -7,7 +7,7 @@ name = "enhanced-deforum-music-generator"
 version = "0.1.0"
 description = "Enhanced Deforum Music Generator"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 dependencies = [
   "gradio>=4.44.0",
   "numpy>=1.23.0",

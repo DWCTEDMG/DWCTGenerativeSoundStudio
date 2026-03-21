@@ -35,6 +35,37 @@ function chooseHomeRoot() {
   return os.tmpdir();
 }
 
+function resolveBootstrapPaths() {
+  const appDataDir = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  const localAppDataDir = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+  const bootstrapDir = path.join(appDataDir, "EDMG Studio");
+  return {
+    appDataDir,
+    localAppDataDir,
+    bootstrapDir,
+    bootstrapPath: path.join(bootstrapDir, "bootstrap.json"),
+  };
+}
+
+async function backupBootstrap(bootstrapPath, stamp) {
+  if (!fs.existsSync(bootstrapPath)) {
+    return { existed: false, backupPath: "" };
+  }
+  const backupPath = `${bootstrapPath}.codex-backup-${stamp}`;
+  await fsp.copyFile(bootstrapPath, backupPath);
+  return { existed: true, backupPath };
+}
+
+async function restoreBootstrap(bootstrapPath, backup) {
+  if (backup?.existed && backup.backupPath && fs.existsSync(backup.backupPath)) {
+    await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
+    await fsp.copyFile(backup.backupPath, bootstrapPath);
+    await fsp.rm(backup.backupPath, { force: true });
+    return;
+  }
+  await fsp.rm(bootstrapPath, { force: true });
+}
+
 async function allocatePort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => {
@@ -133,7 +164,11 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
   const homeRoot = chooseHomeRoot();
   const studioHome = path.join(homeRoot, `EDMG-Packaged-Proof-${stamp}`);
+  const { appDataDir, localAppDataDir, bootstrapPath } = resolveBootstrapPaths();
+  const bootstrapBackup = await backupBootstrap(bootstrapPath, stamp);
   await fsp.mkdir(studioHome, { recursive: true });
+  await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
+  await fsp.rm(bootstrapPath, { force: true });
   const testPage = path.join(studioHome, "blank.html");
   await fsp.writeFile(testPage, "<!doctype html><html><body>packaged customer flow</body></html>\n");
   const port = Number(process.env.EDMG_STUDIO_PROOF_PORT || (await allocatePort()));
@@ -207,6 +242,10 @@ async function main() {
     const summary = {
       ok: job.status === "succeeded",
       studioHome,
+      appDataDir,
+      localAppDataDir,
+      bootstrapPath,
+      bootstrapCreated: fs.existsSync(bootstrapPath),
       baseUrl,
       health,
       paths: {
@@ -318,6 +357,7 @@ async function main() {
     }
   } finally {
     await killProcessTree(child);
+    await restoreBootstrap(bootstrapPath, bootstrapBackup);
   }
 }
 

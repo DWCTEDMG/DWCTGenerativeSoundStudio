@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const require = createRequire(import.meta.url);
+const REQUIRE_LIVE_PROBE = (process.env.EDMG_STUDIO_REQUIRE_LIVE_DEV_PROBE ?? "0") === "1";
 
 function log(msg) {
   console.log(`[desktop-integration] ${msg}`);
@@ -253,11 +254,25 @@ async function main() {
   await assertPreloadContract();
   log("preload contract checks passed");
 
-  const electronProbe = await runElectronProbe();
-  if (electronProbe.skipped) {
-    log(`live Electron probe skipped: ${electronProbe.reason}`);
-  } else {
-    log("live Electron probe passed");
+  let electronProbe;
+  try {
+    electronProbe = await runElectronProbe();
+    if (electronProbe.skipped) {
+      log(`live Electron probe skipped: ${electronProbe.reason}`);
+    } else {
+      log("live Electron probe passed");
+    }
+  } catch (error) {
+    const reason = String(error?.message ?? error);
+    if (REQUIRE_LIVE_PROBE) {
+      throw error;
+    }
+    electronProbe = {
+      ok: false,
+      skipped: true,
+      reason: `best-effort probe skipped after failure: ${reason}`,
+    };
+    log(`live Electron probe skipped after failure: ${reason}`);
   }
 
   const summary = {

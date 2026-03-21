@@ -10,7 +10,7 @@
    - Click **Start Studio (Electron dev)**
 
 ## Prereqs (installed once)
-- **Python 3.10+** (Windows: install from python.org)
+- **Python `>=3.10,<3.14`** (Windows: install from python.org)
 - **Node.js LTS** (for the Electron UI)
 - Optional but recommended:
   - **Ollama** running at `http://127.0.0.1:11434`
@@ -18,3 +18,24 @@
   - **FFmpeg** on PATH (for MP4 assembly)
 
 If Ollama/ComfyUI/FFmpeg aren’t installed yet, the app will still boot and show clear “Fix:” instructions in the Setup / logs.
+
+## Release proof
+
+From `studio/edmg-studio/`:
+
+```powershell
+npm run validate:release
+```
+
+That runs the staged desktop checks, packaged customer-flow proof, and packaged
+upgrade/migration proof.
+
+For the fresh-machine packaged setup path specifically:
+
+```powershell
+npm run validate:packaged-zero-state-setup
+```
+
+That proof ignores global Ollama/7-Zip, installs Studio-managed copies under
+the selected `Studio Home`, and verifies the packaged app can bootstrap its own
+external tools from scratch.

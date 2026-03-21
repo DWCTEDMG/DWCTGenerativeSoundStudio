@@ -362,7 +362,7 @@ async function run(action: string, path: string, body: any = {}) {
   </div>
   <div className="small" style={{ marginTop: 6 }}>
     {ollamaRequired
-      ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → Ollama installer → pull model → ComfyUI Portable install + start."
+      ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → managed Ollama install → pull model → ComfyUI Portable install + start."
       : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → ComfyUI Portable install + start. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`}
   </div>
   <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
@@ -466,9 +466,9 @@ async function run(action: string, path: string, body: any = {}) {
             </button>
             <button
               disabled={busy === "ollama"}
-              onClick={() => run("ollama", "/v1/setup/ollama/download_and_run", {})}
+              onClick={() => run("ollama", "/v1/setup/ollama/install_managed", {})}
             >
-              {busy === "ollama" ? "Launching…" : "Download & Run Ollama Installer"}
+              {busy === "ollama" ? "Installing…" : "Install Ollama Into External Tools"}
             </button>
             <button
               className="secondary"

@@ -1,6 +1,7 @@
 # AI Providers (Local-first, upgradeable)
 
-EDMG Studio defaults to **local AI** via Ollama.
+EDMG Studio defaults to **local AI** via Ollama, but provider selection is now
+available directly in Studio `Settings` instead of only through environment variables.
 
 ## Default (recommended): Ollama
 
@@ -33,6 +34,9 @@ EDMG_AI_OPENAI_COMPAT_MODEL=...
 EDMG_AI_OPENAI_COMPAT_API_KEY=...  # if required
 ```
 
+Studio stores the OpenAI-compatible API key through its secret-storage path so
+you do not have to keep it in plain-text environment variables.
+
 ## External AI service (advanced)
 
 If you deploy `services/ai/edmg_ai_service` as a separate FastAPI service, set:
@@ -40,4 +44,13 @@ If you deploy `services/ai/edmg_ai_service` as a separate FastAPI service, set:
 ```bash
 EDMG_AI_MODE=http
 EDMG_AI_BASE_URL=http://127.0.0.1:7862
+```
+
+## Rule-based fallback
+
+If you want to avoid a model dependency for planning, Studio also supports:
+
+```bash
+EDMG_AI_MODE=local
+EDMG_AI_PROVIDER=rule_based
 ```

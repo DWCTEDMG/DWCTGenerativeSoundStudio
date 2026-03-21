@@ -14,7 +14,7 @@ A desktop-style "studio" application:
 
 ### Prereqs
 - Node.js LTS
-- Python 3.10+
+- Python `>=3.10,<3.14`
 - FFmpeg on PATH for dev checkouts, or the bundled Studio FFmpeg for packaged builds (used for MP4 assembly)
 - ComfyUI running (default `http://127.0.0.1:8188`)
 - AI Director runs **in-process** by default (talks to Ollama directly); no separate AI server needed.
@@ -49,6 +49,10 @@ When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard
 
 This keeps the runtime UX like a DAW/game installer: click buttons, no terminal required.
 
+Release/operator runbook:
+- [Studio release runbook](../../docs/STUDIO_RELEASE_RUNBOOK.md)
+- [Release checklist](../../RELEASE.md)
+
 Install/storage split:
 - **Install directory**: where the packaged app itself is installed
 - **Studio Home**: where projects, caches, Electron session data, portable tools, and large runtime payloads live
@@ -71,8 +75,11 @@ Install/storage split:
 
 If `EDMG_STUDIO_HOME` is set, Studio uses it as the root for:
 - backend project data (`<studio-home>/data`)
+- models (`<studio-home>/models`)
 - Electron user/session data (`<studio-home>/electron`)
 - caches and temporary files (`<studio-home>/cache`)
+- logs (`<studio-home>/logs`)
+- external tools (`<studio-home>/external`)
 
 EDMG Core integration:
 - If EDMG Core is installed in the same environment, Studio can:

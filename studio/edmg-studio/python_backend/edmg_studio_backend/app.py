@@ -66,7 +66,7 @@ from .services.setup_wizard import (
     SetupTaskManager,
     check_backend_bundle,
     check_ollama,
-    download_and_run_ollama_installer,
+    download_and_install_ollama,
     pull_ollama_model,
     download_and_extract_portable,
     ComfyPortableProcess,
@@ -1020,6 +1020,11 @@ def setup_status():
             f"Studio can start Ollama with models stored under {settings.ollama_models_dir}. "
             "Use Start Studio-managed Ollama, or run the helper script after installing Ollama."
         )
+    elif not ollama.get("ok"):
+        ollama["hint"] = (
+            f"Studio can install Ollama into {settings.external_dir / 'ollama'} and keep models under "
+            f"{settings.ollama_models_dir}."
+        )
 
     # ComfyUI availability
     try:
@@ -1074,19 +1079,24 @@ def setup_status():
         }
 
 
-@app.post("/v1/setup/ollama/download_and_run")
-def setup_ollama_download_and_run():
+@app.post("/v1/setup/ollama/install_managed")
+def setup_ollama_install_managed():
     dest = settings.external_dir / "_installers"
     url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     task = setup_tasks.start(
-        "download_ollama_installer",
-        download_and_run_ollama_installer,
+        "install_managed_ollama",
+        download_and_install_ollama,
         dest,
         settings.external_dir,
         settings.models_dir,
         url,
     )
     return {"ok": True, "task": task.__dict__}
+
+
+@app.post("/v1/setup/ollama/download_and_run")
+def setup_ollama_download_and_run():
+    return setup_ollama_install_managed()
 
 
 @app.post("/v1/setup/ollama/start_managed")
@@ -1148,7 +1158,7 @@ def setup_full_install(payload: dict[str, Any]):
         except Exception:
             download_and_install_7zip(task, settings.external_dir, settings.data_dir)
 
-        # 3) Ollama installer/model only when the active AI path actually uses Ollama.
+        # 3) Ollama install/model only when the active AI path actually uses Ollama.
         if ai_config.get("ollama_required"):
             ollama_status = check_ollama(ollama_url, model)
             if not ollama_status.get("ok"):
@@ -1156,8 +1166,8 @@ def setup_full_install(payload: dict[str, Any]):
                     ollama_managed.start(task, settings.external_dir, settings.models_dir, ollama_url)
                 except Exception:
                     dest = settings.external_dir / "_installers"
-                    download_and_run_ollama_installer(task, dest, settings.external_dir, settings.models_dir, ollama_url)
-                    raise RuntimeError("Ollama installer launched. Finish installing Ollama, then rerun Full Setup.")
+                    download_and_install_ollama(task, dest, settings.external_dir, settings.models_dir, ollama_url)
+                    ollama_managed.start(task, settings.external_dir, settings.models_dir, ollama_url)
             else:
                 SetupTaskManager.log(task, "Ollama is already reachable.")
 

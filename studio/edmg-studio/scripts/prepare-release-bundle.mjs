@@ -12,6 +12,8 @@ const electronBackendDir = path.join(root, "electron-resources", "backend");
 const backendBinaryName = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
 const bundledBackendPath = path.join(electronBackendDir, backendBinaryName);
 const bundleManifestPath = path.join(electronBackendDir, "backend-bundle-manifest.json");
+const SUPPORTED_PYTHON_MIN = [3, 10];
+const SUPPORTED_PYTHON_MAX_EXCLUSIVE = [3, 14];
 
 const ignoredDirNames = new Set([
   ".git",
@@ -50,6 +52,49 @@ function canRun(command, args, options = {}) {
   return result.status === 0;
 }
 
+function compareVersionTriples(left, right) {
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const delta = (left[index] ?? 0) - (right[index] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
+}
+
+function parsePythonVersion(command, args, options = {}) {
+  const result = spawnSync(command, [...args, "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"], {
+    cwd: options.cwd ?? root,
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: false,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) return null;
+  const raw = String(result.stdout || "").trim();
+  const match = raw.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return null;
+  return {
+    raw,
+    tuple: [Number(match[1]), Number(match[2]), Number(match[3])],
+  };
+}
+
+function isSupportedPythonVersion(versionTuple) {
+  return compareVersionTriples(versionTuple, SUPPORTED_PYTHON_MIN) >= 0 &&
+    compareVersionTriples(versionTuple, SUPPORTED_PYTHON_MAX_EXCLUSIVE) < 0;
+}
+
+function assertSupportedPython(command, args, label, options = {}) {
+  const version = parsePythonVersion(command, args, options);
+  if (!version) {
+    throw new Error(`Could not determine ${label} version for ${command}`);
+  }
+  if (!isSupportedPythonVersion(version.tuple)) {
+    throw new Error(
+      `${label} ${version.raw} is unsupported for Studio release builds. Use Python >= ${SUPPORTED_PYTHON_MIN.join(".")} and < ${SUPPORTED_PYTHON_MAX_EXCLUSIVE.join(".")}.`,
+    );
+  }
+  return version.raw;
+}
+
 function resolvePythonBootstrapCommand() {
   const envPython = process.env.EDMG_STUDIO_PYTHON;
   const candidates = [
@@ -59,12 +104,15 @@ function resolvePythonBootstrapCommand() {
   ].filter(Boolean);
 
   for (const candidate of candidates) {
-    if (canRun(candidate.command, [...candidate.prefix, "--version"], { cwd: root })) {
+    const version = parsePythonVersion(candidate.command, candidate.prefix, { cwd: root });
+    if (version && isSupportedPythonVersion(version.tuple)) {
       return candidate;
     }
   }
 
-  throw new Error("Could not find a usable Python command. Set EDMG_STUDIO_PYTHON or install Python.");
+  throw new Error(
+    `Could not find a supported Python command. Set EDMG_STUDIO_PYTHON or install Python >= ${SUPPORTED_PYTHON_MIN.join(".")} and < ${SUPPORTED_PYTHON_MAX_EXCLUSIVE.join(".")}.`,
+  );
 }
 
 function venvPythonPath() {
@@ -163,7 +211,15 @@ function findFreshDistBackend(newestSourceMtimeMs) {
 
 function ensureBackendBuild() {
   const bootstrap = resolvePythonBootstrapCommand();
+  assertSupportedPython(bootstrap.command, bootstrap.prefix, "Bootstrap Python", { cwd: root });
   const venvPython = venvPythonPath();
+
+  if (fs.existsSync(venvPython)) {
+    const venvVersion = parsePythonVersion(venvPython, [], { cwd: pythonBackendDir });
+    if (!venvVersion || !isSupportedPythonVersion(venvVersion.tuple)) {
+      fs.rmSync(path.join(pythonBackendDir, "venv"), { recursive: true, force: true });
+    }
+  }
 
   if (fs.existsSync(venvPython) && !canRun(venvPython, ["--version"], { cwd: pythonBackendDir })) {
     fs.rmSync(path.join(pythonBackendDir, "venv"), { recursive: true, force: true });
@@ -174,6 +230,8 @@ function ensureBackendBuild() {
       cwd: pythonBackendDir,
     });
   }
+
+  assertSupportedPython(venvPython, [], "Backend venv Python", { cwd: pythonBackendDir });
 
   runChecked("upgrade backend packaging tools", venvPython, ["-m", "pip", "install", "-U", "pip", "wheel", "setuptools"], {
     cwd: pythonBackendDir,
