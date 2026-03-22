@@ -101,3 +101,32 @@ func TestBuildManagedBackendEnvIncludesCoreKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestCompareArtifactSetsMatch(t *testing.T) {
+	expected := []ArtifactStatus{
+		{Label: "backend bundle", Path: `D:\out\backend.exe`, Exists: true, Size: 10, SHA256: "abc"},
+	}
+	current := []ArtifactStatus{
+		{Label: "backend bundle", Path: `D:\out\backend.exe`, Exists: true, Size: 10, SHA256: "abc"},
+	}
+
+	issues := compareArtifactSets(expected, current)
+	if len(issues) != 0 {
+		t.Fatalf("expected no issues, got %v", issues)
+	}
+}
+
+func TestCompareArtifactSetsMismatch(t *testing.T) {
+	expected := []ArtifactStatus{
+		{Label: "backend bundle", Path: `D:\out\backend.exe`, Exists: true, Size: 10, SHA256: "abc"},
+	}
+	current := []ArtifactStatus{
+		{Label: "backend bundle", Path: `D:\out\backend.exe`, Exists: true, Size: 11, SHA256: "def"},
+		{Label: "installer", Path: `D:\out\installer.exe`, Exists: true},
+	}
+
+	issues := compareArtifactSets(expected, current)
+	if len(issues) < 2 {
+		t.Fatalf("expected multiple issues, got %v", issues)
+	}
+}

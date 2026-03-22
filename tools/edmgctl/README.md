@@ -7,6 +7,7 @@ wraps the existing Studio release and diagnostics surface with a small,
 cross-platform CLI that can:
 
 - inspect repo/tool/bootstrap state
+- report supervisor state inside the doctor surface
 - validate Studio-managed storage roots
 - inspect packaged release artifacts
 - run the existing release build and release proof commands
@@ -35,6 +36,7 @@ D:\Tools\Go\bin\go.exe run ./cmd/edmgctl artifact list --hashes
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor start --port 0 --wait --timeout 90s
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor status
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor stop
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release verify-manifest --manifest D:\Tools\edmg-artifacts.json
 ```
 
 Machine-readable output:
@@ -53,6 +55,7 @@ $env:GOCACHE='D:\Tools\GoCache'
 $env:GOMODCACHE='D:\Tools\GoPkg'
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release build
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release validate
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release verify-manifest --manifest D:\Tools\edmg-artifacts.json
 ```
 
 ## Build

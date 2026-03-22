@@ -162,16 +162,25 @@ type SupervisorStatus struct {
 	State        *SupervisorState `json:"state,omitempty"`
 }
 
+type ManifestVerification struct {
+	ManifestPath string           `json:"manifestPath"`
+	Matches      bool             `json:"matches"`
+	Expected     ArtifactManifest `json:"expected"`
+	Current      []ArtifactStatus `json:"current"`
+	Issues       []string         `json:"issues,omitempty"`
+}
+
 type DoctorReport struct {
-	Platform  string          `json:"platform"`
-	RepoRoot  string          `json:"repoRoot"`
-	StudioDir string          `json:"studioDir"`
-	Package   PackageMeta     `json:"package"`
-	Git       GitStatus       `json:"git"`
-	Tools     []ToolStatus    `json:"tools"`
-	Bootstrap BootstrapReport `json:"bootstrap"`
-	Release   ReleaseStatus   `json:"release"`
-	Warnings  []string        `json:"warnings,omitempty"`
+	Platform   string           `json:"platform"`
+	RepoRoot   string           `json:"repoRoot"`
+	StudioDir  string           `json:"studioDir"`
+	Package    PackageMeta      `json:"package"`
+	Git        GitStatus        `json:"git"`
+	Tools      []ToolStatus     `json:"tools"`
+	Bootstrap  BootstrapReport  `json:"bootstrap"`
+	Supervisor SupervisorStatus `json:"supervisor"`
+	Release    ReleaseStatus    `json:"release"`
+	Warnings   []string         `json:"warnings,omitempty"`
 }
 
 func FindRepoRoot(start string) (string, error) {
@@ -230,6 +239,10 @@ func CollectDoctorReport(repoRoot string) (DoctorReport, error) {
 	if err != nil {
 		return DoctorReport{}, err
 	}
+	supervisor, err := GetSupervisorStatus()
+	if err != nil {
+		return DoctorReport{}, err
+	}
 	release, err := CollectReleaseStatus(repoRoot)
 	if err != nil {
 		return DoctorReport{}, err
@@ -250,17 +263,24 @@ func CollectDoctorReport(repoRoot string) (DoctorReport, error) {
 	if !release.WindowsReleaseHost {
 		warnings = append(warnings, "current host is not Windows; dist:win may not be runnable here")
 	}
+	if supervisor.Known && !supervisor.ProcessAlive {
+		warnings = append(warnings, "supervisor has stale state for a stopped backend process")
+	}
+	if supervisor.Known && supervisor.ProcessAlive && !supervisor.Healthy {
+		warnings = append(warnings, "supervisor-managed backend is running but not healthy")
+	}
 
 	return DoctorReport{
-		Platform:  runtime.GOOS + "/" + runtime.GOARCH,
-		RepoRoot:  repoRoot,
-		StudioDir: studioDir,
-		Package:   pkg,
-		Git:       CollectGitStatus(repoRoot),
-		Tools:     CollectToolStatus(),
-		Bootstrap: bootstrap,
-		Release:   release,
-		Warnings:  warnings,
+		Platform:   runtime.GOOS + "/" + runtime.GOARCH,
+		RepoRoot:   repoRoot,
+		StudioDir:  studioDir,
+		Package:    pkg,
+		Git:        CollectGitStatus(repoRoot),
+		Tools:      CollectToolStatus(),
+		Bootstrap:  bootstrap,
+		Supervisor: supervisor,
+		Release:    release,
+		Warnings:   warnings,
 	}, nil
 }
 
@@ -388,6 +408,39 @@ func BuildArtifactManifest(repoRoot string, includeHashes bool) (ArtifactManifes
 		StudioDir:   filepath.Join(repoRoot, StudioRelDir),
 		Package:     pkg,
 		Artifacts:   artifacts,
+	}, nil
+}
+
+func VerifyArtifactManifest(repoRoot, manifestPath string) (ManifestVerification, error) {
+	repoRoot, err := FindRepoRoot(repoRoot)
+	if err != nil {
+		return ManifestVerification{}, err
+	}
+	manifestPath = cleanPath(manifestPath)
+	if manifestPath == "" {
+		return ManifestVerification{}, errors.New("manifest path is required")
+	}
+
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return ManifestVerification{}, err
+	}
+	var expected ArtifactManifest
+	if err := json.Unmarshal(data, &expected); err != nil {
+		return ManifestVerification{}, err
+	}
+
+	current, err := CollectArtifactInventory(repoRoot, true)
+	if err != nil {
+		return ManifestVerification{}, err
+	}
+	issues := compareArtifactSets(expected.Artifacts, current)
+	return ManifestVerification{
+		ManifestPath: manifestPath,
+		Matches:      len(issues) == 0,
+		Expected:     expected,
+		Current:      current,
+		Issues:       issues,
 	}, nil
 }
 
@@ -747,6 +800,43 @@ func BuildManagedBackendEnv(cfg BootstrapConfig, paths StoragePaths, host string
 		flattened = append(flattened, key+"="+value)
 	}
 	return flattened
+}
+
+func compareArtifactSets(expected, current []ArtifactStatus) []string {
+	issues := make([]string, 0)
+	currentByLabel := make(map[string]ArtifactStatus, len(current))
+	for _, artifact := range current {
+		currentByLabel[artifact.Label] = artifact
+	}
+
+	for _, want := range expected {
+		got, ok := currentByLabel[want.Label]
+		if !ok {
+			issues = append(issues, fmt.Sprintf("missing current artifact entry for %s", want.Label))
+			continue
+		}
+		if want.Exists != got.Exists {
+			issues = append(issues, fmt.Sprintf("%s existence mismatch: expected %t, got %t", want.Label, want.Exists, got.Exists))
+		}
+		if want.Exists && !got.Exists {
+			continue
+		}
+		if want.SHA256 != "" && got.SHA256 != "" && !strings.EqualFold(want.SHA256, got.SHA256) {
+			issues = append(issues, fmt.Sprintf("%s sha256 mismatch: expected %s, got %s", want.Label, want.SHA256, got.SHA256))
+		}
+		if want.Size != 0 && got.Size != 0 && want.Size != got.Size {
+			issues = append(issues, fmt.Sprintf("%s size mismatch: expected %d, got %d", want.Label, want.Size, got.Size))
+		}
+		if cleanPath(want.Path) != "" && cleanPath(got.Path) != "" && cleanPath(want.Path) != cleanPath(got.Path) {
+			issues = append(issues, fmt.Sprintf("%s path mismatch: expected %s, got %s", want.Label, want.Path, got.Path))
+		}
+		delete(currentByLabel, want.Label)
+	}
+
+	for label := range currentByLabel {
+		issues = append(issues, fmt.Sprintf("unexpected current artifact entry for %s", label))
+	}
+	return issues
 }
 
 func newArtifactStatus(label, artifactPath string, includeHashes bool) ArtifactStatus {

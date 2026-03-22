@@ -70,6 +70,11 @@ func runDoctor(args []string) error {
 	fmt.Printf("Git: %s (%s)\n", cleanState(report.Git.Clean), report.Git.Head)
 	fmt.Printf("Bootstrap: %s\n", boolWord(report.Bootstrap.Exists))
 	fmt.Printf("Studio Home: %s\n", report.Bootstrap.Resolved.StudioHome)
+	fmt.Printf("Supervisor known: %s\n", boolWord(report.Supervisor.Known))
+	fmt.Printf("Supervisor healthy: %s\n", boolWord(report.Supervisor.Healthy))
+	if report.Supervisor.State != nil {
+		fmt.Printf("Supervisor url: %s\n", report.Supervisor.State.BaseURL)
+	}
 	fmt.Printf("Release manifest: %s\n", boolWord(report.Release.BundleManifestOK))
 	for _, tool := range report.Tools {
 		status := "missing"
@@ -154,6 +159,8 @@ func runRelease(args []string) error {
 		return runReleaseBuild(args[1:])
 	case "validate":
 		return runReleaseValidate(args[1:])
+	case "verify-manifest":
+		return runReleaseVerifyManifest(args[1:])
 	default:
 		return fmt.Errorf("unknown release subcommand %q", args[0])
 	}
@@ -395,6 +402,36 @@ func runReleaseValidate(args []string) error {
 	return support.RunReleaseValidate(*repo)
 }
 
+func runReleaseVerifyManifest(args []string) error {
+	fs := flag.NewFlagSet("release verify-manifest", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repo := fs.String("repo", ".", "repo root or any path inside the repo")
+	manifest := fs.String("manifest", "", "path to a saved artifact manifest JSON")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	result, err := support.VerifyArtifactManifest(*repo, *manifest)
+	if *asJSON {
+		_ = printJSON(result)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Manifest: %s\n", result.ManifestPath)
+	fmt.Printf("Matches: %s\n", boolWord(result.Matches))
+	if len(result.Issues) > 0 {
+		fmt.Println("Issues:")
+		for _, issue := range result.Issues {
+			fmt.Printf("- %s\n", issue)
+		}
+	}
+	return nil
+}
+
 func printJSON(value any) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
@@ -443,6 +480,8 @@ Commands:
   release status         Inspect bundled artifacts and packaged outputs
   release build          Run the existing Windows release build (npm run dist:win)
   release validate       Run the existing release proof (npm run validate:release)
+  release verify-manifest
+                        Compare current packaged artifacts with a saved manifest
 
 Use --json on read-only commands for machine-readable output.`)
 }
