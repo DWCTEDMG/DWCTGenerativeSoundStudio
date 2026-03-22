@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -136,6 +139,27 @@ type ArtifactManifest struct {
 	StudioDir   string           `json:"studioDir"`
 	Package     PackageMeta      `json:"package"`
 	Artifacts   []ArtifactStatus `json:"artifacts"`
+}
+
+type SupervisorState struct {
+	Name        string `json:"name"`
+	PID         int    `json:"pid"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	BaseURL     string `json:"baseUrl"`
+	CommandPath string `json:"commandPath"`
+	StudioHome  string `json:"studioHome"`
+	LogPath     string `json:"logPath,omitempty"`
+	StartedAt   string `json:"startedAt"`
+}
+
+type SupervisorStatus struct {
+	StateFile    string           `json:"stateFile"`
+	Known        bool             `json:"known"`
+	ProcessAlive bool             `json:"processAlive"`
+	Healthy      bool             `json:"healthy"`
+	HealthNote   string           `json:"healthNote,omitempty"`
+	State        *SupervisorState `json:"state,omitempty"`
 }
 
 type DoctorReport struct {
@@ -473,6 +497,175 @@ func RunReleaseValidate(repoRoot string) error {
 	return runNPMScript(repoRoot, "validate:release")
 }
 
+func StartManagedBackend(repoRoot, host string, port int, waitTimeout time.Duration) (SupervisorStatus, error) {
+	repoRoot, err := FindRepoRoot(repoRoot)
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	if strings.TrimSpace(host) == "" {
+		host = "127.0.0.1"
+	}
+	if port == 0 {
+		port, err = allocatePort(host)
+		if err != nil {
+			return SupervisorStatus{}, err
+		}
+	}
+
+	statePath, err := SupervisorStatePath()
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	current, _ := ReadSupervisorState()
+	if current != nil {
+		alive, _ := processAlive(current.PID)
+		if alive {
+			return SupervisorStatus{
+				StateFile:    statePath,
+				Known:        true,
+				ProcessAlive: true,
+				Healthy:      healthCheck(current.BaseURL, 2*time.Second) == nil,
+				State:        current,
+				HealthNote:   "managed backend already running",
+			}, fmt.Errorf("managed backend already running with pid %d at %s", current.PID, current.BaseURL)
+		}
+		_ = os.Remove(statePath)
+	}
+
+	bootstrap, err := ReadBootstrapReport()
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	backendPath, err := packagedBackendPath(repoRoot)
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	ffmpegPath := packagedFFmpegPath(repoRoot)
+	env := BuildManagedBackendEnv(bootstrap.Config, bootstrap.Resolved, host, port, ffmpegPath)
+	logDir := filepath.Join(bootstrap.Resolved.LogsDir, "edmgctl")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return SupervisorStatus{}, err
+	}
+	logPath := filepath.Join(logDir, "packaged-backend-supervisor.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	defer logFile.Close()
+	_, _ = logFile.WriteString(fmt.Sprintf("\n[%s] launching %s serve --host %s --port %d\n", time.Now().UTC().Format(time.RFC3339), backendPath, host, port))
+
+	cmd := exec.Command(backendPath, "serve", "--host", host, "--port", fmt.Sprintf("%d", port))
+	cmd.Dir = filepath.Dir(backendPath)
+	cmd.Env = env
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	defer devNull.Close()
+	cmd.Stdin = devNull
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	if runtime.GOOS == "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: 0x00000008 | 0x00000200,
+		}
+	}
+
+	if err := cmd.Start(); err != nil {
+		return SupervisorStatus{}, err
+	}
+
+	state := &SupervisorState{
+		Name:        "packaged-backend",
+		PID:         cmd.Process.Pid,
+		Host:        host,
+		Port:        port,
+		BaseURL:     fmt.Sprintf("http://%s:%d", host, port),
+		CommandPath: backendPath,
+		StudioHome:  bootstrap.Resolved.StudioHome,
+		LogPath:     logPath,
+		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := WriteSupervisorState(state); err != nil {
+		_ = stopProcess(state.PID)
+		return SupervisorStatus{}, err
+	}
+
+	status := SupervisorStatus{
+		StateFile:    statePath,
+		Known:        true,
+		ProcessAlive: true,
+		State:        state,
+	}
+	if waitTimeout > 0 {
+		err = waitForHealthURL(state.BaseURL, waitTimeout)
+		status.Healthy = err == nil
+		if err != nil {
+			status.HealthNote = err.Error()
+			return status, err
+		}
+	} else {
+		status.Healthy = healthCheck(state.BaseURL, 1500*time.Millisecond) == nil
+	}
+	return status, nil
+}
+
+func GetSupervisorStatus() (SupervisorStatus, error) {
+	statePath, err := SupervisorStatePath()
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	state, err := ReadSupervisorState()
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	if state == nil {
+		return SupervisorStatus{StateFile: statePath}, nil
+	}
+	alive, err := processAlive(state.PID)
+	status := SupervisorStatus{
+		StateFile:    statePath,
+		Known:        true,
+		ProcessAlive: alive,
+		State:        state,
+	}
+	if err != nil {
+		status.HealthNote = err.Error()
+		return status, nil
+	}
+	healthErr := healthCheck(state.BaseURL, 2*time.Second)
+	status.Healthy = healthErr == nil
+	if healthErr != nil {
+		status.HealthNote = healthErr.Error()
+	}
+	return status, nil
+}
+
+func StopManagedBackend() (SupervisorStatus, error) {
+	statePath, err := SupervisorStatePath()
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	state, err := ReadSupervisorState()
+	if err != nil {
+		return SupervisorStatus{}, err
+	}
+	if state == nil {
+		return SupervisorStatus{StateFile: statePath}, nil
+	}
+	_ = stopProcess(state.PID)
+	_ = os.Remove(statePath)
+	return SupervisorStatus{
+		StateFile:    statePath,
+		Known:        true,
+		ProcessAlive: false,
+		Healthy:      false,
+		State:        state,
+	}, nil
+}
+
 func runNPMScript(repoRoot, script string) error {
 	repoRoot, err := FindRepoRoot(repoRoot)
 	if err != nil {
@@ -488,6 +681,72 @@ func runNPMScript(repoRoot, script string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
+}
+
+func BuildManagedBackendEnv(cfg BootstrapConfig, paths StoragePaths, host string, port int, ffmpegPath string) []string {
+	envMap := make(map[string]string, 64)
+	for _, raw := range os.Environ() {
+		key, value, found := strings.Cut(raw, "=")
+		if found {
+			envMap[key] = value
+		}
+	}
+
+	managed := map[string]string{
+		"EDMG_STUDIO_HOME":               paths.StudioHome,
+		"EDMG_STUDIO_DATA_DIR":           paths.DataDir,
+		"EDMG_STUDIO_MODELS_DIR":         paths.ModelsDir,
+		"EDMG_STUDIO_CACHE_DIR":          paths.CacheRoot,
+		"EDMG_STUDIO_LOGS_DIR":           paths.LogsDir,
+		"EDMG_STUDIO_EXTERNAL_DIR":       paths.ExternalDir,
+		"OLLAMA_MODELS":                  paths.OllamaModelsDir,
+		"PIP_CACHE_DIR":                  filepath.Join(paths.CacheRoot, "pip"),
+		"XDG_CACHE_HOME":                 filepath.Join(paths.CacheRoot, "xdg"),
+		"HF_HOME":                        filepath.Join(paths.CacheRoot, "huggingface"),
+		"HUGGINGFACE_HUB_CACHE":          filepath.Join(paths.CacheRoot, "huggingface", "hub"),
+		"TRANSFORMERS_CACHE":             filepath.Join(paths.CacheRoot, "transformers"),
+		"TORCH_HOME":                     filepath.Join(paths.CacheRoot, "torch"),
+		"NLTK_DATA":                      filepath.Join(paths.CacheRoot, "nltk_data"),
+		"WHISPER_CACHE_DIR":              filepath.Join(paths.CacheRoot, "whisper"),
+		"MPLCONFIGDIR":                   filepath.Join(paths.CacheRoot, "matplotlib"),
+		"TMP":                            filepath.Join(paths.CacheRoot, "tmp"),
+		"TEMP":                           filepath.Join(paths.CacheRoot, "tmp"),
+		"EDMG_STUDIO_BACKEND_HOST":       host,
+		"EDMG_STUDIO_BACKEND_PORT":       fmt.Sprintf("%d", port),
+		"EDMG_AI_MODE":                   cfg.AISettings.Mode,
+		"EDMG_AI_PROVIDER":               cfg.AISettings.Provider,
+		"EDMG_AI_BASE_URL":               cfg.AISettings.AIBaseURL,
+		"EDMG_AI_OLLAMA_URL":             cfg.AISettings.OllamaURL,
+		"EDMG_AI_OLLAMA_MODEL":           cfg.AISettings.OllamaModel,
+		"EDMG_AI_OPENAI_COMPAT_BASE_URL": cfg.AISettings.OpenAICompatBaseURL,
+		"EDMG_AI_OPENAI_COMPAT_MODEL":    cfg.AISettings.OpenAICompatModel,
+	}
+	if ffmpegPath != "" {
+		managed["EDMG_FFMPEG_PATH"] = ffmpegPath
+	}
+
+	for _, value := range managed {
+		if strings.TrimSpace(value) != "" && looksLikePath(value) {
+			dirPath := value
+			if ext := filepath.Ext(value); ext != "" {
+				dirPath = filepath.Dir(value)
+			}
+			_ = os.MkdirAll(dirPath, 0o755)
+		}
+	}
+
+	for key, value := range managed {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		envMap[key] = value
+	}
+
+	flattened := make([]string, 0, len(envMap))
+	for key, value := range envMap {
+		flattened = append(flattened, key+"="+value)
+	}
+	return flattened
 }
 
 func newArtifactStatus(label, artifactPath string, includeHashes bool) ArtifactStatus {
@@ -607,6 +866,162 @@ func sha256File(path string) string {
 	return fmt.Sprintf("%x", sum)
 }
 
+func packagedBackendPath(repoRoot string) (string, error) {
+	repoRoot, err := FindRepoRoot(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	studioDir := filepath.Join(repoRoot, StudioRelDir)
+	path := firstExisting(
+		filepath.Join(studioDir, BackendRelDir, "edmg-studio-backend.exe"),
+		filepath.Join(studioDir, BackendRelDir, "edmg-studio-backend"),
+	)
+	if !fileExists(path) {
+		return "", fmt.Errorf("packaged backend not found under %s", filepath.Join(studioDir, BackendRelDir))
+	}
+	return path, nil
+}
+
+func packagedFFmpegPath(repoRoot string) string {
+	repoRoot, err := FindRepoRoot(repoRoot)
+	if err != nil {
+		return ""
+	}
+	studioDir := filepath.Join(repoRoot, StudioRelDir)
+	path := firstExisting(
+		filepath.Join(studioDir, FFmpegRelDir, "ffmpeg.exe"),
+		filepath.Join(studioDir, FFmpegRelDir, "ffmpeg"),
+	)
+	if !fileExists(path) {
+		return ""
+	}
+	return path
+}
+
+func SupervisorStatePath() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, BootstrapRelDir, "edmgctl-supervisor.json"), nil
+}
+
+func ReadSupervisorState() (*SupervisorState, error) {
+	statePath, err := SupervisorStatePath()
+	if err != nil {
+		return nil, err
+	}
+	if !fileExists(statePath) {
+		return nil, nil
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return nil, err
+	}
+	var state SupervisorState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func WriteSupervisorState(state *SupervisorState) error {
+	statePath, err := SupervisorStatePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(statePath, append(data, '\n'), 0o644)
+}
+
+func waitForHealthURL(baseURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		lastErr = healthCheck(baseURL, 2*time.Second)
+		if lastErr == nil {
+			return nil
+		}
+		time.Sleep(750 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("backend did not become healthy in time")
+	}
+	return lastErr
+}
+
+func healthCheck(baseURL string, timeout time.Duration) error {
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(strings.TrimRight(baseURL, "/") + "/health")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("health returned %s", resp.Status)
+	}
+	return nil
+}
+
+func allocatePort(host string) (int, error) {
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return 0, err
+	}
+	defer listener.Close()
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return 0, errors.New("failed to allocate tcp port")
+	}
+	return addr.Port, nil
+}
+
+func processAlive(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, nil
+	}
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			return false, err
+		}
+		text := strings.TrimSpace(out.String())
+		if text == "" || strings.HasPrefix(text, "INFO:") {
+			return false, nil
+		}
+		return strings.Contains(text, fmt.Sprintf("\"%d\"", pid)), nil
+	}
+	cmd := exec.Command("kill", "-0", fmt.Sprintf("%d", pid))
+	if err := cmd.Run(); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+func stopProcess(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("taskkill", "/PID", fmt.Sprintf("%d", pid), "/T", "/F")
+		return cmd.Run()
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return process.Signal(syscall.SIGTERM)
+}
+
 func parseMajorMinor(version string) (int, int) {
 	version = strings.TrimSpace(version)
 	version = strings.TrimPrefix(version, "Python ")
@@ -688,4 +1103,17 @@ func pathWithin(base, target string) bool {
 		return true
 	}
 	return !strings.HasPrefix(rel, "..") && rel != ".."
+}
+
+func looksLikePath(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	if strings.Contains(value, "://") {
+		return false
+	}
+	if strings.Contains(value, "\n") {
+		return false
+	}
+	return strings.ContainsAny(value, `\/:`)
 }

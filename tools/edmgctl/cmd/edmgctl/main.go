@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/HIMOI890/DWCTGenerativeSoundStudio/tools/edmgctl/internal/support"
 )
@@ -27,6 +28,8 @@ func main() {
 		err = runBootstrap(args)
 	case "artifact":
 		err = runArtifact(args)
+	case "supervisor":
+		err = runSupervisor(args)
 	case "release":
 		err = runRelease(args)
 	case "help", "-h", "--help":
@@ -227,6 +230,120 @@ func runArtifactManifest(args []string) error {
 	return os.WriteFile(*out, append(data, '\n'), 0o644)
 }
 
+func runSupervisor(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing supervisor subcommand")
+	}
+	switch args[0] {
+	case "start":
+		return runSupervisorStart(args[1:])
+	case "status":
+		return runSupervisorStatus(args[1:])
+	case "stop":
+		return runSupervisorStop(args[1:])
+	default:
+		return fmt.Errorf("unknown supervisor subcommand %q", args[0])
+	}
+}
+
+func runSupervisorStart(args []string) error {
+	fs := flag.NewFlagSet("supervisor start", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repo := fs.String("repo", ".", "repo root or any path inside the repo")
+	host := fs.String("host", "127.0.0.1", "backend host")
+	port := fs.Int("port", 7863, "backend port (use 0 for automatic selection)")
+	wait := fs.Bool("wait", true, "wait for /health before returning")
+	timeout := fs.Duration("timeout", 90*time.Second, "health wait timeout when --wait is enabled")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	waitTimeout := time.Duration(0)
+	if *wait {
+		waitTimeout = *timeout
+	}
+	status, err := support.StartManagedBackend(*repo, *host, *port, waitTimeout)
+	if *asJSON {
+		_ = printJSON(status)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Supervisor state file: %s\n", status.StateFile)
+	fmt.Printf("Backend pid: %d\n", status.State.PID)
+	fmt.Printf("Backend url: %s\n", status.State.BaseURL)
+	if status.State.LogPath != "" {
+		fmt.Printf("Log: %s\n", status.State.LogPath)
+	}
+	fmt.Printf("Healthy: %s\n", boolWord(status.Healthy))
+	if status.HealthNote != "" {
+		fmt.Printf("Note: %s\n", status.HealthNote)
+	}
+	return nil
+}
+
+func runSupervisorStatus(args []string) error {
+	fs := flag.NewFlagSet("supervisor status", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	status, err := support.GetSupervisorStatus()
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return printJSON(status)
+	}
+	fmt.Printf("Supervisor state file: %s\n", status.StateFile)
+	fmt.Printf("Known: %s\n", boolWord(status.Known))
+	fmt.Printf("Process alive: %s\n", boolWord(status.ProcessAlive))
+	fmt.Printf("Healthy: %s\n", boolWord(status.Healthy))
+	if status.State != nil {
+		fmt.Printf("Backend url: %s\n", status.State.BaseURL)
+		fmt.Printf("PID: %d\n", status.State.PID)
+		fmt.Printf("Studio Home: %s\n", status.State.StudioHome)
+		if status.State.LogPath != "" {
+			fmt.Printf("Log: %s\n", status.State.LogPath)
+		}
+	}
+	if status.HealthNote != "" {
+		fmt.Printf("Note: %s\n", status.HealthNote)
+	}
+	return nil
+}
+
+func runSupervisorStop(args []string) error {
+	fs := flag.NewFlagSet("supervisor stop", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	status, err := support.StopManagedBackend()
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return printJSON(status)
+	}
+	fmt.Printf("Supervisor state file: %s\n", status.StateFile)
+	fmt.Printf("Stopped: %s\n", boolWord(status.Known))
+	if status.State != nil {
+		fmt.Printf("Last PID: %d\n", status.State.PID)
+		fmt.Printf("Last URL: %s\n", status.State.BaseURL)
+		if status.State.LogPath != "" {
+			fmt.Printf("Last log: %s\n", status.State.LogPath)
+		}
+	}
+	return nil
+}
+
 func runReleaseStatus(args []string) error {
 	fs := flag.NewFlagSet("release status", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -320,6 +437,9 @@ Commands:
   bootstrap show         Print bootstrap config and resolved Studio-managed roots
   artifact list          List release artifacts with size and optional hashes
   artifact manifest      Emit a JSON manifest for release artifacts
+  supervisor start       Start the packaged backend with Studio-managed env
+  supervisor status      Inspect the managed backend process and /health
+  supervisor stop        Stop the managed backend process
   release status         Inspect bundled artifacts and packaged outputs
   release build          Run the existing Windows release build (npm run dist:win)
   release validate       Run the existing release proof (npm run validate:release)

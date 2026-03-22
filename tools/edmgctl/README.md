@@ -32,6 +32,9 @@ D:\Tools\Go\bin\go.exe run ./cmd/edmgctl doctor
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl bootstrap show
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release status
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl artifact list --hashes
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor start --port 0 --wait --timeout 90s
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor status
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor stop
 ```
 
 Machine-readable output:
@@ -89,6 +92,12 @@ It also inventories:
 - bundled FFmpeg
 - unpacked packaged app
 - Windows installer artifact
+
+It can also supervise one packaged backend process for support and proof work:
+
+- start the packaged backend with the same Studio-managed storage roots
+- ping `/health`
+- stop the managed backend
 
 So the current Python backend, Electron main process, React UI, and packaging
 scripts remain the source of truth. Go is only the orchestration/diagnostic

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,37 @@ func TestNewArtifactStatusWithHash(t *testing.T) {
 	}
 	if status.Modified == "" {
 		t.Fatalf("expected modified timestamp")
+	}
+}
+
+func TestBuildManagedBackendEnvIncludesCoreKeys(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "studio-home")
+	cfg := BootstrapConfig{
+		AISettings: AISettings{
+			Mode:        "local",
+			Provider:    "ollama",
+			OllamaURL:   "http://127.0.0.1:11434",
+			OllamaModel: "qwen2.5:3b-instruct",
+		},
+	}
+	paths := DefaultStoragePaths(home)
+	env := BuildManagedBackendEnv(cfg, paths, "127.0.0.1", 5999, filepath.Join(home, "ffmpeg.exe"))
+	joined := strings.Join(env, "\n")
+
+	for _, expected := range []string{
+		"EDMG_STUDIO_HOME=" + paths.StudioHome,
+		"EDMG_STUDIO_DATA_DIR=" + paths.DataDir,
+		"EDMG_STUDIO_MODELS_DIR=" + paths.ModelsDir,
+		"EDMG_STUDIO_CACHE_DIR=" + paths.CacheRoot,
+		"EDMG_STUDIO_LOGS_DIR=" + paths.LogsDir,
+		"EDMG_STUDIO_EXTERNAL_DIR=" + paths.ExternalDir,
+		"EDMG_STUDIO_BACKEND_HOST=127.0.0.1",
+		"EDMG_STUDIO_BACKEND_PORT=5999",
+		"EDMG_AI_PROVIDER=ollama",
+		"EDMG_FFMPEG_PATH=" + filepath.Join(home, "ffmpeg.exe"),
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("expected env to contain %q", expected)
+		}
 	}
 }
