@@ -58,6 +58,17 @@ That proof covers:
 - packaged upgrade and storage migration proof
 - packaged zero-state setup proof with Studio-managed Ollama and 7-Zip
 
+Optional support-plane helper:
+
+```powershell
+cd tools/edmgctl
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl doctor
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release status
+```
+
+That Go CLI is intentionally read-only for diagnostics unless you explicitly run
+its `release build` or `release validate` wrappers.
+
 Minimum manual acceptance pass after automation:
 
 1. Install the packaged app with the assisted installer.

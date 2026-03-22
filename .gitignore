@@ -70,6 +70,10 @@ studio/edmg-studio/release/
 studio/edmg-studio/.cache/
 studio/edmg-studio/tmp/
 studio/edmg-studio/data/
+studio/edmg-studio/models/
+studio/edmg-studio/cache/
+studio/edmg-studio/logs/
+studio/edmg-studio/external/
 studio/edmg-studio/_legacy_migrations/
 studio/edmg-studio/launcher_env.json
 studio/edmg-studio/electron/
