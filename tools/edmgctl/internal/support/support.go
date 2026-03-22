@@ -1,6 +1,7 @@
 package support
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
@@ -168,6 +169,28 @@ type ManifestVerification struct {
 	Expected     ArtifactManifest `json:"expected"`
 	Current      []ArtifactStatus `json:"current"`
 	Issues       []string         `json:"issues,omitempty"`
+}
+
+type ReleaseProofPointer struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+	DocPath string `json:"docPath,omitempty"`
+	Note    string `json:"note,omitempty"`
+}
+
+type SupportBundleEntry struct {
+	Name       string `json:"name"`
+	SourcePath string `json:"sourcePath,omitempty"`
+}
+
+type SupportBundleSummary struct {
+	OutputPath    string                `json:"outputPath"`
+	GeneratedAt   string                `json:"generatedAt"`
+	RepoRoot      string                `json:"repoRoot"`
+	StudioDir     string                `json:"studioDir"`
+	Package       PackageMeta           `json:"package"`
+	Entries       []SupportBundleEntry  `json:"entries"`
+	ReleaseProofs []ReleaseProofPointer `json:"releaseProofs"`
 }
 
 type DoctorReport struct {
@@ -442,6 +465,129 @@ func VerifyArtifactManifest(repoRoot, manifestPath string) (ManifestVerification
 		Current:      current,
 		Issues:       issues,
 	}, nil
+}
+
+func ExportSupportBundle(repoRoot, outPath string) (SupportBundleSummary, error) {
+	repoRoot, err := FindRepoRoot(repoRoot)
+	if err != nil {
+		return SupportBundleSummary{}, err
+	}
+	pkg, err := LoadPackageMeta(repoRoot)
+	if err != nil {
+		return SupportBundleSummary{}, err
+	}
+	doctor, err := CollectDoctorReport(repoRoot)
+	if err != nil {
+		return SupportBundleSummary{}, err
+	}
+	manifest, err := BuildArtifactManifest(repoRoot, true)
+	if err != nil {
+		return SupportBundleSummary{}, err
+	}
+	proofs := releaseProofPointers(repoRoot)
+
+	outPath, err = resolveSupportBundlePath(repoRoot, doctor.Bootstrap, outPath)
+	if err != nil {
+		return SupportBundleSummary{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return SupportBundleSummary{}, err
+	}
+
+	bundleFile, err := os.Create(outPath)
+	if err != nil {
+		return SupportBundleSummary{}, err
+	}
+	defer bundleFile.Close()
+
+	zipWriter := zip.NewWriter(bundleFile)
+	entries := make([]SupportBundleEntry, 0, 8)
+	addJSON := func(name string, value any) error {
+		data, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := writeZipBytes(zipWriter, name, append(data, '\n')); err != nil {
+			return err
+		}
+		entries = append(entries, SupportBundleEntry{Name: name})
+		return nil
+	}
+	addFile := func(name, sourcePath string) error {
+		if !fileExists(sourcePath) {
+			return nil
+		}
+		if err := writeZipFile(zipWriter, name, sourcePath); err != nil {
+			return err
+		}
+		entries = append(entries, SupportBundleEntry{Name: name, SourcePath: sourcePath})
+		return nil
+	}
+
+	if err := addJSON("doctor.json", doctor); err != nil {
+		_ = zipWriter.Close()
+		return SupportBundleSummary{}, err
+	}
+	if err := addJSON("bootstrap-report.json", doctor.Bootstrap); err != nil {
+		_ = zipWriter.Close()
+		return SupportBundleSummary{}, err
+	}
+	if err := addJSON("supervisor-status.json", doctor.Supervisor); err != nil {
+		_ = zipWriter.Close()
+		return SupportBundleSummary{}, err
+	}
+	if err := addJSON("artifact-manifest.json", manifest); err != nil {
+		_ = zipWriter.Close()
+		return SupportBundleSummary{}, err
+	}
+	if err := addJSON("release-proofs.json", proofs); err != nil {
+		_ = zipWriter.Close()
+		return SupportBundleSummary{}, err
+	}
+	if doctor.Bootstrap.Exists {
+		if err := addFile("bootstrap.json", doctor.Bootstrap.Path); err != nil {
+			_ = zipWriter.Close()
+			return SupportBundleSummary{}, err
+		}
+	}
+	if doctor.Supervisor.Known && doctor.Supervisor.State != nil {
+		statePath := doctor.Supervisor.StateFile
+		if err := addFile("edmgctl-supervisor.json", statePath); err != nil {
+			_ = zipWriter.Close()
+			return SupportBundleSummary{}, err
+		}
+		if doctor.Supervisor.State.LogPath != "" {
+			logName := filepath.ToSlash(filepath.Join("logs", filepath.Base(doctor.Supervisor.State.LogPath)))
+			if err := addFile(logName, doctor.Supervisor.State.LogPath); err != nil {
+				_ = zipWriter.Close()
+				return SupportBundleSummary{}, err
+			}
+		}
+	}
+
+	summary := SupportBundleSummary{
+		OutputPath:    outPath,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		RepoRoot:      repoRoot,
+		StudioDir:     filepath.Join(repoRoot, StudioRelDir),
+		Package:       pkg,
+		Entries:       entries,
+		ReleaseProofs: proofs,
+	}
+	readme := buildSupportBundleReadme(summary)
+	if err := writeZipBytes(zipWriter, "README.txt", []byte(readme)); err != nil {
+		_ = zipWriter.Close()
+		return SupportBundleSummary{}, err
+	}
+	if err := writeZipBytes(zipWriter, "bundle-summary.json", mustJSON(summary)); err != nil {
+		_ = zipWriter.Close()
+		return SupportBundleSummary{}, err
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return SupportBundleSummary{}, err
+	}
+	return summary, nil
 }
 
 func ReadBootstrapReport() (BootstrapReport, error) {
@@ -800,6 +946,106 @@ func BuildManagedBackendEnv(cfg BootstrapConfig, paths StoragePaths, host string
 		flattened = append(flattened, key+"="+value)
 	}
 	return flattened
+}
+
+func releaseProofPointers(repoRoot string) []ReleaseProofPointer {
+	doc := filepath.Join(repoRoot, "RELEASE.md")
+	return []ReleaseProofPointer{
+		{
+			Name:    "full-release-validation",
+			Command: "npm run validate:release",
+			DocPath: doc,
+			Note:    "Runs desktop validation, packaged customer flow, and packaged upgrade proof.",
+		},
+		{
+			Name:    "packaged-customer-flow",
+			Command: "npm run validate:packaged-customer-flow",
+			DocPath: doc,
+			Note:    "Verifies create, upload, analyze, plan, run, and output paths in the packaged app.",
+		},
+		{
+			Name:    "packaged-upgrade-proof",
+			Command: "npm run validate:packaged-upgrade-proof",
+			DocPath: doc,
+			Note:    "Verifies migration from the older C:\\-style layout into Studio-managed roots.",
+		},
+		{
+			Name:    "packaged-zero-state-setup",
+			Command: "npm run validate:packaged-zero-state-setup",
+			DocPath: doc,
+			Note:    "Verifies Studio-managed Ollama and portable 7-Zip setup on a fresh root.",
+		},
+	}
+}
+
+func resolveSupportBundlePath(repoRoot string, bootstrap BootstrapReport, outPath string) (string, error) {
+	if clean := cleanPath(outPath); clean != "" {
+		return clean, nil
+	}
+	baseDir := filepath.Join(os.TempDir(), "edmgctl", "support")
+	if bootstrap.Resolved.LogsDir != "" {
+		baseDir = filepath.Join(bootstrap.Resolved.LogsDir, "edmgctl", "support")
+	}
+	return filepath.Join(baseDir, supportBundleFileName(time.Now().UTC())), nil
+}
+
+func supportBundleFileName(ts time.Time) string {
+	return fmt.Sprintf("edmg-support-%s.zip", ts.UTC().Format("20060102-150405"))
+}
+
+func buildSupportBundleReadme(summary SupportBundleSummary) string {
+	var b strings.Builder
+	b.WriteString("EDMG Studio support bundle\n")
+	b.WriteString("=========================\n\n")
+	b.WriteString("This archive was exported by edmgctl.\n\n")
+	b.WriteString("Contents:\n")
+	for _, entry := range summary.Entries {
+		b.WriteString("- ")
+		b.WriteString(entry.Name)
+		if entry.SourcePath != "" {
+			b.WriteString(" <- ")
+			b.WriteString(entry.SourcePath)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("- README.txt\n")
+	b.WriteString("- bundle-summary.json\n\n")
+	b.WriteString("Recommended follow-up proofs:\n")
+	for _, proof := range summary.ReleaseProofs {
+		b.WriteString("- ")
+		b.WriteString(proof.Command)
+		if proof.Note != "" {
+			b.WriteString(" : ")
+			b.WriteString(proof.Note)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func mustJSON(value any) []byte {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return []byte("{}\n")
+	}
+	return append(data, '\n')
+}
+
+func writeZipBytes(zipWriter *zip.Writer, name string, data []byte) error {
+	writer, err := zipWriter.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write(data)
+	return err
+}
+
+func writeZipFile(zipWriter *zip.Writer, name, sourcePath string) error {
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+	return writeZipBytes(zipWriter, name, data)
 }
 
 func compareArtifactSets(expected, current []ArtifactStatus) []string {

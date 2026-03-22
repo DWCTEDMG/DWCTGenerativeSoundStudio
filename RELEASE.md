@@ -64,6 +64,7 @@ Optional support-plane helper:
 cd tools/edmgctl
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl doctor
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release status
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl support export --out D:\Tools\edmg-support.zip
 ```
 
 That Go CLI is intentionally read-only for diagnostics unless you explicitly run

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefaultStoragePaths(t *testing.T) {
@@ -128,5 +129,31 @@ func TestCompareArtifactSetsMismatch(t *testing.T) {
 	issues := compareArtifactSets(expected, current)
 	if len(issues) < 2 {
 		t.Fatalf("expected multiple issues, got %v", issues)
+	}
+}
+
+func TestSupportBundleFileName(t *testing.T) {
+	name := supportBundleFileName(time.Date(2026, 3, 21, 15, 4, 5, 0, time.UTC))
+	if name != "edmg-support-20260321-150405.zip" {
+		t.Fatalf("unexpected bundle filename %s", name)
+	}
+}
+
+func TestReleaseProofPointersIncludeCoreProofs(t *testing.T) {
+	proofs := releaseProofPointers(`D:\DWCTGenerativeSoundStudio`)
+	joined := make([]string, 0, len(proofs))
+	for _, proof := range proofs {
+		joined = append(joined, proof.Command)
+	}
+	commands := strings.Join(joined, "\n")
+	for _, expected := range []string{
+		"npm run validate:release",
+		"npm run validate:packaged-customer-flow",
+		"npm run validate:packaged-upgrade-proof",
+		"npm run validate:packaged-zero-state-setup",
+	} {
+		if !strings.Contains(commands, expected) {
+			t.Fatalf("expected release proofs to contain %q", expected)
+		}
 	}
 }

@@ -28,6 +28,8 @@ func main() {
 		err = runBootstrap(args)
 	case "artifact":
 		err = runArtifact(args)
+	case "support":
+		err = runSupport(args)
 	case "supervisor":
 		err = runSupervisor(args)
 	case "release":
@@ -180,6 +182,18 @@ func runArtifact(args []string) error {
 	}
 }
 
+func runSupport(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing support subcommand")
+	}
+	switch args[0] {
+	case "export":
+		return runSupportExport(args[1:])
+	default:
+		return fmt.Errorf("unknown support subcommand %q", args[0])
+	}
+}
+
 func runArtifactList(args []string) error {
 	fs := flag.NewFlagSet("artifact list", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -235,6 +249,34 @@ func runArtifactManifest(args []string) error {
 		return err
 	}
 	return os.WriteFile(*out, append(data, '\n'), 0o644)
+}
+
+func runSupportExport(args []string) error {
+	fs := flag.NewFlagSet("support export", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repo := fs.String("repo", ".", "repo root or any path inside the repo")
+	out := fs.String("out", "", "write the support bundle zip to this path")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	summary, err := support.ExportSupportBundle(*repo, *out)
+	if *asJSON {
+		return printJSON(summary)
+	}
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Bundle: %s\n", summary.OutputPath)
+	fmt.Printf("Entries: %d\n", len(summary.Entries)+2)
+	for _, entry := range summary.Entries {
+		fmt.Printf("- %s\n", entry.Name)
+	}
+	fmt.Println("- README.txt")
+	fmt.Println("- bundle-summary.json")
+	return nil
 }
 
 func runSupervisor(args []string) error {
@@ -474,6 +516,7 @@ Commands:
   bootstrap show         Print bootstrap config and resolved Studio-managed roots
   artifact list          List release artifacts with size and optional hashes
   artifact manifest      Emit a JSON manifest for release artifacts
+  support export         Package doctor/bootstrap/release data into one zip
   supervisor start       Start the packaged backend with Studio-managed env
   supervisor status      Inspect the managed backend process and /health
   supervisor stop        Stop the managed backend process
