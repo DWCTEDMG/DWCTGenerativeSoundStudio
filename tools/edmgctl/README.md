@@ -31,6 +31,7 @@ $env:GOMODCACHE='D:\Tools\GoPkg'
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl doctor
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl bootstrap show
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release status
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl artifact list --hashes
 ```
 
 Machine-readable output:
@@ -39,6 +40,7 @@ Machine-readable output:
 $env:GOCACHE='D:\Tools\GoCache'
 $env:GOMODCACHE='D:\Tools\GoPkg'
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl doctor --json
+D:\Tools\Go\bin\go.exe run ./cmd/edmgctl artifact manifest --out D:\Tools\edmg-artifacts.json
 ```
 
 Release wrappers:
@@ -80,6 +82,13 @@ It executes:
 
 - `npm run dist:win`
 - `npm run validate:release`
+
+It also inventories:
+
+- bundled backend executable
+- bundled FFmpeg
+- unpacked packaged app
+- Windows installer artifact
 
 So the current Python backend, Electron main process, React UI, and packaging
 scripts remain the source of truth. Go is only the orchestration/diagnostic

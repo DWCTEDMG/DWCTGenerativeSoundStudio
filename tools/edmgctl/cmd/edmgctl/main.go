@@ -25,6 +25,8 @@ func main() {
 		err = runDoctor(args)
 	case "bootstrap":
 		err = runBootstrap(args)
+	case "artifact":
+		err = runArtifact(args)
 	case "release":
 		err = runRelease(args)
 	case "help", "-h", "--help":
@@ -154,6 +156,77 @@ func runRelease(args []string) error {
 	}
 }
 
+func runArtifact(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing artifact subcommand")
+	}
+	switch args[0] {
+	case "list":
+		return runArtifactList(args[1:])
+	case "manifest":
+		return runArtifactManifest(args[1:])
+	default:
+		return fmt.Errorf("unknown artifact subcommand %q", args[0])
+	}
+}
+
+func runArtifactList(args []string) error {
+	fs := flag.NewFlagSet("artifact list", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repo := fs.String("repo", ".", "repo root or any path inside the repo")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	hashes := fs.Bool("hashes", false, "include sha256 digests")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	artifacts, err := support.CollectArtifactInventory(*repo, *hashes)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return printJSON(artifacts)
+	}
+
+	for _, artifact := range artifacts {
+		fmt.Printf("%s: %s\n", artifact.Label, presentWord(artifact.Exists))
+		fmt.Printf("  path: %s\n", artifact.Path)
+		if artifact.Exists {
+			fmt.Printf("  size: %d bytes\n", artifact.Size)
+			fmt.Printf("  modified: %s\n", artifact.Modified)
+			if artifact.SHA256 != "" {
+				fmt.Printf("  sha256: %s\n", artifact.SHA256)
+			}
+		}
+	}
+	return nil
+}
+
+func runArtifactManifest(args []string) error {
+	fs := flag.NewFlagSet("artifact manifest", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repo := fs.String("repo", ".", "repo root or any path inside the repo")
+	out := fs.String("out", "", "write JSON manifest to this path")
+	hashes := fs.Bool("hashes", true, "include sha256 digests")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	manifest, err := support.BuildArtifactManifest(*repo, *hashes)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(*out) == "" {
+		return printJSON(manifest)
+	}
+
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(*out, append(data, '\n'), 0o644)
+}
+
 func runReleaseStatus(args []string) error {
 	fs := flag.NewFlagSet("release status", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -245,6 +318,8 @@ func usage() {
 Commands:
   doctor                 Summarize repo, toolchain, bootstrap, and release state
   bootstrap show         Print bootstrap config and resolved Studio-managed roots
+  artifact list          List release artifacts with size and optional hashes
+  artifact manifest      Emit a JSON manifest for release artifacts
   release status         Inspect bundled artifacts and packaged outputs
   release build          Run the existing Windows release build (npm run dist:win)
   release validate       Run the existing release proof (npm run validate:release)

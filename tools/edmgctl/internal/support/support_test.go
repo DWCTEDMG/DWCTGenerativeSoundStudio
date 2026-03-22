@@ -1,6 +1,9 @@
 package support
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -39,5 +42,29 @@ func TestResolveStoragePathsWithOverrides(t *testing.T) {
 	}
 	if paths.ModelsDir != filepath.Join(home, "models") {
 		t.Fatalf("expected default models dir, got %s", paths.ModelsDir)
+	}
+}
+
+func TestNewArtifactStatusWithHash(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "artifact.bin")
+	content := []byte("edmg-artifact\n")
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	status := newArtifactStatus("fixture", target, true)
+	if !status.Exists {
+		t.Fatalf("expected artifact to exist")
+	}
+	if status.Size != int64(len(content)) {
+		t.Fatalf("expected size %d, got %d", len(content), status.Size)
+	}
+	expected := fmt.Sprintf("%x", sha256.Sum256(content))
+	if status.SHA256 != expected {
+		t.Fatalf("expected sha256 %s, got %s", expected, status.SHA256)
+	}
+	if status.Modified == "" {
+		t.Fatalf("expected modified timestamp")
 	}
 }

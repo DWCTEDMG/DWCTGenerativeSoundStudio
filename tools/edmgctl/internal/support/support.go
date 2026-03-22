@@ -2,6 +2,7 @@ package support
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const (
@@ -111,9 +113,12 @@ type BootstrapReport struct {
 }
 
 type ArtifactStatus struct {
-	Label  string `json:"label"`
-	Path   string `json:"path"`
-	Exists bool   `json:"exists"`
+	Label    string `json:"label"`
+	Path     string `json:"path"`
+	Exists   bool   `json:"exists"`
+	Size     int64  `json:"size,omitempty"`
+	SHA256   string `json:"sha256,omitempty"`
+	Modified string `json:"modified,omitempty"`
 }
 
 type ReleaseStatus struct {
@@ -124,6 +129,13 @@ type ReleaseStatus struct {
 	BundleManifestOK   bool             `json:"bundleManifestOk"`
 	BundleSourceHash   string           `json:"bundleSourceHash,omitempty"`
 	Artifacts          []ArtifactStatus `json:"artifacts"`
+}
+
+type ArtifactManifest struct {
+	GeneratedAt string           `json:"generatedAt"`
+	StudioDir   string           `json:"studioDir"`
+	Package     PackageMeta      `json:"package"`
+	Artifacts   []ArtifactStatus `json:"artifacts"`
 }
 
 type DoctorReport struct {
@@ -299,27 +311,9 @@ func CollectReleaseStatus(repoRoot string) (ReleaseStatus, error) {
 		}
 	}
 
-	artifacts := []ArtifactStatus{
-		{
-			Label:  "backend bundle",
-			Path:   firstExisting(filepath.Join(studioDir, BackendRelDir, "edmg-studio-backend.exe"), filepath.Join(studioDir, BackendRelDir, "edmg-studio-backend")),
-			Exists: fileExists(filepath.Join(studioDir, BackendRelDir, "edmg-studio-backend.exe")) || fileExists(filepath.Join(studioDir, BackendRelDir, "edmg-studio-backend")),
-		},
-		{
-			Label:  "bundled ffmpeg",
-			Path:   firstExisting(filepath.Join(studioDir, FFmpegRelDir, "ffmpeg.exe"), filepath.Join(studioDir, FFmpegRelDir, "ffmpeg")),
-			Exists: fileExists(filepath.Join(studioDir, FFmpegRelDir, "ffmpeg.exe")) || fileExists(filepath.Join(studioDir, FFmpegRelDir, "ffmpeg")),
-		},
-		{
-			Label:  "win-unpacked app",
-			Path:   filepath.Join(studioDir, "dist", "win-unpacked", packagedAppName()),
-			Exists: fileExists(filepath.Join(studioDir, "dist", "win-unpacked", packagedAppName())),
-		},
-		{
-			Label:  "installer",
-			Path:   filepath.Join(studioDir, "dist", fmt.Sprintf("%s Setup %s.exe", pkg.Name, pkg.Version)),
-			Exists: fileExists(filepath.Join(studioDir, "dist", fmt.Sprintf("%s Setup %s.exe", pkg.Name, pkg.Version))),
-		},
+	artifacts, err := CollectArtifactInventory(repoRoot, false)
+	if err != nil {
+		return ReleaseStatus{}, err
 	}
 
 	return ReleaseStatus{
@@ -330,6 +324,46 @@ func CollectReleaseStatus(repoRoot string) (ReleaseStatus, error) {
 		BundleManifestOK:   manifestOK,
 		BundleSourceHash:   manifestHash,
 		Artifacts:          artifacts,
+	}, nil
+}
+
+func CollectArtifactInventory(repoRoot string, includeHashes bool) ([]ArtifactStatus, error) {
+	repoRoot, err := FindRepoRoot(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	studioDir := filepath.Join(repoRoot, StudioRelDir)
+	pkg, err := LoadPackageMeta(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	return []ArtifactStatus{
+		newArtifactStatus("backend bundle", firstExisting(filepath.Join(studioDir, BackendRelDir, "edmg-studio-backend.exe"), filepath.Join(studioDir, BackendRelDir, "edmg-studio-backend")), includeHashes),
+		newArtifactStatus("bundled ffmpeg", firstExisting(filepath.Join(studioDir, FFmpegRelDir, "ffmpeg.exe"), filepath.Join(studioDir, FFmpegRelDir, "ffmpeg")), includeHashes),
+		newArtifactStatus("win-unpacked app", filepath.Join(studioDir, "dist", "win-unpacked", packagedAppName()), includeHashes),
+		newArtifactStatus("installer", filepath.Join(studioDir, "dist", fmt.Sprintf("%s Setup %s.exe", pkg.Name, pkg.Version)), includeHashes),
+	}, nil
+}
+
+func BuildArtifactManifest(repoRoot string, includeHashes bool) (ArtifactManifest, error) {
+	repoRoot, err := FindRepoRoot(repoRoot)
+	if err != nil {
+		return ArtifactManifest{}, err
+	}
+	pkg, err := LoadPackageMeta(repoRoot)
+	if err != nil {
+		return ArtifactManifest{}, err
+	}
+	artifacts, err := CollectArtifactInventory(repoRoot, includeHashes)
+	if err != nil {
+		return ArtifactManifest{}, err
+	}
+	return ArtifactManifest{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		StudioDir:   filepath.Join(repoRoot, StudioRelDir),
+		Package:     pkg,
+		Artifacts:   artifacts,
 	}, nil
 }
 
@@ -456,6 +490,24 @@ func runNPMScript(repoRoot, script string) error {
 	return cmd.Run()
 }
 
+func newArtifactStatus(label, artifactPath string, includeHashes bool) ArtifactStatus {
+	status := ArtifactStatus{
+		Label: label,
+		Path:  artifactPath,
+	}
+	info, err := os.Stat(artifactPath)
+	if err != nil || info.IsDir() {
+		return status
+	}
+	status.Exists = true
+	status.Size = info.Size()
+	status.Modified = info.ModTime().UTC().Format(time.RFC3339)
+	if includeHashes {
+		status.SHA256 = sha256File(artifactPath)
+	}
+	return status
+}
+
 type commandCandidate struct {
 	Name string
 	Args []string
@@ -544,6 +596,15 @@ func runAndCapture(dir, name string, args ...string) string {
 		return ""
 	}
 	return out.String()
+}
+
+func sha256File(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum)
 }
 
 func parseMajorMinor(version string) (int, int) {
