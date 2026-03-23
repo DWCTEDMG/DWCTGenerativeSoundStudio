@@ -21,6 +21,8 @@ DEFAULT_BACKEND_PORT = 7863
 DEFAULT_BACKEND_HOST = "127.0.0.1"
 LAUNCHER_ENV_PATH = STUDIO_DIR / "launcher_env.json"
 BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json"
+SUPPORTED_PYTHON_MIN = (3, 10)
+SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 14)
 
 
 def _resolve_ffmpeg_path() -> str:
@@ -36,6 +38,109 @@ def _resolve_ffmpeg_path() -> str:
         return explicit
 
     return "ffmpeg"
+
+
+def _format_python_requirement() -> str:
+    return (
+        f"Python >= {SUPPORTED_PYTHON_MIN[0]}.{SUPPORTED_PYTHON_MIN[1]} "
+        f"and < {SUPPORTED_PYTHON_MAX_EXCLUSIVE[0]}.{SUPPORTED_PYTHON_MAX_EXCLUSIVE[1]}"
+    )
+
+
+def _python_version_for_command(cmd: list[str]) -> tuple[int, int, int] | None:
+    try:
+        proc = subprocess.run(
+            [*cmd, "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = str(proc.stdout or "").strip()
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", raw)
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def _is_supported_python_version(version: tuple[int, int, int] | None) -> bool:
+    if version is None:
+        return False
+    return SUPPORTED_PYTHON_MIN <= version[:2] < SUPPORTED_PYTHON_MAX_EXCLUSIVE
+
+
+def _format_python_version(version: tuple[int, int, int] | None) -> str:
+    if version is None:
+        return "unknown"
+    return ".".join(str(part) for part in version)
+
+
+def _describe_python_command(cmd: list[str]) -> str:
+    return " ".join(cmd)
+
+
+def _supported_python_candidates() -> list[list[str]]:
+    candidates: list[list[str]] = []
+    explicit = os.environ.get("EDMG_STUDIO_PYTHON", "").strip()
+    if explicit:
+        candidates.append([explicit])
+    candidates.append([sys.executable])
+    candidates.append(["python"])
+    if sys.platform.startswith("win"):
+        for minor in range(SUPPORTED_PYTHON_MAX_EXCLUSIVE[1] - 1, SUPPORTED_PYTHON_MIN[1] - 1, -1):
+            candidates.append(["py", f"-3.{minor}"])
+        candidates.append(["py", "-3"])
+
+    unique: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for cmd in candidates:
+        key = tuple(cmd)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(cmd)
+    return unique
+
+
+def _resolve_supported_python_command() -> tuple[list[str], tuple[int, int, int]]:
+    unsupported: list[str] = []
+    for cmd in _supported_python_candidates():
+        version = _python_version_for_command(cmd)
+        if version is None:
+            continue
+        if _is_supported_python_version(version):
+            return cmd, version
+        unsupported.append(f"{_describe_python_command(cmd)} ({_format_python_version(version)})")
+    detail = ""
+    if unsupported:
+        detail = " Unsupported candidates: " + ", ".join(unsupported)
+    raise RuntimeError(f"Could not find a supported Python interpreter. Need {_format_python_requirement()}.{detail}")
+
+
+def _backend_venv_status() -> tuple[bool, str]:
+    py = _venv_python(BACKEND_VENV)
+    if not py.exists():
+        return False, "missing python executable"
+    version = _python_version_for_command([str(py)])
+    if version is None:
+        return False, "python executable is not runnable"
+    if not _is_supported_python_version(version):
+        return False, f"unsupported Python {_format_python_version(version)}"
+    return True, _format_python_version(version)
+
+
+def _reset_backend_venv(log_cb) -> None:
+    if BACKEND_VENV.exists():
+        shutil.rmtree(BACKEND_VENV, ignore_errors=True)
+    py = _venv_python(BACKEND_VENV)
+    if py.exists():
+        try:
+            py.unlink()
+        except Exception:
+            pass
 
 def _read_json(path: Path, default):
     try:
@@ -1261,10 +1366,15 @@ class Launcher(tk.Tk):
         self._refresh_in_progress = True
         try:
             py = sys.executable
+            try:
+                bootstrap_cmd, bootstrap_version = _resolve_supported_python_command()
+                bootstrap_note = f" | bootstrap: {_describe_python_command(bootstrap_cmd)} ({_format_python_version(bootstrap_version)})"
+            except Exception as e:
+                bootstrap_note = f" | bootstrap: NOT FOUND ({e})"
             node = self._which("node")
             npm = self._which("npm")
 
-            self.lbl_python.config(text=f"Python: {py}")
+            self.lbl_python.config(text=f"Python: {py}{bootstrap_note}")
             self.lbl_node.config(text=f"Node: {node or 'NOT FOUND'} (npm: {npm or 'NOT FOUND'})")
 
             _, line_ollama = _port_doctor_line("Ollama", "127.0.0.1", 11434, health_url="http://127.0.0.1:11434/api/tags")
@@ -1292,13 +1402,28 @@ class Launcher(tk.Tk):
     def install_backend(self) -> None:
         def work():
             BACKEND_DIR.mkdir(parents=True, exist_ok=True)
+            bootstrap_cmd, bootstrap_version = _resolve_supported_python_command()
+            self._log(
+                f"Using bootstrap Python: {_describe_python_command(bootstrap_cmd)} "
+                f"({_format_python_version(bootstrap_version)})"
+            )
+
+            venv_ok, venv_detail = _backend_venv_status()
+            if BACKEND_VENV.exists() and not venv_ok:
+                self._log(f"Backend venv is incompatible ({venv_detail}). Recreating it.")
+                _reset_backend_venv(self._log)
+
             if not BACKEND_VENV.exists():
                 self._log(f"Creating venv: {BACKEND_VENV}")
-                rc = _run_cmd([sys.executable, "-m", "venv", str(BACKEND_VENV)], cwd=BACKEND_DIR, log_cb=self._log)
+                rc = _run_cmd([*bootstrap_cmd, "-m", "venv", str(BACKEND_VENV)], cwd=BACKEND_DIR, log_cb=self._log)
                 if rc != 0:
                     raise RuntimeError("venv creation failed")
 
             py = str(_venv_python(BACKEND_VENV))
+            venv_ok, venv_detail = _backend_venv_status()
+            if not venv_ok:
+                raise RuntimeError(f"Backend venv is not usable after creation: {venv_detail}")
+
             self._log("Upgrading pip…")
             rc = _run_cmd([py, "-m", "pip", "install", "-U", "pip"], cwd=BACKEND_DIR, log_cb=self._log)
             if rc != 0:
@@ -1340,8 +1465,9 @@ class Launcher(tk.Tk):
                 self._log("Backend already running.")
                 return
 
-            if not BACKEND_VENV.exists():
-                self._log("Backend venv missing. Running backend install first.")
+            venv_ok, venv_detail = _backend_venv_status()
+            if not BACKEND_VENV.exists() or not venv_ok:
+                self._log(f"Backend venv missing or incompatible ({venv_detail}). Running backend install first.")
                 self.install_backend()
                 raise RuntimeError("Backend not installed yet. Re-run Start Backend after install completes.")
 
