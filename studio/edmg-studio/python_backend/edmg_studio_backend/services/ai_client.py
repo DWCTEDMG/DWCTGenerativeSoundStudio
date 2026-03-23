@@ -92,10 +92,11 @@ class LocalAiDirectorClient:
             return
         from edmg_ai_service.config import Settings as AiSettings
         from edmg_ai_service.provider_factory import build_provider
-        from .config import settings as backend_settings
+        from ..config import Settings
         from .secrets import SecretStore
 
         self._provider_settings = AiSettings()
+        backend_settings = Settings()
         provider_name = (self._provider_settings.provider or "").strip().lower()
         if provider_name in ("openai_compat", "openai-compatible", "openai") and not self._provider_settings.openai_compat_api_key:
             secret_api_key = SecretStore(backend_settings.data_dir).get("openai_compat_api_key")
