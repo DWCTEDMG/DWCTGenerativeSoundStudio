@@ -1,5 +1,6 @@
 appId: com.dwct.edmgstudio
 productName: DWCT EDMG Studio
+icon: electron-resources/app-icon.png
 
 files:
   - "dist/**"
@@ -17,6 +18,7 @@ directories:
   output: "release"
 
 win:
+  icon: electron-resources/app-icon.ico
   target:
     - nsis
   artifactName: "DWCT-EDMG-Studio-${version}-Setup.${ext}"

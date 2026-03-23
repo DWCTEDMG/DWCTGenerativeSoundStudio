@@ -70,7 +70,7 @@ export default function App() {
   if (page === "models") content = <Models {...commonProps} />;
 
   return (
-    <div style={{ display: "flex" }}>
+    <div className="app-shell">
       <Sidebar page={page} onNavigate={setPage} />
       <div className="main">{content}</div>
     </div>

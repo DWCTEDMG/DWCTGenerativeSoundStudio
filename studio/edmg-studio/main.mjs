@@ -830,6 +830,28 @@ function getProdIndexPath() {
   return path.join(app.getAppPath(), "dist", "index.html");
 }
 
+function getWindowIconPath() {
+  const candidates = app.isPackaged
+    ? [
+        path.join(process.resourcesPath, "app-icon.ico"),
+        path.join(process.resourcesPath, "app-icon.png"),
+        path.join(process.resourcesPath, "electron-resources", "app-icon.ico"),
+        path.join(process.resourcesPath, "electron-resources", "app-icon.png"),
+      ]
+    : [
+        path.join(__dirname, "electron-resources", "app-icon.ico"),
+        path.join(__dirname, "electron-resources", "app-icon.png"),
+      ];
+
+  for (const candidate of candidates) {
+    if (pathExistsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
 function getDevPythonPath() {
   const explicit = process.env.EDMG_STUDIO_PYTHON;
   if (explicit && explicit.trim()) return explicit.trim();
@@ -1084,6 +1106,7 @@ async function createMainWindow() {
     minWidth: 1100,
     minHeight: 720,
     title: APP_NAME,
+    icon: getWindowIconPath(),
     backgroundColor: "#05070b",
     show: false,
     autoHideMenuBar: false,

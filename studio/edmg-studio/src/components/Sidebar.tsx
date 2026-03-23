@@ -36,8 +36,25 @@ export default function Sidebar({
 
   return (
     <div className="sidebar">
-      <div style={{ fontSize: 18, fontWeight: 800 }}>EDMG Studio</div>
-      <div className="small" style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <img
+          src="/studio-logo.png"
+          alt="EDMG Studio logo"
+          style={{
+            width: "100%",
+            maxWidth: 220,
+            aspectRatio: "1 / 1",
+            objectFit: "contain",
+            borderRadius: 24,
+            border: "1px solid rgba(70,214,224,0.28)",
+            background:
+              "radial-gradient(circle at top center, rgba(255,132,52,0.14), transparent 34%), rgba(5,17,19,0.94)",
+            boxShadow: "0 18px 40px rgba(0,0,0,0.32), 0 0 0 1px rgba(70,214,224,0.08)",
+          }}
+        />
+        <div style={{ fontSize: 18, fontWeight: 800, textAlign: "center" }}>EDMG Studio</div>
+      </div>
+      <div className="small" style={{ marginTop: 6, textAlign: "center" }}>
         Desktop UI + local backend + ComfyUI + AI + EDMG Core
       </div>
 
