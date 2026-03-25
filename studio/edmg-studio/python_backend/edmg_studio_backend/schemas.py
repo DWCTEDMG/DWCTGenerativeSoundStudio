@@ -32,6 +32,7 @@ class RenderScenesRequest(BaseModel):
     negative_prompt: str = "blurry, low quality, watermark, text, logo"
 
 MotionEngine = Literal["animatediff","svd"]
+CreativePreset = Literal["cinematic", "psychedelic", "ambient"]
 
 class RenderMotionRequest(BaseModel):
     """Render motion clips per scene via ComfyUI (AnimateDiff or SVD)."""
@@ -108,11 +109,20 @@ class InternalVideoRenderRequest(BaseModel):
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
 
+class CreativeDirectionApplyRequest(BaseModel):
+    variant_index: int = 0
+    preset: CreativePreset = "cinematic"
+    sensitivity: float = Field(default=1.0, ge=0.1, le=3.0)
+    overwrite_tracks: bool = True
+    overwrite_camera: bool = False
+
 class ExportDeforumRequest(BaseModel):
     variant_index: int = 0
     fps: int = 30
     width: int = 1024
     height: int = 576
+    preset: CreativePreset = "cinematic"
+    sensitivity: float = Field(default=1.0, ge=0.1, le=3.0)
 
 class CloudAwsTestRequest(BaseModel):
     bucket: str | None = None

@@ -80,6 +80,9 @@ describe("Workspace page", () => {
     expect(await screen.findByText("Creative direction")).toBeTruthy();
     expect(await screen.findByText("Scene prompt pack")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Copy prompt pack" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Apply direction to timeline" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Timeline patch" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "LLM contract" })).toBeTruthy();
     expect(await screen.findByText(/Transcript anchor/i)).toBeTruthy();
   });
 });

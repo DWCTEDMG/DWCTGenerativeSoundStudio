@@ -31,7 +31,8 @@ except Exception:
 from .config import Settings
 from .schemas import (
     HealthResponse, ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
-    RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest, ExportDeforumRequest,
+    RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest,
+    CreativeDirectionApplyRequest, ExportDeforumRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
 )
 from .store.projects import ProjectStore
@@ -1733,6 +1734,44 @@ def get_creative_direction(project_id: str, variant_index: int = 0, preset: str 
     return {"ok": True, "creative_direction": payload}
 
 
+@app.post("/v1/projects/{project_id}/creative_direction/apply_timeline_patch")
+def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirectionApplyRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    payload = _build_creative_direction_payload(
+        proj,
+        variant_index=int(req.variant_index or 0),
+        preset=str(req.preset or "cinematic"),
+        sensitivity=float(req.sensitivity or 1.0),
+    )
+    patch_timeline = (
+        payload.get("timeline_patch", {}).get("timeline")
+        if isinstance(payload.get("timeline_patch"), dict)
+        else {}
+    )
+    if not isinstance(patch_timeline, dict) or not patch_timeline:
+        raise HTTPException(400, "Creative direction timeline patch is unavailable")
+
+    base_timeline = proj.meta.get("timeline") if isinstance(proj.meta.get("timeline"), dict) else {}
+    merged = _merge_creative_timeline_patch(
+        base_timeline,
+        patch_timeline,
+        overwrite_tracks=bool(req.overwrite_tracks),
+        overwrite_camera=bool(req.overwrite_camera),
+    )
+    proj.meta["timeline"] = merged
+    proj.meta["last_creative_direction"] = {
+        "variant_index": int(req.variant_index or 0),
+        "preset": str(req.preset or "cinematic"),
+        "sensitivity": float(req.sensitivity or 1.0),
+        "applied_at": time.time(),
+    }
+    store.save(proj)
+    return {"ok": True, "timeline": merged, "creative_direction": payload}
+
+
 def _analysis_transcript_text(analysis: dict[str, Any]) -> str:
     raw = (analysis or {}).get("transcript")
     if isinstance(raw, dict):
@@ -1792,6 +1831,69 @@ _CREATIVE_DIRECTION_STOPWORDS = {
     "before", "during", "through", "scene", "shot", "visual", "video", "music", "audio", "render",
     "track", "variant", "project", "style", "look", "high", "detail", "coherent", "consistent",
 }
+
+_CREATIVE_EMOTION_WORDS: dict[str, set[str]] = {
+    "euphoria": {"light", "higher", "rise", "alive", "open", "glow", "gold", "electric", "dance", "rush"},
+    "longing": {"echo", "late", "ghost", "after", "distance", "remember", "missing", "fade", "lost", "again"},
+    "tension": {"edge", "fall", "smoke", "storm", "shadow", "break", "pressure", "night", "wire", "warning"},
+    "intimacy": {"skin", "breath", "close", "touch", "hand", "heart", "whisper", "inside"},
+    "defiance": {"burn", "riot", "wild", "fight", "loud", "rough", "fire", "run"},
+    "wonder": {"sky", "stars", "ocean", "dream", "horizon", "infinite", "blue", "sun", "neon", "glass"},
+}
+
+
+def _creative_tokenize(text: str) -> list[str]:
+    return [
+        token
+        for token in re.sub(r"[^a-z0-9\s'-]", " ", str(text or "").lower()).split()
+        if len(token) > 2 and token not in _CREATIVE_DIRECTION_STOPWORDS
+    ]
+
+
+def _creative_emotion_scores(tokens: list[str], limit: int = 4) -> list[dict[str, Any]]:
+    if not tokens:
+        return []
+
+    raw_scores = [
+        (emotion, sum(1 for token in tokens if token in words))
+        for emotion, words in _CREATIVE_EMOTION_WORDS.items()
+    ]
+    peak = max([score for _emotion, score in raw_scores] or [0])
+    if peak <= 0:
+        return []
+
+    return [
+        {"emotion": emotion, "score": round(float(score) / float(peak), 3)}
+        for emotion, score in sorted(raw_scores, key=lambda item: (-item[1], item[0]))
+        if score > 0
+    ][:limit]
+
+
+def _creative_hooks(sentences: list[str], limit: int = 3) -> list[str]:
+    picks: list[str] = []
+    for sentence in list(sentences[:2]) + list(sentences[-1:]):
+        clean = str(sentence or "").strip()
+        if clean and clean not in picks:
+            picks.append(clean)
+        if len(picks) >= limit:
+            break
+    return picks
+
+
+def _creative_average(values: list[float]) -> float:
+    return float(sum(values) / len(values)) if values else 0.0
+
+
+def _creative_provider_mode(plan: dict[str, Any]) -> str:
+    source = str((plan or {}).get("source") or "").strip().lower()
+    provider = os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower()
+    if source == "ai":
+        if provider == "ollama":
+            return "ollama-contract"
+        if provider in {"openai_compat", "openai-compatible", "openai"}:
+            return "openai-contract"
+        return f"{provider}-contract" if provider else "provider-contract"
+    return "local-heuristic"
 
 
 def _normalize_unit(value: Any, mode: str = "unit") -> float | None:
@@ -1995,6 +2097,51 @@ def _creative_motion_hint(params: dict[str, float]) -> str:
     )
 
 
+def _creative_section_label(index: int, total: int, energy: float, band: str) -> str:
+    if index == 0:
+        return "Arrival" if energy < 0.42 else "Cold Open"
+    if index == max(0, total - 1):
+        return "Resolve" if energy > 0.68 else "Afterglow"
+    if energy > 0.82 and band == "bass":
+        return "Drop"
+    if energy > 0.68 and band == "mid":
+        return "Lift"
+    if energy < 0.34:
+        return "Breath"
+    if band == "treble":
+        return "Spark"
+    if band == "bass":
+        return "Drive"
+    return "Build"
+
+
+def _creative_section_hints(label: str, band: str) -> tuple[str, str]:
+    if label == "Drop":
+        return (
+            "Fast dolly-in with handheld recovery and sharper light separation.",
+            "Push zoom, stronger negative Z travel, and transient shake accents.",
+        )
+    if label == "Breath":
+        return (
+            "Locked or gently drifting frame with longer lens settle.",
+            "Small XY drift, softer contrast, and more negative space.",
+        )
+    if band == "treble":
+        return (
+            "Lateral glide with highlight streaks and cleaner silhouette edges.",
+            "Particle flicker, quicker spin accents, and brighter edge energy.",
+        )
+    if band == "bass":
+        return (
+            "Low-angle orbit with grounded perspective and denser foreground depth.",
+            "Scale pulses, front-to-back travel, and weighty motion ramps.",
+        )
+    return (
+        "Steadicam reveal with measured parallax depth and controlled drift.",
+        "Blend orbit, rise, and moderate contrast ramps for continuity.",
+    )
+
+
 def _fallback_scene_metrics(index: int, total: int, overall: dict[str, Any]) -> dict[str, Any]:
     ratio = float(index) / max(1.0, float(total - 1)) if total > 1 else 0.0
     curve = math.sin(ratio * math.pi)
@@ -2007,6 +2154,118 @@ def _fallback_scene_metrics(index: int, total: int, overall: dict[str, Any]) -> 
         "duration_s": float(overall.get("duration_s") or 0.0),
         "source": "analysis",
     }
+
+
+def _derive_reactive_sections(
+    overall: dict[str, Any],
+    duration_s: float,
+    transcript_sentences: list[str],
+    motifs: list[str],
+    title: str,
+    preset: str,
+    sensitivity: float,
+    max_sections: int = 6,
+) -> list[dict[str, Any]]:
+    if duration_s <= 0:
+        duration_s = max(12.0, float(len(transcript_sentences) or 3) * 6.0)
+    desired = max(3, min(8, int(max_sections)))
+    curve = [max(0.0, min(1.0, float(v))) for v in list(overall.get("energy_curve") or [])]
+
+    ordered: list[int] = [0]
+    if len(curve) >= 4:
+        min_gap = max(2, len(curve) // max(3, desired + 1))
+        candidates = sorted(
+            [
+                (index, abs(curve[index] - curve[index - 1]))
+                for index in range(1, len(curve) - 1)
+            ],
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        for index, _score in candidates:
+            if len(ordered) >= desired:
+                break
+            if all(abs(index - existing) >= min_gap for existing in ordered):
+                ordered.append(index)
+        if len(ordered) < desired:
+            step = max(1, len(curve) // desired)
+            for index in range(step, len(curve) - 1, step):
+                if len(ordered) >= desired:
+                    break
+                if all(abs(index - existing) >= min_gap for existing in ordered):
+                    ordered.append(index)
+        ordered.append(len(curve) - 1)
+    else:
+        total_points = max(desired * 4, 16)
+        ordered.extend([int(round((index / float(desired)) * (total_points - 1))) for index in range(1, desired)])
+        ordered.append(total_points - 1)
+
+    ordered = sorted(set(max(0, int(value)) for value in ordered))
+    if len(ordered) < 2:
+        ordered = [0, max(1, len(curve) - 1 if curve else desired * 3)]
+
+    total_points = max(ordered[-1], len(curve) - 1, 1)
+    sections: list[dict[str, Any]] = []
+    for index, start_idx in enumerate(ordered[:-1]):
+        end_idx = max(start_idx + 1, ordered[index + 1])
+        if curve:
+            chunk = curve[start_idx : min(len(curve), end_idx + 1)]
+        else:
+            span = max(1, end_idx - start_idx)
+            chunk = [
+                max(0.0, min(1.0, float(overall.get("energy") or 0.45) * 0.75 + math.sin((start_idx + offset) / max(1.0, total_points) * math.pi) * 0.22))
+                for offset in range(span)
+            ]
+        avg_energy = _creative_average(chunk)
+        peak_energy = max(chunk) if chunk else float(overall.get("energy") or 0.45)
+        ratio = float(index) / max(1.0, float(len(ordered) - 2)) if len(ordered) > 2 else 0.0
+        band = (
+            "bass"
+            if float(overall.get("bass") or 0.0) + peak_energy * 0.12 >= max(float(overall.get("mid") or 0.0) + avg_energy * 0.08, float(overall.get("treble") or 0.0) + ratio * 0.1)
+            else "mid"
+            if float(overall.get("mid") or 0.0) + avg_energy * 0.08 >= float(overall.get("treble") or 0.0) + ratio * 0.1
+            else "treble"
+        )
+        label = _creative_section_label(index, len(ordered) - 1, avg_energy, band)
+        metrics = {
+            "energy": avg_energy,
+            "bass": max(0.0, min(1.0, float(overall.get("bass") or 0.0) * 0.85 + peak_energy * 0.12)),
+            "mid": max(0.0, min(1.0, float(overall.get("mid") or 0.0) * 0.85 + avg_energy * 0.12)),
+            "treble": max(0.0, min(1.0, float(overall.get("treble") or 0.0) * 0.82 + ratio * 0.08 + peak_energy * 0.1)),
+            "duration_s": max(0.2, (end_idx - start_idx) / max(1.0, total_points) * duration_s),
+            "source": "analysis",
+        }
+        params = _compute_reactive_params(metrics, preset, sensitivity)
+        camera_hint, motion_hint = _creative_section_hints(label, band)
+        start_s = float(start_idx) / float(total_points) * duration_s
+        end_s = min(duration_s, max(start_s + 0.2, float(end_idx) / float(total_points) * duration_s))
+        cue_index = min(len(transcript_sentences) - 1, int(round(ratio * max(0, len(transcript_sentences) - 1)))) if transcript_sentences else -1
+        transcript_cue = transcript_sentences[cue_index] if cue_index >= 0 else "No transcript cue available; drive the section from the energy arc."
+        prompt = (
+            f"{title or 'Untitled project'}, {label.lower()} section, {band}-led motion language, "
+            f"{preset} music-film framing, motifs: {', '.join(motifs[:3]) or 'cinematic continuity'}"
+        )
+        sections.append(
+            {
+                "index": index,
+                "name": label,
+                "start_s": start_s,
+                "end_s": end_s,
+                "duration_s": max(0.2, end_s - start_s),
+                "energy": float(avg_energy),
+                "energy_label": _creative_energy_label(float(avg_energy)),
+                "prompt": prompt,
+                "transcript_cue": transcript_cue,
+                "camera_hint": camera_hint,
+                "motion_hint": f"{motion_hint} {_creative_motion_hint(params)}",
+                "band": band,
+                "avg_energy": float(avg_energy),
+                "peak_energy": float(peak_energy),
+                "reactive_params": params,
+                "scene_source": "analysis_fallback",
+            }
+        )
+    return sections
 
 
 def _scene_metrics_from_curve(
@@ -2041,40 +2300,387 @@ def _scene_metrics_from_curve(
     }
 
 
+def _dedupe_camera_keyframes(keyframes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    dedup: dict[float, dict[str, Any]] = {}
+    for keyframe in keyframes:
+        try:
+            t = round(float(keyframe.get("t") or 0.0), 3)
+        except Exception:
+            continue
+        dedup[t] = {**keyframe, "t": t}
+    return [dedup[t] for t in sorted(dedup.keys())]
+
+
+def _build_creative_timeline_patch(
+    packed_scenes: list[dict[str, Any]],
+    duration_s: float,
+    negative_prompt: str,
+) -> dict[str, Any]:
+    prompt_track = {
+        "id": "track_prompt",
+        "name": "Prompts",
+        "type": "prompt",
+        "clips": [],
+    }
+    motion_track = {
+        "id": "track_motion",
+        "name": "Motion",
+        "type": "motion",
+        "clips": [],
+    }
+    layers: list[dict[str, Any]] = []
+    camera_keyframes: list[dict[str, Any]] = []
+
+    for index, scene in enumerate(packed_scenes):
+        start_s = float(scene.get("start_s") or 0.0)
+        end_s = max(start_s + 0.2, float(scene.get("end_s") or (start_s + 5.0)))
+        params = scene.get("reactive_params") if isinstance(scene.get("reactive_params"), dict) else {}
+        zoom = float(params.get("zoom") or 1.0)
+        zoom_end = zoom + max(0.01, float(scene.get("energy") or 0.0) * 0.04)
+        pan_x_end = float(params.get("translation_x") or 0.0)
+        pan_y_end = float(params.get("translation_y") or 0.0)
+        rotation_start = float(params.get("rotation_z") or 0.0)
+        rotation_end = rotation_start + float(scene.get("energy") or 0.0) * 2.5
+
+        prompt_track["clips"].append(
+            {
+                "id": f"creative_prompt_{index}",
+                "start_s": start_s,
+                "end_s": end_s,
+                "data": {
+                    "prompt": str(scene.get("prompt_pack") or scene.get("prompt") or "").strip(),
+                    "negative_prompt": negative_prompt,
+                },
+            }
+        )
+        motion_track["clips"].append(
+            {
+                "id": f"creative_motion_{index}",
+                "start_s": start_s,
+                "end_s": end_s,
+                "data": {
+                    "zoom_start": zoom,
+                    "zoom_end": zoom_end,
+                    "pan_x_start": 0.0,
+                    "pan_x_end": pan_x_end,
+                    "pan_y_start": 0.0,
+                    "pan_y_end": pan_y_end,
+                    "rotation_start": rotation_start,
+                    "rotation_end": rotation_end,
+                    "strength": float(params.get("strength") or 0.35),
+                    "cfg": float(params.get("cfg_scale") or 7.0),
+                    "steps": 12,
+                },
+            }
+        )
+
+        cue_text = str(scene.get("transcript_cue") or scene.get("name") or "").strip()
+        if cue_text:
+            layers.append(
+                {
+                    "id": f"creative_overlay_{index}",
+                    "type": "text",
+                    "text": cue_text[:180],
+                    "start_s": start_s,
+                    "end_s": end_s,
+                    "x": 24,
+                    "y": 24 + (index % 3) * 92,
+                    "w": 420,
+                    "h": 84,
+                    "size": 32,
+                    "color": "#ffffff",
+                    "stroke_color": "#000000",
+                    "stroke_width": 2,
+                    "opacity": 0.94 if float(scene.get("energy") or 0.0) >= 0.5 else 0.82,
+                    "blend_mode": "normal",
+                    "z": 20 + index,
+                }
+            )
+
+        camera_keyframes.extend(
+            [
+                {
+                    "t": start_s,
+                    "zoom": zoom,
+                    "pan_x": 0.0,
+                    "pan_y": 0.0,
+                    "rotation_deg": rotation_start,
+                },
+                {
+                    "t": end_s,
+                    "zoom": zoom_end,
+                    "pan_x": pan_x_end,
+                    "pan_y": pan_y_end,
+                    "rotation_deg": rotation_end,
+                },
+            ]
+        )
+
+    return {
+        "ok": bool(packed_scenes),
+        "timeline": {
+            "tracks": [prompt_track, motion_track],
+            "layers": layers,
+            "camera": {"keyframes": _dedupe_camera_keyframes(camera_keyframes)},
+            "render": {"fps_output": 24},
+            "duration_s": duration_s,
+        },
+        "notes": [
+            "Prompt and motion tracks match the canonical Studio timeline schema.",
+            "Lyric and transcript cues are converted into compositor text layers instead of a parallel overlay-track format.",
+        ],
+    }
+
+
+def _build_creative_deforum_preview(
+    packed_scenes: list[dict[str, Any]],
+    duration_s: float,
+    negative_prompt: str,
+    fps: int = 30,
+) -> dict[str, Any]:
+    total_frames = max(1, int(round(max(duration_s, 1.0) * max(1, fps))))
+    prompts: dict[str, str] = {}
+    zoom_pairs: list[tuple[int, float]] = []
+    angle_pairs: list[tuple[int, float]] = []
+    translation_pairs: list[tuple[int, float]] = []
+    cfg_pairs: list[tuple[int, float]] = []
+    strength_pairs: list[tuple[int, float]] = []
+    contrast_pairs: list[tuple[int, float]] = []
+
+    for index, scene in enumerate(packed_scenes):
+        start_frame = max(0, int(round(float(scene.get("start_s") or 0.0) * fps)))
+        end_frame = max(start_frame + 1, int(round(float(scene.get("end_s") or 0.0) * fps)))
+        params = scene.get("reactive_params") if isinstance(scene.get("reactive_params"), dict) else {}
+        prompts[str(start_frame)] = str(scene.get("prompt") or "cinematic").strip() or "cinematic"
+        zoom = float(params.get("zoom") or 1.0)
+        angle = float(params.get("rotation_y") or params.get("rotation_z") or 0.0)
+        translation = float(params.get("translation_z") or 0.0)
+        cfg = float(params.get("cfg_scale") or 7.0)
+        strength = float(params.get("strength") or 0.35)
+        contrast = float(params.get("contrast") or 1.0)
+        zoom_pairs.extend([(start_frame, zoom), (end_frame, zoom + max(0.01, float(scene.get("energy") or 0.0) * 0.02))])
+        angle_pairs.extend([(start_frame, angle), (end_frame, angle + float(scene.get("energy") or 0.0) * 2.0)])
+        translation_pairs.extend([(start_frame, translation), (end_frame, translation - float(scene.get("energy") or 0.0) * 2.0)])
+        cfg_pairs.extend([(start_frame, cfg), (end_frame, cfg)])
+        strength_pairs.extend([(start_frame, strength), (end_frame, strength)])
+        contrast_pairs.extend([(start_frame, contrast), (end_frame, contrast)])
+
+    schedules = {
+        "zoom": _format_schedule_pairs(zoom_pairs) if zoom_pairs else "",
+        "angle": _format_schedule_pairs(angle_pairs) if angle_pairs else "",
+        "translation_z": _format_schedule_pairs(translation_pairs) if translation_pairs else "",
+        "cfg_scale_schedule": _format_schedule_pairs(cfg_pairs) if cfg_pairs else "",
+        "strength_schedule": _format_schedule_pairs(strength_pairs) if strength_pairs else "",
+        "contrast_schedule": _format_schedule_pairs(contrast_pairs) if contrast_pairs else "",
+    }
+
+    return {
+        "ok": bool(packed_scenes),
+        "settings": {
+            "animation_mode": "3D",
+            "fps": fps,
+            "max_frames": total_frames,
+            "prompts": prompts or {"0": "cinematic"},
+            "negative_prompts": {"0": negative_prompt},
+            **{key: value for key, value in schedules.items() if value},
+            "schedules": schedules,
+        },
+    }
+
+
+def _build_creative_contract(
+    proj: Any,
+    plan: dict[str, Any],
+    transcript_text: str,
+    packed_scenes: list[dict[str, Any]],
+    motifs: list[str],
+    hooks: list[str],
+    duration_s: float,
+    bpm: float,
+    provider_mode: str,
+) -> dict[str, Any]:
+    mode = "lyric-film" if transcript_text else "music-video"
+    visual_tone = str(
+        (plan.get("variants") or [{}])[0].get("mood")
+        if isinstance((plan.get("variants") or [{}])[0], dict)
+        else ""
+    ).strip() or "cinematic reactive framing"
+
+    return {
+        "ok": True,
+        "endpoint": "/v1/projects/:project_id/narrative_direction",
+        "provider_mode": provider_mode,
+        "request": {
+            "title": str(getattr(proj, "name", "") or "Untitled project"),
+            "transcript": transcript_text,
+            "duration_s": duration_s,
+            "bpm": bpm,
+            "scene_count": len(packed_scenes),
+            "mode": mode,
+            "visual_tone": visual_tone,
+            "anchors": motifs[:5],
+            "hooks": hooks,
+        },
+        "expected_response_shape": {
+            "ok": True,
+            "creative_direction": {
+                "scenes": [
+                    {
+                        "name": "string",
+                        "start_s": 0,
+                        "end_s": 0,
+                        "prompt": "string",
+                        "camera_hint": "string",
+                        "motion_hint": "string",
+                        "transcript_cue": "string",
+                    }
+                ]
+            },
+            "timeline_patch": {
+                "timeline": {
+                    "tracks": [{"type": "prompt"}, {"type": "motion"}],
+                    "layers": [{"type": "text"}],
+                }
+            },
+        },
+    }
+
+
+def _merge_creative_timeline_patch(
+    base_timeline: dict[str, Any],
+    patch_timeline: dict[str, Any],
+    *,
+    overwrite_tracks: bool,
+    overwrite_camera: bool,
+) -> dict[str, Any]:
+    merged = {**(base_timeline or {})}
+    base_tracks = [track for track in list(merged.get("tracks") or []) if isinstance(track, dict)]
+    patch_tracks = [track for track in list(patch_timeline.get("tracks") or []) if isinstance(track, dict)]
+
+    for patch_track in patch_tracks:
+        track_type = str(patch_track.get("type") or "").lower()
+        idx = next(
+            (index for index, track in enumerate(base_tracks) if str(track.get("type") or "").lower() == track_type),
+            -1,
+        )
+        if idx >= 0:
+            if overwrite_tracks:
+                base_tracks[idx] = patch_track
+            else:
+                existing_clips = [clip for clip in list(base_tracks[idx].get("clips") or []) if isinstance(clip, dict)]
+                merged_clips = {str(clip.get("id") or f"clip_{index}"): clip for index, clip in enumerate(existing_clips)}
+                for clip_index, clip in enumerate(list(patch_track.get("clips") or [])):
+                    if not isinstance(clip, dict):
+                        continue
+                    merged_clips[str(clip.get("id") or f"patch_{clip_index}")] = clip
+                base_tracks[idx] = {**base_tracks[idx], **patch_track, "clips": list(merged_clips.values())}
+        else:
+            base_tracks.append(patch_track)
+
+    merged["tracks"] = base_tracks
+
+    base_layers = [layer for layer in list(merged.get("layers") or []) if isinstance(layer, dict)]
+    patch_layers = [layer for layer in list(patch_timeline.get("layers") or []) if isinstance(layer, dict)]
+    merged_layers = {str(layer.get("id") or f"layer_{index}"): layer for index, layer in enumerate(base_layers)}
+    for index, layer in enumerate(patch_layers):
+        merged_layers[str(layer.get("id") or f"patch_layer_{index}")] = layer
+    merged["layers"] = list(merged_layers.values())
+
+    patch_camera = patch_timeline.get("camera") if isinstance(patch_timeline.get("camera"), dict) else {}
+    base_camera = merged.get("camera") if isinstance(merged.get("camera"), dict) else {}
+    if overwrite_camera or not list(base_camera.get("keyframes") or []):
+        merged["camera"] = patch_camera or base_camera
+    else:
+        merged_keyframes = _dedupe_camera_keyframes(
+            [keyframe for keyframe in list(base_camera.get("keyframes") or []) if isinstance(keyframe, dict)]
+            + [keyframe for keyframe in list(patch_camera.get("keyframes") or []) if isinstance(keyframe, dict)]
+        )
+        merged["camera"] = {**base_camera, **patch_camera, "keyframes": merged_keyframes}
+
+    patch_render = patch_timeline.get("render") if isinstance(patch_timeline.get("render"), dict) else {}
+    if patch_render:
+        merged["render"] = {**(merged.get("render") if isinstance(merged.get("render"), dict) else {}), **patch_render}
+
+    if isinstance(patch_timeline.get("duration_s"), (int, float)):
+        merged["duration_s"] = float(patch_timeline.get("duration_s"))
+    return merged
+
+
 def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str, sensitivity: float) -> dict[str, Any]:
-    analysis = (proj.meta.get("analysis") or {}) if hasattr(proj, "meta") else {}
-    plan = (proj.meta.get("last_plan") or {}) if hasattr(proj, "meta") else {}
+    analysis_raw = (proj.meta.get("analysis") or {}) if hasattr(proj, "meta") else {}
+    analysis = analysis_raw if isinstance(analysis_raw, dict) else {}
+    plan_raw = (proj.meta.get("last_plan") or {}) if hasattr(proj, "meta") else {}
+    plan = plan_raw if isinstance(plan_raw, dict) else {}
     variants = list(plan.get("variants") or [])
     variant = variants[variant_index] if 0 <= variant_index < len(variants) else {}
-    scenes = list(variant.get("scenes") or [])
+    scenes = list(variant.get("scenes") or []) if isinstance(variant, dict) else []
     transcript_text = _analysis_transcript_text(analysis).strip()
     transcript_sentences = _analysis_transcript_sentences(analysis)
+    hooks = _creative_hooks(transcript_sentences)
     motifs = _analysis_motifs(variant if isinstance(variant, dict) else {}, transcript_text)
+    emotion_tokens = _creative_tokenize(" ".join([transcript_text, *[str(scene.get("prompt") or "") for scene in scenes if isinstance(scene, dict)]]))
+    emotions = _creative_emotion_scores(emotion_tokens)
     overall = _infer_reactivity_metrics(analysis if isinstance(analysis, dict) else {})
     energy_curve = list(overall.get("energy_curve") or [])
     waveform = list(overall.get("waveform") or [])
     duration_s = float(overall.get("duration_s") or 0.0)
+    fallback_sections = _derive_reactive_sections(
+        overall,
+        duration_s,
+        transcript_sentences,
+        motifs,
+        str(getattr(proj, "name", "") or "Untitled project"),
+        preset,
+        sensitivity,
+        max_sections=min(8, max(3, len(scenes) or 6)),
+    )
+    source_scenes: list[dict[str, Any]] = scenes if scenes else fallback_sections
+    scene_source = "plan" if scenes else "analysis_fallback" if fallback_sections else "none"
+    provider_mode = _creative_provider_mode(plan)
+    negative_prompt = next(
+        (
+            str(scene.get("negative_prompt") or "").strip()
+            for scene in source_scenes
+            if isinstance(scene, dict) and str(scene.get("negative_prompt") or "").strip()
+        ),
+        "blurry, low quality, watermark, text, logo",
+    )
 
     packed_scenes: list[dict[str, Any]] = []
-    for index, scene in enumerate(scenes):
+    for index, scene in enumerate(source_scenes):
         name = str(scene.get("name") or f"Scene {index + 1}")
         start_s = float(scene.get("start_s") or index * 5.0)
         end_s = float(scene.get("end_s") or (start_s + 5.0))
-        metrics = _scene_metrics_from_curve(index, len(scenes) or 1, scene, overall, duration_s, energy_curve)
-        params = _compute_reactive_params(metrics, preset, sensitivity)
-        cue_index = (
-            min(len(transcript_sentences) - 1, int((index / max(1, len(scenes) - 1)) * len(transcript_sentences)))
-            if transcript_sentences else -1
-        )
-        transcript_cue = (
-            transcript_sentences[cue_index]
-            if cue_index >= 0 else
-            "No transcript cue available; drive the scene from the prompt and energy arc."
-        )
+        if scene_source == "analysis_fallback" and isinstance(scene.get("reactive_params"), dict):
+            metrics = {
+                "energy": float(scene.get("energy") or 0.0),
+                "bass": max(0.0, min(1.0, float(overall.get("bass") or 0.0) * 0.85 + float(scene.get("peak_energy") or scene.get("energy") or 0.0) * 0.12)),
+                "mid": max(0.0, min(1.0, float(overall.get("mid") or 0.0) * 0.85 + float(scene.get("avg_energy") or scene.get("energy") or 0.0) * 0.12)),
+                "treble": max(0.0, min(1.0, float(overall.get("treble") or 0.0) * 0.85 + float(scene.get("peak_energy") or scene.get("energy") or 0.0) * 0.1)),
+                "duration_s": max(0.2, end_s - start_s),
+                "source": "analysis",
+            }
+            params = {key: float(value) for key, value in dict(scene.get("reactive_params") or {}).items() if isinstance(value, (int, float))}
+            transcript_cue = str(scene.get("transcript_cue") or "").strip() or "No transcript cue available; drive the section from the energy arc."
+            energy_label = str(scene.get("energy_label") or _creative_energy_label(float(metrics["energy"])))
+            camera_hint = str(scene.get("camera_hint") or _creative_camera_hint(float(metrics["energy"])))
+            motion_hint = str(scene.get("motion_hint") or _creative_motion_hint(params))
+        else:
+            metrics = _scene_metrics_from_curve(index, len(source_scenes) or 1, scene, overall, duration_s, energy_curve)
+            params = _compute_reactive_params(metrics, preset, sensitivity)
+            cue_index = (
+                min(len(transcript_sentences) - 1, int((index / max(1, len(source_scenes) - 1)) * len(transcript_sentences)))
+                if transcript_sentences else -1
+            )
+            transcript_cue = (
+                transcript_sentences[cue_index]
+                if cue_index >= 0 else
+                "No transcript cue available; drive the scene from the prompt and energy arc."
+            )
+            energy_label = _creative_energy_label(float(metrics["energy"]))
+            camera_hint = _creative_camera_hint(float(metrics["energy"]))
+            motion_hint = _creative_motion_hint(params)
         prompt = str(scene.get("prompt") or "").strip() or "Cinematic image sequence with a coherent subject and controlled atmosphere."
-        energy_label = _creative_energy_label(float(metrics["energy"]))
-        camera_hint = _creative_camera_hint(float(metrics["energy"]))
-        motion_hint = _creative_motion_hint(params)
         prompt_pack = " ".join(
             [
                 prompt,
@@ -2099,6 +2705,8 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
                 "camera_hint": camera_hint,
                 "motion_hint": motion_hint,
                 "prompt_pack": prompt_pack,
+                "reactive_params": params,
+                "scene_source": scene_source,
             }
         )
 
@@ -2111,10 +2719,61 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             for scene in packed_scenes
         ]
     )
+    timeline_patch = _build_creative_timeline_patch(packed_scenes, duration_s or max([float(scene.get("end_s") or 0.0) for scene in packed_scenes] or [0.0]), negative_prompt)
+    deforum_preview = _build_creative_deforum_preview(
+        packed_scenes,
+        duration_s or max([float(scene.get("end_s") or 0.0) for scene in packed_scenes] or [0.0]),
+        negative_prompt,
+        fps=30,
+    )
+    bpm = float(
+        _pick_raw_number((analysis.get("features") or {}) if isinstance(analysis, dict) else {}, ["bpm", "tempo_bpm", "tempo"])
+        or 0.0
+    )
+    narrative_analysis = {
+        "ok": bool(transcript_text or motifs or packed_scenes),
+        "title": str(getattr(proj, "name", "") or "Untitled project"),
+        "provider_mode": provider_mode,
+        "scene_source": scene_source,
+        "emotions": emotions,
+        "hooks": hooks,
+        "motifs": motifs,
+        "transcript_line_count": len(transcript_sentences),
+    }
+    llm_contract = _build_creative_contract(
+        proj,
+        plan,
+        transcript_text,
+        packed_scenes,
+        motifs,
+        hooks,
+        duration_s,
+        bpm,
+        provider_mode,
+    )
+
+    missing: list[str] = []
+    if not analysis:
+        missing.append("analysis")
+    if not variants:
+        missing.append("plan")
+    ready = bool(packed_scenes or fallback_sections or transcript_text)
+    if analysis and scenes:
+        status = "Creative direction is being derived on the backend from the saved project analysis and plan."
+    elif analysis and fallback_sections:
+        status = "Plan not found. Using audio-reactive fallback sections derived from saved analysis."
+    elif scenes:
+        status = "Audio analysis not found. Using saved plan scenes with narrative fallbacks."
+    else:
+        status = "Run audio analysis and generate a plan variant to unlock creative direction guidance."
 
     return {
+        "ready": ready,
+        "missing": missing,
         "preset": preset,
         "sensitivity": float(sensitivity),
+        "provider_mode": provider_mode,
+        "scene_source": scene_source,
         "metrics": {
             "energy": float(overall["energy"]),
             "bass": float(overall["bass"]),
@@ -2127,13 +2786,18 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         "motifs": motifs,
         "transcript_text": transcript_text,
         "transcript_summary": " ".join(transcript_sentences[:3]),
+        "narrative_analysis": narrative_analysis,
+        "sections": fallback_sections,
         "scenes": packed_scenes,
         "export_text": export_text,
-        "status": (
-            "Creative direction is being derived on the backend from the saved project analysis and plan."
-            if analysis else
-            "Run audio analysis and generate a plan variant to unlock creative direction guidance."
-        ),
+        "timeline_patch": timeline_patch,
+        "deforum_preview": deforum_preview,
+        "llm_contract": llm_contract,
+        "notes": [
+            "Creative direction now carries audio-reactive sections, timeline patch data, and a Deforum-aligned preview in one Studio-native payload.",
+            "Prompt and motion tracks stay in the canonical timeline schema, while lyric cues are translated into compositor text layers.",
+        ],
+        "status": status,
     }
 
 
@@ -4073,7 +4737,25 @@ def export_deforum(project_id: str, req: ExportDeforumRequest):
         raise HTTPException(400, "variant_index out of range")
 
     variant = variants[req.variant_index]
-    prompts = _scene_schedule_to_prompts(variant, fps=req.fps)
+    safe_preset = str(req.preset or "cinematic")
+    if safe_preset not in {"cinematic", "psychedelic", "ambient"}:
+        safe_preset = "cinematic"
+    creative_payload = _build_creative_direction_payload(
+        proj,
+        variant_index=req.variant_index,
+        preset=safe_preset,
+        sensitivity=float(req.sensitivity or 1.0),
+    )
+    preview_settings = (
+        creative_payload.get("deforum_preview", {}).get("settings")
+        if isinstance(creative_payload.get("deforum_preview"), dict)
+        else {}
+    )
+    prompts = (
+        dict(preview_settings.get("prompts") or {})
+        if isinstance(preview_settings, dict) and isinstance(preview_settings.get("prompts"), dict)
+        else _scene_schedule_to_prompts(variant, fps=req.fps)
+    )
 
     # Use EDMG Core template if available; otherwise minimal
     try:
@@ -4096,6 +4778,24 @@ def export_deforum(project_id: str, req: ExportDeforumRequest):
             "prompts": prompts,
             "note": "Install EDMG Core for full Deforum template output."
         }
+
+    if isinstance(preview_settings, dict):
+        for key in (
+            "negative_prompts",
+            "zoom",
+            "angle",
+            "translation_z",
+            "cfg_scale_schedule",
+            "strength_schedule",
+            "contrast_schedule",
+            "schedules",
+        ):
+            value = preview_settings.get(key)
+            if value:
+                settings_dict[key] = value
+    settings_dict["W"] = req.width
+    settings_dict["H"] = req.height
+    settings_dict["fps"] = req.fps
 
     out_dir = store.project_dir(project_id) / "outputs" / "deforum"
     out_dir.mkdir(parents=True, exist_ok=True)
