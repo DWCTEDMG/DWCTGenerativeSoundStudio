@@ -3,7 +3,7 @@ productName: DWCT EDMG Studio
 icon: electron-resources/app-icon.png
 
 files:
-  - "dist/**"
+  - "dist-web/**"
   - "main.mjs"
   - "preload.cjs"
   - "package.json"
@@ -15,7 +15,7 @@ extraResources:
       - "**/*"
 
 directories:
-  output: "release"
+  output: "dist"
 
 win:
   icon: electron-resources/app-icon.ico

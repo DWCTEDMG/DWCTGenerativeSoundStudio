@@ -9,17 +9,21 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "build": "vite build",
+    "test:ui": "vitest run",
+    "test:ui:watch": "vitest",
     "lint": "eslint src main.mjs preload.cjs electron scripts --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepare:release-bundle": "node scripts/prepare-release-bundle.mjs",
     "release:stage-desktop": "node scripts/release-stage-desktop.mjs",
     "validate:electron-bridge": "node --check main.mjs && node --check preload.cjs && node --check electron/main.mjs && node --check electron/preload.cjs",
-    "validate:desktop-integration": "node scripts/desktop-integration-harness.mjs",
+    "validate:desktop-integration": "node scripts/desktop-integration-harness.mjs --require-live-probe",
+    "validate:desktop-integration:best-effort": "node scripts/desktop-integration-harness.mjs",
+    "validate:desktop-integration:strict": "npm run validate:desktop-integration",
     "validate:packaged-desktop-smoke": "node scripts/packaged-desktop-smoke.mjs",
     "validate:packaged-customer-flow": "node scripts/packaged-customer-flow.mjs",
     "validate:packaged-upgrade-proof": "node scripts/packaged-upgrade-proof.mjs",
     "validate:packaged-zero-state-setup": "node scripts/packaged-zero-state-setup-proof.mjs",
-    "validate:desktop": "npm run typecheck && npm run build && npm run prepare:release-bundle && npm run release:stage-desktop && npm run validate:electron-bridge && npm run validate:desktop-integration && npm run validate:packaged-desktop-smoke",
+    "validate:desktop": "npm run typecheck && npm run test:ui && npm run build && npm run prepare:release-bundle && npm run release:stage-desktop && npm run validate:electron-bridge && npm run validate:desktop-integration && npm run validate:packaged-desktop-smoke",
     "validate:release": "npm run validate:desktop && npm run dist:win && npm run validate:packaged-customer-flow && npm run validate:packaged-upgrade-proof",
     "build:electron": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs --dir -c.directories.app=release/staged-app",
     "dist:win": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app"
@@ -36,13 +40,16 @@
     "@typescript-eslint/eslint-plugin": "^8.57.1",
     "@typescript-eslint/parser": "^8.57.1",
     "@vitejs/plugin-react": "^5.0.0",
+    "@testing-library/react": "^16.3.0",
     "concurrently": "^9.2.1",
     "electron": "41.0.3",
     "electron-builder": "^26.8.1",
     "eslint": "^10.0.3",
     "globals": "^17.4.0",
+    "jsdom": "^26.1.0",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
+    "vitest": "^3.2.4",
     "wait-on": "^7.2.0"
   },
   "build": {
@@ -54,7 +61,7 @@
       "buildResources": "electron-resources"
     },
     "files": [
-      "dist/**",
+      "dist-web/**",
       "main.mjs",
       "preload.cjs",
       "package.json"

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,12 +20,21 @@ let BACKEND_PORT = Number(process.env.EDMG_STUDIO_BACKEND_PORT ?? "7863");
 const SPAWN_BACKEND = (process.env.EDMG_STUDIO_SPAWN_BACKEND ?? "1") !== "0";
 
 const TEST_MODE = (process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1";
+const TEST_SKIP_MIGRATION = (process.env.EDMG_STUDIO_TEST_SKIP_MIGRATION ?? "0") === "1";
 const TEST_PAGE = process.env.EDMG_STUDIO_TEST_PAGE
   ? path.resolve(process.env.EDMG_STUDIO_TEST_PAGE)
   : "";
 const TEST_REPORT_PATH = process.env.EDMG_STUDIO_TEST_REPORT_PATH
   ? path.resolve(process.env.EDMG_STUDIO_TEST_REPORT_PATH)
   : "";
+const TEST_TRACE_PATH = TEST_REPORT_PATH ? `${TEST_REPORT_PATH}.trace.log` : "";
+const TEST_PROBE_REVEAL_PATH = process.env.EDMG_STUDIO_TEST_PROBE_REVEAL_PATH
+  ? path.resolve(process.env.EDMG_STUDIO_TEST_PROBE_REVEAL_PATH)
+  : "";
+const TEST_PROBE_OPEN_PATH = process.env.EDMG_STUDIO_TEST_PROBE_OPEN_PATH
+  ? path.resolve(process.env.EDMG_STUDIO_TEST_PROBE_OPEN_PATH)
+  : "";
+const TEST_EXPECT_BACKEND_URL = String(process.env.EDMG_STUDIO_TEST_EXPECT_BACKEND_URL ?? "").trim();
 const FAKE_PATH_ACTIONS = (process.env.EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS ?? "0") === "1";
 
 const UI_PORT = process.env.EDMG_STUDIO_UI_PORT ?? "5173";
@@ -121,6 +130,14 @@ function safeStreamWrite(stream, chunk) {
   } catch (error) {
     suppressPipeError(error);
   }
+}
+
+function appendTestTrace(message) {
+  if (!TEST_MODE || !TEST_TRACE_PATH) return;
+  try {
+    ensureDirSync(path.dirname(TEST_TRACE_PATH));
+    fs.appendFileSync(TEST_TRACE_PATH, `[${new Date().toISOString()}] ${message}\n`, "utf8");
+  } catch {}
 }
 
 let currentBackendUrl = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
@@ -827,7 +844,7 @@ function getPreloadPath() {
 }
 
 function getProdIndexPath() {
-  return path.join(app.getAppPath(), "dist", "index.html");
+  return path.join(app.getAppPath(), "dist-web", "index.html");
 }
 
 function getWindowIconPath() {
@@ -1072,8 +1089,13 @@ function stopBackend() {
 }
 
 async function loadRenderer(win) {
+  if (TEST_MODE && TEST_REPORT_PATH) {
+    await win.loadURL("data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Cbody%3Eedmg%20test%20mode%3C%2Fbody%3E%3C%2Fhtml%3E");
+    return;
+  }
+
   if (TEST_MODE && TEST_PAGE) {
-    await win.loadFile(TEST_PAGE);
+    await win.loadURL(pathToFileURL(TEST_PAGE).toString());
     return;
   }
 
@@ -1083,6 +1105,85 @@ async function loadRenderer(win) {
   }
 
   await win.loadFile(getProdIndexPath());
+}
+
+async function writeTestReport(payload) {
+  if (!TEST_MODE || !TEST_REPORT_PATH) {
+    return { ok: false, skipped: true };
+  }
+
+  appendTestTrace(`writeTestReport ${JSON.stringify(payload)}`);
+  await fsp.mkdir(path.dirname(TEST_REPORT_PATH), { recursive: true });
+  await fsp.writeFile(TEST_REPORT_PATH, JSON.stringify(payload, null, 2), "utf8");
+
+  return {
+    ok: true,
+    path: TEST_REPORT_PATH,
+  };
+}
+
+async function runWindowTestProbe(win) {
+  if (!TEST_MODE || !TEST_REPORT_PATH) return;
+
+  const probeSource = JSON.stringify({
+    revealPath: TEST_PROBE_REVEAL_PATH || "",
+    openPath: TEST_PROBE_OPEN_PATH || "",
+    expectedBackendUrl: TEST_EXPECT_BACKEND_URL || "",
+  });
+
+  try {
+    appendTestTrace("runWindowTestProbe:executeJavaScript:start");
+    const payload = await win.webContents.executeJavaScript(
+      `(async () => {
+        const probe = ${probeSource};
+        const out = {
+          ok: false,
+          bridgeAvailable: !!window.edmg,
+          testBridgeAvailable: !!window.__edmgTest,
+          backendUrlSync: null,
+          backendUrlAsync: null,
+          reveal: null,
+          open: null,
+          errors: [],
+        };
+
+        try {
+          out.backendUrlSync = typeof window.edmg?.backendUrl === "function" ? window.edmg.backendUrl() : null;
+          out.backendUrlAsync = typeof window.edmg?.getBackendUrl === "function" ? await window.edmg.getBackendUrl() : null;
+          if (probe.revealPath && typeof window.edmg?.revealPath === "function") {
+            out.reveal = await window.edmg.revealPath(probe.revealPath);
+          }
+          if (probe.openPath && typeof window.edmg?.openPath === "function") {
+            out.open = await window.edmg.openPath(probe.openPath);
+          }
+        } catch (error) {
+          out.errors.push(String(error && error.message ? error.message : error));
+        }
+
+        const backendMatches = !probe.expectedBackendUrl ||
+          (out.backendUrlSync === probe.expectedBackendUrl && out.backendUrlAsync === probe.expectedBackendUrl);
+        const revealMatches = !probe.revealPath || !!out.reveal?.ok;
+        const openMatches = !probe.openPath || !!out.open?.ok;
+        out.ok = Boolean(out.bridgeAvailable && backendMatches && revealMatches && openMatches && out.errors.length === 0);
+        return out;
+      })()`,
+      true,
+    );
+    appendTestTrace(`runWindowTestProbe:executeJavaScript:done ${JSON.stringify(payload)}`);
+    await writeTestReport(payload);
+  } catch (error) {
+    appendTestTrace(`runWindowTestProbe:error ${String(error?.message ?? error)}`);
+    await writeTestReport({
+      ok: false,
+      bridgeAvailable: false,
+      testBridgeAvailable: false,
+      backendUrlSync: null,
+      backendUrlAsync: null,
+      reveal: null,
+      open: null,
+      errors: [String(error?.message ?? error)],
+    });
+  }
 }
 
 function attachWindowDiagnostics(win) {
@@ -1119,11 +1220,20 @@ async function createMainWindow() {
       additionalArguments: [
         `--edmg-backend-host=${BACKEND_HOST}`,
         `--edmg-backend-port=${String(BACKEND_PORT)}`,
+        `--edmg-test-mode=${TEST_MODE ? "1" : "0"}`,
       ],
     },
   });
 
   attachWindowDiagnostics(win);
+
+  if (TEST_MODE) {
+    appendTestTrace("createMainWindow:created");
+    win.webContents.on("did-finish-load", () => {
+      appendTestTrace(`createMainWindow:did-finish-load ${win.webContents.getURL()}`);
+      console.log("[test-mode] did-finish-load", win.webContents.getURL());
+    });
+  }
 
   win.once("ready-to-show", () => {
     win.show();
@@ -1135,7 +1245,22 @@ async function createMainWindow() {
     }
   });
 
+  if (TEST_MODE) {
+    appendTestTrace("createMainWindow:loadRenderer:start");
+    console.log("[test-mode] loading renderer");
+  }
   await loadRenderer(win);
+  if (TEST_MODE) {
+    appendTestTrace(`createMainWindow:loadRenderer:done ${win.webContents.getURL()}`);
+    console.log("[test-mode] renderer loaded", win.webContents.getURL());
+    appendTestTrace("createMainWindow:runWindowTestProbe:start");
+    console.log("[test-mode] running window test probe");
+  }
+  await runWindowTestProbe(win);
+  if (TEST_MODE) {
+    appendTestTrace("createMainWindow:runWindowTestProbe:done");
+    console.log("[test-mode] window test probe finished");
+  }
 
   mainWindow = win;
   return win;
@@ -1315,17 +1440,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle("edmg:testWriteReport", async (_event, payload) => {
-    if (!TEST_MODE || !TEST_REPORT_PATH) {
-      return { ok: false, skipped: true };
-    }
-
-    await fsp.mkdir(path.dirname(TEST_REPORT_PATH), { recursive: true });
-    await fsp.writeFile(TEST_REPORT_PATH, JSON.stringify(payload, null, 2), "utf8");
-
-    return {
-      ok: true,
-      path: TEST_REPORT_PATH,
-    };
+    return writeTestReport(payload);
   });
 }
 
@@ -1346,11 +1461,21 @@ app.on("activate", async () => {
 });
 
 app.whenReady().then(async () => {
-  await runPendingStudioMigrationIfNeeded();
+  appendTestTrace("app.whenReady:start");
+  if (TEST_SKIP_MIGRATION) {
+    appendTestTrace("app.whenReady:skipMigration");
+  } else {
+    await runPendingStudioMigrationIfNeeded();
+    appendTestTrace("app.whenReady:afterMigration");
+  }
   registerIpcHandlers();
+  appendTestTrace("app.whenReady:afterRegisterIpc");
   await startBackendIfNeeded();
+  appendTestTrace("app.whenReady:afterStartBackend");
   await createMainWindow();
+  appendTestTrace("app.whenReady:afterCreateMainWindow");
 }).catch((error) => {
+  appendTestTrace(`app.whenReady:error ${String(error?.message ?? error)}`);
   console.error("[main] fatal startup error:", error);
   dialog.showErrorBox("EDMG Studio failed to start", String(error?.message ?? error));
   app.quit();

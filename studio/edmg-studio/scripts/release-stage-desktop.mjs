@@ -10,7 +10,7 @@ const STAGE_META_DIR = path.join(STAGE_DIR, ".edmg-stage");
 const MANIFEST_PATH = path.join(STAGE_META_DIR, "manifest.json");
 
 const COPY_ITEMS = [
-  "dist",
+  "dist-web",
   "main.mjs",
   "preload.cjs",
   "package.json",
@@ -80,7 +80,7 @@ async function main() {
     createdAt: new Date().toISOString(),
     main: "main.mjs",
     copied: [
-      "dist/**",
+      "dist-web/**",
       "main.mjs",
       "preload.cjs",
       "package.json",

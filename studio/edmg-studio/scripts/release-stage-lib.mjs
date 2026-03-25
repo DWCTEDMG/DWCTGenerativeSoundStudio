@@ -20,18 +20,18 @@ export function loadPackageJson() {
 }
 
 export function assertDesktopArtifacts() {
-  const distIndex = path.join(root, 'dist', 'index.html');
-  const distAssets = path.join(root, 'dist', 'assets');
+  const distIndex = path.join(root, 'dist-web', 'index.html');
+  const distAssets = path.join(root, 'dist-web', 'assets');
   const mainPath = path.join(root, 'main.mjs');
   const preloadPath = path.join(root, 'preload.cjs');
   const pkgPath = path.join(root, 'package.json');
-  if (!fs.existsSync(distIndex)) throw new Error('dist/index.html must exist. Run npm run build first.');
-  if (!fs.existsSync(distAssets)) throw new Error('dist/assets must exist. Run npm run build first.');
+  if (!fs.existsSync(distIndex)) throw new Error('dist-web/index.html must exist. Run npm run build first.');
+  if (!fs.existsSync(distAssets)) throw new Error('dist-web/assets must exist. Run npm run build first.');
   if (!fs.existsSync(mainPath)) throw new Error('main.mjs must exist');
   if (!fs.existsSync(preloadPath)) throw new Error('preload.cjs must exist');
   if (!fs.existsSync(pkgPath)) throw new Error('package.json must exist');
   const assets = fs.readdirSync(distAssets);
-  if (!assets.length) throw new Error('dist/assets must contain built assets');
+  if (!assets.length) throw new Error('dist-web/assets must contain built assets');
   const pkg = loadPackageJson();
   if (pkg.main !== 'main.mjs') throw new Error('package.json main must point to main.mjs');
 }

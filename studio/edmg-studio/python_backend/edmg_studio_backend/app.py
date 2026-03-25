@@ -1910,7 +1910,7 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
             if mode_norm == "ai":
                 # strict AI mode
                 raise UserFacingError(
-                    message="AI Director is not available.",
+                    message="The configured planning/transcription provider is not available.",
                     hint=(
                         "Fix: If you're using Ollama, make sure it is installed and running (Ollama app or `ollama serve`), "
                         "and that the model is pulled (e.g., `ollama pull qwen2.5:3b-instruct`). "

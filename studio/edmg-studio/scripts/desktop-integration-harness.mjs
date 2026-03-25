@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const require = createRequire(import.meta.url);
-const REQUIRE_LIVE_PROBE = (process.env.EDMG_STUDIO_REQUIRE_LIVE_DEV_PROBE ?? "0") === "1";
+const REQUIRE_LIVE_PROBE =
+  (process.env.EDMG_STUDIO_REQUIRE_LIVE_DEV_PROBE ?? "0") === "1" ||
+  process.argv.includes("--require-live-probe");
 
 function log(msg) {
   console.log(`[desktop-integration] ${msg}`);
@@ -62,7 +64,9 @@ async function assertPreloadContract() {
     return originalLoad.call(this, request, parent, isMain);
   };
   const previous = process.env.EDMG_STUDIO_TEST_MODE;
+  const previousSkipMigration = process.env.EDMG_STUDIO_TEST_SKIP_MIGRATION;
   process.env.EDMG_STUDIO_TEST_MODE = "1";
+  process.env.EDMG_STUDIO_TEST_SKIP_MIGRATION = "1";
   delete require.cache[preloadPath];
   try {
     require(preloadPath);
@@ -70,6 +74,8 @@ async function assertPreloadContract() {
     Module._load = originalLoad;
     if (previous == null) delete process.env.EDMG_STUDIO_TEST_MODE;
     else process.env.EDMG_STUDIO_TEST_MODE = previous;
+    if (previousSkipMigration == null) delete process.env.EDMG_STUDIO_TEST_SKIP_MIGRATION;
+    else process.env.EDMG_STUDIO_TEST_SKIP_MIGRATION = previousSkipMigration;
     delete require.cache[preloadPath];
   }
 
@@ -174,6 +180,17 @@ function buildProbeHtml({ fixtureFile, fixtureDir, expectedBackendUrl }) {
 </html>`;
 }
 
+function buildIsolatedDesktopEnv(fixtureRoot) {
+  const appDataDir = path.join(fixtureRoot, "appdata", "Roaming");
+  const localAppDataDir = path.join(fixtureRoot, "appdata", "Local");
+  const studioHome = path.join(fixtureRoot, "studio-home");
+  return {
+    APPDATA: appDataDir,
+    LOCALAPPDATA: localAppDataDir,
+    EDMG_STUDIO_HOME: studioHome,
+  };
+}
+
 async function waitForFile(filePath, timeoutMs = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -186,7 +203,7 @@ async function waitForFile(filePath, timeoutMs = 20000) {
 async function runElectronProbe() {
   const support = canLaunchElectron();
   if (!support.ok) {
-    return { ok: true, skipped: true, reason: support.reason };
+    return { ok: false, skipped: true, reason: support.reason };
   }
 
   const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "edmg-desktop-int-"));
@@ -196,6 +213,7 @@ async function runElectronProbe() {
   fs.writeFileSync(fixtureFile, "desktop integration probe\n");
   const reportPath = path.join(fixtureRoot, "report.json");
   const htmlPath = path.join(fixtureRoot, "probe.html");
+  const isolatedEnv = buildIsolatedDesktopEnv(fixtureRoot);
 
   const { server, port } = await startMockBackend();
   const expectedBackendUrl = `http://127.0.0.1:${port}`;
@@ -215,12 +233,17 @@ async function runElectronProbe() {
     env: {
       ...process.env,
       EDMG_STUDIO_TEST_MODE: "1",
+      EDMG_STUDIO_TEST_SKIP_MIGRATION: "1",
       EDMG_STUDIO_TEST_PAGE: htmlPath,
       EDMG_STUDIO_TEST_REPORT_PATH: reportPath,
+      EDMG_STUDIO_TEST_PROBE_REVEAL_PATH: fixtureFile,
+      EDMG_STUDIO_TEST_PROBE_OPEN_PATH: fixtureDir,
+      EDMG_STUDIO_TEST_EXPECT_BACKEND_URL: expectedBackendUrl,
       EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
       EDMG_STUDIO_SPAWN_BACKEND: "0",
       EDMG_STUDIO_BACKEND_PORT: String(port),
       ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
+      ...isolatedEnv,
     },
     stdio: "inherit",
   });
@@ -257,6 +280,9 @@ async function main() {
   let electronProbe;
   try {
     electronProbe = await runElectronProbe();
+    if (electronProbe.skipped && REQUIRE_LIVE_PROBE) {
+      throw new Error(`Live Electron probe skipped in strict mode: ${electronProbe.reason}`);
+    }
     if (electronProbe.skipped) {
       log(`live Electron probe skipped: ${electronProbe.reason}`);
     } else {
@@ -276,7 +302,8 @@ async function main() {
   }
 
   const summary = {
-    ok: true,
+    ok: Boolean(electronProbe?.ok && !electronProbe?.skipped),
+    strictLiveProbe: REQUIRE_LIVE_PROBE,
     sourceCoverage: true,
     preloadContract: true,
     electronProbe,

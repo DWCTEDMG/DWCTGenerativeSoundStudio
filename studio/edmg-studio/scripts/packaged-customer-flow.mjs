@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +11,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
+const DEFAULT_REQUEST_TIMEOUT_MS = Number(process.env.EDMG_STUDIO_PROOF_REQUEST_TIMEOUT_MS || (10 * 60 * 1000));
+const DEFAULT_HEAVY_REQUEST_TIMEOUT_MS = Number(process.env.EDMG_STUDIO_PROOF_HEAVY_TIMEOUT_MS || (20 * 60 * 1000));
 
 function log(message) {
   console.log(`[packaged-customer-flow] ${message}`);
@@ -102,9 +106,77 @@ async function waitForHealth(baseUrl, timeoutMs = 120000) {
   throw new Error(`Backend never became healthy at ${baseUrl}`);
 }
 
+function resolveTimeoutMs(value, fallback = DEFAULT_REQUEST_TIMEOUT_MS) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function requestJsonViaNode(url, init, timeoutMs) {
+  const target = new URL(url);
+  const transport = target.protocol === "https:" ? https : http;
+  const body = typeof init.body === "string" || Buffer.isBuffer(init.body) ? init.body : null;
+  const headers = {
+    accept: "application/json",
+    ...(init.headers || {}),
+  };
+  if (body && headers["content-length"] == null) {
+    headers["content-length"] = Buffer.byteLength(body);
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      target,
+      {
+        method: init.method || "GET",
+        headers,
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          clearTimeout(timer);
+          const text = Buffer.concat(chunks).toString("utf8");
+          let payload = null;
+          if (text) {
+            try {
+              payload = JSON.parse(text);
+            } catch {
+              payload = { raw: text };
+            }
+          }
+          if ((response.statusCode || 500) >= 400) {
+            reject(new Error(`${init.method || "GET"} ${url} failed: ${response.statusCode} ${text}`));
+            return;
+          }
+          resolve(payload);
+        });
+      },
+    );
+
+    const timer = setTimeout(() => {
+      request.destroy(new Error(`${init.method || "GET"} ${url} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    request.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    if (body) {
+      request.write(body);
+    }
+    request.end();
+  });
+}
+
 async function requestJson(url, init = {}) {
+  const timeoutMs = resolveTimeoutMs(init.timeoutMs);
+  if (!(init.body instanceof FormData)) {
+    return requestJsonViaNode(url, init, timeoutMs);
+  }
   const response = await fetch(url, {
     ...init,
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {
       accept: "application/json",
       ...(init.headers || {}),
@@ -158,6 +230,11 @@ async function main() {
   assert.ok(appExe, "Packaged app not found. Run npm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
   const audioFixture = resolveAudioFixture();
   assert.ok(audioFixture, "Audio fixture not found. Set EDMG_STUDIO_AUDIO_FIXTURE.");
+  const audioBytes = (await fsp.stat(audioFixture)).size;
+  const heavyRequestTimeoutMs = Math.max(
+    DEFAULT_HEAVY_REQUEST_TIMEOUT_MS,
+    Math.ceil(audioBytes / (1024 * 1024)) * 5000,
+  );
 
   await stopExistingPackagedProcesses();
 
@@ -175,6 +252,7 @@ async function main() {
   const baseUrl = `http://127.0.0.1:${port}`;
 
   log(`launching ${appExe}`);
+  log(`using heavy request timeout ${heavyRequestTimeoutMs}ms for ${path.basename(audioFixture)} (${audioBytes} bytes)`);
   const child = spawn(appExe, [], {
     cwd: path.dirname(appExe),
     env: {
@@ -199,7 +277,10 @@ async function main() {
     assert.ok(projectId, "Project creation did not return an id");
 
     const upload = await uploadAudio(`${baseUrl}/v1/projects/${projectId}/assets/audio`, audioFixture);
-    const analyze = await requestJson(`${baseUrl}/v1/projects/${projectId}/analyze_audio`, { method: "POST" });
+    const analyze = await requestJson(`${baseUrl}/v1/projects/${projectId}/analyze_audio`, {
+      method: "POST",
+      timeoutMs: heavyRequestTimeoutMs,
+    });
     const plan = await postJson(`${baseUrl}/v1/projects/${projectId}/plan?mode=local`, {
       title: "Packaged Customer Proof",
       style_prefs: "audio reactive neon performance visuals",

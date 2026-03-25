@@ -37,5 +37,5 @@
 - Avoid printing secrets/tokens/API keys
 
 ## Testing
-- Python: pytest, with fixtures in `tests/conftest.py`
-- Node/TS: runner TBD (Vitest/Jest recommended)
+- Python: `python -m pytest enhanced_deforum_music_generator/tests` after `pip install -e ".[studio_bundle,test]"`
+- Node/TS: Vitest + jsdom smoke tests under `studio/edmg-studio/src/test`

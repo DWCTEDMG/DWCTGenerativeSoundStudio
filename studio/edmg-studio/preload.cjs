@@ -15,6 +15,10 @@ const BACKEND_PORT =
   getArgValue("--edmg-backend-port=") ||
   "7863";
 
+const TEST_MODE =
+  (process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1" ||
+  getArgValue("--edmg-test-mode=") === "1";
+
 const DEFAULT_BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 
 contextBridge.exposeInMainWorld("edmg", {
@@ -45,7 +49,7 @@ contextBridge.exposeInMainWorld("edmg", {
   relaunch: () => ipcRenderer.invoke("edmg:relaunch"),
 });
 
-if ((process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1") {
+if (TEST_MODE) {
   contextBridge.exposeInMainWorld("__edmgTest", {
     writeReport: (payload) => ipcRenderer.invoke("edmg:testWriteReport", payload),
   });

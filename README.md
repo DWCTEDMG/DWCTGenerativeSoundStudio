@@ -3,7 +3,7 @@
 This repo merges:
 - EDMG Studio, the primary desktop product
 - Standalone EDMG engine (Gradio UI + CLI + API)
-- Automatic1111 extension bundle (included in `/a1111_extension`)
+- Legacy A1111/engine integration paths
 - Installer/build scripts for advanced and legacy workflows
 
 ## Quick start (recommended)
@@ -18,11 +18,11 @@ Or on macOS/Linux:
 ./run_me.sh
 ```
 
-The launcher opens the unified Studio flow:
+The launcher opens the canonical unified Studio flow:
 - installs Studio backend/UI dev dependencies when needed
 - starts EDMG Studio
 - keeps runtime data and caches under your chosen Studio home
-- lets Studio’s in-app Setup page handle Ollama, ComfyUI Portable, model packs, and EDMG Core repair/install
+- lets Studio’s in-app Setup page handle Ollama, local OpenAI-compatible providers, ComfyUI Portable, model packs, and EDMG Core repair/install
 
 ### 2) Use Studio Setup
 Inside Studio:
@@ -77,18 +77,21 @@ desktop/electron
 
 It is superseded by `studio/edmg-studio`, which is now the canonical desktop product.
 
-## Automatic1111 extension bundle
+## A1111 / legacy integration
 
-The A1111 extension folder is included at:
-- `a1111_extension/`
+This repo still contains legacy engine and integration paths, but it does **not**
+ship a bundled `a1111_extension/` folder anymore.
 
-The installer will copy it into:
-- `stable-diffusion-webui/extensions/enhanced-deforum-music-generator/`
+If you need Automatic1111 integration, treat it as an external/legacy workflow
+alongside the standalone EDMG engine. The authoritative desktop product path is:
+
+- `studio/edmg-studio/`
 
 ## Notes
 
 - This project installs Python dependencies but does **not** install GPU drivers.
-- First run of A1111 can take time (it creates its own venv and installs deps).
+- First run of the legacy A1111 path can take time because Stable Diffusion WebUI
+  creates and populates its own environment.
 
 ## Documentation
 

@@ -114,6 +114,17 @@ function buildProbeHtml({ fixtureFile, fixtureDir, expectedBackendUrl, stageDir 
 </html>`;
 }
 
+function buildIsolatedDesktopEnv(fixtureRoot) {
+  const appDataDir = path.join(fixtureRoot, "appdata", "Roaming");
+  const localAppDataDir = path.join(fixtureRoot, "appdata", "Local");
+  const studioHome = path.join(fixtureRoot, "studio-home");
+  return {
+    APPDATA: appDataDir,
+    LOCALAPPDATA: localAppDataDir,
+    EDMG_STUDIO_HOME: studioHome,
+  };
+}
+
 async function waitForFile(filePath, timeoutMs = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -136,8 +147,8 @@ async function runStagedAppProbe() {
   };
   const resources = bundledResourcePaths(appDir);
 
-  const distIndex = path.join(appDir, "dist", "index.html");
-  assert.ok(fs.existsSync(distIndex), "staged app dist/index.html missing");
+  const distIndex = path.join(appDir, "dist-web", "index.html");
+  assert.ok(fs.existsSync(distIndex), "staged app dist-web/index.html missing");
   assert.ok(fs.existsSync(path.join(appDir, 'electron-builder.yml')), 'staged app electron-builder.yml missing');
   assert.ok(fs.existsSync(resources.backendExe), `staged app missing bundled backend: ${resources.backendExe}`);
   assert.ok(fs.existsSync(resources.backendManifest), `staged app missing backend bundle manifest: ${resources.backendManifest}`);
@@ -158,7 +169,8 @@ async function runStagedAppProbe() {
   const fixtureFile = path.join(fixtureRoot, "demo.txt");
   await fsp.writeFile(fixtureFile, "packaged desktop smoke probe\n");
   const reportPath = path.join(fixtureRoot, "report.json");
-  const htmlPath = path.join(appDir, "dist", "packaged-smoke-probe.html");
+  const htmlPath = path.join(appDir, "dist-web", "packaged-smoke-probe.html");
+  const isolatedEnv = buildIsolatedDesktopEnv(fixtureRoot);
 
   const { server, port } = await startMockBackend();
   const expectedBackendUrl = `http://127.0.0.1:${port}`;
@@ -178,12 +190,17 @@ async function runStagedAppProbe() {
     env: {
       ...process.env,
       EDMG_STUDIO_TEST_MODE: "1",
+      EDMG_STUDIO_TEST_SKIP_MIGRATION: "1",
       EDMG_STUDIO_TEST_PAGE: htmlPath,
       EDMG_STUDIO_TEST_REPORT_PATH: reportPath,
+      EDMG_STUDIO_TEST_PROBE_REVEAL_PATH: fixtureFile,
+      EDMG_STUDIO_TEST_PROBE_OPEN_PATH: fixtureDir,
+      EDMG_STUDIO_TEST_EXPECT_BACKEND_URL: expectedBackendUrl,
       EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
       EDMG_STUDIO_SPAWN_BACKEND: "0",
       EDMG_STUDIO_BACKEND_PORT: String(port),
       ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
+      ...isolatedEnv,
     },
     stdio: "inherit",
   });

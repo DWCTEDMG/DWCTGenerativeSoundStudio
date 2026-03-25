@@ -6,6 +6,14 @@ pip install -e ".[studio_bundle]"
 edmg-studio-backend serve --host 127.0.0.1 --port 7863
 ```
 
+## Tests
+Install the same backend bundle Studio uses, plus the test extra:
+
+```bash
+pip install -e ".[studio_bundle,test]"
+python -m pytest enhanced_deforum_music_generator/tests
+```
+
 ## AI (Ollama by default)
 
 The backend defaults to **EDMG_AI_MODE=local** and will call **Ollama** directly (no separate AI server to run).
@@ -26,7 +34,7 @@ EDMG_AI_MODE=http
 EDMG_AI_BASE_URL=http://127.0.0.1:7862
 ```
 
-OpenAI-compatible option (LM Studio / vLLM / Groq / Together, etc.):
+OpenAI-compatible option (LM Studio / llama.cpp server / vLLM / Groq / Together, etc.):
 
 ```bash
 EDMG_AI_MODE=local
@@ -38,6 +46,6 @@ EDMG_AI_OPENAI_COMPAT_API_KEY=...  # if required
 
 ## Integrations
 - ComfyUI renders are queued locally.
-- AI Director is optional; used for transcription/features/plan.
+- Planning/transcription run in-process by default through the selected provider; an external AI service on `7862` is optional.
 - EDMG Core is bundled into the Studio backend install/build target; Studio Setup can repair or reinstall it if needed.
 - FFmpeg defaults to the Studio-bundled binary when available; `EDMG_FFMPEG_PATH` remains an override.

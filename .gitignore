@@ -65,6 +65,8 @@ external/*
 desktop/electron/node_modules/
 node_modules/
 studio/edmg-studio/dist/
+studio/edmg-studio/dist-web/
+studio/edmg-studio/dist-audit/
 studio/edmg-studio/dist-sim/
 studio/edmg-studio/release/
 studio/edmg-studio/.cache/
@@ -90,3 +92,5 @@ Desktop.ini
 .vs/
 .vscode/
 DWCTGenerativeSoundStudio-main/
+Untitled-2 copy 2.jpg
+sdfsd copy.jpg

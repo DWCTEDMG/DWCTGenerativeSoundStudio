@@ -17,12 +17,15 @@ EDMG_AI_OLLAMA_MODEL=qwen2.5:3b-instruct
 Use this when pointing EDMG to an OpenAI-compatible server such as:
 
 - LM Studio local server
+- llama.cpp server
+- LocalAI
 - vLLM / TGI / OpenWebUI / etc.
 - a cloud provider with OpenAI-compatible endpoints
 
 Common base URLs:
 
 - LM Studio: `http://127.0.0.1:1234/v1`
+- llama.cpp server: `http://127.0.0.1:8080/v1`
 - Groq: `https://api.groq.com/openai/v1`
 - Together: `https://api.together.xyz/v1`
 
@@ -39,7 +42,7 @@ you do not have to keep it in plain-text environment variables.
 
 ## External AI service (advanced)
 
-If you deploy `services/ai/edmg_ai_service` as a separate FastAPI service, set:
+If you deploy the optional EDMG AI service as a separate FastAPI process, set:
 
 ```bash
 EDMG_AI_MODE=http

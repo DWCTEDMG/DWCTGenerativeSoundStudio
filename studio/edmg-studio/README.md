@@ -6,7 +6,8 @@ A desktop-style "studio" application:
 - Local **FastAPI** backend for projects, assets, planning, rendering, and outputs
 - Integrates with:
   - **ComfyUI** for image generation (local or remote)
-  - **AI Director** service (optional) for planning/transcription/features
+  - In-process **AI providers** for planning/transcription/features (Ollama by default)
+  - Optional external **AI service** over HTTP when you want to separate that workload
   - **EDMG Core** (enhanced-deforum-music-generator) for Deforum template/export (optional but recommended)
   - **AWS** + **Lightning.ai** bundle scaffolding
 
@@ -17,7 +18,7 @@ A desktop-style "studio" application:
 - Python `>=3.10,<3.14`
 - FFmpeg on PATH for dev checkouts, or the bundled Studio FFmpeg for packaged builds (used for MP4 assembly)
 - ComfyUI running (default `http://127.0.0.1:8188`)
-- AI Director runs **in-process** by default (talks to Ollama directly); no separate AI server needed.
+- Planning/transcription run **in-process** by default through the selected provider; no separate AI server is required for the normal Studio path.
 - EDMG Core is included by the default Studio backend bundle/install target
 
 ### Backend
@@ -43,6 +44,7 @@ When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard
 - Uses an assisted Windows installer, so you can choose the **app install directory** instead of being forced into the default `C:\` path
 - Lets you choose a **Studio Home** folder before large downloads, so project data, Electron data, ComfyUI Portable, and caches can live on `D:\...`
 - Checks **Ollama** availability (local AI)
+- Supports local **OpenAI-compatible** servers such as LM Studio or `llama.cpp` server through Studio Settings
 - Lets you **pull the default model** via a button
 - Checks **ComfyUI** availability and can **download + extract ComfyUI Portable** on Windows
 - Verifies **FFmpeg** for MP4 assembly, preferring the Studio-bundled binary when present
@@ -59,7 +61,7 @@ Install/storage split:
 
 ## Ports
 - Studio backend: **7863**
-- AI director service: **7862**
+- External AI service (optional): **7862**
 - ComfyUI: **8188**
 
 ## Environment variables (Backend)
@@ -90,7 +92,7 @@ EDMG Core integration:
 ## Workflow
 1. Create a project
 2. Upload audio
-3. Analyze + transcribe (optional via AI service)
+3. Analyze + transcribe (in-process provider by default; optional external AI service)
 4. Generate plan variants
 5. Render scene stills via ComfyUI
 6. Assemble MP4 (FFmpeg slideshow + audio)
