@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
+import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
 import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults } from "../components/renderDefaults";
@@ -1335,6 +1336,16 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
         </div>
 
         <div className="card">
+          <CreativeDirectionPanel
+            projectId={projectId}
+            analysis={analysis}
+            plan={plan}
+            selectedVariant={selectedVariant}
+            compact
+            onNavigate={onNavigate}
+          />
+
+          <hr />
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Render readiness</div>
           <div className="small">
             Audio analysis: {analysis ? "✓" : "×"} • Plan variants: {variantCount ? "✓" : "×"}

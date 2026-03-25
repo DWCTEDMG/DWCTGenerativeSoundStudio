@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
+import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
 import { useUiMode } from "../components/uiMode";
 import type { PageProps } from "../types/pageProps";
 
@@ -295,6 +296,15 @@ export default function Workspace({ onNavigate }: PageProps) {
         </div>
 
         <div className="card">
+          <CreativeDirectionPanel
+            projectId={projectId}
+            analysis={analysis}
+            plan={plan}
+            selectedVariant={selectedVariant}
+            onNavigate={onNavigate}
+          />
+
+          <hr />
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Timeline</div>
           <Timeline />
 

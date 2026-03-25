@@ -1723,6 +1723,16 @@ def analyze_audio(project_id: str):
     return {"ok": True, "analysis": analysis}
 
 
+@app.get("/v1/projects/{project_id}/creative_direction")
+def get_creative_direction(project_id: str, variant_index: int = 0, preset: str = "cinematic", sensitivity: float = 1.0):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    safe_preset = preset if preset in {"cinematic", "psychedelic", "ambient"} else "cinematic"
+    payload = _build_creative_direction_payload(proj, variant_index=variant_index, preset=safe_preset, sensitivity=sensitivity)
+    return {"ok": True, "creative_direction": payload}
+
+
 def _analysis_transcript_text(analysis: dict[str, Any]) -> str:
     raw = (analysis or {}).get("transcript")
     if isinstance(raw, dict):
@@ -1774,6 +1784,357 @@ def _build_public_audio_analysis(proj: Any) -> Any:
         return aa
     except Exception:
         return {"duration": duration, "tempo_bpm": bpm, "beats": beats, "energy": energy, "lyrics": transcript}
+
+
+_CREATIVE_DIRECTION_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "into", "is", "it", "its",
+    "of", "on", "or", "that", "the", "their", "this", "to", "with", "your", "you", "about", "after",
+    "before", "during", "through", "scene", "shot", "visual", "video", "music", "audio", "render",
+    "track", "variant", "project", "style", "look", "high", "detail", "coherent", "consistent",
+}
+
+
+def _normalize_unit(value: Any, mode: str = "unit") -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if mode == "tempo":
+        return max(0.0, min(1.0, (number - 60.0) / 120.0))
+    if mode == "centroid":
+        return max(0.0, min(1.0, number / 5000.0))
+    if abs(number) <= 1.0:
+        return max(0.0, min(1.0, number))
+    return max(0.0, min(1.0, number / 100.0))
+
+
+def _pick_feature_number(source: dict[str, Any], keys: list[str], mode: str = "unit") -> float | None:
+    for key in keys:
+        if key not in source:
+            continue
+        normalized = _normalize_unit(source.get(key), mode)
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def _pick_raw_number(source: dict[str, Any], keys: list[str]) -> float | None:
+    for key in keys:
+        try:
+            return float(source.get(key))
+        except Exception:
+            continue
+    return None
+
+
+def _feature_series(source: dict[str, Any], keys: list[str]) -> list[float]:
+    for key in keys:
+        values = source.get(key)
+        if isinstance(values, (list, tuple)):
+            out: list[float] = []
+            for item in values:
+                try:
+                    out.append(float(item))
+                except Exception:
+                    continue
+            if out:
+                return out
+    return []
+
+
+def _bucket_curve(values: list[float], buckets: int = 96) -> list[float]:
+    if not values:
+        return []
+    target = max(16, int(buckets))
+    step = max(1, int(math.ceil(len(values) / target)))
+    out: list[float] = []
+    for start in range(0, len(values), step):
+        chunk = values[start:start + step]
+        if not chunk:
+            continue
+        peak = max(abs(float(v)) for v in chunk)
+        out.append(max(0.0, min(1.0, peak)))
+    return out[:target]
+
+
+def _analysis_transcript_sentences(analysis: dict[str, Any]) -> list[str]:
+    text = _analysis_transcript_text(analysis).strip()
+    if not text:
+        return []
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+
+
+def _analysis_motifs(variant: dict[str, Any], transcript_text: str, limit: int = 8) -> list[str]:
+    feed: list[str] = [transcript_text]
+    for scene in list(variant.get("scenes") or []):
+        feed.append(str(scene.get("name") or ""))
+        feed.append(str(scene.get("prompt") or ""))
+
+    counts: dict[str, int] = {}
+    for value in feed:
+        tokens = re.sub(r"[^a-z0-9\s-]", " ", str(value).lower()).split()
+        for token in tokens:
+            if len(token) <= 2 or token in _CREATIVE_DIRECTION_STOPWORDS:
+                continue
+            counts[token] = counts.get(token, 0) + 1
+
+    return [token for token, _count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]]
+
+
+def _infer_reactivity_metrics(analysis: dict[str, Any]) -> dict[str, Any]:
+    feats = (analysis.get("features") or {}) if isinstance(analysis, dict) else {}
+    duration_s = (
+        _pick_raw_number(feats, ["duration_s", "duration", "audio_duration_s"])
+        or _pick_raw_number(analysis, ["duration_s", "duration"])
+        or 0.0
+    )
+    energy_curve = _feature_series(feats, ["energy", "energy_curve", "energy_envelope", "onset_strength"])
+    scalar_energy = _pick_feature_number(feats, ["energy", "rms_energy", "loudness_norm", "dynamic_energy"])
+    if scalar_energy is None and energy_curve:
+        scalar_energy = max(0.0, min(1.0, sum(energy_curve) / max(1, len(energy_curve))))
+    energy = scalar_energy if scalar_energy is not None else 0.45
+    bass = _pick_feature_number(feats, ["bass", "bass_energy", "low_frequency_energy", "kick_energy"])
+    if bass is None:
+        bass = max(0.0, min(1.0, 0.32 + energy * 0.45))
+    mid = _pick_feature_number(feats, ["mid", "mid_energy", "spectral_flatness", "harmonic_energy"])
+    if mid is None:
+        mid = max(0.0, min(1.0, 0.38 + energy * 0.34))
+    treble = _pick_feature_number(feats, ["treble", "brightness", "high_frequency_energy"])
+    if treble is None:
+        treble = _pick_feature_number(feats, ["spectral_centroid"], mode="centroid")
+    if treble is None:
+        tempo = _pick_feature_number(feats, ["tempo_bpm", "bpm", "tempo"], mode="tempo") or 0.2
+        treble = max(0.0, min(1.0, 0.25 + energy * 0.18 + tempo * 0.3))
+
+    return {
+        "energy": float(energy),
+        "bass": float(bass),
+        "mid": float(mid),
+        "treble": float(treble),
+        "duration_s": float(duration_s),
+        "source": "analysis",
+        "waveform": _bucket_curve(energy_curve, 96),
+        "energy_curve": [max(0.0, min(1.0, float(v))) for v in energy_curve],
+    }
+
+
+def _compute_reactive_params(metrics: dict[str, Any], preset: str, sensitivity: float) -> dict[str, float]:
+    sens = max(0.1, min(3.0, float(sensitivity or 1.0)))
+    energy = max(0.0, min(1.0, float(metrics.get("energy") or 0.0)))
+    bass = max(0.0, min(1.0, float(metrics.get("bass") or 0.0)))
+    mid = max(0.0, min(1.0, float(metrics.get("mid") or 0.0)))
+    treble = max(0.0, min(1.0, float(metrics.get("treble") or 0.0)))
+
+    if preset == "psychedelic":
+        return {
+            "zoom": 1.0 + math.sin(energy * 9.0) * 0.38 * sens,
+            "rotation_x": energy * sens * 95.0,
+            "rotation_y": bass * sens * 160.0,
+            "rotation_z": treble * sens * 42.0,
+            "translation_x": math.sin(mid * 5.0) * 18.0 * sens,
+            "translation_y": math.cos(treble * 4.0) * 14.0 * sens,
+            "translation_z": -energy * 42.0 * sens,
+            "cfg_scale": 6.8 + mid * sens * 2.5,
+            "strength": 0.56 + treble * sens * 0.22,
+            "brightness": 0.48 + mid * sens * 0.36,
+            "contrast": 1.0 + energy * sens * 0.72,
+        }
+    if preset == "ambient":
+        return {
+            "zoom": 1.0 + energy * sens * 0.12,
+            "rotation_x": bass * sens * 10.0,
+            "rotation_y": mid * sens * 16.0,
+            "rotation_z": treble * sens * 8.0,
+            "translation_x": math.sin(bass * 4.0) * 12.0 * sens,
+            "translation_y": math.cos(mid * 3.0) * 10.0 * sens,
+            "translation_z": -energy * 12.0 * sens,
+            "cfg_scale": 6.0 + treble * sens * 1.8,
+            "strength": 0.5 + mid * sens * 0.16,
+            "brightness": 0.42 + mid * sens * 0.22,
+            "contrast": 0.95 + energy * sens * 0.24,
+        }
+    return {
+        "zoom": 1.0 + energy * sens * 0.28,
+        "rotation_x": mid * sens * 12.0,
+        "rotation_y": math.sin(bass * 4.0) * sens * 34.0,
+        "rotation_z": treble * sens * 10.0,
+        "translation_x": mid * sens * 10.0,
+        "translation_y": treble * sens * 8.0,
+        "translation_z": -energy * sens * 34.0,
+        "cfg_scale": 7.0 + mid * sens * 2.4,
+        "strength": 0.62 + treble * sens * 0.21,
+        "brightness": 0.45 + energy * sens * 0.16,
+        "contrast": 1.02 + energy * sens * 0.4,
+    }
+
+
+def _creative_energy_label(value: float) -> str:
+    if value >= 0.82:
+        return "surge"
+    if value >= 0.64:
+        return "lift"
+    if value >= 0.42:
+        return "steady"
+    return "breath"
+
+
+def _creative_camera_hint(value: float) -> str:
+    if value >= 0.82:
+        return "Aggressive push-in, stronger parallax, sharper light contrast, and quicker cut cadence."
+    if value >= 0.64:
+        return "Tracking medium shot with progressive push, controlled drift, and bolder edge lighting."
+    if value >= 0.42:
+        return "Measured dolly or orbit, restrained motion blur, and stable framing for continuity."
+    return "Wide or medium-wide hold, soft drift, longer lens settle, and more negative space."
+
+
+def _creative_motion_hint(params: dict[str, float]) -> str:
+    return (
+        f"Zoom {params['zoom']:.2f}, cfg {params['cfg_scale']:.1f}, strength {params['strength']:.2f}, "
+        f"Z travel {params['translation_z']:.1f}."
+    )
+
+
+def _fallback_scene_metrics(index: int, total: int, overall: dict[str, Any]) -> dict[str, Any]:
+    ratio = float(index) / max(1.0, float(total - 1)) if total > 1 else 0.0
+    curve = math.sin(ratio * math.pi)
+    energy = max(0.0, min(1.0, float(overall["energy"]) * 0.72 + curve * 0.26 + ratio * 0.06))
+    return {
+        "energy": energy,
+        "bass": max(0.0, min(1.0, float(overall["bass"]) * 0.7 + curve * 0.22)),
+        "mid": max(0.0, min(1.0, float(overall["mid"]) * 0.8 + (1.0 - abs(0.5 - ratio) * 2.0) * 0.14)),
+        "treble": max(0.0, min(1.0, float(overall["treble"]) * 0.72 + ratio * 0.18)),
+        "duration_s": float(overall.get("duration_s") or 0.0),
+        "source": "analysis",
+    }
+
+
+def _scene_metrics_from_curve(
+    index: int,
+    total: int,
+    scene: dict[str, Any],
+    overall: dict[str, Any],
+    duration_s: float,
+    energy_curve: list[float],
+) -> dict[str, Any]:
+    if duration_s <= 0 or not energy_curve:
+        return _fallback_scene_metrics(index, total, overall)
+
+    start_s = float(scene.get("start_s") or 0.0)
+    end_s = float(scene.get("end_s") or (start_s + 5.0))
+    start_idx = max(0, min(len(energy_curve) - 1, int((start_s / max(duration_s, 0.001)) * len(energy_curve))))
+    end_idx = max(start_idx + 1, min(len(energy_curve), int(math.ceil((end_s / max(duration_s, 0.001)) * len(energy_curve)))))
+    chunk = energy_curve[start_idx:end_idx]
+    if not chunk:
+        return _fallback_scene_metrics(index, total, overall)
+
+    energy = max(0.0, min(1.0, sum(chunk) / max(1, len(chunk))))
+    peak = max(chunk)
+    ratio = float(index) / max(1.0, float(total - 1)) if total > 1 else 0.0
+    return {
+        "energy": energy,
+        "bass": max(0.0, min(1.0, float(overall["bass"]) * 0.82 + peak * 0.14)),
+        "mid": max(0.0, min(1.0, float(overall["mid"]) * 0.82 + energy * 0.18)),
+        "treble": max(0.0, min(1.0, float(overall["treble"]) * 0.78 + ratio * 0.08 + peak * 0.1)),
+        "duration_s": max(0.2, end_s - start_s),
+        "source": "analysis",
+    }
+
+
+def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str, sensitivity: float) -> dict[str, Any]:
+    analysis = (proj.meta.get("analysis") or {}) if hasattr(proj, "meta") else {}
+    plan = (proj.meta.get("last_plan") or {}) if hasattr(proj, "meta") else {}
+    variants = list(plan.get("variants") or [])
+    variant = variants[variant_index] if 0 <= variant_index < len(variants) else {}
+    scenes = list(variant.get("scenes") or [])
+    transcript_text = _analysis_transcript_text(analysis).strip()
+    transcript_sentences = _analysis_transcript_sentences(analysis)
+    motifs = _analysis_motifs(variant if isinstance(variant, dict) else {}, transcript_text)
+    overall = _infer_reactivity_metrics(analysis if isinstance(analysis, dict) else {})
+    energy_curve = list(overall.get("energy_curve") or [])
+    waveform = list(overall.get("waveform") or [])
+    duration_s = float(overall.get("duration_s") or 0.0)
+
+    packed_scenes: list[dict[str, Any]] = []
+    for index, scene in enumerate(scenes):
+        name = str(scene.get("name") or f"Scene {index + 1}")
+        start_s = float(scene.get("start_s") or index * 5.0)
+        end_s = float(scene.get("end_s") or (start_s + 5.0))
+        metrics = _scene_metrics_from_curve(index, len(scenes) or 1, scene, overall, duration_s, energy_curve)
+        params = _compute_reactive_params(metrics, preset, sensitivity)
+        cue_index = (
+            min(len(transcript_sentences) - 1, int((index / max(1, len(scenes) - 1)) * len(transcript_sentences)))
+            if transcript_sentences else -1
+        )
+        transcript_cue = (
+            transcript_sentences[cue_index]
+            if cue_index >= 0 else
+            "No transcript cue available; drive the scene from the prompt and energy arc."
+        )
+        prompt = str(scene.get("prompt") or "").strip() or "Cinematic image sequence with a coherent subject and controlled atmosphere."
+        energy_label = _creative_energy_label(float(metrics["energy"]))
+        camera_hint = _creative_camera_hint(float(metrics["energy"]))
+        motion_hint = _creative_motion_hint(params)
+        prompt_pack = " ".join(
+            [
+                prompt,
+                f"Energy profile: {energy_label}.",
+                camera_hint,
+                f"Motion recipe: {motion_hint}",
+                f"Carry motifs from {', '.join(motifs[:4])}." if motifs else "",
+                f"Narrative cue: {transcript_cue}" if transcript_cue else "",
+            ]
+        ).strip()
+        packed_scenes.append(
+            {
+                "index": index,
+                "name": name,
+                "start_s": start_s,
+                "end_s": end_s,
+                "duration_s": max(0.2, end_s - start_s),
+                "energy": float(metrics["energy"]),
+                "energy_label": energy_label,
+                "prompt": prompt,
+                "transcript_cue": transcript_cue,
+                "camera_hint": camera_hint,
+                "motion_hint": motion_hint,
+                "prompt_pack": prompt_pack,
+            }
+        )
+
+    export_text = "\n\n".join(
+        [
+            (
+                f"{scene['index'] + 1}. {scene['name']} ({scene['start_s']:.2f}s - {scene['end_s']:.2f}s)\n"
+                f"{scene['prompt_pack']}"
+            )
+            for scene in packed_scenes
+        ]
+    )
+
+    return {
+        "preset": preset,
+        "sensitivity": float(sensitivity),
+        "metrics": {
+            "energy": float(overall["energy"]),
+            "bass": float(overall["bass"]),
+            "mid": float(overall["mid"]),
+            "treble": float(overall["treble"]),
+            "duration_s": duration_s,
+            "source": "analysis",
+        },
+        "waveform": waveform,
+        "motifs": motifs,
+        "transcript_text": transcript_text,
+        "transcript_summary": " ".join(transcript_sentences[:3]),
+        "scenes": packed_scenes,
+        "export_text": export_text,
+        "status": (
+            "Creative direction is being derived on the backend from the saved project analysis and plan."
+            if analysis else
+            "Run audio analysis and generate a plan variant to unlock creative direction guidance."
+        ),
+    }
 
 
 def _format_schedule_pairs(pairs: list[tuple[int, float]]) -> str:
