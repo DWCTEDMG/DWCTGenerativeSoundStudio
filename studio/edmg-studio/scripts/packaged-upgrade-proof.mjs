@@ -286,6 +286,7 @@ async function main() {
     console.log(JSON.stringify(summary, null, 2));
   } finally {
     await killProcessTree(child);
+    await stopExistingPackagedProcesses();
     await restoreBootstrap(bootstrapPath, bootstrapBackup);
   }
 }

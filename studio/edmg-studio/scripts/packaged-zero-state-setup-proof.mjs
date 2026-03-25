@@ -288,6 +288,7 @@ async function main() {
   } finally {
     await killProcessTree(child);
     await stopProcessesByPathPrefix(path.join(studioHome, "external", "ollama"));
+    await stopExistingPackagedProcesses();
     await restoreBootstrap(bootstrapPath, bootstrapBackup);
     if (!KEEP_PROOF_HOME) {
       await fsp.rm(studioHome, { recursive: true, force: true });

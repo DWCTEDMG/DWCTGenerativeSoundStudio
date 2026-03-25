@@ -438,6 +438,7 @@ async function main() {
     }
   } finally {
     await killProcessTree(child);
+    await stopExistingPackagedProcesses();
     await restoreBootstrap(bootstrapPath, bootstrapBackup);
   }
 }
