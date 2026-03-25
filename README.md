@@ -1,4 +1,4 @@
-# Enhanced Deforum Music Generator (EDMG) — Unified Repo
+# Enhanced Deforum Music Generator (EDMG) — Studio Canonical Repo
 
 This repo merges:
 - EDMG Studio, the primary desktop product
@@ -6,7 +6,11 @@ This repo merges:
 - Legacy A1111/engine integration paths
 - Installer/build scripts for advanced and legacy workflows
 
-## Quick start (recommended)
+EDMG Studio is the authoritative product surface. Everything else in this repo
+should be treated as engine support, compatibility tooling, or archived
+reference material.
+
+## Canonical entrypoints
 
 ### 1) Launch EDMG Studio
 ```bash
@@ -30,9 +34,25 @@ Inside Studio:
 - run **Full Setup** for Ollama + ComfyUI Portable
 - optionally install **EDMG Core** from the same Setup page for the fully unified workflow
 
-## CLI / scripts (manual)
+### 3) Release / validation
 
-### Install (creates `./venv`)
+For release operations, use:
+
+- [RELEASE.md](/D:/DWCTGenerativeSoundStudio/RELEASE.md)
+- [README_STUDIO.md](/D:/DWCTGenerativeSoundStudio/README_STUDIO.md)
+- [docs/STUDIO_RELEASE_RUNBOOK.md](/D:/DWCTGenerativeSoundStudio/docs/STUDIO_RELEASE_RUNBOOK.md)
+
+## Secondary / compatibility paths
+
+These still exist, but they are not the primary product entry:
+
+- `start.bat`
+- `start.sh`
+- `desktop/electron/`
+- standalone engine / Gradio workflows
+- archived UI prototypes in `examples/archive-ui/`
+
+### Engine install (secondary)
 Linux/Mac:
 ```bash
 bash install.sh full cpu
@@ -49,7 +69,7 @@ Windows:
 .\install.ps1 -Mode full -Backend cu121 -Venv D:\EDMG\venv -CacheRoot D:\EDMG\cache
 ```
 
-### Run EDMG UI
+### Run legacy standalone engine UI
 Linux/Mac:
 ```bash
 ./start.sh

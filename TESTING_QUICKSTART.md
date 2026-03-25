@@ -1,13 +1,16 @@
 # EDMG Studio – quick test (no CLI typing)
 
 1. Unzip this folder somewhere short (e.g. `C:\EDMG\`).
-2. Double-click **LAUNCH_EDMG_STUDIO_GUI.bat**
+2. Double-click **RUN_ME.bat**
 3. In the Launcher:
    - Click **Install/Update Backend**
    - Click **Install/Update Studio UI**
    - Click **Start Backend**
    - Click **Run Health Test**
    - Click **Start Studio (Electron dev)**
+
+`LAUNCH_EDMG_STUDIO_GUI.bat` still exists as a compatibility alias, but
+`RUN_ME.bat` is the canonical root launcher.
 
 ## Prereqs (installed once)
 - **Python `>=3.10,<3.14`** (Windows: install from python.org)

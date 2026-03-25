@@ -1,4 +1,4 @@
-# EDMG Studio (Legacy Electron UI)
+# EDMG Studio (Compatibility Electron Shell)
 
 This shell is retained for compatibility, but the canonical desktop product is now:
 
@@ -18,7 +18,7 @@ Deforum settings JSON editor with:
 - Quick utilities to open common folders (outputs, models_store, repo root)
 - Restart button for the backend API
 
-## Run
+## Run manually only if you specifically need this compatibility shell
 
 From the repo root:
 
@@ -37,7 +37,7 @@ If you want it to use a specific venv, set:
 set EDMG_PYTHON=C:\path\to\venv\Scripts\python.exe
 ```
 
-### Backend port
+### Backend port (legacy shell)
 
 ```bash
 set EDMG_API_PORT=7862
@@ -47,3 +47,4 @@ set EDMG_API_PORT=7862
 
 - The UI loads JSONEditor from `node_modules`, so it works offline.
 - The backend defaults to 720p @ 30fps in the template.
+- This is not the release-authoritative Studio path. Prefer `studio/edmg-studio`.

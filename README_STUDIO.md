@@ -1,4 +1,4 @@
-# EDMG Studio (included)
+# EDMG Studio
 
 This repo includes the **primary desktop product** under:
 
@@ -11,12 +11,15 @@ The original DWCTEDMG codebase remains the engine + integrations, but Studio is 
 canonical product surface and can install the EDMG Core engine into the same workflow.
 For release/install operations, use [docs/STUDIO_RELEASE_RUNBOOK.md](docs/STUDIO_RELEASE_RUNBOOK.md) and [RELEASE.md](RELEASE.md).
 
-## Quick start (recommended)
+## Authoritative product path
 
 From the repo root:
 
 - `RUN_ME.bat`
 - `./run_me.sh`
+
+Compatibility aliases may still exist, but the repo should be treated as if the
+Studio path above is the single desktop entrypoint.
 
 That launcher keeps the Studio product aligned with the same `Studio Home`, backend port,
 and runtime data that the in-app Setup page uses.
@@ -36,3 +39,12 @@ The packaged Windows installer is now configured as an assisted installer so the
 - `npm run dev`
 
 The backend talks to local Ollama directly by default, so a separate AI service is not required for the normal Studio flow.
+
+## Secondary surfaces
+
+These remain in the repo for compatibility or engine-specific workflows, but
+they are not equal alternatives to the Studio product path:
+
+- `start.bat` / `start.sh` for the standalone engine UI
+- `desktop/electron/` legacy shell
+- archived prototype UI files in `examples/archive-ui/`

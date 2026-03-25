@@ -3,6 +3,9 @@ setlocal
 
 echo 🎵 Enhanced Deforum Music Generator 🎥
 echo ==================================
+echo Legacy standalone engine launcher.
+echo For the canonical Studio product, use RUN_ME.bat instead.
+echo.
 
 REM Activate venv if present
 if exist "venv\Scripts\activate.bat" (

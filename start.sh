@@ -3,6 +3,9 @@ set -euo pipefail
 
 echo "🎵 Enhanced Deforum Music Generator 🎥"
 echo "=================================="
+echo "Legacy standalone engine launcher."
+echo "For the canonical Studio product, use ./run_me.sh instead."
+echo
 
 if [ -d "venv" ]; then
   echo "📦 Activating virtual environment..."
