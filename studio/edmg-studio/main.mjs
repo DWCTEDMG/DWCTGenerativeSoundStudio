@@ -1,10 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
-import http from "node:http";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { createBackendRuntime } from "./main-process/backend-runtime.mjs";
+import { createWindowRuntime } from "./main-process/window-runtime.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,7 +17,6 @@ const IGNORABLE_WRITE_ERROR_CODES = new Set(["EPIPE", "ERR_STREAM_DESTROYED"]);
 
 const BACKEND_HOST = process.env.EDMG_STUDIO_BACKEND_HOST ?? "127.0.0.1";
 let BACKEND_PORT = Number(process.env.EDMG_STUDIO_BACKEND_PORT ?? "7863");
-const SPAWN_BACKEND = (process.env.EDMG_STUDIO_SPAWN_BACKEND ?? "1") !== "0";
 const BACKEND_READY_TIMEOUT_MS = Number(
   process.env.EDMG_STUDIO_BACKEND_READY_TIMEOUT_MS ??
   (app.isPackaged && IS_WINDOWS ? "120000" : "15000"),
@@ -144,13 +143,7 @@ function appendTestTrace(message) {
   } catch {}
 }
 
-let currentBackendUrl = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 installSafeProcessLogging();
-console.log(`EDMG_currentBackendUrl=${currentBackendUrl}`);
-
-let mainWindow = null;
-let backendProc = null;
-let backendSpawnFailed = false;
 
 app.setName(APP_NAME);
 
@@ -842,226 +835,6 @@ function getDefaultDataDir() {
 
   return path.join(app.getPath("userData"), "data");
 }
-
-function getPreloadPath() {
-  return path.join(__dirname, "preload.cjs");
-}
-
-function getProdIndexPath() {
-  return path.join(app.getAppPath(), "dist-web", "index.html");
-}
-
-function getWindowIconPath() {
-  const candidates = app.isPackaged
-    ? [
-        path.join(process.resourcesPath, "app-icon.ico"),
-        path.join(process.resourcesPath, "app-icon.png"),
-        path.join(process.resourcesPath, "electron-resources", "app-icon.ico"),
-        path.join(process.resourcesPath, "electron-resources", "app-icon.png"),
-      ]
-    : [
-        path.join(__dirname, "electron-resources", "app-icon.ico"),
-        path.join(__dirname, "electron-resources", "app-icon.png"),
-      ];
-
-  for (const candidate of candidates) {
-    if (pathExistsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return undefined;
-}
-
-function getDevPythonPath() {
-  const explicit = process.env.EDMG_STUDIO_PYTHON;
-  if (explicit && explicit.trim()) return explicit.trim();
-
-  if (IS_WINDOWS) {
-    return path.join(__dirname, "python_backend", "venv", "Scripts", "python.exe");
-  }
-
-  return path.join(__dirname, "python_backend", "venv", "bin", "python");
-}
-
-function getPackagedBackendPath() {
-  const exeName = IS_WINDOWS ? "edmg-studio-backend.exe" : "edmg-studio-backend";
-  return path.join(process.resourcesPath, "backend", exeName);
-}
-
-function resolveManagedFfmpegPath() {
-  const explicit = String(process.env.EDMG_FFMPEG_PATH ?? "").trim();
-  if (explicit) {
-    if (!path.isAbsolute(explicit) || pathExistsSync(explicit)) {
-      return explicit;
-    }
-    console.warn("[ffmpeg] explicit EDMG_FFMPEG_PATH missing, falling back:", explicit);
-  }
-
-  const exeName = IS_WINDOWS ? "ffmpeg.exe" : "ffmpeg";
-  const candidates = app.isPackaged
-    ? [
-        path.join(process.resourcesPath, "bin", exeName),
-        path.join(process.resourcesPath, "electron-resources", "bin", exeName),
-      ]
-    : [
-        path.join(__dirname, "electron-resources", "bin", exeName),
-      ];
-
-  for (const candidate of candidates) {
-    if (pathExistsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return explicit || "ffmpeg";
-}
-
-function getBackendLaunchSpec() {
-  if (app.isPackaged) {
-    const command = getPackagedBackendPath();
-    return {
-      command,
-      args: ["serve", "--host", BACKEND_HOST, "--port", String(BACKEND_PORT)],
-      cwd: path.dirname(command),
-      label: "packaged-backend",
-    };
-  }
-
-  return {
-    command: getDevPythonPath(),
-    args: ["-m", "edmg_studio_backend", "serve", "--host", BACKEND_HOST, "--port", String(BACKEND_PORT)],
-    cwd: path.join(__dirname, "python_backend"),
-    label: "python-backend",
-  };
-}
-
-function buildBackendChildEnv(managedStudioEnv, ffmpegPath) {
-  const env = {
-    ...process.env,
-    ...managedStudioEnv,
-    ...buildManagedAiEnv(),
-    EDMG_STUDIO_BACKEND_HOST: BACKEND_HOST,
-    EDMG_STUDIO_BACKEND_PORT: String(BACKEND_PORT),
-    EDMG_FFMPEG_PATH: ffmpegPath,
-  };
-
-  for (const key of [
-    "ELECTRON_RUN_AS_NODE",
-    "ELECTRON_NO_ATTACH_CONSOLE",
-    "ELECTRON_NO_ASAR",
-    "ELECTRON_ENABLE_LOGGING",
-    "CHROME_CRASHPAD_PIPE_NAME",
-    "NODE_OPTIONS",
-    "VITE_DEV_SERVER_URL",
-    "EDMG_STUDIO_TEST_MODE",
-    "EDMG_STUDIO_TEST_PAGE",
-    "EDMG_STUDIO_TEST_REPORT_PATH",
-    "EDMG_STUDIO_TEST_PROBE_REVEAL_PATH",
-    "EDMG_STUDIO_TEST_PROBE_OPEN_PATH",
-    "EDMG_STUDIO_TEST_EXPECT_BACKEND_URL",
-    "EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS",
-  ]) {
-    delete env[key];
-  }
-
-  return env;
-}
-
-function resolveBackendLogPaths(logsDir) {
-  const backendDir = path.join(logsDir || getStudioPaths().logsDir || app.getPath("logs"), "backend");
-  ensureDirSync(backendDir);
-  return {
-    stdoutPath: path.join(backendDir, "backend-stdout.log"),
-    stderrPath: path.join(backendDir, "backend-stderr.log"),
-  };
-}
-
-function tailFileSync(filePath, maxLines = 40) {
-  if (!filePath || !pathExistsSync(filePath)) return "";
-  try {
-    const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean);
-    return lines.slice(-maxLines).join("\n");
-  } catch {
-    return "";
-  }
-}
-
-function terminateProcessTree(pid) {
-  if (!pid) return;
-  if (IS_WINDOWS) {
-    const result = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      windowsHide: true,
-      stdio: "ignore",
-      shell: false,
-    });
-    if (result.status === 0) return;
-  }
-  try {
-    process.kill(pid);
-  } catch {}
-}
-
-function quotePowerShell(value) {
-  return `'${String(value ?? "").replace(/'/g, "''")}'`;
-}
-
-function launchPackagedBackendWindows(spec, env, logPaths) {
-  const argList = (spec.args || []).map((arg) => quotePowerShell(String(arg))).join(", ");
-  const stdoutPath = logPaths?.stdoutPath || "";
-  const stderrPath = logPaths?.stderrPath || "";
-  if (stdoutPath) ensureDirSync(path.dirname(stdoutPath));
-  if (stderrPath) ensureDirSync(path.dirname(stderrPath));
-  const script = [
-    `$proc = Start-Process -FilePath ${quotePowerShell(spec.command)} -ArgumentList @(${argList}) -WorkingDirectory ${quotePowerShell(spec.cwd || path.dirname(spec.command))} -WindowStyle Hidden -RedirectStandardOutput ${quotePowerShell(stdoutPath)} -RedirectStandardError ${quotePowerShell(stderrPath)} -PassThru`,
-    "[Console]::Out.Write($proc.Id)",
-  ].filter(Boolean).join("; ");
-
-  return new Promise((resolve, reject) => {
-    const launcher = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-      env,
-    });
-    let stdout = "";
-    let stderr = "";
-
-    launcher.stdout?.on("data", (chunk) => {
-      stdout += String(chunk || "");
-    });
-    launcher.stderr?.on("data", (chunk) => {
-      stderr += String(chunk || "");
-    });
-    launcher.on("error", (error) => {
-      reject(error);
-    });
-    launcher.on("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(String(stderr || stdout || `PowerShell Start-Process failed with code ${code ?? "unknown"}`).trim()));
-        return;
-      }
-      const pid = Number(String(stdout || "").trim());
-      if (!Number.isFinite(pid) || pid <= 0) {
-        reject(new Error(`Could not resolve packaged backend pid from Start-Process output: ${String(stdout || "").trim()}`));
-        return;
-      }
-      resolve({
-        pid,
-        kind: "windows_start_process",
-        logPaths,
-        kill() {
-          terminateProcessTree(pid);
-        },
-      });
-    });
-  });
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function isExistingDirectory(targetPath) {
   try {
     return fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory();
@@ -1070,345 +843,47 @@ function isExistingDirectory(targetPath) {
   }
 }
 
-async function probeBackend(url = currentBackendUrl) {
-  return new Promise((resolve) => {
-    const req = http.get(`${url}/health`, (res) => {
-      res.resume();
-      resolve(res.statusCode != null && res.statusCode >= 200 && res.statusCode < 500);
-    });
+const backendRuntime = createBackendRuntime({
+  app,
+  dialog,
+  rootDir: __dirname,
+  isWindows: IS_WINDOWS,
+  backendHost: BACKEND_HOST,
+  backendPort: BACKEND_PORT,
+  backendReadyTimeoutMs: BACKEND_READY_TIMEOUT_MS,
+  testMode: TEST_MODE,
+  pathExistsSync,
+  ensureDirSync,
+  safeStreamWrite,
+  getStudioPaths,
+  buildManagedStudioEnv,
+  buildManagedAiEnv,
+});
 
-    req.on("error", () => resolve(false));
-    req.setTimeout(1500, () => {
-      req.destroy();
-      resolve(false);
-    });
-  });
-}
+const windowRuntime = createWindowRuntime({
+  app,
+  BrowserWindow,
+  rootDir: __dirname,
+  appName: APP_NAME,
+  isDev: IS_DEV,
+  devServerUrl: DEV_SERVER_URL,
+  backendHost: BACKEND_HOST,
+  backendPort: BACKEND_PORT,
+  testMode: TEST_MODE,
+  testPage: TEST_PAGE,
+  testReportPath: TEST_REPORT_PATH,
+  testProbeRevealPath: TEST_PROBE_REVEAL_PATH,
+  testProbeOpenPath: TEST_PROBE_OPEN_PATH,
+  testExpectBackendUrl: TEST_EXPECT_BACKEND_URL,
+  pathExistsSync,
+  ensureDirSync,
+  appendTestTrace,
+});
 
-async function waitForBackendReady(timeoutMs = BACKEND_READY_TIMEOUT_MS) {
-  const started = Date.now();
-
-  while (Date.now() - started < timeoutMs) {
-    if (await probeBackend()) {
-      return true;
-    }
-    await delay(300);
-  }
-
-  return false;
-}
-
-async function startBackendIfNeeded() {
-  if (!SPAWN_BACKEND) {
-    console.log("[edmg] spawn backend=false");
-    return false;
-  }
-
-  if (await probeBackend()) {
-    console.log("[backend] already reachable:", currentBackendUrl);
-    return true;
-  }
-
-  const spec = getBackendLaunchSpec();
-  const managedStudioEnv = buildManagedStudioEnv();
-  const backendDataDir = managedStudioEnv.EDMG_STUDIO_DATA_DIR;
-  const ffmpegPath = resolveManagedFfmpegPath();
-  const childEnv = buildBackendChildEnv(managedStudioEnv, ffmpegPath);
-  const logPaths = resolveBackendLogPaths(managedStudioEnv.EDMG_STUDIO_LOGS_DIR);
-
-  if (app.isPackaged && !fs.existsSync(spec.command)) {
-    backendSpawnFailed = true;
-    console.error("[backend] packaged backend missing:", spec.command);
-
-    if (!TEST_MODE) {
-      dialog.showErrorBox(
-        "EDMG Studio backend missing",
-        `Could not find packaged backend:\n${spec.command}`
-      );
-    }
-
-    return false;
-  }
-
-  console.log("[edmg] spawn backend=true");
-  console.log("[backend] launching", {
-    label: spec.label,
-    command: spec.command,
-    args: spec.args,
-    cwd: spec.cwd,
-  });
-  console.log("[backend] EDMG_STUDIO_DATA_DIR=", backendDataDir);
-  console.log("[backend] EDMG_STUDIO_MODELS_DIR=", managedStudioEnv.EDMG_STUDIO_MODELS_DIR);
-  console.log("[backend] EDMG_STUDIO_EXTERNAL_DIR=", managedStudioEnv.EDMG_STUDIO_EXTERNAL_DIR);
-  console.log("[backend] OLLAMA_MODELS=", managedStudioEnv.OLLAMA_MODELS);
-  console.log("[backend] EDMG_FFMPEG_PATH=", ffmpegPath);
-  console.log("[backend] log files=", logPaths);
-
-  try {
-    if (app.isPackaged && IS_WINDOWS) {
-      backendProc = await launchPackagedBackendWindows(spec, childEnv, logPaths);
-      console.log("[backend] launched via Start-Process", { pid: backendProc.pid });
-    } else {
-      backendProc = spawn(spec.command, spec.args, {
-        cwd: spec.cwd,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: childEnv,
-      });
-    }
-  } catch (error) {
-    backendSpawnFailed = true;
-    console.error("[backend] spawn threw:", error);
-
-    if (!TEST_MODE) {
-      dialog.showErrorBox(
-        "EDMG Studio backend failed to start",
-        String(error?.message ?? error)
-      );
-    }
-
-    return false;
-  }
-
-  if (typeof backendProc?.stdout?.on === "function") {
-    backendProc.stdout.on("data", (chunk) => {
-      safeStreamWrite(process.stdout, `[backend] ${chunk}`);
-    });
-  }
-
-  if (typeof backendProc?.stderr?.on === "function") {
-    backendProc.stderr.on("data", (chunk) => {
-      safeStreamWrite(process.stderr, `[backend] ${chunk}`);
-    });
-  }
-
-  if (typeof backendProc?.on === "function") {
-    backendProc.on("error", (error) => {
-      backendSpawnFailed = true;
-      console.error("[backend] child process error:", error);
-
-      if (!TEST_MODE) {
-        dialog.showErrorBox(
-          "EDMG Studio backend failed to start",
-          `${error?.message ?? error}`
-        );
-      }
-    });
-
-    backendProc.on("exit", (code, signal) => {
-      console.log("[backend] exited", { code, signal });
-      backendProc = null;
-    });
-  }
-
-  const ready = await waitForBackendReady();
-  if (!ready) {
-    console.warn("[backend] not reachable:", currentBackendUrl);
-    const stdoutTail = tailFileSync(logPaths.stdoutPath);
-    const stderrTail = tailFileSync(logPaths.stderrPath);
-    if (stdoutTail) console.warn("[backend] stdout tail:\n" + stdoutTail);
-    if (stderrTail) console.warn("[backend] stderr tail:\n" + stderrTail);
-  }
-
-  return ready;
-}
-
-function stopBackend() {
-  if (!backendProc) return;
-
-  try {
-    if (typeof backendProc.kill === "function") {
-      backendProc.kill();
-    } else if (backendProc.pid) {
-      terminateProcessTree(backendProc.pid);
-    }
-  } catch (error) {
-    console.warn("[backend] failed to stop cleanly:", error);
-  }
-
-  backendProc = null;
-}
-
-async function loadRenderer(win) {
-  if (TEST_MODE && TEST_REPORT_PATH) {
-    await win.loadURL("data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Cbody%3Eedmg%20test%20mode%3C%2Fbody%3E%3C%2Fhtml%3E");
-    return;
-  }
-
-  if (TEST_MODE && TEST_PAGE) {
-    await win.loadURL(pathToFileURL(TEST_PAGE).toString());
-    return;
-  }
-
-  if (IS_DEV) {
-    await win.loadURL(DEV_SERVER_URL);
-    return;
-  }
-
-  await win.loadFile(getProdIndexPath());
-}
-
-async function writeTestReport(payload) {
-  if (!TEST_MODE || !TEST_REPORT_PATH) {
-    return { ok: false, skipped: true };
-  }
-
-  appendTestTrace(`writeTestReport ${JSON.stringify(payload)}`);
-  await fsp.mkdir(path.dirname(TEST_REPORT_PATH), { recursive: true });
-  await fsp.writeFile(TEST_REPORT_PATH, JSON.stringify(payload, null, 2), "utf8");
-
-  return {
-    ok: true,
-    path: TEST_REPORT_PATH,
-  };
-}
-
-async function runWindowTestProbe(win) {
-  if (!TEST_MODE || !TEST_REPORT_PATH) return;
-
-  const probeSource = JSON.stringify({
-    revealPath: TEST_PROBE_REVEAL_PATH || "",
-    openPath: TEST_PROBE_OPEN_PATH || "",
-    expectedBackendUrl: TEST_EXPECT_BACKEND_URL || "",
-  });
-
-  try {
-    appendTestTrace("runWindowTestProbe:executeJavaScript:start");
-    const payload = await win.webContents.executeJavaScript(
-      `(async () => {
-        const probe = ${probeSource};
-        const out = {
-          ok: false,
-          bridgeAvailable: !!window.edmg,
-          testBridgeAvailable: !!window.__edmgTest,
-          backendUrlSync: null,
-          backendUrlAsync: null,
-          reveal: null,
-          open: null,
-          errors: [],
-        };
-
-        try {
-          out.backendUrlSync = typeof window.edmg?.backendUrl === "function" ? window.edmg.backendUrl() : null;
-          out.backendUrlAsync = typeof window.edmg?.getBackendUrl === "function" ? await window.edmg.getBackendUrl() : null;
-          if (probe.revealPath && typeof window.edmg?.revealPath === "function") {
-            out.reveal = await window.edmg.revealPath(probe.revealPath);
-          }
-          if (probe.openPath && typeof window.edmg?.openPath === "function") {
-            out.open = await window.edmg.openPath(probe.openPath);
-          }
-        } catch (error) {
-          out.errors.push(String(error && error.message ? error.message : error));
-        }
-
-        const backendMatches = !probe.expectedBackendUrl ||
-          (out.backendUrlSync === probe.expectedBackendUrl && out.backendUrlAsync === probe.expectedBackendUrl);
-        const revealMatches = !probe.revealPath || !!out.reveal?.ok;
-        const openMatches = !probe.openPath || !!out.open?.ok;
-        out.ok = Boolean(out.bridgeAvailable && backendMatches && revealMatches && openMatches && out.errors.length === 0);
-        return out;
-      })()`,
-      true,
-    );
-    appendTestTrace(`runWindowTestProbe:executeJavaScript:done ${JSON.stringify(payload)}`);
-    await writeTestReport(payload);
-  } catch (error) {
-    appendTestTrace(`runWindowTestProbe:error ${String(error?.message ?? error)}`);
-    await writeTestReport({
-      ok: false,
-      bridgeAvailable: false,
-      testBridgeAvailable: false,
-      backendUrlSync: null,
-      backendUrlAsync: null,
-      reveal: null,
-      open: null,
-      errors: [String(error?.message ?? error)],
-    });
-  }
-}
-
-function attachWindowDiagnostics(win) {
-  win.webContents.on("did-fail-load", (_event, code, desc, url) => {
-    console.error("[renderer] did-fail-load", { code, desc, url });
-  });
-
-  win.webContents.on("render-process-gone", (_event, details) => {
-    console.error("[renderer] render-process-gone", details);
-  });
-
-  win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    console.log("[renderer console]", { level, message, line, sourceId });
-  });
-}
-
-async function createMainWindow() {
-  const win = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1100,
-    minHeight: 720,
-    title: APP_NAME,
-    icon: getWindowIconPath(),
-    backgroundColor: "#05070b",
-    show: false,
-    autoHideMenuBar: false,
-    webPreferences: {
-      preload: getPreloadPath(),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-      devTools: true,
-      additionalArguments: [
-        `--edmg-backend-host=${BACKEND_HOST}`,
-        `--edmg-backend-port=${String(BACKEND_PORT)}`,
-        `--edmg-test-mode=${TEST_MODE ? "1" : "0"}`,
-      ],
-    },
-  });
-
-  attachWindowDiagnostics(win);
-
-  if (TEST_MODE) {
-    appendTestTrace("createMainWindow:created");
-    win.webContents.on("did-finish-load", () => {
-      appendTestTrace(`createMainWindow:did-finish-load ${win.webContents.getURL()}`);
-      console.log("[test-mode] did-finish-load", win.webContents.getURL());
-    });
-  }
-
-  win.once("ready-to-show", () => {
-    win.show();
-  });
-
-  win.on("closed", () => {
-    if (mainWindow === win) {
-      mainWindow = null;
-    }
-  });
-
-  if (TEST_MODE) {
-    appendTestTrace("createMainWindow:loadRenderer:start");
-    console.log("[test-mode] loading renderer");
-  }
-  await loadRenderer(win);
-  if (TEST_MODE) {
-    appendTestTrace(`createMainWindow:loadRenderer:done ${win.webContents.getURL()}`);
-    console.log("[test-mode] renderer loaded", win.webContents.getURL());
-    appendTestTrace("createMainWindow:runWindowTestProbe:start");
-    console.log("[test-mode] running window test probe");
-  }
-  await runWindowTestProbe(win);
-  if (TEST_MODE) {
-    appendTestTrace("createMainWindow:runWindowTestProbe:done");
-    console.log("[test-mode] window test probe finished");
-  }
-
-  mainWindow = win;
-  return win;
-}
+console.log(`EDMG_currentBackendUrl=${backendRuntime.getCurrentBackendUrl()}`);
 
 function registerIpcHandlers() {
-  ipcMain.handle("edmg:getBackendUrl", async () => currentBackendUrl);
+  ipcMain.handle("edmg:getBackendUrl", async () => backendRuntime.getCurrentBackendUrl());
   ipcMain.handle("edmg:getStudioPaths", async () => ({ ok: true, ...getStudioPaths() }));
   ipcMain.handle("edmg:getAiSettings", async () => ({ ok: true, ...getConfiguredAiSettings() }));
 
@@ -1544,7 +1019,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle("edmg:pickFile", async (_event, options = {}) => {
-    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+    const result = await dialog.showOpenDialog(windowRuntime.getMainWindow() ?? undefined, {
       title: options?.title ?? "Select file",
       defaultPath: options?.defaultPath,
       filters: Array.isArray(options?.filters) ? options.filters : undefined,
@@ -1561,7 +1036,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle("edmg:pickDirectory", async (_event, options = {}) => {
-    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+    const result = await dialog.showOpenDialog(windowRuntime.getMainWindow() ?? undefined, {
       title: options?.title ?? "Select folder",
       defaultPath: options?.defaultPath,
       properties: ["openDirectory", "createDirectory"],
@@ -1581,7 +1056,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle("edmg:testWriteReport", async (_event, payload) => {
-    return writeTestReport(payload);
+    return windowRuntime.writeTestReport(payload);
   });
 }
 
@@ -1592,12 +1067,12 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  stopBackend();
+  backendRuntime.stopBackend();
 });
 
 app.on("activate", async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    await createMainWindow();
+    await windowRuntime.createMainWindow();
   }
 });
 
@@ -1611,9 +1086,9 @@ app.whenReady().then(async () => {
   }
   registerIpcHandlers();
   appendTestTrace("app.whenReady:afterRegisterIpc");
-  await startBackendIfNeeded();
+  await backendRuntime.startBackendIfNeeded();
   appendTestTrace("app.whenReady:afterStartBackend");
-  await createMainWindow();
+  await windowRuntime.createMainWindow();
   appendTestTrace("app.whenReady:afterCreateMainWindow");
 }).catch((error) => {
   appendTestTrace(`app.whenReady:error ${String(error?.message ?? error)}`);

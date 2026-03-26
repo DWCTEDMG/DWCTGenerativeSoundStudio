@@ -10,6 +10,7 @@
   "files": [
     "dist-web/**",
     "main.mjs",
+    "main-process/**",
     "preload.cjs",
     "package.json"
   ],

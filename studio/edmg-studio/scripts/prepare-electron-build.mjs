@@ -6,9 +6,11 @@ import { fileURLToPath } from "node:url";
 const root = process.cwd();
 const rootMain = path.join(root, "main.mjs");
 const rootPreload = path.join(root, "preload.cjs");
+const rootMainProcessDir = path.join(root, "main-process");
 const electronDir = path.join(root, "electron");
 const electronMain = path.join(electronDir, "main.mjs");
 const electronPreload = path.join(electronDir, "preload.cjs");
+const electronMainProcessDir = path.join(electronDir, "main-process");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const ffmpegBinDir = path.join(root, "electron-resources", "bin");
@@ -16,6 +18,7 @@ const ffmpegExe = path.join(ffmpegBinDir, process.platform === "win32" ? "ffmpeg
 
 if (!fs.existsSync(rootMain)) throw new Error(`Missing: ${rootMain}`);
 if (!fs.existsSync(rootPreload)) throw new Error(`Missing: ${rootPreload}`);
+if (!fs.existsSync(rootMainProcessDir)) throw new Error(`Missing: ${rootMainProcessDir}`);
 
 function ensureBundledFfmpeg() {
   if (fs.existsSync(ffmpegExe)) return;
@@ -54,5 +57,7 @@ ensureBundledFfmpeg();
 fs.mkdirSync(electronDir, { recursive: true });
 fs.copyFileSync(rootMain, electronMain);
 fs.copyFileSync(rootPreload, electronPreload);
+fs.rmSync(electronMainProcessDir, { recursive: true, force: true });
+fs.cpSync(rootMainProcessDir, electronMainProcessDir, { recursive: true });
 
 console.log("Validated root Electron entry files, ensured bundled FFmpeg, and synced mirror copies under electron/.");
