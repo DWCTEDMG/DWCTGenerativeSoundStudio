@@ -647,15 +647,9 @@ async function sourceAlreadyRedirectsToTarget(sourcePath, targetPath) {
   return Boolean(sourceTarget && samePath(sourceTarget, targetPath));
 }
 
-async function detachTargetIfItRedirectsToSource(sourcePath, targetPath) {
+async function targetAlreadyRedirectsToSource(sourcePath, targetPath) {
   const targetTarget = await readJunctionTarget(targetPath);
-  if (!targetTarget || !samePath(targetTarget, sourcePath)) {
-    return false;
-  }
-
-  await fsp.rm(targetPath, { recursive: true, force: true });
-  await fsp.mkdir(targetPath, { recursive: true });
-  return true;
+  return Boolean(targetTarget && samePath(targetTarget, sourcePath));
 }
 
 async function pathExists(targetPath) {
@@ -769,12 +763,15 @@ async function migrateDirectory({ sourcePath, targetPath, label, allowJunction =
     return { label, status: "skipped", sourcePath: source, targetPath: target, reason: "already_redirected" };
   }
 
+  if (await targetAlreadyRedirectsToSource(source, target)) {
+    return { label, status: "skipped", sourcePath: source, targetPath: target, reason: "target_already_redirects_to_source" };
+  }
+
   if (!(await pathExists(source))) {
     return { label, status: "skipped", sourcePath: source, targetPath: target, reason: "missing_source" };
   }
 
   try {
-    await detachTargetIfItRedirectsToSource(source, target);
     const { filesCopied, filesRenamed } = await safeMergeCopy(source, target);
     let cleanup = "kept_source";
     let compatibilityPath = "none";

@@ -27,9 +27,7 @@ from .secrets import SecretStore
 # ------------------------------ persistence ------------------------------
 
 def _config_dir(data_dir: Path) -> Path:
-    p = (data_dir / "config").resolve()
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    return _ensure_managed_dir(data_dir / "config", label="config")
 
 def _read_json(path: Path, default: Any) -> Any:
     try:
@@ -44,6 +42,72 @@ def _write_json(path: Path, obj: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+
+
+def _normalize_path(path: Path | str) -> str:
+    raw = os.fspath(path)
+    if raw.startswith("\\\\?\\"):
+        raw = raw[4:]
+    return os.path.normcase(os.path.normpath(os.path.abspath(raw)))
+
+
+def _same_path(left: Path | str, right: Path | str) -> bool:
+    return _normalize_path(left) == _normalize_path(right)
+
+
+def _read_reparse_target(path: Path) -> Path | None:
+    try:
+        raw = os.readlink(path)
+    except OSError:
+        return None
+    if raw.startswith("\\\\?\\"):
+        raw = raw[4:]
+    if not os.path.isabs(raw):
+        raw = os.path.join(os.fspath(path.parent), raw)
+    return Path(os.path.abspath(raw))
+
+
+def _repair_mutual_junction(path: Path) -> bool:
+    if os.name != "nt":
+        return False
+    target = _read_reparse_target(path)
+    if target is None:
+        return False
+    reverse = _read_reparse_target(target)
+    if reverse is None or not _same_path(reverse, path):
+        return False
+    try:
+        os.rmdir(path)
+        path.mkdir(parents=True, exist_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _repair_mutual_junction_chain(path: Path) -> bool:
+    current = path
+    while True:
+        if _repair_mutual_junction(current):
+            return True
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
+def _ensure_managed_dir(path: Path, *, label: str) -> Path:
+    candidate = Path(os.path.abspath(os.fspath(path.expanduser())))
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+    except (OSError, RuntimeError) as exc:
+        if _repair_mutual_junction_chain(candidate):
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        raise UserFacingError(
+            f"Studio {label} path is invalid: {candidate}",
+            hint="Restart EDMG Studio so it can repair the storage junctions, then retry.",
+            code="INVALID_STORAGE_PATH",
+        ) from exc
 
 
 # ------------------------------ tasks ------------------------------
@@ -223,9 +287,7 @@ class ModelManager:
 
     # ---- resolution ----
     def _internal_models_dir(self, folder: str) -> Path:
-        root = (self.models_dir / "internal" / folder).resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return root
+        return _ensure_managed_dir(self.models_dir / "internal" / folder, label="internal models")
 
     def _models_dest(self, entry: dict[str, Any]) -> tuple[str, Path]:
         """Return (mode, dest_path).
@@ -251,15 +313,17 @@ class ModelManager:
 
     # ---- resolution ----
     def _comfy_models_dir(self, folder: str) -> Path:
-        root = (self.models_dir / folder).resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return root
+        return _ensure_managed_dir(self.models_dir / folder, label="models")
 
     def _legacy_comfy_models_dir(self, folder: str) -> Path | None:
         if comfy_portable_installed(self.external_dir, self.data_dir):
-            root = comfy_portable_root(self.external_dir, self.data_dir) / "ComfyUI" / "models" / folder
-            if root.exists():
-                return root.resolve()
+            root = Path(os.path.abspath(os.fspath(comfy_portable_root(self.external_dir, self.data_dir) / "ComfyUI" / "models" / folder)))
+            try:
+                if root.exists():
+                    return root
+            except (OSError, RuntimeError):
+                if _repair_mutual_junction_chain(root) and root.exists():
+                    return root
         return None
 
     def _installed_map(self, entries: list[dict[str, Any]]) -> dict[str, bool]:
