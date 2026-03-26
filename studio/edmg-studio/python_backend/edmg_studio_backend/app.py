@@ -8,6 +8,7 @@ import zipfile
 import json
 import hashlib
 import shutil
+import subprocess
 from copy import deepcopy
 import math
 import re
@@ -27,6 +28,13 @@ try:
 except Exception:
     _multipart = None
     HAS_MULTIPART = False
+
+try:
+    from PIL import Image, ImageFilter, ImageOps  # type: ignore
+except Exception:
+    Image = None  # type: ignore
+    ImageFilter = None  # type: ignore
+    ImageOps = None  # type: ignore
 
 from .config import Settings
 from .schemas import (
@@ -50,10 +58,12 @@ from .services.worker_manager import WorkerManager
 from .services.ffmpeg import assemble_slideshow, assemble_image_sequence, concat_videos, interpolate_video_fps, mux_audio
 from .services.internal_video import (
     InternalVideoSettings,
+    _scene_keyframe_times,
     describe_internal_render_cache,
     describe_proxy_render_cache,
     render_internal_video_variant,
     render_internal_proxy_video_variant,
+    render_stability_hosted_video_variant,
     render_internal_diffusion_preview_segment,
 )
 from .services.compositor import apply_timeline_layers
@@ -63,6 +73,12 @@ from .utils.path import safe_join
 from .errors import UserFacingError, hint_from_exception
 from .services.model_manager import ModelManager
 from .services.secrets import SecretStore
+from .services.render_settings import (
+    RenderSettingsStore,
+    STABILITY_SD3_MODELS,
+    STABILITY_SERVICES,
+    STABILITY_STYLE_PRESETS,
+)
 from .services.setup_wizard import (
     SetupTaskManager,
     check_backend_bundle,
@@ -74,6 +90,7 @@ from .services.setup_wizard import (
     OllamaManagedProcess,
     check_ffmpeg,
     comfy_portable_installed,
+    comfy_portable_root,
     download_and_install_7zip,
     install_backend_bundle,
     _find_ollama_exe,
@@ -106,6 +123,7 @@ ai = build_ai_client(settings.ai_mode, settings.ai_base_url, settings.ai_timeout
 
 setup_tasks = SetupTaskManager()
 secrets = SecretStore(settings.data_dir)
+render_settings = RenderSettingsStore(settings.data_dir)
 models = ModelManager(
     settings.data_dir,
     settings.models_dir,
@@ -188,6 +206,202 @@ def _request_payload(model: Any) -> dict[str, Any]:
     if callable(legacy):
         return legacy()
     raise TypeError(f"Object {type(model)!r} is not a supported request model")
+
+
+def _catalog_entry(model_id: str | None) -> dict[str, Any] | None:
+    if not model_id:
+        return None
+    catalog_payload = models.catalog()
+    all_entries = list(catalog_payload.get("catalog") or []) + list(catalog_payload.get("user") or [])
+    return next((e for e in all_entries if isinstance(e, dict) and e.get("id") == model_id), None)
+
+
+def _catalog_render_metadata(entry: dict[str, Any] | None) -> dict[str, Any]:
+    render = (entry or {}).get("render") or {}
+    return render if isinstance(render, dict) else {}
+
+
+def _safe_name_tag(value: str | None, fallback: str = "default") -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raw = fallback
+    tag = re.sub(r"[^a-zA-Z0-9]+", "_", raw).strip("_").lower()
+    return tag[:32] or fallback
+
+
+def _resolve_comfy_still_selection(
+    *,
+    model_id: str | None,
+    checkpoint: str | None,
+    workflow_family: str | None,
+    controlnet_model: str | None,
+    reference_asset: str | None,
+    conditioning_mode: str | None,
+) -> dict[str, Any]:
+    entry = _catalog_entry(model_id)
+    render = _catalog_render_metadata(entry)
+
+    chosen_checkpoint = str(
+        checkpoint
+        or render.get("checkpoint_name")
+        or entry.get("filename")
+        or settings.comfyui_checkpoint
+    )
+    family = str(workflow_family or "auto").strip().lower()
+    if family not in {"auto", "txt2img", "controlnet"}:
+        family = "auto"
+
+    control_entry = _catalog_entry(controlnet_model)
+    control_render = _catalog_render_metadata(control_entry)
+    controlnet_name = str(
+        control_render.get("controlnet_name")
+        or control_entry.get("filename")
+        or render.get("controlnet_name")
+        or ""
+    ).strip()
+    if family == "auto":
+        if controlnet_name or reference_asset or (entry and str(entry.get("kind") or "") == "controlnet"):
+            family = "controlnet"
+        else:
+            family = str(render.get("workflow_family") or "txt2img").strip().lower()
+    if family not in {"txt2img", "controlnet"}:
+        family = "txt2img"
+
+    if family == "controlnet" and not controlnet_name and str(entry.get("kind") or "") == "controlnet":
+        controlnet_name = str(entry.get("filename") or "")
+    if family == "controlnet" and not controlnet_name:
+        raise UserFacingError(
+            "No ControlNet model selected",
+            hint="Install a Studio ControlNet model in Models, then choose it on the Render page.",
+            code="CONTROLNET_MISSING",
+            status_code=400,
+        )
+    if family == "controlnet" and not reference_asset:
+        raise UserFacingError(
+            "No reference image selected",
+            hint="Upload or pick a project reference image before running a ControlNet still render.",
+            code="REFERENCE_IMAGE_MISSING",
+            status_code=400,
+        )
+
+    return {
+        "entry": entry,
+        "checkpoint": chosen_checkpoint,
+        "workflow_family": family,
+        "controlnet_name": controlnet_name or None,
+        "conditioning_mode": str(
+            conditioning_mode
+            or control_render.get("conditioning_mode")
+            or render.get("conditioning_mode")
+            or "raw"
+        ).strip().lower(),
+    }
+
+
+def _resolve_comfy_motion_selection(
+    *,
+    model_id: str | None,
+    checkpoint: str | None,
+    svd_model_id: str | None,
+    svd_checkpoint: str | None = None,
+) -> dict[str, Any]:
+    entry = _catalog_entry(model_id)
+    render = _catalog_render_metadata(entry)
+    base_checkpoint = str(
+        checkpoint
+        or render.get("checkpoint_name")
+        or entry.get("filename")
+        or settings.comfyui_checkpoint
+    )
+
+    svd_entry = _catalog_entry(svd_model_id)
+    svd_render = _catalog_render_metadata(svd_entry)
+    resolved_svd = str(
+        svd_checkpoint
+        or svd_render.get("svd_checkpoint")
+        or svd_entry.get("filename")
+        or "svd_xt.safetensors"
+    )
+    return {
+        "entry": entry,
+        "svd_entry": svd_entry,
+        "checkpoint": base_checkpoint,
+        "svd_checkpoint": resolved_svd,
+    }
+
+
+def _resolve_project_reference_path(project_id: str, reference_asset: str | None) -> Path | None:
+    raw = str(reference_asset or "").strip()
+    if not raw:
+        return None
+    project_dir = store.project_dir(project_id)
+    direct = _safe_project_path(project_dir, raw)
+    if direct is not None and direct.exists() and direct.is_file():
+        return direct
+    refs_dir = project_dir / "assets" / "refs"
+    fallback = refs_dir / Path(raw).name
+    if fallback.exists() and fallback.is_file():
+        return fallback
+    return None
+
+
+def _prepare_condition_image(project_id: str, source_path: Path, mode: str) -> Path:
+    mode_l = str(mode or "raw").strip().lower()
+    if mode_l in {"raw", "external"}:
+        return source_path
+    if Image is None or ImageFilter is None or ImageOps is None:
+        return source_path
+
+    cache_dir = store.project_dir(project_id) / "cache" / "control_inputs"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    suffix = source_path.suffix if source_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} else ".png"
+    out_path = cache_dir / f"{source_path.stem}_{mode_l}{suffix}"
+    if out_path.exists():
+        return out_path
+
+    with Image.open(source_path) as image:
+        base = image.convert("RGB")
+        if mode_l == "blur":
+            prepared = base.filter(ImageFilter.GaussianBlur(radius=8))
+        elif mode_l == "edge":
+            edge = base.convert("L").filter(ImageFilter.FIND_EDGES)
+            edge = ImageOps.autocontrast(edge)
+            prepared = edge.point(lambda v: 255 if v >= 48 else 0).convert("RGB")
+        else:
+            prepared = base
+        prepared.save(out_path)
+    return out_path
+
+
+def _fallback_comfy_input_image(image_path: Path, project_id: str) -> str:
+    if comfy_portable_installed(settings.external_dir, settings.data_dir):
+        input_dir = comfy_portable_root(settings.external_dir, settings.data_dir) / "ComfyUI" / "input" / "edmg" / project_id
+        input_dir.mkdir(parents=True, exist_ok=True)
+        dest = input_dir / image_path.name
+        if not dest.exists() or dest.stat().st_mtime < image_path.stat().st_mtime:
+            shutil.copy2(image_path, dest)
+        return f"edmg/{project_id}/{dest.name}".replace("\\", "/")
+    return str(image_path)
+
+
+def _prepare_comfy_reference_image(project_id: str, node_url: str, reference_asset: str, conditioning_mode: str) -> str:
+    source_path = _resolve_project_reference_path(project_id, reference_asset)
+    if source_path is None:
+        raise UserFacingError(
+            "Reference image not found",
+            hint="Upload the reference into the project first, then pick it again on the Render page.",
+            code="REFERENCE_IMAGE_NOT_FOUND",
+            status_code=400,
+        )
+
+    prepared = _prepare_condition_image(project_id, source_path, conditioning_mode)
+    try:
+        uploaded = comfy.upload_input_image(node_url, str(prepared), subfolder=f"edmg/{project_id}", overwrite=True)
+        name = str(uploaded.get("name") or uploaded.get("filename") or prepared.name).strip()
+        subfolder = str(uploaded.get("subfolder") or f"edmg/{project_id}").strip().strip("/")
+        return f"{subfolder}/{name}".replace("\\", "/") if subfolder else name
+    except Exception:
+        return _fallback_comfy_input_image(prepared, project_id)
 
 
 def _render_checkpoint_path(video_path: Path) -> Path:
@@ -673,10 +887,111 @@ def _build_render_chunk_plan(
     }
 
 
+@lru_cache(maxsize=1)
+def _windows_video_controllers() -> list[dict[str, Any]]:
+    if platform.system().lower() != "windows":
+        return []
+    cmd = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json -Compress",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, check=False)
+        if result.returncode != 0:
+            return []
+        raw = str(result.stdout or "").strip()
+        if not raw:
+            return []
+        data = json.loads(raw)
+        items = data if isinstance(data, list) else [data]
+        out: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("Name") or item.get("name") or "").strip()
+            if not name:
+                continue
+            adapter_ram = item.get("AdapterRAM") or item.get("adapterRam") or 0
+            try:
+                vram_gb = round(float(adapter_ram) / float(1024 ** 3), 2) if adapter_ram else 0.0
+            except Exception:
+                vram_gb = 0.0
+            vendor = "unknown"
+            name_l = name.lower()
+            if "nvidia" in name_l:
+                vendor = "nvidia"
+            elif "amd" in name_l or "radeon" in name_l:
+                vendor = "amd"
+            elif "intel" in name_l:
+                vendor = "intel"
+            out.append({"name": name, "vendor": vendor, "vram_gb": vram_gb})
+        return out
+    except Exception:
+        return []
+
+
+def _pick_windows_accel_gpu() -> dict[str, Any] | None:
+    gpus = _windows_video_controllers()
+    if not gpus:
+        return None
+    preferred = [g for g in gpus if g.get("vendor") in {"amd", "nvidia", "intel"}]
+    ordered = preferred or gpus
+    ordered = sorted(ordered, key=lambda item: (0 if item.get("vendor") == "amd" else 1, -float(item.get("vram_gb") or 0.0)))
+    return ordered[0] if ordered else None
+
+
+def _directml_runtime_status() -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "available": False,
+        "runtime_ready": False,
+        "provider": "DmlExecutionProvider",
+        "providers": [],
+        "device_name": None,
+        "vendor": None,
+        "vram_gb": 0.0,
+        "integrated": False,
+        "error": None,
+    }
+    if platform.system().lower() != "windows":
+        out["error"] = "DirectML is only available on Windows."
+        return out
+    try:
+        import onnxruntime as ort  # type: ignore
+
+        providers = list(ort.get_available_providers() or [])
+        out["providers"] = providers
+        out["runtime_ready"] = "DmlExecutionProvider" in providers
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+
+    gpu = _pick_windows_accel_gpu()
+    if gpu:
+        out["device_name"] = gpu.get("name")
+        out["vendor"] = gpu.get("vendor")
+        out["vram_gb"] = float(gpu.get("vram_gb") or 0.0)
+        out["integrated"] = bool(gpu.get("vendor") == "intel")
+    out["available"] = bool(out["runtime_ready"])
+    return out
+
+
+def _backend_family_for(backend: str, *, integrated: bool = False) -> str:
+    backend_l = str(backend or "cpu").lower()
+    if backend_l in {"cuda"}:
+        return "discrete_gpu"
+    if backend_l in {"mps"}:
+        return "integrated_gpu"
+    if backend_l == "directml":
+        return "integrated_gpu" if integrated else "discrete_gpu"
+    return "cpu_only"
+
+
 def _build_internal_render_plan(hw: dict[str, Any] | None = None, *, requested_tier: str = "auto", duration_s: float | None = None) -> dict[str, Any]:
     hw = dict(hw or {})
     backend = str(hw.get("backend") or "cpu").lower()
-    backend_family = str(hw.get("backend_family") or ("discrete_gpu" if backend == "cuda" else ("integrated_gpu" if backend == "mps" else "cpu_only"))).lower()
+    backend_family = str(hw.get("backend_family") or _backend_family_for(backend, integrated=bool(hw.get("integrated_acceleration")))).lower()
     vram_gb = float(hw.get("vram_gb") or 0.0)
     ram_gb = float(hw.get("ram_gb") or 0.0)
     cpu_threads = int(hw.get("cpu_threads") or 1)
@@ -700,6 +1015,16 @@ def _build_internal_render_plan(hw: dict[str, Any] | None = None, *, requested_t
         max_supported = "balanced"
         device_preference = "mps"
         notes.append("Apple Silicon acceleration detected; balanced tier is recommended for sustained laptop rendering.")
+    elif backend == "directml":
+        if backend_family == "discrete_gpu":
+            recommended = "balanced" if (vram_gb >= 6.0 or ram_gb >= 16.0) else "draft"
+            max_supported = "balanced"
+            notes.append("DirectML acceleration detected; SDXL is the preferred AMD / Windows internal path.")
+        else:
+            recommended = "draft"
+            max_supported = "balanced"
+            notes.append("Integrated DirectML acceleration detected; draft or balanced tiers are the safest choice.")
+        device_preference = "directml"
     else:
         if ram_gb >= 24.0 and cpu_threads >= 12:
             recommended = "balanced"
@@ -741,7 +1066,14 @@ def _build_internal_render_plan(hw: dict[str, Any] | None = None, *, requested_t
             defaults["refine_every_n_frames"] = max(int(defaults.get("refine_every_n_frames", 1)), 2)
             notes.append("Integrated GPU path favors keyframe continuity over denser temporal refinement on long renders.")
 
-    preferred_internal_model = "hf_sdxl_internal" if backend == "cuda" and _tier_rank(applied) >= _tier_rank("quality") else "hf_sd15_internal"
+    if backend == "cuda" and vram_gb >= 14.0 and _tier_rank(applied) >= _tier_rank("quality"):
+        preferred_internal_model = "hf_sd35_medium_internal"
+    elif backend == "cuda" and _tier_rank(applied) >= _tier_rank("balanced"):
+        preferred_internal_model = "hf_sdxl_internal"
+    elif backend == "directml":
+        preferred_internal_model = "hf_sdxl_internal" if _tier_rank(applied) >= _tier_rank("balanced") else "hf_sd15_internal"
+    else:
+        preferred_internal_model = "hf_sd15_internal"
     return {
         "requested_tier": requested,
         "recommended_tier": recommended,
@@ -771,6 +1103,10 @@ def _hardware_profile() -> dict[str, Any]:
         "platform": platform.system().lower(),
         "machine": platform.machine().lower(),
         "integrated_acceleration": False,
+        "gpu_vendor": None,
+        "supports_directml": False,
+        "directml_runtime_ready": False,
+        "directml_device_name": None,
     }
     try:
         page_size = int(os.sysconf("SC_PAGE_SIZE"))
@@ -803,12 +1139,33 @@ def _hardware_profile() -> dict[str, Any]:
                     out["device_name"] = "Apple Silicon GPU"
                     out["available_backends"].append("mps")
                     out["integrated_acceleration"] = True
+                    out["gpu_vendor"] = "apple"
             except Exception:
                 pass
     except Exception:
         pass
 
-    out["backend_family"] = "discrete_gpu" if out["backend"] == "cuda" else ("integrated_gpu" if out["backend"] == "mps" else "cpu_only")
+    directml = _directml_runtime_status()
+    out["supports_directml"] = bool(directml.get("available"))
+    out["directml_runtime_ready"] = bool(directml.get("runtime_ready"))
+    out["directml_device_name"] = directml.get("device_name")
+    if directml.get("available"):
+        if "directml" not in out["available_backends"]:
+            out["available_backends"].append("directml")
+        if out["backend"] == "cpu":
+            out["backend"] = "directml"
+            out["device"] = "directml"
+            out["device_name"] = str(directml.get("device_name") or "DirectML GPU")
+            out["vram_gb"] = max(float(out.get("vram_gb") or 0.0), float(directml.get("vram_gb") or 0.0))
+            out["integrated_acceleration"] = bool(directml.get("integrated"))
+            out["gpu_vendor"] = directml.get("vendor")
+        elif not out.get("gpu_vendor") and directml.get("vendor"):
+            out["gpu_vendor"] = directml.get("vendor")
+
+    out["backend_family"] = _backend_family_for(
+        str(out.get("backend") or "cpu"),
+        integrated=bool(out.get("integrated_acceleration")),
+    )
     plan = _build_internal_render_plan(out, requested_tier="auto")
     out["recommended_tier"] = plan["recommended_tier"]
     out["max_supported_tier"] = plan["max_supported_tier"]
@@ -864,8 +1221,81 @@ def hardware():
     hw = _hardware_profile()
     return {"ok": True, "hardware": hw, "render_tier_plan": _build_internal_render_plan(hw, requested_tier="auto")}
 
+
+def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
+    hw = dict(hw or _hardware_profile())
+    cfg = render_settings.get()
+    stability_cfg = dict(cfg.get("stability") or {})
+    directml_cfg = dict(cfg.get("directml") or {})
+    has_stability_key = bool(secrets.get("stability_api_key"))
+    stability_enabled = bool(stability_cfg.get("enabled"))
+    stability_service = str(stability_cfg.get("service") or "sd3")
+    stability_model = str(stability_cfg.get("model") or "sd3.5-large-turbo")
+    directml_available = bool(hw.get("supports_directml"))
+    directml_enabled = bool(directml_cfg.get("enabled"))
+    return {
+        "ok": True,
+        "settings": cfg,
+        "stability": {
+            "provider": "stability",
+            "configured": bool(has_stability_key),
+            "enabled": stability_enabled,
+            "visible": bool(has_stability_key and stability_enabled),
+            "has_api_key": has_stability_key,
+            "allow_auto_fallback": bool(stability_cfg.get("allow_auto_fallback", True)),
+            "service": stability_service,
+            "model": stability_model,
+            "style_preset": str(stability_cfg.get("style_preset") or "none"),
+            "output_format": str(stability_cfg.get("output_format") or "png"),
+            "supports_video_api": False,
+            "note": "Studio uses the current public Stability image API for hosted keyframes, then assembles video locally. A public hosted video route was not found in the current API spec.",
+        },
+        "directml": {
+            "provider": "onnxruntime-directml",
+            "enabled": directml_enabled,
+            "available": directml_available,
+            "active": bool(directml_enabled and str(hw.get("backend") or "cpu").lower() == "directml"),
+            "runtime_ready": bool(hw.get("directml_runtime_ready")),
+            "device_name": hw.get("directml_device_name") or hw.get("device_name"),
+            "preferred_model": str(directml_cfg.get("preferred_model") or "auto"),
+            "allow_auto_selection": bool(directml_cfg.get("allow_auto_selection", True)),
+        },
+        "stability_services": list(STABILITY_SERVICES),
+        "stability_models": list(STABILITY_SD3_MODELS),
+        "style_presets": list(STABILITY_STYLE_PRESETS),
+        "hardware": hw,
+    }
+
+
+def _hosted_stability_ready(payload: dict[str, Any] | None = None) -> bool:
+    payload = payload or {}
+    provider = _render_provider_status().get("stability") or {}
+    if not provider.get("configured") or not provider.get("enabled"):
+        return False
+    requested_mode = str(payload.get("render_mode") or "auto").strip().lower()
+    if requested_mode == "hosted":
+        return True
+    return bool(provider.get("allow_auto_fallback")) and bool(payload.get("allow_hosted_fallback", True))
+
+
+@app.get("/v1/settings/render_providers")
+def get_render_providers():
+    return _render_provider_status()
+
+
+@app.post("/v1/settings/render_providers")
+def set_render_providers(payload: dict[str, Any]):
+    saved = render_settings.update(payload)
+    return {
+        "ok": True,
+        "settings": saved,
+        "status": _render_provider_status(),
+    }
+
+
 @app.get("/v1/config")
 def get_config():
+    provider_status = _render_provider_status()
     return {
         "studio_home": str(settings.studio_home),
         "data_dir": str(settings.data_dir),
@@ -885,6 +1315,7 @@ def get_config():
         "ai_openai_compat_api_key_configured": bool(
             secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
         ),
+        "stability_api_key_configured": bool(secrets.get("stability_api_key")),
         "comfyui_url": settings.comfyui_url,
         "comfyui_urls": list(settings.resolved_comfyui_urls()),
         "comfyui_node_concurrency": settings.comfyui_node_concurrency,
@@ -894,6 +1325,8 @@ def get_config():
         "worker_concurrency": settings.worker_concurrency,
         "worker_poll_interval_s": settings.worker_poll_interval_s,
         "secrets_store": secrets.status().store,
+        "render_provider_settings": provider_status.get("settings"),
+        "render_provider_status": provider_status,
     }
 
 
@@ -908,6 +1341,7 @@ def secrets_status():
         "has_hf_token": st.has_hf_token,
         "has_civitai_api_key": st.has_civitai_api_key,
         "has_openai_compat_api_key": st.has_openai_compat_api_key,
+        "has_stability_api_key": st.has_stability_api_key,
         "note": st.note,
     }
 
@@ -916,10 +1350,10 @@ def secrets_status():
 def secrets_set(payload: dict[str, Any]):
     name = str((payload or {}).get("name") or "").strip().lower()
     value = str((payload or {}).get("value") or "")
-    if name not in ("hf_token", "civitai_api_key", "openai_compat_api_key"):
+    if name not in ("hf_token", "civitai_api_key", "openai_compat_api_key", "stability_api_key"):
         raise UserFacingError(
             "Unknown secret",
-            hint="Supported: hf_token, civitai_api_key, openai_compat_api_key",
+            hint="Supported: hf_token, civitai_api_key, openai_compat_api_key, stability_api_key",
         )
     if not value:
         raise UserFacingError("Missing value", hint="Paste the token/key value, then click Save.")
@@ -930,10 +1364,10 @@ def secrets_set(payload: dict[str, Any]):
 @app.post("/v1/settings/secrets/clear")
 def secrets_clear(payload: dict[str, Any]):
     name = str((payload or {}).get("name") or "").strip().lower()
-    if name not in ("hf_token", "civitai_api_key", "openai_compat_api_key"):
+    if name not in ("hf_token", "civitai_api_key", "openai_compat_api_key", "stability_api_key"):
         raise UserFacingError(
             "Unknown secret",
-            hint="Supported: hf_token, civitai_api_key, openai_compat_api_key",
+            hint="Supported: hf_token, civitai_api_key, openai_compat_api_key, stability_api_key",
         )
     secrets.delete(name)
     return {"ok": True}
@@ -1052,6 +1486,7 @@ def setup_status():
 
     ff = check_ffmpeg(settings.ffmpeg_path)
     backend_bundle = check_backend_bundle()
+    backend_bundle_directml = check_backend_bundle("studio_bundle_directml")
     edmg = core_status()
     if not edmg.get("available"):
         edmg.setdefault(
@@ -1067,15 +1502,18 @@ def setup_status():
     except Exception as e:
         seven = {"ok": False, "path": None, "hint": "Download the portable 7-Zip CLI into the Studio external tools folder, or set EDMG_7Z_PATH."}
 
+    hw = _hardware_profile()
     return {
             "ok": True,
             "ai_config": ai_config,
             "backend_bundle": backend_bundle,
+            "backend_bundle_directml": backend_bundle_directml,
             "ollama": ollama,
             "comfyui": comfy_status,
             "ffmpeg": ff,
             "edmg": edmg,
             "sevenzip": seven,
+            "hardware": hw,
             "tasks": [t.__dict__ for t in setup_tasks.list()[:10]],
         }
 
@@ -1142,6 +1580,8 @@ def setup_full_install(payload: dict[str, Any]):
     flavor = (payload or {}).get("flavor") or "cpu"
     port = int((payload or {}).get("comfy_port") or 8188)
     bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
+    if flavor == "amd" and bundle == "studio_bundle":
+        bundle = "studio_bundle_directml"
     model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ai_config = _setup_ai_config()
@@ -1284,12 +1724,18 @@ def comfyui_capabilities():
 
     ad_ok, ad_missing = comfy.has_nodes(obj, ["ADE_AnimateDiffLoaderGen1", "ADE_StandardStaticContextOptions"])
     svd_ok, svd_missing = comfy.has_nodes(obj, ["SVDSimpleImg2Vid"])
+    controlnet_ok, controlnet_missing = comfy.has_nodes(obj, ["LoadImage", "ControlNetLoader", "ControlNetApplyAdvanced"])
+    detected_checkpoints = sorted(
+        list(set(comfy_pool._extract_checkpoint_names(obj)[0]))  # type: ignore[attr-defined]
+    )
     return {
         "comfyui_url": settings.comfyui_url,
         "comfyui_urls": list(settings.resolved_comfyui_urls()),
         "comfyui_node_concurrency": settings.comfyui_node_concurrency,
         "animatediff": {"available": ad_ok, "missing_nodes": ad_missing},
         "svd": {"available": svd_ok, "missing_nodes": svd_missing},
+        "controlnet": {"available": controlnet_ok, "missing_nodes": controlnet_missing},
+        "detected_checkpoints": detected_checkpoints,
     }
 
 @app.get("/v1/edmg/status")
@@ -1491,7 +1937,7 @@ def preview_diffusion_segment(
     Notes:
       - capped length to protect slow machines
       - no audio mux (Timeline page plays audio separately)
-      - uses the internal Diffusers engine (SD1.5/SDXL) if installed
+      - uses the internal Diffusers engine (SD1.5 / SDXL / SD3.5) if installed
     """
     proj = store.get(project_id)
     if not proj:
@@ -1533,7 +1979,7 @@ def preview_diffusion_segment(
     if not model_dir or not model_dir.exists():
         raise UserFacingError(
             "Internal model is not installed.",
-            hint="Go to Models and install an internal model (SD 1.5 or SDXL), then retry.",
+            hint="Go to Models and install an internal model such as SD 1.5, SDXL, or SD3.5 Medium, then retry.",
             code="MODEL_MISSING",
             status_code=400,
         )
@@ -3296,21 +3742,22 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
     if out_path and out_path.exists():
         return {"cached": True, "saved": str(out_path)}
 
-    checkpoint = payload.get("checkpoint") or settings.comfyui_checkpoint
-
-    wf = comfy.default_workflow(
-        checkpoint=checkpoint,
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        seed=seed,
-        width=width,
-        height=height,
-        steps=steps,
-        cfg=cfg,
-        sampler=sampler
+    selection = _resolve_comfy_still_selection(
+        model_id=str(payload.get("model_id") or "") or None,
+        checkpoint=str(payload.get("checkpoint") or "") or None,
+        workflow_family=str(payload.get("workflow_family") or "auto") or None,
+        controlnet_model=str(payload.get("controlnet_model") or "") or None,
+        reference_asset=str(payload.get("reference_asset") or "") or None,
+        conditioning_mode=str(payload.get("conditioning_mode") or "raw") or None,
     )
+    checkpoint = selection["checkpoint"]
+    workflow_family = str(selection.get("workflow_family") or "txt2img")
+    controlnet_name = str(payload.get("controlnet_name") or selection.get("controlnet_name") or "").strip()
+    conditioning_mode = str(selection.get("conditioning_mode") or "raw")
 
     req = {"checkpoint": checkpoint, "est_steps": steps, "est_frames": 1}
+    if workflow_family == "controlnet":
+        req["node_classes"] = ["LoadImage", "ControlNetLoader", "ControlNetApplyAdvanced"]
     try:
         node_url = comfy_pool.acquire(req)
     except Exception as e:
@@ -3322,6 +3769,47 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
         )
     jobs.append_log(project_id, job_id, f"Using ComfyUI node: {node_url}".rstrip())
     try:
+        if workflow_family == "controlnet":
+            reference_image = _prepare_comfy_reference_image(
+                project_id,
+                node_url,
+                str(payload.get("reference_asset") or ""),
+                conditioning_mode,
+            )
+            wf = comfy.controlnet_workflow(
+                checkpoint=checkpoint,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                seed=seed,
+                width=width,
+                height=height,
+                steps=steps,
+                cfg=cfg,
+                sampler=sampler,
+                controlnet_name=controlnet_name,
+                reference_image=reference_image,
+                controlnet_strength=float(payload.get("controlnet_strength") or 0.8),
+                filename_prefix=f"edmg_cn_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
+            )
+            jobs.append_log(
+                project_id,
+                job_id,
+                f"ControlNet still render using {checkpoint} + {controlnet_name} ({conditioning_mode})",
+            )
+        else:
+            wf = comfy.default_workflow(
+                checkpoint=checkpoint,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                seed=seed,
+                width=width,
+                height=height,
+                steps=steps,
+                cfg=cfg,
+                sampler=sampler,
+                filename_prefix=f"edmg_still_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
+            )
+
         submit = comfy.submit_prompt(node_url, wf)
         prompt_id = submit.get("prompt_id")
         if not prompt_id:
@@ -3730,6 +4218,180 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         store.save(proj)
         return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "proxy", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
 
+    if preflight.get("mode") == "hosted":
+        provider_cfg = dict((render_settings.get().get("stability") or {}))
+        proj = store.get(project_id)
+        if not proj:
+            raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
+        plan = proj.meta.get("last_plan")
+        if not plan or not (plan.get("variants") or []):
+            raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
+
+        variant_index = int(payload.get("variant_index", 0))
+        variants = plan["variants"]
+        if variant_index < 0 or variant_index >= len(variants):
+            raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
+
+        variant = variants[variant_index]
+        scenes = variant.get("scenes") or []
+        pdir = store.project_dir(project_id)
+        audio_meta = proj.meta.get("audio")
+        audio_path: Path | None = None
+        if audio_meta and audio_meta.get("filename"):
+            audio_path = pdir / "assets" / "audio" / str(audio_meta["filename"])
+            if not audio_path.exists():
+                audio_path = None
+
+        settings_obj = InternalVideoSettings(
+            fps_render=int(payload.get("fps_render", 2)),
+            fps_output=int(payload.get("fps_output", 24)),
+            width=int(payload.get("width", 768)),
+            height=int(payload.get("height", 432)),
+            steps=int(payload.get("steps", 15)),
+            cfg=float(payload.get("cfg", provider_cfg.get("cfg_scale", 6.5))),
+            keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
+            interpolation_engine=str(payload.get("interpolation_engine", "auto")),
+            negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
+            model_id=str(preflight.get("model_id") or "stability:sd3:sd3.5-large-turbo"),
+            render_tier=str(payload.get("render_tier") or "auto"),
+            device_preference="cpu",
+            temporal_mode="keyframes" if str(payload.get("temporal_mode") or "frame_img2img") == "frame_img2img" else str(payload.get("temporal_mode") or "keyframes"),
+            temporal_strength=float(payload.get("temporal_strength", provider_cfg.get("strength", 0.55))),
+            temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
+            refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
+            anchor_strength=float(payload.get("anchor_strength", 0.20)),
+            prompt_blend=bool(payload.get("prompt_blend", True)),
+            resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
+        )
+
+        runtime_checkpoint: dict[str, Any] | None = None
+        chunk_plan = dict(((preflight.get("tier_plan") or {}).get("chunk_plan") or {}))
+        estimated_total = max(1, int(preflight.get("estimated_frames", 1)) + 3)
+
+        def _checkpoint(state: dict[str, Any]) -> None:
+            nonlocal runtime_checkpoint
+            runtime_checkpoint = dict(state or {})
+            latest = jobs.get(project_id, job_id)
+            latest_progress = latest.progress if latest and isinstance(latest.progress, dict) else {}
+            jobs.update_progress(
+                project_id,
+                job_id,
+                stage=str(latest_progress.get("stage") or runtime_checkpoint.get("stage") or "running"),
+                current=int(latest_progress.get("current", 0) or 0),
+                total=max(1, int(latest_progress.get("total", estimated_total) or estimated_total)),
+                message=str(latest_progress.get("message") or runtime_checkpoint.get("message") or ""),
+                extra=_job_checkpoint_extra("hosted", settings_obj.model_id, runtime_checkpoint),
+            )
+
+        def _check_canceled() -> None:
+            latest = jobs.get(project_id, job_id)
+            if latest and latest.status == "canceled":
+                jobs.update_progress(
+                    project_id,
+                    job_id,
+                    stage="canceled",
+                    current=int((latest.progress or {}).get("current", 0)),
+                    total=max(1, int((latest.progress or {}).get("total", estimated_total) or estimated_total)),
+                    message="Cancel requested — stopping after current step",
+                    extra=_job_checkpoint_extra("hosted", settings_obj.model_id, runtime_checkpoint),
+                )
+                raise JobCanceled("Hosted render canceled")
+
+        def _log(line: str) -> None:
+            _check_canceled()
+            jobs.append_log(project_id, job_id, line)
+
+        def _progress(stage: str, current: int, total: int, message: str | None = None) -> None:
+            _check_canceled()
+            jobs.update_progress(
+                project_id,
+                job_id,
+                stage=stage,
+                current=current,
+                total=total,
+                message=message,
+                extra=_job_checkpoint_extra("hosted", settings_obj.model_id, runtime_checkpoint),
+            )
+
+        _log(
+            f"Hosted render: fps_render={settings_obj.fps_render} fps_output={settings_obj.fps_output} "
+            f"keyframe_interval_s={settings_obj.keyframe_interval_s} service={preflight.get('hosted_provider', {}).get('service')}"
+        )
+        if preflight.get("warnings"):
+            for warning in preflight["warnings"]:
+                _log(f"Warning: {warning}")
+
+        _progress("starting", 0, estimated_total, "Starting hosted Stability render")
+        variant2 = dict(variant)
+        variant2["index"] = variant_index
+        variant2["duration_s"] = float(
+            proj.meta.get("analysis", {}).get("duration_s")
+            or variant.get("duration_s")
+            or scenes[-1].get("end_s")
+            or 60.0
+        )
+
+        out = render_stability_hosted_video_variant(
+            ffmpeg_path=settings.ffmpeg_path,
+            project_dir=pdir,
+            variant=variant2,
+            scenes=scenes,
+            audio_path=audio_path,
+            settings=settings_obj,
+            stability_api_key=str(secrets.get("stability_api_key") or ""),
+            hosted_settings={
+                "service": str(preflight.get("hosted_provider", {}).get("service") or provider_cfg.get("service") or "sd3"),
+                "model": str(preflight.get("hosted_provider", {}).get("model") or provider_cfg.get("model") or "sd3.5-large-turbo"),
+                "style_preset": str(preflight.get("hosted_provider", {}).get("style_preset") or provider_cfg.get("style_preset") or "none"),
+                "output_format": str(preflight.get("hosted_provider", {}).get("output_format") or provider_cfg.get("output_format") or "png"),
+                "strength": float(provider_cfg.get("strength", 0.55)),
+                "cfg_scale": float(provider_cfg.get("cfg_scale", 6.5)),
+            },
+            timeline=(proj.meta.get("timeline") or None),
+            log_fn=_log,
+            progress_fn=_progress,
+            cancel_check_fn=_check_canceled,
+            chunk_plan=chunk_plan,
+            checkpoint_fn=_checkpoint,
+        )
+        checkpoint_summary = runtime_checkpoint or _load_render_checkpoint(out)
+
+        jobs.update_progress(
+            project_id,
+            job_id,
+            stage="complete",
+            current=estimated_total,
+            total=estimated_total,
+            message=f"Saved {out.name}",
+            extra=_job_checkpoint_extra("hosted", settings_obj.model_id, checkpoint_summary, video=str(out)),
+        )
+
+        rel_video = str(out.relative_to(pdir))
+        videos = proj.meta.setdefault("outputs", {}).setdefault("videos", [])
+        if rel_video not in videos:
+            videos.append(rel_video)
+        render_entry = {
+            "video": rel_video,
+            "model_id": settings_obj.model_id,
+            "mode": "hosted",
+            "fps_render": settings_obj.fps_render,
+            "fps_output": settings_obj.fps_output,
+            "temporal_mode": settings_obj.temporal_mode,
+            "resume_existing_frames": settings_obj.resume_existing_frames,
+            "variant_index": variant_index,
+            "completed_at": time.time(),
+            "preflight": preflight,
+            "runtime_checkpoint": checkpoint_summary,
+            "hosted_provider": preflight.get("hosted_provider"),
+        }
+        proj.meta["last_internal_render"] = render_entry
+        hist = proj.meta.setdefault("internal_render_history", [])
+        hist.append(render_entry)
+        if isinstance(hist, list) and len(hist) > 20:
+            proj.meta["internal_render_history"] = hist[-20:]
+        store.save(proj)
+        return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "hosted", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
+
     proj, variant, model_id, model_path, settings_obj = _resolve_internal_render_request(project_id, payload)
     scenes = variant.get("scenes") or []
     pdir = store.project_dir(project_id)
@@ -3883,15 +4545,27 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
         raise HTTPException(400, "Selected variant has no scenes")
 
     created = []
+    selection = _resolve_comfy_still_selection(
+        model_id=req.model_id,
+        checkpoint=req.checkpoint,
+        workflow_family=req.workflow_family,
+        controlnet_model=req.controlnet_model,
+        reference_asset=req.reference_asset,
+        conditioning_mode=req.conditioning_mode,
+    )
+    model_tag = _safe_name_tag(req.model_id or selection.get("checkpoint") or "default")
+    workflow_tag = _safe_name_tag(selection.get("workflow_family") or "txt2img")
+    ref_tag = _safe_name_tag(req.reference_asset or "noref")
     for idx, sc in enumerate(scenes):
         # Deterministic output path for caching
         out_dir = store.project_dir(project_id) / "outputs" / "images"
         out_dir.mkdir(parents=True, exist_ok=True)
         seed = _stable_seed(project_id, req.variant_index, idx)
-        out_path = out_dir / f"v{req.variant_index:02d}_scene{idx:03d}_seed{seed}.png"
+        out_path = out_dir / f"v{req.variant_index:02d}_scene{idx:03d}_{workflow_tag}_{model_tag}_{ref_tag}_seed{seed}.png"
         p = {
             "variant_index": req.variant_index,
             "scene_index": idx,
+            "model_id": req.model_id,
             "prompt": sc.get("prompt") or "",
             "negative_prompt": req.negative_prompt,
             "seed": seed,
@@ -3900,6 +4574,13 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
             "steps": req.steps,
             "cfg": req.cfg,
             "sampler": req.sampler,
+            "checkpoint": selection.get("checkpoint"),
+            "workflow_family": selection.get("workflow_family"),
+            "reference_asset": req.reference_asset,
+            "conditioning_mode": selection.get("conditioning_mode"),
+            "controlnet_model": req.controlnet_model,
+            "controlnet_name": selection.get("controlnet_name"),
+            "controlnet_strength": req.controlnet_strength,
             "out_path": str(out_path),
         }
         job = jobs.create(project_id, "comfyui_scene", p)
@@ -3941,6 +4622,21 @@ def render_internal_video(project_id: str, req: InternalVideoRenderRequest):
 
 
 
+def _internal_model_family(model_path: Path) -> str:
+    mi = model_path / "model_index.json"
+    if mi.exists():
+        try:
+            data = json.loads(mi.read_text(encoding="utf-8"))
+            cls = str(data.get("_class_name") or "")
+            if "StableDiffusion3" in cls:
+                return "sd3"
+            if "XL" in cls or "XLPipeline" in cls:
+                return "sdxl"
+        except Exception:
+            pass
+    return "sd15"
+
+
 def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -> tuple[Any, dict[str, Any], str, Path, InternalVideoSettings]:
     proj = store.get(project_id)
     if not proj:
@@ -3962,10 +4658,31 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
     req_model_id = str(payload.get("model_id") or "hf_sd15_internal")
     hw = _hardware_profile()
     tier_plan = _build_internal_render_plan(hw, requested_tier=str(payload.get("render_tier") or "auto"))
+    provider_cfg = _render_provider_status(hw).get("settings") or {}
+    directml_cfg = dict(provider_cfg.get("directml") or {})
+    directml_enabled = bool(directml_cfg.get("enabled", True))
+    requested_device = str(payload.get("device_preference") or tier_plan.get("device_preference") or "auto").strip().lower()
+    if requested_device == "directml" and not directml_enabled:
+        raise UserFacingError(
+            "DirectML is disabled in Settings.",
+            hint="Enable AMD / DirectML internal runtime in Settings, or switch the device preference to CPU/CUDA/MPS.",
+            code="DIRECTML_DISABLED",
+            status_code=400,
+        )
+    if requested_device == "auto" and str(hw.get("backend") or "").lower() == "directml" and not directml_enabled:
+        requested_device = "cpu"
+    if requested_device == "auto" and str(hw.get("backend") or "").lower() == "directml" and not bool(directml_cfg.get("allow_auto_selection", True)):
+        requested_device = "cpu"
 
     def _pick_auto_model() -> str | None:
         preferred = str(tier_plan.get("preferred_internal_model") or hw.get("preferred_internal_model") or "hf_sd15_internal")
-        fallbacks = [preferred, "hf_sd15_internal", "hf_sdxl_internal"]
+        if requested_device == "directml":
+            preferred = str(directml_cfg.get("preferred_model") or preferred or "auto").strip().lower()
+            if preferred == "auto":
+                preferred = "hf_sdxl_internal"
+            fallbacks = [preferred, "hf_sdxl_internal", "hf_sd15_internal"]
+        else:
+            fallbacks = [preferred, "hf_sd35_medium_internal", "hf_sdxl_internal", "hf_sd15_internal"]
         for mid in fallbacks:
             if models.installed_path(mid):
                 return mid
@@ -3977,7 +4694,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
         if not picked:
             raise UserFacingError(
                 "No internal diffusion model installed",
-                hint="Open Models → install either 'Stable Diffusion v1.5 (Internal / Diffusers)' or 'Stable Diffusion XL Base 1.0 (Internal / Diffusers)' then retry.",
+                hint="Open Models and install an internal Diffusers model such as SD 1.5, SDXL, or SD3.5 Medium, then retry.",
                 code="MODEL_NOT_INSTALLED",
                 status_code=400,
             )
@@ -3987,10 +4704,22 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
     if not model_path:
         raise UserFacingError(
             "Internal model not installed",
-            hint="Open Models → install the requested internal model (SD1.5 or SDXL) then retry.",
+            hint="Open Models and install the requested internal model, then retry.",
             code="MODEL_NOT_INSTALLED",
             status_code=400,
         )
+
+    model_family = _internal_model_family(model_path)
+    effective_device_preference = requested_device
+    if requested_device == "directml" and model_family not in {"sd15", "sdxl"}:
+        raise UserFacingError(
+            "DirectML currently supports SD 1.5 and SDXL only.",
+            hint="Use SDXL or SD 1.5 for AMD / DirectML, or switch device preference to CPU for SD3.5.",
+            code="DIRECTML_MODEL_UNSUPPORTED",
+            status_code=400,
+        )
+    if requested_device == "auto" and str(hw.get("backend") or "").lower() == "directml" and model_family not in {"sd15", "sdxl"}:
+        effective_device_preference = "cpu"
 
     settings_obj = InternalVideoSettings(
         fps_render=int(payload.get("fps_render", 2)),
@@ -4004,7 +4733,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
         negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
         model_id=model_id,
         render_tier=str(tier_plan.get("applied_tier") or payload.get("render_tier") or "auto"),
-        device_preference=str(payload.get("device_preference") or tier_plan.get("device_preference") or "auto"),
+        device_preference=effective_device_preference,
         temporal_mode=str(payload.get("temporal_mode", "frame_img2img")),
         temporal_strength=float(payload.get("temporal_strength", 0.35)),
         temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
@@ -4105,6 +4834,7 @@ def _proxy_render_preflight_data(
         "installed_internal_models": {
             "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
             "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
+            "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
         },
         "settings": {
             "fps_render": settings_obj.fps_render,
@@ -4118,14 +4848,157 @@ def _proxy_render_preflight_data(
     }
 
 
+def _hosted_render_preflight_data(
+    project_id: str,
+    payload: dict[str, Any],
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    provider_status = _render_provider_status()
+    stability = dict(provider_status.get("stability") or {})
+    provider_cfg = dict((provider_status.get("settings") or {}).get("stability") or {})
+    if not stability.get("configured"):
+        raise UserFacingError(
+            "Stability API key is not configured.",
+            hint="Open Settings and save a Stability API key, then retry the hosted render.",
+            code="STABILITY_API_KEY_MISSING",
+            status_code=400,
+        )
+    if not stability.get("enabled"):
+        raise UserFacingError(
+            "Hosted Stability fallback is disabled.",
+            hint="Open Settings and enable the Stability hosted fallback, then retry.",
+            code="STABILITY_HOSTED_DISABLED",
+            status_code=400,
+        )
+
+    proj = store.get(project_id)
+    if not proj:
+        raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
+
+    variant_index = int(payload.get("variant_index", 0))
+    variants = plan["variants"]
+    if variant_index < 0 or variant_index >= len(variants):
+        raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
+
+    variant = variants[variant_index]
+    scenes = variant.get("scenes") or []
+    if not scenes:
+        raise UserFacingError("Selected variant has no scenes", hint="Re-run Plan with at least 1 scene.")
+
+    hosted_service = str(payload.get("hosted_service") or "default").strip().lower()
+    if hosted_service in {"", "default"}:
+        hosted_service = str(provider_cfg.get("service") or "sd3")
+    hosted_model = str(payload.get("hosted_model") or provider_cfg.get("model") or "sd3.5-large-turbo").strip().lower()
+    hosted_style = str(payload.get("hosted_style_preset") or provider_cfg.get("style_preset") or "none").strip().lower()
+    hosted_model_id = f"stability:{hosted_service}:{hosted_model if hosted_service == 'sd3' else 'default'}"
+
+    settings_obj = InternalVideoSettings(
+        fps_render=int(payload.get("fps_render", 2)),
+        fps_output=int(payload.get("fps_output", 24)),
+        width=int(payload.get("width", 768)),
+        height=int(payload.get("height", 432)),
+        steps=int(payload.get("steps", 15)),
+        cfg=float(payload.get("cfg", provider_cfg.get("cfg_scale", 6.5))),
+        keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
+        interpolation_engine=str(payload.get("interpolation_engine", "auto")),
+        negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
+        model_id=hosted_model_id,
+        render_tier=str(payload.get("render_tier") or "auto"),
+        device_preference="cpu",
+        temporal_mode="keyframes" if str(payload.get("temporal_mode") or "frame_img2img") == "frame_img2img" else str(payload.get("temporal_mode") or "keyframes"),
+        temporal_strength=float(payload.get("temporal_strength", provider_cfg.get("strength", 0.55))),
+        temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
+        refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
+        anchor_strength=float(payload.get("anchor_strength", 0.20)),
+        prompt_blend=bool(payload.get("prompt_blend", True)),
+        resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
+    )
+
+    duration_s = float(
+        proj.meta.get("analysis", {}).get("duration_s")
+        or variant.get("duration_s")
+        or scenes[-1].get("end_s")
+        or 60.0
+    )
+    total_frames = int(math.ceil(duration_s * max(1, int(settings_obj.fps_render))))
+    keyframes = max(1, len(_scene_keyframe_times(scenes, settings_obj.keyframe_interval_s)))
+    hw = _hardware_profile()
+    tier_plan = _build_internal_render_plan(hw, requested_tier=str(payload.get("render_tier") or "auto"), duration_s=duration_s)
+    tier_plan["chunk_plan"] = _build_render_chunk_plan(hw, applied_tier=str(tier_plan.get("applied_tier") or "draft"), duration_s=duration_s, total_frames=total_frames, fps_render=int(settings_obj.fps_render), render_mode="hosted")
+    cache = describe_internal_render_cache(
+        project_dir=store.project_dir(project_id),
+        variant_index=variant_index,
+        scenes=scenes,
+        timeline=(proj.meta.get("timeline") or None),
+        model_dir=Path(f"stability_platform/{hosted_service}/{hosted_model}"),
+        settings=settings_obj,
+        total_frames=total_frames,
+    )
+    warnings = [
+        "Hosted Stability mode generates keyframes through the public image API, then assembles and muxes the video locally.",
+        "Hosted mode does not call a public Stability video endpoint because one was not found in the current public API spec.",
+    ]
+    if reason:
+        warnings.insert(0, reason)
+    if str(payload.get("temporal_mode") or "frame_img2img") == "frame_img2img":
+        warnings.append("Frame img2img temporal mode is reduced to keyframe continuity in hosted mode to avoid per-frame API calls.")
+    return {
+        "ok": True,
+        "mode": "hosted",
+        "variant_index": variant_index,
+        "model_id": hosted_model_id,
+        "model_path": None,
+        "duration_s": duration_s,
+        "estimated_frames": total_frames,
+        "estimated_keyframes": keyframes,
+        "device": "hosted+local_ffmpeg",
+        "hardware": hw,
+        "tier_plan": tier_plan,
+        "resume_existing_frames": bool(settings_obj.resume_existing_frames),
+        "warnings": warnings,
+        "cache": cache,
+        "installed_internal_models": {
+            "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
+            "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
+            "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
+        },
+        "hosted_provider": {
+            "provider": "stability",
+            "service": hosted_service,
+            "model": hosted_model,
+            "style_preset": hosted_style,
+            "output_format": str(provider_cfg.get("output_format") or "png"),
+            "allow_auto_fallback": bool(provider_cfg.get("allow_auto_fallback", True)),
+        },
+        "settings": {
+            "fps_render": settings_obj.fps_render,
+            "fps_output": settings_obj.fps_output,
+            "width": settings_obj.width,
+            "height": settings_obj.height,
+            "interpolation_engine": settings_obj.interpolation_engine,
+            "resume_existing_frames": settings_obj.resume_existing_frames,
+            "render_mode": "hosted",
+            "render_tier": settings_obj.render_tier,
+        },
+    }
+
+
 def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     requested_mode = str(payload.get("render_mode") or "auto").strip().lower()
     if requested_mode == "proxy":
         return _proxy_render_preflight_data(project_id, payload, reason="Proxy mode requested explicitly.")
+    if requested_mode == "hosted":
+        return _hosted_render_preflight_data(project_id, payload)
 
     try:
         proj, variant, model_id, model_path, settings_obj = _resolve_internal_render_request(project_id, payload)
     except UserFacingError as e:
+        if e.code in {"MODEL_NOT_INSTALLED", "DIRECTML_MODEL_UNSUPPORTED"} and _hosted_stability_ready(payload):
+            return _hosted_render_preflight_data(project_id, payload, reason=e.message)
         allow_proxy = bool(payload.get("allow_proxy_fallback", True))
         if allow_proxy and e.code == "MODEL_NOT_INSTALLED":
             return _proxy_render_preflight_data(project_id, payload, reason=e.message, requested_model_id=str(payload.get("model_id") or "auto"))
@@ -4149,6 +5022,10 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         warnings.append("No GPU acceleration detected; internal diffusion will run on CPU and may be slow on longer renders.")
     elif str(hw.get("backend") or "").lower() == "mps":
         warnings.append("Apple Silicon acceleration detected; balanced settings are recommended for sustained laptop rendering.")
+    elif str(hw.get("backend") or "").lower() == "directml":
+        warnings.append("DirectML acceleration detected; SDXL and SD 1.5 are the supported AMD / Windows GPU paths.")
+    if str(hw.get("backend") or "").lower() == "directml" and str(settings_obj.device_preference or "auto") == "cpu":
+        warnings.append("The selected internal model is not DirectML-compatible, so this render will fall back to CPU.")
     if total_frames > 900:
         warnings.append("This render is long for the current FPS render setting; consider lowering FPS render or increasing keyframe interval.")
     if settings_obj.temporal_mode == "frame_img2img" and total_frames > 600:
@@ -4171,6 +5048,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     installed_internal = {
         "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
         "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
+        "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
     }
     return {
         "ok": True,
@@ -4225,6 +5103,16 @@ def render_motion_scenes(project_id: str, req: RenderMotionRequest):
         raise HTTPException(400, "Selected variant has no scenes")
 
     created = []
+    motion_selection = _resolve_comfy_motion_selection(
+        model_id=req.model_id,
+        checkpoint=req.checkpoint,
+        svd_model_id=req.svd_model_id,
+        svd_checkpoint=req.svd_checkpoint,
+    )
+    checkpoint = str(motion_selection.get("checkpoint") or settings.comfyui_checkpoint)
+    svd_checkpoint = str(motion_selection.get("svd_checkpoint") or req.svd_checkpoint or "svd_xt.safetensors")
+    model_tag = _safe_name_tag(req.model_id or checkpoint)
+    svd_tag = _safe_name_tag(req.svd_model_id or svd_checkpoint or "svd")
     for idx, sc in enumerate(scenes):
         start = float(sc.get("start_s", idx * 5))
         end = float(sc.get("end_s", start + 5))
@@ -4238,11 +5126,13 @@ def render_motion_scenes(project_id: str, req: RenderMotionRequest):
 
         seed = _stable_seed(project_id, req.variant_index, idx)
         pdir = store.project_dir(project_id)
-        frames_dir = pdir / "outputs" / "frames" / f"v{req.variant_index:02d}" / f"scene{idx:03d}" / f"{req.engine}_seed{seed}"
-        out_clip = pdir / "outputs" / "clips" / f"v{req.variant_index:02d}_scene{idx:03d}_{req.engine}_seed{seed}.mp4"
+        frames_dir = pdir / "outputs" / "frames" / f"v{req.variant_index:02d}" / f"scene{idx:03d}" / f"{req.engine}_{model_tag}_{svd_tag}_seed{seed}"
+        out_clip = pdir / "outputs" / "clips" / f"v{req.variant_index:02d}_scene{idx:03d}_{req.engine}_{model_tag}_{svd_tag}_seed{seed}.mp4"
         p = {
             "variant_index": req.variant_index,
             "scene_index": idx,
+            "model_id": req.model_id,
+            "svd_model_id": req.svd_model_id,
             "prompt": sc.get("prompt") or "",
             "negative_prompt": req.negative_prompt,
             "seed": seed,
@@ -4251,7 +5141,7 @@ def render_motion_scenes(project_id: str, req: RenderMotionRequest):
             "steps": req.steps,
             "cfg": req.cfg,
             "sampler": req.sampler,
-            "checkpoint": req.checkpoint,
+            "checkpoint": checkpoint,
             "fps": req.fps,
             "frames": frames,
             "engine": req.engine,
@@ -4261,7 +5151,7 @@ def render_motion_scenes(project_id: str, req: RenderMotionRequest):
             "context_length": req.context_length,
             "context_overlap": req.context_overlap,
             "beta_schedule": req.beta_schedule,
-            "svd_checkpoint": req.svd_checkpoint,
+            "svd_checkpoint": svd_checkpoint,
             "svd_num_steps": req.svd_num_steps,
             "svd_motion_bucket_id": req.svd_motion_bucket_id,
             "svd_fps_id": req.svd_fps_id,
@@ -4293,23 +5183,38 @@ def _preset_defaults(preset: str) -> dict[str, Any]:
     return {"stills": {"width": 768, "height": 432, "steps": 20, "cfg": 6.5, "sampler": "euler"}, "motion": {"fps": 12, "max_frames": 48}}
 
 
-@lru_cache(maxsize=1)
 def _internal_diffusion_runtime_status() -> dict[str, Any]:
     try:
         import diffusers  # type: ignore  # noqa: F401
         import torch  # type: ignore  # noqa: F401
-        return {"ok": True, "diagnostics": ["internal_runtime=ready"]}
+        diagnostics = ["internal_runtime=ready"]
+        directml = _directml_runtime_status()
+        if directml.get("runtime_ready"):
+            diagnostics.append("directml_runtime=ready")
+        return {"ok": True, "diagnostics": diagnostics}
     except Exception as e:
         return {"ok": False, "error": str(e), "diagnostics": ["internal_runtime=missing"]}
 
 
 def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> dict[str, Any]:
     hw = _hardware_profile()
+    provider_status = _render_provider_status(hw)
+    directml_status = dict(provider_status.get("directml") or {})
+    if str(hw.get("backend") or "").lower() == "directml" and not bool(directml_status.get("enabled", True)):
+        hw = dict(hw)
+        hw["backend"] = "cpu"
+        hw["device"] = "cpu"
+        hw["backend_family"] = "cpu_only"
+        hw["device_preference"] = "cpu"
+        hw["available_backends"] = [b for b in list(hw.get("available_backends") or []) if str(b).lower() != "directml"]
     preset_l = str(preset or "balanced").lower().strip()
     requested_tier = "draft" if preset_l == "fast" else ("quality" if preset_l in ("quality", "ultra") else "auto")
     tier_plan = _build_internal_render_plan(hw, requested_tier=requested_tier)
     preferred = str(tier_plan.get("preferred_internal_model") or hw.get("preferred_internal_model") or "hf_sd15_internal")
-    fallbacks = [preferred, "hf_sd15_internal", "hf_sdxl_internal"]
+    if str(tier_plan.get("device_preference") or "auto") == "directml":
+        fallbacks = [preferred, "hf_sdxl_internal", "hf_sd15_internal"]
+    else:
+        fallbacks = [preferred, "hf_sd15_internal", "hf_sdxl_internal"]
     runtime = _internal_diffusion_runtime_status()
     picked = next((mid for mid in fallbacks if models.installed_path(mid)), None)
     if picked and runtime.get("ok"):
@@ -4320,6 +5225,18 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
             "reason": f"{reason} Falling back to local internal render.",
             "diagnostics": ["comfyui=unavailable", f"internal_model={picked}", *list(runtime.get("diagnostics") or [])],
             "tier_plan": tier_plan,
+        }
+    if _hosted_stability_ready({"allow_hosted_fallback": True}):
+        stability = provider_status.get("stability") or {}
+        diagnostics = ["comfyui=unavailable", "hosted_stability=ready", *list(runtime.get("diagnostics") or [])]
+        return {
+            "mode": "hosted",
+            "engine": "stability",
+            "model_id": f"stability:{stability.get('service')}:{stability.get('model')}",
+            "reason": f"{reason} Falling back to hosted Stability keyframes.",
+            "diagnostics": diagnostics,
+            "tier_plan": tier_plan,
+            "hosted_provider": stability,
         }
     diagnostics = ["comfyui=unavailable"]
     if picked:
@@ -4431,8 +5348,13 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
     if mode_l == "internal":
         preset_l = str(preset or "balanced").lower().strip()
         requested_tier = "draft" if preset_l == "fast" else ("quality" if preset_l in ("quality", "ultra") else "auto")
-        tier_plan = _build_internal_render_plan(_hardware_profile(), requested_tier=requested_tier)
+        hw = _hardware_profile()
+        provider_status = _render_provider_status(hw)
+        tier_plan = _build_internal_render_plan(hw, requested_tier=requested_tier)
         tier_defaults = dict(tier_plan.get("defaults") or {})
+        device_preference = str(tier_plan.get("device_preference") or "auto")
+        if device_preference == "directml" and not bool((provider_status.get("directml") or {}).get("enabled", True)):
+            device_preference = "cpu"
         internal_req = InternalVideoRenderRequest(
             variant_index=variant_index,
             fps_output=int(tier_defaults.get("fps_output", 24)),
@@ -4446,7 +5368,7 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             model_id=os.getenv("EDMG_INTERNAL_MODEL_ID", "auto"),
             render_mode="auto",
             render_tier=str(tier_plan.get("applied_tier") or requested_tier),
-            device_preference=str(tier_plan.get("device_preference") or "auto"),
+            device_preference=device_preference,
             temporal_mode=str(tier_defaults.get("temporal_mode", "frame_img2img")),
             temporal_steps=int(tier_defaults.get("temporal_steps", 12)),
             refine_every_n_frames=int(tier_defaults.get("refine_every_n_frames", 1)),
@@ -4460,9 +5382,14 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
     defaults = _preset_defaults(preset)
     rec = _recommend_pipeline(project_id, preset=preset, mode=mode, engine=engine)
 
-    if rec["mode"] in ("internal", "proxy"):
-        tier_plan = dict(rec.get("tier_plan") or _build_internal_render_plan(_hardware_profile(), requested_tier=("draft" if preset == "fast" else ("quality" if preset in ("quality", "ultra") else "auto"))))
+    if rec["mode"] in ("internal", "proxy", "hosted"):
+        hw = _hardware_profile()
+        provider_status = _render_provider_status(hw)
+        tier_plan = dict(rec.get("tier_plan") or _build_internal_render_plan(hw, requested_tier=("draft" if preset == "fast" else ("quality" if preset in ("quality", "ultra") else "auto"))))
         tier_defaults = dict(tier_plan.get("defaults") or {})
+        device_preference = str(tier_plan.get("device_preference") or "auto")
+        if device_preference == "directml" and not bool((provider_status.get("directml") or {}).get("enabled", True)):
+            device_preference = "cpu"
         internal_req = InternalVideoRenderRequest(
             variant_index=variant_index,
             fps_output=int(tier_defaults.get("fps_output", 24)),
@@ -4474,14 +5401,15 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             keyframe_interval_s=float(tier_defaults.get("keyframe_interval_s", os.getenv("EDMG_INTERNAL_KEYFRAME_INTERVAL_S", "5.0"))),
             interpolation_engine=str(tier_defaults.get("interpolation_engine", os.getenv("EDMG_INTERPOLATION_ENGINE", "auto"))),
             model_id=str(rec.get("model_id") or os.getenv("EDMG_INTERNAL_MODEL_ID", "auto")),
-            render_mode=("proxy" if rec["mode"] == "proxy" else "auto"),
+            render_mode=("proxy" if rec["mode"] == "proxy" else ("hosted" if rec["mode"] == "hosted" else "auto")),
             render_tier=str(tier_plan.get("applied_tier") or "auto"),
-            device_preference=str(tier_plan.get("device_preference") or "auto"),
+            device_preference=device_preference,
             temporal_mode=str(tier_defaults.get("temporal_mode", "frame_img2img")),
             temporal_steps=int(tier_defaults.get("temporal_steps", 12)),
             refine_every_n_frames=int(tier_defaults.get("refine_every_n_frames", 1)),
             anchor_strength=float(tier_defaults.get("anchor_strength", 0.20)),
             prompt_blend=bool(tier_defaults.get("prompt_blend", True)),
+            allow_hosted_fallback=True,
             allow_proxy_fallback=True,
         )
         res = render_internal_video(project_id, internal_req)
@@ -4588,7 +5516,15 @@ else:
 
 
 @app.get("/v1/projects/{project_id}/export/comfyui_workflows")
-def export_comfyui_workflows(project_id: str, variant_index: int = 0):
+def export_comfyui_workflows(
+    project_id: str,
+    variant_index: int = 0,
+    model_id: str | None = None,
+    workflow_family: str = "auto",
+    reference_asset: str | None = None,
+    controlnet_model: str | None = None,
+    conditioning_mode: str = "raw",
+):
     """Compile plan scenes into per-scene ComfyUI workflow JSON files."""
     proj = store.get(project_id)
     if not proj:
@@ -4607,19 +5543,54 @@ def export_comfyui_workflows(project_id: str, variant_index: int = 0):
     out_dir = store.project_dir(project_id) / "outputs" / "comfyui_workflows" / f"variant_{variant_index:02d}"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_files = []
+    selection = _resolve_comfy_still_selection(
+        model_id=model_id,
+        checkpoint=None,
+        workflow_family=workflow_family,
+        controlnet_model=controlnet_model,
+        reference_asset=reference_asset,
+        conditioning_mode=conditioning_mode,
+    )
+    reference_image = None
+    if selection.get("workflow_family") == "controlnet" and reference_asset:
+        ref_path = _resolve_project_reference_path(project_id, reference_asset)
+        if ref_path is not None:
+            exported_ref_dir = out_dir / "refs"
+            exported_ref_dir.mkdir(parents=True, exist_ok=True)
+            prepared = _prepare_condition_image(project_id, ref_path, str(selection.get("conditioning_mode") or "raw"))
+            exported_ref = exported_ref_dir / prepared.name
+            shutil.copy2(prepared, exported_ref)
+            reference_image = str(Path("refs") / exported_ref.name).replace("\\", "/")
     for idx, sc in enumerate(scenes):
-        checkpoint = str(sc.get("checkpoint") or settings.comfyui_checkpoint)
-        wf = comfy.default_workflow(
-            checkpoint=checkpoint,
-            prompt=str(sc.get("prompt") or ""),
-            negative_prompt=str(sc.get("negative_prompt") or "(low quality, worst quality)"),
-            seed=int(sc.get("seed") or (idx + 12345)),
-            width=int(sc.get("width") or 768),
-            height=int(sc.get("height") or 432),
-            steps=int(sc.get("steps") or 20),
-            cfg=float(sc.get("cfg") or 6.5),
-            sampler=str(sc.get("sampler") or "euler"),
-        )
+        checkpoint = str(selection.get("checkpoint") or sc.get("checkpoint") or settings.comfyui_checkpoint)
+        if selection.get("workflow_family") == "controlnet":
+            wf = comfy.controlnet_workflow(
+                checkpoint=checkpoint,
+                prompt=str(sc.get("prompt") or ""),
+                negative_prompt=str(sc.get("negative_prompt") or "(low quality, worst quality)"),
+                seed=int(sc.get("seed") or (idx + 12345)),
+                width=int(sc.get("width") or 768),
+                height=int(sc.get("height") or 432),
+                steps=int(sc.get("steps") or 20),
+                cfg=float(sc.get("cfg") or 6.5),
+                sampler=str(sc.get("sampler") or "euler"),
+                controlnet_name=str(selection.get("controlnet_name") or ""),
+                reference_image=str(reference_image or "reference.png"),
+                controlnet_strength=0.8,
+                filename_prefix=f"scene_{idx:03d}",
+            )
+        else:
+            wf = comfy.default_workflow(
+                checkpoint=checkpoint,
+                prompt=str(sc.get("prompt") or ""),
+                negative_prompt=str(sc.get("negative_prompt") or "(low quality, worst quality)"),
+                seed=int(sc.get("seed") or (idx + 12345)),
+                width=int(sc.get("width") or 768),
+                height=int(sc.get("height") or 432),
+                steps=int(sc.get("steps") or 20),
+                cfg=float(sc.get("cfg") or 6.5),
+                sampler=str(sc.get("sampler") or "euler"),
+            )
         p = out_dir / f"scene_{idx:03d}.json"
         p.write_text(json.dumps(wf, ensure_ascii=False, indent=2), encoding="utf-8")
         out_files.append(str(p.relative_to(store.project_dir(project_id))))

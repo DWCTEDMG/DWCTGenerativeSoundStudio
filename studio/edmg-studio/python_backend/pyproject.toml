@@ -47,6 +47,10 @@ internal = [
   "safetensors>=0.4.3",
   "torch>=2.2.0",
 ]
+directml = [
+  "onnxruntime-directml>=1.18.0; platform_system == 'Windows'",
+  "optimum[onnxruntime]>=1.19.0; platform_system == 'Windows'",
+]
 full = [
   "numpy>=1.23.0",
   "scipy>=1.10.0",
@@ -80,6 +84,25 @@ studio_bundle = [
   "textblob>=0.17.0",
   "nltk>=3.8.0",
   "python-dotenv>=0.21.0",
+]
+studio_bundle_directml = [
+  "numpy>=1.23.0",
+  "scipy>=1.10.0",
+  "PyYAML>=6.0.0",
+  "librosa>=0.10.2",
+  "soundfile>=0.12.0",
+  "faster-whisper>=1.1.0",
+  "diffusers>=0.30.0",
+  "transformers>=4.42.0",
+  "accelerate>=0.33.0",
+  "safetensors>=0.4.3",
+  "torch>=2.2.0",
+  "spacy>=3.5.0",
+  "textblob>=0.17.0",
+  "nltk>=3.8.0",
+  "python-dotenv>=0.21.0",
+  "onnxruntime-directml>=1.18.0; platform_system == 'Windows'",
+  "optimum[onnxruntime]>=1.19.0; platform_system == 'Windows'",
 ]
 test = [
   "pytest>=8.3.0",

@@ -236,7 +236,8 @@ function ensureBackendBuild() {
   runChecked("upgrade backend packaging tools", venvPython, ["-m", "pip", "install", "-U", "pip", "wheel", "setuptools"], {
     cwd: pythonBackendDir,
   });
-  runChecked("install backend studio bundle", venvPython, ["-m", "pip", "install", "-e", ".[studio_bundle]"], {
+  const backendBundleExtra = process.platform === "win32" ? "studio_bundle_directml" : "studio_bundle";
+  runChecked("install backend studio bundle", venvPython, ["-m", "pip", "install", "-e", `.[${backendBundleExtra}]`], {
     cwd: pythonBackendDir,
   });
   runChecked("install pyinstaller", venvPython, ["-m", "pip", "install", "pyinstaller"], {

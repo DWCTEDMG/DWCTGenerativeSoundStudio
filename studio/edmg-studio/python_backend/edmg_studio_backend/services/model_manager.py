@@ -190,6 +190,16 @@ class ModelManager:
 
         self._lock = threading.Lock()
 
+    def _all_entries(self) -> list[dict[str, Any]]:
+        cat = self.catalog()
+        return list(cat.get("catalog") or []) + list(cat.get("user") or [])
+
+    def _find_entry(self, model_id: str) -> dict[str, Any] | None:
+        return next(
+            (e for e in self._all_entries() if isinstance(e, dict) and e.get("id") == model_id),
+            None,
+        )
+
     # ---- catalog ----
     def catalog(self) -> dict[str, Any]:
         built = built_in_catalog()
@@ -251,11 +261,15 @@ class ModelManager:
 
     # ---- install ----
     def install(self, model_id: str) -> ModelTask:
-        cat = self.catalog()
-        all_entries = (cat.get("catalog") or []) + (cat.get("user") or [])
-        entry = next((e for e in all_entries if isinstance(e, dict) and e.get("id") == model_id), None)
+        entry = self._find_entry(model_id)
         if not entry:
             raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        if entry.get("installable", True) is False:
+            raise UserFacingError(
+                "This model is discovery-only in Studio right now",
+                hint="Open the model card to review the external runtime bundle, or install a Studio-supported checkpoint/diffusers model instead.",
+                code="MODEL_BROWSER_ONLY",
+            )
 
         # Enforce license acceptance for any external weights/download.
         if entry.get("kind") != "llm" and not self._is_accepted(model_id):
@@ -347,16 +361,23 @@ class ModelManager:
             src = (e.get("source") or "").lower()
             if src == "ollama":
                 out[mid] = str(e.get("ollama_model") or "") in ollama_models
+                continue
+
+            target = e.get("target") or {}
+            engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+            folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+            fname = str(e.get("filename") or "")
+
+            if engine == "internal":
+                out[mid] = bool((self._internal_models_dir(folder) / mid).exists())
+                continue
+
+            if fname:
+                primary = self._comfy_models_dir(folder) / fname
+                legacy_root = self._legacy_comfy_models_dir(folder)
+                out[mid] = primary.exists() or bool(legacy_root and (legacy_root / fname).exists())
             else:
-                fname = e.get("filename") or ""
-                target = (e.get("target") or {})
-                folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
-                if fname:
-                    primary = self._comfy_models_dir(folder) / fname
-                    legacy_root = self._legacy_comfy_models_dir(folder)
-                    out[mid] = primary.exists() or bool(legacy_root and (legacy_root / fname).exists())
-                else:
-                    out[mid] = False
+                out[mid] = False
         return out
 
     # ---- installers ----
@@ -510,9 +531,7 @@ class ModelManager:
     
     def installed_path(self, model_id: str) -> Path | None:
         """Return local path for an installed model (file or directory), else None."""
-        cat = self.catalog()
-        all_entries = (cat.get("catalog") or []) + (cat.get("user") or [])
-        entry = next((e for e in all_entries if isinstance(e, dict) and e.get("id") == model_id), None)
+        entry = self._find_entry(model_id)
         if not entry:
             return None
         target = entry.get("target") or {}
@@ -520,6 +539,9 @@ class ModelManager:
         folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
         if engine == "internal":
             p = (self._internal_models_dir(folder) / model_id)
+            return p if p.exists() else None
+        if engine == "runtime_bundle":
+            p = self._internal_models_dir(folder) / model_id
             return p if p.exists() else None
         fname = str(entry.get("filename") or "")
         if not fname:

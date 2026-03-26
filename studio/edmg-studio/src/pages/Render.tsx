@@ -6,6 +6,20 @@ import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults } from "../components/renderDefaults";
 import { copyPathValue, desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 
+type CatalogEntry = {
+  id: string;
+  name: string;
+  kind: string;
+  filename?: string;
+  render?: {
+    checkpoint_name?: string;
+    controlnet_name?: string;
+    svd_checkpoint?: string;
+    conditioning_mode?: string;
+    render_modes?: string[];
+  };
+};
+
 export default function Render({ onNavigate }: { onNavigate?: (page: any) => void }) {
   const savedRenderDefaults = readRenderDefaults();
   const { mode: uiMode } = useUiMode();
@@ -26,12 +40,23 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   const [maxFramesPerScene, setMaxFramesPerScene] = useState<number>(240);
   const [motionContextLength, setMotionContextLength] = useState<number>(16);
   const [motionContextOverlap, setMotionContextOverlap] = useState<number>(4);
+  const [stillWorkflow, setStillWorkflow] = useState<"txt2img" | "controlnet">("txt2img");
+  const [selectedStillModelId, setSelectedStillModelId] = useState<string>("hf_sd35_large_turbo_ckpt");
+  const [selectedMotionModelId, setSelectedMotionModelId] = useState<string>("hf_sd35_large_turbo_ckpt");
+  const [selectedSvdModelId, setSelectedSvdModelId] = useState<string>("hf_svd_xt_1_1");
+  const [selectedControlnetModelId, setSelectedControlnetModelId] = useState<string>("hf_sd35_controlnet_blur");
+  const [controlnetStrength, setControlnetStrength] = useState<number>(0.8);
+  const [conditioningMode, setConditioningMode] = useState<"raw" | "blur" | "edge" | "external">("blur");
+  const [referenceAsset, setReferenceAsset] = useState<string>("");
+  const [referenceUploadFile, setReferenceUploadFile] = useState<File | null>(null);
 
   const [internalFpsOut, setInternalFpsOut] = useState<number>(24);
   const [internalFpsRender, setInternalFpsRender] = useState<number>(2);
   const [internalKeyInterval, setInternalKeyInterval] = useState<number>(5);
   const [internalInterp, setInternalInterp] = useState<"auto"|"minterpolate"|"fps"|"rife">("auto");
   const [internalModelId, setInternalModelId] = useState<string>("auto");
+  const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"proxy">("auto");
+  const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
 
   const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img">("frame_img2img");
@@ -130,6 +155,9 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
 
   const [caps, setCaps] = useState<any>(null);
   const [hardware, setHardware] = useState<any>(null);
+  const [renderProviders, setRenderProviders] = useState<any>(null);
+  const [modelCatalog, setModelCatalog] = useState<CatalogEntry[]>([]);
+  const [projectAssets, setProjectAssets] = useState<{ refs: { path: string }[] }>({ refs: [] });
   const [validate, setValidate] = useState<any>(null);
   const [internalPreflight, setInternalPreflight] = useState<any>(null);
   const [latestInternalJob, setLatestInternalJob] = useState<any>(null);
@@ -145,6 +173,42 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     ? `${backendUrl}/v1/projects/${projectId}/file?path=${encodeURIComponent(latestInternalVideoPath)}`
     : "";
 
+  const comfyStillModels = useMemo(
+    () => modelCatalog.filter((m) => (m.render?.render_modes || []).includes("stills") && m.kind === "checkpoint"),
+    [modelCatalog]
+  );
+  const controlnetModels = useMemo(
+    () => modelCatalog.filter((m) => m.kind === "controlnet"),
+    [modelCatalog]
+  );
+  const svdModels = useMemo(
+    () => modelCatalog.filter((m) => (m.render?.render_modes || []).includes("motion_svd") || m.kind === "motion_module"),
+    [modelCatalog]
+  );
+  const internalModelOptions = useMemo(
+    () => modelCatalog.filter((m) => m.kind === "diffusers"),
+    [modelCatalog]
+  );
+  const selectedStillModel = useMemo(
+    () => comfyStillModels.find((m) => m.id === selectedStillModelId) || comfyStillModels[0] || null,
+    [comfyStillModels, selectedStillModelId]
+  );
+  const selectedControlnetModel = useMemo(
+    () => controlnetModels.find((m) => m.id === selectedControlnetModelId) || controlnetModels[0] || null,
+    [controlnetModels, selectedControlnetModelId]
+  );
+  const selectedMotionModel = useMemo(
+    () => comfyStillModels.find((m) => m.id === selectedMotionModelId) || comfyStillModels[0] || null,
+    [comfyStillModels, selectedMotionModelId]
+  );
+  const selectedSvdModel = useMemo(
+    () => svdModels.find((m) => m.id === selectedSvdModelId) || svdModels[0] || null,
+    [svdModels, selectedSvdModelId]
+  );
+  const internalHostedVisible = !!renderProviders?.stability?.visible;
+  const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
+  const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
+
   const buildInternalPayload = () => ({
     variant_index: selectedVariant,
     fps_output: internalFpsOut,
@@ -158,11 +222,45 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     anchor_strength: internalAnchorStrength,
     prompt_blend: internalPromptBlend,
     model_id: internalModelId,
-    render_mode: "auto",
+    render_mode: internalRenderMode,
     render_tier: internalRenderTier,
+    device_preference: internalDevicePreference,
+    allow_hosted_fallback: true,
     allow_proxy_fallback: true,
     resume_existing_frames: internalResumeExisting,
   });
+
+  useEffect(() => {
+    const preferred = String(hardware?.hardware?.device_preference || "auto");
+    if (preferred && internalDevicePreference === "auto" && preferred !== "auto") {
+      if (preferred === "directml" && !internalDirectmlAvailable) return;
+      if (preferred === "directml" || preferred === "cuda" || preferred === "mps" || preferred === "cpu") {
+        setInternalDevicePreference(preferred as any);
+      }
+    }
+  }, [hardware, internalDevicePreference, internalDirectmlAvailable]);
+
+  useEffect(() => {
+    if (!internalHostedVisible && internalRenderMode === "hosted") {
+      setInternalRenderMode("auto");
+    }
+  }, [internalHostedVisible, internalRenderMode]);
+
+  useEffect(() => {
+    if (!internalDirectmlAvailable && internalDevicePreference === "directml") {
+      setInternalDevicePreference("auto");
+    }
+  }, [internalDirectmlAvailable, internalDevicePreference]);
+
+  const refreshReferenceAssets = async (id: string) => {
+    if (!id) return;
+    try {
+      const d = await apiGet(`/v1/projects/${id}/assets`);
+      setProjectAssets({ refs: Array.isArray(d?.assets?.refs) ? d.assets.refs : [] });
+    } catch {
+      setProjectAssets({ refs: [] });
+    }
+  };
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
@@ -230,15 +328,46 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   useEffect(() => {
     apiGet("/v1/comfyui/capabilities").then(setCaps).catch(() => {});
     apiGet("/v1/hardware").then((d) => setHardware(d)).catch(() => {});
+    apiGet("/v1/settings/render_providers").then(setRenderProviders).catch(() => {});
+    apiGet("/v1/models/catalog").then((d) => setModelCatalog(Array.isArray(d?.catalog) ? d.catalog : [])).catch(() => {});
   }, [backendUrl]);
 
   useEffect(() => {
-    if (projectId) refreshProject(projectId).catch(() => {});
+    if (projectId) {
+      refreshProject(projectId).catch(() => {});
+      refreshReferenceAssets(projectId).catch(() => {});
+    }
   }, [projectId]);
 
   useEffect(() => {
     refreshValidate().catch(() => {});
   }, [projectId, selectedVariant, renderPreset]);
+
+  useEffect(() => {
+    if (selectedStillModelId || !comfyStillModels.length) return;
+    setSelectedStillModelId(comfyStillModels[0].id);
+  }, [comfyStillModels, selectedStillModelId]);
+
+  useEffect(() => {
+    if (selectedMotionModelId || !comfyStillModels.length) return;
+    setSelectedMotionModelId(comfyStillModels[0].id);
+  }, [comfyStillModels, selectedMotionModelId]);
+
+  useEffect(() => {
+    if (selectedControlnetModelId || !controlnetModels.length) return;
+    setSelectedControlnetModelId(controlnetModels[0].id);
+  }, [controlnetModels, selectedControlnetModelId]);
+
+  useEffect(() => {
+    if (selectedSvdModelId || !svdModels.length) return;
+    setSelectedSvdModelId(svdModels[0].id);
+  }, [selectedSvdModelId, svdModels]);
+
+  useEffect(() => {
+    if (stillWorkflow === "controlnet" && selectedControlnetModel?.render?.conditioning_mode) {
+      setConditioningMode(selectedControlnetModel.render.conditioning_mode as any);
+    }
+  }, [selectedControlnetModel, stillWorkflow]);
 
   useEffect(() => {
     refreshInternalPreflight().catch(() => {});
@@ -250,7 +379,9 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     internalKeyInterval,
     internalInterp,
     internalModelId,
+    internalRenderMode,
     internalRenderTier,
+    internalDevicePreference,
     internalTemporalMode,
     internalTemporalStrength,
     internalTemporalSteps,
@@ -423,9 +554,19 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/comfyui/scenes`, { variant_index: selectedVariant, checkpoint: checkpointName || undefined });
+      const d = await apiPost(`/v1/projects/${projectId}/render/comfyui/scenes`, {
+        variant_index: selectedVariant,
+        model_id: selectedStillModel?.id || undefined,
+        checkpoint: checkpointName || undefined,
+        workflow_family: stillWorkflow,
+        reference_asset: stillWorkflow === "controlnet" ? referenceAsset || undefined : undefined,
+        conditioning_mode: stillWorkflow === "controlnet" ? conditioningMode : undefined,
+        controlnet_model: stillWorkflow === "controlnet" ? selectedControlnetModel?.id || undefined : undefined,
+        controlnet_strength: stillWorkflow === "controlnet" ? controlnetStrength : undefined,
+      });
       setInfo(d);
       await refreshProject(projectId);
+      await refreshReferenceAssets(projectId);
     } catch (e: any) {
       setErr(String(e));
     }
@@ -437,13 +578,15 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     try {
       const engine = renderMode === "motion_svd" ? "svd" : "animatediff";
       const d = await apiPost(`/v1/projects/${projectId}/render/comfyui/motion_scenes`, {
+        model_id: selectedMotionModel?.id || undefined,
+        svd_model_id: renderMode === "motion_svd" ? selectedSvdModel?.id || undefined : undefined,
         checkpoint: checkpointName || undefined,
         variant_index: selectedVariant,
         engine,
         fps: motionFps,
         max_frames_per_scene: maxFramesPerScene,
         context_length: motionContextLength,
-        context_overlap: motionContextOverlap
+        context_overlap: motionContextOverlap,
       });
       setInfo(d);
       await refreshProject(projectId);
@@ -502,8 +645,31 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiGet(`/v1/projects/${projectId}/export/comfyui_workflows?variant_index=${selectedVariant}`);
+      const params = new URLSearchParams({
+        variant_index: String(selectedVariant),
+        model_id: selectedStillModel?.id || "",
+        workflow_family: stillWorkflow,
+      });
+      if (stillWorkflow === "controlnet") {
+        if (referenceAsset) params.set("reference_asset", referenceAsset);
+        if (selectedControlnetModel?.id) params.set("controlnet_model", selectedControlnetModel.id);
+        params.set("conditioning_mode", conditioningMode);
+      }
+      const d = await apiGet(`/v1/projects/${projectId}/export/comfyui_workflows?${params.toString()}`);
       setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const uploadReferenceAsset = async () => {
+    if (!referenceUploadFile || !projectId) return;
+    setErr(null);
+    try {
+      await apiUpload(`/v1/projects/${projectId}/assets/refs`, referenceUploadFile);
+      setReferenceUploadFile(null);
+      await refreshReferenceAssets(projectId);
       await refreshProject(projectId);
     } catch (e: any) {
       setErr(String(e));
@@ -587,14 +753,14 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 )}
               </div>
               <div className="small" style={{ marginTop: 6 }}>
-                ComfyUI: AnimateDiff {caps?.animatediff?.available ? "✓" : "×"} / SVD {caps?.svd?.available ? "✓" : "×"}
+                ComfyUI: AnimateDiff {caps?.animatediff?.available ? "✓" : "×"} / SVD {caps?.svd?.available ? "✓" : "×"} / ControlNet {caps?.controlnet?.available ? "✓" : "×"}
               </div>
             </div>
           </div>
 
           <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
             <button onClick={runPipeline} disabled={!variantCount}>Preset + Render (one click)</button>
-            <button className="secondary" onClick={runInternalVideo} disabled={!variantCount}>Internal (CPU-safe)</button>
+            <button className="secondary" onClick={runInternalVideo} disabled={!variantCount}>Internal / Hosted</button>
             <button className="secondary" onClick={assemble} disabled={!variantCount}>Assemble only</button>
           </div>
 
@@ -607,6 +773,15 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               <div className="card" style={{ marginTop: 10 }}>
                 <div style={{ fontWeight: 900, marginBottom: 8 }}>Internal renderer (no ComfyUI)</div>
                 <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ minWidth: 170 }}>
+                    <div className="small">Render mode</div>
+                    <select value={internalRenderMode} onChange={(e) => setInternalRenderMode(e.target.value as any)}>
+                      <option value="auto">Auto</option>
+                      <option value="diffusion">Local diffusion</option>
+                      {internalHostedVisible ? <option value="hosted">Hosted Stability</option> : null}
+                      <option value="proxy">Proxy only</option>
+                    </select>
+                  </div>
                   <div style={{ minWidth: 140 }}>
                     <div className="small">FPS output</div>
                     <input type="number" value={internalFpsOut} min={1} max={60} onChange={(e) => setInternalFpsOut(Number(e.target.value))} />
@@ -631,11 +806,22 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
 <div style={{ minWidth: 240 }}>
   <div className="small">Internal model</div>
   <select value={internalModelId} onChange={(e) => setInternalModelId(e.target.value)}>
-    <option value="auto">Auto (SDXL on GPU, SD1.5 fallback)</option>
-    <option value="hf_sd15_internal">SD 1.5 (Internal)</option>
-    <option value="hf_sdxl_internal">SDXL Base 1.0 (Internal)</option>
+    <option value="auto">Auto (SD3.5 on strong GPU, SDXL or SD1.5 fallback)</option>
+    {internalModelOptions.map((m) => (
+      <option key={m.id} value={m.id}>{m.name}</option>
+    ))}
   </select>
 </div>
+                  <div style={{ minWidth: 180 }}>
+                    <div className="small">Device</div>
+                    <select value={internalDevicePreference} onChange={(e) => setInternalDevicePreference(e.target.value as any)}>
+                      <option value="auto">Auto</option>
+                      <option value="cpu">CPU</option>
+                      {hardware?.hardware?.available_backends?.includes?.("cuda") ? <option value="cuda">CUDA</option> : null}
+                      {hardware?.hardware?.available_backends?.includes?.("mps") ? <option value="mps">MPS</option> : null}
+                      {internalDirectmlAvailable ? <option value="directml">DirectML</option> : null}
+                    </select>
+                  </div>
                   <div style={{ minWidth: 190 }}>
                     <div className="small">Render tier</div>
                     <select value={internalRenderTier} onChange={(e) => setInternalRenderTier(e.target.value as any)}>
@@ -649,6 +835,22 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
                   Tip: install internal models in Models first. Auto tiering adapts the internal renderer for laptops, Apple Silicon, CPU-only systems, and higher-end GPUs.
                 </div>
+                {internalHostedVisible ? (
+                  <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                    Hosted Stability fallback is configured: <b>{renderProviders?.stability?.service}</b>
+                    {renderProviders?.stability?.service === "sd3" ? <> / <b>{renderProviders?.stability?.model}</b></> : null}
+                  </div>
+                ) : null}
+                {internalDirectmlAvailable ? (
+                  <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                    DirectML runtime detected on <b>{hardware?.hardware?.directml_device_name || hardware?.hardware?.device_name}</b>.
+                  </div>
+                ) : null}
+                {internalDirectmlDetected && !internalDirectmlAvailable ? (
+                  <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                    DirectML runtime is available on this machine but currently disabled in Settings.
+                  </div>
+                ) : null}
                 {savedRenderDefaults.profileId ? (
                   <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
                     Saved defaults: <b>{String(savedRenderDefaults.profileId).replace(/_/g, " ")}</b>
@@ -660,6 +862,13 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   {internalPreflight?.ok ? (
                     <div>
                       <div className="small">Mode: <b>{internalPreflight.mode || "diffusion"}</b> • Device: <b>{internalPreflight.device}</b> • Model: <b>{internalPreflight.model_id}</b></div>
+                      {internalPreflight?.hosted_provider ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          Hosted provider: <b>{internalPreflight.hosted_provider.provider}</b> • service <b>{internalPreflight.hosted_provider.service}</b>
+                          {internalPreflight.hosted_provider.model ? <> • model <b>{internalPreflight.hosted_provider.model}</b></> : null}
+                          {internalPreflight.hosted_provider.style_preset ? <> • style <b>{internalPreflight.hosted_provider.style_preset}</b></> : null}
+                        </div>
+                      ) : null}
                       <div className="small" style={{ marginTop: 4 }}>
                         Tier: requested <b>{internalPreflight?.tier_plan?.requested_tier || internalRenderTier}</b> • applied <b>{internalPreflight?.tier_plan?.applied_tier || "auto"}</b> • recommended <b>{internalPreflight?.tier_plan?.recommended_tier || hardware?.hardware?.recommended_tier || "draft"}</b>
                       </div>
@@ -678,7 +887,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                         Hardware: <b>{hardware?.hardware?.device_name || internalPreflight?.hardware?.device_name || internalPreflight.device}</b> • backend family <b>{hardware?.hardware?.backend_family || internalPreflight?.hardware?.backend_family || "cpu_only"}</b> • RAM <b>{Number(hardware?.hardware?.ram_gb || internalPreflight?.hardware?.ram_gb || 0).toFixed(1)} GB</b>
                       </div>
                       <div className="small" style={{ marginTop: 4 }}>
-                        Internal models: SD 1.5 <b>{internalPreflight?.installed_internal_models?.hf_sd15_internal ? "installed" : "missing"}</b> • SDXL <b>{internalPreflight?.installed_internal_models?.hf_sdxl_internal ? "installed" : "missing"}</b>
+                        Internal models: SD 1.5 <b>{internalPreflight?.installed_internal_models?.hf_sd15_internal ? "installed" : "missing"}</b> • SDXL <b>{internalPreflight?.installed_internal_models?.hf_sdxl_internal ? "installed" : "missing"}</b> • SD3.5 <b>{internalPreflight?.installed_internal_models?.hf_sd35_medium_internal ? "installed" : "missing"}</b>
                       </div>
                       {internalPreflight?.requested_model_id ? (
                         <div className="small" style={{ marginTop: 4 }}>
@@ -711,7 +920,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                           {" "}• final <b>{internalPreflight.cache.final_exists ? "yes" : "no"}</b>
                         </div>
                       ) : null}
-                      {!internalPreflight?.installed_internal_models?.hf_sd15_internal && !internalPreflight?.installed_internal_models?.hf_sdxl_internal ? (
+                      {!internalHostedVisible && !internalPreflight?.installed_internal_models?.hf_sd15_internal && !internalPreflight?.installed_internal_models?.hf_sdxl_internal && !internalPreflight?.installed_internal_models?.hf_sd35_medium_internal ? (
                         <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                           <button className="secondary" onClick={() => onNavigate?.("models")}>Open Models to install internal renderer</button>
                         </div>
@@ -1251,15 +1460,26 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 </div>
               </div>
 
-
-<div className="row" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <div className="small" style={{ width: 140, fontWeight: 800 }}>Checkpoint</div>
-                <input
-                  style={{ minWidth: 360 }}
-                  value={checkpointName}
-                  onChange={(e) => setCheckpointName(e.target.value)}
-                  placeholder="sdxl_base_1.0.safetensors (leave blank for default)"
-                />
+              <div className="row" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ minWidth: 260 }}>
+                  <div className="small" style={{ fontWeight: 800 }}>Studio still model</div>
+                  <select value={selectedStillModel?.id || ""} onChange={(e) => setSelectedStillModelId(e.target.value)}>
+                    {comfyStillModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ minWidth: 260 }}>
+                  <div className="small" style={{ fontWeight: 800 }}>Manual checkpoint override</div>
+                  <input
+                    value={checkpointName}
+                    onChange={(e) => setCheckpointName(e.target.value)}
+                    placeholder={selectedStillModel?.render?.checkpoint_name || "leave blank for catalog default"}
+                  />
+                </div>
+                <div className="small" style={{ opacity: 0.8, flex: 1, minWidth: 220 }}>
+                  Studio maps these catalog entries to the installed Stability checkpoints so you do not have to remember filenames.
+                </div>
               </div>
               <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <label className="small">Mode</label>
@@ -1278,15 +1498,93 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   </>
                 )}
 
+                {renderMode === "stills" && (
+                  <>
+                    <label className="small">Still workflow</label>
+                    <select value={stillWorkflow} onChange={(e) => setStillWorkflow(e.target.value as any)}>
+                      <option value="txt2img">Text-to-image</option>
+                      <option value="controlnet">ControlNet reference</option>
+                    </select>
+                  </>
+                )}
+
                 {renderMode === "motion_ad" && (
                   <>
+                    <label className="small">Base model</label>
+                    <select value={selectedMotionModel?.id || ""} onChange={(e) => setSelectedMotionModelId(e.target.value)}>
+                      {comfyStillModels.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
                     <label className="small">Context</label>
                     <input style={{ width: 80 }} type="number" value={motionContextLength} onChange={(e) => setMotionContextLength(Number(e.target.value))} />
                     <label className="small">Overlap</label>
                     <input style={{ width: 80 }} type="number" value={motionContextOverlap} onChange={(e) => setMotionContextOverlap(Number(e.target.value))} />
                   </>
                 )}
+
+                {renderMode === "motion_svd" && (
+                  <>
+                    <label className="small">Base model</label>
+                    <select value={selectedMotionModel?.id || ""} onChange={(e) => setSelectedMotionModelId(e.target.value)}>
+                      {comfyStillModels.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                    <label className="small">SVD model</label>
+                    <select value={selectedSvdModel?.id || ""} onChange={(e) => setSelectedSvdModelId(e.target.value)}>
+                      {svdModels.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                  </>
+                )}
               </div>
+
+              {renderMode === "stills" && stillWorkflow === "controlnet" ? (
+                <div className="card" style={{ marginTop: 10 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Reference-driven ControlNet</div>
+                  <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ minWidth: 260 }}>
+                      <div className="small">ControlNet model</div>
+                      <select value={selectedControlnetModel?.id || ""} onChange={(e) => setSelectedControlnetModelId(e.target.value)}>
+                        {controlnetModels.map((m) => (
+                          <option key={m.id} value={m.id}>{m.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ minWidth: 180 }}>
+                      <div className="small">Conditioning mode</div>
+                      <select value={conditioningMode} onChange={(e) => setConditioningMode(e.target.value as any)}>
+                        <option value="raw">Raw image</option>
+                        <option value="blur">Blur pass</option>
+                        <option value="edge">Edge map</option>
+                        <option value="external">External-prepared map</option>
+                      </select>
+                    </div>
+                    <div style={{ minWidth: 140 }}>
+                      <div className="small">Strength</div>
+                      <input type="number" min={0} max={2} step={0.1} value={controlnetStrength} onChange={(e) => setControlnetStrength(Number(e.target.value))} />
+                    </div>
+                  </div>
+                  <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                    <div style={{ minWidth: 320 }}>
+                      <div className="small">Reference image</div>
+                      <select value={referenceAsset} onChange={(e) => setReferenceAsset(e.target.value)}>
+                        <option value="">Select project reference</option>
+                        {projectAssets.refs.map((asset) => (
+                          <option key={asset.path} value={asset.path}>{asset.path}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <input type="file" accept="image/*" onChange={(e) => setReferenceUploadFile(e.target.files?.[0] || null)} />
+                    <button className="secondary" disabled={!referenceUploadFile || !projectId} onClick={uploadReferenceAsset}>Upload reference</button>
+                  </div>
+                  <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
+                    Blur is the smoothest built-in path. Edge creates a quick structure map. External expects a pre-made conditioning image such as a depth map.
+                  </div>
+                </div>
+              ) : null}
 
               <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
                 <button onClick={renderScenes} disabled={!variantCount || renderMode !== "stills"}>Enqueue still scenes</button>

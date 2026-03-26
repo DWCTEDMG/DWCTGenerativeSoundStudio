@@ -286,7 +286,24 @@ class _Pipes:
     txt2img: Any
     img2img: Any
     device: str
-    is_sdxl: bool = False
+    family: str = "sd15"
+    backend: str = "diffusers"
+
+
+def _model_family_from_dir(model_dir: Path) -> str:
+    family = "sd15"
+    mi = model_dir / "model_index.json"
+    if mi.exists():
+        try:
+            j = json.loads(mi.read_text(encoding="utf-8"))
+            cls = str(j.get("_class_name") or "")
+            if "StableDiffusion3" in cls:
+                family = "sd3"
+            elif ("XL" in cls) or ("XLPipeline" in cls):
+                family = "sdxl"
+        except Exception:
+            family = "sd15"
+    return family
 
 
 def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
@@ -294,6 +311,8 @@ def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
         import json
         import torch  # type: ignore
         from diffusers import (  # type: ignore
+            StableDiffusion3Img2ImgPipeline,
+            StableDiffusion3Pipeline,
             StableDiffusionImg2ImgPipeline,
             StableDiffusionPipeline,
             StableDiffusionXLImg2ImgPipeline,
@@ -312,19 +331,36 @@ def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
     if cached is not None:
         return cached
 
-    is_sdxl = False
-    mi = model_dir / "model_index.json"
-    if mi.exists():
-        try:
-            j = json.loads(mi.read_text(encoding="utf-8"))
-            cls = str(j.get("_class_name") or "")
-            is_sdxl = ("XL" in cls) or ("XLPipeline" in cls)
-        except Exception:
-            is_sdxl = False
+    family = _model_family_from_dir(model_dir)
 
     torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32
 
-    if is_sdxl:
+    if family == "sd3":
+        txt = StableDiffusion3Pipeline.from_pretrained(
+            str(model_dir),
+            torch_dtype=torch_dtype,
+        )
+        if hasattr(txt, "enable_attention_slicing"):
+            txt.enable_attention_slicing()
+        if device == "cuda" and hasattr(txt, "enable_xformers_memory_efficient_attention"):
+            try:
+                txt.enable_xformers_memory_efficient_attention()
+            except Exception:
+                pass
+        txt = txt.to(device)
+
+        img = StableDiffusion3Img2ImgPipeline(**txt.components)
+        if hasattr(img, "enable_attention_slicing"):
+            img.enable_attention_slicing()
+        if device == "cuda" and hasattr(img, "enable_xformers_memory_efficient_attention"):
+            try:
+                img.enable_xformers_memory_efficient_attention()
+            except Exception:
+                pass
+        img = img.to(device)
+
+        pipes = _Pipes(txt2img=txt, img2img=img, device=device, family="sd3", backend="diffusers")
+    elif family == "sdxl":
         txt = StableDiffusionXLPipeline.from_pretrained(
             str(model_dir),
             torch_dtype=torch_dtype,
@@ -350,7 +386,7 @@ def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
                 pass
         img = img.to(device)
 
-        pipes = _Pipes(txt2img=txt, img2img=img, device=device, is_sdxl=True)
+        pipes = _Pipes(txt2img=txt, img2img=img, device=device, family="sdxl", backend="diffusers")
     else:
         txt = StableDiffusionPipeline.from_pretrained(
             str(model_dir),
@@ -377,10 +413,73 @@ def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
                 pass
         img = img.to(device)
 
-        pipes = _Pipes(txt2img=txt, img2img=img, device=device, is_sdxl=False)
+        pipes = _Pipes(txt2img=txt, img2img=img, device=device, family="sd15", backend="diffusers")
 
     _PipelineCache.set(cache_key, pipes)
     return pipes
+
+
+def _try_load_directml(model_dir: Path) -> _Pipes:
+    family = _model_family_from_dir(model_dir)
+    if family not in {"sd15", "sdxl"}:
+        raise UserFacingError(
+            "DirectML acceleration currently supports SD 1.5 and SDXL only.",
+            hint="Use SDXL or SD 1.5 for AMD / DirectML renders, or switch device preference to CPU for SD3.5.",
+            code="DIRECTML_MODEL_UNSUPPORTED",
+            status_code=400,
+        )
+
+    try:
+        import onnxruntime as ort  # type: ignore
+        from optimum.onnxruntime import (  # type: ignore
+            ORTStableDiffusionImg2ImgPipeline,
+            ORTStableDiffusionPipeline,
+            ORTStableDiffusionXLImg2ImgPipeline,
+            ORTStableDiffusionXLPipeline,
+        )
+    except Exception as e:
+        raise UserFacingError(
+            "DirectML runtime is not installed.",
+            hint="Open Setup and install the AMD / DirectML backend runtime, then retry.",
+            code="DIRECTML_DEPS",
+            status_code=500,
+        ) from e
+
+    providers = list(ort.get_available_providers() or [])
+    if "DmlExecutionProvider" not in providers:
+        raise UserFacingError(
+            "DirectML execution provider is unavailable in this backend environment.",
+            hint="Reinstall the AMD / DirectML backend runtime from Setup, then retry.",
+            code="DIRECTML_UNAVAILABLE",
+            status_code=500,
+        )
+
+    cache_key = (str(model_dir), "directml")
+    cached = _PipelineCache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    common_kwargs = {
+        "export": True,
+        "provider": "DmlExecutionProvider",
+    }
+    if family == "sdxl":
+        txt = ORTStableDiffusionXLPipeline.from_pretrained(str(model_dir), **common_kwargs)
+        img = ORTStableDiffusionXLImg2ImgPipeline.from_pretrained(str(model_dir), **common_kwargs)
+        pipes = _Pipes(txt2img=txt, img2img=img, device="directml", family="sdxl", backend="directml")
+    else:
+        txt = ORTStableDiffusionPipeline.from_pretrained(str(model_dir), **common_kwargs)
+        img = ORTStableDiffusionImg2ImgPipeline.from_pretrained(str(model_dir), **common_kwargs)
+        pipes = _Pipes(txt2img=txt, img2img=img, device="directml", family="sd15", backend="directml")
+
+    _PipelineCache.set(cache_key, pipes)
+    return pipes
+
+
+def _try_load_pipelines(model_dir: Path, device: str) -> _Pipes:
+    if device == "directml":
+        return _try_load_directml(model_dir)
+    return _try_load_diffusers(model_dir, device=device)
 
 
 def _device_auto(preference: str = "auto") -> str:
@@ -404,16 +503,30 @@ def _device_auto(preference: str = "auto") -> str:
         except Exception:
             return False
 
+    def _directml_ok() -> bool:
+        if pref != "directml" and pref != "auto" and pref not in {"cuda", "mps", "cpu"}:
+            return False
+        try:
+            import onnxruntime as ort  # type: ignore
+
+            return "DmlExecutionProvider" in list(ort.get_available_providers() or [])
+        except Exception:
+            return False
+
     if pref == "cuda" and _cuda_ok():
         return "cuda"
     if pref == "mps" and _mps_ok():
         return "mps"
+    if pref == "directml" and _directml_ok():
+        return "directml"
     if pref == "cpu":
         return "cpu"
     if _cuda_ok():
         return "cuda"
     if _mps_ok():
         return "mps"
+    if _directml_ok():
+        return "directml"
     return "cpu"
 
 
@@ -421,10 +534,10 @@ def _encode_prompt(pipes: _Pipes, prompt: str) -> Any:
     """Return an encoded prompt representation.
 
     SD1.5 path: returns text-encoder embeddings (fast + blendable).
-    SDXL path: returns the prompt string (we rely on pipeline internal encoding).
+    SDXL / SD3 path: returns the prompt string (we rely on pipeline internal encoding).
     """
     prompt = str(prompt or "").strip() or "cinematic"
-    if pipes.is_sdxl:
+    if pipes.family != "sd15" or pipes.backend == "directml":
         # Keep it simple & robust for SDXL: use native pipeline encoding.
         return prompt
 
@@ -499,35 +612,41 @@ def _generate_txt2img(
     cfg: float,
     seed: int,
 ) -> "Image.Image":
-    import torch  # type: ignore
+    g = None
+    if pipes.device != "directml":
+        import torch  # type: ignore
 
-    g = torch.Generator(device=pipes.device if pipes.device != "mps" else "cpu")
-    g.manual_seed(int(seed))
+        g = torch.Generator(device=pipes.device if pipes.device != "mps" else "cpu")
+        g.manual_seed(int(seed))
 
-    if pipes.is_sdxl:
+    if pipes.family != "sd15" or pipes.backend == "directml" or isinstance(prompt_embeds, str):
         prompt = str(prompt_embeds or "").strip() or "cinematic"
         negative = str(negative_embeds or "").strip()
-        out = pipes.txt2img(
+        kwargs = dict(
             prompt=prompt,
             negative_prompt=negative,
             width=int(width),
             height=int(height),
             num_inference_steps=int(steps),
             guidance_scale=float(cfg),
-            generator=g,
         )
+        if g is not None:
+            kwargs["generator"] = g
+        out = pipes.txt2img(**kwargs)
         return out.images[0]
 
-    out = pipes.txt2img(
+    kwargs = dict(
         prompt=None,
         width=int(width),
         height=int(height),
         num_inference_steps=int(steps),
         guidance_scale=float(cfg),
-        generator=g,
         prompt_embeds=prompt_embeds,
         negative_prompt_embeds=negative_embeds,
     )
+    if g is not None:
+        kwargs["generator"] = g
+    out = pipes.txt2img(**kwargs)
     return out.images[0]
 
 
@@ -543,15 +662,17 @@ def _generate_img2img(
     seed: int,
     strength: float,
 ) -> "Image.Image":
-    import torch  # type: ignore
+    g = None
+    if pipes.device != "directml":
+        import torch  # type: ignore
 
-    g = torch.Generator(device=pipes.device if pipes.device != "mps" else "cpu")
-    g.manual_seed(int(seed))
+        g = torch.Generator(device=pipes.device if pipes.device != "mps" else "cpu")
+        g.manual_seed(int(seed))
 
-    if pipes.is_sdxl:
+    if pipes.family != "sd15" or pipes.backend == "directml" or isinstance(prompt_embeds, str):
         prompt = str(prompt_embeds or "").strip() or "cinematic"
         negative = str(negative_embeds or "").strip()
-        out = pipes.img2img(
+        kwargs = dict(
             prompt=prompt,
             negative_prompt=negative,
             image=init_image,
@@ -560,11 +681,13 @@ def _generate_img2img(
             height=int(height),
             num_inference_steps=int(steps),
             guidance_scale=float(cfg),
-            generator=g,
         )
+        if g is not None:
+            kwargs["generator"] = g
+        out = pipes.img2img(**kwargs)
         return out.images[0]
 
-    out = pipes.img2img(
+    kwargs = dict(
         prompt=None,
         image=init_image,
         strength=float(max(0.0, min(1.0, strength))),
@@ -572,10 +695,12 @@ def _generate_img2img(
         height=int(height),
         num_inference_steps=int(steps),
         guidance_scale=float(cfg),
-        generator=g,
         prompt_embeds=prompt_embeds,
         negative_prompt_embeds=negative_embeds,
     )
+    if g is not None:
+        kwargs["generator"] = g
+    out = pipes.img2img(**kwargs)
     return out.images[0]
 
 
@@ -1032,7 +1157,7 @@ def render_internal_video_variant(
     _require_pillow()
 
     device = _device_auto(settings.device_preference)
-    pipes = _try_load_diffusers(model_dir, device=device)
+    pipes = _try_load_pipelines(model_dir, device=device)
 
     out_w, out_h = settings.width, settings.height
     fps_r = max(1, int(settings.fps_render))
@@ -1385,6 +1510,292 @@ def render_internal_video_variant(
 
     return final_mp4
 
+
+def render_stability_hosted_video_variant(
+    *,
+    ffmpeg_path: str,
+    project_dir: Path,
+    variant: dict[str, Any],
+    scenes: list[dict[str, Any]],
+    audio_path: Path | None,
+    settings: InternalVideoSettings,
+    stability_api_key: str,
+    hosted_settings: dict[str, Any],
+    timeline: dict[str, Any] | None = None,
+    log_fn=None,
+    progress_fn=None,
+    cancel_check_fn=None,
+    chunk_plan: dict[str, Any] | None = None,
+    checkpoint_fn=None,
+) -> Path:
+    _require_pillow()
+
+    from .stability_platform import StabilityPlatformClient
+
+    service = str(hosted_settings.get("service") or "sd3").strip().lower()
+    model = str(hosted_settings.get("model") or "sd3.5-large-turbo").strip().lower()
+    style_preset = str(hosted_settings.get("style_preset") or "none").strip().lower()
+    output_format = str(hosted_settings.get("output_format") or "png").strip().lower()
+    hosted_strength = float(hosted_settings.get("strength") or settings.temporal_strength or 0.55)
+    hosted_cfg_scale = float(hosted_settings.get("cfg_scale") or settings.cfg or 6.5)
+    client = StabilityPlatformClient(stability_api_key)
+
+    out_w, out_h = settings.width, settings.height
+    fps_r = max(1, int(settings.fps_render))
+    duration_s = float(variant.get("duration_s") or _infer_duration(scenes))
+    total_frames = int(math.ceil(duration_s * fps_r))
+
+    provider_marker = Path(f"stability_platform/{service}/{model or 'default'}")
+    work_tag = _build_work_tag(
+        variant_index=int(variant.get("index", 0)),
+        scenes=scenes,
+        timeline=timeline,
+        model_dir=provider_marker,
+        settings=settings,
+    )
+    out_frames = project_dir / "outputs" / "frames_internal" / work_tag
+    out_frames.mkdir(parents=True, exist_ok=True)
+
+    key_times = _scene_keyframe_times(scenes, settings.keyframe_interval_s)
+    total_units = max(1, len(key_times) + total_frames + 3)
+    cache_info = describe_internal_render_cache(
+        project_dir=project_dir,
+        variant_index=int(variant.get("index", 0)),
+        scenes=scenes,
+        timeline=timeline,
+        model_dir=provider_marker,
+        settings=settings,
+        total_frames=total_frames,
+    )
+    raw_mp4 = project_dir / "outputs" / "videos" / f"{work_tag}_raw.mp4"
+    interp_mp4 = project_dir / "outputs" / "videos" / f"{work_tag}_interp.mp4"
+    final_mp4 = project_dir / "outputs" / "videos" / f"{work_tag}.mp4"
+    meta_json = project_dir / "outputs" / "videos" / f"{work_tag}.render.json"
+    checkpoint_json = project_dir / "outputs" / "videos" / f"{work_tag}.checkpoint.json"
+    emit_checkpoint = _build_checkpoint_emitter(
+        checkpoint_json=checkpoint_json,
+        project_dir=project_dir,
+        work_tag=work_tag,
+        render_mode="hosted",
+        variant_index=int(variant.get("index", 0)),
+        total_frames=total_frames,
+        fps_render=fps_r,
+        chunk_plan=chunk_plan,
+        checkpoint_fn=checkpoint_fn,
+    )
+    if progress_fn:
+        progress_fn("preparing", 0, total_units, f"Preparing hosted Stability render via {service}")
+    emit_checkpoint(stage="preparing", status="running", force=True, message=f"Preparing hosted Stability render via {service}")
+
+    if log_fn:
+        log_fn(
+            f"Hosted Stability render cache tag={work_tag} service={service} model={model or 'default'} "
+            f"resume_existing_frames={'yes' if settings.resume_existing_frames else 'no'}"
+        )
+        log_fn(
+            f"Cache status frames={cache_info['frames_present']}/{cache_info['frames_expected']} "
+            f"raw={'yes' if cache_info['raw_exists'] else 'no'} "
+            f"interp={'yes' if cache_info['interp_exists'] else 'no'} "
+            f"final={'yes' if cache_info['final_exists'] else 'no'}"
+        )
+
+    if settings.resume_existing_frames and final_mp4.exists():
+        final_mtime = final_mp4.stat().st_mtime
+        audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
+        if audio_ok:
+            emit_checkpoint(stage="complete", status="complete", force=True, final=True, message=f"Reusing completed hosted render {final_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": interp_mp4.exists(), "final_exists": True})
+            if progress_fn:
+                progress_fn("complete", total_units, total_units, f"Reusing completed hosted render {final_mp4.name}")
+            if log_fn:
+                log_fn(f"Reusing completed hosted render {final_mp4.name}")
+            return final_mp4
+
+    key_imgs: dict[float, Image.Image] = {}
+    prev_key_img: Image.Image | None = None
+    supports_init = service in {"sd3", "ultra"}
+    for i, t in enumerate(key_times):
+        if cancel_check_fn:
+            cancel_check_fn()
+        prompt = _prompt_at_time(scenes, t, timeline=timeline) or "cinematic"
+        seed = int(hash(f"hosted-key:{t}:{prompt}") & 0x7FFFFFFF)
+        if progress_fn:
+            progress_fn("keyframes", i, total_units, f"Generating hosted keyframe {i+1}/{len(key_times)}")
+        emit_checkpoint(stage="keyframes", status="running", message=f"Generating hosted keyframe {i+1}/{len(key_times)}")
+        if log_fn:
+            log_fn(f"Hosted keyframe {i+1}/{len(key_times)} t={t:.2f}s seed={seed} service={service} model={model or 'default'}")
+
+        key_result = client.generate_image(
+            prompt=prompt,
+            width=out_w,
+            height=out_h,
+            service=service,
+            model=model,
+            style_preset=style_preset,
+            negative_prompt=settings.negative_prompt,
+            seed=seed,
+            init_image=(prev_key_img if supports_init and prev_key_img is not None and settings.temporal_mode != "off" else None),
+            strength=hosted_strength,
+            cfg_scale=hosted_cfg_scale,
+            output_format=output_format,
+        )
+        img = key_result.image
+        key_imgs[t] = img
+        prev_key_img = img
+        if progress_fn:
+            progress_fn("keyframes", i + 1, total_units, f"Ready hosted keyframe {i+1}/{len(key_times)}")
+        emit_checkpoint(stage="keyframes", status="running", message=f"Ready hosted keyframe {i+1}/{len(key_times)}")
+
+    def _save_frame(img: Image.Image, fi: int, t: float) -> Path:
+        if timeline:
+            img = apply_timeline_layers(img, project_dir=project_dir, timeline=timeline, t=t)
+        p = _frame_path(out_frames, fi)
+        img.save(p)
+        return p
+
+    for fi in range(total_frames):
+        if cancel_check_fn:
+            cancel_check_fn()
+        t = fi / fps_r
+        existing = _frame_path(out_frames, fi)
+        if settings.resume_existing_frames and existing.exists():
+            if progress_fn:
+                progress_fn("frames", len(key_times) + fi + 1, total_units, f"Reusing hosted frame {fi+1}/{total_frames}")
+            emit_checkpoint(stage="frames", status="running", message=f"Reusing hosted frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
+            continue
+
+        a, _b, _w = _key_times_bracket(key_times, t)
+        src = key_imgs[a]
+        zoom, pan_x, pan_y, rot = _camera_at_time(t, timeline=timeline, fallback_interval_s=settings.keyframe_interval_s)
+        fr = _ken_burns_frame(src, out_w, out_h, zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rot)
+        _save_frame(fr, fi, t)
+        if progress_fn:
+            progress_fn("frames", len(key_times) + fi + 1, total_units, f"Rendered hosted frame {fi+1}/{total_frames}")
+        emit_checkpoint(stage="frames", status="running", message=f"Rendered hosted frame {fi+1}/{total_frames}", frame_event="rendered", rendered_delta=1)
+        if log_fn and fi % max(1, fps_r * 3) == 0:
+            log_fn(f"Rendered hosted frame {fi+1}/{total_frames}")
+
+    if cancel_check_fn:
+        cancel_check_fn()
+
+    raw_mp4.parent.mkdir(parents=True, exist_ok=True)
+    if settings.resume_existing_frames and cache_info["frames_complete"] and raw_mp4.exists():
+        if progress_fn:
+            progress_fn("assembling", total_units - 2, total_units, f"Reusing hosted raw MP4 {raw_mp4.name}")
+        emit_checkpoint(stage="assembling", status="running", force=True, message=f"Reusing hosted raw MP4 {raw_mp4.name}", extra_outputs={"raw_exists": True})
+        if log_fn:
+            log_fn(f"Reusing hosted raw MP4 {raw_mp4.name}")
+    else:
+        if progress_fn:
+            progress_fn("assembling", total_units - 2, total_units, "Assembling hosted raw MP4")
+        emit_checkpoint(stage="assembling", status="running", force=True, message="Assembling hosted raw MP4")
+        if log_fn:
+            log_fn("Assembling hosted raw MP4 from rendered frames")
+        assemble_image_sequence(
+            ffmpeg_path=ffmpeg_path,
+            frames_dir=out_frames,
+            out_mp4=raw_mp4,
+            fps=fps_r,
+            glob_pattern="frame_*.png",
+            audio_path=None,
+        )
+
+    if cancel_check_fn:
+        cancel_check_fn()
+
+    if int(settings.fps_output) == int(fps_r):
+        if not interp_mp4.exists() or interp_mp4.stat().st_mtime < raw_mp4.stat().st_mtime:
+            interp_mp4.write_bytes(raw_mp4.read_bytes())
+        if progress_fn:
+            progress_fn("assembling", total_units - 1, total_units, f"Keeping FPS at {int(settings.fps_output)}")
+        emit_checkpoint(stage="assembling", status="running", force=True, message=f"Keeping FPS at {int(settings.fps_output)}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": True})
+    elif settings.resume_existing_frames and interp_mp4.exists() and raw_mp4.exists() and interp_mp4.stat().st_mtime >= raw_mp4.stat().st_mtime:
+        if progress_fn:
+            progress_fn("assembling", total_units - 1, total_units, f"Reusing hosted interpolated MP4 {interp_mp4.name}")
+        emit_checkpoint(stage="assembling", status="running", force=True, message=f"Reusing hosted interpolated MP4 {interp_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": True})
+    else:
+        if progress_fn:
+            progress_fn("assembling", total_units - 1, total_units, f"Interpolating to {int(settings.fps_output)} fps")
+        emit_checkpoint(stage="assembling", status="running", force=True, message=f"Interpolating to {int(settings.fps_output)} fps", extra_outputs={"raw_exists": raw_mp4.exists()})
+        interpolate_video_fps(
+            ffmpeg_path=ffmpeg_path,
+            in_mp4=raw_mp4,
+            out_mp4=interp_mp4,
+            fps_out=int(settings.fps_output),
+            engine=settings.interpolation_engine,
+        )
+
+    if cancel_check_fn:
+        cancel_check_fn()
+
+    if settings.resume_existing_frames and final_mp4.exists():
+        final_mtime = final_mp4.stat().st_mtime
+        audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
+        interp_ok = interp_mp4.exists() and final_mtime >= interp_mp4.stat().st_mtime
+    else:
+        audio_ok = False
+        interp_ok = False
+
+    if audio_ok and interp_ok:
+        if progress_fn:
+            progress_fn("muxing", total_units, total_units, f"Reusing hosted final video {final_mp4.name}")
+        emit_checkpoint(stage="muxing", status="running", force=True, message=f"Reusing hosted final video {final_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": interp_mp4.exists(), "final_exists": True})
+    else:
+        if progress_fn:
+            progress_fn("muxing", total_units, total_units, "Muxing audio and finalizing hosted video")
+        emit_checkpoint(stage="muxing", status="running", force=True, message="Muxing audio and finalizing hosted video", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": interp_mp4.exists()})
+        if audio_path and audio_path.exists():
+            mux_audio(ffmpeg_path=ffmpeg_path, video_mp4=interp_mp4, audio_path=audio_path, out_mp4=final_mp4)
+        else:
+            final_mp4.write_bytes(interp_mp4.read_bytes())
+
+    meta = {
+        "work_tag": work_tag,
+        "completed_at": __import__("time").time(),
+        "variant_index": int(variant.get("index", 0)),
+        "render_mode": "hosted",
+        "hosted_provider": {
+            "service": service,
+            "model": model,
+            "style_preset": style_preset,
+            "output_format": output_format,
+            "strength": hosted_strength,
+            "cfg_scale": hosted_cfg_scale,
+        },
+        "settings": {
+            "fps_render": int(settings.fps_render),
+            "fps_output": int(settings.fps_output),
+            "width": int(settings.width),
+            "height": int(settings.height),
+            "keyframe_interval_s": float(settings.keyframe_interval_s),
+            "interpolation_engine": str(settings.interpolation_engine),
+            "temporal_mode": "keyframes",
+            "resume_existing_frames": bool(settings.resume_existing_frames),
+            "model_id": str(settings.model_id),
+        },
+        "frames": {
+            "expected": int(total_frames),
+            "present": len(list(out_frames.glob("frame_*.png"))),
+            "dir": str(out_frames),
+        },
+        "outputs": {
+            "raw_mp4": str(raw_mp4),
+            "interp_mp4": str(interp_mp4),
+            "final_mp4": str(final_mp4),
+            "checkpoint_json": str(checkpoint_json),
+        },
+        "timeline_digest": _json_digest(_timeline_render_fingerprint(timeline)),
+        "scene_digest": _json_digest(scenes or []),
+    }
+    try:
+        meta_json.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    emit_checkpoint(stage="complete", status="complete", force=True, final=True, message=f"Hosted render complete: {final_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": interp_mp4.exists(), "final_exists": final_mp4.exists()})
+    if log_fn:
+        log_fn(f"Hosted render complete: {final_mp4.name}")
+    return final_mp4
+
+
 def _proxy_scene_at_time(scenes: list[dict[str, Any]], t: float) -> dict[str, Any] | None:
     for sc in scenes or []:
         try:
@@ -1706,7 +2117,7 @@ def render_internal_diffusion_preview_segment(
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     device = _device_auto(settings.device_preference)
-    pipes = _try_load_diffusers(model_dir, device=device)
+    pipes = _try_load_pipelines(model_dir, device=device)
 
     try:
         import torch  # type: ignore

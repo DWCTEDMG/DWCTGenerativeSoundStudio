@@ -3,13 +3,106 @@ import { apiGet, apiPost } from "../components/api";
 import { useUiMode } from "../components/uiMode";
 import type { PageProps } from "../types/pageProps";
 
+type CatalogEntry = {
+  id: string;
+  name: string;
+  kind: string;
+  source: string;
+  recommended?: string;
+  notes?: string;
+  license_id?: string;
+  license_url?: string;
+  installable?: boolean;
+  hf_repo_id?: string;
+  hf_url?: string;
+  filename?: string;
+  tags?: string[];
+  hardware_targets?: string[];
+  collections?: string[];
+};
+
 type CatalogPayload = {
-  catalog: any[];
-  user: any[];
+  catalog: CatalogEntry[];
+  user: CatalogEntry[];
   packs: any[];
   accepted: Record<string, any>;
   installed: Record<string, boolean>;
 };
+
+type HubResult = {
+  id: string;
+  downloads?: number;
+  likes?: number;
+  lastModified?: string;
+  pipeline_tag?: string;
+  tags?: string[];
+};
+
+type HubCollection = {
+  id: string;
+  label: string;
+  search: string;
+  note: string;
+  url: string;
+};
+
+const HUB_COLLECTIONS: HubCollection[] = [
+  {
+    id: "stable-diffusion-35",
+    label: "SD3.5 Image",
+    search: "stable-diffusion-3.5",
+    note: "Curated Stability image models, including SD3.5 large, medium, turbo, and controlnets.",
+    url: "https://huggingface.co/collections/stabilityai/stable-diffusion-35",
+  },
+  {
+    id: "video",
+    label: "Video",
+    search: "stable-video-diffusion",
+    note: "Stable Video Diffusion image-to-video checkpoints and related motion models.",
+    url: "https://huggingface.co/collections/stabilityai/video",
+  },
+  {
+    id: "nvidia-optimized",
+    label: "NVIDIA",
+    search: "tensorrt stable-diffusion-3.5",
+    note: "TensorRT-oriented Stability bundles for NVIDIA-specific fast paths.",
+    url: "https://huggingface.co/collections/stabilityai/nvidia-optimized",
+  },
+  {
+    id: "amd-optimized",
+    label: "AMD",
+    search: "amdgpu stable-diffusion-3.5",
+    note: "AMDGPU / DirectML-oriented Stability bundles for Windows and AMD hardware paths.",
+    url: "https://huggingface.co/collections/stabilityai/amd-optimized",
+  },
+];
+
+const STABILITY_LINKS = [
+  { label: "SD3.5 collection", url: "https://huggingface.co/collections/stabilityai/stable-diffusion-35" },
+  { label: "Video collection", url: "https://huggingface.co/collections/stabilityai/video" },
+  { label: "NVIDIA collection", url: "https://huggingface.co/collections/stabilityai/nvidia-optimized" },
+  { label: "AMD collection", url: "https://huggingface.co/collections/stabilityai/amd-optimized" },
+  { label: "Stability GitHub", url: "https://github.com/Stability-AI" },
+  { label: "generative-models", url: "https://github.com/Stability-AI/generative-models" },
+  { label: "sd3.5 repo", url: "https://github.com/Stability-AI/sd3.5" },
+  { label: "stable-audio-tools", url: "https://github.com/Stability-AI/stable-audio-tools" },
+  { label: "Stability Platform", url: "https://platform.stability.ai/" },
+];
+
+function formatDate(value?: string) {
+  if (!value) return "unknown";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString();
+}
+
+function repoIdFromEntry(model: CatalogEntry) {
+  if (model.hf_repo_id) return model.hf_repo_id;
+  if (model.hf_url) {
+    const match = model.hf_url.match(/huggingface\.co\/([^/]+\/[^/]+)\/resolve\//i);
+    if (match) return match[1];
+  }
+  return "";
+}
 
 function ModelCard({
   m,
@@ -19,47 +112,126 @@ function ModelCard({
   onInstall,
   onOpen
 }: {
-  m: any;
+  m: CatalogEntry;
   installed: boolean;
   accepted: boolean;
   onAccept: () => void;
   onInstall: () => void;
   onOpen: (u: string) => void;
 }) {
-  const needsAccept = m?.source !== "ollama" && !accepted;
-  const canInstall = !needsAccept;
+  const installable = m.installable !== false;
+  const needsAccept = installable && m.source !== "ollama" && !accepted;
+  const canInstall = installable && !needsAccept;
 
   return (
     <div className="card" style={{ marginTop: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
         <div>
-          <div style={{ fontWeight: 900 }}>{m?.name}</div>
+          <div style={{ fontWeight: 900 }}>{m.name}</div>
           <div className="small" style={{ marginTop: 4 }}>
             <span style={{ opacity: 0.85 }}>
-              {m?.kind} • {m?.source}
-              {m?.recommended ? ` • ${m.recommended}` : ""}
+              {m.kind} • {m.source}
+              {m.recommended ? ` • ${m.recommended}` : ""}
             </span>
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            License: <b>{m?.license_id ?? "unknown"}</b>
+            License: <b>{m.license_id ?? "unknown"}</b>
           </div>
-          {m?.notes ? <div className="small" style={{ marginTop: 6 }}>{m.notes}</div> : null}
+          {m.tags?.length ? (
+            <div className="small" style={{ marginTop: 6, opacity: 0.88 }}>
+              Tags: <b>{m.tags.join(", ")}</b>
+            </div>
+          ) : null}
+          {m.hardware_targets?.length ? (
+            <div className="small" style={{ marginTop: 4, opacity: 0.82 }}>
+              Best on: <b>{m.hardware_targets.join(", ")}</b>
+            </div>
+          ) : null}
+          {m.notes ? <div className="small" style={{ marginTop: 6 }}>{m.notes}</div> : null}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
           <div className="small" style={{ fontWeight: 800 }}>
-            {installed ? "Installed" : "Not installed"}
+            {installed ? "Installed" : installable ? "Not installed" : "Browser only"}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-            {m?.license_url ? (
-              <button className="secondary" onClick={() => onOpen(m.license_url)}>View license</button>
+            {m.license_url ? (
+              <button className="secondary" onClick={() => onOpen(m.license_url || "")}>View license</button>
+            ) : null}
+            {(m.hf_repo_id || m.hf_url) ? (
+              <button className="secondary" onClick={() => onOpen(`https://huggingface.co/${repoIdFromEntry(m) || ""}`)}>
+                Open model page
+              </button>
             ) : null}
             {needsAccept ? (
               <button onClick={onAccept}>Accept license</button>
             ) : null}
             <button disabled={!canInstall || installed} onClick={onInstall}>
-              {installed ? "Installed" : "Install"}
+              {installed ? "Installed" : installable ? "Install" : "Install unavailable"}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HubResultCard({
+  result,
+  matchedCatalog,
+  installed,
+  accepted,
+  onAccept,
+  onInstall,
+  onOpen,
+}: {
+  result: HubResult;
+  matchedCatalog: CatalogEntry | null;
+  installed: boolean;
+  accepted: boolean;
+  onAccept: (model: CatalogEntry) => void;
+  onInstall: (model: CatalogEntry) => void;
+  onOpen: (url: string) => void;
+}) {
+  const modelUrl = `https://huggingface.co/${result.id}`;
+  return (
+    <div className="card" style={{ marginTop: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div style={{ fontWeight: 900 }}>{result.id}</div>
+          <div className="small" style={{ marginTop: 4, opacity: 0.85 }}>
+            {(result.pipeline_tag || "model")} • {result.downloads ?? 0} downloads • {result.likes ?? 0} likes
+          </div>
+          <div className="small" style={{ marginTop: 4, opacity: 0.82 }}>
+            Updated: <b>{formatDate(result.lastModified)}</b>
+          </div>
+          {result.tags?.length ? (
+            <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+              {result.tags.slice(0, 6).join(", ")}
+            </div>
+          ) : null}
+          {matchedCatalog ? (
+            <div className="small" style={{ marginTop: 8 }}>
+              Studio match: <b>{matchedCatalog.name}</b>
+            </div>
+          ) : (
+            <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>
+              No direct Studio install mapping yet.
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+          <button className="secondary" onClick={() => onOpen(modelUrl)}>Open on Hugging Face</button>
+          {matchedCatalog && matchedCatalog.installable !== false && !accepted ? (
+            <button onClick={() => onAccept(matchedCatalog)}>Accept license</button>
+          ) : null}
+          {matchedCatalog ? (
+            <button
+              disabled={matchedCatalog.installable === false || installed || (matchedCatalog.source !== "ollama" && !accepted)}
+              onClick={() => onInstall(matchedCatalog)}
+            >
+              {installed ? "Installed in Studio" : matchedCatalog.installable === false ? "Browser only" : "Install in Studio"}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
@@ -70,12 +242,18 @@ export default function Models(props: PageProps) {
   const { mode } = useUiMode();
   const [data, setData] = useState<CatalogPayload | null>(null);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [renderProviders, setRenderProviders] = useState<any>(null);
   const [err, setErr] = useState<string>("");
 
   const [civitaiUrl, setCivitaiUrl] = useState("");
   const [importing, setImporting] = useState(false);
-
   const [localFolder, setLocalFolder] = useState("checkpoints");
+
+  const [hubCollectionId, setHubCollectionId] = useState<string>(HUB_COLLECTIONS[0].id);
+  const [hubQuery, setHubQuery] = useState<string>("");
+  const [hubLoading, setHubLoading] = useState<boolean>(false);
+  const [hubResults, setHubResults] = useState<HubResult[]>([]);
+  const [hubError, setHubError] = useState<string>("");
 
   async function refresh() {
     setErr("");
@@ -84,6 +262,8 @@ export default function Models(props: PageProps) {
       setData(d as any);
       const t = await apiGet("/v1/models/tasks");
       setTasks((t as any)?.tasks ?? []);
+      const rp = await apiGet("/v1/settings/render_providers");
+      setRenderProviders(rp);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     }
@@ -101,12 +281,65 @@ export default function Models(props: PageProps) {
     return { built, user };
   }, [data]);
 
-  async function accept(m: any) {
+  const hubCollection = useMemo(
+    () => HUB_COLLECTIONS.find((item) => item.id === hubCollectionId) ?? HUB_COLLECTIONS[0],
+    [hubCollectionId]
+  );
+
+  const builtByRepoId = useMemo(() => {
+    const mapping = new Map<string, CatalogEntry>();
+    for (const item of merged.built ?? []) {
+      const repoId = repoIdFromEntry(item);
+      if (repoId) mapping.set(repoId, item);
+    }
+    return mapping;
+  }, [merged.built]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadHub = async () => {
+      setHubLoading(true);
+      setHubError("");
+      try {
+        const query = (hubQuery || hubCollection.search).trim() || hubCollection.search;
+        const { listModels } = await import("@huggingface/hub");
+        const nextResults: HubResult[] = [];
+        for await (const item of listModels({
+          search: query,
+          author: "stabilityai",
+          limit: 8,
+        } as any)) {
+          nextResults.push({
+            id: String((item as any).id || ""),
+            downloads: Number((item as any).downloads || 0),
+            likes: Number((item as any).likes || 0),
+            lastModified: String((item as any).lastModified || ""),
+            pipeline_tag: String((item as any).pipeline_tag || ""),
+            tags: Array.isArray((item as any).tags) ? (item as any).tags.slice(0, 8) : [],
+          });
+        }
+        if (!cancelled) setHubResults(nextResults);
+      } catch (e: any) {
+        if (!cancelled) {
+          setHubError(String(e?.message ?? e));
+          setHubResults([]);
+        }
+      } finally {
+        if (!cancelled) setHubLoading(false);
+      }
+    };
+    void loadHub();
+    return () => {
+      cancelled = true;
+    };
+  }, [hubCollection, hubQuery]);
+
+  async function accept(m: CatalogEntry) {
     await apiPost("/v1/models/accept", { model_id: m.id, license_id: m.license_id ?? "unknown" });
     await refresh();
   }
 
-  async function install(m: any) {
+  async function install(m: CatalogEntry) {
     await apiPost("/v1/models/install", { model_id: m.id });
     await refresh();
   }
@@ -146,22 +379,27 @@ export default function Models(props: PageProps) {
 
   const internalSummary = useMemo(() => {
     const built = merged.built ?? [];
-    const sd15 = built.find((m: any) => m.id === "hf_sd15_internal");
-    const sdxl = built.find((m: any) => m.id === "hf_sdxl_internal");
+    const sd15 = built.find((m) => m.id === "hf_sd15_internal");
+    const sdxl = built.find((m) => m.id === "hf_sdxl_internal");
+    const sd35 = built.find((m) => m.id === "hf_sd35_medium_internal");
     const installedInternal = {
       sd15: !!installedMap["hf_sd15_internal"],
       sdxl: !!installedMap["hf_sdxl_internal"],
+      sd35: !!installedMap["hf_sd35_medium_internal"],
     };
-    const preferred = installedInternal.sdxl ? "SDXL" : installedInternal.sd15 ? "SD 1.5" : "none";
-    return { sd15, sdxl, installedInternal, preferred };
+    const preferred = installedInternal.sd35 ? "SD3.5 Medium" : installedInternal.sdxl ? "SDXL" : installedInternal.sd15 ? "SD 1.5" : "none";
+    return { sd15, sdxl, sd35, installedInternal, preferred };
   }, [merged, installedMap]);
 
+  const defaultModels = (merged.built ?? []).filter((m) => m.recommended === "default" && m.installable !== false);
+  const advancedModels = (merged.built ?? []).filter((m) => m.recommended !== "default" && m.installable !== false);
+  const browserOnlyModels = (merged.built ?? []).filter((m) => m.installable === false);
 
   return (
     <div>
       <h2>Model Manager</h2>
       <div className="small" style={{ marginTop: 6 }}>
-        EDMG ships with a curated model catalog, but does <b>not</b> bundle large weights in the installer. Use this page to install recommended defaults, add community models (Civitai), or bring your own.
+        EDMG ships with a curated model catalog, but does <b>not</b> bundle large weights in the installer. Use this page to install Studio-ready defaults, add community models, or browse curated Stability model families.
       </div>
 
       {err && (
@@ -174,7 +412,7 @@ export default function Models(props: PageProps) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 900 }}>First-run packs</div>
         <div className="small" style={{ marginTop: 6 }}>
-          Pick a pack to get started. You can still install/uninstall individual models below.
+          Pick a pack to get started. Packs install Studio-supported defaults only; browser-only runtime bundles stay separate until their execution path is ready.
         </div>
         <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
           {(data?.packs ?? []).map((p: any) => (
@@ -185,7 +423,7 @@ export default function Models(props: PageProps) {
         </div>
         {mode === "advanced" && (data?.packs ?? []).length ? (
           <div className="small" style={{ marginTop: 10, opacity: 0.85 }}>
-            Tip: Packs only enqueue installs. Track progress in the tasks list below.
+            Packs only enqueue installs. Track progress in the tasks list below.
           </div>
         ) : null}
       </div>
@@ -193,10 +431,13 @@ export default function Models(props: PageProps) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 900 }}>Internal render readiness</div>
         <div className="small" style={{ marginTop: 6 }}>
-          Internal video rendering is ready when at least one diffusers model is installed. SDXL is preferred on stronger GPUs; SD 1.5 is the safer fallback.
+          Internal video rendering is ready when at least one diffusers model is installed. SD3.5 Medium is preferred on stronger GPUs; SDXL is the balanced path; SD 1.5 remains the safest fallback.
         </div>
         <div className="small" style={{ marginTop: 8 }}>
-          SD 1.5: <b>{internalSummary.installedInternal.sd15 ? "installed" : "missing"}</b> • SDXL: <b>{internalSummary.installedInternal.sdxl ? "installed" : "missing"}</b> • Preferred: <b>{internalSummary.preferred}</b>
+          SD 1.5: <b>{internalSummary.installedInternal.sd15 ? "installed" : "missing"}</b>
+          {" "}• SDXL: <b>{internalSummary.installedInternal.sdxl ? "installed" : "missing"}</b>
+          {" "}• SD3.5 Medium: <b>{internalSummary.installedInternal.sd35 ? "installed" : "missing"}</b>
+          {" "}• Preferred: <b>{internalSummary.preferred}</b>
         </div>
         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {!internalSummary.installedInternal.sd15 && internalSummary.sd15 ? (
@@ -205,14 +446,107 @@ export default function Models(props: PageProps) {
           {!internalSummary.installedInternal.sdxl && internalSummary.sdxl ? (
             <button onClick={() => install(internalSummary.sdxl)}>Install SDXL internal</button>
           ) : null}
+          {!internalSummary.installedInternal.sd35 && internalSummary.sd35 ? (
+            <button onClick={() => install(internalSummary.sd35)}>Install SD3.5 internal</button>
+          ) : null}
           <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
         </div>
+      </div>
+
+      {renderProviders?.stability?.visible ? (
+        <div className="card" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 900 }}>Hosted Stability fallback</div>
+          <div className="small" style={{ marginTop: 6 }}>
+            Hosted keyframe rendering is configured and will appear as an internal render option in Render. Studio keeps assembly, caching, history, retry, and resume local while using Stability&apos;s hosted image API for keyframes.
+          </div>
+          <div className="small" style={{ marginTop: 8 }}>
+            Service: <b>{renderProviders?.stability?.service}</b>
+            {renderProviders?.stability?.service === "sd3" ? <> • model <b>{renderProviders?.stability?.model}</b></> : null}
+            {" "}• style <b>{renderProviders?.stability?.style_preset || "none"}</b>
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
+            <button className="secondary" onClick={() => props.onNavigate?.("settings")}>Open Settings</button>
+          </div>
+        </div>
+      ) : null}
+
+      {renderProviders?.directml?.available ? (
+        <div className="card" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 900 }}>AMD / DirectML runtime</div>
+          <div className="small" style={{ marginTop: 6 }}>
+            DirectML is available on <b>{renderProviders?.directml?.device_name || "this Windows GPU"}</b>. Studio&apos;s internal renderer can now use SDXL and SD 1.5 through ONNX Runtime on supported AMD / Windows machines.
+          </div>
+          <div className="small" style={{ marginTop: 8 }}>
+            Preferred DirectML model: <b>{renderProviders?.directml?.preferred_model || "auto"}</b> • active backend <b>{renderProviders?.directml?.active ? "yes" : "no"}</b>
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
+            <button className="secondary" onClick={() => props.onNavigate?.("settings")}>Tune runtime</button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 900 }}>Stability quick links</div>
+        <div className="small" style={{ marginTop: 6 }}>
+          These are the source collections and repos Studio now uses for curated model discovery.
+        </div>
+        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {STABILITY_LINKS.map((link) => (
+            <button key={link.url} className="secondary" onClick={() => window.edmg?.openExternal?.(link.url)}>
+              {link.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 900 }}>Stability Hub browser</div>
+        <div className="small" style={{ marginTop: 6 }}>
+          Powered by Hugging Face Hub search for a richer in-app browse flow. Studio only enables one-click install when a result maps cleanly to a supported local runtime path.
+        </div>
+        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={hubCollectionId} onChange={(e) => setHubCollectionId(e.target.value)}>
+            {HUB_COLLECTIONS.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
+          <input
+            style={{ minWidth: 320 }}
+            value={hubQuery}
+            onChange={(e) => setHubQuery(e.target.value)}
+            placeholder={hubCollection.search}
+          />
+          <button className="secondary" onClick={() => window.edmg?.openExternal?.(hubCollection.url)}>Open official collection</button>
+        </div>
+        <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>{hubCollection.note}</div>
+        {hubError ? <div className="small" style={{ marginTop: 8, color: "var(--danger)" }}>{hubError}</div> : null}
+        {hubLoading ? <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>Loading Hub results…</div> : null}
+        {!hubLoading && !hubResults.length && !hubError ? (
+          <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>No results yet.</div>
+        ) : null}
+        {hubResults.map((result) => {
+          const matchedCatalog = builtByRepoId.get(result.id) ?? null;
+          return (
+            <HubResultCard
+              key={result.id}
+              result={result}
+              matchedCatalog={matchedCatalog}
+              installed={matchedCatalog ? !!installedMap[matchedCatalog.id] : false}
+              accepted={matchedCatalog ? !!acceptedMap[matchedCatalog.id] : false}
+              onAccept={accept}
+              onInstall={install}
+              onOpen={(u) => window.edmg?.openExternal?.(u)}
+            />
+          );
+        })}
       </div>
 
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 900 }}>Add community model (Civitai)</div>
         <div className="small" style={{ marginTop: 6 }}>
-          Paste a Civitai model URL (optionally with <code>modelVersionId=…</code>) or a numeric model ID. You'll be prompted to review license/terms.
+          Paste a Civitai model URL (optionally with <code>modelVersionId=…</code>) or a numeric model ID. You&apos;ll be prompted to review license/terms.
         </div>
         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
@@ -233,7 +567,7 @@ export default function Models(props: PageProps) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 900 }}>Bring your own</div>
         <div className="small" style={{ marginTop: 6 }}>
-          Add a local checkpoint/LoRA/etc. EDMG will copy it into the ComfyUI models folder (Portable if installed; otherwise under <code>data/models</code>).
+          Add a local checkpoint, LoRA, or ControlNet. EDMG copies it into the Studio-managed ComfyUI models folder.
         </div>
         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <label className="small" style={{ fontWeight: 800 }}>Type:</label>
@@ -249,7 +583,7 @@ export default function Models(props: PageProps) {
       </div>
 
       <h3 style={{ marginTop: 18 }}>Recommended defaults</h3>
-      {(merged.built ?? []).filter((m: any) => m.recommended === "default").map((m: any) => (
+      {defaultModels.map((m) => (
         <ModelCard
           key={m.id}
           m={m}
@@ -264,7 +598,7 @@ export default function Models(props: PageProps) {
       {mode === "advanced" ? (
         <>
           <h3 style={{ marginTop: 18 }}>Advanced / optional</h3>
-          {(merged.built ?? []).filter((m: any) => m.recommended !== "default").map((m: any) => (
+          {advancedModels.map((m) => (
             <ModelCard
               key={m.id}
               m={m}
@@ -276,9 +610,29 @@ export default function Models(props: PageProps) {
             />
           ))}
 
+          {browserOnlyModels.length ? (
+            <>
+              <h3 style={{ marginTop: 18 }}>Discovery-only runtime bundles</h3>
+              <div className="small" style={{ opacity: 0.82 }}>
+                These are still browser-only packages. Studio&apos;s real AMD path now runs through internal DirectML, while these vendor bundles remain surfaced for discovery and future runtime work.
+              </div>
+              {browserOnlyModels.map((m) => (
+                <ModelCard
+                  key={m.id}
+                  m={m}
+                  installed={!!installedMap[m.id]}
+                  accepted={!!acceptedMap[m.id]}
+                  onAccept={() => accept(m)}
+                  onInstall={() => install(m)}
+                  onOpen={(u) => window.edmg?.openExternal?.(u)}
+                />
+              ))}
+            </>
+          ) : null}
+
           <h3 style={{ marginTop: 18 }}>User models</h3>
           {(merged.user ?? []).length ? (
-            (merged.user ?? []).map((m: any) => (
+            (merged.user ?? []).map((m) => (
               <div key={m.id}>
                 <ModelCard
                   m={m}

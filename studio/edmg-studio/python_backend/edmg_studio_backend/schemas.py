@@ -23,7 +23,13 @@ class ApplyPlanRequest(BaseModel):
 class RenderScenesRequest(BaseModel):
     """Render one still image per scene."""
     variant_index: int = 0
+    model_id: str | None = None
     checkpoint: str | None = None  # optional checkpoint filename for ComfyUI
+    workflow_family: Literal["auto", "txt2img", "controlnet"] = "auto"
+    reference_asset: str | None = None
+    conditioning_mode: Literal["raw", "blur", "edge", "external"] = "raw"
+    controlnet_model: str | None = None
+    controlnet_strength: float = Field(default=0.8, ge=0.0, le=2.0)
     width: int = 1024
     height: int = 576
     steps: int = 28
@@ -37,7 +43,9 @@ CreativePreset = Literal["cinematic", "psychedelic", "ambient"]
 class RenderMotionRequest(BaseModel):
     """Render motion clips per scene via ComfyUI (AnimateDiff or SVD)."""
     variant_index: int = 0
+    model_id: str | None = None
     checkpoint: str | None = None  # optional base checkpoint filename for ComfyUI
+    svd_model_id: str | None = None
     engine: MotionEngine = "animatediff"
 
     # Output / timeline
@@ -77,6 +85,7 @@ class InternalVideoRenderRequest(BaseModel):
     Modes:
       - auto: prefer diffusion if an internal model is installed, otherwise fall back to proxy
       - diffusion: require an internal diffusion model
+      - hosted: use the configured hosted still-image provider for keyframes, then assemble locally
       - proxy: render a local draft video using timeline compositing only
     """
     variant_index: int = 0
@@ -92,10 +101,14 @@ class InternalVideoRenderRequest(BaseModel):
 
     interpolation_engine: Literal["auto","minterpolate","fps","rife"] = "auto"
     model_id: str = "auto"
-    render_mode: Literal["auto","diffusion","proxy"] = "auto"
+    render_mode: Literal["auto","diffusion","hosted","proxy"] = "auto"
     render_tier: Literal["auto","draft","balanced","quality"] = "auto"
-    device_preference: Literal["auto","cpu","cuda","mps"] = "auto"
+    device_preference: Literal["auto","cpu","cuda","mps","directml"] = "auto"
+    allow_hosted_fallback: bool = True
     allow_proxy_fallback: bool = True
+    hosted_service: Literal["default","core","ultra","sd3"] = "default"
+    hosted_model: str | None = None
+    hosted_style_preset: str | None = None
     negative_prompt: str = "blurry, low quality, watermark, text, logo"
 
     temporal_mode: Literal["off","keyframes","frame_img2img"] = "frame_img2img"

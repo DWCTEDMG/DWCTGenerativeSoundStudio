@@ -766,11 +766,16 @@ BACKEND_BUNDLE_MODULES: dict[str, dict[str, str]] = {
         "safetensors": "safetensors",
         "torch": "torch",
     },
+    "directml": {
+        "onnxruntime-directml": "onnxruntime",
+        "optimum": "optimum",
+    },
 }
 
 BACKEND_BUNDLE_ALIASES: dict[str, tuple[str, ...]] = {
     "full": ("audio", "asr", "internal"),
     "studio_bundle": ("audio", "asr", "internal"),
+    "studio_bundle_directml": ("audio", "asr", "internal", "directml"),
 }
 
 
@@ -782,6 +787,8 @@ def _bundle_module_map(bundle: str) -> dict[str, str]:
     keys = BACKEND_BUNDLE_ALIASES.get(bundle, (bundle,))
     modules: dict[str, str] = {}
     for key in keys:
+        if key == "directml" and platform.system() != "Windows":
+            continue
         modules.update(BACKEND_BUNDLE_MODULES.get(key, {}))
     return modules
 

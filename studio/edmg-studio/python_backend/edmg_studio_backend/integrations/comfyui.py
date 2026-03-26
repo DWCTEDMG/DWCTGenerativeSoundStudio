@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 import requests
 from typing import Any
 
@@ -25,6 +26,20 @@ def get_object_info(comfyui_url: str) -> dict[str, Any]:
     r = requests.get(f"{comfyui_url}/object_info", timeout=60)
     r.raise_for_status()
     return r.json()
+
+
+def upload_input_image(comfyui_url: str, image_path: str, *, subfolder: str = "edmg", overwrite: bool = True) -> dict[str, Any]:
+    mime_type = mimetypes.guess_type(image_path)[0] or "application/octet-stream"
+    with open(image_path, "rb") as handle:
+        files = {"image": (image_path.split("/")[-1].split("\\")[-1], handle, mime_type)}
+        data = {
+            "type": "input",
+            "subfolder": subfolder,
+            "overwrite": "true" if overwrite else "false",
+        }
+        r = requests.post(f"{comfyui_url}/upload/image", data=data, files=files, timeout=120)
+    r.raise_for_status()
+    return r.json() if r.content else {}
 
 def download_image_bytes(comfyui_url: str, filename: str, subfolder: str = "", folder_type: str = "output") -> bytes:
     params = {"filename": filename, "subfolder": subfolder, "type": folder_type}
@@ -98,6 +113,56 @@ def default_workflow(
         }},
         "9": {"class_type":"VAEDecode","inputs":{"samples":["8",0],"vae":["3",2]}},
         "10": {"class_type":"SaveImage","inputs":{"filename_prefix":filename_prefix,"images":["9",0]}}
+    }
+
+
+def controlnet_workflow(
+    checkpoint: str,
+    prompt: str,
+    negative_prompt: str,
+    seed: int,
+    width: int,
+    height: int,
+    steps: int,
+    cfg: float,
+    sampler: str,
+    controlnet_name: str,
+    reference_image: str,
+    controlnet_strength: float = 0.8,
+    start_percent: float = 0.0,
+    end_percent: float = 1.0,
+    filename_prefix: str = "edmg_studio_cn",
+) -> dict[str, Any]:
+    return {
+        "3": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":checkpoint}},
+        "4": {"class_type":"LoadImage","inputs":{"image":reference_image,"upload":"image"}},
+        "5": {"class_type":"ControlNetLoader","inputs":{"control_net_name":controlnet_name}},
+        "6": {"class_type":"CLIPTextEncode","inputs":{"text":prompt,"clip":["3",1]}},
+        "7": {"class_type":"CLIPTextEncode","inputs":{"text":negative_prompt,"clip":["3",1]}},
+        "8": {"class_type":"ControlNetApplyAdvanced","inputs":{
+            "strength":float(controlnet_strength),
+            "start_percent":float(start_percent),
+            "end_percent":float(end_percent),
+            "positive":["6",0],
+            "negative":["7",0],
+            "control_net":["5",0],
+            "image":["4",0]
+        }},
+        "9": {"class_type":"EmptyLatentImage","inputs":{"width":width,"height":height,"batch_size":1}},
+        "10": {"class_type":"KSampler","inputs":{
+            "seed":seed,
+            "steps":steps,
+            "cfg":cfg,
+            "sampler_name":sampler,
+            "scheduler":"normal",
+            "denoise":1,
+            "model":["3",0],
+            "positive":["8",0],
+            "negative":["8",1],
+            "latent_image":["9",0]
+        }},
+        "11": {"class_type":"VAEDecode","inputs":{"samples":["10",0],"vae":["3",2]}},
+        "12": {"class_type":"SaveImage","inputs":{"filename_prefix":filename_prefix,"images":["11",0]}}
     }
 
 def animatediff_workflow(

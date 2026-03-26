@@ -97,9 +97,11 @@ async function run(action: string, path: string, body: any = {}) {
   const comfyOk = !!status?.comfyui?.ok;
   const ffOk = !!status?.ffmpeg?.ok;
   const backendBundleOk = !!status?.backend_bundle?.ok;
+  const backendBundleDirectmlOk = !!status?.backend_bundle_directml?.ok;
   const edmgOk = !!status?.edmg?.available;
   const sevenOk = !!status?.sevenzip?.ok;
   const aiConfig = status?.ai_config ?? null;
+  const directmlAvailable = !!status?.hardware?.supports_directml;
   const aiLabel = String(aiConfig?.label ?? "Local Ollama");
   const ollamaRequired = !!aiConfig?.ollama_required;
   const modelRequired = !!aiConfig?.model_required;
@@ -384,6 +386,12 @@ async function run(action: string, path: string, body: any = {}) {
     >
       {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
     </button>
+    <button
+      disabled={busy === "full_amd"}
+      onClick={() => run("full_amd", "/v1/setup/full/install", { flavor: "amd", bundle: "studio_bundle_directml" })}
+    >
+      {busy === "full_amd" ? "Running…" : "Full Setup (AMD / DirectML)"}
+    </button>
     {onNavigate ? (
       <button className="secondary" onClick={() => onNavigate("settings")}>
         Open AI Settings
@@ -400,12 +408,22 @@ async function run(action: string, path: string, body: any = {}) {
   <div className="small" style={{ marginTop: 6 }}>
     Installs the backend audio, ASR, and internal-render Python dependencies into the Studio backend environment.
   </div>
+  <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+    DirectML available on this machine: <b>{directmlAvailable ? "yes" : "no"}</b>
+    {status?.hardware?.directml_device_name ? <> • device <code>{status.hardware.directml_device_name}</code></> : null}
+  </div>
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
     <button
       disabled={busy === "backend_bundle"}
       onClick={() => run("backend_bundle", "/v1/setup/backend/install", { bundle: "studio_bundle" })}
     >
       {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime"}
+    </button>
+    <button
+      disabled={busy === "backend_bundle_directml"}
+      onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml" })}
+    >
+      {busy === "backend_bundle_directml" ? "Installing…" : "Install AMD / DirectML Runtime"}
     </button>
   </div>
   {!backendBundleOk && status?.backend_bundle?.hint && (
@@ -418,6 +436,16 @@ async function run(action: string, path: string, body: any = {}) {
       Missing modules: <code>{status.backend_bundle.missing.join(", ")}</code>
     </div>
   )}
+  {!backendBundleDirectmlOk && status?.backend_bundle_directml?.hint ? (
+    <div className="small" style={{ marginTop: 10 }}>
+      DirectML fix: {status.backend_bundle_directml.hint}
+    </div>
+  ) : null}
+  {!!status?.backend_bundle_directml?.missing?.length ? (
+    <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
+      DirectML modules: <code>{status.backend_bundle_directml.missing.join(", ")}</code>
+    </div>
+  ) : null}
 </div>
 
 <div className="card">

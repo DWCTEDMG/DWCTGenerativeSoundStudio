@@ -12,6 +12,37 @@ describe("Render page", () => {
       "/v1/projects": { projects: [{ id: "p1", name: "Demo Project" }] },
       "/v1/comfyui/capabilities": { ok: true },
       "/v1/hardware": { ok: true, device: "cpu" },
+      "/v1/models/catalog": {
+        catalog: [
+          {
+            id: "hf_sd35_large_turbo_ckpt",
+            name: "Stable Diffusion 3.5 Large Turbo (Checkpoint)",
+            kind: "checkpoint",
+            render: { checkpoint_name: "sd3.5_large_turbo.safetensors", render_modes: ["stills"] },
+          },
+          {
+            id: "hf_sd35_controlnet_blur",
+            name: "SD3.5 Large ControlNet Blur",
+            kind: "controlnet",
+            render: { controlnet_name: "sd3.5_large_controlnet_blur.safetensors", conditioning_mode: "blur" },
+          },
+          {
+            id: "hf_svd_xt_1_1",
+            name: "Stable Video Diffusion XT 1.1",
+            kind: "motion_module",
+            render: { svd_checkpoint: "svd_xt_1_1.safetensors", render_modes: ["motion_svd"] },
+          },
+          {
+            id: "hf_sd15_internal",
+            name: "Stable Diffusion v1.5 (Internal / Diffusers)",
+            kind: "diffusers",
+          },
+        ],
+        user: [],
+        packs: [],
+        accepted: {},
+        installed: {},
+      },
       "/v1/projects/p1": {
         project: {
           id: "p1",
@@ -29,6 +60,7 @@ describe("Render page", () => {
           },
         },
       },
+      "/v1/projects/p1/assets": { assets: { refs: [] } },
       "/v1/projects/p1/pipeline/validate*": { ok: true, valid: true },
       "/v1/projects/p1/creative_direction*": {
         creative_direction: {
