@@ -148,7 +148,14 @@ installSafeProcessLogging();
 app.setName(APP_NAME);
 
 function ensureDirSync(targetPath) {
-  fs.mkdirSync(targetPath, { recursive: true });
+  try {
+    fs.mkdirSync(targetPath, { recursive: true });
+  } catch (error) {
+    if (error?.code === "ELOOP" && repairMutualJunctionLoopSync(targetPath)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 function pathExistsSync(targetPath) {
@@ -596,6 +603,61 @@ function samePath(left, right) {
   return IS_WINDOWS ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+function readJunctionTargetSync(targetPath) {
+  try {
+    const stat = fs.lstatSync(targetPath);
+    if (!stat.isSymbolicLink()) return "";
+    const rawTarget = fs.readlinkSync(targetPath);
+    return normalizePath(path.resolve(path.dirname(targetPath), rawTarget));
+  } catch {
+    return "";
+  }
+}
+
+async function readJunctionTarget(targetPath) {
+  try {
+    const stat = await fsp.lstat(targetPath);
+    if (!stat.isSymbolicLink()) return "";
+    const rawTarget = await fsp.readlink(targetPath);
+    return normalizePath(path.resolve(path.dirname(targetPath), rawTarget));
+  } catch {
+    return "";
+  }
+}
+
+function repairMutualJunctionLoopSync(targetPath) {
+  const source = normalizePath(targetPath);
+  if (!source) return false;
+  const target = readJunctionTargetSync(source);
+  if (!target) return false;
+  const reverse = readJunctionTargetSync(target);
+  if (!reverse || !samePath(reverse, source)) return false;
+
+  try {
+    fs.rmSync(source, { recursive: true, force: true });
+    fs.mkdirSync(source, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sourceAlreadyRedirectsToTarget(sourcePath, targetPath) {
+  const sourceTarget = await readJunctionTarget(sourcePath);
+  return Boolean(sourceTarget && samePath(sourceTarget, targetPath));
+}
+
+async function detachTargetIfItRedirectsToSource(sourcePath, targetPath) {
+  const targetTarget = await readJunctionTarget(targetPath);
+  if (!targetTarget || !samePath(targetTarget, sourcePath)) {
+    return false;
+  }
+
+  await fsp.rm(targetPath, { recursive: true, force: true });
+  await fsp.mkdir(targetPath, { recursive: true });
+  return true;
+}
+
 async function pathExists(targetPath) {
   try {
     await fsp.lstat(targetPath);
@@ -703,11 +765,16 @@ async function migrateDirectory({ sourcePath, targetPath, label, allowJunction =
     return { label, status: "skipped", sourcePath: source, targetPath: target, reason: "already_aligned" };
   }
 
+  if (await sourceAlreadyRedirectsToTarget(source, target)) {
+    return { label, status: "skipped", sourcePath: source, targetPath: target, reason: "already_redirected" };
+  }
+
   if (!(await pathExists(source))) {
     return { label, status: "skipped", sourcePath: source, targetPath: target, reason: "missing_source" };
   }
 
   try {
+    await detachTargetIfItRedirectsToSource(source, target);
     const { filesCopied, filesRenamed } = await safeMergeCopy(source, target);
     let cleanup = "kept_source";
     let compatibilityPath = "none";
