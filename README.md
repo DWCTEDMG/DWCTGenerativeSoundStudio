@@ -116,3 +116,4 @@ alongside the standalone EDMG engine. The authoritative desktop product path is:
 ## Documentation
 
 - [AI integration design (API + local providers)](docs/AI_INTEGRATION.md)
+- [Studio repo map](docs/STUDIO_REPO_MAP.md)

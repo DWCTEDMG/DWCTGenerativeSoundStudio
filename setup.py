@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Complete Setup Script for Enhanced Deforum Music Generator
-Handles installation, configuration, and initial setup of all components.
+Complete setup script for the legacy standalone Enhanced Deforum Music Generator workflow.
+The canonical desktop product in this repo is EDMG Studio under `studio/edmg-studio/`.
+This script remains for compatibility with the older engine/bootstrap path.
 
 Usage:
     python setup.py --mode [minimal|standard|full|dev]

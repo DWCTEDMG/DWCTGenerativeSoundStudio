@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""CLI orchestrator for installing/running EDMG + backends (CPU-first).
+"""Legacy compatibility CLI for installing/running the standalone EDMG engine and external backends.
+
+The canonical desktop product in this repo is EDMG Studio under `studio/edmg-studio/`.
+This script remains for standalone-engine and integration workflows.
 
 Examples:
   python bootstrap_all.py install --edmg --full

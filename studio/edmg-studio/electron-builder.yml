@@ -1,31 +1,39 @@
-appId: com.dwct.edmgstudio
-productName: DWCT EDMG Studio
-icon: electron-resources/app-icon.png
-
-files:
-  - "dist-web/**"
-  - "main.mjs"
-  - "preload.cjs"
-  - "package.json"
-
-extraResources:
-  - from: "electron-resources"
-    to: "edmg"
-    filter:
-      - "**/*"
-
-directories:
-  output: "dist"
-
-win:
-  icon: electron-resources/app-icon.ico
-  target:
-    - nsis
-  artifactName: "DWCT-EDMG-Studio-${version}-Setup.${ext}"
-
-nsis:
-  oneClick: false
-  perMachine: false
-  allowElevation: false
-  allowToChangeInstallationDirectory: true
-  deleteAppDataOnUninstall: false
+# Auto-generated from package.json build. Do not edit by hand.
+{
+  "appId": "com.dwct.edmgstudio",
+  "productName": "EDMG Studio",
+  "icon": "electron-resources/app-icon.png",
+  "directories": {
+    "output": "dist",
+    "buildResources": "electron-resources"
+  },
+  "files": [
+    "dist-web/**",
+    "main.mjs",
+    "preload.cjs",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "electron-resources",
+      "to": ".",
+      "filter": [
+        "**/*"
+      ]
+    }
+  ],
+  "win": {
+    "icon": "electron-resources/app-icon.ico",
+    "target": [
+      "nsis"
+    ],
+    "artifactName": "${name} Setup ${version}.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowElevation": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false
+  }
+}

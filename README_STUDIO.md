@@ -10,6 +10,7 @@ It is an Electron + React UI with a local FastAPI backend, intended to be the
 The original DWCTEDMG codebase remains the engine + integrations, but Studio is the
 canonical product surface and can install the EDMG Core engine into the same workflow.
 For release/install operations, use [docs/STUDIO_RELEASE_RUNBOOK.md](docs/STUDIO_RELEASE_RUNBOOK.md) and [RELEASE.md](RELEASE.md).
+For the top-level repo surface and compatibility map, see [docs/STUDIO_REPO_MAP.md](docs/STUDIO_REPO_MAP.md).
 
 ## Authoritative product path
 

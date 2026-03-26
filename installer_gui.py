@@ -2,7 +2,10 @@
 """
 installer_gui.py
 
-EDMG "install everything" GUI installer & launcher.
+Legacy EDMG standalone-engine installer GUI and launcher.
+
+The canonical desktop product in this repo is EDMG Studio under `studio/edmg-studio/`.
+This GUI remains for compatibility with the older standalone-engine workflow.
 
 What it can do:
 - Standalone EDMG (repo venv + dependencies) with CPU or CUDA PyTorch wheels

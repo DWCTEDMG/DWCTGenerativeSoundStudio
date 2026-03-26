@@ -1,3 +1,13 @@
+IMPORTANT: this file describes a legacy standalone/full-bundle workflow, not the current canonical product path for this repository.
+
+For the current repo:
+- Primary desktop product: `studio/edmg-studio/`
+- Canonical launchers: `RUN_ME.bat` or `./run_me.sh`
+- Canonical release docs: `README_STUDIO.md`, `RELEASE.md`, `docs/STUDIO_RELEASE_RUNBOOK.md`
+- Canonical repo map: `docs/STUDIO_REPO_MAP.md`
+
+Keep using the instructions below only if you intentionally want the older standalone engine/bootstrap flow.
+
 EDMG Full Installation + Use Guide (Start-to-Finish)
 
 This guide assumes you have the FULL bundle you uploaded: enhanced_deforum_music_generator_FULL.zip. Inside it are multiple builds. The most complete one (GUI installer + CLI orchestrator + ComfyUI workflow tools + HF video tools + docs) is:

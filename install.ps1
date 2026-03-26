@@ -13,6 +13,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 Write-Host "== EDMG installer ==" -ForegroundColor Cyan
+Write-Host "Installing the legacy standalone engine compatibility path." -ForegroundColor Yellow
+Write-Host "For the canonical EDMG Studio desktop product, use RUN_ME.bat instead." -ForegroundColor Yellow
 if ($Cuda -and $Backend -eq "cpu") {
   $Backend = "cu121"
 }
@@ -49,3 +51,4 @@ if ([System.IO.Path]::IsPathRooted($Venv)) {
   Write-Host "  .\$Venv\Scripts\activate" -ForegroundColor Green
 }
 Write-Host "  python -m enhanced_deforum_music_generator ui --port 7860" -ForegroundColor Green
+Write-Host "`nCanonical desktop product: RUN_ME.bat" -ForegroundColor Cyan

@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,30 +14,14 @@ function log(msg) {
   console.log(`[packaged-desktop-smoke] ${msg}`);
 }
 
-function resolveElectronBinary() {
-  const envPath = process.env.EDMG_STUDIO_ELECTRON_BINARY;
-  if (envPath && fs.existsSync(envPath)) return envPath;
-  const candidates = [
-    path.join(root, "node_modules", "electron", "dist", process.platform === "win32" ? "electron.exe" : "electron"),
-    path.join(root, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "Electron"),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return "";
-}
-
 function canLaunchElectron() {
-  if (!resolveElectronBinary()) {
-    return { ok: false, reason: "Electron binary unavailable (likely npm install --ignore-scripts without postinstall download)." };
-  }
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     const xvfb = "/usr/bin/xvfb-run";
     if (!fs.existsSync(xvfb)) {
-      return { ok: false, reason: "No DISPLAY/WAYLAND session and xvfb-run not available." };
+      return { ok: false, reason: "No DISPLAY/WAYLAND session and xvfb-run not available for unpacked desktop launch." };
     }
   }
-  return { ok: true, reason: "Electron launch supported" };
+  return { ok: true, reason: "Unpacked desktop launch supported" };
 }
 
 import { assertDesktopArtifacts, stageDesktopRelease } from './release-stage-lib.mjs';
@@ -48,6 +32,50 @@ function bundledResourcePaths(appDir) {
     backendManifest: path.join(appDir, "electron-resources", "backend", "backend-bundle-manifest.json"),
     ffmpegExe: path.join(appDir, "electron-resources", "bin", process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg"),
   };
+}
+
+function resolveUnpackedApp(outputDir) {
+  const candidates = [
+    path.join(outputDir, "win-unpacked", process.platform === "win32" ? "EDMG Studio.exe" : "EDMG Studio"),
+    path.join(outputDir, "linux-unpacked", "edmg-studio"),
+    path.join(outputDir, "mac", "EDMG Studio.app", "Contents", "MacOS", "EDMG Studio"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+async function buildUnpackedDesktopApp(appDir, outputDir) {
+  await fsp.rm(outputDir, { recursive: true, force: true });
+  const builderScript = path.join(root, "scripts", "run-electron-builder.mjs");
+  const result = spawnSync(
+    process.execPath,
+    [
+      builderScript,
+      "--dir",
+      `-c.directories.app=${appDir}`,
+      `-c.directories.output=${outputDir}`,
+    ],
+    {
+      cwd: root,
+      stdio: "inherit",
+      env: process.env,
+    },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`electron-builder --dir failed with exit code ${result.status}`);
+  }
+
+  const unpackedApp = resolveUnpackedApp(outputDir);
+  assert.ok(unpackedApp, `Unpacked app not found under ${outputDir}`);
+  return unpackedApp;
 }
 
 async function startMockBackend() {
@@ -67,51 +95,6 @@ async function startMockBackend() {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Unable to bind mock backend");
   return { server, port: address.port };
-}
-
-function buildProbeHtml({ fixtureFile, fixtureDir, expectedBackendUrl, stageDir }) {
-  const payload = JSON.stringify({ fixtureFile, fixtureDir, expectedBackendUrl, stageDir });
-  return `<!doctype html>
-<html>
-  <body>
-    <pre id="status">starting</pre>
-    <script>
-      const fixture = ${payload};
-      async function run() {
-        const out = {
-          ok: false,
-          bridgeAvailable: !!window.edmg,
-          backendUrlSync: null,
-          backendUrlAsync: null,
-          reveal: null,
-          open: null,
-          stageDir: fixture.stageDir,
-          errors: [],
-        };
-        try {
-          out.backendUrlSync = typeof window.edmg?.backendUrl === 'function' ? window.edmg.backendUrl() : null;
-          out.backendUrlAsync = typeof window.edmg?.getBackendUrl === 'function' ? await window.edmg.getBackendUrl() : null;
-          out.reveal = typeof window.edmg?.revealPath === 'function' ? await window.edmg.revealPath(fixture.fixtureFile) : null;
-          out.open = typeof window.edmg?.openPath === 'function' ? await window.edmg.openPath(fixture.fixtureDir) : null;
-          out.ok = Boolean(
-            out.bridgeAvailable &&
-            out.backendUrlSync === fixture.expectedBackendUrl &&
-            out.backendUrlAsync === fixture.expectedBackendUrl &&
-            out.reveal?.ok &&
-            out.open?.ok
-          );
-        } catch (error) {
-          out.errors.push(String(error && error.message ? error.message : error));
-        }
-        document.getElementById('status').textContent = JSON.stringify(out, null, 2);
-        if (window.__edmgTest?.writeReport) {
-          await window.__edmgTest.writeReport(out);
-        }
-      }
-      run();
-    </script>
-  </body>
-</html>`;
 }
 
 function buildIsolatedDesktopEnv(fixtureRoot) {
@@ -136,13 +119,18 @@ async function waitForFile(filePath, timeoutMs = 20000) {
 
 async function runStagedAppProbe() {
   const support = canLaunchElectron();
-  const stageManifest = await stageDesktopRelease();
+  const smokeStageDir = path.join(root, "release", "staged-app-smoke");
+  const smokeOutputDir = path.join(root, "release", "desktop-smoke-dist");
+  const stageManifest = await stageDesktopRelease({ outDir: smokeStageDir, clean: true });
   const appDir = stageManifest.stageDir;
+  const unpackedApp = await buildUnpackedDesktopApp(appDir, smokeOutputDir);
   const summary = {
     ok: true,
     skipped: !support.ok,
     reason: support.reason,
     appDir,
+    smokeOutputDir,
+    unpackedApp,
     stageManifestPath: path.join(appDir, '.edmg-stage', 'manifest.json'),
   };
   const resources = bundledResourcePaths(appDir);
@@ -169,29 +157,25 @@ async function runStagedAppProbe() {
   const fixtureFile = path.join(fixtureRoot, "demo.txt");
   await fsp.writeFile(fixtureFile, "packaged desktop smoke probe\n");
   const reportPath = path.join(fixtureRoot, "report.json");
-  const htmlPath = path.join(appDir, "dist-web", "packaged-smoke-probe.html");
   const isolatedEnv = buildIsolatedDesktopEnv(fixtureRoot);
 
   const { server, port } = await startMockBackend();
   const expectedBackendUrl = `http://127.0.0.1:${port}`;
-  await fsp.writeFile(htmlPath, buildProbeHtml({ fixtureFile, fixtureDir, expectedBackendUrl, stageDir: appDir }));
 
-  const electronBinary = resolveElectronBinary();
-  const args = ["."];
-  let cmd = electronBinary;
+  const args = [];
+  let cmd = unpackedApp;
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY && fs.existsSync("/usr/bin/xvfb-run")) {
     cmd = "/usr/bin/xvfb-run";
-    args.unshift("-a", electronBinary);
+    args.push("-a", unpackedApp);
   }
 
   log(`launching staged app probe using ${cmd}`);
   const child = spawn(cmd, args, {
-    cwd: appDir,
+    cwd: path.dirname(unpackedApp),
     env: {
       ...process.env,
       EDMG_STUDIO_TEST_MODE: "1",
       EDMG_STUDIO_TEST_SKIP_MIGRATION: "1",
-      EDMG_STUDIO_TEST_PAGE: htmlPath,
       EDMG_STUDIO_TEST_REPORT_PATH: reportPath,
       EDMG_STUDIO_TEST_PROBE_REVEAL_PATH: fixtureFile,
       EDMG_STUDIO_TEST_PROBE_OPEN_PATH: fixtureDir,
