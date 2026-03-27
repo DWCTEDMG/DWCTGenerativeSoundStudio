@@ -46,6 +46,11 @@ data/
 *_REPORT.md
 PATCH_*.txt
 TEST_REPORT.json
+/onnx_diffusers_doc.md
+/stability_platform_bundle.js
+/stability_v2beta_openapi.json
+/output/
+/tmp/
 
 # ----------------------------
 # External apps
