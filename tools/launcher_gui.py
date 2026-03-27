@@ -19,6 +19,7 @@ BACKEND_VENV = BACKEND_DIR / "venv"
 BUNDLED_FFMPEG = STUDIO_DIR / "electron-resources" / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
 DEFAULT_BACKEND_PORT = 7863
 DEFAULT_BACKEND_HOST = "127.0.0.1"
+DEFAULT_UI_PORT = 5173
 LAUNCHER_ENV_PATH = STUDIO_DIR / "launcher_env.json"
 BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json"
 SUPPORTED_PYTHON_MIN = (3, 10)
@@ -554,6 +555,8 @@ def _ensure_backend_env() -> tuple[str, int]:
         port = int(port_raw) if port_raw else DEFAULT_BACKEND_PORT
     except Exception:
         port = DEFAULT_BACKEND_PORT
+    if port == DEFAULT_UI_PORT:
+        port = DEFAULT_BACKEND_PORT
 
     os.environ["EDMG_STUDIO_BACKEND_HOST"] = host
     os.environ["EDMG_STUDIO_BACKEND_PORT"] = str(port)
@@ -712,17 +715,17 @@ def _tail_file(path: Path, max_bytes: int = 200_000) -> str:
 
 def _parse_backend_url_from_logs(text: str) -> tuple[str, int] | None:
     """Parse EDMG_BACKEND_URL marker from Electron logs."""
-    m = re.search(r"EDMG_BACKEND_URL=(https?://[^\s]+)", text)
-    if m:
+    for pattern in (
+        r"EDMG_BACKEND_URL=(https?://[^\s]+)",
+        r"\[backend\][^\n]*?(https?://(?:127\.0\.0\.1|localhost):\d{4,5})",
+    ):
+        m = re.search(pattern, text)
+        if not m:
+            continue
         u = m.group(1).strip().rstrip("/")
         m2 = re.search(r"^https?://([^:/]+):(\d+)", u)
         if m2:
             return m2.group(1), int(m2.group(2))
-
-    # Fallback: any likely localhost URL
-    m = re.search(r"https?://(?:127\.0\.0\.1|localhost):(\d{4,5})", text)
-    if m:
-        return "127.0.0.1", int(m.group(1))
     return None
 
 
@@ -1139,6 +1142,11 @@ class Launcher(tk.Tk):
         """Auto-pick a free backend port if current port is taken by something else."""
         host = self.backend_host
         port = int(self.backend_port)
+        if port == DEFAULT_UI_PORT:
+            self._log(f"Backend port {port} conflicts with the Studio UI port. Resetting to a backend-safe port…")
+            new_port = _find_free_port(host, DEFAULT_BACKEND_PORT, max_tries=50)
+            self._set_backend_host_port(host, new_port, reason="ui-port-conflict")
+            return
 
         # If it responds as our backend, keep it.
         if self._backend_health_ok(host, port):

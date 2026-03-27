@@ -22,6 +22,10 @@ export function createBackendRuntime({
   let currentBackendUrl = `http://${backendHost}:${backendPort}`;
   let backendProc = null;
 
+  function logBackendUrlMarker() {
+    console.log(`EDMG_BACKEND_URL=${currentBackendUrl}`);
+  }
+
   function getCurrentBackendUrl() {
     return currentBackendUrl;
   }
@@ -244,6 +248,7 @@ export function createBackendRuntime({
   }
 
   async function startBackendIfNeeded() {
+    logBackendUrlMarker();
     if ((process.env.EDMG_STUDIO_SPAWN_BACKEND ?? "1") === "0") {
       console.log("[edmg] spawn backend=false");
       return false;
@@ -251,6 +256,7 @@ export function createBackendRuntime({
 
     if (await probeBackend()) {
       console.log("[backend] already reachable:", currentBackendUrl);
+      logBackendUrlMarker();
       return true;
     }
 
@@ -350,6 +356,8 @@ export function createBackendRuntime({
       const stderrTail = tailFileSync(logPaths.stderrPath);
       if (stdoutTail) console.warn("[backend] stdout tail:\n" + stdoutTail);
       if (stderrTail) console.warn("[backend] stderr tail:\n" + stderrTail);
+    } else {
+      logBackendUrlMarker();
     }
 
     return ready;
