@@ -1,6 +1,0 @@
-# Full install: standard + extras
--r requirements.txt
-
-# Extras
-azure-storage-blob>=12.16.0
-boto3>=1.28.0

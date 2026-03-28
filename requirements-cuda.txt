@@ -1,2 +1,0 @@
-# CUDA convenience requirements
--r requirements.txt

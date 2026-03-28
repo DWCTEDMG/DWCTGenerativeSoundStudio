@@ -65,9 +65,8 @@ external/*
 
 
 # ----------------------------
-# Electron UI dependencies
+# Studio UI dependencies
 # ----------------------------
-desktop/electron/node_modules/
 node_modules/
 studio/edmg-studio/dist/
 studio/edmg-studio/dist-web/
