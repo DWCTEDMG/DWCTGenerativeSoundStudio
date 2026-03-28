@@ -80,14 +80,6 @@ def _run(cmd: Sequence[str], *, cwd: Optional[Path] = None, env: Optional[dict[s
     return int(proc.returncode)
 
 
-def _backend_env(env: Optional[dict[str, str]] = None) -> dict[str, str]:
-    merged = dict(env or os.environ.copy())
-    current = merged.get("PYTHONPATH", "").strip()
-    backend_str = str(BACKEND_ROOT)
-    merged["PYTHONPATH"] = backend_str if not current else os.pathsep.join([backend_str, current])
-    return merged
-
-
 def _pip(py: Path, args: Sequence[str], *, env: Optional[dict[str, str]] = None) -> int:
     return _run([str(py), "-m", "pip", *args], cwd=STUDIO_ROOT, env=env)
 
@@ -152,9 +144,9 @@ def _post_install(
         _run(
             [str(py), "-c", "import nltk; nltk.download('punkt', quiet=True); nltk.download('stopwords', quiet=True)"],
             cwd=STUDIO_ROOT,
-            env=_backend_env(env),
+            env=env,
         )
-        _run([str(py), "-c", "import spacy; print('spacy ok')"], cwd=STUDIO_ROOT, env=_backend_env(env))
+        _run([str(py), "-c", "import spacy; print('spacy ok')"], cwd=STUDIO_ROOT, env=env)
 
     if not skip_models and not skip_whisper:
         _run(
@@ -170,7 +162,7 @@ def _post_install(
                 ),
             ],
             cwd=STUDIO_ROOT,
-            env=_backend_env(env),
+            env=env,
         )
 
 
@@ -239,7 +231,6 @@ def verify() -> int:
             "print('deforum_music:', d.__file__)",
         ],
         cwd=STUDIO_ROOT,
-        env=_backend_env(),
     )
     if code != 0:
         return code
@@ -254,7 +245,6 @@ def verify() -> int:
             "assert 'W' in d and 'H' in d and 'prompts' in d",
         ],
         cwd=STUDIO_ROOT,
-        env=_backend_env(),
     )
     return int(code)
 
