@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Studio-local support installer for the vendored EDMG Core packages.
+"""
+scripts/edmg_installer.py
 
-This script is intentionally internal to EDMG Studio. It is used by Studio's
-setup/repair flow to install or repair the vendored EDMG engine packages inside
-the backend environment without relying on the retired root-level legacy
-installers.
+Deterministic installer used by:
+- install.ps1 / install.sh
+- bootstrap_all.py
+- installer_gui.py
+
+This installer *does not* manage GPU drivers. It can, however, install the
+appropriate PyTorch wheels (CPU or CUDA) into the EDMG venv.
+
+Examples:
+  python scripts/edmg_installer.py install --mode full --backend cpu  --venv venv
+  python scripts/edmg_installer.py install --mode full --backend cu121 --venv venv
+  python scripts/edmg_installer.py verify
 """
 
 from __future__ import annotations
@@ -17,8 +26,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 
-STUDIO_ROOT = Path(__file__).resolve().parents[1]
-BACKEND_ROOT = STUDIO_ROOT / "python_backend"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _is_windows() -> bool:
@@ -32,8 +40,8 @@ def _venv_python(venv_dir: Path) -> Path:
 def _resolve_path(path_value: str | Path) -> Path:
     path = Path(path_value).expanduser()
     if not path.is_absolute():
-        path = STUDIO_ROOT / path
-    return path.resolve()
+        path = REPO_ROOT / path
+    return path
 
 
 def _managed_env(cache_root: Optional[Path]) -> Optional[dict[str, str]]:
@@ -76,22 +84,41 @@ def _managed_env(cache_root: Optional[Path]) -> Optional[dict[str, str]]:
 
 
 def _run(cmd: Sequence[str], *, cwd: Optional[Path] = None, env: Optional[dict[str, str]] = None) -> int:
-    proc = subprocess.run(list(cmd), cwd=str(cwd) if cwd else None, env=env)
-    return int(proc.returncode)
+    p = subprocess.run(list(cmd), cwd=str(cwd) if cwd else None, env=env)
+    return int(p.returncode)
 
 
 def _pip(py: Path, args: Sequence[str], *, env: Optional[dict[str, str]] = None) -> int:
-    return _run([str(py), "-m", "pip", *args], cwd=STUDIO_ROOT, env=env)
+    return _run([str(py), "-m", "pip", *args], cwd=REPO_ROOT, env=env)
 
 
 def _ensure_venv(venv_dir: Path, *, env: Optional[dict[str, str]] = None) -> Path:
     py = _venv_python(venv_dir)
     if py.exists():
         return py
-    print(f"[edmg-core-installer] Creating venv: {venv_dir}")
-    if _run([sys.executable, "-m", "venv", str(venv_dir)], cwd=STUDIO_ROOT, env=env) != 0:
+    print(f"[edmg-installer] Creating venv: {venv_dir}")
+    if _run([sys.executable, "-m", "venv", str(venv_dir)], cwd=REPO_ROOT, env=env) != 0:
         raise RuntimeError("Failed to create venv")
     return _venv_python(venv_dir)
+
+
+def _select_requirements(mode: str) -> Path:
+    candidates = []
+    if mode == "minimal":
+        candidates.append(REPO_ROOT / "requirements-minimal.txt")
+    if mode == "standard":
+        candidates.append(REPO_ROOT / "requirements.txt")
+    if mode == "full":
+        candidates.append(REPO_ROOT / "requirements-full.txt")
+    if mode == "dev":
+        candidates.append(REPO_ROOT / "requirements-dev.txt")
+    # Fallback
+    candidates.append(REPO_ROOT / "requirements.txt")
+
+    for c in candidates:
+        if c.exists() and c.stat().st_size > 0:
+            return c
+    raise FileNotFoundError("No requirements file found.")
 
 
 def _torch_index_url(backend: str) -> str:
@@ -103,9 +130,16 @@ def _torch_index_url(backend: str) -> str:
     raise ValueError(f"Unsupported backend: {backend} (use cpu, cu118, cu121, cu124)")
 
 
+
+def _install_whisper_no_deps(py: Path, *, env: Optional[dict[str, str]] = None) -> int:
+    # Install Whisper without deps to avoid pulling a conflicting torch wheel.
+    # FFmpeg must be available separately.
+    return _pip(py, ["install", "--no-deps", "-U", "openai-whisper>=20230314"], env=env)
+
+
 def _install_torch(py: Path, backend: str, *, env: Optional[dict[str, str]] = None) -> int:
     url = _torch_index_url(backend)
-    print(f"[edmg-core-installer] Installing PyTorch ({backend}) from {url}")
+    print(f"[edmg-installer] Installing PyTorch ({backend}) from {url}")
     return _pip(
         py,
         [
@@ -121,47 +155,27 @@ def _install_torch(py: Path, backend: str, *, env: Optional[dict[str, str]] = No
     )
 
 
-def _install_whisper_no_deps(py: Path, *, env: Optional[dict[str, str]] = None) -> int:
-    return _pip(py, ["install", "--no-deps", "-U", "openai-whisper>=20230314"], env=env)
-
-
-def _editable_target(mode: str) -> str:
-    extras = ["core"]
-    if mode == "dev":
-        extras.append("test")
-    return f"{BACKEND_ROOT}[{','.join(extras)}]"
-
-
 def _post_install(
     py: Path,
     *,
     skip_corpora: bool,
     skip_models: bool,
-    skip_whisper: bool,
     env: Optional[dict[str, str]] = None,
 ) -> None:
+    # Best-effort lightweight post install steps.
     if not skip_corpora:
         _run(
             [str(py), "-c", "import nltk; nltk.download('punkt', quiet=True); nltk.download('stopwords', quiet=True)"],
-            cwd=STUDIO_ROOT,
+            cwd=REPO_ROOT,
             env=env,
         )
-        _run([str(py), "-c", "import spacy; print('spacy ok')"], cwd=STUDIO_ROOT, env=env)
+        _run([str(py), "-c", "import spacy; print('spacy ok')"], cwd=REPO_ROOT, env=env)
 
-    if not skip_models and not skip_whisper:
+    if not skip_models:
+        # Whisper cache corruption happens; keep best-effort.
         _run(
-            [
-                str(py),
-                "-c",
-                (
-                    "import importlib.util as u; "
-                    "spec=u.find_spec('whisper'); "
-                    "print('whisper_installed', bool(spec)); "
-                    "import sys; "
-                    "sys.exit(0) if not spec else None"
-                ),
-            ],
-            cwd=STUDIO_ROOT,
+            [str(py), "-c", "import importlib.util as u;\nspec=u.find_spec('whisper');\nprint('whisper_installed', bool(spec));\nimport sys;\nif not spec: sys.exit(0);\nimport whisper;\ntry:\n  whisper.load_model('base');\n  print('whisper_warmup_ok');\nexcept Exception as e:\n  print('whisper_warmup_error', e);\nsys.exit(0)"],
+            cwd=REPO_ROOT,
             env=env,
         )
 
@@ -191,25 +205,24 @@ def install(
         if _install_torch(py, backend, env=managed_env) != 0:
             return 1
 
-    target = _editable_target(mode)
-    print(f"[edmg-core-installer] Installing backend package from: {target}")
-    if _pip(py, ["install", "-e", target], env=managed_env) != 0:
+    req = _select_requirements(mode)
+    print(f"[edmg-installer] Installing requirements from: {req.name}")
+    if _pip(py, ["install", "-r", str(req)], env=managed_env) != 0:
         return 1
 
+    # Whisper is optional and only installed for full/dev by default.
     if mode in ("full", "dev") and not skip_whisper:
-        print("[edmg-core-installer] Installing Whisper (no-deps)")
+        print("[edmg-installer] Installing Whisper (no-deps)")
         if _install_whisper_no_deps(py, env=managed_env) != 0:
-            print("[edmg-core-installer] WARNING: Whisper install failed. Continuing.")
+            print("[edmg-installer] WARNING: Whisper install failed. Continuing.")
 
-    _post_install(
-        py,
-        skip_corpora=skip_corpora,
-        skip_models=skip_models,
-        skip_whisper=skip_whisper,
-        env=managed_env,
-    )
+    # Editable install so `src/` packages are importable everywhere
+    if _pip(py, ["install", "-e", "."], env=managed_env) != 0:
+        return 1
 
-    print("\n[edmg-core-installer] OK")
+    _post_install(py, skip_corpora=skip_corpora, skip_models=skip_models, env=managed_env)
+
+    print("\n[edmg-installer] OK")
     if resolved_venv:
         if _is_windows():
             print(f"  Activate: {resolved_venv / 'Scripts' / 'activate'}")
@@ -217,7 +230,9 @@ def install(
             print(f"  Activate: source {resolved_venv / 'bin' / 'activate'}")
     if cache_root:
         print(f"  Cache:    {_resolve_path(cache_root)}")
-    print("  Verify:   python studio/edmg-studio/scripts/edmg_core_installer.py verify")
+    print("  Run UI:   python -m enhanced_deforum_music_generator ui --port 7860")
+    print("  Deploy UI: python -m enhanced_deforum_music_generator ui --host 0.0.0.0 --port 7860")
+    print("  Verify:   python scripts/edmg_installer.py verify")
     return 0
 
 
@@ -230,11 +245,12 @@ def verify() -> int:
             "print('enhanced_deforum_music_generator:', e.__file__); "
             "print('deforum_music:', d.__file__)",
         ],
-        cwd=STUDIO_ROOT,
+        cwd=REPO_ROOT,
     )
     if code != 0:
         return code
 
+    # Verify public API + full Deforum template availability
     code = _run(
         [
             sys.executable,
@@ -244,34 +260,38 @@ def verify() -> int:
             "print('deforum_template_keys', len(d)); "
             "assert 'W' in d and 'H' in d and 'prompts' in d",
         ],
-        cwd=STUDIO_ROOT,
+        cwd=REPO_ROOT,
     )
     return int(code)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="edmg-core-installer")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    p = argparse.ArgumentParser(prog="edmg-installer")
+    sub = p.add_subparsers(dest="cmd", required=True)
 
-    install_parser = sub.add_parser("install", help="Install or repair the vendored EDMG Core packages")
-    install_parser.add_argument("--mode", default="standard", choices=["minimal", "standard", "full", "dev"])
-    install_parser.add_argument("--venv", default="", help="Optional venv dir (empty uses current Python)")
-    install_parser.add_argument("--cache-root", default="", help="Shared cache root for pip/HF/Torch/Whisper/temp files")
-    install_parser.add_argument("--skip-torch", action="store_true", default=False)
-    install_parser.add_argument("--backend", default="cpu", choices=["cpu", "cu118", "cu121", "cu124"])
-    install_parser.add_argument("--cuda", action="store_true", default=False, help="Deprecated alias for --backend cu121")
-    install_parser.add_argument("--cuda-version", default="", choices=["", "118", "121", "124"], help="Deprecated convenience alias")
-    install_parser.add_argument("--skip-corpora", action="store_true", default=False)
-    install_parser.add_argument("--skip-models", action="store_true", default=False)
-    install_parser.add_argument("--skip-whisper", action="store_true", default=False)
+    pi = sub.add_parser("install", help="Install dependencies + editable package")
+    pi.add_argument("--mode", default="full", choices=["minimal", "standard", "full", "dev"])
+    pi.add_argument("--venv", default="venv", help="Venv dir name (set empty to use current Python)")
+    pi.add_argument("--cache-root", default="", help="Shared cache root for pip/HF/Torch/Whisper/temp files")
+    pi.add_argument("--skip-torch", action="store_true", default=False)
+    pi.add_argument("--backend", default="cpu", choices=["cpu", "cu118", "cu121", "cu124"])
 
-    sub.add_parser("verify", help="Verify key EDMG Core imports and template generation")
+    # Back-compat flags
+    pi.add_argument("--cuda", action="store_true", default=False, help="(deprecated) same as --backend cu121")
+    pi.add_argument("--cuda-version", default="", choices=["", "118", "121", "124"], help="(optional) convenience alias")
 
-    args = parser.parse_args(argv)
+    pi.add_argument("--skip-corpora", action="store_true", default=False)
+    pi.add_argument("--skip-models", action="store_true", default=False)
+    pi.add_argument("--skip-whisper", action="store_true", default=False, help="Skip Whisper install (full/dev only)")
+
+    pv = sub.add_parser("verify", help="Verify key imports and CLIs")
+
+    args = p.parse_args(argv)
 
     if args.cmd == "install":
-        venv = args.venv.strip() if isinstance(args.venv, str) else ""
-        venv = venv or None
+        venv = args.venv.strip() if isinstance(args.venv, str) else "venv"
+        if venv == "":
+            venv = None
 
         backend = str(args.backend)
         if args.cuda_version:

@@ -1,74 +1,119 @@
-# EDMG Studio Monolith Repo
+# Enhanced Deforum Music Generator (EDMG) — Studio Canonical Repo
 
-This repository is the single authoritative source tree for EDMG Studio.
+This repo merges:
+- EDMG Studio, the primary desktop product
+- Standalone EDMG engine (Gradio UI + CLI + API)
+- Legacy A1111/engine integration paths
+- Installer/build scripts for advanced and legacy workflows
 
-Studio is not a sidecar anymore. The desktop shell, React frontend, FastAPI
-backend, vendored EDMG engine packages, setup flow, release packaging, and
-support tooling all converge on one product path:
+EDMG Studio is the authoritative product surface. Everything else in this repo
+should be treated as engine support, compatibility tooling, or archived
+reference material.
 
-- `studio/edmg-studio/`
+## Canonical entrypoints
 
-The older standalone-engine installers, duplicate Electron shell, and extra
-README entrypoints have been retired so the repo presents one product instead
-of multiple competing workflows.
-
-## Canonical launch
-
-Windows:
-
-```bat
+### 1) Launch EDMG Studio
+```bash
 RUN_ME.bat
 ```
 
-macOS/Linux:
-
+Or on macOS/Linux:
 ```bash
 ./run_me.sh
 ```
 
-Those launchers open the Studio dev launcher in `tools/launcher_gui.py`, which
-keeps the UI, backend, and `Studio Home` storage aligned with the same settings
-used by the packaged app.
+The launcher opens the canonical unified Studio flow:
+- installs Studio backend/UI dev dependencies when needed
+- starts EDMG Studio
+- keeps runtime data and caches under your chosen Studio home
+- lets Studio’s in-app Setup page handle Ollama, local OpenAI-compatible providers, ComfyUI Portable, model packs, and EDMG Core repair/install
 
-## Canonical product layout
+### 2) Use Studio Setup
+Inside Studio:
+- set **Studio Home** to `D:\...` if you want the full product off `C:\`
+- run **Full Setup** for Ollama + ComfyUI Portable
+- optionally install **EDMG Core** from the same Setup page for the fully unified workflow
+
+### 3) Release / validation
+
+For release operations, use:
+
+- [RELEASE.md](/D:/DWCTGenerativeSoundStudio/RELEASE.md)
+- [README_STUDIO.md](/D:/DWCTGenerativeSoundStudio/README_STUDIO.md)
+- [docs/STUDIO_RELEASE_RUNBOOK.md](/D:/DWCTGenerativeSoundStudio/docs/STUDIO_RELEASE_RUNBOOK.md)
+
+## Secondary / compatibility paths
+
+These still exist, but they are not the primary product entry:
+
+- `start.bat`
+- `start.sh`
+- `desktop/electron/`
+- standalone engine / Gradio workflows
+- archived UI prototypes in `examples/archive-ui/`
+
+### Engine install (secondary)
+Linux/Mac:
+```bash
+bash install.sh full cpu
+# or CUDA (example)
+bash install.sh full cu121
+```
+
+Windows:
+```powershell
+.\install.ps1 -Mode full -Cuda
+# or use the GUI installer to choose cu118/cu121/cu124
+
+# Example: keep the venv and caches on D:
+.\install.ps1 -Mode full -Backend cu121 -Venv D:\EDMG\venv -CacheRoot D:\EDMG\cache
+```
+
+### Run legacy standalone engine UI
+Linux/Mac:
+```bash
+./start.sh
+```
+
+Windows:
+```powershell
+.\start.bat
+```
+
+## UI default mode: Deforum JSON Expert
+
+The Gradio UI defaults to **“Deforum JSON Expert”** mode:
+- A full Deforum settings template is shown as editable JSON
+- EDMG generates audio-reactive schedules + prompts
+- Your edited template **overrides** the generated output keys when merged
+
+## Legacy desktop shell
+
+An older Electron shell still exists here:
+
+```
+desktop/electron
+```
+
+It is superseded by `studio/edmg-studio`, which is now the canonical desktop product.
+
+## A1111 / legacy integration
+
+This repo still contains legacy engine and integration paths, but it does **not**
+ship a bundled `a1111_extension/` folder anymore.
+
+If you need Automatic1111 integration, treat it as an external/legacy workflow
+alongside the standalone EDMG engine. The authoritative desktop product path is:
 
 - `studio/edmg-studio/`
-  Electron shell, preload, main-process runtime, React/Vite frontend, packaging
-  scripts, and release validation.
-- `studio/edmg-studio/python_backend/`
-  FastAPI backend plus the vendored `enhanced_deforum_music_generator` and
-  `deforum_music` engine packages that power planning, analysis, schedules, and
-  EDMG Core support.
-- `tools/launcher_gui.py`
-  Shared dev launcher and Studio Home bootstrap flow.
-- `packaging/windows/`
-  Windows-first release orchestration for the packaged Studio app.
 
-## Studio Home
+## Notes
 
-Studio separates the app install directory from the heavy runtime storage root.
-The `Studio Home` contains:
+- This project installs Python dependencies but does **not** install GPU drivers.
+- First run of the legacy A1111 path can take time because Stable Diffusion WebUI
+  creates and populates its own environment.
 
-- `data`
-- `models`
-- `cache`
-- `logs`
-- `external`
-- `electron`
+## Documentation
 
-That keeps large downloads, render caches, and external tools off the app
-install path and allows migration to another drive such as `D:\`.
-
-## Release and operator docs
-
-- [studio/edmg-studio/README.md](D:\DWCTGenerativeSoundStudio\studio\edmg-studio\README.md)
-- [RELEASE.md](D:\DWCTGenerativeSoundStudio\RELEASE.md)
-- [docs/STUDIO_RELEASE_RUNBOOK.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_RELEASE_RUNBOOK.md)
-- [docs/STUDIO_REPO_MAP.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_REPO_MAP.md)
-
-## Compatibility note
-
-Root-level Python import shims still exist for `enhanced_deforum_music_generator`
-and `deforum_music` so repo-root tests and helper scripts can resolve the
-vendored engine packages from the Studio backend tree. They are compatibility
-glue, not a separate product surface.
+- [AI integration design (API + local providers)](docs/AI_INTEGRATION.md)
+- [Studio repo map](docs/STUDIO_REPO_MAP.md)

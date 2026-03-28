@@ -82,8 +82,8 @@ def download_model_snapshot(
     """
     if snapshot_download is None:
         raise RuntimeError(
-            "huggingface_hub is not installed. Repair the Studio backend bundle or install "
-            "the backend extras from studio/edmg-studio/python_backend."
+            "huggingface_hub is not installed. Install it (and diffusers full deps) via: "
+            "python setup.py --mode full"
         )
 
     dest_dir.mkdir(parents=True, exist_ok=True)

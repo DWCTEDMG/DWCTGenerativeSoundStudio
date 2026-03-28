@@ -1,54 +1,55 @@
 # EDMG Studio Repo Map
 
-This repository now presents one product surface: EDMG Studio.
+This repo contains one primary product and several compatibility surfaces.
 
-## Canonical product tree
+## Canonical product
+
+The authoritative desktop product is:
 
 - `studio/edmg-studio/`
-  Canonical Electron desktop app.
-- `studio/edmg-studio/src/`
-  React/Vite frontend.
-- `studio/edmg-studio/main.mjs`, `preload.cjs`, `main-process/`
-  Desktop shell and runtime glue.
-- `studio/edmg-studio/python_backend/`
-  FastAPI backend plus the vendored EDMG engine packages.
-- `tools/launcher_gui.py`
-  Shared dev launcher and Studio Home bootstrap flow.
-- `packaging/windows/`
-  Windows-first packaged release automation.
 
-## Canonical entrypoints
+Its canonical launch path from the repo root is:
 
 - `RUN_ME.bat`
 - `./run_me.sh`
 
-## Internal support surfaces
+Its canonical runtime architecture is:
 
-These are still part of the monolith, but they are support tooling rather than
-separate user-facing products:
+1. Electron shell and preload in `studio/edmg-studio/`
+2. React/Vite frontend in `studio/edmg-studio/src/`
+3. FastAPI backend in `studio/edmg-studio/python_backend/`
+4. Shared launcher/runtime glue in `tools/launcher_gui.py`
+5. Windows packaging and release validation under `studio/edmg-studio/scripts/`, `packaging/windows/`, and `docs/STUDIO_RELEASE_RUNBOOK.md`
 
-- `studio/edmg-studio/scripts/`
-- `tools/edmgctl/`
-- `scripts/`
+## Secondary compatibility surfaces
 
-Important: these support paths exist to serve the Studio product. They are not
-alternative install flows.
+These remain supported for engine-specific or legacy workflows, but they are not the primary desktop product:
 
-## Legacy surfaces retired from the public repo entry
+- `start.bat`
+- `start.sh`
+- `install.ps1`
+- `install.sh`
+- `bootstrap_all.py`
+- `installer_gui.py`
+- `setup.py`
 
-The old standalone installers, duplicate desktop shell, and extra top-level
-README entrypoints have been removed. Archived or reference-only material that
-still remains should be treated as implementation detail, not as competing
-product surfaces.
+Treat them as standalone-engine and integration tooling around the broader EDMG codebase, not as equal alternatives to Studio.
+
+## Legacy/reference surfaces
+
+These are useful for reference, migration, or archived workflows:
+
+- `desktop/electron/`
+- `examples/archive-ui/`
+- `juce_example/`
 
 ## Release and validation
 
-Primary Studio docs:
+Use these for the Studio product:
 
-- [README.md](D:\DWCTGenerativeSoundStudio\README.md)
-- [studio/edmg-studio/README.md](D:\DWCTGenerativeSoundStudio\studio\edmg-studio\README.md)
-- [RELEASE.md](D:\DWCTGenerativeSoundStudio\RELEASE.md)
-- [docs/STUDIO_RELEASE_RUNBOOK.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_RELEASE_RUNBOOK.md)
+- `README_STUDIO.md`
+- `RELEASE.md`
+- `docs/STUDIO_RELEASE_RUNBOOK.md`
 
 Key validation commands run from `studio/edmg-studio/`:
 
