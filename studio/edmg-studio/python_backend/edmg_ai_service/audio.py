@@ -3,6 +3,27 @@ from __future__ import annotations
 from typing import Any
 
 
+def _coerce_scalar_float(value: Any, default: float = 0.0) -> float:
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    try:
+        arr = np.asarray(value, dtype=float).reshape(-1)
+    except Exception:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+    if arr.size == 0:
+        return float(default)
+    return float(arr[0])
+
+
 def lightweight_audio_features(path: str) -> dict[str, Any]:
     """Optional audio features.
 
@@ -25,7 +46,7 @@ def lightweight_audio_features(path: str) -> dict[str, Any]:
 
     return {
         "duration_s": duration,
-        "bpm": float(tempo),
+        "bpm": _coerce_scalar_float(tempo),
         "rms": rms,
         "spectral_centroid": centroid,
     }

@@ -10,6 +10,9 @@ class AudioConfig:
     max_duration: int = 1800  # 30 minutes default as requested
     cache_dir: Optional[str] = None
     sample_rate: int = 22050
+    beat_track_units: str = "time"
+    enable_noise_reduction: bool = False
+    normalize_audio: bool = False
 
 @dataclass
 class LyricsConfig:

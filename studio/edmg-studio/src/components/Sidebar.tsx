@@ -38,7 +38,7 @@ export default function Sidebar({
     <div className="sidebar">
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginBottom: 6 }}>
         <img
-          src="/studio-logo.png"
+          src="studio-logo.png"
           alt="EDMG Studio logo"
           style={{
             width: "100%",

@@ -193,6 +193,37 @@ def _stable_seed(project_id: str, variant_index: int, scene_index: int) -> int:
     h = hashlib.md5(f"{project_id}:{variant_index}:{scene_index}".encode("utf-8")).hexdigest()[:8]
     return int(h, 16)
 
+
+def _analysis_duration_s(analysis: Any) -> float | None:
+    if not isinstance(analysis, dict):
+        return None
+    features = analysis.get("features") if isinstance(analysis.get("features"), dict) else {}
+    candidates = (
+        analysis.get("duration_s"),
+        analysis.get("duration"),
+        features.get("duration_s"),
+        features.get("duration"),
+    )
+    for candidate in candidates:
+        try:
+            value = float(candidate)
+        except Exception:
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _resolved_project_duration_s(proj: Any, variant: dict[str, Any], scenes: list[dict[str, Any]]) -> float:
+    analysis_duration = _analysis_duration_s(getattr(proj, "meta", {}).get("analysis"))
+    if analysis_duration:
+        return float(analysis_duration)
+    if variant.get("duration_s"):
+        return float(variant.get("duration_s") or 0.0)
+    if scenes:
+        return float(scenes[-1].get("end_s") or 60.0)
+    return 60.0
+
 @app.get("/health", response_model=HealthResponse)
 def health():
     return HealthResponse(ok=True)
@@ -229,6 +260,51 @@ def _safe_name_tag(value: str | None, fallback: str = "default") -> str:
     return tag[:32] or fallback
 
 
+def _extract_comfy_checkpoint_names(object_info: dict[str, Any] | None) -> list[str]:
+    info = object_info or {}
+    loader = info.get("CheckpointLoaderSimple")
+    if not isinstance(loader, dict):
+        return []
+    input_info = loader.get("input")
+    if not isinstance(input_info, dict):
+        return []
+    required = input_info.get("required")
+    if not isinstance(required, dict):
+        return []
+    ckpt_field = required.get("ckpt_name")
+    if not isinstance(ckpt_field, list) or not ckpt_field:
+        return []
+    options = ckpt_field[0]
+    if not isinstance(options, list):
+        return []
+    return [str(item).strip() for item in options if str(item).strip()]
+
+
+def _resolve_comfy_checkpoint_name(
+    preferred: str | None,
+    *,
+    allow_auto_fallback: bool,
+) -> tuple[str, str | None]:
+    requested = str(preferred or settings.comfyui_checkpoint or "").strip()
+    available: list[str] = []
+    for url in settings.resolved_comfyui_urls():
+        try:
+            names = _extract_comfy_checkpoint_names(comfy.get_object_info(url))
+        except Exception:
+            continue
+        for name in names:
+            if name not in available:
+                available.append(name)
+    if requested and requested in available:
+        return requested, None
+    if allow_auto_fallback and available:
+        fallback = available[0]
+        if fallback != requested:
+            return fallback, requested or None
+        return fallback, None
+    return requested, None
+
+
 def _resolve_comfy_still_selection(
     *,
     model_id: str | None,
@@ -239,36 +315,38 @@ def _resolve_comfy_still_selection(
     conditioning_mode: str | None,
 ) -> dict[str, Any]:
     entry = _catalog_entry(model_id)
+    entry_data = entry if isinstance(entry, dict) else {}
     render = _catalog_render_metadata(entry)
 
-    chosen_checkpoint = str(
-        checkpoint
-        or render.get("checkpoint_name")
-        or entry.get("filename")
-        or settings.comfyui_checkpoint
+    explicit_checkpoint = str(checkpoint or "").strip()
+    catalog_checkpoint = str(render.get("checkpoint_name") or entry_data.get("filename") or "").strip()
+    chosen_checkpoint, fallback_checkpoint = _resolve_comfy_checkpoint_name(
+        explicit_checkpoint or catalog_checkpoint or settings.comfyui_checkpoint,
+        allow_auto_fallback=not explicit_checkpoint and not catalog_checkpoint,
     )
     family = str(workflow_family or "auto").strip().lower()
     if family not in {"auto", "txt2img", "controlnet"}:
         family = "auto"
 
     control_entry = _catalog_entry(controlnet_model)
+    control_entry_data = control_entry if isinstance(control_entry, dict) else {}
     control_render = _catalog_render_metadata(control_entry)
     controlnet_name = str(
         control_render.get("controlnet_name")
-        or control_entry.get("filename")
+        or control_entry_data.get("filename")
         or render.get("controlnet_name")
         or ""
     ).strip()
     if family == "auto":
-        if controlnet_name or reference_asset or (entry and str(entry.get("kind") or "") == "controlnet"):
+        if controlnet_name or reference_asset or str(entry_data.get("kind") or "") == "controlnet":
             family = "controlnet"
         else:
             family = str(render.get("workflow_family") or "txt2img").strip().lower()
     if family not in {"txt2img", "controlnet"}:
         family = "txt2img"
 
-    if family == "controlnet" and not controlnet_name and str(entry.get("kind") or "") == "controlnet":
-        controlnet_name = str(entry.get("filename") or "")
+    if family == "controlnet" and not controlnet_name and str(entry_data.get("kind") or "") == "controlnet":
+        controlnet_name = str(entry_data.get("filename") or "")
     if family == "controlnet" and not controlnet_name:
         raise UserFacingError(
             "No ControlNet model selected",
@@ -287,6 +365,7 @@ def _resolve_comfy_still_selection(
     return {
         "entry": entry,
         "checkpoint": chosen_checkpoint,
+        "checkpoint_fallback_from": fallback_checkpoint,
         "workflow_family": family,
         "controlnet_name": controlnet_name or None,
         "conditioning_mode": str(
@@ -306,26 +385,29 @@ def _resolve_comfy_motion_selection(
     svd_checkpoint: str | None = None,
 ) -> dict[str, Any]:
     entry = _catalog_entry(model_id)
+    entry_data = entry if isinstance(entry, dict) else {}
     render = _catalog_render_metadata(entry)
-    base_checkpoint = str(
-        checkpoint
-        or render.get("checkpoint_name")
-        or entry.get("filename")
-        or settings.comfyui_checkpoint
+    explicit_checkpoint = str(checkpoint or "").strip()
+    catalog_checkpoint = str(render.get("checkpoint_name") or entry_data.get("filename") or "").strip()
+    base_checkpoint, fallback_checkpoint = _resolve_comfy_checkpoint_name(
+        explicit_checkpoint or catalog_checkpoint or settings.comfyui_checkpoint,
+        allow_auto_fallback=not explicit_checkpoint and not catalog_checkpoint,
     )
 
     svd_entry = _catalog_entry(svd_model_id)
+    svd_entry_data = svd_entry if isinstance(svd_entry, dict) else {}
     svd_render = _catalog_render_metadata(svd_entry)
     resolved_svd = str(
         svd_checkpoint
         or svd_render.get("svd_checkpoint")
-        or svd_entry.get("filename")
+        or svd_entry_data.get("filename")
         or "svd_xt.safetensors"
     )
     return {
         "entry": entry,
         "svd_entry": svd_entry,
         "checkpoint": base_checkpoint,
+        "checkpoint_fallback_from": fallback_checkpoint,
         "svd_checkpoint": resolved_svd,
     }
 
@@ -795,7 +877,7 @@ def _internal_render_defaults_for_tier(tier: str, hw: dict[str, Any], *, duratio
             "steps": 15 if backend == "cpu" else 16,
             "cfg": 6.8,
             "keyframe_interval_s": 5.0,
-            "interpolation_engine": "fps" if backend == "cpu" else "auto",
+            "interpolation_engine": "auto",
             "temporal_mode": "keyframes",
             "temporal_steps": 12,
             "refine_every_n_frames": 2,
@@ -811,8 +893,8 @@ def _internal_render_defaults_for_tier(tier: str, hw: dict[str, Any], *, duratio
             "steps": 10,
             "cfg": 6.0,
             "keyframe_interval_s": 6.0,
-            "interpolation_engine": "fps",
-            "temporal_mode": "off",
+            "interpolation_engine": "auto",
+            "temporal_mode": "keyframes",
             "temporal_steps": 8,
             "refine_every_n_frames": 3,
             "anchor_strength": 0.12,
@@ -1463,13 +1545,24 @@ def setup_status():
 
     # ComfyUI availability
     try:
-        diag = comfy_pool.diagnose({"checkpoint": settings.comfyui_checkpoint})
+        resolved_checkpoint, fallback_from = _resolve_comfy_checkpoint_name(
+            settings.comfyui_checkpoint,
+            allow_auto_fallback=True,
+        )
+        diag = comfy_pool.diagnose({"checkpoint": resolved_checkpoint})
         comfy_ok = bool(diag.get("compatible") or diag.get("busy_compatible"))
-        comfy_hint = None if comfy_ok else "Install and start ComfyUI (Portable) or ComfyUI Desktop, then ensure it is reachable at the configured URL(s)."
+        if comfy_ok and fallback_from:
+            comfy_hint = (
+                f"Configured checkpoint `{fallback_from}` is unavailable; Studio will use `{resolved_checkpoint}` until the configured checkpoint is installed."
+            )
+        else:
+            comfy_hint = None if comfy_ok else "Install and start ComfyUI (Portable) or ComfyUI Desktop, then ensure it is reachable at the configured URL(s)."
         comfy_status = {
             "ok": comfy_ok,
             "url": settings.resolved_comfyui_urls()[0] if settings.resolved_comfyui_urls() else settings.comfyui_url,
-            "checkpoint": settings.comfyui_checkpoint,
+            "checkpoint": resolved_checkpoint,
+            "requested_checkpoint": settings.comfyui_checkpoint,
+            "checkpoint_fallback_from": fallback_from,
             "diagnose": diag,
             "portable_installed": comfy_portable_installed(settings.external_dir, settings.data_dir),
             "hint": comfy_hint,
@@ -2165,6 +2258,9 @@ def analyze_audio(project_id: str):
         trans = {"error": f"transcribe failed: {e}"}
 
     analysis = {"features": feats, "transcript": trans, "timestamp": time.time()}
+    duration_s = _analysis_duration_s(analysis)
+    if duration_s:
+        analysis["duration_s"] = float(duration_s)
     proj.meta["analysis"] = analysis
     store.save(proj)
     return {"ok": True, "analysis": analysis}
@@ -3346,6 +3442,109 @@ def _local_plan_from_project(proj: Any, *, title: str, style_prefs: str, num_var
     return {"title": title, "duration_s": float(getattr(analysis_obj, "duration", 0.0) or 0.0) or 60.0, "variants": variants, "source": "local"}
 
 
+def _coerce_scene_time(raw: Any, fallback: float) -> float:
+    try:
+        return max(0.0, float(raw))
+    except Exception:
+        return max(0.0, float(fallback))
+
+
+def _normalize_plan_scene_list(
+    scenes: Any,
+    *,
+    duration_s: float | None,
+    max_scenes: int,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    source = scenes if isinstance(scenes, list) else []
+    for index, raw_scene in enumerate(source):
+        if not isinstance(raw_scene, dict):
+            continue
+        start_s = _coerce_scene_time(raw_scene.get("start_s"), float(index))
+        end_s = _coerce_scene_time(raw_scene.get("end_s"), start_s + 1.0)
+        if end_s <= start_s:
+            end_s = start_s + 0.5
+        scene = dict(raw_scene)
+        scene["start_s"] = start_s
+        scene["end_s"] = end_s
+        scene["prompt"] = str(raw_scene.get("prompt") or "").strip() or "Cinematic image sequence with a coherent subject and controlled atmosphere."
+        scene["negative_prompt"] = str(raw_scene.get("negative_prompt") or "blurry, low quality, watermark, text, logo").strip()
+        normalized.append(scene)
+
+    normalized.sort(key=lambda scene: (_coerce_scene_time(scene.get("start_s"), 0.0), _coerce_scene_time(scene.get("end_s"), 0.0)))
+
+    if not normalized:
+        if duration_s and duration_s > 0:
+            return [
+                {
+                    "start_s": 0.0,
+                    "end_s": float(duration_s),
+                    "prompt": "Cinematic image sequence with a coherent subject and controlled atmosphere.",
+                    "negative_prompt": "blurry, low quality, watermark, text, logo",
+                }
+            ]
+        return []
+
+    limit = max(1, int(max_scenes or len(normalized)))
+    if len(normalized) > limit:
+        normalized = normalized[:limit]
+
+    final_duration = float(duration_s or 0.0)
+    if final_duration <= 0:
+        final_duration = max(_coerce_scene_time(scene.get("end_s"), 0.0) for scene in normalized)
+    if final_duration <= 0:
+        final_duration = max(0.5, float(len(normalized)))
+
+    carry_start = 0.0
+    for index, scene in enumerate(normalized):
+        scene["start_s"] = carry_start
+        if index == len(normalized) - 1:
+            scene["end_s"] = max(carry_start + 0.05, final_duration)
+        else:
+            proposed_end = _coerce_scene_time(scene.get("end_s"), carry_start + 0.5)
+            scene["end_s"] = max(carry_start + 0.05, min(proposed_end, final_duration))
+        carry_start = float(scene["end_s"])
+
+    return normalized
+
+
+def _normalize_plan_payload(
+    plan: dict[str, Any],
+    *,
+    requested_variants: int,
+    requested_max_scenes: int,
+    duration_s_hint: float | None,
+) -> dict[str, Any]:
+    normalized = dict(plan or {})
+    variants_raw = normalized.get("variants") if isinstance(normalized.get("variants"), list) else []
+    variants: list[dict[str, Any]] = []
+    limit = max(1, int(requested_variants or 1))
+
+    for raw_variant in list(variants_raw)[:limit]:
+        if not isinstance(raw_variant, dict):
+            continue
+        variant = dict(raw_variant)
+        variant_duration = _coerce_scene_time(
+            raw_variant.get("duration_s") or normalized.get("duration_s") or duration_s_hint,
+            duration_s_hint or 0.0,
+        )
+        variant["duration_s"] = variant_duration
+        variant["scenes"] = _normalize_plan_scene_list(
+            raw_variant.get("scenes"),
+            duration_s=variant_duration or duration_s_hint,
+            max_scenes=requested_max_scenes,
+        )
+        variants.append(variant)
+
+    normalized["variants"] = variants
+    if duration_s_hint and duration_s_hint > 0:
+        normalized["duration_s"] = float(duration_s_hint)
+    elif variants:
+        normalized["duration_s"] = max(_coerce_scene_time((variant or {}).get("duration_s"), 0.0) for variant in variants)
+    normalized["source"] = str(normalized.get("source") or "local")
+    return normalized
+
+
 @app.post("/v1/projects/{project_id}/plan")
 def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
     proj = store.get(project_id)
@@ -3400,6 +3599,14 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
             style_prefs=req.style_prefs or "",
             num_variants=req.num_variants,
             max_scenes=req.max_scenes,
+        )
+
+    if isinstance(plan, dict):
+        plan = _normalize_plan_payload(
+            plan,
+            requested_variants=req.num_variants,
+            requested_max_scenes=req.max_scenes,
+            duration_s_hint=_analysis_duration_s(analysis),
         )
 
     proj.meta["last_plan"] = plan
@@ -4160,12 +4367,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         _progress("starting", 0, estimated_total, "Starting proxy draft render")
         variant2 = dict(variant)
         variant2["index"] = variant_index
-        variant2["duration_s"] = float(
-            proj.meta.get("analysis", {}).get("duration_s")
-            or variant.get("duration_s")
-            or scenes[-1].get("end_s")
-            or 60.0
-        )
+        variant2["duration_s"] = _resolved_project_duration_s(proj, variant, scenes)
 
         out = render_internal_proxy_video_variant(
             ffmpeg_path=settings.ffmpeg_path,
@@ -4324,12 +4526,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         _progress("starting", 0, estimated_total, "Starting hosted Stability render")
         variant2 = dict(variant)
         variant2["index"] = variant_index
-        variant2["duration_s"] = float(
-            proj.meta.get("analysis", {}).get("duration_s")
-            or variant.get("duration_s")
-            or scenes[-1].get("end_s")
-            or 60.0
-        )
+        variant2["duration_s"] = _resolved_project_duration_s(proj, variant, scenes)
 
         out = render_stability_hosted_video_variant(
             ffmpeg_path=settings.ffmpeg_path,
@@ -4466,12 +4663,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
 
     variant2 = dict(variant)
     variant2["index"] = int(payload.get("variant_index", 0))
-    variant2["duration_s"] = float(
-        proj.meta.get("analysis", {}).get("duration_s")
-        or variant.get("duration_s")
-        or scenes[-1].get("end_s")
-        or 60.0
-    )
+    variant2["duration_s"] = _resolved_project_duration_s(proj, variant, scenes)
 
     out = render_internal_video_variant(
         ffmpeg_path=settings.ffmpeg_path,
@@ -4791,12 +4983,7 @@ def _proxy_render_preflight_data(
         resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
     )
 
-    duration_s = float(
-        proj.meta.get("analysis", {}).get("duration_s")
-        or variant.get("duration_s")
-        or scenes[-1].get("end_s")
-        or 60.0
-    )
+    duration_s = _resolved_project_duration_s(proj, variant, scenes)
     total_frames = int(math.ceil(duration_s * max(1, int(settings_obj.fps_render))))
     hw = _hardware_profile()
     tier_plan = _build_internal_render_plan(hw, requested_tier=str(payload.get("render_tier") or "auto"), duration_s=duration_s)
@@ -4824,7 +5011,7 @@ def _proxy_render_preflight_data(
         "model_path": None,
         "duration_s": duration_s,
         "estimated_frames": total_frames,
-        "estimated_keyframes": max(1, len(scenes)),
+        "estimated_keyframes": max(1, len(_scene_keyframe_times(scenes, settings_obj.keyframe_interval_s))),
         "device": str(tier_plan.get("device_preference") or "cpu"),
         "hardware": hw,
         "tier_plan": tier_plan,
@@ -4918,12 +5105,7 @@ def _hosted_render_preflight_data(
         resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
     )
 
-    duration_s = float(
-        proj.meta.get("analysis", {}).get("duration_s")
-        or variant.get("duration_s")
-        or scenes[-1].get("end_s")
-        or 60.0
-    )
+    duration_s = _resolved_project_duration_s(proj, variant, scenes)
     total_frames = int(math.ceil(duration_s * max(1, int(settings_obj.fps_render))))
     keyframes = max(1, len(_scene_keyframe_times(scenes, settings_obj.keyframe_interval_s)))
     hw = _hardware_profile()
@@ -5005,15 +5187,10 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         raise
 
     scenes = variant.get("scenes") or []
-    duration_s = float(
-        proj.meta.get("analysis", {}).get("duration_s")
-        or variant.get("duration_s")
-        or scenes[-1].get("end_s")
-        or 60.0
-    )
+    duration_s = _resolved_project_duration_s(proj, variant, scenes)
     fps_render = max(1, int(settings_obj.fps_render))
     total_frames = int(math.ceil(duration_s * fps_render))
-    keyframes = max(1, len(scenes))
+    keyframes = max(1, len(_scene_keyframe_times(scenes, settings_obj.keyframe_interval_s)))
     hw = _hardware_profile()
     tier_plan = _build_internal_render_plan(hw, requested_tier=str(payload.get("render_tier") or settings_obj.render_tier or "auto"), duration_s=duration_s)
     tier_plan["chunk_plan"] = _build_render_chunk_plan(hw, applied_tier=str(tier_plan.get("applied_tier") or "draft"), duration_s=duration_s, total_frames=total_frames, fps_render=fps_render, render_mode="diffusion")
@@ -5258,7 +5435,7 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
 
 
 def _recommend_pipeline(project_id: str, preset: str, mode: str = "auto", engine: str = "auto") -> dict[str, Any]:
-    ckpt = settings.comfyui_checkpoint
+    ckpt, _fallback_from = _resolve_comfy_checkpoint_name(settings.comfyui_checkpoint, allow_auto_fallback=True)
     mode_l = (mode or "auto").lower().strip()
     engine_l = (engine or "auto").lower().strip()
 

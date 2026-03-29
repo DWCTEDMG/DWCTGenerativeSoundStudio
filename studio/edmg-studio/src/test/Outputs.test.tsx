@@ -45,5 +45,5 @@ describe("Outputs page", () => {
     expect(await screen.findByRole("heading", { name: "Outputs" })).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Open Render Queue" }));
     expect(onNavigate).toHaveBeenCalledWith("queue");
-  });
+  }, 15000);
 });

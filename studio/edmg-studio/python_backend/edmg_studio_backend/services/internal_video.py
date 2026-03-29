@@ -954,6 +954,23 @@ def _motion_params_at_time(t: float, timeline: dict[str, Any] | None) -> dict[st
             return out
     return None
 
+
+def _camera_keyframes_are_actionable(points: list[dict[str, Any]]) -> bool:
+    if len(points) >= 2:
+        return True
+    if len(points) != 1:
+        return False
+    point = points[0]
+    return any(
+        abs(float(point.get(key, default)) - float(default)) > 1e-4
+        for key, default in (
+            ("zoom", 1.0),
+            ("pan_x", 0.0),
+            ("pan_y", 0.0),
+            ("rotation_deg", 0.0),
+        )
+    )
+
 def _camera_at_time(
     t: float,
     *,
@@ -974,7 +991,7 @@ def _camera_at_time(
             if isinstance(kfs, list):
                 pts = [x for x in kfs if isinstance(x, dict) and "t" in x]
                 pts.sort(key=lambda d: float(d.get("t", 0.0)))
-                if pts:
+                if _camera_keyframes_are_actionable(pts):
                     if t <= float(pts[0]["t"]):
                         p = pts[0]
                         return float(p.get("zoom", 1.0)), float(p.get("pan_x", 0.0)), float(p.get("pan_y", 0.0)), float(p.get("rotation_deg", 0.0))
@@ -1065,7 +1082,7 @@ def _build_checkpoint_emitter(
             "final_exists": False,
         },
     }
-    last_emitted = {"stage": None, "completed_frames": -1}
+    last_emitted = {"stage": None, "completed_frames": -1, "ts": 0.0}
 
     def _emit(
         *,
@@ -1109,6 +1126,7 @@ def _build_checkpoint_emitter(
         state["outputs"] = outputs
 
         should_emit = force or final
+        now = time.time()
         if not should_emit:
             if last_emitted["stage"] != stage:
                 should_emit = True
@@ -1118,12 +1136,18 @@ def _build_checkpoint_emitter(
                 should_emit = True
             elif completed_frames > 0 and (completed_frames % max(1, frames_per_chunk) == 0):
                 should_emit = True
+            elif frame_event and completed_frames != int(last_emitted["completed_frames"]):
+                if completed_frames <= max(12, fps_render * 8):
+                    should_emit = True
+                elif (now - float(last_emitted["ts"] or 0.0)) >= 1.0:
+                    should_emit = True
         if should_emit:
             _write_runtime_checkpoint(checkpoint_json, state)
             if checkpoint_fn:
                 checkpoint_fn(dict(state))
             last_emitted["stage"] = str(stage)
             last_emitted["completed_frames"] = int(completed_frames)
+            last_emitted["ts"] = float(now)
         return dict(state)
 
     return _emit
@@ -1297,7 +1321,9 @@ def render_internal_video_variant(
                 continue
 
             a, b, w = _key_times_bracket(key_times, t)
-            src = key_imgs[a]
+            src = key_imgs[a].convert("RGB")
+            if a != b:
+                src = Image.blend(src, key_imgs[b].convert("RGB"), float(w))
             zoom, pan_x, pan_y, rot = _camera_at_time(t, timeline=timeline, fallback_interval_s=settings.keyframe_interval_s)
             fr = _ken_burns_frame(src, out_w, out_h, zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rot)
             frame_paths.append(_save_frame(fr, fi, t))

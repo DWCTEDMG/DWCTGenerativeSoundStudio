@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+
 def ensure_ffmpeg(ffmpeg_path: str) -> str:
     if os.path.isabs(ffmpeg_path) and Path(ffmpeg_path).exists():
         return ffmpeg_path
@@ -12,6 +13,75 @@ def ensure_ffmpeg(ffmpeg_path: str) -> str:
     if not found:
         raise RuntimeError("FFmpeg not found. Install FFmpeg and ensure it's on PATH, or set EDMG_FFMPEG_PATH.")
     return found
+
+
+def ensure_ffprobe(ffmpeg_path: str) -> str:
+    ffmpeg = Path(ensure_ffmpeg(ffmpeg_path))
+    ffprobe_name = "ffprobe.exe" if ffmpeg.suffix.lower() == ".exe" else "ffprobe"
+    sibling = ffmpeg.with_name(ffprobe_name)
+    if sibling.exists():
+        return str(sibling)
+    found = shutil.which("ffprobe")
+    if not found:
+        raise RuntimeError("ffprobe not found. Install FFmpeg with ffprobe available on PATH.")
+    return found
+
+
+def _probe_duration_seconds(ffmpeg_path: str, media_path: Path) -> float | None:
+    if not media_path.exists():
+        return None
+    ffprobe = ensure_ffprobe(ffmpeg_path)
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(media_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return None
+    try:
+        duration = float((proc.stdout or "").strip())
+    except Exception:
+        return None
+    return duration if duration > 0 else None
+
+
+def _normalize_video_duration(
+    ffmpeg_path: str,
+    *,
+    video_mp4: Path,
+    target_duration_s: float,
+    actual_duration_s: float,
+) -> None:
+    ffmpeg = ensure_ffmpeg(ffmpeg_path)
+    temp_mp4 = video_mp4.with_name(f"{video_mp4.stem}.durationfix{video_mp4.suffix}")
+    vf_parts: list[str] = []
+    if actual_duration_s < target_duration_s:
+        vf_parts.append(f"tpad=stop_mode=clone:stop_duration={max(0.0, target_duration_s - actual_duration_s):.6f}")
+    vf_parts.append(f"trim=duration={target_duration_s:.6f}")
+    vf_parts.append("setpts=PTS-STARTPTS")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(video_mp4),
+        "-vf",
+        ",".join(vf_parts),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(temp_mp4),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"FFmpeg duration normalization failed: {proc.stderr[:2000]}")
+    temp_mp4.replace(video_mp4)
 
 def assemble_slideshow(
     ffmpeg_path: str,
@@ -198,6 +268,21 @@ def interpolate_video_fps(
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg interpolate failed: {proc.stderr[:2000]}")
+    if use_mi:
+        input_duration = _probe_duration_seconds(ffmpeg_path, in_mp4)
+        output_duration = _probe_duration_seconds(ffmpeg_path, out_mp4)
+        tolerance_s = max(0.03, (1.0 / max(1, fps_out)) + 0.005)
+        if (
+            input_duration is not None
+            and output_duration is not None
+            and abs(output_duration - input_duration) > tolerance_s
+        ):
+            _normalize_video_duration(
+                ffmpeg_path,
+                video_mp4=out_mp4,
+                target_duration_s=input_duration,
+                actual_duration_s=output_duration,
+            )
 
 def mux_audio(
     ffmpeg_path: str,

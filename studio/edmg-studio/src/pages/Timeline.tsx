@@ -216,6 +216,7 @@ export default function Timeline({}: PageProps) {
   const [selected, setSelected] = useState<Selected>(null);
 
   const [audioUrl, setAudioUrl] = useState<string>("");
+  const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const [peaks, setPeaks] = useState<number[]>([]);
@@ -271,6 +272,10 @@ export default function Timeline({}: PageProps) {
   useEffect(() => {
     if (!audioUrl) { setPeaks([]); return; }
     fetchAudioPeaks(audioUrl, 800).then(setPeaks).catch(() => setPeaks([]));
+  }, [audioUrl]);
+
+  useEffect(() => {
+    setIsPlaying(false);
   }, [audioUrl]);
 
   // draw waveform
@@ -801,7 +806,11 @@ export default function Timeline({}: PageProps) {
   const playPause = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) a.play().catch(() => {}); else a.pause();
+    if (a.paused) {
+      a.play().catch(() => {});
+    } else {
+      a.pause();
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -854,7 +863,7 @@ export default function Timeline({}: PageProps) {
             <input type="number" step={0.1} value={playheadS} onChange={(e) => setPlayheadS(Number(e.target.value))} style={{ width: 110 }} />
             <label className="small">px/s</label>
             <input type="number" step={5} value={pxPerSecond} onChange={(e) => setPxPerSecond(Number(e.target.value))} style={{ width: 90 }} />
-            <button className="secondary" onClick={playPause}>{audioRef.current?.paused ? "Play" : "Pause"}</button>
+            <button className="secondary" onClick={playPause}>{isPlaying ? "Pause" : "Play"}</button>
             <button className="secondary" onClick={() => { setSelected(null); }}>Clear selection</button>
             <div className="small" style={{ opacity: 0.8 }}>duration ≈ {durationS.toFixed(2)}s</div>
           </div>
@@ -869,7 +878,17 @@ export default function Timeline({}: PageProps) {
             />
           </div>
 
-          {audioUrl ? <audio ref={audioRef} src={audioUrl} controls style={{ width: "100%", marginTop: 10 }} /> : <div className="small" style={{ opacity: 0.75, marginTop: 10 }}>No audio uploaded for this project.</div>}
+          {audioUrl ? (
+            <audio
+              ref={audioRef}
+              src={audioUrl}
+              controls
+              style={{ width: "100%", marginTop: 10 }}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onEnded={() => setIsPlaying(false)}
+            />
+          ) : <div className="small" style={{ opacity: 0.75, marginTop: 10 }}>No audio uploaded for this project.</div>}
 
           <div style={{ marginTop: 14, fontWeight: 900 }}>Tracks</div>
 

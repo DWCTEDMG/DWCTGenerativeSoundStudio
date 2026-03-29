@@ -32,6 +32,61 @@ function resolveAudioFixture() {
   return fs.existsSync(candidate) ? candidate : "";
 }
 
+async function createSyntheticAudioFixture(targetPath, {
+  durationSeconds = 8,
+  sampleRate = 44100,
+  channels = 2,
+  frequencyHz = 110,
+  amplitude = 0.28,
+} = {}) {
+  const totalFrames = Math.max(1, Math.floor(durationSeconds * sampleRate));
+  const bytesPerSample = 2;
+  const blockAlign = channels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = totalFrames * blockAlign;
+  const buffer = Buffer.alloc(44 + dataSize);
+
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bytesPerSample * 8, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+
+  for (let frame = 0; frame < totalFrames; frame += 1) {
+    const t = frame / sampleRate;
+    const envelope = Math.min(1, frame / (sampleRate * 0.2), (totalFrames - frame) / (sampleRate * 0.2));
+    const left = Math.sin(2 * Math.PI * frequencyHz * t) * amplitude * envelope;
+    const right = Math.sin(2 * Math.PI * (frequencyHz * 1.5) * t) * amplitude * envelope;
+    const samples = [left, right];
+    for (let channel = 0; channel < channels; channel += 1) {
+      const sample = samples[channel % samples.length];
+      const clamped = Math.max(-1, Math.min(1, sample));
+      buffer.writeInt16LE(Math.round(clamped * 32767), 44 + (frame * channels + channel) * bytesPerSample);
+    }
+  }
+
+  await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+  await fsp.writeFile(targetPath, buffer);
+  return targetPath;
+}
+
+async function ensureAudioFixture() {
+  const existing = resolveAudioFixture();
+  if (existing) return { audioFixture: existing, generated: false };
+
+  const fixturePath = path.join(os.tmpdir(), "edmg-packaged-customer-flow.wav");
+  await createSyntheticAudioFixture(fixturePath);
+  return { audioFixture: fixturePath, generated: true };
+}
+
 function chooseHomeRoot() {
   const preferred = process.env.EDMG_STUDIO_PROOF_ROOT;
   if (preferred) return preferred;
@@ -228,8 +283,8 @@ async function killProcessTree(child) {
 async function main() {
   const appExe = resolvePackagedApp();
   assert.ok(appExe, "Packaged app not found. Run npm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
-  const audioFixture = resolveAudioFixture();
-  assert.ok(audioFixture, "Audio fixture not found. Set EDMG_STUDIO_AUDIO_FIXTURE.");
+  const { audioFixture, generated: generatedAudioFixture } = await ensureAudioFixture();
+  assert.ok(audioFixture, "Audio fixture not found and synthetic fallback generation failed.");
   const audioBytes = (await fsp.stat(audioFixture)).size;
   const heavyRequestTimeoutMs = Math.max(
     DEFAULT_HEAVY_REQUEST_TIMEOUT_MS,
@@ -252,6 +307,9 @@ async function main() {
   const baseUrl = `http://127.0.0.1:${port}`;
 
   log(`launching ${appExe}`);
+  if (generatedAudioFixture) {
+    log(`generated synthetic audio fixture at ${audioFixture}`);
+  }
   log(`using heavy request timeout ${heavyRequestTimeoutMs}ms for ${path.basename(audioFixture)} (${audioBytes} bytes)`);
   const child = spawn(appExe, [], {
     cwd: path.dirname(appExe),

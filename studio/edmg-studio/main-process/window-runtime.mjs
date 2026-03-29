@@ -58,13 +58,13 @@ export function createWindowRuntime({
   }
 
   async function loadRenderer(win) {
-    if (testMode && testReportPath) {
-      await win.loadURL("data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Cbody%3Eedmg%20test%20mode%3C%2Fbody%3E%3C%2Fhtml%3E");
+    if (testMode && testPage) {
+      await win.loadURL(pathToFileURL(testPage).toString());
       return;
     }
 
-    if (testMode && testPage) {
-      await win.loadURL(pathToFileURL(testPage).toString());
+    if (testMode && testReportPath) {
+      await win.loadURL("data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Cbody%3Eedmg%20test%20mode%3C%2Fbody%3E%3C%2Fhtml%3E");
       return;
     }
 
@@ -92,7 +92,7 @@ export function createWindowRuntime({
   }
 
   async function runWindowTestProbe(win) {
-    if (!testMode || !testReportPath) return;
+    if (!testMode || !testReportPath || testPage) return;
 
     const probeSource = JSON.stringify({
       revealPath: testProbeRevealPath || "",

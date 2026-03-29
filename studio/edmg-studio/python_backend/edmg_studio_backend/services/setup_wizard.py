@@ -90,6 +90,9 @@ def _ollama_base(url: str) -> str:
 
 
 def _managed_ollama_models_dir(models_dir: Path) -> Path:
+    explicit = str(os.environ.get("OLLAMA_MODELS") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
     return (models_dir / "ollama").resolve()
 
 
