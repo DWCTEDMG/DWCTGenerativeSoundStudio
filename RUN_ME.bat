@@ -1,29 +1,4 @@
 @echo off
 setlocal
 cd /d %~dp0
-
-if defined EDMG_STUDIO_PYTHON (
-  "%EDMG_STUDIO_PYTHON%" -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
-  if %errorlevel%==0 (
-    "%EDMG_STUDIO_PYTHON%" tools\launcher_gui.py
-    goto :eof
-  )
-)
-
-where py >nul 2>nul
-if %errorlevel%==0 (
-  py -3.13 -c "import sys" >nul 2>nul && (py -3.13 tools\launcher_gui.py & goto :eof)
-  py -3.12 -c "import sys" >nul 2>nul && (py -3.12 tools\launcher_gui.py & goto :eof)
-  py -3.11 -c "import sys" >nul 2>nul && (py -3.11 tools\launcher_gui.py & goto :eof)
-  py -3.10 -c "import sys" >nul 2>nul && (py -3.10 tools\launcher_gui.py & goto :eof)
-)
-
-where python >nul 2>nul
-if %errorlevel%==0 (
-  python -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul && (python tools\launcher_gui.py & goto :eof)
-)
-
-echo Could not find a supported Python interpreter.
-echo EDMG Studio requires Python 3.10 - 3.13 for the dev launcher.
-echo If you already have one installed, set EDMG_STUDIO_PYTHON to that python.exe and run again.
-pause
+call "%~dp0studio\edmg-studio\RUN_ME.bat"

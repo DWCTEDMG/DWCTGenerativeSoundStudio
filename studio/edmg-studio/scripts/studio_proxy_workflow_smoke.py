@@ -11,14 +11,10 @@ from fastapi.testclient import TestClient
 
 import sys
 
-_ROOT = Path(__file__).resolve().parents[1]
-_BACKEND = _ROOT / 'studio' / 'edmg-studio' / 'python_backend'
+_STUDIO_ROOT = Path(__file__).resolve().parents[1]
+_BACKEND = _STUDIO_ROOT / 'python_backend'
 if _BACKEND.exists() and str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
-if str(_ROOT / 'src') not in sys.path:
-    sys.path.insert(0, str(_ROOT / 'src'))
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
 
 from edmg_studio_backend import app as studio_app
 from edmg_studio_backend.services import internal_video as internal_video_service

@@ -12,9 +12,9 @@ This repository now presents one product surface: EDMG Studio.
   Desktop shell and runtime glue.
 - `studio/edmg-studio/python_backend/`
   FastAPI backend plus the vendored EDMG engine packages.
-- `tools/launcher_gui.py`
+- `studio/edmg-studio/tools/launcher_gui.py`
   Shared dev launcher and Studio Home bootstrap flow.
-- `packaging/windows/`
+- `studio/edmg-studio/packaging/windows/`
   Windows-first packaged release automation.
 
 ## Canonical entrypoints
@@ -28,8 +28,7 @@ These are still part of the monolith, but they are support tooling rather than
 separate user-facing products:
 
 - `studio/edmg-studio/scripts/`
-- `tools/edmgctl/`
-- `scripts/`
+- `studio/edmg-studio/tools/edmgctl/`
 
 Important: these support paths exist to serve the Studio product. They are not
 alternative install flows.

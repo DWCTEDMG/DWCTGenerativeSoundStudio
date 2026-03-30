@@ -1,18 +1,18 @@
 # ComfyUI integration: workflows (video)
 
-This project can generate video via **Diffusers** directly (see `scripts/run_video_diffusers.py`),
+This project can generate video via **Diffusers** directly (see `studio/edmg-studio/scripts/run_video_diffusers.py`),
 and it can also **co-exist** with ComfyUI by wiring the same model files into `ComfyUI/models`.
 
 Because ComfyUI workflow distribution varies by model family (templates, images-with-metadata, JSONs),
 EDMG provides a reproducible fetch+patch tool:
 
-- `scripts/fetch_comfyui_workflows.py`
+- `studio/edmg-studio/scripts/fetch_comfyui_workflows.py`
 - `comfyui_workflows/manifest.json`
 
 ## Fetch workflows
 
 ```bash
-python scripts/fetch_comfyui_workflows.py --out comfyui_workflows/downloaded
+python studio/edmg-studio/scripts/fetch_comfyui_workflows.py --out comfyui_workflows/downloaded
 ```
 
 ## Patch workflows to your local model filenames
@@ -21,7 +21,7 @@ If you already have models installed under `ComfyUI/models/**`, patch the downlo
 match *your* filenames:
 
 ```bash
-python scripts/fetch_comfyui_workflows.py \
+python studio/edmg-studio/scripts/fetch_comfyui_workflows.py \
   --out comfyui_workflows/downloaded \
   --patch \
   --comfyui-root /path/to/ComfyUI
@@ -48,7 +48,7 @@ See: `comfyui_workflows/manifest.json` for sources and expected model filenames.
 If a workflow references model filenames you already have in a central store, you can link/copy them into the right `ComfyUI/models/*` folders:
 
 ```bash
-python scripts/wire_comfyui_models.py --comfyui-root /path/to/ComfyUI --models-root external/models --workflow path/to/workflow.json
+python studio/edmg-studio/scripts/wire_comfyui_models.py --comfyui-root /path/to/ComfyUI --models-root external/models --workflow path/to/workflow.json
 ```
 
 Use `--mode copy` if symlinks are not allowed on your system.

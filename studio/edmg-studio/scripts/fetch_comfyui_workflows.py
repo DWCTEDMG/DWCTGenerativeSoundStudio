@@ -102,9 +102,12 @@ def _download(url: str, dest: Path, *, retries: int = 3, timeout: int = 60) -> N
     dest.parent.mkdir(parents=True, exist_ok=True)
     # Support local file sources for offline/CI use.
     if url.startswith('file://'):
-        from urllib.parse import urlparse
+        from urllib.parse import unquote, urlparse
+        from urllib.request import url2pathname
         import shutil
-        src_path = Path(urlparse(url).path)
+        parsed = urlparse(url)
+        raw_path = f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
+        src_path = Path(url2pathname(unquote(raw_path)))
         if not src_path.exists():
             raise FileNotFoundError(f'Workflow source not found: {src_path}')
         shutil.copy2(src_path, dest)

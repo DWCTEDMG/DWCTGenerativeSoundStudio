@@ -1,13 +1,13 @@
 param(
-  [string]$OutDir = "./studio/edmg-studio/electron-resources/bin"
+  [string]$OutDir = "./electron-resources/bin"
 )
 
 $ErrorActionPreference = "Stop"
 
-$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
-$OutDirAbs = Resolve-Path (Join-Path $RepoRoot $OutDir) -ErrorAction SilentlyContinue
+$StudioDir = Resolve-Path (Join-Path $PSScriptRoot "../..")
+$OutDirAbs = Resolve-Path (Join-Path $StudioDir $OutDir) -ErrorAction SilentlyContinue
 if (-not $OutDirAbs) {
-  $OutDirAbs = Join-Path $RepoRoot $OutDir
+  $OutDirAbs = Join-Path $StudioDir $OutDir
   New-Item -ItemType Directory -Force -Path $OutDirAbs | Out-Null
 }
 

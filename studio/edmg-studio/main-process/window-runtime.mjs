@@ -92,7 +92,7 @@ export function createWindowRuntime({
   }
 
   async function runWindowTestProbe(win) {
-    if (!testMode || !testReportPath || testPage) return;
+    if (!testMode || !testReportPath) return;
 
     const probeSource = JSON.stringify({
       revealPath: testProbeRevealPath || "",
@@ -133,7 +133,14 @@ export function createWindowRuntime({
             (out.backendUrlSync === probe.expectedBackendUrl && out.backendUrlAsync === probe.expectedBackendUrl);
           const revealMatches = !probe.revealPath || !!out.reveal?.ok;
           const openMatches = !probe.openPath || !!out.open?.ok;
-          out.ok = Boolean(out.bridgeAvailable && backendMatches && revealMatches && openMatches && out.errors.length === 0);
+          out.ok = Boolean(
+            out.bridgeAvailable &&
+            out.testBridgeAvailable &&
+            backendMatches &&
+            revealMatches &&
+            openMatches &&
+            out.errors.length === 0
+          );
           return out;
         })()`,
         true,

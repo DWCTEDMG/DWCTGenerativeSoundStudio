@@ -53,6 +53,9 @@ DEFAULT_MODELS: List[Tuple[str, str]] = [
     ("ltx", "Lightricks/LTX-Video"),
 ]
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+RUNNER_PATH = SCRIPT_DIR / "run_video_diffusers.py"
+
 
 def _sanitize(s: str) -> str:
     s = s.replace("/", "__")
@@ -152,7 +155,7 @@ def _run_one(
 ) -> ModelRun:
     cmd = [
         python_exe,
-        "scripts/run_video_diffusers.py",
+        str(RUNNER_PATH),
         "--family",
         family,
         "--model-id",
@@ -311,7 +314,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     for family, model_id in models:
         out_path = out_dir / f"{_sanitize(model_id)}.mp4"
-        cmd_preview = f"{args.python} scripts/run_video_diffusers.py --family {family} --model-id {shlex.quote(model_id)} --output {out_path}"
+        cmd_preview = f"{args.python} {shlex.quote(str(RUNNER_PATH))} --family {family} --model-id {shlex.quote(model_id)} --output {out_path}"
         print(f"\n=== {family} :: {model_id}")
         if args.dry_run:
             print(cmd_preview)

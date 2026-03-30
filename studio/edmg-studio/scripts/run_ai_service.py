@@ -11,7 +11,7 @@ import os
 
 import uvicorn
 
-from services.ai.edmg_ai_service.app import app  # type: ignore
+from edmg_ai_service.app import app  # type: ignore
 
 
 def main() -> None:

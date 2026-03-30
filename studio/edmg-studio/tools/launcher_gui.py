@@ -11,9 +11,8 @@ from pathlib import Path
 import urllib.request
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
-
-STUDIO_DIR = ROOT / "studio" / "edmg-studio"
+STUDIO_DIR = Path(__file__).resolve().parents[1]
+ROOT = STUDIO_DIR.parents[1]
 BACKEND_DIR = STUDIO_DIR / "python_backend"
 BACKEND_VENV = BACKEND_DIR / "venv"
 BUNDLED_FFMPEG = STUDIO_DIR / "electron-resources" / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
@@ -1547,13 +1546,13 @@ class Launcher(tk.Tk):
         if not ps1.exists():
             raise RuntimeError(f"Script not found: {ps1}")
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)]
-        rc = _run_cmd(cmd, cwd=ROOT, log_cb=self._log)
+        rc = _run_cmd(cmd, cwd=STUDIO_DIR, log_cb=self._log)
         if rc != 0:
             raise RuntimeError(f"PowerShell script failed (exit {rc}): {ps1.name}")
 
     def get_ffmpeg(self) -> None:
         def work():
-            ps1 = ROOT / "packaging" / "windows" / "get_ffmpeg.ps1"
+            ps1 = STUDIO_DIR / "packaging" / "windows" / "get_ffmpeg.ps1"
             self._log("This will download FFmpeg and stage it for the packaged Studio renderer/build.")
             self._run_powershell(ps1)
 
@@ -1561,7 +1560,7 @@ class Launcher(tk.Tk):
 
     def build_installer(self) -> None:
         def work():
-            ps1 = ROOT / "packaging" / "windows" / "build_all.ps1"
+            ps1 = STUDIO_DIR / "packaging" / "windows" / "build_all.ps1"
             self._log("Building installer (backend EXE + Electron installer)…")
             self._run_powershell(ps1)
             self._log("Build finished. Use 'Open Release Folder' to find the installer.")

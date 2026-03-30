@@ -5,7 +5,7 @@ a download + wiring helper for ComfyUI/A1111.
 
 ## Catalog file
 
-- `src/enhanced_deforum_music_generator/presets/hf_video_model_catalog.json`
+- `studio/edmg-studio/python_backend/enhanced_deforum_music_generator/presets/hf_video_model_catalog.json`
 
 ## Download + wire from the Gradio UI
 
@@ -33,7 +33,7 @@ and wires into:
 Use the unified script:
 
 ```bash
-python scripts/run_video_diffusers.py --model-id Wan-AI/Wan2.2-TI2V-5B-Diffusers \
+python studio/edmg-studio/scripts/run_video_diffusers.py --model-id Wan-AI/Wan2.2-TI2V-5B-Diffusers \
   --prompt "Two cats boxing on a stage" --output outputs/wan.mp4 --device cuda --dtype bfloat16
 ```
 

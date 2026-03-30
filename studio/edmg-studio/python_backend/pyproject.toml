@@ -123,7 +123,6 @@ include = [
   "core*",
   "config*",
   "integrations*",
-  "src*",
   "edmg_ai_service*",
 ]
 
@@ -136,7 +135,6 @@ extend-exclude = [
   "build",
   "dist",
   "node_modules",
-  "src/enhanced_deforum_music_generator/tests",
 ]
 
 [tool.ruff.lint]

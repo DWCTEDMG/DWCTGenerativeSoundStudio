@@ -1,8 +1,8 @@
 import pytest
 import numpy as np
-from core.audio_analyzer import AudioAnalyzer
-from config.config_system import AudioConfig
 import soundfile as sf
+from enhanced_deforum_music_generator.config.config_system import AudioConfig
+from enhanced_deforum_music_generator.core.audio_analyzer import AudioAnalyzer
 
 
 def test_audio_analyzer_runs_on_sample(tmp_path):

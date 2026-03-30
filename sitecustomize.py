@@ -4,7 +4,8 @@ sitecustomize.py
 Python automatically imports `sitecustomize` on interpreter startup (if found on
 `sys.path`). This repo uses it for two reasons:
 
-1) Make `src/` importable without requiring an editable install, so commands like:
+1) Make the canonical Studio backend importable from the repo root without
+   requiring an editable install, so commands like:
      python -m enhanced_deforum_music_generator ui
    work immediately after extracting/cloning.
 
@@ -28,24 +29,15 @@ from pathlib import Path
 import types
 
 
-def _ensure_src_on_path() -> None:
+def _ensure_canonical_studio_paths_on_path() -> None:
     repo_root = Path(__file__).resolve().parent
-    src_dir = repo_root / "src"
-    if src_dir.exists():
-        src_str = str(src_dir)
-        if src_str not in sys.path:
-            sys.path.insert(0, src_str)
-
-
-
-
-def _ensure_studio_backend_on_path() -> None:
-    repo_root = Path(__file__).resolve().parent
+    studio_root = repo_root / "studio" / "edmg-studio"
     backend_dir = repo_root / "studio" / "edmg-studio" / "python_backend"
-    if backend_dir.exists():
-        backend_str = str(backend_dir)
-        if backend_str not in sys.path:
-            sys.path.insert(0, backend_str)
+    for candidate in (backend_dir, studio_root):
+        if candidate.exists():
+            candidate_str = str(candidate)
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
 
 def _ensure_librosa() -> None:
     """
@@ -170,9 +162,6 @@ def _ensure_whisper_stub() -> None:
 
     mod.load_model = load_model  # type: ignore[attr-defined]
     sys.modules["whisper"] = mod
-
-
-_ensure_src_on_path()
-_ensure_studio_backend_on_path()
+_ensure_canonical_studio_paths_on_path()
 _ensure_librosa()
 _ensure_whisper_stub()

@@ -1,10 +1,12 @@
 import sys
 import pathlib
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
+_STUDIO = _ROOT / 'studio' / 'edmg-studio'
 _BACKEND = _ROOT / 'studio' / 'edmg-studio' / 'python_backend'
+if _STUDIO.exists():
+    sys.path.insert(0, str(_STUDIO))
 if _BACKEND.exists():
     sys.path.insert(0, str(_BACKEND))
-sys.path.insert(0, str(_ROOT / 'src'))
 sys.path.insert(0, str(_ROOT))
 
 import pytest

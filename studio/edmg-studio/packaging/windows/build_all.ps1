@@ -62,21 +62,21 @@ function Get-BundledFfmpegPath($StudioDir) {
   return Join-Path $StudioDir "electron-resources\bin\ffmpeg.exe"
 }
 
-function Ensure-BundledFfmpeg($RepoRoot, $StudioDir) {
+function Ensure-BundledFfmpeg($StudioDir) {
   $bundled = Get-BundledFfmpegPath $StudioDir
   if (Test-Path $bundled) {
     Write-Host ("[info] Bundled FFmpeg ready: " + $bundled) -ForegroundColor Cyan
     return $bundled
   }
 
-  $script = Join-Path $RepoRoot "packaging\windows\get_ffmpeg.ps1"
+  $script = Join-Path $StudioDir "packaging\windows\get_ffmpeg.ps1"
   if (-not (Test-Path $script)) {
     throw "Missing FFmpeg staging script: $script"
   }
 
   Write-Host "[info] Bundled FFmpeg missing; downloading/staging it now..." -ForegroundColor Yellow
   Invoke-Checked "stage bundled FFmpeg" {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $script -OutDir "./studio/edmg-studio/electron-resources/bin"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $script -OutDir "./electron-resources/bin"
   }
 
   if (-not (Test-Path $bundled)) {
@@ -235,8 +235,8 @@ Assert-Command $PythonExe
 Assert-Command $NpmExe
 Assert-SupportedPythonVersion $PythonExe @() "Bootstrap Python" | Out-Null
 
-$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
-$StudioDir = Join-Path $RepoRoot "studio/edmg-studio"
+$StudioDir = Resolve-Path (Join-Path $PSScriptRoot "../..")
+$RepoRoot = Resolve-Path (Join-Path $StudioDir "../..")
 $PyBackendDir = Join-Path $StudioDir "python_backend"
 
 if (-not (Test-Path $StudioDir)) {
@@ -250,7 +250,7 @@ $BackendPkgDir = Resolve-BackendPackageDir $PyBackendDir
 $BundledFfmpegPath = Get-BundledFfmpegPath $StudioDir
 Doctor $RepoRoot $StudioDir $PyBackendDir $BackendPkgDir $BundledFfmpegPath
 Migrate-LegacyData $RepoRoot $StudioDir $PyBackendDir
-$BundledFfmpegPath = Ensure-BundledFfmpeg $RepoRoot $StudioDir
+$BundledFfmpegPath = Ensure-BundledFfmpeg $StudioDir
 
 Write-Host "[1/4] Building Python backend (PyInstaller)..."
 Push-Location $PyBackendDir

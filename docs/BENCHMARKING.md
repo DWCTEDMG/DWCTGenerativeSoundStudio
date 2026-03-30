@@ -2,7 +2,7 @@
 
 EDMG includes a multi-model benchmarking harness:
 
-- `scripts/video_model_bench.py` (spawns one process per model)
+- `studio/edmg-studio/scripts/video_model_bench.py` (spawns one process per model)
 
 It runs the same prompt across multiple Diffusers pipelines and writes:
 - per-model MP4 outputs
@@ -12,7 +12,7 @@ It runs the same prompt across multiple Diffusers pipelines and writes:
 ## Example
 
 ```bash
-python scripts/video_model_bench.py \
+python studio/edmg-studio/scripts/video_model_bench.py \
   --prompt "A macro shot of raindrops on neon glass, cinematic lighting" \
   --bench-name smoke \
   --quick

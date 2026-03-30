@@ -26,7 +26,7 @@ macOS/Linux:
 ./run_me.sh
 ```
 
-Those launchers open the Studio dev launcher in `tools/launcher_gui.py`, which
+Those launchers open the Studio dev launcher in `studio/edmg-studio/tools/launcher_gui.py`, which
 keeps the UI, backend, and `Studio Home` storage aligned with the same settings
 used by the packaged app.
 
@@ -39,9 +39,9 @@ used by the packaged app.
   FastAPI backend plus the vendored `enhanced_deforum_music_generator` and
   `deforum_music` engine packages that power planning, analysis, schedules, and
   EDMG Core support.
-- `tools/launcher_gui.py`
+- `studio/edmg-studio/tools/launcher_gui.py`
   Shared dev launcher and Studio Home bootstrap flow.
-- `packaging/windows/`
+- `studio/edmg-studio/packaging/windows/`
   Windows-first release orchestration for the packaged Studio app.
 
 ## Studio Home
@@ -68,7 +68,6 @@ install path and allows migration to another drive such as `D:\`.
 
 ## Compatibility note
 
-Root-level Python import shims still exist for `enhanced_deforum_music_generator`
-and `deforum_music` so repo-root tests and helper scripts can resolve the
-vendored engine packages from the Studio backend tree. They are compatibility
-glue, not a separate product surface.
+The repo root now keeps only thin launch aliases and monolith-level docs. The
+runtime code, packaging logic, backend engine packages, and operator tooling
+live under `studio/edmg-studio/`.

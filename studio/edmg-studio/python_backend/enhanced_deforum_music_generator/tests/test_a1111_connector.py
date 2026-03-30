@@ -1,6 +1,6 @@
 import pytest
-from config.config_system import A1111Config
-from integrations.a1111_connector import A1111Connector
+from enhanced_deforum_music_generator.config.config_system import A1111Config
+from enhanced_deforum_music_generator.integrations.a1111_connector import A1111Connector
 
 
 def test_a1111_ping(monkeypatch):

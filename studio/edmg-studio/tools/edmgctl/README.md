@@ -25,7 +25,7 @@ lowest-risk place for Go is around operations and tooling:
 
 ## Commands
 
-From `tools/edmgctl/`:
+From `studio/edmg-studio/tools/edmgctl/`:
 
 ```powershell
 $env:GOCACHE='D:\Tools\GoCache'
@@ -63,7 +63,7 @@ D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release verify-manifest --manifest D:\T
 ## Build
 
 ```powershell
-cd D:\DWCTGenerativeSoundStudio\tools\edmgctl
+cd D:\DWCTGenerativeSoundStudio\studio\edmg-studio\tools\edmgctl
 $env:GOCACHE='D:\Tools\GoCache'
 $env:GOMODCACHE='D:\Tools\GoPkg'
 D:\Tools\Go\bin\go.exe build -o D:\Tools\edmgctl.exe ./cmd/edmgctl

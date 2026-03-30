@@ -22,7 +22,7 @@
         "Node name for S&R": "EDMG ComfyUI Workflow Note"
       },
       "widgets_values": [
-        "This is a placeholder EDMG workflow.\n\nUse scripts/fetch_comfyui_workflows.py to download real workflows into comfyui_workflows/downloaded/ and open those in ComfyUI."
+        "This is a placeholder EDMG workflow.\n\nUse studio/edmg-studio/scripts/fetch_comfyui_workflows.py to download real workflows into comfyui_workflows/downloaded/ and open those in ComfyUI."
       ]
     }
   ],

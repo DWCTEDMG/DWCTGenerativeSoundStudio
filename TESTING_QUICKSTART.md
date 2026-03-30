@@ -9,8 +9,9 @@
    - Click **Run Health Test**
    - Click **Start Studio (Electron dev)**
 
-`LAUNCH_EDMG_STUDIO_GUI.bat` still exists as a compatibility alias, but
-`RUN_ME.bat` is the canonical root launcher.
+`LAUNCH_EDMG_STUDIO_GUI.bat` still exists as a compatibility alias, but the
+canonical launcher now lives under `studio/edmg-studio/RUN_ME.bat` and the
+repo-root `RUN_ME.bat` simply forwards to it.
 
 ## Prereqs (installed once)
 - **Python `>=3.10,<3.14`** (Windows: install from python.org)

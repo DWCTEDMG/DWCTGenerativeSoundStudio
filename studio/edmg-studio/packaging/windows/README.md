@@ -18,7 +18,7 @@ Recommended (for AI):
 Open PowerShell in repo root and run:
 
 ```powershell
-./packaging/windows/build_all.ps1
+./studio/edmg-studio/packaging/windows/build_all.ps1
 ```
 
 Outputs:

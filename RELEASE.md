@@ -28,7 +28,7 @@ git status --short
 From the repo root:
 
 ```powershell
-./packaging/windows/build_all.ps1
+./studio/edmg-studio/packaging/windows/build_all.ps1
 ```
 
 That script now:
@@ -61,7 +61,7 @@ That proof covers:
 Optional support-plane helper:
 
 ```powershell
-cd tools/edmgctl
+cd studio/edmg-studio/tools/edmgctl
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl doctor
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release status
 D:\Tools\Go\bin\go.exe run ./cmd/edmgctl support export --out D:\Tools\edmg-support.zip

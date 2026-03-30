@@ -12,12 +12,12 @@ Why this exists:
 
 1) Fetch workflows:
 ```bash
-python scripts/fetch_comfyui_workflows.py --out comfyui_workflows/downloaded
+python studio/edmg-studio/scripts/fetch_comfyui_workflows.py --out comfyui_workflows/downloaded
 ```
 
 2) Patch workflows based on your local ComfyUI install:
 ```bash
-python scripts/fetch_comfyui_workflows.py \
+python studio/edmg-studio/scripts/fetch_comfyui_workflows.py \
   --out comfyui_workflows/downloaded \
   --patch \
   --comfyui-root /path/to/ComfyUI

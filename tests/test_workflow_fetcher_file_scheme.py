@@ -6,7 +6,7 @@ import sys
 
 def test_fetch_comfyui_workflows_supports_file_scheme(tmp_path: Path):
     repo_root = Path(__file__).resolve().parents[1]
-    script = repo_root / "scripts" / "fetch_comfyui_workflows.py"
+    script = repo_root / "studio" / "edmg-studio" / "scripts" / "fetch_comfyui_workflows.py"
 
     # Create a minimal workflow JSON
     wf = {"last_node_id": 1, "nodes": [], "links": []}
@@ -37,7 +37,7 @@ def test_fetch_comfyui_workflows_supports_file_scheme(tmp_path: Path):
     env["EDMG_WORKFLOW_MANIFEST"] = str(manifest_path)
 
     cmd = [sys.executable, str(script), "--out", str(out_dir), "--manifest", str(manifest_path)]
-    proc = subprocess.run(cmd, cwd=str(repo_root), env=env, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=str(repo_root / "studio" / "edmg-studio"), env=env, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
 
     fetched = out_dir / "test_wf.json"
