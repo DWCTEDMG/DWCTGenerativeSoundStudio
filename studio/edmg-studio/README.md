@@ -70,10 +70,12 @@ Install/storage split:
 - `EDMG_AI_MODE` (default: `local`)
 - `EDMG_AI_PROVIDER` (default: `ollama`)
 - `EDMG_AI_OLLAMA_URL` (default: `http://127.0.0.1:11434`)
-- `EDMG_AI_OLLAMA_MODEL` (default: `qwen2.5:3b-instruct`)
+- `EDMG_AI_OLLAMA_MODEL` (default: `qwen2.5:7b-instruct`)
 - `EDMG_COMFYUI_URL` (default: `http://127.0.0.1:8188`)
 - `EDMG_COMFYUI_CHECKPOINT` (default: `sdxl_base_1.0.safetensors`)
 - `EDMG_FFMPEG_PATH` (optional override; packaged Studio prefers its bundled FFmpeg, dev falls back to `ffmpeg` on PATH)
+
+If you need a lighter local planner for weaker CPUs or low-memory systems, set `EDMG_AI_OLLAMA_MODEL=qwen2.5:3b-instruct`.
 
 If `EDMG_STUDIO_HOME` is set, Studio uses it as the root for:
 - backend project data (`<studio-home>/data`)

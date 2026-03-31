@@ -11,7 +11,7 @@ class Settings:
 
     # ollama
     ollama_url: str = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434").strip()
-    ollama_model: str = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct").strip()
+    ollama_model: str = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct").strip()
 
     # openai-compatible
     openai_compat_base_url: str = os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000").strip()

@@ -24,8 +24,10 @@ Recommended env vars:
 EDMG_AI_MODE=local
 EDMG_AI_PROVIDER=ollama
 EDMG_AI_OLLAMA_URL=http://127.0.0.1:11434
-EDMG_AI_OLLAMA_MODEL=qwen2.5:3b-instruct
+EDMG_AI_OLLAMA_MODEL=qwen2.5:7b-instruct
 ```
+
+Use `qwen2.5:3b-instruct` instead on lighter CPU-only or low-memory systems.
 
 If you want an external AI service instead:
 

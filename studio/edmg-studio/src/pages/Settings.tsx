@@ -22,7 +22,7 @@ const DEFAULT_AI_SETTINGS: StudioAiSettings = {
   provider: "ollama",
   aiBaseUrl: "http://127.0.0.1:7862",
   ollamaUrl: "http://127.0.0.1:11434",
-  ollamaModel: "qwen2.5:3b-instruct",
+  ollamaModel: "qwen2.5:7b-instruct",
   openaiCompatBaseUrl: "http://127.0.0.1:8000",
   openaiCompatModel: "qwen2.5-7b-instruct",
   source: "default",
@@ -367,10 +367,10 @@ export default function Settings(_props: PageProps) {
                   </div>
                   <div>
                     <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Ollama model</div>
-                    <input value={aiDraft.ollamaModel} onChange={(e) => updateAiDraft({ ollamaModel: e.target.value })} placeholder="qwen2.5:3b-instruct" />
+                    <input value={aiDraft.ollamaModel} onChange={(e) => updateAiDraft({ ollamaModel: e.target.value })} placeholder="qwen2.5:7b-instruct" />
                   </div>
                   <div className="small" style={{ opacity: 0.82 }}>
-                    Best free/local default. Good for offline use and zero paid-provider requirements.
+                    Best quality free/local default. Use <code>qwen2.5:3b-instruct</code> on lighter CPU-only or low-memory systems.
                   </div>
                 </>
               ) : null}

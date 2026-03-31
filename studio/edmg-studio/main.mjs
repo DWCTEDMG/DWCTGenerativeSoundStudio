@@ -51,7 +51,7 @@ const AI_SETTINGS_DEFAULTS = Object.freeze({
   provider: "ollama",
   aiBaseUrl: "http://127.0.0.1:7862",
   ollamaUrl: "http://127.0.0.1:11434",
-  ollamaModel: "qwen2.5:3b-instruct",
+  ollamaModel: "qwen2.5:7b-instruct",
   openaiCompatBaseUrl: "http://127.0.0.1:8000",
   openaiCompatModel: "qwen2.5-7b-instruct",
 });

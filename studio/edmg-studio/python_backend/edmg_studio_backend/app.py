@@ -1391,7 +1391,7 @@ def get_config():
         "ai_timeout_s": settings.ai_timeout_s,
         "ai_provider": os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama",
         "ai_ollama_url": os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434").strip(),
-        "ai_ollama_model": os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct").strip(),
+        "ai_ollama_model": os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct").strip(),
         "ai_openai_compat_base_url": os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000").strip(),
         "ai_openai_compat_model": os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen2.5-7b-instruct").strip(),
         "ai_openai_compat_api_key_configured": bool(
@@ -1459,7 +1459,7 @@ def _setup_ai_config() -> dict[str, Any]:
     ai_mode = (settings.ai_mode or "local").strip().lower() or "local"
     ai_provider = (os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
-    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
+    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
     openai_compat_base_url = os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000")
     openai_compat_model = os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen2.5-7b-instruct")
     openai_compat_api_key_configured = bool(
@@ -1517,7 +1517,7 @@ def setup_status():
     """Installer GUI status for required components."""
     ai_config = _setup_ai_config()
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
-    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
+    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
     ollama = check_ollama(ollama_url, ollama_model)
     ollama_exe = None
     ollama_exe_error = None
@@ -1648,7 +1648,7 @@ def setup_ollama_start_managed():
 def setup_ollama_pull(payload: dict[str, Any]):
     import os
 
-    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
+    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
     url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     task = setup_tasks.start(f"pull_model:{model}", pull_ollama_model, url, model)
     return {"ok": True, "task": task.__dict__}
@@ -1675,7 +1675,7 @@ def setup_full_install(payload: dict[str, Any]):
     bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
     if flavor == "amd" and bundle == "studio_bundle":
         bundle = "studio_bundle_directml"
-    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
+    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ai_config = _setup_ai_config()
 
@@ -3583,7 +3583,7 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
                     message="The configured planning/transcription provider is not available.",
                     hint=(
                         "Fix: If you're using Ollama, make sure it is installed and running (Ollama app or `ollama serve`), "
-                        "and that the model is pulled (e.g., `ollama pull qwen2.5:3b-instruct`). "
+                        "and that the model is pulled (e.g., `ollama pull qwen2.5:7b-instruct`). "
                         "If you want a remote AI, set EDMG_AI_MODE=http and EDMG_AI_BASE_URL to the running AI service."
                     ),
                     code="AI_UNAVAILABLE",
