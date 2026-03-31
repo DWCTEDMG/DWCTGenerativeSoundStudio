@@ -313,6 +313,7 @@ def _resolve_comfy_still_selection(
     controlnet_model: str | None,
     reference_asset: str | None,
     conditioning_mode: str | None,
+    controlnet_units: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     entry = _catalog_entry(model_id)
     entry_data = entry if isinstance(entry, dict) else {}
@@ -325,7 +326,8 @@ def _resolve_comfy_still_selection(
         allow_auto_fallback=not explicit_checkpoint and not catalog_checkpoint,
     )
     family = str(workflow_family or "auto").strip().lower()
-    if family not in {"auto", "txt2img", "controlnet"}:
+    supported_families = {"auto", "txt2img", "img2img", "inpaint", "outpaint", "controlnet"}
+    if family not in supported_families:
         family = "auto"
 
     control_entry = _catalog_entry(controlnet_model)
@@ -337,24 +339,28 @@ def _resolve_comfy_still_selection(
         or render.get("controlnet_name")
         or ""
     ).strip()
+    has_controlnet_units = any(
+        isinstance(unit, dict) and str(unit.get("model") or unit.get("controlnet_name") or "").strip()
+        for unit in (controlnet_units or [])
+    )
     if family == "auto":
-        if controlnet_name or reference_asset or str(entry_data.get("kind") or "") == "controlnet":
+        if controlnet_name or reference_asset or has_controlnet_units or str(entry_data.get("kind") or "") == "controlnet":
             family = "controlnet"
         else:
             family = str(render.get("workflow_family") or "txt2img").strip().lower()
-    if family not in {"txt2img", "controlnet"}:
+    if family not in supported_families - {"auto"}:
         family = "txt2img"
 
-    if family == "controlnet" and not controlnet_name and str(entry_data.get("kind") or "") == "controlnet":
+    if family == "controlnet" and not controlnet_name and not has_controlnet_units and str(entry_data.get("kind") or "") == "controlnet":
         controlnet_name = str(entry_data.get("filename") or "")
-    if family == "controlnet" and not controlnet_name:
+    if family == "controlnet" and not controlnet_name and not has_controlnet_units:
         raise UserFacingError(
             "No ControlNet model selected",
             hint="Install a Studio ControlNet model in Models, then choose it on the Render page.",
             code="CONTROLNET_MISSING",
             status_code=400,
         )
-    if family == "controlnet" and not reference_asset:
+    if family == "controlnet" and not reference_asset and not has_controlnet_units:
         raise UserFacingError(
             "No reference image selected",
             hint="Upload or pick a project reference image before running a ControlNet still render.",
@@ -484,6 +490,141 @@ def _prepare_comfy_reference_image(project_id: str, node_url: str, reference_ass
         return f"{subfolder}/{name}".replace("\\", "/") if subfolder else name
     except Exception:
         return _fallback_comfy_input_image(prepared, project_id)
+
+
+def _resolve_optional_comfy_asset_name(
+    ref: str | None,
+    *,
+    folder: str,
+    allowed_kinds: set[str] | None = None,
+) -> str | None:
+    raw = str(ref or "").strip()
+    if not raw:
+        return None
+    asset = models.resolve_comfy_asset(raw, folder=folder, allowed_kinds=allowed_kinds)
+    return str(asset.get("filename") or raw).strip() or None
+
+
+def _normalize_render_loras(raw_loras: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_loras, list):
+        return []
+    items = [item for item in raw_loras if isinstance(item, dict)]
+    return models.resolve_loras(items)
+
+
+def _normalize_controlnet_units(raw_units: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    if not isinstance(raw_units, list):
+        return normalized
+    for unit in raw_units:
+        if not isinstance(unit, dict):
+            continue
+        model_ref = str(unit.get("model") or unit.get("controlnet_name") or "").strip()
+        reference_asset = str(unit.get("reference_asset") or "").strip()
+        if not model_ref or not reference_asset:
+            continue
+        asset = models.resolve_comfy_asset(model_ref, folder="controlnet", allowed_kinds={"controlnet"})
+        normalized.append(
+            {
+                "model": model_ref,
+                "name": asset.get("name") or Path(str(asset.get("filename") or model_ref)).stem,
+                "controlnet_name": str(asset.get("filename") or model_ref),
+                "reference_asset": reference_asset,
+                "conditioning_mode": str(unit.get("conditioning_mode") or "raw").strip().lower() or "raw",
+                "strength": float(unit.get("strength", 0.8)),
+                "start_percent": float(unit.get("start_percent", 0.0)),
+                "end_percent": float(unit.get("end_percent", 1.0)),
+            }
+        )
+    return normalized
+
+
+def _output_metadata_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.name}.json")
+
+
+def _project_relative_path(project_id: str, path: Path | str | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        return str(Path(path).resolve().relative_to(store.project_dir(project_id).resolve()))
+    except Exception:
+        try:
+            return str(Path(path).relative_to(store.project_dir(project_id)))
+        except Exception:
+            return str(path)
+
+
+def _build_generation_metadata(
+    *,
+    project_id: str,
+    job_id: str,
+    output_path: Path,
+    payload: dict[str, Any],
+    workflow_family: str,
+    checkpoint: str,
+    loras: list[dict[str, Any]] | None = None,
+    controlnet_units: list[dict[str, Any]] | None = None,
+    vae_name: str | None = None,
+    prompt_id: str | None = None,
+    comfyui_image: dict[str, Any] | None = None,
+    node_url: str | None = None,
+    cached: bool = False,
+    artifact_key: str = "image",
+) -> dict[str, Any]:
+    metadata_path = _output_metadata_path(output_path)
+    rel_output = _project_relative_path(project_id, output_path)
+    rel_metadata = _project_relative_path(project_id, metadata_path)
+    return {
+        "kind": "studio_diffusion_output",
+        "project_id": project_id,
+        "job_id": job_id,
+        "variant_index": int(payload.get("variant_index", 0)),
+        "scene_index": int(payload.get("scene_index", 0)),
+        "workflow_family": str(workflow_family or "txt2img"),
+        "prompt": str(payload.get("prompt") or ""),
+        "negative_prompt": str(payload.get("negative_prompt") or ""),
+        "seed": int(payload.get("seed") or 0),
+        "steps": int(payload.get("steps") or 0),
+        "cfg_scale": float(payload.get("cfg") or 0.0),
+        "sampler": str(payload.get("sampler") or "euler"),
+        "width": int(payload.get("width") or 0),
+        "height": int(payload.get("height") or 0),
+        "denoise_strength": float(payload.get("denoise_strength") or 0.0),
+        "base_model": {
+            "model_id": payload.get("model_id"),
+            "checkpoint": checkpoint,
+            "vae": vae_name,
+        },
+        "loras": list(loras or []),
+        "controlnet_units": list(controlnet_units or []),
+        "source_asset": payload.get("source_asset"),
+        "reference_asset": payload.get("reference_asset"),
+        "inpaint_mask": payload.get("inpaint_mask"),
+        "hires_fix": payload.get("hires_fix"),
+        "refiner": payload.get("refiner"),
+        "upscaler": payload.get("upscaler"),
+        "output": {
+            str(artifact_key or "image"): rel_output,
+            "metadata": rel_metadata,
+            "cached": bool(cached),
+            "comfyui_prompt_id": prompt_id,
+            "comfyui_image": comfyui_image or None,
+        },
+        "provenance": {
+            "app": "DWCT Generative Sound Studio",
+            "backend": "comfyui",
+            "node_url": node_url,
+            "captured_at": time.time(),
+        },
+    }
+
+
+def _write_generation_metadata(output_path: Path, metadata: dict[str, Any]) -> Path:
+    metadata_path = _output_metadata_path(output_path)
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    return metadata_path
 
 
 def _render_checkpoint_path(video_path: Path) -> Path:
@@ -3947,8 +4088,21 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
 
     out_path = Path(payload.get("out_path") or "")
     if out_path and out_path.exists():
-        return {"cached": True, "saved": str(out_path)}
+        metadata_path = _output_metadata_path(out_path)
+        metadata = None
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except Exception:
+                metadata = None
+        return {
+            "cached": True,
+            "saved": str(out_path),
+            "metadata_path": str(metadata_path) if metadata_path else None,
+            "metadata": metadata,
+        }
 
+    raw_controlnet_units = payload.get("controlnet_units") if isinstance(payload.get("controlnet_units"), list) else []
     selection = _resolve_comfy_still_selection(
         model_id=str(payload.get("model_id") or "") or None,
         checkpoint=str(payload.get("checkpoint") or "") or None,
@@ -3956,15 +4110,23 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
         controlnet_model=str(payload.get("controlnet_model") or "") or None,
         reference_asset=str(payload.get("reference_asset") or "") or None,
         conditioning_mode=str(payload.get("conditioning_mode") or "raw") or None,
+        controlnet_units=raw_controlnet_units,
     )
     checkpoint = selection["checkpoint"]
     workflow_family = str(selection.get("workflow_family") or "txt2img")
     controlnet_name = str(payload.get("controlnet_name") or selection.get("controlnet_name") or "").strip()
     conditioning_mode = str(selection.get("conditioning_mode") or "raw")
+    resolved_loras = _normalize_render_loras(payload.get("loras"))
+    vae_name = _resolve_optional_comfy_asset_name(payload.get("vae"), folder="vae", allowed_kinds={"vae"})
+    metadata_controlnet_units: list[dict[str, Any]] = []
 
     req = {"checkpoint": checkpoint, "est_steps": steps, "est_frames": 1}
     if workflow_family == "controlnet":
         req["node_classes"] = ["LoadImage", "ControlNetLoader", "ControlNetApplyAdvanced"]
+    elif workflow_family == "img2img":
+        req["node_classes"] = ["LoadImage", "VAEEncode"]
+    elif workflow_family in {"inpaint", "outpaint"}:
+        req["node_classes"] = ["LoadImage", "LoadImageMask", "VAEEncodeForInpaint"]
     try:
         node_url = comfy_pool.acquire(req)
     except Exception as e:
@@ -3977,12 +4139,32 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
     jobs.append_log(project_id, job_id, f"Using ComfyUI node: {node_url}".rstrip())
     try:
         if workflow_family == "controlnet":
-            reference_image = _prepare_comfy_reference_image(
-                project_id,
-                node_url,
-                str(payload.get("reference_asset") or ""),
-                conditioning_mode,
-            )
+            controlnet_units = _normalize_controlnet_units(raw_controlnet_units)
+            if not controlnet_units and controlnet_name and payload.get("reference_asset"):
+                controlnet_units = _normalize_controlnet_units(
+                    [
+                        {
+                            "model": str(payload.get("controlnet_model") or controlnet_name),
+                            "reference_asset": str(payload.get("reference_asset") or ""),
+                            "conditioning_mode": conditioning_mode,
+                            "strength": float(payload.get("controlnet_strength") or 0.8),
+                        }
+                    ]
+                )
+            prepared_units = []
+            for unit in controlnet_units:
+                prepared_units.append(
+                    {
+                        **unit,
+                        "reference_image": _prepare_comfy_reference_image(
+                            project_id,
+                            node_url,
+                            str(unit.get("reference_asset") or ""),
+                            str(unit.get("conditioning_mode") or "raw"),
+                        ),
+                    }
+                )
+            metadata_controlnet_units = [dict(unit) for unit in prepared_units]
             wf = comfy.controlnet_workflow(
                 checkpoint=checkpoint,
                 prompt=prompt,
@@ -3994,14 +4176,73 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 cfg=cfg,
                 sampler=sampler,
                 controlnet_name=controlnet_name,
-                reference_image=reference_image,
+                reference_image=str(prepared_units[0].get("reference_image") or "reference.png") if prepared_units else "reference.png",
                 controlnet_strength=float(payload.get("controlnet_strength") or 0.8),
                 filename_prefix=f"edmg_cn_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
+                loras=resolved_loras,
+                vae_name=vae_name,
+                controlnet_units=prepared_units,
             )
             jobs.append_log(
                 project_id,
                 job_id,
-                f"ControlNet still render using {checkpoint} + {controlnet_name} ({conditioning_mode})",
+                f"ControlNet still render using {checkpoint} with {len(prepared_units) or 1} unit(s)",
+            )
+        elif workflow_family == "img2img":
+            source_asset = str(payload.get("source_asset") or payload.get("reference_asset") or "").strip()
+            if not source_asset:
+                raise UserFacingError(
+                    "No source image selected for img2img",
+                    hint="Upload or choose a project reference image before running img2img.",
+                    code="IMG2IMG_SOURCE_MISSING",
+                    status_code=400,
+                )
+            source_image = _prepare_comfy_reference_image(project_id, node_url, source_asset, "raw")
+            wf = comfy.img2img_workflow(
+                checkpoint=checkpoint,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                seed=seed,
+                width=width,
+                height=height,
+                steps=steps,
+                cfg=cfg,
+                sampler=sampler,
+                source_image=source_image,
+                denoise_strength=float(payload.get("denoise_strength") or 0.75),
+                filename_prefix=f"edmg_img2img_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
+                loras=resolved_loras,
+                vae_name=vae_name,
+            )
+        elif workflow_family in {"inpaint", "outpaint"}:
+            source_asset = str(payload.get("source_asset") or "").strip()
+            mask_asset = str(payload.get("inpaint_mask") or "").strip()
+            if not source_asset or not mask_asset:
+                raise UserFacingError(
+                    "Source image or inpaint mask is missing",
+                    hint="Choose both a source image and a mask before running an inpaint or outpaint render.",
+                    code="INPAINT_ASSETS_MISSING",
+                    status_code=400,
+                )
+            source_image = _prepare_comfy_reference_image(project_id, node_url, source_asset, "raw")
+            mask_image = _prepare_comfy_reference_image(project_id, node_url, mask_asset, "raw")
+            builder = comfy.outpaint_workflow if workflow_family == "outpaint" else comfy.inpaint_workflow
+            wf = builder(
+                checkpoint=checkpoint,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                seed=seed,
+                width=width,
+                height=height,
+                steps=steps,
+                cfg=cfg,
+                sampler=sampler,
+                source_image=source_image,
+                mask_image=mask_image,
+                denoise_strength=float(payload.get("denoise_strength") or 0.8),
+                filename_prefix=f"edmg_{workflow_family}_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
+                loras=resolved_loras,
+                vae_name=vae_name,
             )
         else:
             wf = comfy.default_workflow(
@@ -4015,7 +4256,21 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 cfg=cfg,
                 sampler=sampler,
                 filename_prefix=f"edmg_still_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
+                loras=resolved_loras,
+                vae_name=vae_name,
             )
+        if resolved_loras:
+            lora_log = ", ".join(
+                f"{str(item.get('filename') or item.get('name') or 'lora')}@{float(item.get('weight', 1.0)):.2f}"
+                for item in resolved_loras
+            )
+            jobs.append_log(
+                project_id,
+                job_id,
+                f"LoRAs: {lora_log}",
+            )
+        if vae_name:
+            jobs.append_log(project_id, job_id, f"VAE override: {vae_name}")
 
         submit = comfy.submit_prompt(node_url, wf)
         prompt_id = submit.get("prompt_id")
@@ -4049,7 +4304,28 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                     out_path = out_dir / out_name
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_bytes(img_bytes)
-                return {"prompt_id": prompt_id, "saved": str(out_path), "comfyui_image": im}
+                metadata = _build_generation_metadata(
+                    project_id=project_id,
+                    job_id=job_id,
+                    output_path=out_path,
+                    payload=payload,
+                    workflow_family=workflow_family,
+                    checkpoint=checkpoint,
+                    loras=resolved_loras,
+                    controlnet_units=metadata_controlnet_units,
+                    vae_name=vae_name,
+                    prompt_id=str(prompt_id),
+                    comfyui_image=im,
+                    node_url=node_url,
+                )
+                metadata_path = _write_generation_metadata(out_path, metadata)
+                return {
+                    "prompt_id": prompt_id,
+                    "saved": str(out_path),
+                    "metadata_path": str(metadata_path),
+                    "metadata": metadata,
+                    "comfyui_image": im,
+                }
 
             time.sleep(1.0)
 
@@ -4087,11 +4363,20 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
     fps = int(payload.get("fps", 12))
     motion_model_name = str(payload.get("motion_model_name") or "mm_sd_v15_v2.ckpt")
     required_tags = payload.get("required_tags") or []
+    resolved_loras = _normalize_render_loras(payload.get("loras"))
+    vae_name = _resolve_optional_comfy_asset_name(payload.get("vae"), folder="vae", allowed_kinds={"vae"})
 
     frames_dir = Path(payload.get("frames_dir") or "")
     out_clip = Path(payload.get("out_clip") or "")
     if out_clip and out_clip.exists():
-        return {"cached": True, "saved": str(out_clip)}
+        metadata_path = _output_metadata_path(out_clip)
+        metadata = None
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except Exception:
+                metadata = None
+        return {"cached": True, "saved": str(out_clip), "metadata_path": str(metadata_path), "metadata": metadata}
     if frames_dir and frames_dir.exists() and out_clip:
         # If frames already exist (resume), try assembling.
         try:
@@ -4124,6 +4409,8 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
             svd_decoding_t=int(payload.get("svd_decoding_t") or 14),
             device=str(payload.get("device") or "cuda"),
             filename_prefix=filename_prefix,
+            loras=resolved_loras,
+            vae_name=vae_name,
         )
         req = {
             "checkpoint": checkpoint,
@@ -4150,6 +4437,8 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
             context_overlap=int(payload.get("context_overlap") or 4),
             beta_schedule=str(payload.get("beta_schedule") or "autoselect"),
             filename_prefix=filename_prefix,
+            loras=resolved_loras,
+            vae_name=vae_name,
         )
         req = {
             "checkpoint": checkpoint,
@@ -4172,6 +4461,8 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
             cfg=cfg,
             sampler=sampler,
             filename_prefix=filename_prefix,
+            loras=resolved_loras,
+            vae_name=vae_name,
         )
         req = {"checkpoint": checkpoint, "est_steps": steps, "est_frames": 1, "tags": required_tags}
         expected_frames = 1
@@ -4193,6 +4484,8 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
                 cfg=cfg,
                 sampler=sampler,
                 filename_prefix=filename_prefix,
+                loras=resolved_loras,
+                vae_name=vae_name,
             )
             req = {"checkpoint": checkpoint, "est_steps": steps, "est_frames": 1, "tags": required_tags}
             expected_frames = 1
@@ -4214,6 +4507,14 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
             )
 
     jobs.append_log(project_id, job_id, f"Using ComfyUI node: {node_url}".rstrip())
+    if resolved_loras:
+        lora_log = ", ".join(
+            f"{str(item.get('filename') or item.get('name') or 'lora')}@{float(item.get('weight', 1.0)):.2f}"
+            for item in resolved_loras
+        )
+        jobs.append_log(project_id, job_id, f"LoRAs: {lora_log}")
+    if vae_name:
+        jobs.append_log(project_id, job_id, f"VAE override: {vae_name}")
     try:
         submit = comfy.submit_prompt(node_url, wf)
         prompt_id = submit.get("prompt_id")
@@ -4254,7 +4555,30 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
                 # Assemble clip
                 if out_clip:
                     assemble_image_sequence(settings.ffmpeg_path, frames_dir, out_clip, fps=fps)
-                    return {"prompt_id": prompt_id, "saved": str(out_clip), "frames_dir": str(frames_dir)}
+                    metadata = _build_generation_metadata(
+                        project_id=project_id,
+                        job_id=job_id,
+                        output_path=out_clip,
+                        payload=payload,
+                        workflow_family=f"motion_{engine}",
+                        checkpoint=str(checkpoint),
+                        loras=resolved_loras,
+                        controlnet_units=[],
+                        vae_name=vae_name,
+                        prompt_id=str(prompt_id),
+                        comfyui_image=ims[0] if ims else None,
+                        node_url=node_url,
+                        artifact_key="video",
+                    )
+                    metadata["frames_dir"] = _project_relative_path(project_id, frames_dir)
+                    metadata_path = _write_generation_metadata(out_clip, metadata)
+                    return {
+                        "prompt_id": prompt_id,
+                        "saved": str(out_clip),
+                        "frames_dir": str(frames_dir),
+                        "metadata_path": str(metadata_path),
+                        "metadata": metadata,
+                    }
                 # Fallback: no clip target provided
                 return {"prompt_id": prompt_id, "frames_dir": str(frames_dir)}
 
@@ -4295,24 +4619,12 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
             if not audio_path.exists():
                 audio_path = None
 
-        settings_obj = InternalVideoSettings(
-            fps_render=int(payload.get("fps_render", 2)),
-            fps_output=int(payload.get("fps_output", 24)),
-            width=int(payload.get("width", 768)),
-            height=int(payload.get("height", 432)),
-            steps=int(payload.get("steps", 15)),
-            cfg=float(payload.get("cfg", 7.0)),
-            keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
-            interpolation_engine=str(payload.get("interpolation_engine", "auto")),
-            negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
+        settings_obj = _internal_settings_from_payload(
+            payload,
             model_id="proxy_draft",
+            render_tier=str(payload.get("render_tier") or "auto"),
+            device_preference="cpu",
             temporal_mode="off",
-            temporal_strength=float(payload.get("temporal_strength", 0.35)),
-            temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
-            refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
-            anchor_strength=float(payload.get("anchor_strength", 0.20)),
-            prompt_blend=bool(payload.get("prompt_blend", True)),
-            resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
         )
 
         runtime_checkpoint: dict[str, Any] | None = None
@@ -4444,26 +4756,15 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
             if not audio_path.exists():
                 audio_path = None
 
-        settings_obj = InternalVideoSettings(
-            fps_render=int(payload.get("fps_render", 2)),
-            fps_output=int(payload.get("fps_output", 24)),
-            width=int(payload.get("width", 768)),
-            height=int(payload.get("height", 432)),
-            steps=int(payload.get("steps", 15)),
-            cfg=float(payload.get("cfg", provider_cfg.get("cfg_scale", 6.5))),
-            keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
-            interpolation_engine=str(payload.get("interpolation_engine", "auto")),
-            negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
+        hosted_payload = dict(payload)
+        hosted_payload.setdefault("cfg", provider_cfg.get("cfg_scale", 6.5))
+        hosted_payload.setdefault("temporal_strength", provider_cfg.get("strength", 0.55))
+        settings_obj = _internal_settings_from_payload(
+            hosted_payload,
             model_id=str(preflight.get("model_id") or "stability:sd3:sd3.5-large-turbo"),
             render_tier=str(payload.get("render_tier") or "auto"),
             device_preference="cpu",
             temporal_mode="keyframes" if str(payload.get("temporal_mode") or "frame_img2img") == "frame_img2img" else str(payload.get("temporal_mode") or "keyframes"),
-            temporal_strength=float(payload.get("temporal_strength", provider_cfg.get("strength", 0.55))),
-            temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
-            refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
-            anchor_strength=float(payload.get("anchor_strength", 0.20)),
-            prompt_blend=bool(payload.get("prompt_blend", True)),
-            resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
         )
 
         runtime_checkpoint: dict[str, Any] | None = None
@@ -4737,6 +5038,20 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
         raise HTTPException(400, "Selected variant has no scenes")
 
     created = []
+    resolved_loras = _normalize_render_loras(getattr(req, "loras", []))
+    controlnet_units = _normalize_controlnet_units(getattr(req, "controlnet_units", []))
+    if req.workflow_family == "controlnet" and not controlnet_units and req.controlnet_model and req.reference_asset:
+        controlnet_units = _normalize_controlnet_units(
+            [
+                {
+                    "model": req.controlnet_model,
+                    "reference_asset": req.reference_asset,
+                    "conditioning_mode": req.conditioning_mode,
+                    "strength": req.controlnet_strength,
+                }
+            ]
+        )
+    vae_name = _resolve_optional_comfy_asset_name(req.vae, folder="vae", allowed_kinds={"vae"})
     selection = _resolve_comfy_still_selection(
         model_id=req.model_id,
         checkpoint=req.checkpoint,
@@ -4744,6 +5059,7 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
         controlnet_model=req.controlnet_model,
         reference_asset=req.reference_asset,
         conditioning_mode=req.conditioning_mode,
+        controlnet_units=controlnet_units,
     )
     model_tag = _safe_name_tag(req.model_id or selection.get("checkpoint") or "default")
     workflow_tag = _safe_name_tag(selection.get("workflow_family") or "txt2img")
@@ -4752,7 +5068,7 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
         # Deterministic output path for caching
         out_dir = store.project_dir(project_id) / "outputs" / "images"
         out_dir.mkdir(parents=True, exist_ok=True)
-        seed = _stable_seed(project_id, req.variant_index, idx)
+        seed = int(req.seed) + idx if req.seed is not None else _stable_seed(project_id, req.variant_index, idx)
         out_path = out_dir / f"v{req.variant_index:02d}_scene{idx:03d}_{workflow_tag}_{model_tag}_{ref_tag}_seed{seed}.png"
         p = {
             "variant_index": req.variant_index,
@@ -4768,11 +5084,20 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
             "sampler": req.sampler,
             "checkpoint": selection.get("checkpoint"),
             "workflow_family": selection.get("workflow_family"),
+            "source_asset": req.source_asset,
             "reference_asset": req.reference_asset,
+            "inpaint_mask": req.inpaint_mask,
             "conditioning_mode": selection.get("conditioning_mode"),
             "controlnet_model": req.controlnet_model,
             "controlnet_name": selection.get("controlnet_name"),
             "controlnet_strength": req.controlnet_strength,
+            "controlnet_units": controlnet_units,
+            "loras": resolved_loras,
+            "vae": vae_name,
+            "denoise_strength": req.denoise_strength,
+            "hires_fix": _request_payload(req.hires_fix) if req.hires_fix else None,
+            "refiner": _request_payload(req.refiner) if req.refiner else None,
+            "upscaler": req.upscaler,
             "out_path": str(out_path),
         }
         job = jobs.create(project_id, "comfyui_scene", p)
@@ -4827,6 +5152,43 @@ def _internal_model_family(model_path: Path) -> str:
         except Exception:
             pass
     return "sd15"
+
+
+def _internal_settings_from_payload(
+    payload: dict[str, Any],
+    *,
+    model_id: str,
+    render_tier: str,
+    device_preference: str,
+    temporal_mode: str | None = None,
+) -> InternalVideoSettings:
+    refiner = payload.get("refiner") if isinstance(payload.get("refiner"), dict) else None
+    return InternalVideoSettings(
+        fps_render=int(payload.get("fps_render", 2)),
+        fps_output=int(payload.get("fps_output", 24)),
+        width=int(payload.get("width", 768)),
+        height=int(payload.get("height", 432)),
+        steps=int(payload.get("steps", 15)),
+        cfg=float(payload.get("cfg", 7.0)),
+        sampler=str(payload.get("sampler", "euler")),
+        seed=(int(payload["seed"]) if payload.get("seed") is not None else None),
+        keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
+        interpolation_engine=str(payload.get("interpolation_engine", "auto")),
+        negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
+        model_id=model_id,
+        loras=tuple(_normalize_render_loras(payload.get("loras"))),
+        vae=str(payload.get("vae") or "").strip() or None,
+        refiner=refiner,
+        render_tier=render_tier,
+        device_preference=device_preference,
+        temporal_mode=temporal_mode if temporal_mode is not None else str(payload.get("temporal_mode", "frame_img2img")),
+        temporal_strength=float(payload.get("temporal_strength", 0.35)),
+        temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
+        refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
+        anchor_strength=float(payload.get("anchor_strength", 0.20)),
+        prompt_blend=bool(payload.get("prompt_blend", True)),
+        resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
+    )
 
 
 def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -> tuple[Any, dict[str, Any], str, Path, InternalVideoSettings]:
@@ -4913,26 +5275,11 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
     if requested_device == "auto" and str(hw.get("backend") or "").lower() == "directml" and model_family not in {"sd15", "sdxl"}:
         effective_device_preference = "cpu"
 
-    settings_obj = InternalVideoSettings(
-        fps_render=int(payload.get("fps_render", 2)),
-        fps_output=int(payload.get("fps_output", 24)),
-        width=int(payload.get("width", 768)),
-        height=int(payload.get("height", 432)),
-        steps=int(payload.get("steps", 15)),
-        cfg=float(payload.get("cfg", 7.0)),
-        keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
-        interpolation_engine=str(payload.get("interpolation_engine", "auto")),
-        negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
+    settings_obj = _internal_settings_from_payload(
+        payload,
         model_id=model_id,
         render_tier=str(tier_plan.get("applied_tier") or payload.get("render_tier") or "auto"),
         device_preference=effective_device_preference,
-        temporal_mode=str(payload.get("temporal_mode", "frame_img2img")),
-        temporal_strength=float(payload.get("temporal_strength", 0.35)),
-        temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
-        refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
-        anchor_strength=float(payload.get("anchor_strength", 0.20)),
-        prompt_blend=bool(payload.get("prompt_blend", True)),
-        resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
     )
     return proj, variant, model_id, model_path, settings_obj
 
@@ -4961,26 +5308,12 @@ def _proxy_render_preflight_data(
     if not scenes:
         raise UserFacingError("Selected variant has no scenes", hint="Re-run Plan with at least 1 scene.")
 
-    settings_obj = InternalVideoSettings(
-        fps_render=int(payload.get("fps_render", 2)),
-        fps_output=int(payload.get("fps_output", 24)),
-        width=int(payload.get("width", 768)),
-        height=int(payload.get("height", 432)),
-        steps=int(payload.get("steps", 15)),
-        cfg=float(payload.get("cfg", 7.0)),
-        keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
-        interpolation_engine=str(payload.get("interpolation_engine", "auto")),
-        negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
+    settings_obj = _internal_settings_from_payload(
+        payload,
         model_id="proxy_draft",
         render_tier=str(payload.get("render_tier") or "auto"),
         device_preference="cpu",
         temporal_mode="off",
-        temporal_strength=float(payload.get("temporal_strength", 0.35)),
-        temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
-        refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
-        anchor_strength=float(payload.get("anchor_strength", 0.20)),
-        prompt_blend=bool(payload.get("prompt_blend", True)),
-        resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
     )
 
     duration_s = _resolved_project_duration_s(proj, variant, scenes)
@@ -5083,26 +5416,15 @@ def _hosted_render_preflight_data(
     hosted_style = str(payload.get("hosted_style_preset") or provider_cfg.get("style_preset") or "none").strip().lower()
     hosted_model_id = f"stability:{hosted_service}:{hosted_model if hosted_service == 'sd3' else 'default'}"
 
-    settings_obj = InternalVideoSettings(
-        fps_render=int(payload.get("fps_render", 2)),
-        fps_output=int(payload.get("fps_output", 24)),
-        width=int(payload.get("width", 768)),
-        height=int(payload.get("height", 432)),
-        steps=int(payload.get("steps", 15)),
-        cfg=float(payload.get("cfg", provider_cfg.get("cfg_scale", 6.5))),
-        keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
-        interpolation_engine=str(payload.get("interpolation_engine", "auto")),
-        negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
+    hosted_payload = dict(payload)
+    hosted_payload.setdefault("cfg", provider_cfg.get("cfg_scale", 6.5))
+    hosted_payload.setdefault("temporal_strength", provider_cfg.get("strength", 0.55))
+    settings_obj = _internal_settings_from_payload(
+        hosted_payload,
         model_id=hosted_model_id,
         render_tier=str(payload.get("render_tier") or "auto"),
         device_preference="cpu",
         temporal_mode="keyframes" if str(payload.get("temporal_mode") or "frame_img2img") == "frame_img2img" else str(payload.get("temporal_mode") or "keyframes"),
-        temporal_strength=float(payload.get("temporal_strength", provider_cfg.get("strength", 0.55))),
-        temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
-        refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
-        anchor_strength=float(payload.get("anchor_strength", 0.20)),
-        prompt_blend=bool(payload.get("prompt_blend", True)),
-        resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
     )
 
     duration_s = _resolved_project_duration_s(proj, variant, scenes)
@@ -5280,6 +5602,8 @@ def render_motion_scenes(project_id: str, req: RenderMotionRequest):
         raise HTTPException(400, "Selected variant has no scenes")
 
     created = []
+    resolved_loras = _normalize_render_loras(getattr(req, "loras", []))
+    vae_name = _resolve_optional_comfy_asset_name(req.vae, folder="vae", allowed_kinds={"vae"})
     motion_selection = _resolve_comfy_motion_selection(
         model_id=req.model_id,
         checkpoint=req.checkpoint,
@@ -5301,7 +5625,7 @@ def render_motion_scenes(project_id: str, req: RenderMotionRequest):
         if req.engine == "svd":
             frames = min(frames, 25)
 
-        seed = _stable_seed(project_id, req.variant_index, idx)
+        seed = int(req.seed) + idx if req.seed is not None else _stable_seed(project_id, req.variant_index, idx)
         pdir = store.project_dir(project_id)
         frames_dir = pdir / "outputs" / "frames" / f"v{req.variant_index:02d}" / f"scene{idx:03d}" / f"{req.engine}_{model_tag}_{svd_tag}_seed{seed}"
         out_clip = pdir / "outputs" / "clips" / f"v{req.variant_index:02d}_scene{idx:03d}_{req.engine}_{model_tag}_{svd_tag}_seed{seed}.mp4"
@@ -5324,6 +5648,8 @@ def render_motion_scenes(project_id: str, req: RenderMotionRequest):
             "engine": req.engine,
             "frames_dir": str(frames_dir),
             "out_clip": str(out_clip),
+            "loras": resolved_loras,
+            "vae": vae_name,
             "motion_model_name": req.motion_model_name,
             "context_length": req.context_length,
             "context_overlap": req.context_overlap,
@@ -5701,6 +6027,14 @@ def export_comfyui_workflows(
     reference_asset: str | None = None,
     controlnet_model: str | None = None,
     conditioning_mode: str = "raw",
+    width: int | None = None,
+    height: int | None = None,
+    steps: int | None = None,
+    cfg: float | None = None,
+    sampler: str | None = None,
+    negative_prompt: str | None = None,
+    seed: int | None = None,
+    loras_json: str | None = None,
 ):
     """Compile plan scenes into per-scene ComfyUI workflow JSON files."""
     proj = store.get(project_id)
@@ -5720,6 +6054,13 @@ def export_comfyui_workflows(
     out_dir = store.project_dir(project_id) / "outputs" / "comfyui_workflows" / f"variant_{variant_index:02d}"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_files = []
+    loras = []
+    if loras_json:
+        try:
+            parsed_loras = json.loads(loras_json)
+        except Exception:
+            parsed_loras = []
+        loras = _normalize_render_loras(parsed_loras)
     selection = _resolve_comfy_still_selection(
         model_id=model_id,
         checkpoint=None,
@@ -5744,29 +6085,31 @@ def export_comfyui_workflows(
             wf = comfy.controlnet_workflow(
                 checkpoint=checkpoint,
                 prompt=str(sc.get("prompt") or ""),
-                negative_prompt=str(sc.get("negative_prompt") or "(low quality, worst quality)"),
-                seed=int(sc.get("seed") or (idx + 12345)),
-                width=int(sc.get("width") or 768),
-                height=int(sc.get("height") or 432),
-                steps=int(sc.get("steps") or 20),
-                cfg=float(sc.get("cfg") or 6.5),
-                sampler=str(sc.get("sampler") or "euler"),
+                negative_prompt=str(negative_prompt or sc.get("negative_prompt") or "(low quality, worst quality)"),
+                seed=int(seed if seed is not None else (sc.get("seed") or (idx + 12345))),
+                width=int(width or sc.get("width") or 768),
+                height=int(height or sc.get("height") or 432),
+                steps=int(steps or sc.get("steps") or 20),
+                cfg=float(cfg if cfg is not None else (sc.get("cfg") or 6.5)),
+                sampler=str(sampler or sc.get("sampler") or "euler"),
                 controlnet_name=str(selection.get("controlnet_name") or ""),
                 reference_image=str(reference_image or "reference.png"),
                 controlnet_strength=0.8,
                 filename_prefix=f"scene_{idx:03d}",
+                loras=loras,
             )
         else:
             wf = comfy.default_workflow(
                 checkpoint=checkpoint,
                 prompt=str(sc.get("prompt") or ""),
-                negative_prompt=str(sc.get("negative_prompt") or "(low quality, worst quality)"),
-                seed=int(sc.get("seed") or (idx + 12345)),
-                width=int(sc.get("width") or 768),
-                height=int(sc.get("height") or 432),
-                steps=int(sc.get("steps") or 20),
-                cfg=float(sc.get("cfg") or 6.5),
-                sampler=str(sc.get("sampler") or "euler"),
+                negative_prompt=str(negative_prompt or sc.get("negative_prompt") or "(low quality, worst quality)"),
+                seed=int(seed if seed is not None else (sc.get("seed") or (idx + 12345))),
+                width=int(width or sc.get("width") or 768),
+                height=int(height or sc.get("height") or 432),
+                steps=int(steps or sc.get("steps") or 20),
+                cfg=float(cfg if cfg is not None else (sc.get("cfg") or 6.5)),
+                sampler=str(sampler or sc.get("sampler") or "euler"),
+                loras=loras,
             )
         p = out_dir / f"scene_{idx:03d}.json"
         p.write_text(json.dumps(wf, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -5966,12 +6309,20 @@ def list_outputs(project_id: str):
     def _file_entry(fp: Path) -> dict[str, Any]:
         try:
             st = fp.stat()
-            return {
+            entry = {
                 "path": str(fp.relative_to(pdir)),
                 "name": fp.name,
                 "size_bytes": int(st.st_size),
                 "modified_at": float(st.st_mtime),
             }
+            metadata_path = _output_metadata_path(fp)
+            if metadata_path.exists():
+                entry["metadata_path"] = str(metadata_path.relative_to(pdir))
+                try:
+                    entry["metadata"] = json.loads(metadata_path.read_text(encoding="utf-8"))
+                except Exception:
+                    entry["metadata_error"] = "invalid_json"
+            return entry
         except Exception:
             return {"path": str(fp.relative_to(pdir)), "name": fp.name}
 

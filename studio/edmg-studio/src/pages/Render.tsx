@@ -3,13 +3,14 @@ import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
 import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
-import { readRenderDefaults } from "../components/renderDefaults";
+import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import { copyPathValue, desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 
 type CatalogEntry = {
   id: string;
   name: string;
   kind: string;
+  source?: string;
   filename?: string;
   render?: {
     checkpoint_name?: string;
@@ -19,6 +20,22 @@ type CatalogEntry = {
     render_modes?: string[];
   };
 };
+
+type SelectedLora = {
+  name: string;
+  label: string;
+  weight: number;
+};
+
+const SAMPLER_OPTIONS = [
+  "euler",
+  "euler_ancestral",
+  "heun",
+  "dpmpp_2m",
+  "dpmpp_2m_sde",
+  "dpmpp_sde",
+  "ddim",
+];
 
 export default function Render({ onNavigate }: { onNavigate?: (page: any) => void }) {
   const savedRenderDefaults = readRenderDefaults();
@@ -49,6 +66,17 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   const [conditioningMode, setConditioningMode] = useState<"raw" | "blur" | "edge" | "external">("blur");
   const [referenceAsset, setReferenceAsset] = useState<string>("");
   const [referenceUploadFile, setReferenceUploadFile] = useState<File | null>(null);
+  const [renderWidth, setRenderWidth] = useState<number>(Number(savedRenderDefaults.stillWidth ?? 1024));
+  const [renderHeight, setRenderHeight] = useState<number>(Number(savedRenderDefaults.stillHeight ?? 576));
+  const [renderSteps, setRenderSteps] = useState<number>(Number(savedRenderDefaults.stillSteps ?? 28));
+  const [renderCfg, setRenderCfg] = useState<number>(Number(savedRenderDefaults.stillCfg ?? 7));
+  const [renderSampler, setRenderSampler] = useState<string>(String(savedRenderDefaults.stillSampler || "euler"));
+  const [renderNegativePrompt, setRenderNegativePrompt] = useState<string>(
+    String(savedRenderDefaults.stillNegativePrompt || "blurry, low quality, watermark, text, logo")
+  );
+  const [renderSeed, setRenderSeed] = useState<string>(String(savedRenderDefaults.stillSeed || ""));
+  const [selectedLoras, setSelectedLoras] = useState<SelectedLora[]>([]);
+  const [loraToAdd, setLoraToAdd] = useState<string>("");
 
   const [internalFpsOut, setInternalFpsOut] = useState<number>(24);
   const [internalFpsRender, setInternalFpsRender] = useState<number>(2);
@@ -157,6 +185,7 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   const [hardware, setHardware] = useState<any>(null);
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [modelCatalog, setModelCatalog] = useState<CatalogEntry[]>([]);
+  const [installedModels, setInstalledModels] = useState<Record<string, boolean>>({});
   const [projectAssets, setProjectAssets] = useState<{ refs: { path: string }[] }>({ refs: [] });
   const [validate, setValidate] = useState<any>(null);
   const [internalPreflight, setInternalPreflight] = useState<any>(null);
@@ -188,6 +217,10 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   const internalModelOptions = useMemo(
     () => modelCatalog.filter((m) => m.kind === "diffusers"),
     [modelCatalog]
+  );
+  const loraModels = useMemo(
+    () => modelCatalog.filter((m) => m.kind === "lora" && installedModels[m.id] !== false),
+    [modelCatalog, installedModels]
   );
   const selectedStillModel = useMemo(
     () => comfyStillModels.find((m) => m.id === selectedStillModelId) || comfyStillModels[0] || null,
@@ -228,6 +261,24 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     allow_hosted_fallback: true,
     allow_proxy_fallback: true,
     resume_existing_frames: internalResumeExisting,
+  });
+
+  const parsedRenderSeed = useMemo(() => {
+    const trimmed = renderSeed.trim();
+    if (!trimmed) return undefined;
+    const value = Number(trimmed);
+    return Number.isFinite(value) ? Math.trunc(value) : undefined;
+  }, [renderSeed]);
+
+  const buildDiffusionPayload = () => ({
+    width: renderWidth,
+    height: renderHeight,
+    steps: renderSteps,
+    cfg: renderCfg,
+    sampler: renderSampler,
+    negative_prompt: renderNegativePrompt,
+    seed: parsedRenderSeed,
+    loras: selectedLoras.map((item) => ({ name: item.name, weight: item.weight })),
   });
 
   useEffect(() => {
@@ -329,8 +380,30 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     apiGet("/v1/comfyui/capabilities").then(setCaps).catch(() => {});
     apiGet("/v1/hardware").then((d) => setHardware(d)).catch(() => {});
     apiGet("/v1/settings/render_providers").then(setRenderProviders).catch(() => {});
-    apiGet("/v1/models/catalog").then((d) => setModelCatalog(Array.isArray(d?.catalog) ? d.catalog : [])).catch(() => {});
+    apiGet("/v1/models/catalog").then((d) => {
+      const built = Array.isArray(d?.catalog) ? d.catalog : [];
+      const user = Array.isArray(d?.user) ? d.user : [];
+      setModelCatalog([...(built as CatalogEntry[]), ...(user as CatalogEntry[])]);
+      setInstalledModels(d?.installed && typeof d.installed === "object" ? d.installed : {});
+    }).catch(() => {});
   }, [backendUrl]);
+
+  useEffect(() => {
+    writeRenderDefaults({
+      ...savedRenderDefaults,
+      stillWidth: renderWidth,
+      stillHeight: renderHeight,
+      stillSteps: renderSteps,
+      stillCfg: renderCfg,
+      stillSampler: renderSampler,
+      stillNegativePrompt: renderNegativePrompt,
+      stillSeed: renderSeed,
+    });
+  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed]);
+
+  useEffect(() => {
+    if (!loraToAdd && loraModels.length) setLoraToAdd(loraModels[0].id);
+  }, [loraModels, loraToAdd]);
 
   useEffect(() => {
     if (projectId) {
@@ -550,6 +623,20 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     if (p.resume_existing_frames != null) setInternalResumeExisting(Boolean(p.resume_existing_frames));
   };
 
+  const addSelectedLora = () => {
+    if (!loraToAdd) return;
+    const model = loraModels.find((item) => item.id === loraToAdd);
+    if (!model) return;
+    setSelectedLoras((current) => {
+      if (current.some((item) => item.name === model.id)) return current;
+      return [...current, { name: model.id, label: model.name, weight: 1.0 }];
+    });
+  };
+
+  const removeSelectedLora = (name: string) => {
+    setSelectedLoras((current) => current.filter((item) => item.name !== name));
+  };
+
   const renderScenes = async () => {
     setErr(null);
     setInfo(null);
@@ -559,6 +646,7 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
         model_id: selectedStillModel?.id || undefined,
         checkpoint: checkpointName || undefined,
         workflow_family: stillWorkflow,
+        ...buildDiffusionPayload(),
         reference_asset: stillWorkflow === "controlnet" ? referenceAsset || undefined : undefined,
         conditioning_mode: stillWorkflow === "controlnet" ? conditioningMode : undefined,
         controlnet_model: stillWorkflow === "controlnet" ? selectedControlnetModel?.id || undefined : undefined,
@@ -582,6 +670,7 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
         svd_model_id: renderMode === "motion_svd" ? selectedSvdModel?.id || undefined : undefined,
         checkpoint: checkpointName || undefined,
         variant_index: selectedVariant,
+        ...buildDiffusionPayload(),
         engine,
         fps: motionFps,
         max_frames_per_scene: maxFramesPerScene,
@@ -650,6 +739,14 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
         model_id: selectedStillModel?.id || "",
         workflow_family: stillWorkflow,
       });
+      params.set("width", String(renderWidth));
+      params.set("height", String(renderHeight));
+      params.set("steps", String(renderSteps));
+      params.set("cfg", String(renderCfg));
+      params.set("sampler", renderSampler);
+      params.set("negative_prompt", renderNegativePrompt);
+      if (parsedRenderSeed != null) params.set("seed", String(parsedRenderSeed));
+      if (selectedLoras.length) params.set("loras_json", JSON.stringify(selectedLoras.map((item) => ({ name: item.name, weight: item.weight }))));
       if (stillWorkflow === "controlnet") {
         if (referenceAsset) params.set("reference_asset", referenceAsset);
         if (selectedControlnetModel?.id) params.set("controlnet_model", selectedControlnetModel.id);
@@ -1479,6 +1576,102 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 </div>
                 <div className="small" style={{ opacity: 0.8, flex: 1, minWidth: 220 }}>
                   Studio maps these catalog entries to the installed Stability checkpoints so you do not have to remember filenames.
+                </div>
+              </div>
+              <div className="card" style={{ marginTop: 10 }}>
+                <div style={{ fontWeight: 900, marginBottom: 8 }}>Generation settings</div>
+                <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ minWidth: 120 }}>
+                    <div className="small">Width</div>
+                    <input type="number" min={256} max={2048} step={64} value={renderWidth} onChange={(e) => setRenderWidth(Number(e.target.value))} />
+                  </div>
+                  <div style={{ minWidth: 120 }}>
+                    <div className="small">Height</div>
+                    <input type="number" min={256} max={2048} step={64} value={renderHeight} onChange={(e) => setRenderHeight(Number(e.target.value))} />
+                  </div>
+                  <div style={{ minWidth: 120 }}>
+                    <div className="small">Steps</div>
+                    <input type="number" min={1} max={80} step={1} value={renderSteps} onChange={(e) => setRenderSteps(Number(e.target.value))} />
+                  </div>
+                  <div style={{ minWidth: 120 }}>
+                    <div className="small">CFG</div>
+                    <input type="number" min={1} max={20} step={0.1} value={renderCfg} onChange={(e) => setRenderCfg(Number(e.target.value))} />
+                  </div>
+                  <div style={{ minWidth: 180 }}>
+                    <div className="small">Sampler</div>
+                    <select value={renderSampler} onChange={(e) => setRenderSampler(e.target.value)}>
+                      {SAMPLER_OPTIONS.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ minWidth: 160 }}>
+                    <div className="small">Base seed</div>
+                    <input
+                      value={renderSeed}
+                      onChange={(e) => setRenderSeed(e.target.value)}
+                      placeholder="leave blank for auto"
+                    />
+                  </div>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <div className="small" style={{ marginBottom: 4 }}>Negative prompt</div>
+                  <textarea
+                    style={{ width: "100%", minHeight: 72 }}
+                    value={renderNegativePrompt}
+                    onChange={(e) => setRenderNegativePrompt(e.target.value)}
+                  />
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>LoRAs</div>
+                  <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <select value={loraToAdd} onChange={(e) => setLoraToAdd(e.target.value)} disabled={!loraModels.length}>
+                      {loraModels.length ? (
+                        loraModels.map((m) => (
+                          <option key={m.id} value={m.id}>{m.name}</option>
+                        ))
+                      ) : (
+                        <option value="">No installed LoRAs</option>
+                      )}
+                    </select>
+                    <button className="secondary" onClick={addSelectedLora} disabled={!loraModels.length}>
+                      Add LoRA
+                    </button>
+                    <div className="small" style={{ opacity: 0.8 }}>
+                      Import LoRAs from Models to make them selectable here.
+                    </div>
+                  </div>
+                  {selectedLoras.length ? (
+                    <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                      {selectedLoras.map((item) => (
+                        <div key={item.name} className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                          <div style={{ minWidth: 280 }}>{item.label}</div>
+                          <label className="small">Weight</label>
+                          <input
+                            type="number"
+                            min={-4}
+                            max={4}
+                            step={0.05}
+                            value={item.weight}
+                            onChange={(e) => {
+                              const nextWeight = Number(e.target.value);
+                              setSelectedLoras((current) => current.map((entry) => (
+                                entry.name === item.name ? { ...entry, weight: nextWeight } : entry
+                              )));
+                            }}
+                            style={{ width: 110 }}
+                          />
+                          <button className="secondary" onClick={() => removeSelectedLora(item.name)}>
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
+                      No LoRAs attached. Scene prompts will run against the selected base model only.
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>

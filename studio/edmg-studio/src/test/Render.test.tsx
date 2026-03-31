@@ -38,10 +38,18 @@ describe("Render page", () => {
             kind: "diffusers",
           },
         ],
-        user: [],
+        user: [
+          {
+            id: "local_lora_neon",
+            name: "Neon Accent LoRA",
+            kind: "lora",
+            source: "local",
+            filename: "neon-accent.safetensors",
+          },
+        ],
         packs: [],
         accepted: {},
-        installed: {},
+        installed: { local_lora_neon: true },
       },
       "/v1/projects/p1": {
         project: {
@@ -99,6 +107,9 @@ describe("Render page", () => {
 
     expect(await screen.findByRole("heading", { name: "Render" })).toBeTruthy();
     expect(await screen.findByText("Creative direction")).toBeTruthy();
+    expect(await screen.findByText("Generation settings")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Add LoRA" }));
+    expect((await screen.findAllByText("Neon Accent LoRA")).length).toBeGreaterThan(1);
     fireEvent.click(await screen.findByRole("button", { name: "Open Outputs" }));
     expect(onNavigate).toHaveBeenCalledWith("outputs");
   }, 10000);

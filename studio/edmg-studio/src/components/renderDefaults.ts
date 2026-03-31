@@ -5,6 +5,13 @@ export type StudioRenderDefaults = {
   renderPreset?: "fast" | "balanced" | "quality" | "ultra";
   internalRenderTier?: "auto" | "draft" | "balanced" | "quality";
   internalResumeExisting?: boolean;
+  stillWidth?: number;
+  stillHeight?: number;
+  stillSteps?: number;
+  stillCfg?: number;
+  stillSampler?: string;
+  stillNegativePrompt?: string;
+  stillSeed?: string;
 };
 
 const KEY = "edmg_render_defaults";

@@ -6,7 +6,7 @@ import json
 import math
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +32,16 @@ class InternalVideoSettings:
 
     steps: int = 15
     cfg: float = 7.0
+    sampler: str = "euler"
+    seed: int | None = None
     keyframe_interval_s: float = 5.0
 
     interpolation_engine: str = "auto"  # auto|minterpolate|fps|rife
     negative_prompt: str = "blurry, low quality, watermark, text, logo"
     model_id: str = "hf_sd15_internal"
+    loras: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    vae: str | None = None
+    refiner: dict[str, Any] | None = None
     render_tier: str = "auto"
     device_preference: str = "auto"
 
@@ -72,6 +77,14 @@ class _EmbedCache:
     @classmethod
     def set(cls, key: tuple[str, str], value: Any) -> None:
         cls._cache[key] = value
+
+
+def _stable_seed_int(*parts: Any, fallback: int = 0) -> int:
+    raw = "|".join(str(part) for part in parts if part is not None)
+    if not raw:
+        return int(fallback)
+    digest = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:8]
+    return int(digest, 16)
 
 
 
@@ -249,9 +262,14 @@ def _render_signature(
         "height": int(settings.height),
         "steps": int(settings.steps),
         "cfg": float(settings.cfg),
+        "sampler": str(settings.sampler),
+        "seed": settings.seed,
         "keyframe_interval_s": float(settings.keyframe_interval_s),
         "interpolation_engine": str(settings.interpolation_engine),
         "model_id": str(settings.model_id),
+        "loras_digest": _json_digest(list(settings.loras)),
+        "vae": str(settings.vae or ""),
+        "refiner": settings.refiner or None,
         "render_tier": str(settings.render_tier),
         "device_preference": str(settings.device_preference),
         "temporal_mode": str(settings.temporal_mode),
@@ -1262,7 +1280,7 @@ def render_internal_video_variant(
         if cancel_check_fn:
             cancel_check_fn()
         p = _prompt_at_time(scenes, t, timeline=timeline) or "cinematic"
-        seed = int(hash(f"key:{t}:{p}") & 0x7FFFFFFF)
+        seed = _stable_seed_int("key", settings.seed, t, p, work_tag)
         if log_fn:
             log_fn(f"Keyframe {i+1}/{len(key_times)} t={t:.2f}s seed={seed} device={device}")
         if progress_fn:
@@ -1383,7 +1401,7 @@ def render_internal_video_variant(
             if settings.anchor_strength > 0:
                 init = Image.blend(init.convert("RGB"), anchor.convert("RGB"), float(settings.anchor_strength))
 
-            seed = int(hash(f"frame:{fi}:{t:.3f}") & 0x7FFFFFFF)
+            seed = _stable_seed_int("frame", settings.seed, fi, f"{t:.3f}", work_tag)
             if fi % refine_every == 0:
                 if log_fn and fi % max(1, fps_r * 3) == 0:
                     log_fn(f"Refining frame {fi+1}/{total_frames} strength={settings.temporal_strength:.2f} steps={steps_refine}")
@@ -1501,6 +1519,8 @@ def render_internal_video_variant(
             "height": int(settings.height),
             "steps": int(settings.steps),
             "cfg": float(settings.cfg),
+            "sampler": str(settings.sampler),
+            "seed": settings.seed,
             "keyframe_interval_s": float(settings.keyframe_interval_s),
             "interpolation_engine": str(settings.interpolation_engine),
             "temporal_mode": str(settings.temporal_mode),
@@ -1511,6 +1531,10 @@ def render_internal_video_variant(
             "prompt_blend": bool(settings.prompt_blend),
             "resume_existing_frames": bool(settings.resume_existing_frames),
             "model_id": str(settings.model_id),
+            "negative_prompt": str(settings.negative_prompt),
+            "loras": list(settings.loras),
+            "vae": settings.vae,
+            "refiner": settings.refiner,
         },
         "frames": {
             "expected": int(total_frames),
@@ -2151,7 +2175,7 @@ def render_internal_diffusion_preview_segment(
         torch = None  # type: ignore
 
     # Stable seed for repeatable previews
-    base_seed = int(seed) if seed is not None else 1337
+    base_seed = int(seed) if seed is not None else int(settings.seed or 1337)
     gen = None
     try:
         if torch is not None:

@@ -380,6 +380,129 @@ class ModelManager:
                 out[mid] = False
         return out
 
+    def _iter_comfy_model_dirs(self, folder: str) -> list[Path]:
+        dirs = [self._comfy_models_dir(folder)]
+        legacy_root = self._legacy_comfy_models_dir(folder)
+        if legacy_root is not None:
+            dirs.append(legacy_root)
+        return dirs
+
+    def _find_existing_comfy_file(self, folder: str, ref: str) -> Path | None:
+        raw = str(ref or "").strip()
+        if not raw:
+            return None
+
+        candidates = {raw, Path(raw).name}
+        stem = Path(raw).stem
+        for model_dir in self._iter_comfy_model_dirs(folder):
+            for candidate in candidates:
+                match = model_dir / candidate
+                if match.exists() and match.is_file():
+                    return match
+            if stem:
+                for match in model_dir.glob("*"):
+                    if match.is_file() and match.stem == stem:
+                        return match
+        return None
+
+    def resolve_comfy_asset(
+        self,
+        ref: str,
+        *,
+        folder: str,
+        allowed_kinds: set[str] | None = None,
+    ) -> dict[str, Any]:
+        raw = str(ref or "").strip()
+        if not raw:
+            raise UserFacingError("Missing model selection", hint=f"Pick a Studio {folder.rstrip('s')} first.")
+
+        entry = self._find_entry(raw)
+        if entry is None:
+            normalized_folder = str(folder or "checkpoints").strip().lower()
+            for candidate in self._all_entries():
+                if not isinstance(candidate, dict):
+                    continue
+                target = candidate.get("target") if isinstance(candidate.get("target"), dict) else {}
+                candidate_folder = str(target.get("folder") or "checkpoints").strip().lower()
+                filename = str(candidate.get("filename") or "").strip()
+                if candidate_folder != normalized_folder:
+                    continue
+                if filename == raw or Path(filename).stem == Path(raw).stem:
+                    entry = candidate
+                    break
+
+        if entry is not None:
+            kind = str(entry.get("kind") or "").strip().lower()
+            if allowed_kinds and kind not in allowed_kinds:
+                expected = ", ".join(sorted(allowed_kinds))
+                raise UserFacingError(
+                    f"{entry.get('name') or raw} is not a valid {folder.rstrip('s')} selection",
+                    hint=f"Pick a Studio asset of type: {expected}.",
+                )
+
+            filename = str(
+                entry.get("filename")
+                or Path(str(entry.get("source_path") or "")).name
+                or raw
+            ).strip()
+            installed = self.installed_path(str(entry.get("id") or ""))
+            resolved_path = installed or self._find_existing_comfy_file(folder, filename)
+            if resolved_path is None:
+                raise UserFacingError(
+                    f"{entry.get('name') or filename} is not installed",
+                    hint="Install the asset in Model Manager, or import it as a local Studio model first.",
+                )
+
+            return {
+                "id": entry.get("id"),
+                "name": entry.get("name") or Path(filename).stem,
+                "kind": entry.get("kind") or folder.rstrip("s"),
+                "filename": resolved_path.name,
+                "path": str(resolved_path),
+                "source": entry.get("source") or "local",
+                "folder": folder,
+            }
+
+        resolved_path = self._find_existing_comfy_file(folder, raw)
+        if resolved_path is None:
+            raise UserFacingError(
+                f"Unknown Studio asset: {raw}",
+                hint=f"Import the file into Models as a {folder.rstrip('s')} first, then retry.",
+            )
+
+        return {
+            "id": None,
+            "name": resolved_path.stem,
+            "kind": folder.rstrip("s"),
+            "filename": resolved_path.name,
+            "path": str(resolved_path),
+            "source": "local",
+            "folder": folder,
+        }
+
+    def resolve_loras(self, requested: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        resolved: list[dict[str, Any]] = []
+        for item in requested or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            asset = self.resolve_comfy_asset(name, folder="loras", allowed_kinds={"lora"})
+            weight = float(item.get("weight", 1.0))
+            clip_weight = item.get("clip_weight")
+            resolved.append(
+                {
+                    "id": asset.get("id"),
+                    "name": asset.get("name") or Path(asset["filename"]).stem,
+                    "filename": asset["filename"],
+                    "path": asset["path"],
+                    "weight": weight,
+                    "clip_weight": float(clip_weight) if clip_weight is not None else weight,
+                }
+            )
+        return resolved
+
     # ---- installers ----
     def _install_ollama(self, task: ModelTask, entry: dict[str, Any]) -> None:
         model = str(entry.get("ollama_model") or "")

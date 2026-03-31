@@ -2,6 +2,38 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from typing import Any, Literal
 
+ConditioningMode = Literal["raw", "blur", "edge", "external"]
+DiffusionWorkflowFamily = Literal["auto", "txt2img", "img2img", "inpaint", "outpaint", "controlnet"]
+
+
+class LoraSelection(BaseModel):
+    name: str = Field(min_length=1, max_length=260)
+    weight: float = Field(default=1.0, ge=-4.0, le=4.0)
+    clip_weight: float | None = Field(default=None, ge=-4.0, le=4.0)
+
+
+class ControlNetUnit(BaseModel):
+    model: str = Field(min_length=1, max_length=260)
+    reference_asset: str = Field(min_length=1, max_length=1024)
+    conditioning_mode: ConditioningMode = "raw"
+    strength: float = Field(default=0.8, ge=0.0, le=2.0)
+    start_percent: float = Field(default=0.0, ge=0.0, le=1.0)
+    end_percent: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class HiresFixSettings(BaseModel):
+    enabled: bool = True
+    scale: float = Field(default=1.5, ge=1.0, le=4.0)
+    steps: int | None = Field(default=None, ge=1, le=80)
+    denoise: float = Field(default=0.35, ge=0.0, le=1.0)
+    upscaler: str | None = None
+
+
+class RefinerSettings(BaseModel):
+    model: str | None = None
+    switch_at: float = Field(default=0.8, ge=0.0, le=1.0)
+    steps: int | None = Field(default=None, ge=1, le=80)
+
 class HealthResponse(BaseModel):
     ok: bool = True
     version: str = "1.1.0"
@@ -25,11 +57,21 @@ class RenderScenesRequest(BaseModel):
     variant_index: int = 0
     model_id: str | None = None
     checkpoint: str | None = None  # optional checkpoint filename for ComfyUI
-    workflow_family: Literal["auto", "txt2img", "controlnet"] = "auto"
+    workflow_family: DiffusionWorkflowFamily = "auto"
+    seed: int | None = None
     reference_asset: str | None = None
-    conditioning_mode: Literal["raw", "blur", "edge", "external"] = "raw"
+    source_asset: str | None = None
+    inpaint_mask: str | None = None
+    conditioning_mode: ConditioningMode = "raw"
     controlnet_model: str | None = None
     controlnet_strength: float = Field(default=0.8, ge=0.0, le=2.0)
+    loras: list[LoraSelection] = Field(default_factory=list)
+    controlnet_units: list[ControlNetUnit] = Field(default_factory=list)
+    vae: str | None = None
+    denoise_strength: float = Field(default=0.75, ge=0.0, le=1.0)
+    hires_fix: HiresFixSettings | None = None
+    refiner: RefinerSettings | None = None
+    upscaler: str | None = None
     width: int = 1024
     height: int = 576
     steps: int = 28
@@ -47,6 +89,7 @@ class RenderMotionRequest(BaseModel):
     checkpoint: str | None = None  # optional base checkpoint filename for ComfyUI
     svd_model_id: str | None = None
     engine: MotionEngine = "animatediff"
+    seed: int | None = None
 
     # Output / timeline
     fps: int = Field(default=12, ge=1, le=60)
@@ -59,6 +102,8 @@ class RenderMotionRequest(BaseModel):
     cfg: float = 6.5
     sampler: str = "euler"
     negative_prompt: str = "blurry, low quality, watermark, text, logo"
+    loras: list[LoraSelection] = Field(default_factory=list)
+    vae: str | None = None
 
     # AnimateDiff Evolved settings
     motion_model_name: str = "mm_sd_v15_v2.ckpt"
@@ -97,6 +142,8 @@ class InternalVideoRenderRequest(BaseModel):
 
     steps: int = Field(default=15, ge=1, le=80)
     cfg: float = Field(default=7.0, ge=1.0, le=20.0)
+    sampler: str = "euler"
+    seed: int | None = None
     keyframe_interval_s: float = Field(default=5.0, ge=0.5, le=60.0)
 
     interpolation_engine: Literal["auto","minterpolate","fps","rife"] = "auto"
@@ -110,6 +157,9 @@ class InternalVideoRenderRequest(BaseModel):
     hosted_model: str | None = None
     hosted_style_preset: str | None = None
     negative_prompt: str = "blurry, low quality, watermark, text, logo"
+    loras: list[LoraSelection] = Field(default_factory=list)
+    vae: str | None = None
+    refiner: RefinerSettings | None = None
 
     temporal_mode: Literal["off","keyframes","frame_img2img"] = "frame_img2img"
     temporal_strength: float = Field(default=0.35, ge=0.01, le=0.99)
