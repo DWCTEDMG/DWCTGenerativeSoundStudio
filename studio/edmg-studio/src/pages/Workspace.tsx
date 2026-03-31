@@ -102,6 +102,12 @@ export default function Workspace({ onNavigate }: PageProps) {
 
   const variantScenes = plan?.variants?.[selectedVariant]?.scenes || [];
   const durationS = analysis?.features?.duration_s || analysis?.features?.duration || plan?.duration_s || 0;
+  const refAssets = Array.isArray(assets?.refs) ? assets.refs : [];
+  const variantCount = Array.isArray(plan?.variants) ? plan.variants.length : 0;
+  const selectedVariantName =
+    plan?.variants?.[selectedVariant]?.name || (variantCount ? `Variant ${selectedVariant + 1}` : "none");
+  const analysisReady = Boolean(analysis);
+  const audioReady = Boolean(project?.meta?.audio);
 
   const Timeline = () => {
     if (!variantScenes.length) return <div className="small">No scenes. Generate a plan to see a timeline.</div>;
@@ -113,23 +119,30 @@ export default function Workspace({ onNavigate }: PageProps) {
     const maxT = Math.ceil(maxDur / tickEvery) * tickEvery;
     for (let t = 0; t <= maxT; t += tickEvery) ticks.push(t);
     return (
-      <div>
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+      <div className="workspace-timelinePane">
+        <div className="workspace-timelineToolbar">
           <div className="small">Zoom</div>
-          <input style={{ width: 220 }} type="range" min={20} max={160} value={timelineZoom} onChange={(e) => setTimelineZoom(Number(e.target.value))} />
+          <input
+            className="workspace-timelineRange"
+            type="range"
+            min={20}
+            max={160}
+            value={timelineZoom}
+            onChange={(e) => setTimelineZoom(Number(e.target.value))}
+          />
           <div className="small">{timelineZoom}px/s</div>
         </div>
-        <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: 12, marginTop: 10 }}>
-          <div style={{ width: widthPx, padding: 12, position: "relative" }}>
-            <div style={{ height: 20, position: "relative", marginBottom: 10 }}>
+        <div className="workspace-timelineScroller">
+          <div className="workspace-timelineCanvas" style={{ width: widthPx }}>
+            <div className="workspace-timelineRuler">
               {ticks.map((t) => (
-                <div key={t} style={{ position: "absolute", left: t * timelineZoom, top: 0 }}>
-                  <div style={{ height: 10, width: 1, background: "var(--border)" }} />
-                  <div className="small" style={{ transform: "translateX(-6px)", marginTop: 2 }}>{t}s</div>
+                <div key={t} className="workspace-timelineTick" style={{ left: t * timelineZoom }}>
+                  <div className="workspace-timelineTickLine" />
+                  <div className="small workspace-timelineTickLabel">{t}s</div>
                 </div>
               ))}
             </div>
-            <div style={{ position: "relative", height: 120 }}>
+            <div className="workspace-sceneStage">
               {variantScenes.map((sc: any, i: number) => {
                 const s = Number(sc.start_s ?? (i * 5));
                 const e = Number(sc.end_s ?? (s + 5));
@@ -139,22 +152,12 @@ export default function Workspace({ onNavigate }: PageProps) {
                   <div
                     key={i}
                     title={sc.prompt}
+                    className="workspace-sceneBar"
                     style={{
                       position: "absolute",
                       left,
                       top: 20 + (i % 4) * 24,
                       width: w,
-                      height: 20,
-                      borderRadius: 10,
-                      border: "1px solid var(--border)",
-                      background: "rgba(255,255,255,0.06)",
-                      padding: "0 8px",
-                      display: "flex",
-                      alignItems: "center",
-                      fontSize: 12,
-                      overflow: "hidden",
-                      whiteSpace: "nowrap",
-                      textOverflow: "ellipsis",
                     }}
                   >
                     {i + 1}. {String(sc.name || "Scene")}
@@ -164,10 +167,10 @@ export default function Workspace({ onNavigate }: PageProps) {
             </div>
           </div>
         </div>
-        <div style={{ marginTop: 10 }}>
-          <div style={{ fontWeight: 800, marginBottom: 8 }}>Scene list</div>
+        <div className="workspace-sceneList">
+          <div className="workspace-sectionTitle">Scene list</div>
           {variantScenes.map((sc: any, i: number) => (
-            <div key={i} className="card" style={{ marginBottom: 8 }}>
+            <div key={i} className="workspace-sceneRow">
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <div style={{ fontWeight: 700 }}>{i + 1}. {sc.name || "Scene"}</div>
                 <div className="small">{Number(sc.start_s ?? i * 5).toFixed(2)}s → {Number(sc.end_s ?? (i * 5 + 5)).toFixed(2)}s</div>
@@ -181,12 +184,42 @@ export default function Workspace({ onNavigate }: PageProps) {
   };
 
   return (
-    <div>
-      <h1>Workspace</h1>
+    <div className="workspace-page">
+      <div className="workspace-header">
+        <div>
+          <div className="timeline-kicker">Studio Session</div>
+          <h1>Workspace</h1>
+          <div className="small workspace-headerCopy">
+            Ingest, analyze, shape creative direction, and hand the session off to Timeline and Render.
+          </div>
+        </div>
+        <div className="workspace-statusStrip">
+          <div className="workspace-stat">
+            <span className="small">Project</span>
+            <strong>{project?.name || "none"}</strong>
+          </div>
+          <div className="workspace-stat">
+            <span className="small">Audio</span>
+            <strong>{audioReady ? "ready" : "missing"}</strong>
+          </div>
+          <div className="workspace-stat">
+            <span className="small">Analysis</span>
+            <strong>{analysisReady ? "ready" : "pending"}</strong>
+          </div>
+          <div className="workspace-stat">
+            <span className="small">Variant</span>
+            <strong>{selectedVariantName}</strong>
+          </div>
+        </div>
+      </div>
 
-      <div className="grid2">
-        <div className="card">
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Project</div>
+      <div className="workspace-shell">
+        <div className="card workspace-sideCard">
+          <div className="workspace-section">
+            <div className="workspace-sectionHead">
+              <div className="workspace-sectionTitle">Project</div>
+              <div className="small">Choose the active session and inspect current ingest status.</div>
+            </div>
           {projects.length ? (
             <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               {projects.map((p) => (
@@ -196,11 +229,15 @@ export default function Workspace({ onNavigate }: PageProps) {
           ) : (
             <div className="small">No projects yet. Create one in Projects tab.</div>
           )}
+          </div>
 
-          <hr />
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Audio</div>
+          <div className="workspace-section">
+            <div className="workspace-sectionHead">
+              <div className="workspace-sectionTitle">Audio</div>
+              <div className="small">Upload the track, then analyze and transcribe it.</div>
+            </div>
           <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files?.[0] || null)} />
-          <div className="row" style={{ marginTop: 10 }}>
+          <div className="row workspace-actionRow" style={{ marginTop: 10 }}>
             <button onClick={uploadAudio} disabled={!audioFile || !projectId}>Upload</button>
             <button className="secondary" onClick={runAnalysis} disabled={!projectId}>Analyze + Transcribe</button>
           </div>
@@ -209,27 +246,35 @@ export default function Workspace({ onNavigate }: PageProps) {
               uploaded: {project.meta.audio.filename} ({bytes(project.meta.audio.size_bytes)})
             </div>
           )}
+          </div>
 
-          <hr />
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Project Assets</div>
+          <div className="workspace-section">
+            <div className="workspace-sectionHead">
+              <div className="workspace-sectionTitle">Reference Assets</div>
+              <div className="small">Style and character anchors that guide image and motion prompts.</div>
+            </div>
           <div className="small">Reference images (style/character anchors)</div>
           <input type="file" accept="image/*" onChange={(e) => setRefFile(e.target.files?.[0] || null)} />
-          <div className="row" style={{ marginTop: 10 }}>
+          <div className="row workspace-actionRow" style={{ marginTop: 10 }}>
             <button onClick={uploadRef} disabled={!refFile || !projectId}>Upload ref</button>
             <button className="secondary" onClick={() => projectId && refreshProject(projectId)} disabled={!projectId}>Refresh assets</button>
           </div>
-          <div className="grid3" style={{ marginTop: 10 }}>
-            {(assets?.refs || []).map((r: any) => (
+          <div className="workspace-assetsGrid">
+            {refAssets.map((r: any) => (
               <a key={r.path} href={fileUrl(projectId, r.path)} target="_blank" rel="noreferrer">
-                <img src={fileUrl(projectId, r.path)} style={{ width: "100%", borderRadius: 12, border: "1px solid var(--border)" }} />
+                <img src={fileUrl(projectId, r.path)} className="workspace-assetThumb" />
               </a>
             ))}
-            {!assets?.refs?.length && <div className="small">No refs yet.</div>}
+            {!refAssets.length && <div className="small">No refs yet.</div>}
+          </div>
           </div>
 
-          <hr />
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>AI Plan</div>
-          <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div className="workspace-section">
+            <div className="workspace-sectionHead">
+              <div className="workspace-sectionTitle">Plan Variants</div>
+              <div className="small">Generate multiple scene structures, then apply the best one to the timeline.</div>
+            </div>
+          <div className="row workspace-actionRow" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <label className="small row" style={{ gap: 6, alignItems: "center" }}>
               Plan mode
               <select value={planMode} onChange={(e) => setPlanMode(e.target.value as any)}>
@@ -241,7 +286,8 @@ export default function Workspace({ onNavigate }: PageProps) {
             <button onClick={generatePlan} disabled={!projectId}>Generate Plan Variants</button>
           </div>
 
-          {plan?.variants?.length ? (<>
+          {plan?.variants?.length ? (
+            <>
             <div style={{ marginTop: 12 }}>
               <div className="small">Select variant</div>
               <select value={selectedVariant} onChange={(e) => setSelectedVariant(Number(e.target.value))}>
@@ -250,7 +296,7 @@ export default function Workspace({ onNavigate }: PageProps) {
                 ))}
               </select>
             </div>
-            <div className="row" style={{ gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+            <div className="row workspace-actionRow" style={{ gap: 10, marginTop: 10, flexWrap: "wrap" }}>
               <button
                 onClick={async () => {
                   setErr(null);
@@ -277,39 +323,51 @@ export default function Workspace({ onNavigate }: PageProps) {
                 Apply (overwrite)
               </button>
             </div>
-          </>) : (
+            </>
+          ) : (
             <div className="small" style={{ marginTop: 10 }}>No plan generated yet.</div>
           )}
+          </div>
 
-          <hr />
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Next</div>
+          <div className="workspace-section">
+            <div className="workspace-sectionHead">
+              <div className="workspace-sectionTitle">Handoff</div>
+              <div className="small">Move from planning into rendering and output review.</div>
+            </div>
           <div className="small" style={{ marginBottom: 10 }}>
             Workspace is for planning. Rendering, queue control, and exports live in the Render page.
           </div>
-          <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          <div className="row workspace-actionRow" style={{ gap: 10, flexWrap: "wrap" }}>
             <button onClick={() => onNavigate?.("render")} disabled={!plan?.variants?.length}>Go to Render</button>
             <button className="secondary" onClick={() => onNavigate?.("outputs")}>Outputs</button>
             <button className="secondary" onClick={() => onNavigate?.("queue")}>Render Queue</button>
+          </div>
           </div>
 
           {err && <div style={{ marginTop: 12, color: "var(--danger)" }}>{err}</div>}
         </div>
 
-        <div className="card">
-          <CreativeDirectionPanel
-            projectId={projectId}
-            analysis={analysis}
-            plan={plan}
-            selectedVariant={selectedVariant}
-            onNavigate={onNavigate}
-          />
+        <div className="workspace-mainStack">
+          <div className="card workspace-featureCard">
+            <CreativeDirectionPanel
+              projectId={projectId}
+              analysis={analysis}
+              plan={plan}
+              selectedVariant={selectedVariant}
+              onNavigate={onNavigate}
+            />
+          </div>
 
-          <hr />
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Timeline</div>
-          <Timeline />
+          <div className="card workspace-featureCard">
+            <div className="workspace-sectionHead">
+              <div className="workspace-sectionTitle">Timeline Preview</div>
+              <div className="small">Scene structure and pacing before the full arrangement pass.</div>
+            </div>
+            <Timeline />
+          </div>
 
-          <details style={{ marginTop: 12 }} open={uiMode === "advanced"}>
-            <summary style={{ cursor: "pointer", fontWeight: 800 }}>Inspect</summary>
+          <details className="card workspace-inspectCard" open={uiMode === "advanced"}>
+            <summary className="workspace-inspectSummary">Inspect</summary>
             <div style={{ marginTop: 10 }}>
               <div style={{ fontWeight: 800, marginBottom: 10 }}>Selected variant (raw)</div>
               {plan?.variants?.length ? (
@@ -332,7 +390,7 @@ export default function Workspace({ onNavigate }: PageProps) {
         </div>
       </div>
 
-      <div className="small" style={{ marginTop: 14 }}>
+      <div className="small workspace-footerNote">
         Use Outputs to view images/videos. The backend runs an always-on worker by default; Render Queue lets you inspect jobs/logs and retry/cancel.
       </div>
     </div>
