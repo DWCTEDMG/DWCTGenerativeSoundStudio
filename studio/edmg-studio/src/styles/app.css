@@ -389,15 +389,16 @@ th {
 .timeline-page {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
 }
 .timeline-pageHeader {
   display: flex;
   justify-content: space-between;
   gap: 18px;
-  align-items: flex-end;
+  align-items: flex-start;
   min-width: 0;
+  padding: 2px 2px 0;
 }
 .timeline-kicker {
   font-size: 11px;
@@ -424,39 +425,43 @@ th {
 }
 .timeline-statusStrip {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 .timeline-stat {
-  min-width: 120px;
-  padding: 10px 12px;
-  border: 1px solid rgba(111, 162, 212, 0.22);
-  border-radius: 12px;
-  background: rgba(8, 18, 24, 0.82);
+  min-width: 148px;
+  padding: 9px 11px;
+  border: 1px solid rgba(111, 162, 212, 0.16);
+  border-radius: 11px;
+  background: rgba(8, 18, 24, 0.72);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 .timeline-stat strong {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 800;
+  line-height: 1.2;
 }
 .timeline-toolbarCard {
-  padding: 16px;
-  background: linear-gradient(180deg, rgba(8, 18, 24, 0.94) 0%, rgba(7, 16, 21, 0.92) 100%);
+  padding: 14px 16px;
+  background: linear-gradient(180deg, rgba(8, 18, 24, 0.94) 0%, rgba(7, 16, 21, 0.9) 100%);
 }
 .timeline-toolbarGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.92fr) minmax(0, 1.16fr);
+  gap: 0;
 }
 .timeline-toolbarGroup {
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 14px;
-  padding: 12px;
-  background: rgba(6, 13, 18, 0.68);
+  padding: 0;
+  background: transparent;
   min-width: 0;
+}
+.timeline-toolbarGroup + .timeline-toolbarGroup {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 16px;
+  margin-left: 16px;
 }
 .timeline-toolbarLabel {
   font-size: 11px;
@@ -464,13 +469,13 @@ th {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: #94b7d8;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .timeline-toolbarFields {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
+  gap: 10px 12px;
+  align-items: flex-end;
 }
 .timeline-toolbarFields > input,
 .timeline-toolbarFields > select {
@@ -478,11 +483,37 @@ th {
   min-width: 110px;
   max-width: 180px;
 }
+.timeline-miniField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 128px;
+  flex: 1 1 128px;
+}
+.timeline-miniLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8ea0b3;
+}
+.timeline-toolbarActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-bottom: 1px;
+}
+.timeline-toolbarActions--wide {
+  flex: 1 1 100%;
+}
 .timeline-toolbarFooter {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   flex-wrap: wrap;
 }
 .timeline-audioControl {
@@ -499,7 +530,7 @@ th {
 .timeline-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 400px;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
   align-items: start;
 }
@@ -510,10 +541,62 @@ th {
 .timeline-dock {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 .timeline-dockCard {
   background: linear-gradient(180deg, rgba(7, 16, 21, 0.95) 0%, rgba(6, 14, 20, 0.92) 100%);
+}
+.timeline-dockHub {
+  padding: 0;
+  overflow: hidden;
+}
+.timeline-dockTabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-wrap: wrap;
+}
+.timeline-dockTab {
+  min-width: 0;
+  flex: 1 1 110px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  box-shadow: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  background: rgba(9, 21, 28, 0.72);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+.timeline-dockTab:hover {
+  transform: none;
+  box-shadow: none;
+}
+.timeline-dockTab.is-active {
+  background: rgba(32, 91, 138, 0.46);
+  border-color: rgba(117, 185, 241, 0.42);
+}
+.timeline-dockTabMeta {
+  font-size: 11px;
+  color: #9dafc0;
+  white-space: nowrap;
+}
+.timeline-dockStatusBar {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px 0;
+  flex-wrap: wrap;
+}
+.timeline-dockBody {
+  padding: 14px 14px 16px;
+}
+.timeline-dockPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .timeline-arrangementCard {
   padding: 16px;
@@ -580,9 +663,14 @@ th {
   gap: 6px;
 }
 .timeline-railActions button {
-  padding: 6px 8px;
-  border-radius: 8px;
-  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  box-shadow: none;
+}
+.timeline-railActions button:hover {
+  transform: none;
+  box-shadow: none;
 }
 .timeline-boardScroll {
   overflow: auto;
@@ -802,6 +890,14 @@ th {
   .timeline-workspace {
     grid-template-columns: 1fr;
   }
+  .timeline-toolbarGroup + .timeline-toolbarGroup {
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-left: 0;
+    margin-left: 0;
+    padding-top: 14px;
+    margin-top: 14px;
+  }
   .timeline-pageHeader {
     flex-direction: column;
     align-items: flex-start;
@@ -814,9 +910,7 @@ th {
   .timeline-board {
     grid-template-columns: 180px minmax(0, 1fr);
   }
-  .timeline-toolbarFields > input,
-  .timeline-toolbarFields > select {
-    min-width: 92px;
-    max-width: none;
+  .timeline-miniField {
+    min-width: 100%;
   }
 }

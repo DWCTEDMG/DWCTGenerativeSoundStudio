@@ -13,6 +13,8 @@ type Selected =
   | { kind: "camera"; kfIdx: number }
   | null;
 
+type DockSection = "inspector" | "proxy" | "diffusion" | "curves";
+
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
@@ -266,6 +268,7 @@ export default function Timeline({}: PageProps) {
   const [diffW, setDiffW] = useState<number>(512);
   const [diffH, setDiffH] = useState<number>(512);
   const [diffModel, setDiffModel] = useState<string>("auto");
+  const [dockSection, setDockSection] = useState<DockSection>("inspector");
 
   const [err, setErr] = useState<string | null>(null);
 
@@ -962,6 +965,16 @@ export default function Timeline({}: PageProps) {
       : bpm
         ? `BPM fallback ${bpm.toFixed(1)}`
         : "Run Analyze or set BPM to enable quantize";
+  const pickedSelection =
+    selected?.kind === "track" ? selectedTrackClip(selected) : null;
+  const selectionStatus =
+    selected?.kind === "track" && pickedSelection
+      ? `${pickedSelection.tr.name} clip`
+      : selected?.kind === "overlay"
+        ? `Overlay ${selected.layerIdx + 1}`
+        : selected?.kind === "camera"
+          ? `Camera keyframe ${selected.kfIdx + 1}`
+          : "No selection";
   const timelineSurfaceStyle = {
     width: timelineCanvasWidth,
     ["--timeline-major-grid" as any]: `${Math.max(pxPerSecond, 24)}px`,
@@ -977,8 +990,8 @@ export default function Timeline({}: PageProps) {
           <span className="badge">{timelineDirty ? "Unsaved edits" : "Saved"}</span>
         </div>
         <div className="small timeline-headerCopy">
-          Nuendo and Pro Tools style workspace: transport on top, fixed track headers on the left,
-          timeline canvas in the center, preview and inspector docked on the right.
+          Console-style top bar, fixed track headers, wide arrange canvas, and a utility dock that
+          keeps deep controls available without flooding the screen.
         </div>
       </div>
       <div className="timeline-statusStrip">
@@ -992,7 +1005,7 @@ export default function Timeline({}: PageProps) {
         </div>
         <div className="timeline-stat">
           <span className="small">Selection</span>
-          <strong>{selected ? selected.kind : "none"}</strong>
+          <strong>{selectionStatus}</strong>
         </div>
       </div>
     </div>
@@ -1004,88 +1017,104 @@ export default function Timeline({}: PageProps) {
         <div className="timeline-toolbarGroup">
           <div className="timeline-toolbarLabel">Session</div>
           <div className="timeline-toolbarFields">
-            <label className="small">Project</label>
-            <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name || p.id}
-                </option>
-              ))}
-            </select>
-            <label className="small">Variant</label>
-            <select
-              value={selectedVariant}
-              onChange={(e) => setSelectedVariant(Number(e.target.value))}
-            >
-              {Array.from({ length: Math.max(1, plan?.variants?.length || 1) }).map((_, i) => (
-                <option key={i} value={i}>
-                  {plan?.variants?.[i]?.name
-                    ? `${i + 1}. ${plan.variants[i].name}`
-                    : `Variant ${i + 1}`}
-                </option>
-              ))}
-            </select>
+            <div className="timeline-miniField">
+              <span className="timeline-miniLabel">Project</span>
+              <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name || p.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="timeline-miniField">
+              <span className="timeline-miniLabel">Variant</span>
+              <select
+                value={selectedVariant}
+                onChange={(e) => setSelectedVariant(Number(e.target.value))}
+              >
+                {Array.from({ length: Math.max(1, plan?.variants?.length || 1) }).map((_, i) => (
+                  <option key={i} value={i}>
+                    {plan?.variants?.[i]?.name
+                      ? `${i + 1}. ${plan.variants[i].name}`
+                      : `Variant ${i + 1}`}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
         <div className="timeline-toolbarGroup">
           <div className="timeline-toolbarLabel">Transport</div>
           <div className="timeline-toolbarFields">
-            <label className="small">Playhead</label>
-            <input
-              type="number"
-              step={0.1}
-              value={playheadS}
-              onChange={(e) => setPlayheadS(Number(e.target.value))}
-            />
-            <label className="small">Zoom</label>
-            <input
-              type="number"
-              step={5}
-              value={pxPerSecond}
-              onChange={(e) => setPxPerSecond(Number(e.target.value))}
-            />
-            <button className="secondary" onClick={playPause}>
-              {isPlaying ? "Pause" : "Play"}
-            </button>
-            <button className="secondary" onClick={() => setSelected(null)}>
-              Clear selection
-            </button>
+            <div className="timeline-miniField">
+              <span className="timeline-miniLabel">Playhead</span>
+              <input
+                type="number"
+                step={0.1}
+                value={playheadS}
+                onChange={(e) => setPlayheadS(Number(e.target.value))}
+              />
+            </div>
+            <div className="timeline-miniField">
+              <span className="timeline-miniLabel">Zoom</span>
+              <input
+                type="number"
+                step={5}
+                value={pxPerSecond}
+                onChange={(e) => setPxPerSecond(Number(e.target.value))}
+              />
+            </div>
+            <div className="timeline-toolbarActions">
+              <button className="primary" onClick={playPause}>
+                {isPlaying ? "Pause" : "Play"}
+              </button>
+              <button className="secondary" onClick={() => setSelected(null)}>
+                Clear selection
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="timeline-toolbarGroup">
           <div className="timeline-toolbarLabel">Grid</div>
           <div className="timeline-toolbarFields">
-            <label className="small">BPM</label>
-            <input
-              type="number"
-              step={0.1}
-              placeholder="auto"
-              value={bpmOverride ?? ""}
-              onChange={(e) => setBpmOverride(e.target.value ? Number(e.target.value) : null)}
-            />
-            <label className="small">Quantize</label>
-            <select
-              value={String(quantizeBeats)}
-              onChange={(e) => setQuantizeBeats(Number(e.target.value))}
-            >
-              <option value="1">1 beat</option>
-              <option value="0.5">1/2 beat</option>
-              <option value="0.25">1/4 beat</option>
-            </select>
-            <button className="secondary" disabled={!selected} onClick={quantizeSelection}>
-              Quantize
-            </button>
-            <button className="secondary" disabled={!selected} onClick={splitSelection}>
-              Split
-            </button>
-            <button className="secondary" disabled={!selected} onClick={duplicateSelection}>
-              Duplicate
-            </button>
-            <button className={timelineDirty ? "primary" : "secondary"} onClick={saveTimeline}>
-              {timelineDirty ? "Save timeline *" : "Save timeline"}
-            </button>
+            <div className="timeline-miniField">
+              <span className="timeline-miniLabel">BPM</span>
+              <input
+                type="number"
+                step={0.1}
+                placeholder="auto"
+                value={bpmOverride ?? ""}
+                onChange={(e) => setBpmOverride(e.target.value ? Number(e.target.value) : null)}
+              />
+            </div>
+            <div className="timeline-miniField">
+              <span className="timeline-miniLabel">Quantize</span>
+              <select
+                value={String(quantizeBeats)}
+                onChange={(e) => setQuantizeBeats(Number(e.target.value))}
+              >
+                <option value="1">1 beat</option>
+                <option value="0.5">1/2 beat</option>
+                <option value="0.25">1/4 beat</option>
+              </select>
+            </div>
+            <div className="timeline-toolbarActions timeline-toolbarActions--wide">
+              <button className="secondary" disabled={!selected} onClick={quantizeSelection}>
+                Quantize
+              </button>
+              <button className="secondary" disabled={!selected} onClick={splitSelection}>
+                Split
+              </button>
+              <button className="secondary" disabled={!selected} onClick={duplicateSelection}>
+                Duplicate
+              </button>
+              <button className={timelineDirty ? "primary" : "secondary"} onClick={saveTimeline}>
+                {timelineDirty ? "Save timeline *" : "Save timeline"}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1357,8 +1386,8 @@ export default function Timeline({}: PageProps) {
     </div>
   );
 
-  const inspectorCard = (
-    <div className="card timeline-dockCard">
+  const inspectorPanel = (
+    <div className="timeline-dockPanel">
       <div className="timeline-panelHeader">
         <div>
           <div className="timeline-panelTitle">Inspector</div>
@@ -1563,8 +1592,8 @@ export default function Timeline({}: PageProps) {
     </div>
   );
 
-  const proxyCard = (
-    <div className="card timeline-dockCard">
+  const proxyPanel = (
+    <div className="timeline-dockPanel">
       <div className="timeline-panelHeader">
         <div>
           <div className="timeline-panelTitle">Proxy Preview</div>
@@ -1613,8 +1642,8 @@ export default function Timeline({}: PageProps) {
     </div>
   );
 
-  const diffusionCard = (
-    <div className="card timeline-dockCard">
+  const diffusionPanel = (
+    <div className="timeline-dockPanel">
       <div className="timeline-panelHeader">
         <div>
           <div className="timeline-panelTitle">Diffusion Preview</div>
@@ -1711,7 +1740,7 @@ export default function Timeline({}: PageProps) {
     </div>
   );
 
-  const motionCurvesCard = (() => {
+  const motionCurvesPanel = (() => {
     const tr = (tracks || []).find((t: any) => String(t?.type || "").toLowerCase() === "motion");
     const clip = (tr?.clips || [])[0];
     if (!clip || !timeline) return null;
@@ -1783,7 +1812,7 @@ export default function Timeline({}: PageProps) {
     const curSteps = evalSchedule(stepsPairs, Number(playheadS || 0) * fps) ?? 15;
 
     return (
-      <div className="card timeline-dockCard">
+      <div className="timeline-dockPanel">
         <div className="timeline-panelHeader">
           <div>
             <div className="timeline-panelTitle">Motion Curves</div>
@@ -1888,6 +1917,42 @@ export default function Timeline({}: PageProps) {
     );
   })();
 
+  const dockTabs: Array<{ id: DockSection; label: string; meta: string }> = [
+    {
+      id: "inspector",
+      label: "Inspector",
+      meta: selected ? selectionStatus : "idle",
+    },
+    {
+      id: "proxy",
+      label: "Proxy",
+      meta: proxyUrl ? "ready" : "draft",
+    },
+    {
+      id: "diffusion",
+      label: "Look Dev",
+      meta: diffUrl ? "ready" : "draft",
+    },
+    ...(motionCurvesPanel
+      ? [
+          {
+            id: "curves" as DockSection,
+            label: "Curves",
+            meta: "motion",
+          },
+        ]
+      : []),
+  ];
+
+  const activeDockPanel =
+    dockSection === "proxy"
+      ? proxyPanel
+      : dockSection === "diffusion"
+        ? diffusionPanel
+        : dockSection === "curves" && motionCurvesPanel
+          ? motionCurvesPanel
+          : inspectorPanel;
+
   return (
     <div className="timeline-page" onKeyDown={onKeyDown} tabIndex={0} style={{ outline: "none" }}>
       {pageHeader}
@@ -1901,10 +1966,30 @@ export default function Timeline({}: PageProps) {
         <div className="timeline-mainColumn">{arrangementCard}</div>
         <div className="timeline-dock">
           {monitorCard}
-          {inspectorCard}
-          {proxyCard}
-          {diffusionCard}
-          {motionCurvesCard}
+          <div className="card timeline-dockCard timeline-dockHub">
+            <div className="timeline-dockTabs" role="tablist" aria-label="Timeline utilities">
+              {dockTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={dockSection === tab.id}
+                  className={`timeline-dockTab${dockSection === tab.id ? " is-active" : ""}`}
+                  onClick={() => setDockSection(tab.id)}
+                >
+                  <span>{tab.label}</span>
+                  <span className="timeline-dockTabMeta">{tab.meta}</span>
+                </button>
+              ))}
+            </div>
+            <div className="timeline-dockStatusBar">
+              <div className="small">Selection: <b>{selectionStatus}</b></div>
+              <div className="small">
+                Playhead {fmtTime(playheadS)} • Grid {quantizeStatus}
+              </div>
+            </div>
+            <div className="timeline-dockBody">{activeDockPanel}</div>
+          </div>
         </div>
       </div>
     </div>
