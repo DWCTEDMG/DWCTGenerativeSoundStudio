@@ -1,5 +1,12 @@
 export function getBackendUrl(): string {
-  return window.edmg?.backendUrl?.() ?? window.__EDMG_BACKEND_URL__ ?? "http://127.0.0.1:7863";
+  const params = new URLSearchParams(window.location.search);
+  return (
+    params.get("backendUrl") ||
+    params.get("backend") ||
+    window.edmg?.backendUrl?.() ||
+    window.__EDMG_BACKEND_URL__ ||
+    "http://127.0.0.1:7863"
+  );
 }
 
 function formatBackendError(d: any, fallback: string): string {
@@ -33,7 +40,7 @@ export async function apiPost(path: string, body: any) {
   const r = await fetch(`${base}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `POST ${path} failed`));
@@ -47,7 +54,6 @@ export async function apiDelete(path: string) {
   if (!r.ok) throw new Error(formatBackendError(d, `DELETE ${path} failed`));
   return d;
 }
-
 
 export async function apiUpload(path: string, file: File) {
   const base = getBackendUrl();

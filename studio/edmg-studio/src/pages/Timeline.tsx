@@ -15,7 +15,13 @@ type Selected =
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
+}
 
+function fmtTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00.0";
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds - mins * 60;
+  return `${mins}:${secs.toFixed(1).padStart(4, "0")}`;
 }
 
 function parseDeforumSchedule(s: string): Array<[number, number]> {
@@ -46,7 +52,7 @@ function evalSchedule(pairs: Array<[number, number]>, frame: number): number | n
     const [a, av] = pairs[i];
     const [b, bv] = pairs[i + 1];
     if (a <= f && f <= b) {
-      const w = (f - a) / Math.max(1e-9, (b - a));
+      const w = (f - a) / Math.max(1e-9, b - a);
       return av * (1 - w) + bv * w;
     }
   }
@@ -66,19 +72,22 @@ function upsertPoint(s: string, frame: number, value: number): string {
 
 function sampleCurve(
   pairs: Array<[number, number]>,
-  durationSOrOptions: number | { durationS: number; fps: number; samples: number; fallback: number },
+  durationSOrOptions:
+    | number
+    | { durationS: number; fps: number; samples: number; fallback: number },
   fpsArg?: number,
   samplesArg?: number,
-  fallbackArg?: number
+  fallbackArg?: number,
 ): Array<[number, number]> {
-  const opts = typeof durationSOrOptions === "object"
-    ? durationSOrOptions
-    : {
-        durationS: durationSOrOptions,
-        fps: Number(fpsArg || 0),
-        samples: Number(samplesArg || 0),
-        fallback: Number(fallbackArg ?? 0),
-      };
+  const opts =
+    typeof durationSOrOptions === "object"
+      ? durationSOrOptions
+      : {
+          durationS: durationSOrOptions,
+          fps: Number(fpsArg || 0),
+          samples: Number(samplesArg || 0),
+          fallback: Number(fallbackArg ?? 0),
+        };
   const durationS = Number(opts.durationS || 0);
   const fps = Number(opts.fps || 0);
   const samples = Number(opts.samples || 0);
@@ -96,10 +105,17 @@ function sampleCurve(
   return out;
 }
 
-function svgPath(points: Array<[number, number]>, xMax: number, yMin: number, yMax: number, w: number, h: number): string {
+function svgPath(
+  points: Array<[number, number]>,
+  xMax: number,
+  yMin: number,
+  yMax: number,
+  w: number,
+  h: number,
+): string {
   if (!points.length) return "";
   const clampY = (v: number) => {
-    const u = (v - yMin) / Math.max(1e-9, (yMax - yMin));
+    const u = (v - yMin) / Math.max(1e-9, yMax - yMin);
     return h - clamp(u, 0, 1) * h;
   };
   const X = (t: number) => clamp(t / Math.max(1e-9, xMax), 0, 1) * w;
@@ -110,14 +126,22 @@ function svgPath(points: Array<[number, number]>, xMax: number, yMin: number, yM
 
 function ensureTimelineShape(timeline: AnyDict, planVariant: AnyDict | null): AnyDict {
   const tl = timeline && typeof timeline === "object" ? { ...timeline } : {};
-  const scenes: AnyDict[] = planVariant?.scenes && Array.isArray(planVariant.scenes) ? planVariant.scenes : [];
+  const scenes: AnyDict[] =
+    planVariant?.scenes && Array.isArray(planVariant.scenes) ? planVariant.scenes : [];
 
   const ensureTrack = (id: string, name: string, type: string, clips: Clip[]) => {
     tl.tracks = Array.isArray(tl.tracks) ? [...tl.tracks] : [];
-    const idx = tl.tracks.findIndex((t: AnyDict) => String(t?.type || "").toLowerCase() === type.toLowerCase());
+    const idx = tl.tracks.findIndex(
+      (t: AnyDict) => String(t?.type || "").toLowerCase() === type.toLowerCase(),
+    );
     if (idx >= 0) {
       const cur = tl.tracks[idx] || {};
-      tl.tracks[idx] = { id: cur.id || id, name: cur.name || name, type, clips: Array.isArray(cur.clips) ? cur.clips : clips };
+      tl.tracks[idx] = {
+        id: cur.id || id,
+        name: cur.name || name,
+        type,
+        clips: Array.isArray(cur.clips) ? cur.clips : clips,
+      };
     } else {
       tl.tracks.push({ id, name, type, clips });
     }
@@ -128,7 +152,7 @@ function ensureTimelineShape(timeline: AnyDict, planVariant: AnyDict | null): An
     id: String(s.id || `scene_${i}`),
     start_s: Number(s.start_s || i * 5),
     end_s: Number(s.end_s || Number(s.start_s || i * 5) + 5),
-    data: { prompt: String(s.prompt || "").trim() || "cinematic" }
+    data: { prompt: String(s.prompt || "").trim() || "cinematic" },
   }));
   ensureTrack("track_prompt", "Prompts", "prompt", promptClips);
 
@@ -148,8 +172,8 @@ function ensureTimelineShape(timeline: AnyDict, planVariant: AnyDict | null): An
       rotation_end: 0.0,
       strength: 0.35,
       cfg: 7.0,
-      steps: 12
-    }
+      steps: 12,
+    },
   }));
   ensureTrack("track_motion", "Motion", "motion", motionClips);
 
@@ -178,7 +202,9 @@ async function fetchAudioPeaks(audioUrl: string, targetPoints: number): Promise<
     for (let j = 0; j < step && i + j < ch.length; j++) m = Math.max(m, Math.abs(ch[i + j]));
     peaks.push(m);
   }
-  try { ctx.close(); } catch {}
+  try {
+    ctx.close();
+  } catch {}
   return peaks;
 }
 
@@ -246,32 +272,48 @@ export default function Timeline({}: PageProps) {
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
     setProjects(Array.isArray(d?.projects) ? d.projects : []);
-    if (!projectId && Array.isArray(d?.projects) && d.projects[0]?.id) setProjectId(String(d.projects[0].id));
+    if (!projectId && Array.isArray(d?.projects) && d.projects[0]?.id)
+      setProjectId(String(d.projects[0].id));
   };
 
   const refreshProject = async (pid: string) => {
     const d = await apiGet(`/v1/projects/${pid}`);
     setProject(d?.project || null);
     const p = d?.project || {};
-    const tl = ensureTimelineShape((p?.meta?.timeline || {}), (p?.meta?.last_plan?.variants || [])[selectedVariant] || null);
+    const tl = ensureTimelineShape(
+      p?.meta?.timeline || {},
+      (p?.meta?.last_plan?.variants || [])[selectedVariant] || null,
+    );
     setTimeline(tl);
     setTimelineDirty(false);
 
-    const dur = Number(p?.meta?.audio?.duration_s || p?.meta?.analysis?.features?.duration_s || p?.duration_s || 60);
+    const dur = Number(
+      p?.meta?.audio?.duration_s || p?.meta?.analysis?.features?.duration_s || p?.duration_s || 60,
+    );
     setDurationS(Number.isFinite(dur) && dur > 0 ? dur : 60);
 
     const audioFn = p?.meta?.audio?.filename;
-    if (audioFn) setAudioUrl(`${backendUrl}/v1/projects/${pid}/audio?v=${Date.now()}`); else setAudioUrl("");
+    if (audioFn) setAudioUrl(`${backendUrl}/v1/projects/${pid}/audio?v=${Date.now()}`);
+    else setAudioUrl("");
 
     setPlan(p?.meta?.last_plan || null);
   };
 
-  useEffect(() => { refreshProjects().catch(() => {}); }, []);
-  useEffect(() => { if (projectId) refreshProject(projectId).catch(() => {}); }, [projectId, selectedVariant]);
+  useEffect(() => {
+    refreshProjects().catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (projectId) refreshProject(projectId).catch(() => {});
+  }, [projectId, selectedVariant]);
 
   useEffect(() => {
-    if (!audioUrl) { setPeaks([]); return; }
-    fetchAudioPeaks(audioUrl, 800).then(setPeaks).catch(() => setPeaks([]));
+    if (!audioUrl) {
+      setPeaks([]);
+      return;
+    }
+    fetchAudioPeaks(audioUrl, 800)
+      .then(setPeaks)
+      .catch(() => setPeaks([]));
   }, [audioUrl]);
 
   useEffect(() => {
@@ -284,7 +326,8 @@ export default function Timeline({}: PageProps) {
     if (!c || !peaks.length) return;
     const ctx = c.getContext("2d");
     if (!ctx) return;
-    const w = c.width, h = c.height;
+    const w = c.width,
+      h = c.height;
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = "rgba(255,255,255,0.08)";
     const n = peaks.length;
@@ -293,21 +336,27 @@ export default function Timeline({}: PageProps) {
       const ph = Math.max(1, Math.floor(peaks[i] * h));
       ctx.fillRect(x, Math.floor((h - ph) / 2), 1, ph);
     }
-  }, [peaks]);
+  }, [peaks, durationS, pxPerSecond]);
 
   // scrub preview frame
   useEffect(() => {
     if (!projectId) return;
     if (previewTimer.current) clearTimeout(previewTimer.current);
     previewTimer.current = setTimeout(() => {
-      setPreviewUrl(`${backendUrl}/v1/projects/${projectId}/preview/frame?t=${encodeURIComponent(String(playheadS))}&w=768&h=432&v=${Date.now()}`);
+      setPreviewUrl(
+        `${backendUrl}/v1/projects/${projectId}/preview/frame?t=${encodeURIComponent(String(playheadS))}&w=768&h=432&v=${Date.now()}`,
+      );
     }, 60);
-    return () => { if (previewTimer.current) clearTimeout(previewTimer.current); };
+    return () => {
+      if (previewTimer.current) clearTimeout(previewTimer.current);
+    };
   }, [projectId, playheadS]);
 
   const tracks: Track[] = Array.isArray(timeline?.tracks) ? timeline.tracks : [];
   const layers: AnyDict[] = Array.isArray(timeline?.layers) ? timeline.layers : [];
-  const camKeyframes: AnyDict[] = Array.isArray(timeline?.camera?.keyframes) ? timeline.camera.keyframes : [];
+  const camKeyframes: AnyDict[] = Array.isArray(timeline?.camera?.keyframes)
+    ? timeline.camera.keyframes
+    : [];
 
   const onWaveformClick = (e: React.MouseEvent) => {
     const c = canvasRef.current;
@@ -323,32 +372,43 @@ export default function Timeline({}: PageProps) {
 
   const dragRef = useRef<any>(null);
 
-  const onTrackClipPointerDown = (trackIdx: number, clipIdx: number, mode: "move" | "left" | "right") => (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const tr = tracks[trackIdx];
-    const cl = tr?.clips?.[clipIdx];
-    if (!cl) return;
-    (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-    dragRef.current = { kind: "track", trackIdx, clipIdx, mode, x0: e.clientX, start0: cl.start_s, end0: cl.end_s };
-    setSelected({ kind: "track", trackIdx, clipIdx });
-    setProxyStart(cl.start_s);
-    setProxyEnd(cl.end_s);
-  };
+  const onTrackClipPointerDown =
+    (trackIdx: number, clipIdx: number, mode: "move" | "left" | "right") =>
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const tr = tracks[trackIdx];
+      const cl = tr?.clips?.[clipIdx];
+      if (!cl) return;
+      (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+      dragRef.current = {
+        kind: "track",
+        trackIdx,
+        clipIdx,
+        mode,
+        x0: e.clientX,
+        start0: cl.start_s,
+        end0: cl.end_s,
+      };
+      setSelected({ kind: "track", trackIdx, clipIdx });
+      setProxyStart(cl.start_s);
+      setProxyEnd(cl.end_s);
+    };
 
-  const onOverlayPointerDown = (layerIdx: number, mode: "move" | "left" | "right") => (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const l = layers[layerIdx];
-    if (!l) return;
-    (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-    const s0 = Number(l.start_s ?? 0);
-    const e0 = Number(l.end_s ?? durationS);
-    dragRef.current = { kind: "overlay", layerIdx, mode, x0: e.clientX, start0: s0, end0: e0 };
-    setSelected({ kind: "overlay", layerIdx });
-    setProxyStart(s0);
-    setProxyEnd(e0);
-  };
+  const onOverlayPointerDown =
+    (layerIdx: number, mode: "move" | "left" | "right") => (e: React.PointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const l = layers[layerIdx];
+      if (!l) return;
+      (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+      const s0 = Number(l.start_s ?? 0);
+      const e0 = Number(l.end_s ?? durationS);
+      dragRef.current = { kind: "overlay", layerIdx, mode, x0: e.clientX, start0: s0, end0: e0 };
+      setSelected({ kind: "overlay", layerIdx });
+      setProxyStart(s0);
+      setProxyEnd(e0);
+    };
 
   const onCameraKfPointerDown = (kfIdx: number) => (e: React.PointerEvent) => {
     e.preventDefault();
@@ -371,16 +431,26 @@ export default function Timeline({}: PageProps) {
       const tr = tracks[st.trackIdx];
       const cl = tr?.clips?.[st.clipIdx];
       if (!tr || !cl) return;
-      let start = st.start0, end = st.end0;
-      if (st.mode === "move") { start = st.start0 + dx; end = st.end0 + dx; }
-      if (st.mode === "left") { start = st.start0 + dx; }
-      if (st.mode === "right") { end = st.end0 + dx; }
+      let start = st.start0,
+        end = st.end0;
+      if (st.mode === "move") {
+        start = st.start0 + dx;
+        end = st.end0 + dx;
+      }
+      if (st.mode === "left") {
+        start = st.start0 + dx;
+      }
+      if (st.mode === "right") {
+        end = st.end0 + dx;
+      }
       start = clamp(start, 0, durationS - 0.05);
       end = clamp(end, start + 0.05, durationS);
 
       const nextTracks = tracks.map((t, i) => {
         if (i !== st.trackIdx) return t;
-        const nextClips = (t.clips || []).map((c, j) => j === st.clipIdx ? { ...c, start_s: start, end_s: end } : c);
+        const nextClips = (t.clips || []).map((c, j) =>
+          j === st.clipIdx ? { ...c, start_s: start, end_s: end } : c,
+        );
         return { ...t, clips: nextClips };
       });
 
@@ -392,14 +462,24 @@ export default function Timeline({}: PageProps) {
     if (st.kind === "overlay") {
       const l = layers[st.layerIdx];
       if (!l) return;
-      let start = st.start0, end = st.end0;
-      if (st.mode === "move") { start = st.start0 + dx; end = st.end0 + dx; }
-      if (st.mode === "left") { start = st.start0 + dx; }
-      if (st.mode === "right") { end = st.end0 + dx; }
+      let start = st.start0,
+        end = st.end0;
+      if (st.mode === "move") {
+        start = st.start0 + dx;
+        end = st.end0 + dx;
+      }
+      if (st.mode === "left") {
+        start = st.start0 + dx;
+      }
+      if (st.mode === "right") {
+        end = st.end0 + dx;
+      }
       start = clamp(start, 0, durationS - 0.05);
       end = clamp(end, start + 0.05, durationS);
 
-      const nextLayers = layers.map((x, i) => i === st.layerIdx ? { ...x, start_s: start, end_s: end } : x);
+      const nextLayers = layers.map((x, i) =>
+        i === st.layerIdx ? { ...x, start_s: start, end_s: end } : x,
+      );
       setTimeline({ ...timeline, layers: nextLayers });
       setTimelineDirty(true);
       return;
@@ -409,14 +489,16 @@ export default function Timeline({}: PageProps) {
       const k = camKeyframes[st.kfIdx];
       if (!k) return;
       let t = clamp(st.t0 + dx, 0, durationS);
-      const next = camKeyframes.map((x, i) => i === st.kfIdx ? { ...x, t } : x);
+      const next = camKeyframes.map((x, i) => (i === st.kfIdx ? { ...x, t } : x));
       next.sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
       setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
       setTimelineDirty(true);
     }
   };
 
-  const onTimelinePointerUp = () => { dragRef.current = null; };
+  const onTimelinePointerUp = () => {
+    dragRef.current = null;
+  };
 
   const saveTimeline = async () => {
     if (!projectId) return;
@@ -441,9 +523,23 @@ export default function Timeline({}: PageProps) {
     const data =
       type === "prompt"
         ? { prompt: "cinematic" }
-        : { zoom_start: 1.0, zoom_end: 1.06, pan_x_start: 0, pan_x_end: 0, pan_y_start: 0, pan_y_end: 0, rotation_start: 0, rotation_end: 0, strength: 0.35, cfg: 7.0, steps: 12 };
+        : {
+            zoom_start: 1.0,
+            zoom_end: 1.06,
+            pan_x_start: 0,
+            pan_x_end: 0,
+            pan_y_start: 0,
+            pan_y_end: 0,
+            rotation_start: 0,
+            rotation_end: 0,
+            strength: 0.35,
+            cfg: 7.0,
+            steps: 12,
+          };
 
-    const nextTracks = tracks.map((t, i) => i === idx ? { ...t, clips: [...(t.clips || []), { id, start_s: s, end_s: e, data }] } : t);
+    const nextTracks = tracks.map((t, i) =>
+      i === idx ? { ...t, clips: [...(t.clips || []), { id, start_s: s, end_s: e, data }] } : t,
+    );
     setTimeline({ ...timeline, tracks: nextTracks });
     setTimelineDirty(true);
   };
@@ -559,7 +655,7 @@ export default function Timeline({}: PageProps) {
     return Math.max(0, Math.round(t / step) * step);
   };
 
-  const _minLen = 0.10;
+  const _minLen = 0.1;
 
   const duplicateSelection = () => {
     if (!selected) return;
@@ -585,7 +681,7 @@ export default function Timeline({}: PageProps) {
       const dur = Math.max(_minLen, Number(l.end_s ?? durationS) - Number(l.start_s ?? 0));
       const s = clamp(playheadS, 0, Math.max(0, durationS - dur));
       const e = clamp(s + dur, s + _minLen, durationS);
-      const nextLayers = layers.map((x, i) => i === selected.layerIdx ? x : x);
+      const nextLayers = layers.map((x, i) => (i === selected.layerIdx ? x : x));
       nextLayers.push({ ...l, start_s: s, end_s: e });
       setTimeline({ ...timeline, layers: nextLayers });
       setTimelineDirty(true);
@@ -595,7 +691,9 @@ export default function Timeline({}: PageProps) {
       const k = camKeyframes[selected.kfIdx];
       if (!k) return;
       const t = clamp(playheadS, 0, durationS);
-      const next = [...camKeyframes, { ...k, t }].sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
+      const next = [...camKeyframes, { ...k, t }].sort(
+        (a, b) => Number(a.t || 0) - Number(b.t || 0),
+      );
       setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
       setTimelineDirty(true);
     }
@@ -613,7 +711,9 @@ export default function Timeline({}: PageProps) {
       const right = { ...cl, id: `${String(tr.type)}_${Date.now()}`, start_s: tSplit };
       const nextTracks = tracks.map((t, i) => {
         if (i !== selected.trackIdx) return t;
-        const nextClips = (t.clips || []).flatMap((c, j) => j === selected.clipIdx ? [left, right] : [c]);
+        const nextClips = (t.clips || []).flatMap((c, j) =>
+          j === selected.clipIdx ? [left, right] : [c],
+        );
         return { ...t, clips: nextClips };
       });
       setTimeline({ ...timeline, tracks: nextTracks });
@@ -623,11 +723,12 @@ export default function Timeline({}: PageProps) {
     if (selected.kind === "overlay") {
       const l = layers[selected.layerIdx];
       if (!l) return;
-      const s0 = Number(l.start_s ?? 0), e0 = Number(l.end_s ?? durationS);
+      const s0 = Number(l.start_s ?? 0),
+        e0 = Number(l.end_s ?? durationS);
       if (!(s0 + _minLen < tSplit && tSplit < e0 - _minLen)) return;
       const left = { ...l, end_s: tSplit };
       const right = { ...l, start_s: tSplit };
-      const nextLayers = layers.flatMap((x, i) => i === selected.layerIdx ? [left, right] : [x]);
+      const nextLayers = layers.flatMap((x, i) => (i === selected.layerIdx ? [left, right] : [x]));
       setTimeline({ ...timeline, layers: nextLayers });
       setTimelineDirty(true);
     }
@@ -636,7 +737,12 @@ export default function Timeline({}: PageProps) {
   const quantizeSelection = () => {
     const grid = _beatGrid();
     const step = _quantStepS();
-    if (!grid && !step) { setErr("No beat grid available for quantize. Run Analyze (beat detection) or set BPM override."); return; }
+    if (!grid && !step) {
+      setErr(
+        "No beat grid available for quantize. Run Analyze (beat detection) or set BPM override.",
+      );
+      return;
+    }
     if (!selected) return;
 
     const snapRange = (s: number, e: number) => {
@@ -661,7 +767,9 @@ export default function Timeline({}: PageProps) {
       const [ss, ee] = snapRange(Number(cl.start_s), Number(cl.end_s));
       const nextTracks = tracks.map((t, i) => {
         if (i !== selected.trackIdx) return t;
-        const nextClips = (t.clips || []).map((c, j) => j === selected.clipIdx ? { ...c, start_s: ss, end_s: ee } : c);
+        const nextClips = (t.clips || []).map((c, j) =>
+          j === selected.clipIdx ? { ...c, start_s: ss, end_s: ee } : c,
+        );
         return { ...t, clips: nextClips };
       });
       setTimeline({ ...timeline, tracks: nextTracks });
@@ -684,7 +792,6 @@ export default function Timeline({}: PageProps) {
       updateSelectedCamera({ t: tt });
     }
   };
-
 
   // Hotkeys (Timeline page)
   // S = split @ playhead, D = duplicate @ playhead, Q = quantize selection
@@ -716,7 +823,17 @@ export default function Timeline({}: PageProps) {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selected, playheadS, durationS, quantizeBeats, bpmOverride, timeline, splitSelection, duplicateSelection, quantizeSelection]);
+  }, [
+    selected,
+    playheadS,
+    durationS,
+    quantizeBeats,
+    bpmOverride,
+    timeline,
+    splitSelection,
+    duplicateSelection,
+    quantizeSelection,
+  ]);
 
   const setDiffRangeFromSelection = () => {
     if (!selected) return;
@@ -748,13 +865,13 @@ export default function Timeline({}: PageProps) {
     const s = clamp(Number(diffStart), 0, durationS);
     const e = clamp(Number(diffEnd), s + 0.05, durationS);
     setDiffUrl(
-      `${backendUrl}/v1/projects/${projectId}/preview/diffusion_segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}`
-      + `&w=${encodeURIComponent(String(diffW))}&h=${encodeURIComponent(String(diffH))}`
-      + `&fps=${encodeURIComponent(String(diffFps))}&steps=${encodeURIComponent(String(diffSteps))}`
-      + `&cfg=${encodeURIComponent(String(diffCfg))}&strength=${encodeURIComponent(String(diffStrength))}`
-      + `&model_id=${encodeURIComponent(String(diffModel))}`
-      + `&variant_index=${encodeURIComponent(String(selectedVariant || 0))}`
-      + `&force=1&v=${Date.now()}`
+      `${backendUrl}/v1/projects/${projectId}/preview/diffusion_segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}` +
+        `&w=${encodeURIComponent(String(diffW))}&h=${encodeURIComponent(String(diffH))}` +
+        `&fps=${encodeURIComponent(String(diffFps))}&steps=${encodeURIComponent(String(diffSteps))}` +
+        `&cfg=${encodeURIComponent(String(diffCfg))}&strength=${encodeURIComponent(String(diffStrength))}` +
+        `&model_id=${encodeURIComponent(String(diffModel))}` +
+        `&variant_index=${encodeURIComponent(String(selectedVariant || 0))}` +
+        `&force=1&v=${Date.now()}`,
     );
   };
 
@@ -773,7 +890,9 @@ export default function Timeline({}: PageProps) {
     if (!tr || !cl) return;
     const nextTracks = tracks.map((t, i) => {
       if (i !== selected.trackIdx) return t;
-      const nextClips = (t.clips || []).map((c, j) => j === selected.clipIdx ? { ...c, data: { ...(c.data || {}), ...patch } } : c);
+      const nextClips = (t.clips || []).map((c, j) =>
+        j === selected.clipIdx ? { ...c, data: { ...(c.data || {}), ...patch } } : c,
+      );
       return { ...t, clips: nextClips };
     });
     setTimeline({ ...timeline, tracks: nextTracks });
@@ -783,7 +902,7 @@ export default function Timeline({}: PageProps) {
   const updateSelectedOverlayTimes = (start_s: number, end_s: number) => {
     if (!selected || selected.kind !== "overlay") return;
     const idx = selected.layerIdx;
-    const nextLayers = layers.map((x, i) => i === idx ? { ...x, start_s, end_s } : x);
+    const nextLayers = layers.map((x, i) => (i === idx ? { ...x, start_s, end_s } : x));
     setTimeline({ ...timeline, layers: nextLayers });
     setTimelineDirty(true);
   };
@@ -791,7 +910,9 @@ export default function Timeline({}: PageProps) {
   const updateSelectedCamera = (patch: AnyDict) => {
     if (!selected || selected.kind !== "camera") return;
     const idx = selected.kfIdx;
-    const next = camKeyframes.map((x, i) => i === idx ? { ...x, ...patch } : x).sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
+    const next = camKeyframes
+      .map((x, i) => (i === idx ? { ...x, ...patch } : x))
+      .sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
     setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
     setTimelineDirty(true);
   };
@@ -800,7 +921,9 @@ export default function Timeline({}: PageProps) {
     if (!projectId) return;
     const s = clamp(Number(proxyStart), 0, durationS);
     const e = clamp(Number(proxyEnd), s + 0.05, durationS);
-    setProxyUrl(`${backendUrl}/v1/projects/${projectId}/preview/segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}&w=768&h=432&fps=${encodeURIComponent(String(proxyFps))}&force=1&v=${Date.now()}`);
+    setProxyUrl(
+      `${backendUrl}/v1/projects/${projectId}/preview/segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}&w=768&h=432&fps=${encodeURIComponent(String(proxyFps))}&force=1&v=${Date.now()}`,
+    );
   };
 
   const playPause = () => {
@@ -814,500 +937,974 @@ export default function Timeline({}: PageProps) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === " " && (e.target as any)?.tagName !== "TEXTAREA" && (e.target as any)?.tagName !== "INPUT") {
+    if (
+      e.key === " " &&
+      (e.target as any)?.tagName !== "TEXTAREA" &&
+      (e.target as any)?.tagName !== "INPUT"
+    ) {
       e.preventDefault();
       playPause();
     }
   };
 
-  const laneStyle: React.CSSProperties = { position: "relative", height: 46, borderRadius: 12, background: "rgba(255,255,255,0.04)", overflow: "hidden" };
+  const bpm = _bpm();
+  const beatGrid = _beatGrid();
+  const timelineCanvasWidth = Math.max(1320, Math.ceil(durationS * pxPerSecond) + 120);
+  const rulerStepS = pxPerSecond >= 180 ? 1 : pxPerSecond >= 120 ? 2 : pxPerSecond >= 72 ? 4 : 8;
+  const rulerEnd = Math.ceil(durationS / Math.max(1, rulerStepS)) * rulerStepS;
+  const rulerTicks = Array.from(
+    { length: Math.floor(rulerEnd / Math.max(1, rulerStepS)) + 1 },
+    (_, i) => Number((i * rulerStepS).toFixed(3)),
+  );
+  const quantizeStatus =
+    beatGrid && beatGrid.length >= 2
+      ? `${beatGrid.length} detected beat markers`
+      : bpm
+        ? `BPM fallback ${bpm.toFixed(1)}`
+        : "Run Analyze or set BPM to enable quantize";
+  const timelineSurfaceStyle = {
+    width: timelineCanvasWidth,
+    ["--timeline-major-grid" as any]: `${Math.max(pxPerSecond, 24)}px`,
+    ["--timeline-minor-grid" as any]: `${Math.max(pxPerSecond / 4, 12)}px`,
+  } as React.CSSProperties;
 
-  return (
-    <div onKeyDown={onKeyDown} tabIndex={0} style={{ outline: "none" }}>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontSize: 22, fontWeight: 900 }}>Timeline</div>
-        <div className="row" style={{ gap: 10, alignItems: "center" }}>
-          <label className="small">Project</label>
-          <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-            {projects.map((p) => <option key={p.id} value={p.id}>{p.name || p.id}</option>)}
-          </select>
-          <label className="small">Variant</label>
-          <select value={selectedVariant} onChange={(e) => setSelectedVariant(Number(e.target.value))}>
-            {Array.from({ length: Math.max(1, (plan?.variants?.length || 1)) }).map((_, i) => <option key={i} value={i}>{i}</option>)}
-          </select>
-          <label className="small">BPM</label>
-          <input type="number" step={0.1} placeholder="auto" value={bpmOverride ?? ""} onChange={(e) => setBpmOverride(e.target.value ? Number(e.target.value) : null)} style={{ width: 90 }} />
-          <label className="small">Quantize</label>
-          <select value={String(quantizeBeats)} onChange={(e) => setQuantizeBeats(Number(e.target.value))}>
-            <option value="1">1 beat</option>
-            <option value="0.5">1/2 beat</option>
-            <option value="0.25">1/4 beat</option>
-          </select>
-          <button className="secondary" disabled={!selected} onClick={quantizeSelection}>Quantize selection</button>
-          <button className="secondary" disabled={!selected} onClick={splitSelection}>Split @ playhead</button>
-          <button className="secondary" disabled={!selected} onClick={duplicateSelection}>Duplicate @ playhead</button>
-          <button className={timelineDirty ? "primary" : "secondary"} onClick={saveTimeline}>{timelineDirty ? "Save timeline *" : "Save timeline"}</button>
+  const pageHeader = (
+    <div className="timeline-pageHeader">
+      <div>
+        <div className="timeline-kicker">Arrangement View</div>
+        <div className="timeline-titleRow">
+          <h1>Timeline</h1>
+          <span className="badge">{timelineDirty ? "Unsaved edits" : "Saved"}</span>
+        </div>
+        <div className="small timeline-headerCopy">
+          Nuendo and Pro Tools style workspace: transport on top, fixed track headers on the left,
+          timeline canvas in the center, preview and inspector docked on the right.
+        </div>
+      </div>
+      <div className="timeline-statusStrip">
+        <div className="timeline-stat">
+          <span className="small">Duration</span>
+          <strong>{fmtTime(durationS)}</strong>
+        </div>
+        <div className="timeline-stat">
+          <span className="small">Playhead</span>
+          <strong>{fmtTime(playheadS)}</strong>
+        </div>
+        <div className="timeline-stat">
+          <span className="small">Selection</span>
+          <strong>{selected ? selected.kind : "none"}</strong>
+        </div>
+      </div>
+    </div>
+  );
+
+  const toolbarCard = (
+    <div className="card timeline-toolbarCard">
+      <div className="timeline-toolbarGrid">
+        <div className="timeline-toolbarGroup">
+          <div className="timeline-toolbarLabel">Session</div>
+          <div className="timeline-toolbarFields">
+            <label className="small">Project</label>
+            <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name || p.id}
+                </option>
+              ))}
+            </select>
+            <label className="small">Variant</label>
+            <select
+              value={selectedVariant}
+              onChange={(e) => setSelectedVariant(Number(e.target.value))}
+            >
+              {Array.from({ length: Math.max(1, plan?.variants?.length || 1) }).map((_, i) => (
+                <option key={i} value={i}>
+                  {plan?.variants?.[i]?.name
+                    ? `${i + 1}. ${plan.variants[i].name}`
+                    : `Variant ${i + 1}`}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="timeline-toolbarGroup">
+          <div className="timeline-toolbarLabel">Transport</div>
+          <div className="timeline-toolbarFields">
+            <label className="small">Playhead</label>
+            <input
+              type="number"
+              step={0.1}
+              value={playheadS}
+              onChange={(e) => setPlayheadS(Number(e.target.value))}
+            />
+            <label className="small">Zoom</label>
+            <input
+              type="number"
+              step={5}
+              value={pxPerSecond}
+              onChange={(e) => setPxPerSecond(Number(e.target.value))}
+            />
+            <button className="secondary" onClick={playPause}>
+              {isPlaying ? "Pause" : "Play"}
+            </button>
+            <button className="secondary" onClick={() => setSelected(null)}>
+              Clear selection
+            </button>
+          </div>
+        </div>
+
+        <div className="timeline-toolbarGroup">
+          <div className="timeline-toolbarLabel">Grid</div>
+          <div className="timeline-toolbarFields">
+            <label className="small">BPM</label>
+            <input
+              type="number"
+              step={0.1}
+              placeholder="auto"
+              value={bpmOverride ?? ""}
+              onChange={(e) => setBpmOverride(e.target.value ? Number(e.target.value) : null)}
+            />
+            <label className="small">Quantize</label>
+            <select
+              value={String(quantizeBeats)}
+              onChange={(e) => setQuantizeBeats(Number(e.target.value))}
+            >
+              <option value="1">1 beat</option>
+              <option value="0.5">1/2 beat</option>
+              <option value="0.25">1/4 beat</option>
+            </select>
+            <button className="secondary" disabled={!selected} onClick={quantizeSelection}>
+              Quantize
+            </button>
+            <button className="secondary" disabled={!selected} onClick={splitSelection}>
+              Split
+            </button>
+            <button className="secondary" disabled={!selected} onClick={duplicateSelection}>
+              Duplicate
+            </button>
+            <button className={timelineDirty ? "primary" : "secondary"} onClick={saveTimeline}>
+              {timelineDirty ? "Save timeline *" : "Save timeline"}
+            </button>
+          </div>
         </div>
       </div>
 
-      {err ? <div className="card" style={{ marginTop: 10, border: "1px solid rgba(255,120,120,0.35)" }}><div className="small">{err}</div></div> : null}
+      <div className="timeline-toolbarFooter">
+        <div className="small">
+          Keyboard: `Space` play/pause, `S` split, `D` duplicate, `Q` quantize.
+        </div>
+        <div className="small">Grid source: {quantizeStatus}</div>
+      </div>
 
-      <div className="row" style={{ gap: 16, alignItems: "flex-start", marginTop: 12 }}>
-        <div className="card" style={{ flex: 1, minWidth: 700 }}>
-          <div style={{ fontWeight: 900 }}>Audio waveform</div>
-          <div className="small" style={{ opacity: 0.85, marginTop: 6 }}>
-            Click waveform to move playhead. Space = play/pause. Drag blocks to change timing.
+      {audioUrl ? (
+        <audio
+          ref={audioRef}
+          src={audioUrl}
+          controls
+          className="timeline-audioControl"
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+        />
+      ) : (
+        <div className="small timeline-audioEmpty">No audio uploaded for this project.</div>
+      )}
+    </div>
+  );
+
+  const arrangementCard = (
+    <div
+      className="card timeline-arrangementCard"
+      onPointerMove={onTimelinePointerMove}
+      onPointerUp={onTimelinePointerUp}
+      onPointerCancel={onTimelinePointerUp}
+    >
+      <div className="timeline-panelHeader">
+        <div>
+          <div className="timeline-panelTitle">Arrangement</div>
+          <div className="small">
+            Tracks stay full-height and scroll horizontally instead of collapsing when the window
+            gets tighter.
           </div>
-          <div className="row" style={{ gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-            <label className="small">Playhead</label>
-            <input type="number" step={0.1} value={playheadS} onChange={(e) => setPlayheadS(Number(e.target.value))} style={{ width: 110 }} />
-            <label className="small">px/s</label>
-            <input type="number" step={5} value={pxPerSecond} onChange={(e) => setPxPerSecond(Number(e.target.value))} style={{ width: 90 }} />
-            <button className="secondary" onClick={playPause}>{isPlaying ? "Pause" : "Play"}</button>
-            <button className="secondary" onClick={() => { setSelected(null); }}>Clear selection</button>
-            <div className="small" style={{ opacity: 0.8 }}>duration ≈ {durationS.toFixed(2)}s</div>
+        </div>
+        <div className="timeline-panelMeta">
+          <span className="badge">{tracks.length} tracks</span>
+          <span className="badge">{layers.length} overlays</span>
+          <span className="badge">{camKeyframes.length} camera keyframes</span>
+        </div>
+      </div>
+
+      <div className="timeline-board">
+        <div className="timeline-boardRail">
+          <div className="timeline-railCell timeline-railCell--header">
+            <div className="timeline-railTitle">Timeline ruler</div>
+            <div className="timeline-railMeta">Seconds and grid divisions</div>
           </div>
 
-          <div style={{ marginTop: 10 }}>
-            <canvas
-              ref={canvasRef}
-              width={900}
-              height={90}
-              onClick={onWaveformClick}
-              style={{ width: "100%", height: 90, borderRadius: 12, background: "rgba(0,0,0,0.25)", cursor: "pointer" }}
-            />
+          <div className="timeline-railCell timeline-railCell--wave">
+            <div className="timeline-railTitle">Waveform</div>
+            <div className="timeline-railMeta">Click to park the playhead</div>
           </div>
 
-          {audioUrl ? (
-            <audio
-              ref={audioRef}
-              src={audioUrl}
-              controls
-              style={{ width: "100%", marginTop: 10 }}
-              onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
-              onEnded={() => setIsPlaying(false)}
-            />
-          ) : <div className="small" style={{ opacity: 0.75, marginTop: 10 }}>No audio uploaded for this project.</div>}
-
-          <div style={{ marginTop: 14, fontWeight: 900 }}>Tracks</div>
-
-          {/* Prompt + Motion tracks */}
           {tracks.map((tr, trackIdx) => (
-            <div key={tr.id || trackIdx} style={{ marginTop: 10 }}>
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                <div className="small" style={{ fontWeight: 900 }}>{tr.name} <span style={{ opacity: 0.7 }}>({tr.type})</span></div>
-                <div className="row" style={{ gap: 8 }}>
-                  {String(tr.type).toLowerCase() === "prompt" ? <button className="secondary" onClick={() => addClip("prompt")}>Add prompt</button> : null}
-                  {String(tr.type).toLowerCase() === "motion" ? <button className="secondary" onClick={() => addClip("motion")}>Add motion</button> : null}
-                  <button className="secondary" disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)} onClick={duplicateSelection}>Duplicate</button>
-                  <button className="secondary" disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)} onClick={splitSelection}>Split</button>
-                  <button className="secondary" disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)} onClick={quantizeSelection}>Quantize</button>
-                </div>
+            <div key={tr.id || trackIdx} className="timeline-railCell">
+              <div className="timeline-railTitle">{tr.name}</div>
+              <div className="timeline-railMeta">
+                {String(tr.type).toUpperCase()} • {(tr.clips || []).length} clips
               </div>
-
-              <div style={laneStyle} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp}>
-                {(tr.clips || []).map((cl, i) => {
-                  const left = clipPx(cl.start_s);
-                  const width = Math.max(12, clipPx(cl.end_s) - clipPx(cl.start_s));
-                  const isSel = selected?.kind === "track" && selected.trackIdx === trackIdx && selected.clipIdx === i;
-                  return (
-                    <div
-                      key={cl.id || i}
-                      onPointerDown={onTrackClipPointerDown(trackIdx, i, "move")}
-                      style={{
-                        position: "absolute",
-                        left,
-                        top: 7,
-                        height: 32,
-                        width,
-                        borderRadius: 10,
-                        cursor: "grab",
-                        padding: "6px 10px",
-                        background: isSel ? "rgba(120,200,255,0.22)" : "rgba(255,255,255,0.12)",
-                        border: isSel ? "1px solid rgba(120,200,255,0.55)" : "1px solid rgba(255,255,255,0.12)",
-                        overflow: "hidden",
-                        whiteSpace: "nowrap",
-                        textOverflow: "ellipsis",
-                        userSelect: "none"
-                      }}
-                      title={fmtLabel(tr.type, cl)}
-                    >
-                      <div className="small" style={{ opacity: 0.95 }}>{fmtLabel(tr.type, cl)}</div>
-                      <div onPointerDown={onTrackClipPointerDown(trackIdx, i, "left")} style={{ position: "absolute", left: 0, top: 0, width: 10, height: "100%", cursor: "ew-resize" }} />
-                      <div onPointerDown={onTrackClipPointerDown(trackIdx, i, "right")} style={{ position: "absolute", right: 0, top: 0, width: 10, height: "100%", cursor: "ew-resize" }} />
-                    </div>
-                  );
-                })}
-
-                <div style={{ position: "absolute", left: clipPx(playheadS), top: 0, width: 2, height: "100%", background: "rgba(255,120,120,0.85)" }} />
+              <div className="timeline-railActions">
+                {String(tr.type).toLowerCase() === "prompt" ? (
+                  <button className="secondary" onClick={() => addClip("prompt")}>
+                    Add prompt
+                  </button>
+                ) : null}
+                {String(tr.type).toLowerCase() === "motion" ? (
+                  <button className="secondary" onClick={() => addClip("motion")}>
+                    Add motion
+                  </button>
+                ) : null}
+                <button
+                  className="secondary"
+                  disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)}
+                  onClick={duplicateSelection}
+                >
+                  Dup
+                </button>
+                <button
+                  className="secondary"
+                  disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)}
+                  onClick={splitSelection}
+                >
+                  Split
+                </button>
+                <button
+                  className="secondary"
+                  disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)}
+                  onClick={quantizeSelection}
+                >
+                  Quant
+                </button>
               </div>
             </div>
           ))}
 
-          {/* Motion curves inspector (EDMG schedules) */}
-          {(() => {
-            const tr = (tracks || []).find((t: any) => String(t?.type || "").toLowerCase() === "motion");
-            const clip = (tr?.clips || [])[0];
-            if (!clip || !timeline) return null;
-            const data: AnyDict = (clip?.data && typeof clip.data === "object") ? clip.data : {};
-            const fps = 24;
-            const duration = Number(durationS || 0) || 60;
+          <div className="timeline-railCell">
+            <div className="timeline-railTitle">Overlays</div>
+            <div className="timeline-railMeta">timeline.layers</div>
+            <div className="timeline-railHint">Edit visual placement in Render.</div>
+            <div className="timeline-railActions">
+              <button
+                className="secondary"
+                disabled={selected?.kind !== "overlay"}
+                onClick={duplicateSelection}
+              >
+                Dup
+              </button>
+              <button
+                className="secondary"
+                disabled={selected?.kind !== "overlay"}
+                onClick={splitSelection}
+              >
+                Split
+              </button>
+              <button
+                className="secondary"
+                disabled={selected?.kind !== "overlay"}
+                onClick={quantizeSelection}
+              >
+                Quant
+              </button>
+            </div>
+          </div>
 
-            const strengthSched = String(data.denoise_schedule || data.strength_schedule || "");
-            const cfgSched = String(data.cfg_scale_schedule || "");
-            const stepsSched = String(data.steps_schedule || "");
-            const strengthPairs = parseDeforumSchedule(strengthSched);
-            const cfgPairs = parseDeforumSchedule(cfgSched);
-            const stepsPairs = parseDeforumSchedule(stepsSched);
-            const strengthCurve = sampleCurve(strengthPairs, { durationS: duration, fps, samples: 220, fallback: 0.35 });
-            const cfgCurve = sampleCurve(cfgPairs, { durationS: duration, fps, samples: 220, fallback: 7.0 });
-            const stepsCurve = sampleCurve(stepsPairs, { durationS: duration, fps, samples: 220, fallback: 15 });
+          <div className="timeline-railCell">
+            <div className="timeline-railTitle">Camera</div>
+            <div className="timeline-railMeta">Automation keyframes</div>
+            <div className="timeline-railActions">
+              <button className="secondary" onClick={addCameraKeyframe}>
+                Add keyframe
+              </button>
+              <button
+                className="secondary"
+                disabled={selected?.kind !== "camera"}
+                onClick={duplicateSelection}
+              >
+                Dup
+              </button>
+              <button
+                className="secondary"
+                disabled={selected?.kind !== "camera"}
+                onClick={quantizeSelection}
+              >
+                Quant
+              </button>
+            </div>
+          </div>
+        </div>
 
-            const W = 720;
-            const H = 160;
-
-            const strengthPath = svgPath(strengthCurve, duration, 0, 1, W, H);
-            const cfgPath = svgPath(cfgCurve, duration, 1, 30, W, H);
-            const stepsPath = svgPath(stepsCurve, duration, 4, 60, W, H);
-
-            const updateMotionField = (field: string, val: string) => {
-              const next = { ...(timeline as any) };
-              next.tracks = Array.isArray(next.tracks) ? next.tracks.map((t: any) => {
-                if (String(t?.type || "").toLowerCase() !== "motion") return t;
-                const clips = Array.isArray(t.clips) ? t.clips : [];
-                if (!clips.length) return t;
-                const c0 = clips[0] || {};
-                const d0 = (c0.data && typeof c0.data === "object") ? { ...c0.data } : {};
-                d0[field] = val;
-                return { ...t, clips: [{ ...c0, data: d0 }, ...clips.slice(1)] };
-              }) : next.tracks;
-              setTimeline(next);
-              setTimelineDirty(true);
-            };
-
-            const insertPointAtPlayhead = (field: "strength_schedule" | "cfg_scale_schedule" | "steps_schedule" | "denoise_schedule", value: number) => {
-              const f = Math.round(Number(playheadS || 0) * fps);
-              const cur = String((data as any)[field] || "");
-              const next = upsertPoint(cur, f, value);
-              updateMotionField(field, next);
-            };
-
-            const curStrength = evalSchedule(strengthPairs, Number(playheadS || 0) * fps) ?? 0.35;
-            const curCfg = evalSchedule(cfgPairs, Number(playheadS || 0) * fps) ?? 7.0;
-            const curSteps = evalSchedule(stepsPairs, Number(playheadS || 0) * fps) ?? 15;
-
-            return (
-              <div className="card" style={{ marginTop: 14 }}>
-                <div style={{ fontWeight: 900 }}>Motion Curves (cfg / strength / steps)</div>
-                <div className="small" style={{ opacity: 0.85, marginTop: 6 }}>
-                  Reads Deforum-style schedules from the Motion track. Click “Insert @ playhead” to add schedule points.
+        <div className="timeline-boardScroll">
+          <div className="timeline-boardCanvas" style={timelineSurfaceStyle}>
+            <div className="timeline-rulerRow">
+              {rulerTicks.map((tick) => (
+                <div key={tick} className="timeline-rulerTick" style={{ left: clipPx(tick) }}>
+                  <div className="timeline-rulerTickLine" />
+                  <div className="timeline-rulerTickLabel">{fmtTime(tick)}</div>
                 </div>
-
-                <div style={{ marginTop: 10, overflowX: "auto" }}>
-                  <svg width={W} height={H} style={{ width: "100%", height: H, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>
-                    {/* grid */}
-                    {Array.from({ length: 9 }).map((_, i) => (
-                      <line key={i} x1={(i / 8) * W} y1={0} x2={(i / 8) * W} y2={H} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
-                    ))}
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <line key={i} x1={0} y1={(i / 4) * H} x2={W} y2={(i / 4) * H} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
-                    ))}
-                    {/* curves */}
-                    <path d={strengthPath} fill="none" stroke="rgba(120,200,255,0.85)" strokeWidth={2} />
-                    <path d={cfgPath} fill="none" stroke="rgba(255,210,120,0.85)" strokeWidth={2} />
-                    <path d={stepsPath} fill="none" stroke="rgba(180,255,180,0.85)" strokeWidth={2} />
-                    {/* playhead */}
-                    <line x1={(clamp(Number(playheadS || 0), 0, duration) / Math.max(1e-6, duration)) * W} y1={0} x2={(clamp(Number(playheadS || 0), 0, duration) / Math.max(1e-6, duration)) * W} y2={H} stroke="rgba(255,120,120,0.9)" strokeWidth={2} />
-                  </svg>
-                </div>
-
-                <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-                  <div className="small" style={{ fontWeight: 900 }}>@ playhead</div>
-                  <div className="small">strength {curStrength.toFixed(3)}</div>
-                  <button className="secondary" onClick={() => insertPointAtPlayhead("strength_schedule", curStrength)}>Insert @ playhead</button>
-                  <div className="small">cfg {curCfg.toFixed(2)}</div>
-                  <button className="secondary" onClick={() => insertPointAtPlayhead("cfg_scale_schedule", curCfg)}>Insert @ playhead</button>
-                  <div className="small">steps {Math.round(curSteps)}</div>
-                  <button className="secondary" onClick={() => insertPointAtPlayhead("steps_schedule", curSteps)}>Insert @ playhead</button>
-                </div>
-
-                <div style={{ marginTop: 10 }}>
-                  <div className="small" style={{ fontWeight: 900, marginBottom: 6 }}>strength_schedule</div>
-                  <textarea style={{ width: "100%", minHeight: 64 }} value={String(data.strength_schedule || "")} onChange={(e) => updateMotionField("strength_schedule", e.target.value)} />
-                </div>
-
-                <div style={{ marginTop: 10 }}>
-                  <div className="small" style={{ fontWeight: 900, marginBottom: 6 }}>cfg_scale_schedule</div>
-                  <textarea style={{ width: "100%", minHeight: 64 }} value={String(data.cfg_scale_schedule || "")} onChange={(e) => updateMotionField("cfg_scale_schedule", e.target.value)} />
-                </div>
-
-                <div style={{ marginTop: 10 }}>
-                  <div className="small" style={{ fontWeight: 900, marginBottom: 6 }}>steps_schedule</div>
-                  <textarea style={{ width: "100%", minHeight: 64 }} value={String(data.steps_schedule || "")} onChange={(e) => updateMotionField("steps_schedule", e.target.value)} />
-                </div>
-
-                <div style={{ marginTop: 10 }}>
-                  <div className="small" style={{ fontWeight: 900, marginBottom: 6 }}>denoise_schedule (optional)</div>
-                  <textarea style={{ width: "100%", minHeight: 64 }} value={String(data.denoise_schedule || "")} onChange={(e) => updateMotionField("denoise_schedule", e.target.value)} />
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Overlays lane */}
-          <div style={{ marginTop: 14 }}>
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <div className="small" style={{ fontWeight: 900 }}>Overlays <span style={{ opacity: 0.7 }}>(timeline.layers)</span></div>
-              <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                <div className="small" style={{ opacity: 0.8 }}>Edit overlay visuals in Render → Visual editor.</div>
-                <button className="secondary" disabled={selected?.kind !== "overlay"} onClick={duplicateSelection}>Duplicate</button>
-                <button className="secondary" disabled={selected?.kind !== "overlay"} onClick={splitSelection}>Split</button>
-                <button className="secondary" disabled={selected?.kind !== "overlay"} onClick={quantizeSelection}>Quantize</button>
-              </div>
+              ))}
+              <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
             </div>
 
-            <div style={laneStyle} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp}>
+            <div className="timeline-waveformRow" onClick={onWaveformClick}>
+              <canvas
+                ref={canvasRef}
+                width={timelineCanvasWidth}
+                height={92}
+                className="timeline-waveformCanvas"
+              />
+              <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
+            </div>
+
+            {tracks.map((tr, trackIdx) => (
+              <div key={tr.id || trackIdx} className="timeline-laneRow">
+                {(tr.clips || []).map((cl, i) => {
+                  const left = clipPx(cl.start_s);
+                  const width = Math.max(16, clipPx(cl.end_s) - clipPx(cl.start_s));
+                  const isSel =
+                    selected?.kind === "track" &&
+                    selected.trackIdx === trackIdx &&
+                    selected.clipIdx === i;
+                  return (
+                    <div
+                      key={cl.id || i}
+                      className={`timeline-laneClip timeline-laneClip--${String(tr.type).toLowerCase()}${isSel ? " is-selected" : ""}`}
+                      onPointerDown={onTrackClipPointerDown(trackIdx, i, "move")}
+                      style={{ left, width }}
+                      title={fmtLabel(tr.type, cl)}
+                    >
+                      <div className="timeline-laneClipLabel">{fmtLabel(tr.type, cl)}</div>
+                      <div
+                        className="timeline-laneClipHandle timeline-laneClipHandle--left"
+                        onPointerDown={onTrackClipPointerDown(trackIdx, i, "left")}
+                      />
+                      <div
+                        className="timeline-laneClipHandle timeline-laneClipHandle--right"
+                        onPointerDown={onTrackClipPointerDown(trackIdx, i, "right")}
+                      />
+                    </div>
+                  );
+                })}
+                <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
+              </div>
+            ))}
+
+            <div className="timeline-laneRow timeline-laneRow--overlay">
               {layers.map((l, i) => {
                 const s = Number(l.start_s ?? 0);
                 const e = Number(l.end_s ?? durationS);
                 const left = clipPx(s);
-                const width = Math.max(12, clipPx(e) - clipPx(s));
-                const label = l.type === "image" ? String(l.asset || "image") : l.type === "text" ? String(l.text || "text").slice(0, 20) : String(l.type || "layer");
+                const width = Math.max(16, clipPx(e) - clipPx(s));
+                const label =
+                  l.type === "image"
+                    ? String(l.asset || "image")
+                    : l.type === "text"
+                      ? String(l.text || "text").slice(0, 32)
+                      : String(l.type || "layer");
                 const isSel = selected?.kind === "overlay" && selected.layerIdx === i;
 
                 return (
                   <div
                     key={i}
+                    className={`timeline-laneClip timeline-laneClip--overlay${isSel ? " is-selected" : ""}`}
                     onPointerDown={onOverlayPointerDown(i, "move")}
-                    style={{
-                      position: "absolute",
-                      left,
-                      top: 7,
-                      height: 32,
-                      width,
-                      borderRadius: 10,
-                      cursor: "grab",
-                      padding: "6px 10px",
-                      background: isSel ? "rgba(255,210,120,0.18)" : "rgba(255,255,255,0.10)",
-                      border: isSel ? "1px solid rgba(255,210,120,0.55)" : "1px solid rgba(255,255,255,0.10)",
-                      overflow: "hidden",
-                      whiteSpace: "nowrap",
-                      textOverflow: "ellipsis",
-                      userSelect: "none"
-                    }}
+                    style={{ left, width }}
                     title={label}
                   >
-                    <div className="small" style={{ opacity: 0.95 }}>{label}</div>
-                    <div onPointerDown={onOverlayPointerDown(i, "left")} style={{ position: "absolute", left: 0, top: 0, width: 10, height: "100%", cursor: "ew-resize" }} />
-                    <div onPointerDown={onOverlayPointerDown(i, "right")} style={{ position: "absolute", right: 0, top: 0, width: 10, height: "100%", cursor: "ew-resize" }} />
+                    <div className="timeline-laneClipLabel">{label}</div>
+                    <div
+                      className="timeline-laneClipHandle timeline-laneClipHandle--left"
+                      onPointerDown={onOverlayPointerDown(i, "left")}
+                    />
+                    <div
+                      className="timeline-laneClipHandle timeline-laneClipHandle--right"
+                      onPointerDown={onOverlayPointerDown(i, "right")}
+                    />
                   </div>
                 );
               })}
-              <div style={{ position: "absolute", left: clipPx(playheadS), top: 0, width: 2, height: "100%", background: "rgba(255,120,120,0.85)" }} />
+              <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
             </div>
-          </div>
 
-          {/* Camera lane */}
-          <div style={{ marginTop: 14 }}>
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <div className="small" style={{ fontWeight: 900 }}>Camera automation <span style={{ opacity: 0.7 }}>(keyframes)</span></div>
-              <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                <button className="secondary" onClick={addCameraKeyframe}>Add keyframe @ playhead</button>
-                <button className="secondary" disabled={selected?.kind !== "camera"} onClick={duplicateSelection}>Duplicate</button>
-                <button className="secondary" disabled={selected?.kind !== "camera"} onClick={quantizeSelection}>Quantize</button>
-              </div>
-            </div>
-            <div style={laneStyle} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp}>
+            <div className="timeline-laneRow timeline-laneRow--camera">
               {camKeyframes.map((k, i) => {
                 const x = clipPx(Number(k.t || 0));
                 const isSel = selected?.kind === "camera" && selected.kfIdx === i;
                 return (
                   <div
                     key={i}
+                    className={`timeline-keyframe${isSel ? " is-selected" : ""}`}
                     onPointerDown={onCameraKfPointerDown(i)}
-                    title={`t=${Number(k.t || 0).toFixed(2)} zoom=${Number(k.zoom || 1).toFixed(2)}`}
-                    style={{
-                      position: "absolute",
-                      left: x - 6,
-                      top: 14,
-                      width: 12,
-                      height: 12,
-                      transform: "rotate(45deg)",
-                      background: isSel ? "rgba(120,200,255,0.70)" : "rgba(255,255,255,0.35)",
-                      border: isSel ? "1px solid rgba(120,200,255,0.95)" : "1px solid rgba(255,255,255,0.25)",
-                      cursor: "grab",
-                      borderRadius: 2
-                    }}
+                    title={`t=${fmtTime(Number(k.t || 0))} • zoom=${Number(k.zoom || 1).toFixed(2)}`}
+                    style={{ left: x - 7 }}
                   />
                 );
               })}
-              <div style={{ position: "absolute", left: clipPx(playheadS), top: 0, width: 2, height: "100%", background: "rgba(255,120,120,0.85)" }} />
+              <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
 
-        <div className="card" style={{ width: 560 }}>
-          <div style={{ fontWeight: 900 }}>Preview (cached frame)</div>
-          <div className="small" style={{ opacity: 0.85, marginTop: 6 }}>
-            Fast overlay preview for scrubbing (no diffusion).
+  const inspectorCard = (
+    <div className="card timeline-dockCard">
+      <div className="timeline-panelHeader">
+        <div>
+          <div className="timeline-panelTitle">Inspector</div>
+          <div className="small">
+            Selection-aware controls stay docked instead of hiding below the timeline.
           </div>
-          <div style={{ marginTop: 10 }}>
-            {previewUrl ? <img src={previewUrl} style={{ width: "100%", borderRadius: 12 }} /> : <div className="small">No preview.</div>}
-          </div>
+        </div>
+        <span className="badge">{selected ? selected.kind : "none"}</span>
+      </div>
 
-          <div style={{ marginTop: 14, fontWeight: 900 }}>Proxy preview clip (cached segment)</div>
-          <div className="small" style={{ opacity: 0.85, marginTop: 6 }}>
-            Generates a short low-res MP4 for the selected time range (overlays only). Play audio separately.
-          </div>
-          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-            <label className="small">start</label>
-            <input type="number" step={0.1} value={proxyStart} onChange={(e) => setProxyStart(Number(e.target.value))} style={{ width: 90 }} />
-            <label className="small">end</label>
-            <input type="number" step={0.1} value={proxyEnd} onChange={(e) => setProxyEnd(Number(e.target.value))} style={{ width: 90 }} />
-            <label className="small">fps</label>
-            <input type="number" step={1} value={proxyFps} onChange={(e) => setProxyFps(Number(e.target.value))} style={{ width: 70 }} />
-            <button className="primary" onClick={generateProxy}>Generate</button>
-            <button className="secondary" onClick={() => setProxyUrl("")}>Clear</button>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            {proxyUrl ? <video src={proxyUrl} controls style={{ width: "100%", borderRadius: 12 }} /> : <div className="small" style={{ opacity: 0.8 }}>No proxy clip generated.</div>}
-          </div>
-
-          <div style={{ marginTop: 14, fontWeight: 900 }}>Diffusion preview (cached look)</div>
-          <div className="small" style={{ opacity: 0.85, marginTop: 6 }}>
-            Generates a short low-FPS, low-steps diffusion MP4 (SD1.5/SDXL internal). This can be slow on CPU.
-          </div>
-          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-            <button className="secondary" disabled={!selected} onClick={setDiffRangeFromSelection}>Use selection</button>
-            <label className="small">start</label>
-            <input type="number" step={0.1} value={diffStart} onChange={(e) => setDiffStart(Number(e.target.value))} style={{ width: 90 }} />
-            <label className="small">end</label>
-            <input type="number" step={0.1} value={diffEnd} onChange={(e) => setDiffEnd(Number(e.target.value))} style={{ width: 90 }} />
-            <label className="small">fps</label>
-            <input type="number" step={1} value={diffFps} onChange={(e) => setDiffFps(Number(e.target.value))} style={{ width: 70 }} />
-          </div>
-          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-            <label className="small">steps</label>
-            <input type="number" step={1} value={diffSteps} onChange={(e) => setDiffSteps(Number(e.target.value))} style={{ width: 70 }} />
-            <label className="small">cfg</label>
-            <input type="number" step={0.1} value={diffCfg} onChange={(e) => setDiffCfg(Number(e.target.value))} style={{ width: 70 }} />
-            <label className="small">strength</label>
-            <input type="number" step={0.01} value={diffStrength} onChange={(e) => setDiffStrength(Number(e.target.value))} style={{ width: 80 }} />
-            <label className="small">w</label>
-            <input type="number" step={64} value={diffW} onChange={(e) => setDiffW(Number(e.target.value))} style={{ width: 80 }} />
-            <label className="small">h</label>
-            <input type="number" step={64} value={diffH} onChange={(e) => setDiffH(Number(e.target.value))} style={{ width: 80 }} />
-            <label className="small">model</label>
-            <select value={diffModel} onChange={(e) => setDiffModel(e.target.value)}>
-              <option value="auto">auto</option>
-              <option value="hf_sd15_internal">sd15</option>
-              <option value="hf_sdxl_internal">sdxl</option>
-            </select>
-            <button className="primary" onClick={generateDiffusionPreview}>Generate</button>
-            <button className="secondary" onClick={() => setDiffUrl("")}>Clear</button>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            {diffUrl ? <video src={diffUrl} controls style={{ width: "100%", borderRadius: 12 }} /> : <div className="small" style={{ opacity: 0.8 }}>No diffusion preview generated.</div>}
-          </div>
-
-          <div style={{ marginTop: 14, fontWeight: 900 }}>Selected item</div>
-          {selected?.kind === "track" ? (
-            (() => {
-              const picked = selectedTrackClip(selected);
-              if (!picked) return <div className="small" style={{ opacity: 0.8, marginTop: 8 }}>No selection.</div>;
-              const { tr, cl } = picked;
-              const tt = String(tr.type).toLowerCase();
-              return (
+      {selected?.kind === "track" ? (
+        (() => {
+          const picked = selectedTrackClip(selected);
+          if (!picked) return <div className="small timeline-emptyState">No selection.</div>;
+          const { tr, cl } = picked;
+          const tt = String(tr.type).toLowerCase();
+          return (
+            <>
+              <div className="small timeline-inspectorMeta">
+                {tr.name}: {fmtTime(cl.start_s)} → {fmtTime(cl.end_s)}
+              </div>
+              {tt === "prompt" ? (
                 <>
-                  <div className="small" style={{ opacity: 0.85, marginTop: 6 }}>
-                    {tr.name}: t={cl.start_s.toFixed(2)}s → {cl.end_s.toFixed(2)}s
-                  </div>
-                  {tt === "prompt" ? (
-                    <>
-                      <textarea
-                        style={{ width: "100%", minHeight: 120, marginTop: 8 }}
-                        value={String(cl.data?.prompt || "")}
-                        onChange={(e) => updateSelectedClipData({ prompt: e.target.value })}
-                      />
-                      <div className="small" style={{ opacity: 0.8, marginTop: 6 }}>
-                        Internal render uses this prompt track when present.
-                      </div>
-                    </>
-                  ) : tt === "motion" ? (
-                    <>
-                      <div className="small" style={{ opacity: 0.8, marginTop: 8 }}>
-                        Motion clips drive camera when camera keyframes are missing, and can override diffusion params (cfg/steps/strength) per time.
-                      </div>
-                      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-                        <label className="small">zoom start</label>
-                        <input type="number" step={0.01} value={Number(cl.data?.zoom_start ?? 1)} onChange={(e) => updateSelectedClipData({ zoom_start: Number(e.target.value) })} style={{ width: 90 }} />
-                        <label className="small">zoom end</label>
-                        <input type="number" step={0.01} value={Number(cl.data?.zoom_end ?? 1)} onChange={(e) => updateSelectedClipData({ zoom_end: Number(e.target.value) })} style={{ width: 90 }} />
-                        <label className="small">strength</label>
-                        <input type="number" step={0.01} value={Number(cl.data?.strength ?? 0.35)} onChange={(e) => updateSelectedClipData({ strength: Number(e.target.value) })} style={{ width: 90 }} />
-                      </div>
-
-                      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-                        <label className="small">cfg</label>
-                        <input type="number" step={0.1} value={Number(cl.data?.cfg ?? 7)} onChange={(e) => updateSelectedClipData({ cfg: Number(e.target.value) })} style={{ width: 80 }} />
-                        <label className="small">steps</label>
-                        <input type="number" step={1} value={Number(cl.data?.steps ?? 12)} onChange={(e) => updateSelectedClipData({ steps: Number(e.target.value) })} style={{ width: 80 }} />
-                        <label className="small">rot end</label>
-                        <input type="number" step={0.1} value={Number(cl.data?.rotation_end ?? 0)} onChange={(e) => updateSelectedClipData({ rotation_end: Number(e.target.value) })} style={{ width: 90 }} />
-                      </div>
-                    </>
-                  ) : (
-                    <div className="small" style={{ opacity: 0.8, marginTop: 8 }}>Unsupported track type.</div>
-                  )}
-                </>
-              );
-            })()
-          ) : selected?.kind === "overlay" ? (
-            (() => {
-              const l = layers[selected.layerIdx];
-              if (!l) return <div className="small" style={{ opacity: 0.8, marginTop: 8 }}>No selection.</div>;
-              const s0 = Number(l.start_s ?? 0);
-              const e0 = Number(l.end_s ?? durationS);
-              const label = l.type === "image" ? String(l.asset || "image") : l.type === "text" ? String(l.text || "text").slice(0, 40) : String(l.type || "layer");
-              return (
-                <>
-                  <div className="small" style={{ opacity: 0.85, marginTop: 6 }}>Overlay: {label}</div>
-                  <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-                    <label className="small">start</label>
-                    <input type="number" step={0.1} value={s0} onChange={(e) => updateSelectedOverlayTimes(Number(e.target.value), e0)} style={{ width: 110 }} />
-                    <label className="small">end</label>
-                    <input type="number" step={0.1} value={e0} onChange={(e) => updateSelectedOverlayTimes(s0, Number(e.target.value))} style={{ width: 110 }} />
-                  </div>
-                  <div className="small" style={{ opacity: 0.8, marginTop: 8 }}>Edit overlay content/position in Render → Visual editor.</div>
-                </>
-              );
-            })()
-          ) : selected?.kind === "camera" ? (
-            (() => {
-              const k = camKeyframes[selected.kfIdx];
-              if (!k) return <div className="small" style={{ opacity: 0.8, marginTop: 8 }}>No selection.</div>;
-              return (
-                <>
-                  <div className="small" style={{ opacity: 0.85, marginTop: 6 }}>Camera keyframe</div>
-                  <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-                    <label className="small">t</label>
-                    <input type="number" step={0.1} value={Number(k.t || 0)} onChange={(e) => updateSelectedCamera({ t: Number(e.target.value) })} style={{ width: 90 }} />
-                    <label className="small">zoom</label>
-                    <input type="number" step={0.01} value={Number(k.zoom || 1)} onChange={(e) => updateSelectedCamera({ zoom: Number(e.target.value) })} style={{ width: 90 }} />
-                    <label className="small">pan_x</label>
-                    <input type="number" step={0.1} value={Number(k.pan_x || 0)} onChange={(e) => updateSelectedCamera({ pan_x: Number(e.target.value) })} style={{ width: 90 }} />
-                    <label className="small">pan_y</label>
-                    <input type="number" step={0.1} value={Number(k.pan_y || 0)} onChange={(e) => updateSelectedCamera({ pan_y: Number(e.target.value) })} style={{ width: 90 }} />
-                    <label className="small">rot</label>
-                    <input type="number" step={0.1} value={Number(k.rotation_deg || 0)} onChange={(e) => updateSelectedCamera({ rotation_deg: Number(e.target.value) })} style={{ width: 90 }} />
+                  <textarea
+                    className="timeline-inspectorTextarea"
+                    value={String(cl.data?.prompt || "")}
+                    onChange={(e) => updateSelectedClipData({ prompt: e.target.value })}
+                  />
+                  <div className="small timeline-inspectorHint">
+                    Internal render uses this prompt track whenever a prompt lane is present.
                   </div>
                 </>
-              );
-            })()
-          ) : (
-            <div className="small" style={{ opacity: 0.8, marginTop: 8 }}>Click a block/marker in a lane to edit it.</div>
-          )}
+              ) : tt === "motion" ? (
+                <>
+                  <div className="small timeline-inspectorHint">
+                    Motion clips can drive camera movement and diffusion parameters when they are
+                    active.
+                  </div>
+                  <div className="timeline-fieldGrid timeline-fieldGrid--compact">
+                    <label className="small">zoom start</label>
+                    <input
+                      type="number"
+                      step={0.01}
+                      value={Number(cl.data?.zoom_start ?? 1)}
+                      onChange={(e) =>
+                        updateSelectedClipData({ zoom_start: Number(e.target.value) })
+                      }
+                    />
+                    <label className="small">zoom end</label>
+                    <input
+                      type="number"
+                      step={0.01}
+                      value={Number(cl.data?.zoom_end ?? 1)}
+                      onChange={(e) => updateSelectedClipData({ zoom_end: Number(e.target.value) })}
+                    />
+                    <label className="small">strength</label>
+                    <input
+                      type="number"
+                      step={0.01}
+                      value={Number(cl.data?.strength ?? 0.35)}
+                      onChange={(e) => updateSelectedClipData({ strength: Number(e.target.value) })}
+                    />
+                    <label className="small">cfg</label>
+                    <input
+                      type="number"
+                      step={0.1}
+                      value={Number(cl.data?.cfg ?? 7)}
+                      onChange={(e) => updateSelectedClipData({ cfg: Number(e.target.value) })}
+                    />
+                    <label className="small">steps</label>
+                    <input
+                      type="number"
+                      step={1}
+                      value={Number(cl.data?.steps ?? 12)}
+                      onChange={(e) => updateSelectedClipData({ steps: Number(e.target.value) })}
+                    />
+                    <label className="small">rot end</label>
+                    <input
+                      type="number"
+                      step={0.1}
+                      value={Number(cl.data?.rotation_end ?? 0)}
+                      onChange={(e) =>
+                        updateSelectedClipData({ rotation_end: Number(e.target.value) })
+                      }
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="small timeline-emptyState">Unsupported track type.</div>
+              )}
+            </>
+          );
+        })()
+      ) : selected?.kind === "overlay" ? (
+        (() => {
+          const l = layers[selected.layerIdx];
+          if (!l) return <div className="small timeline-emptyState">No selection.</div>;
+          const s0 = Number(l.start_s ?? 0);
+          const e0 = Number(l.end_s ?? durationS);
+          const label =
+            l.type === "image"
+              ? String(l.asset || "image")
+              : l.type === "text"
+                ? String(l.text || "text").slice(0, 40)
+                : String(l.type || "layer");
+          return (
+            <>
+              <div className="small timeline-inspectorMeta">Overlay: {label}</div>
+              <div className="timeline-fieldGrid timeline-fieldGrid--compact">
+                <label className="small">start</label>
+                <input
+                  type="number"
+                  step={0.1}
+                  value={s0}
+                  onChange={(e) => updateSelectedOverlayTimes(Number(e.target.value), e0)}
+                />
+                <label className="small">end</label>
+                <input
+                  type="number"
+                  step={0.1}
+                  value={e0}
+                  onChange={(e) => updateSelectedOverlayTimes(s0, Number(e.target.value))}
+                />
+              </div>
+              <div className="small timeline-inspectorHint">
+                Edit overlay content and screen placement in Render → Visual editor.
+              </div>
+            </>
+          );
+        })()
+      ) : selected?.kind === "camera" ? (
+        (() => {
+          const k = camKeyframes[selected.kfIdx];
+          if (!k) return <div className="small timeline-emptyState">No selection.</div>;
+          return (
+            <>
+              <div className="small timeline-inspectorMeta">Camera keyframe</div>
+              <div className="timeline-fieldGrid timeline-fieldGrid--compact">
+                <label className="small">t</label>
+                <input
+                  type="number"
+                  step={0.1}
+                  value={Number(k.t || 0)}
+                  onChange={(e) => updateSelectedCamera({ t: Number(e.target.value) })}
+                />
+                <label className="small">zoom</label>
+                <input
+                  type="number"
+                  step={0.01}
+                  value={Number(k.zoom || 1)}
+                  onChange={(e) => updateSelectedCamera({ zoom: Number(e.target.value) })}
+                />
+                <label className="small">pan_x</label>
+                <input
+                  type="number"
+                  step={0.1}
+                  value={Number(k.pan_x || 0)}
+                  onChange={(e) => updateSelectedCamera({ pan_x: Number(e.target.value) })}
+                />
+                <label className="small">pan_y</label>
+                <input
+                  type="number"
+                  step={0.1}
+                  value={Number(k.pan_y || 0)}
+                  onChange={(e) => updateSelectedCamera({ pan_y: Number(e.target.value) })}
+                />
+                <label className="small">rot</label>
+                <input
+                  type="number"
+                  step={0.1}
+                  value={Number(k.rotation_deg || 0)}
+                  onChange={(e) => updateSelectedCamera({ rotation_deg: Number(e.target.value) })}
+                />
+              </div>
+            </>
+          );
+        })()
+      ) : (
+        <div className="small timeline-emptyState">
+          Click a clip, overlay, or keyframe to edit it here.
+        </div>
+      )}
+    </div>
+  );
+
+  const monitorCard = (
+    <div className="card timeline-dockCard">
+      <div className="timeline-panelHeader">
+        <div>
+          <div className="timeline-panelTitle">Program Monitor</div>
+          <div className="small">Cached frame preview for scrubbing and timing checks.</div>
+        </div>
+        <span className="badge">Frame</span>
+      </div>
+      <div className="timeline-monitor">
+        {previewUrl ? (
+          <img src={previewUrl} className="timeline-monitorImage" />
+        ) : (
+          <div className="small">No preview.</div>
+        )}
+      </div>
+    </div>
+  );
+
+  const proxyCard = (
+    <div className="card timeline-dockCard">
+      <div className="timeline-panelHeader">
+        <div>
+          <div className="timeline-panelTitle">Proxy Preview</div>
+          <div className="small">Low-resolution timing clip for the selected range.</div>
+        </div>
+        <span className="badge">Cached MP4</span>
+      </div>
+      <div className="timeline-fieldGrid timeline-fieldGrid--compact">
+        <label className="small">start</label>
+        <input
+          type="number"
+          step={0.1}
+          value={proxyStart}
+          onChange={(e) => setProxyStart(Number(e.target.value))}
+        />
+        <label className="small">end</label>
+        <input
+          type="number"
+          step={0.1}
+          value={proxyEnd}
+          onChange={(e) => setProxyEnd(Number(e.target.value))}
+        />
+        <label className="small">fps</label>
+        <input
+          type="number"
+          step={1}
+          value={proxyFps}
+          onChange={(e) => setProxyFps(Number(e.target.value))}
+        />
+      </div>
+      <div className="timeline-inlineActions">
+        <button className="primary" onClick={generateProxy}>
+          Generate
+        </button>
+        <button className="secondary" onClick={() => setProxyUrl("")}>
+          Clear
+        </button>
+      </div>
+      <div className="timeline-monitor timeline-monitor--video">
+        {proxyUrl ? (
+          <video src={proxyUrl} controls className="timeline-monitorVideo" />
+        ) : (
+          <div className="small">No proxy clip generated.</div>
+        )}
+      </div>
+    </div>
+  );
+
+  const diffusionCard = (
+    <div className="card timeline-dockCard">
+      <div className="timeline-panelHeader">
+        <div>
+          <div className="timeline-panelTitle">Diffusion Preview</div>
+          <div className="small">
+            Look-dev segment using the internal SD path without leaving the timeline.
+          </div>
+        </div>
+        <span className="badge">Look Dev</span>
+      </div>
+      <div className="timeline-inlineActions">
+        <button className="secondary" disabled={!selected} onClick={setDiffRangeFromSelection}>
+          Use selection
+        </button>
+      </div>
+      <div className="timeline-fieldGrid timeline-fieldGrid--compact">
+        <label className="small">start</label>
+        <input
+          type="number"
+          step={0.1}
+          value={diffStart}
+          onChange={(e) => setDiffStart(Number(e.target.value))}
+        />
+        <label className="small">end</label>
+        <input
+          type="number"
+          step={0.1}
+          value={diffEnd}
+          onChange={(e) => setDiffEnd(Number(e.target.value))}
+        />
+        <label className="small">fps</label>
+        <input
+          type="number"
+          step={1}
+          value={diffFps}
+          onChange={(e) => setDiffFps(Number(e.target.value))}
+        />
+        <label className="small">steps</label>
+        <input
+          type="number"
+          step={1}
+          value={diffSteps}
+          onChange={(e) => setDiffSteps(Number(e.target.value))}
+        />
+        <label className="small">cfg</label>
+        <input
+          type="number"
+          step={0.1}
+          value={diffCfg}
+          onChange={(e) => setDiffCfg(Number(e.target.value))}
+        />
+        <label className="small">strength</label>
+        <input
+          type="number"
+          step={0.01}
+          value={diffStrength}
+          onChange={(e) => setDiffStrength(Number(e.target.value))}
+        />
+        <label className="small">width</label>
+        <input
+          type="number"
+          step={64}
+          value={diffW}
+          onChange={(e) => setDiffW(Number(e.target.value))}
+        />
+        <label className="small">height</label>
+        <input
+          type="number"
+          step={64}
+          value={diffH}
+          onChange={(e) => setDiffH(Number(e.target.value))}
+        />
+        <label className="small">model</label>
+        <select value={diffModel} onChange={(e) => setDiffModel(e.target.value)}>
+          <option value="auto">auto</option>
+          <option value="hf_sd15_internal">sd15</option>
+          <option value="hf_sdxl_internal">sdxl</option>
+        </select>
+      </div>
+      <div className="timeline-inlineActions">
+        <button className="primary" onClick={generateDiffusionPreview}>
+          Generate
+        </button>
+        <button className="secondary" onClick={() => setDiffUrl("")}>
+          Clear
+        </button>
+      </div>
+      <div className="timeline-monitor timeline-monitor--video">
+        {diffUrl ? (
+          <video src={diffUrl} controls className="timeline-monitorVideo" />
+        ) : (
+          <div className="small">No diffusion preview generated.</div>
+        )}
+      </div>
+    </div>
+  );
+
+  const motionCurvesCard = (() => {
+    const tr = (tracks || []).find((t: any) => String(t?.type || "").toLowerCase() === "motion");
+    const clip = (tr?.clips || [])[0];
+    if (!clip || !timeline) return null;
+    const data: AnyDict = clip?.data && typeof clip.data === "object" ? clip.data : {};
+    const fps = 24;
+    const duration = Number(durationS || 0) || 60;
+
+    const strengthSched = String(data.denoise_schedule || data.strength_schedule || "");
+    const cfgSched = String(data.cfg_scale_schedule || "");
+    const stepsSched = String(data.steps_schedule || "");
+    const strengthPairs = parseDeforumSchedule(strengthSched);
+    const cfgPairs = parseDeforumSchedule(cfgSched);
+    const stepsPairs = parseDeforumSchedule(stepsSched);
+    const strengthCurve = sampleCurve(strengthPairs, {
+      durationS: duration,
+      fps,
+      samples: 220,
+      fallback: 0.35,
+    });
+    const cfgCurve = sampleCurve(cfgPairs, {
+      durationS: duration,
+      fps,
+      samples: 220,
+      fallback: 7.0,
+    });
+    const stepsCurve = sampleCurve(stepsPairs, {
+      durationS: duration,
+      fps,
+      samples: 220,
+      fallback: 15,
+    });
+
+    const W = 720;
+    const H = 160;
+
+    const strengthPath = svgPath(strengthCurve, duration, 0, 1, W, H);
+    const cfgPath = svgPath(cfgCurve, duration, 1, 30, W, H);
+    const stepsPath = svgPath(stepsCurve, duration, 4, 60, W, H);
+
+    const updateMotionField = (field: string, val: string) => {
+      const next = { ...(timeline as any) };
+      next.tracks = Array.isArray(next.tracks)
+        ? next.tracks.map((t: any) => {
+            if (String(t?.type || "").toLowerCase() !== "motion") return t;
+            const clips = Array.isArray(t.clips) ? t.clips : [];
+            if (!clips.length) return t;
+            const c0 = clips[0] || {};
+            const d0 = c0.data && typeof c0.data === "object" ? { ...c0.data } : {};
+            d0[field] = val;
+            return { ...t, clips: [{ ...c0, data: d0 }, ...clips.slice(1)] };
+          })
+        : next.tracks;
+      setTimeline(next);
+      setTimelineDirty(true);
+    };
+
+    const insertPointAtPlayhead = (
+      field: "strength_schedule" | "cfg_scale_schedule" | "steps_schedule" | "denoise_schedule",
+      value: number,
+    ) => {
+      const f = Math.round(Number(playheadS || 0) * fps);
+      const cur = String((data as any)[field] || "");
+      const next = upsertPoint(cur, f, value);
+      updateMotionField(field, next);
+    };
+
+    const curStrength = evalSchedule(strengthPairs, Number(playheadS || 0) * fps) ?? 0.35;
+    const curCfg = evalSchedule(cfgPairs, Number(playheadS || 0) * fps) ?? 7.0;
+    const curSteps = evalSchedule(stepsPairs, Number(playheadS || 0) * fps) ?? 15;
+
+    return (
+      <div className="card timeline-dockCard">
+        <div className="timeline-panelHeader">
+          <div>
+            <div className="timeline-panelTitle">Motion Curves</div>
+            <div className="small">Deforum schedules for cfg, strength, steps, and denoise.</div>
+          </div>
+          <span className="badge">24 fps</span>
+        </div>
+
+        <div className="timeline-curveStage">
+          <svg width={W} height={H} style={{ width: "100%", height: H }}>
+            {Array.from({ length: 9 }).map((_, i) => (
+              <line
+                key={i}
+                x1={(i / 8) * W}
+                y1={0}
+                x2={(i / 8) * W}
+                y2={H}
+                stroke="rgba(255,255,255,0.06)"
+                strokeWidth={1}
+              />
+            ))}
+            {Array.from({ length: 5 }).map((_, i) => (
+              <line
+                key={i}
+                x1={0}
+                y1={(i / 4) * H}
+                x2={W}
+                y2={(i / 4) * H}
+                stroke="rgba(255,255,255,0.06)"
+                strokeWidth={1}
+              />
+            ))}
+            <path d={strengthPath} fill="none" stroke="rgba(120,200,255,0.85)" strokeWidth={2} />
+            <path d={cfgPath} fill="none" stroke="rgba(255,210,120,0.85)" strokeWidth={2} />
+            <path d={stepsPath} fill="none" stroke="rgba(180,255,180,0.85)" strokeWidth={2} />
+            <line
+              x1={(clamp(Number(playheadS || 0), 0, duration) / Math.max(1e-6, duration)) * W}
+              y1={0}
+              x2={(clamp(Number(playheadS || 0), 0, duration) / Math.max(1e-6, duration)) * W}
+              y2={H}
+              stroke="rgba(255,120,120,0.9)"
+              strokeWidth={2}
+            />
+          </svg>
+        </div>
+
+        <div className="timeline-inlineActions">
+          <span className="small">strength {curStrength.toFixed(3)}</span>
+          <button
+            className="secondary"
+            onClick={() => insertPointAtPlayhead("strength_schedule", curStrength)}
+          >
+            Insert strength
+          </button>
+          <span className="small">cfg {curCfg.toFixed(2)}</span>
+          <button
+            className="secondary"
+            onClick={() => insertPointAtPlayhead("cfg_scale_schedule", curCfg)}
+          >
+            Insert cfg
+          </button>
+          <span className="small">steps {Math.round(curSteps)}</span>
+          <button
+            className="secondary"
+            onClick={() => insertPointAtPlayhead("steps_schedule", curSteps)}
+          >
+            Insert steps
+          </button>
+        </div>
+
+        <div className="timeline-textareaStack">
+          <div>
+            <div className="small timeline-stackLabel">strength_schedule</div>
+            <textarea
+              value={String(data.strength_schedule || "")}
+              onChange={(e) => updateMotionField("strength_schedule", e.target.value)}
+            />
+          </div>
+          <div>
+            <div className="small timeline-stackLabel">cfg_scale_schedule</div>
+            <textarea
+              value={String(data.cfg_scale_schedule || "")}
+              onChange={(e) => updateMotionField("cfg_scale_schedule", e.target.value)}
+            />
+          </div>
+          <div>
+            <div className="small timeline-stackLabel">steps_schedule</div>
+            <textarea
+              value={String(data.steps_schedule || "")}
+              onChange={(e) => updateMotionField("steps_schedule", e.target.value)}
+            />
+          </div>
+          <div>
+            <div className="small timeline-stackLabel">denoise_schedule</div>
+            <textarea
+              value={String(data.denoise_schedule || "")}
+              onChange={(e) => updateMotionField("denoise_schedule", e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  })();
+
+  return (
+    <div className="timeline-page" onKeyDown={onKeyDown} tabIndex={0} style={{ outline: "none" }}>
+      {pageHeader}
+      {toolbarCard}
+      {err ? (
+        <div className="card timeline-errorBanner">
+          <div className="small">{err}</div>
+        </div>
+      ) : null}
+      <div className="timeline-workspace">
+        <div className="timeline-mainColumn">{arrangementCard}</div>
+        <div className="timeline-dock">
+          {monitorCard}
+          {inspectorCard}
+          {proxyCard}
+          {diffusionCard}
+          {motionCurvesCard}
         </div>
       </div>
     </div>

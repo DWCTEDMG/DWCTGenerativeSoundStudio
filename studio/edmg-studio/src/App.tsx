@@ -14,8 +14,45 @@ import Settings from "./pages/Settings";
 import Setup from "./pages/Setup";
 import Models from "./pages/Models";
 
+function isPage(value: string): value is Page {
+  const allowed: Page[] = [
+    "dashboard",
+    "projects",
+    "workspace",
+    "timeline",
+    "render",
+    "queue",
+    "outputs",
+    "cloud",
+    "settings",
+    "setup",
+    "models",
+  ];
+  return allowed.includes(value as Page);
+}
+
+function getInitialPage(): Page {
+  if (typeof window === "undefined") return "dashboard";
+  const raw = new URLSearchParams(window.location.search).get("page");
+  return raw && isPage(raw) ? raw : "dashboard";
+}
+
+function getForcedPage(): Page | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("page");
+  return raw && isPage(raw) ? raw : null;
+}
+
+function getRequestedBackendUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  return params.get("backendUrl") || params.get("backend") || null;
+}
+
 export default function App() {
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useState<Page>(getInitialPage);
+  const [forcedPage] = useState<Page | null>(getForcedPage);
+  const [requestedBackendUrl] = useState<string | null>(getRequestedBackendUrl);
   const [backendUrl, setBackendUrl] = useState<string>("");
   const [config, setConfig] = useState<any>(null);
   const [setupChecked, setSetupChecked] = useState(false);
@@ -24,35 +61,50 @@ export default function App() {
     let alive = true;
     (async () => {
       try {
-        const url = window.edmg?.getBackendUrl
-          ? await window.edmg.getBackendUrl()
-          : (window.edmg?.backendUrl?.() ?? window.__EDMG_BACKEND_URL__ ?? "http://127.0.0.1:7863");
+        const url =
+          requestedBackendUrl ||
+          (window.edmg?.getBackendUrl
+            ? await window.edmg.getBackendUrl()
+            : (window.edmg?.backendUrl?.() ??
+              window.__EDMG_BACKEND_URL__ ??
+              "http://127.0.0.1:7863"));
         if (alive) setBackendUrl(url);
       } catch {
-        const url = window.edmg?.backendUrl?.() ?? window.__EDMG_BACKEND_URL__ ?? "http://127.0.0.1:7863";
+        const url =
+          requestedBackendUrl ||
+          window.edmg?.backendUrl?.() ||
+          window.__EDMG_BACKEND_URL__ ||
+          "http://127.0.0.1:7863";
         if (alive) setBackendUrl(url);
       }
     })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [requestedBackendUrl]);
 
   useEffect(() => {
     if (!backendUrl) return;
-    apiGet("/v1/config").then(setConfig).catch(() => {});
+    apiGet("/v1/config")
+      .then(setConfig)
+      .catch(() => {});
   }, [backendUrl]);
 
   useEffect(() => {
     if (!backendUrl || setupChecked) return;
     apiGet("/v1/setup/status")
       .then((s) => {
-        const need = !(s?.ollama?.ok && s?.ollama?.model_present && s?.comfyui?.ok && s?.ffmpeg?.ok);
-        if (need) setPage("setup" as any);
+        const need = !(
+          s?.ollama?.ok &&
+          s?.ollama?.model_present &&
+          s?.comfyui?.ok &&
+          s?.ffmpeg?.ok
+        );
+        if (need && !forcedPage) setPage("setup" as any);
         setSetupChecked(true);
       })
       .catch(() => setSetupChecked(true));
-  }, [backendUrl, setupChecked]);
+  }, [backendUrl, forcedPage, setupChecked]);
 
   const commonProps = useMemo(() => ({ backendUrl, config }), [backendUrl, config]);
 
@@ -69,10 +121,12 @@ export default function App() {
   if (page === "setup") content = <Setup onNavigate={setPage as any} />;
   if (page === "models") content = <Models {...commonProps} />;
 
+  const mainClassName = page === "timeline" ? "main main--timeline" : "main";
+
   return (
     <div className="app-shell">
       <Sidebar page={page} onNavigate={setPage} />
-      <div className="main">{content}</div>
+      <div className={mainClassName}>{content}</div>
     </div>
   );
 }
