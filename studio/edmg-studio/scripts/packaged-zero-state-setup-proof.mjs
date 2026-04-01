@@ -186,7 +186,7 @@ async function main() {
   const externalDir = path.join(studioHome, "external");
   const expectedOllamaExe = path.join(externalDir, "ollama", "ollama.exe");
   const expectedSevenZip = path.join(externalDir, "bin", "7zr.exe");
-  const requestedModel = process.env.EDMG_STUDIO_ZERO_STATE_MODEL || "qwen2.5:0.5b";
+  const requestedModel = process.env.EDMG_STUDIO_ZERO_STATE_MODEL || "qwen3:4b";
 
   await fsp.mkdir(studioHome, { recursive: true });
   await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });

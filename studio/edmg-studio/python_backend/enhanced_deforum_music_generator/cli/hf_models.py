@@ -48,8 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     catalog = load_catalog()
 
     if args.cmd == "list":
-        for k in sorted(catalog.keys()):
-            m = catalog[k]
+        for k, m in catalog.items():
             print(f"{k:22s}  {m.repo_id}  ({m.task})")
         return 0
 

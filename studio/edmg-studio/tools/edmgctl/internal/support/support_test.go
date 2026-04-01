@@ -78,7 +78,7 @@ func TestBuildManagedBackendEnvIncludesCoreKeys(t *testing.T) {
 			Mode:        "local",
 			Provider:    "ollama",
 			OllamaURL:   "http://127.0.0.1:11434",
-			OllamaModel: "qwen2.5:7b-instruct",
+			OllamaModel: "qwen3:8b",
 		},
 	}
 	paths := DefaultStoragePaths(home)

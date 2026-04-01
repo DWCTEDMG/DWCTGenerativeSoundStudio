@@ -22,9 +22,9 @@ const DEFAULT_AI_SETTINGS: StudioAiSettings = {
   provider: "ollama",
   aiBaseUrl: "http://127.0.0.1:7862",
   ollamaUrl: "http://127.0.0.1:11434",
-  ollamaModel: "qwen2.5:7b-instruct",
+  ollamaModel: "qwen3:8b",
   openaiCompatBaseUrl: "http://127.0.0.1:8000",
-  openaiCompatModel: "qwen2.5-7b-instruct",
+  openaiCompatModel: "qwen3-8b",
   source: "default",
 };
 
@@ -367,10 +367,10 @@ export default function Settings(_props: PageProps) {
                   </div>
                   <div>
                     <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Ollama model</div>
-                    <input value={aiDraft.ollamaModel} onChange={(e) => updateAiDraft({ ollamaModel: e.target.value })} placeholder="qwen2.5:7b-instruct" />
+                    <input value={aiDraft.ollamaModel} onChange={(e) => updateAiDraft({ ollamaModel: e.target.value })} placeholder="qwen3:8b" />
                   </div>
                   <div className="small" style={{ opacity: 0.82 }}>
-                    Best quality free/local default. Use <code>qwen2.5:3b-instruct</code> on lighter CPU-only or low-memory systems.
+                    Recommended local planning default. Use <code>qwen3:4b</code> on lighter CPU-only or low-memory systems.
                   </div>
                 </>
               ) : null}
@@ -383,7 +383,7 @@ export default function Settings(_props: PageProps) {
                   </div>
                   <div>
                     <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Model</div>
-                    <input value={aiDraft.openaiCompatModel} onChange={(e) => updateAiDraft({ openaiCompatModel: e.target.value })} placeholder="qwen2.5-7b-instruct" />
+                    <input value={aiDraft.openaiCompatModel} onChange={(e) => updateAiDraft({ openaiCompatModel: e.target.value })} placeholder="qwen3-8b" />
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center" }}>
                     <div>

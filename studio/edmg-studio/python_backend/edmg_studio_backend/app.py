@@ -61,6 +61,7 @@ from .services.internal_video import (
     _scene_keyframe_times,
     describe_internal_render_cache,
     describe_proxy_render_cache,
+    render_internal_still_image,
     render_internal_video_variant,
     render_internal_proxy_video_variant,
     render_stability_hosted_video_variant,
@@ -252,6 +253,38 @@ def _catalog_render_metadata(entry: dict[str, Any] | None) -> dict[str, Any]:
     return render if isinstance(render, dict) else {}
 
 
+def _catalog_entry_engine(entry: dict[str, Any] | None) -> str:
+    render = _catalog_render_metadata(entry)
+    target = (entry or {}).get("target") or {}
+    if not isinstance(target, dict):
+        target = {}
+    engine = str((entry or {}).get("engine") or render.get("engine") or target.get("engine") or "comfyui").strip().lower()
+    return engine or "comfyui"
+
+
+def _catalog_entry_family(entry: dict[str, Any] | None) -> str | None:
+    render = _catalog_render_metadata(entry)
+    family = str((entry or {}).get("family") or render.get("family") or "").strip().lower()
+    return family or None
+
+
+def _catalog_supports_workflow(entry: dict[str, Any] | None, workflow_family: str) -> bool:
+    family = str(workflow_family or "txt2img").strip().lower()
+    if family == "auto":
+        family = "txt2img"
+    if family == "txt2img":
+        return bool((entry or {}).get("supports_txt2img", True))
+    if family == "img2img":
+        return bool((entry or {}).get("supports_img2img", False))
+    if family == "inpaint":
+        return bool((entry or {}).get("supports_inpaint", False))
+    if family == "outpaint":
+        return bool((entry or {}).get("supports_outpaint", False))
+    if family == "controlnet":
+        return bool((entry or {}).get("supports_controlnet", False))
+    return False
+
+
 def _safe_name_tag(value: str | None, fallback: str = "default") -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -418,6 +451,98 @@ def _resolve_comfy_motion_selection(
     }
 
 
+def _resolve_still_scene_selection(
+    *,
+    model_id: str | None,
+    checkpoint: str | None,
+    workflow_family: str | None,
+    controlnet_model: str | None,
+    reference_asset: str | None,
+    conditioning_mode: str | None,
+    controlnet_units: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    entry = _catalog_entry(model_id)
+    if entry is None:
+        return {
+            **_resolve_comfy_still_selection(
+                model_id=model_id,
+                checkpoint=checkpoint,
+                workflow_family=workflow_family,
+                controlnet_model=controlnet_model,
+                reference_asset=reference_asset,
+                conditioning_mode=conditioning_mode,
+                controlnet_units=controlnet_units,
+            ),
+            "engine": "comfyui",
+            "family": None,
+            "model_path": None,
+        }
+
+    engine = _catalog_entry_engine(entry)
+    family = _catalog_entry_family(entry)
+    render = _catalog_render_metadata(entry)
+    requested_family = str(workflow_family or "auto").strip().lower()
+    if requested_family not in {"auto", "txt2img", "img2img", "inpaint", "outpaint", "controlnet"}:
+        requested_family = "auto"
+    if requested_family == "auto":
+        has_controlnet_units = any(
+            isinstance(unit, dict) and str(unit.get("model") or unit.get("controlnet_name") or "").strip()
+            for unit in (controlnet_units or [])
+        )
+        if controlnet_model or reference_asset or has_controlnet_units:
+            requested_family = "controlnet"
+        else:
+            requested_family = str(render.get("workflow_family") or "txt2img").strip().lower()
+            if requested_family == "diffusers":
+                requested_family = "txt2img"
+    if requested_family not in {"txt2img", "img2img", "inpaint", "outpaint", "controlnet"}:
+        requested_family = "txt2img"
+
+    if not _catalog_supports_workflow(entry, requested_family):
+        raise UserFacingError(
+            "The selected still model does not support this workflow.",
+            hint="Choose a compatible still model or switch to a supported workflow family.",
+            code="WORKFLOW_UNSUPPORTED",
+            status_code=400,
+        )
+
+    if engine == "internal":
+        model_path = models.installed_path(str(entry.get("id") or ""))
+        if model_path is None:
+            raise UserFacingError(
+                "Internal still model is not installed",
+                hint="Install the selected internal diffusers model in Models, then retry.",
+                code="MODEL_NOT_INSTALLED",
+                status_code=400,
+            )
+        return {
+            "entry": entry,
+            "engine": "internal",
+            "family": family,
+            "workflow_family": requested_family,
+            "model_path": model_path,
+            "checkpoint": None,
+            "conditioning_mode": str(conditioning_mode or "raw").strip().lower() or "raw",
+            "controlnet_name": None,
+        }
+
+    comfy_selection = _resolve_comfy_still_selection(
+        model_id=model_id,
+        checkpoint=checkpoint,
+        workflow_family=requested_family,
+        controlnet_model=controlnet_model,
+        reference_asset=reference_asset,
+        conditioning_mode=conditioning_mode,
+        controlnet_units=controlnet_units,
+    )
+    return {
+        **comfy_selection,
+        "engine": "comfyui",
+        "family": family,
+        "model_path": None,
+    }
+
+
 def _resolve_project_reference_path(project_id: str, reference_asset: str | None) -> Path | None:
     raw = str(reference_asset or "").strip()
     if not raw:
@@ -431,6 +556,140 @@ def _resolve_project_reference_path(project_id: str, reference_asset: str | None
     if fallback.exists() and fallback.is_file():
         return fallback
     return None
+
+
+def _resolve_project_mask_path(project_id: str, mask_asset: str | None) -> Path | None:
+    raw = str(mask_asset or "").strip()
+    if not raw:
+        return None
+    project_dir = store.project_dir(project_id)
+    direct = _safe_project_path(project_dir, raw)
+    if direct is not None and direct.exists() and direct.is_file():
+        return direct
+    masks_dir = project_dir / "assets" / "masks"
+    fallback = masks_dir / Path(raw).name
+    if fallback.exists() and fallback.is_file():
+        return fallback
+    return None
+
+
+def _normalize_outpaint(raw: Any) -> dict[str, int] | None:
+    if not isinstance(raw, dict):
+        return None
+    out = {
+        "top_px": max(0, int(raw.get("top_px", 0) or 0)),
+        "right_px": max(0, int(raw.get("right_px", 0) or 0)),
+        "bottom_px": max(0, int(raw.get("bottom_px", 0) or 0)),
+        "left_px": max(0, int(raw.get("left_px", 0) or 0)),
+    }
+    if any(value > 0 for value in out.values()):
+        return out
+    return None
+
+
+def _prepare_outpaint_assets(
+    project_id: str,
+    *,
+    source_asset: str,
+    outpaint: dict[str, int] | None = None,
+    mask_asset: str | None = None,
+) -> dict[str, Any]:
+    if Image is None:
+        raise UserFacingError(
+            "Pillow is not installed",
+            hint="Install backend deps including Pillow, then retry.",
+            code="INTERNAL_DEPS",
+            status_code=500,
+        )
+
+    source_path = _resolve_project_reference_path(project_id, source_asset)
+    if source_path is None:
+        raise UserFacingError(
+            "Source image not found",
+            hint="Upload or choose a valid project source image before running the render.",
+            code="SOURCE_IMAGE_NOT_FOUND",
+            status_code=400,
+        )
+
+    explicit_mask_path = _resolve_project_mask_path(project_id, mask_asset)
+    margins = _normalize_outpaint(outpaint) or {"top_px": 0, "right_px": 0, "bottom_px": 0, "left_px": 0}
+
+    cache_dir = store.project_dir(project_id) / "cache" / "outpaint_inputs"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(
+        json.dumps(
+            {
+                "source": str(source_path),
+                "source_mtime": source_path.stat().st_mtime if source_path.exists() else 0,
+                "mask": str(explicit_mask_path) if explicit_mask_path else None,
+                "mask_mtime": explicit_mask_path.stat().st_mtime if explicit_mask_path and explicit_mask_path.exists() else 0,
+                "margins": margins,
+            },
+            sort_keys=True,
+        ).encode("utf-8", errors="ignore")
+    ).hexdigest()[:12]
+    prepared_source = cache_dir / f"{source_path.stem}_{digest}_source.png"
+    prepared_mask = cache_dir / f"{source_path.stem}_{digest}_mask.png"
+
+    if prepared_source.exists() and prepared_mask.exists():
+        mask_source = "explicit_mask" if explicit_mask_path else "generated_outpaint"
+        if explicit_mask_path and any(value > 0 for value in margins.values()):
+            mask_source = "explicit_mask_with_margins"
+        return {
+            "source_path": prepared_source,
+            "mask_path": prepared_mask,
+            "mask_source": mask_source,
+            "outpaint": margins if any(value > 0 for value in margins.values()) else None,
+        }
+
+    with Image.open(source_path) as source_image:
+        source = source_image.convert("RGB")
+        source_w, source_h = source.size
+        if explicit_mask_path:
+            with Image.open(explicit_mask_path) as mask_image:
+                mask = mask_image.convert("L")
+                if any(value > 0 for value in margins.values()):
+                    canvas_w = source_w + int(margins["left_px"]) + int(margins["right_px"])
+                    canvas_h = source_h + int(margins["top_px"]) + int(margins["bottom_px"])
+                    canvas = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
+                    canvas.paste(source, (int(margins["left_px"]), int(margins["top_px"])))
+                    if mask.size != canvas.size:
+                        mask = mask.resize(canvas.size, resample=Image.BILINEAR)
+                    source = canvas
+                elif mask.size != source.size:
+                    canvas = Image.new("RGB", mask.size, (0, 0, 0))
+                    x = max(0, int((mask.size[0] - source_w) / 2))
+                    y = max(0, int((mask.size[1] - source_h) / 2))
+                    canvas.paste(source, (x, y))
+                    source = canvas
+                prepared = mask
+                mask_source = "explicit_mask" if not any(value > 0 for value in margins.values()) else "explicit_mask_with_margins"
+        else:
+            if not any(value > 0 for value in margins.values()):
+                raise UserFacingError(
+                    "Outpaint margins are missing",
+                    hint="Set at least one outpaint edge expansion or choose an explicit outpaint mask.",
+                    code="OUTPAINT_MARGINS_MISSING",
+                    status_code=400,
+                )
+            canvas_w = source_w + int(margins["left_px"]) + int(margins["right_px"])
+            canvas_h = source_h + int(margins["top_px"]) + int(margins["bottom_px"])
+            canvas = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
+            canvas.paste(source, (int(margins["left_px"]), int(margins["top_px"])))
+            prepared = Image.new("L", (canvas_w, canvas_h), 255)
+            prepared.paste(0, (int(margins["left_px"]), int(margins["top_px"]), int(margins["left_px"]) + source_w, int(margins["top_px"]) + source_h))
+            source = canvas
+            mask_source = "generated_outpaint"
+
+        source.save(prepared_source)
+        prepared.save(prepared_mask)
+
+    return {
+        "source_path": prepared_source,
+        "mask_path": prepared_mask,
+        "mask_source": mask_source,
+        "outpaint": margins if any(value > 0 for value in margins.values()) else None,
+    }
 
 
 def _prepare_condition_image(project_id: str, source_path: Path, mode: str) -> Path:
@@ -512,7 +771,12 @@ def _normalize_render_loras(raw_loras: Any) -> list[dict[str, Any]]:
     return models.resolve_loras(items)
 
 
-def _normalize_controlnet_units(raw_units: Any) -> list[dict[str, Any]]:
+def _normalize_controlnet_units(
+    raw_units: Any,
+    *,
+    engine: str = "comfyui",
+    family: str | None = None,
+) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     if not isinstance(raw_units, list):
         return normalized
@@ -523,19 +787,56 @@ def _normalize_controlnet_units(raw_units: Any) -> list[dict[str, Any]]:
         reference_asset = str(unit.get("reference_asset") or "").strip()
         if not model_ref or not reference_asset:
             continue
-        asset = models.resolve_comfy_asset(model_ref, folder="controlnet", allowed_kinds={"controlnet"})
-        normalized.append(
-            {
-                "model": model_ref,
-                "name": asset.get("name") or Path(str(asset.get("filename") or model_ref)).stem,
-                "controlnet_name": str(asset.get("filename") or model_ref),
-                "reference_asset": reference_asset,
-                "conditioning_mode": str(unit.get("conditioning_mode") or "raw").strip().lower() or "raw",
-                "strength": float(unit.get("strength", 0.8)),
-                "start_percent": float(unit.get("start_percent", 0.0)),
-                "end_percent": float(unit.get("end_percent", 1.0)),
-            }
-        )
+        if engine == "internal":
+            asset = models.resolve_internal_asset(model_ref, folder="controlnet", allowed_kinds={"controlnet"})
+            asset_family = str(asset.get("family") or "").strip().lower()
+            if family and asset_family and asset_family != str(family).strip().lower():
+                raise UserFacingError(
+                    "ControlNet family is incompatible with the selected internal still model.",
+                    hint=f"Pick an internal {family.upper()} ControlNet for this still model.",
+                    code="CONTROLNET_FAMILY_MISMATCH",
+                    status_code=400,
+                )
+            normalized.append(
+                {
+                    "model": model_ref,
+                    "id": asset.get("id"),
+                    "name": asset.get("name") or model_ref,
+                    "path": str(asset.get("path") or ""),
+                    "family": asset_family or family,
+                    "engine": "internal",
+                    "reference_asset": reference_asset,
+                    "conditioning_mode": str(unit.get("conditioning_mode") or "raw").strip().lower() or "raw",
+                    "strength": float(unit.get("strength", 0.8)),
+                    "start_percent": float(unit.get("start_percent", 0.0)),
+                    "end_percent": float(unit.get("end_percent", 1.0)),
+                }
+            )
+        else:
+            asset = models.resolve_comfy_asset(model_ref, folder="controlnet", allowed_kinds={"controlnet"})
+            asset_entry = _catalog_entry(str(asset.get("id") or "")) if asset.get("id") else None
+            asset_family = _catalog_entry_family(asset_entry)
+            if family and asset_family and asset_family != str(family).strip().lower():
+                raise UserFacingError(
+                    "ControlNet family is incompatible with the selected still model.",
+                    hint=f"Pick a {family.upper()} ControlNet model for this still render.",
+                    code="CONTROLNET_FAMILY_MISMATCH",
+                    status_code=400,
+                )
+            normalized.append(
+                {
+                    "model": model_ref,
+                    "name": asset.get("name") or Path(str(asset.get("filename") or model_ref)).stem,
+                    "controlnet_name": str(asset.get("filename") or model_ref),
+                    "family": asset_family or family,
+                    "engine": "comfyui",
+                    "reference_asset": reference_asset,
+                    "conditioning_mode": str(unit.get("conditioning_mode") or "raw").strip().lower() or "raw",
+                    "strength": float(unit.get("strength", 0.8)),
+                    "start_percent": float(unit.get("start_percent", 0.0)),
+                    "end_percent": float(unit.get("end_percent", 1.0)),
+                }
+            )
     return normalized
 
 
@@ -569,6 +870,13 @@ def _build_generation_metadata(
     prompt_id: str | None = None,
     comfyui_image: dict[str, Any] | None = None,
     node_url: str | None = None,
+    backend: str = "comfyui",
+    engine: str | None = None,
+    model_family: str | None = None,
+    resolved_model_asset: str | None = None,
+    mask_source: str | None = None,
+    outpaint: dict[str, Any] | None = None,
+    device: str | None = None,
     cached: bool = False,
     artifact_key: str = "image",
 ) -> dict[str, Any]:
@@ -593,7 +901,10 @@ def _build_generation_metadata(
         "denoise_strength": float(payload.get("denoise_strength") or 0.0),
         "base_model": {
             "model_id": payload.get("model_id"),
+            "engine": str(engine or backend or "comfyui"),
+            "family": model_family,
             "checkpoint": checkpoint,
+            "resolved_model_asset": resolved_model_asset or checkpoint,
             "vae": vae_name,
         },
         "loras": list(loras or []),
@@ -601,6 +912,8 @@ def _build_generation_metadata(
         "source_asset": payload.get("source_asset"),
         "reference_asset": payload.get("reference_asset"),
         "inpaint_mask": payload.get("inpaint_mask"),
+        "mask_source": mask_source,
+        "outpaint": outpaint,
         "hires_fix": payload.get("hires_fix"),
         "refiner": payload.get("refiner"),
         "upscaler": payload.get("upscaler"),
@@ -613,7 +926,8 @@ def _build_generation_metadata(
         },
         "provenance": {
             "app": "DWCT Generative Sound Studio",
-            "backend": "comfyui",
+            "backend": backend,
+            "device": device,
             "node_url": node_url,
             "captured_at": time.time(),
         },
@@ -1532,9 +1846,9 @@ def get_config():
         "ai_timeout_s": settings.ai_timeout_s,
         "ai_provider": os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama",
         "ai_ollama_url": os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434").strip(),
-        "ai_ollama_model": os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct").strip(),
+        "ai_ollama_model": os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b").strip(),
         "ai_openai_compat_base_url": os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000").strip(),
-        "ai_openai_compat_model": os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen2.5-7b-instruct").strip(),
+        "ai_openai_compat_model": os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen3-8b").strip(),
         "ai_openai_compat_api_key_configured": bool(
             secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
         ),
@@ -1600,9 +1914,9 @@ def _setup_ai_config() -> dict[str, Any]:
     ai_mode = (settings.ai_mode or "local").strip().lower() or "local"
     ai_provider = (os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
-    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     openai_compat_base_url = os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000")
-    openai_compat_model = os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen2.5-7b-instruct")
+    openai_compat_model = os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen3-8b")
     openai_compat_api_key_configured = bool(
         secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
     )
@@ -1658,7 +1972,7 @@ def setup_status():
     """Installer GUI status for required components."""
     ai_config = _setup_ai_config()
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
-    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     ollama = check_ollama(ollama_url, ollama_model)
     ollama_exe = None
     ollama_exe_error = None
@@ -1789,7 +2103,7 @@ def setup_ollama_start_managed():
 def setup_ollama_pull(payload: dict[str, Any]):
     import os
 
-    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     task = setup_tasks.start(f"pull_model:{model}", pull_ollama_model, url, model)
     return {"ok": True, "task": task.__dict__}
@@ -1816,7 +2130,7 @@ def setup_full_install(payload: dict[str, Any]):
     bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
     if flavor == "amd" and bundle == "studio_bundle":
         bundle = "studio_bundle_directml"
-    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ai_config = _setup_ai_config()
 
@@ -3724,7 +4038,7 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
                     message="The configured planning/transcription provider is not available.",
                     hint=(
                         "Fix: If you're using Ollama, make sure it is installed and running (Ollama app or `ollama serve`), "
-                        "and that the model is pulled (e.g., `ollama pull qwen2.5:7b-instruct`). "
+                        "and that the model is pulled (e.g., `ollama pull qwen3:8b`). "
                         "If you want a remote AI, set EDMG_AI_MODE=http and EDMG_AI_BASE_URL to the running AI service."
                     ),
                     code="AI_UNAVAILABLE",
@@ -4019,6 +4333,10 @@ def _execute_job(job):
             res = _run_comfyui_scene(job.project_id, job.id, job.payload)
             job.result = res
             job.status = "succeeded"
+        elif job.type == "internal_still_scene":
+            res = _run_internal_still_scene(job.project_id, job.id, job.payload)
+            job.result = res
+            job.status = "succeeded"
         elif job.type == "comfyui_motion_scene":
             res = _run_comfyui_motion_scene(job.project_id, job.id, job.payload)
             job.result = res
@@ -4074,6 +4392,182 @@ worker = WorkerManager(
     poll_interval_s=settings.worker_poll_interval_s,
 )
 
+
+def _prepare_still_scene_assets(project_id: str, payload: dict[str, Any], workflow_family: str) -> dict[str, Any]:
+    source_asset = str(payload.get("source_asset") or payload.get("reference_asset") or "").strip()
+    mask_asset = str(payload.get("inpaint_mask") or "").strip()
+    outpaint = _normalize_outpaint(payload.get("outpaint"))
+
+    source_path: Path | None = None
+    mask_path: Path | None = None
+    mask_source: str | None = None
+
+    if workflow_family == "img2img":
+        source_path = _resolve_project_reference_path(project_id, source_asset)
+        if source_path is None:
+            raise UserFacingError(
+                "No source image selected for img2img",
+                hint="Upload or choose a project source image before running img2img.",
+                code="IMG2IMG_SOURCE_MISSING",
+                status_code=400,
+            )
+    elif workflow_family == "inpaint":
+        source_path = _resolve_project_reference_path(project_id, source_asset)
+        mask_path = _resolve_project_mask_path(project_id, mask_asset)
+        if source_path is None or mask_path is None:
+            raise UserFacingError(
+                "Source image or mask is missing",
+                hint="Choose both a source image and a mask before running an inpaint render.",
+                code="INPAINT_ASSETS_MISSING",
+                status_code=400,
+            )
+        mask_source = "explicit_mask"
+    elif workflow_family == "outpaint":
+        prepared = _prepare_outpaint_assets(
+            project_id,
+            source_asset=source_asset,
+            outpaint=outpaint,
+            mask_asset=mask_asset or None,
+        )
+        source_path = prepared["source_path"]
+        mask_path = prepared["mask_path"]
+        mask_source = prepared.get("mask_source")
+        outpaint = prepared.get("outpaint")
+
+    width = int(payload.get("width") or 0)
+    height = int(payload.get("height") or 0)
+    if workflow_family == "outpaint" and source_path is not None and Image is not None:
+        with Image.open(source_path) as generated_source:
+            width, height = generated_source.size
+
+    return {
+        "source_path": source_path,
+        "mask_path": mask_path,
+        "mask_source": mask_source,
+        "outpaint": outpaint,
+        "width": width,
+        "height": height,
+    }
+
+
+def _prepare_internal_controlnet_units(project_id: str, units: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    for unit in units:
+        ref_path = _resolve_project_reference_path(project_id, str(unit.get("reference_asset") or ""))
+        if ref_path is None:
+            raise UserFacingError(
+                "Reference image not found",
+                hint="Upload or choose a valid project reference image before running the ControlNet render.",
+                code="REFERENCE_IMAGE_NOT_FOUND",
+                status_code=400,
+            )
+        conditioned = _prepare_condition_image(project_id, ref_path, str(unit.get("conditioning_mode") or "raw"))
+        prepared.append({**unit, "reference_path": str(conditioned)})
+    return prepared
+
+
+def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    prompt = str(payload.get("prompt") or "")
+    workflow_family = str(payload.get("workflow_family") or "txt2img")
+    model_id = str(payload.get("model_id") or "")
+    model_path = Path(str(payload.get("model_path") or ""))
+    if not model_path.exists():
+        installed = models.installed_path(model_id)
+        if installed is None:
+            raise UserFacingError(
+                "Internal still model is not installed",
+                hint="Install the selected internal diffusers model in Models, then retry.",
+                code="MODEL_NOT_INSTALLED",
+                status_code=400,
+            )
+        model_path = installed
+
+    out_path = Path(str(payload.get("out_path") or ""))
+    if out_path and out_path.exists():
+        metadata_path = _output_metadata_path(out_path)
+        metadata = None
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except Exception:
+                metadata = None
+        return {
+            "cached": True,
+            "saved": str(out_path),
+            "metadata_path": str(metadata_path),
+            "metadata": metadata,
+        }
+
+    prepared_assets = _prepare_still_scene_assets(project_id, payload, workflow_family)
+    actual_width = int(prepared_assets.get("width") or payload.get("width") or 1024)
+    actual_height = int(prepared_assets.get("height") or payload.get("height") or 576)
+    controlnet_units = _prepare_internal_controlnet_units(project_id, list(payload.get("controlnet_units") or []))
+    settings_obj = InternalVideoSettings(
+        width=actual_width,
+        height=actual_height,
+        steps=int(payload.get("steps") or 28),
+        cfg=float(payload.get("cfg") or 7.0),
+        sampler=str(payload.get("sampler") or "euler"),
+        seed=(int(payload["seed"]) if payload.get("seed") is not None else None),
+        negative_prompt=str(payload.get("negative_prompt") or ""),
+        model_id=model_id or str(payload.get("family") or "internal_still"),
+        loras=tuple(_normalize_render_loras(payload.get("loras"))),
+        vae=str(payload.get("vae") or "").strip() or None,
+        refiner=payload.get("refiner") if isinstance(payload.get("refiner"), dict) else None,
+        device_preference="auto",
+    )
+
+    jobs.update_progress(project_id, job_id, stage="rendering", current=0, total=1, message=f"Running internal {workflow_family} render")
+    if settings_obj.loras:
+        lora_log = ", ".join(
+            f"{str(item.get('filename') or item.get('name') or 'lora')}@{float(item.get('weight', 1.0)):.2f}"
+            for item in settings_obj.loras
+        )
+        jobs.append_log(project_id, job_id, f"LoRAs: {lora_log}")
+
+    result = render_internal_still_image(
+        model_dir=model_path,
+        settings=settings_obj,
+        workflow_family=workflow_family,
+        prompt=prompt,
+        source_image_path=prepared_assets.get("source_path"),
+        mask_image_path=prepared_assets.get("mask_path"),
+        controlnet_units=controlnet_units,
+        denoise_strength=float(payload.get("denoise_strength") or 0.75),
+        log_fn=lambda message: jobs.append_log(project_id, job_id, str(message)),
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    result["image"].save(out_path)
+
+    metadata = _build_generation_metadata(
+        project_id=project_id,
+        job_id=job_id,
+        output_path=out_path,
+        payload={**payload, "width": actual_width, "height": actual_height},
+        workflow_family=workflow_family,
+        checkpoint=str(model_path.name),
+        loras=list(settings_obj.loras),
+        controlnet_units=controlnet_units,
+        vae_name=settings_obj.vae,
+        backend="internal_diffusers",
+        engine="internal",
+        model_family=str(payload.get("family") or ""),
+        resolved_model_asset=str(model_path),
+        mask_source=str(prepared_assets.get("mask_source") or ""),
+        outpaint=prepared_assets.get("outpaint"),
+        device=str(result.get("device") or "cpu"),
+    )
+    metadata_path = _write_generation_metadata(out_path, metadata)
+    jobs.update_progress(project_id, job_id, stage="complete", current=1, total=1, message=f"Saved {out_path.name}")
+    return {
+        "saved": str(out_path),
+        "metadata_path": str(metadata_path),
+        "metadata": metadata,
+        "device": result.get("device"),
+        "requested_device": result.get("requested_device"),
+    }
+
 def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     prompt = payload["prompt"]
     negative_prompt = payload["negative_prompt"]
@@ -4119,6 +4613,9 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
     resolved_loras = _normalize_render_loras(payload.get("loras"))
     vae_name = _resolve_optional_comfy_asset_name(payload.get("vae"), folder="vae", allowed_kinds={"vae"})
     metadata_controlnet_units: list[dict[str, Any]] = []
+    prepared_assets = _prepare_still_scene_assets(project_id, payload, workflow_family)
+    actual_width = int(prepared_assets.get("width") or width)
+    actual_height = int(prepared_assets.get("height") or height)
 
     req = {"checkpoint": checkpoint, "est_steps": steps, "est_frames": 1}
     if workflow_family == "controlnet":
@@ -4170,8 +4667,8 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 seed=seed,
-                width=width,
-                height=height,
+                width=actual_width,
+                height=actual_height,
                 steps=steps,
                 cfg=cfg,
                 sampler=sampler,
@@ -4189,22 +4686,22 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 f"ControlNet still render using {checkpoint} with {len(prepared_units) or 1} unit(s)",
             )
         elif workflow_family == "img2img":
-            source_asset = str(payload.get("source_asset") or payload.get("reference_asset") or "").strip()
-            if not source_asset:
+            source_path = prepared_assets.get("source_path")
+            if not isinstance(source_path, Path):
                 raise UserFacingError(
                     "No source image selected for img2img",
-                    hint="Upload or choose a project reference image before running img2img.",
+                    hint="Upload or choose a project source image before running img2img.",
                     code="IMG2IMG_SOURCE_MISSING",
                     status_code=400,
                 )
-            source_image = _prepare_comfy_reference_image(project_id, node_url, source_asset, "raw")
+            source_image = _prepare_comfy_reference_image(project_id, node_url, str(source_path), "raw")
             wf = comfy.img2img_workflow(
                 checkpoint=checkpoint,
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 seed=seed,
-                width=width,
-                height=height,
+                width=actual_width,
+                height=actual_height,
                 steps=steps,
                 cfg=cfg,
                 sampler=sampler,
@@ -4215,25 +4712,25 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 vae_name=vae_name,
             )
         elif workflow_family in {"inpaint", "outpaint"}:
-            source_asset = str(payload.get("source_asset") or "").strip()
-            mask_asset = str(payload.get("inpaint_mask") or "").strip()
-            if not source_asset or not mask_asset:
+            source_path = prepared_assets.get("source_path")
+            mask_path = prepared_assets.get("mask_path")
+            if not isinstance(source_path, Path) or not isinstance(mask_path, Path):
                 raise UserFacingError(
-                    "Source image or inpaint mask is missing",
+                    "Source image or mask is missing",
                     hint="Choose both a source image and a mask before running an inpaint or outpaint render.",
                     code="INPAINT_ASSETS_MISSING",
                     status_code=400,
                 )
-            source_image = _prepare_comfy_reference_image(project_id, node_url, source_asset, "raw")
-            mask_image = _prepare_comfy_reference_image(project_id, node_url, mask_asset, "raw")
+            source_image = _prepare_comfy_reference_image(project_id, node_url, str(source_path), "raw")
+            mask_image = _prepare_comfy_reference_image(project_id, node_url, str(mask_path), "raw")
             builder = comfy.outpaint_workflow if workflow_family == "outpaint" else comfy.inpaint_workflow
             wf = builder(
                 checkpoint=checkpoint,
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 seed=seed,
-                width=width,
-                height=height,
+                width=actual_width,
+                height=actual_height,
                 steps=steps,
                 cfg=cfg,
                 sampler=sampler,
@@ -4308,7 +4805,7 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                     project_id=project_id,
                     job_id=job_id,
                     output_path=out_path,
-                    payload=payload,
+                    payload={**payload, "width": actual_width, "height": actual_height},
                     workflow_family=workflow_family,
                     checkpoint=checkpoint,
                     loras=resolved_loras,
@@ -4317,6 +4814,12 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                     prompt_id=str(prompt_id),
                     comfyui_image=im,
                     node_url=node_url,
+                    backend="comfyui",
+                    engine="comfyui",
+                    model_family=payload.get("family"),
+                    resolved_model_asset=checkpoint,
+                    mask_source=prepared_assets.get("mask_source"),
+                    outpaint=prepared_assets.get("outpaint"),
                 )
                 metadata_path = _write_generation_metadata(out_path, metadata)
                 return {
@@ -5019,6 +5522,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
     return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "diffusion", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
 
 
+@app.post("/v1/projects/{project_id}/render/stills/scenes")
 @app.post("/v1/projects/{project_id}/render/comfyui/scenes")
 def render_scenes(project_id: str, req: RenderScenesRequest):
     proj = store.get(project_id)
@@ -5039,31 +5543,46 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
 
     created = []
     resolved_loras = _normalize_render_loras(getattr(req, "loras", []))
-    controlnet_units = _normalize_controlnet_units(getattr(req, "controlnet_units", []))
-    if req.workflow_family == "controlnet" and not controlnet_units and req.controlnet_model and req.reference_asset:
-        controlnet_units = _normalize_controlnet_units(
-            [
-                {
-                    "model": req.controlnet_model,
-                    "reference_asset": req.reference_asset,
-                    "conditioning_mode": req.conditioning_mode,
-                    "strength": req.controlnet_strength,
-                }
-            ]
-        )
-    vae_name = _resolve_optional_comfy_asset_name(req.vae, folder="vae", allowed_kinds={"vae"})
-    selection = _resolve_comfy_still_selection(
+    raw_controlnet_units = _request_payload(req).get("controlnet_units") if isinstance(_request_payload(req).get("controlnet_units"), list) else list(getattr(req, "controlnet_units", []))
+    if req.workflow_family == "controlnet" and not raw_controlnet_units and req.controlnet_model and req.reference_asset:
+        raw_controlnet_units = [
+            {
+                "model": req.controlnet_model,
+                "reference_asset": req.reference_asset,
+                "conditioning_mode": req.conditioning_mode,
+                "strength": req.controlnet_strength,
+            }
+        ]
+
+    selection = _resolve_still_scene_selection(
         model_id=req.model_id,
         checkpoint=req.checkpoint,
         workflow_family=req.workflow_family,
         controlnet_model=req.controlnet_model,
         reference_asset=req.reference_asset,
         conditioning_mode=req.conditioning_mode,
-        controlnet_units=controlnet_units,
+        controlnet_units=raw_controlnet_units,
+    )
+    controlnet_units = _normalize_controlnet_units(
+        raw_controlnet_units,
+        engine=str(selection.get("engine") or "comfyui"),
+        family=selection.get("family"),
+    )
+    if str(selection.get("workflow_family") or "") == "controlnet" and not controlnet_units:
+        raise UserFacingError(
+            "No compatible ControlNet units were selected",
+            hint="Attach one or more compatible ControlNet units before running the still render.",
+            code="CONTROLNET_MISSING",
+            status_code=400,
+        )
+    vae_name = (
+        _resolve_optional_comfy_asset_name(req.vae, folder="vae", allowed_kinds={"vae"})
+        if str(selection.get("engine") or "comfyui") == "comfyui"
+        else (str(req.vae or "").strip() or None)
     )
     model_tag = _safe_name_tag(req.model_id or selection.get("checkpoint") or "default")
     workflow_tag = _safe_name_tag(selection.get("workflow_family") or "txt2img")
-    ref_tag = _safe_name_tag(req.reference_asset or "noref")
+    ref_tag = _safe_name_tag(req.source_asset or req.reference_asset or "noref")
     for idx, sc in enumerate(scenes):
         # Deterministic output path for caching
         out_dir = store.project_dir(project_id) / "outputs" / "images"
@@ -5087,11 +5606,15 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
             "source_asset": req.source_asset,
             "reference_asset": req.reference_asset,
             "inpaint_mask": req.inpaint_mask,
+            "outpaint": _request_payload(req.outpaint) if req.outpaint else None,
             "conditioning_mode": selection.get("conditioning_mode"),
             "controlnet_model": req.controlnet_model,
             "controlnet_name": selection.get("controlnet_name"),
             "controlnet_strength": req.controlnet_strength,
             "controlnet_units": controlnet_units,
+            "engine": selection.get("engine"),
+            "family": selection.get("family"),
+            "model_path": str(selection.get("model_path")) if selection.get("model_path") else None,
             "loras": resolved_loras,
             "vae": vae_name,
             "denoise_strength": req.denoise_strength,
@@ -5100,7 +5623,8 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
             "upscaler": req.upscaler,
             "out_path": str(out_path),
         }
-        job = jobs.create(project_id, "comfyui_scene", p)
+        job_type = "internal_still_scene" if str(selection.get("engine") or "comfyui") == "internal" else "comfyui_scene"
+        job = jobs.create(project_id, job_type, p)
         created.append(job.__dict__)
 
     proj.meta.setdefault("jobs", []).extend(created)
@@ -6024,7 +6548,9 @@ def export_comfyui_workflows(
     variant_index: int = 0,
     model_id: str | None = None,
     workflow_family: str = "auto",
+    source_asset: str | None = None,
     reference_asset: str | None = None,
+    inpaint_mask: str | None = None,
     controlnet_model: str | None = None,
     conditioning_mode: str = "raw",
     width: int | None = None,
@@ -6034,7 +6560,10 @@ def export_comfyui_workflows(
     sampler: str | None = None,
     negative_prompt: str | None = None,
     seed: int | None = None,
+    denoise_strength: float | None = None,
     loras_json: str | None = None,
+    outpaint_json: str | None = None,
+    controlnet_units_json: str | None = None,
 ):
     """Compile plan scenes into per-scene ComfyUI workflow JSON files."""
     proj = store.get(project_id)
@@ -6061,40 +6590,206 @@ def export_comfyui_workflows(
         except Exception:
             parsed_loras = []
         loras = _normalize_render_loras(parsed_loras)
-    selection = _resolve_comfy_still_selection(
+
+    raw_controlnet_units: list[dict[str, Any]] = []
+    if controlnet_units_json:
+        try:
+            parsed_units = json.loads(controlnet_units_json)
+        except Exception:
+            parsed_units = []
+        if isinstance(parsed_units, list):
+            raw_controlnet_units = [dict(item) for item in parsed_units if isinstance(item, dict)]
+    parsed_outpaint = None
+    if outpaint_json:
+        try:
+            parsed_outpaint = json.loads(outpaint_json)
+        except Exception:
+            raise UserFacingError(
+                "Invalid outpaint settings",
+                hint="Retry the export after re-entering the outpaint margins.",
+                code="OUTPAINT_INVALID",
+                status_code=400,
+            )
+    if workflow_family == "controlnet" and not raw_controlnet_units and controlnet_model and reference_asset:
+        raw_controlnet_units = [
+            {
+                "model": controlnet_model,
+                "reference_asset": reference_asset,
+                "conditioning_mode": conditioning_mode,
+                "strength": 0.8,
+            }
+        ]
+
+    selection = _resolve_still_scene_selection(
         model_id=model_id,
         checkpoint=None,
         workflow_family=workflow_family,
         controlnet_model=controlnet_model,
         reference_asset=reference_asset,
         conditioning_mode=conditioning_mode,
+        controlnet_units=raw_controlnet_units,
     )
-    reference_image = None
-    if selection.get("workflow_family") == "controlnet" and reference_asset:
-        ref_path = _resolve_project_reference_path(project_id, reference_asset)
-        if ref_path is not None:
-            exported_ref_dir = out_dir / "refs"
-            exported_ref_dir.mkdir(parents=True, exist_ok=True)
-            prepared = _prepare_condition_image(project_id, ref_path, str(selection.get("conditioning_mode") or "raw"))
-            exported_ref = exported_ref_dir / prepared.name
-            shutil.copy2(prepared, exported_ref)
-            reference_image = str(Path("refs") / exported_ref.name).replace("\\", "/")
+
+    if str(selection.get("engine") or "comfyui") != "comfyui":
+        raise UserFacingError(
+            "ComfyUI workflow export only supports ComfyUI still models.",
+            hint="Pick a checkpoint-based still model before exporting ComfyUI workflows.",
+            code="EXPORT_ENGINE_UNSUPPORTED",
+            status_code=400,
+        )
+
+    workflow_kind = str(selection.get("workflow_family") or "txt2img")
+    controlnet_units = _normalize_controlnet_units(
+        raw_controlnet_units,
+        engine="comfyui",
+        family=selection.get("family"),
+    )
+    if workflow_kind == "controlnet" and not controlnet_units:
+        raise UserFacingError(
+            "No compatible ControlNet units were selected",
+            hint="Attach one or more compatible ControlNet units before exporting the workflow.",
+            code="CONTROLNET_MISSING",
+            status_code=400,
+        )
+
+    def _copy_export_asset(src: Path, folder: str) -> str:
+        target_dir = out_dir / folder
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / src.name
+        if src.resolve() != target.resolve():
+            shutil.copy2(src, target)
+        return str(Path(folder) / target.name).replace("\\", "/")
+
+    prepared_assets = {
+        "source_path": None,
+        "mask_path": None,
+        "mask_source": None,
+        "outpaint": None,
+        "width": int(width or 0),
+        "height": int(height or 0),
+    }
+    if workflow_kind in {"img2img", "inpaint", "outpaint"}:
+        prepared_assets = _prepare_still_scene_assets(
+            project_id,
+            {
+                "source_asset": source_asset,
+                "reference_asset": reference_asset,
+                "inpaint_mask": inpaint_mask,
+                "outpaint": parsed_outpaint,
+                "width": width,
+                "height": height,
+            },
+            workflow_kind,
+        )
+
+    exported_source_image = (
+        _copy_export_asset(Path(str(prepared_assets["source_path"])), "inputs")
+        if prepared_assets.get("source_path")
+        else None
+    )
+    exported_mask_image = (
+        _copy_export_asset(Path(str(prepared_assets["mask_path"])), "masks")
+        if prepared_assets.get("mask_path")
+        else None
+    )
+
+    exported_controlnet_units: list[dict[str, Any]] = []
+    if workflow_kind == "controlnet":
+        for unit in controlnet_units:
+            ref_path = _resolve_project_reference_path(project_id, str(unit.get("reference_asset") or ""))
+            if ref_path is None:
+                raise UserFacingError(
+                    "Reference image not found",
+                    hint="Upload or choose a valid project reference image before exporting the ControlNet workflow.",
+                    code="REFERENCE_IMAGE_NOT_FOUND",
+                    status_code=400,
+                )
+            conditioned = _prepare_condition_image(project_id, ref_path, str(unit.get("conditioning_mode") or "raw"))
+            exported_controlnet_units.append(
+                {
+                    **unit,
+                    "reference_image": _copy_export_asset(conditioned, "refs"),
+                }
+            )
+
     for idx, sc in enumerate(scenes):
         checkpoint = str(selection.get("checkpoint") or sc.get("checkpoint") or settings.comfyui_checkpoint)
-        if selection.get("workflow_family") == "controlnet":
+        resolved_seed = int(seed if seed is not None else (sc.get("seed") or (idx + 12345)))
+        resolved_width = int(prepared_assets.get("width") or width or sc.get("width") or 768)
+        resolved_height = int(prepared_assets.get("height") or height or sc.get("height") or 432)
+        resolved_steps = int(steps or sc.get("steps") or 20)
+        resolved_cfg = float(cfg if cfg is not None else (sc.get("cfg") or 6.5))
+        resolved_sampler = str(sampler or sc.get("sampler") or "euler")
+        resolved_negative = str(negative_prompt or sc.get("negative_prompt") or "(low quality, worst quality)")
+        resolved_denoise = float(denoise_strength if denoise_strength is not None else 0.75)
+
+        if workflow_kind == "controlnet":
             wf = comfy.controlnet_workflow(
                 checkpoint=checkpoint,
                 prompt=str(sc.get("prompt") or ""),
-                negative_prompt=str(negative_prompt or sc.get("negative_prompt") or "(low quality, worst quality)"),
-                seed=int(seed if seed is not None else (sc.get("seed") or (idx + 12345))),
-                width=int(width or sc.get("width") or 768),
-                height=int(height or sc.get("height") or 432),
-                steps=int(steps or sc.get("steps") or 20),
-                cfg=float(cfg if cfg is not None else (sc.get("cfg") or 6.5)),
-                sampler=str(sampler or sc.get("sampler") or "euler"),
-                controlnet_name=str(selection.get("controlnet_name") or ""),
-                reference_image=str(reference_image or "reference.png"),
+                negative_prompt=resolved_negative,
+                seed=resolved_seed,
+                width=resolved_width,
+                height=resolved_height,
+                steps=resolved_steps,
+                cfg=resolved_cfg,
+                sampler=resolved_sampler,
+                controlnet_name=str(exported_controlnet_units[0].get("controlnet_name") or selection.get("controlnet_name") or ""),
+                reference_image=str(exported_controlnet_units[0].get("reference_image") or "reference.png"),
                 controlnet_strength=0.8,
+                start_percent=float(exported_controlnet_units[0].get("start_percent", 0.0) if exported_controlnet_units else 0.0),
+                end_percent=float(exported_controlnet_units[0].get("end_percent", 1.0) if exported_controlnet_units else 1.0),
+                filename_prefix=f"scene_{idx:03d}",
+                loras=loras,
+                controlnet_units=exported_controlnet_units,
+            )
+        elif workflow_kind == "img2img":
+            wf = comfy.img2img_workflow(
+                checkpoint=checkpoint,
+                prompt=str(sc.get("prompt") or ""),
+                negative_prompt=resolved_negative,
+                seed=resolved_seed,
+                width=resolved_width,
+                height=resolved_height,
+                steps=resolved_steps,
+                cfg=resolved_cfg,
+                sampler=resolved_sampler,
+                source_image=str(exported_source_image or "source.png"),
+                denoise_strength=resolved_denoise,
+                filename_prefix=f"scene_{idx:03d}",
+                loras=loras,
+            )
+        elif workflow_kind == "inpaint":
+            wf = comfy.inpaint_workflow(
+                checkpoint=checkpoint,
+                prompt=str(sc.get("prompt") or ""),
+                negative_prompt=resolved_negative,
+                seed=resolved_seed,
+                width=resolved_width,
+                height=resolved_height,
+                steps=resolved_steps,
+                cfg=resolved_cfg,
+                sampler=resolved_sampler,
+                source_image=str(exported_source_image or "source.png"),
+                mask_image=str(exported_mask_image or "mask.png"),
+                denoise_strength=float(denoise_strength if denoise_strength is not None else 0.8),
+                filename_prefix=f"scene_{idx:03d}",
+                loras=loras,
+            )
+        elif workflow_kind == "outpaint":
+            wf = comfy.outpaint_workflow(
+                checkpoint=checkpoint,
+                prompt=str(sc.get("prompt") or ""),
+                negative_prompt=resolved_negative,
+                seed=resolved_seed,
+                width=resolved_width,
+                height=resolved_height,
+                steps=resolved_steps,
+                cfg=resolved_cfg,
+                sampler=resolved_sampler,
+                source_image=str(exported_source_image or "source.png"),
+                mask_image=str(exported_mask_image or "mask.png"),
+                denoise_strength=float(denoise_strength if denoise_strength is not None else 0.8),
                 filename_prefix=f"scene_{idx:03d}",
                 loras=loras,
             )
@@ -6102,13 +6797,13 @@ def export_comfyui_workflows(
             wf = comfy.default_workflow(
                 checkpoint=checkpoint,
                 prompt=str(sc.get("prompt") or ""),
-                negative_prompt=str(negative_prompt or sc.get("negative_prompt") or "(low quality, worst quality)"),
-                seed=int(seed if seed is not None else (sc.get("seed") or (idx + 12345))),
-                width=int(width or sc.get("width") or 768),
-                height=int(height or sc.get("height") or 432),
-                steps=int(steps or sc.get("steps") or 20),
-                cfg=float(cfg if cfg is not None else (sc.get("cfg") or 6.5)),
-                sampler=str(sampler or sc.get("sampler") or "euler"),
+                negative_prompt=resolved_negative,
+                seed=resolved_seed,
+                width=resolved_width,
+                height=resolved_height,
+                steps=resolved_steps,
+                cfg=resolved_cfg,
+                sampler=resolved_sampler,
                 loras=loras,
             )
         p = out_dir / f"scene_{idx:03d}.json"

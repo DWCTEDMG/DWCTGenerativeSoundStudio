@@ -24,10 +24,10 @@ Recommended env vars:
 EDMG_AI_MODE=local
 EDMG_AI_PROVIDER=ollama
 EDMG_AI_OLLAMA_URL=http://127.0.0.1:11434
-EDMG_AI_OLLAMA_MODEL=qwen2.5:7b-instruct
+EDMG_AI_OLLAMA_MODEL=qwen3:8b
 ```
 
-Use `qwen2.5:3b-instruct` instead on lighter CPU-only or low-memory systems.
+Use `qwen3:4b` instead on lighter CPU-only or low-memory systems.
 
 If you want an external AI service instead:
 
@@ -42,9 +42,28 @@ OpenAI-compatible option (LM Studio / llama.cpp server / vLLM / Groq / Together,
 EDMG_AI_MODE=local
 EDMG_AI_PROVIDER=openai_compat
 EDMG_AI_OPENAI_COMPAT_BASE_URL=http://127.0.0.1:1234/v1
-EDMG_AI_OPENAI_COMPAT_MODEL=...
+EDMG_AI_OPENAI_COMPAT_MODEL=qwen3-8b
 EDMG_AI_OPENAI_COMPAT_API_KEY=...  # if required
 ```
+
+If your OpenAI-compatible gateway exposes a different model alias, override
+`EDMG_AI_OPENAI_COMPAT_MODEL` to match that server.
+
+## Recommended local model stack
+
+- Planner default: `qwen3:8b`
+- Low-resource planner: `qwen3:4b`
+- Broad still-image default: SDXL Base 1.0
+- Fast still-image option: SD3.5 Large Turbo
+- Reference still guidance: SD3.5 ControlNet Blur, Canny, and Depth
+- Primary HF video backend: Wan2.2 TI2V 5B
+- Short image-to-video fallback: SVD XT Img2Vid
+
+## Hardware tiers
+
+- Low-spec: `qwen3:4b` + SDXL Base 1.0
+- Mid-range: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
+- High-end: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
 
 ## Integrations
 - ComfyUI renders are queued locally.

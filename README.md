@@ -65,6 +65,25 @@ install path and allows migration to another drive such as `D:\`.
 - [RELEASE.md](D:\DWCTGenerativeSoundStudio\RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_RELEASE_RUNBOOK.md)
 - [docs/STUDIO_REPO_MAP.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_REPO_MAP.md)
+- [docs/AI_PROVIDERS.md](D:\DWCTGenerativeSoundStudio\docs\AI_PROVIDERS.md)
+- [docs/HF_VIDEO_MODELS.md](D:\DWCTGenerativeSoundStudio\docs\HF_VIDEO_MODELS.md)
+
+## Recommended Local Stack
+
+- Planner default: `qwen3:8b` via Ollama
+- Low-resource planner: `qwen3:4b`
+- OpenAI-compatible default model string: `qwen3-8b`
+- Broad still-image default: SDXL Base 1.0
+- Fast still-image option: SD3.5 Large Turbo
+- Reference still guidance: SD3.5 ControlNet Blur, Canny, and Depth
+- Primary HF video backend: Wan2.2 TI2V 5B
+- Short image-to-video fallback: SVD XT Img2Vid
+
+## Hardware Tiers
+
+- Low-spec: `qwen3:4b` + SDXL Base 1.0
+- Mid-range: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
+- High-end: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
 
 ## Compatibility note
 

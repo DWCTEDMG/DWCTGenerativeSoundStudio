@@ -110,6 +110,75 @@ def _ensure_managed_dir(path: Path, *, label: str) -> Path:
         ) from exc
 
 
+def _entry_render(entry: dict[str, Any]) -> dict[str, Any]:
+    render = entry.get("render")
+    return dict(render) if isinstance(render, dict) else {}
+
+
+def _entry_target(entry: dict[str, Any]) -> dict[str, Any]:
+    target = entry.get("target")
+    return dict(target) if isinstance(target, dict) else {}
+
+
+def _entry_engine(entry: dict[str, Any]) -> str:
+    render = _entry_render(entry)
+    target = _entry_target(entry)
+    engine = str(render.get("engine") or target.get("engine") or "").strip().lower()
+    if engine:
+        return engine
+    kind = str(entry.get("kind") or "").strip().lower()
+    if kind == "diffusers":
+        return "internal"
+    return "comfyui"
+
+
+def _entry_family(entry: dict[str, Any]) -> str | None:
+    family = str(entry.get("family") or _entry_render(entry).get("family") or "").strip().lower()
+    return family or None
+
+
+def _entry_support_flags(entry: dict[str, Any]) -> dict[str, bool]:
+    kind = str(entry.get("kind") or "").strip().lower()
+    engine = _entry_engine(entry)
+    family = _entry_family(entry)
+    if kind in {"checkpoint", "diffusers"}:
+        return {
+            "supports_txt2img": True,
+            "supports_img2img": True,
+            "supports_inpaint": True,
+            "supports_outpaint": True,
+            "supports_controlnet": not (engine == "internal" and family == "sd35"),
+        }
+    return {
+        "supports_txt2img": False,
+        "supports_img2img": False,
+        "supports_inpaint": False,
+        "supports_outpaint": False,
+        "supports_controlnet": False,
+    }
+
+
+def _normalize_catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    item = dict(entry)
+    render = _entry_render(item)
+    engine = _entry_engine(item)
+    family = _entry_family(item)
+    kind = str(item.get("kind") or "").strip().lower()
+    render_modes = [str(mode).strip() for mode in (render.get("render_modes") or []) if str(mode).strip()]
+    if kind in {"checkpoint", "diffusers"} and "stills" not in render_modes:
+        render_modes.append("stills")
+    if kind == "diffusers" and "internal_video" not in render_modes:
+        render_modes.append("internal_video")
+    render["engine"] = engine
+    render["family"] = family
+    render["render_modes"] = render_modes
+    item["render"] = render
+    item["engine"] = engine
+    item["family"] = family
+    item.update(_entry_support_flags(item))
+    return item
+
+
 # ------------------------------ tasks ------------------------------
 
 @dataclass
@@ -202,10 +271,11 @@ class ModelManager:
 
     # ---- catalog ----
     def catalog(self) -> dict[str, Any]:
-        built = built_in_catalog()
+        built = [_normalize_catalog_entry(entry) for entry in built_in_catalog()]
         user = _read_json(self._user_models_path, default=[])
         if not isinstance(user, list):
             user = []
+        user = [_normalize_catalog_entry(entry) for entry in user if isinstance(entry, dict)]
         accepted = _read_json(self._accept_path, default={})
         if not isinstance(accepted, dict):
             accepted = {}
@@ -433,6 +503,13 @@ class ModelManager:
 
         if entry is not None:
             kind = str(entry.get("kind") or "").strip().lower()
+            target = entry.get("target") if isinstance(entry.get("target"), dict) else {}
+            engine = str(target.get("engine") or entry.get("engine") or "comfyui").strip().lower()
+            if engine != "comfyui":
+                raise UserFacingError(
+                    f"{entry.get('name') or raw} is not a valid {folder.rstrip('s')} selection",
+                    hint="Pick a Studio ComfyUI asset for this workflow.",
+                )
             if allowed_kinds and kind not in allowed_kinds:
                 expected = ", ".join(sorted(allowed_kinds))
                 raise UserFacingError(
@@ -478,6 +555,72 @@ class ModelManager:
             "path": str(resolved_path),
             "source": "local",
             "folder": folder,
+        }
+
+    def resolve_internal_asset(
+        self,
+        ref: str,
+        *,
+        folder: str,
+        allowed_kinds: set[str] | None = None,
+    ) -> dict[str, Any]:
+        raw = str(ref or "").strip()
+        if not raw:
+            raise UserFacingError("Missing model selection", hint=f"Pick a Studio {folder.rstrip('s')} first.")
+
+        entry = self._find_entry(raw)
+        if entry is None:
+            for candidate in self._all_entries():
+                if not isinstance(candidate, dict):
+                    continue
+                target = candidate.get("target") if isinstance(candidate.get("target"), dict) else {}
+                candidate_folder = str(target.get("folder") or "").strip().lower()
+                if str(target.get("engine") or "").strip().lower() != "internal":
+                    continue
+                if candidate_folder != str(folder or "").strip().lower():
+                    continue
+                if str(candidate.get("id") or "").strip() == raw:
+                    entry = candidate
+                    break
+
+        if entry is None:
+            raise UserFacingError(
+                f"Unknown internal Studio asset: {raw}",
+                hint=f"Install an internal {folder.rstrip('s')} asset in Models first, then retry.",
+            )
+
+        kind = str(entry.get("kind") or "").strip().lower()
+        if allowed_kinds and kind not in allowed_kinds:
+            expected = ", ".join(sorted(allowed_kinds))
+            raise UserFacingError(
+                f"{entry.get('name') or raw} is not a valid {folder.rstrip('s')} selection",
+                hint=f"Pick a Studio internal asset of type: {expected}.",
+            )
+
+        target = entry.get("target") if isinstance(entry.get("target"), dict) else {}
+        engine = str(target.get("engine") or entry.get("engine") or "").strip().lower()
+        if engine != "internal":
+            raise UserFacingError(
+                f"{entry.get('name') or raw} is not an internal Studio asset",
+                hint="Pick an internal Studio asset for the internal diffusers path.",
+            )
+
+        resolved_path = self.installed_path(str(entry.get("id") or ""))
+        if resolved_path is None:
+            raise UserFacingError(
+                f"{entry.get('name') or raw} is not installed",
+                hint="Install the asset in Model Manager, then retry.",
+            )
+
+        return {
+            "id": entry.get("id"),
+            "name": entry.get("name") or raw,
+            "kind": entry.get("kind") or folder.rstrip("s"),
+            "path": str(resolved_path),
+            "source": entry.get("source") or "local",
+            "folder": folder,
+            "engine": "internal",
+            "family": entry.get("family"),
         }
 
     def resolve_loras(self, requested: list[dict[str, Any]] | None) -> list[dict[str, Any]]:

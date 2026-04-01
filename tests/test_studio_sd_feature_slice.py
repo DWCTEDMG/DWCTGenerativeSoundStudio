@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from edmg_studio_backend import app as studio_app
 from edmg_studio_backend.integrations import comfyui as comfy
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
+from PIL import Image
 
 
 def _make_project(tmp_path: Path):
@@ -120,3 +122,193 @@ def test_run_comfyui_scene_writes_metadata_sidecar(tmp_path, monkeypatch):
     assert metadata["base_model"]["checkpoint"] == "base.safetensors"
     assert metadata["loras"][0]["filename"] == "cinematic-detail.safetensors"
     assert metadata["output"]["image"].replace("\\", "/") == "outputs/images/scene.png"
+
+
+def test_prepare_outpaint_assets_generates_canvas_and_mask(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    refs_dir = store.project_dir(proj.id) / "assets" / "refs"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    src = refs_dir / "source.png"
+    Image.new("RGB", (64, 32), (20, 40, 60)).save(src)
+
+    prepared = studio_app._prepare_still_scene_assets(
+        proj.id,
+        {
+            "source_asset": "assets/refs/source.png",
+            "outpaint": {"top_px": 10, "right_px": 5, "bottom_px": 0, "left_px": 3},
+            "width": 64,
+            "height": 32,
+        },
+        "outpaint",
+    )
+
+    assert prepared["mask_source"] == "generated_outpaint"
+    assert prepared["source_path"] is not None
+    assert prepared["mask_path"] is not None
+
+    with Image.open(prepared["source_path"]) as expanded:
+        assert expanded.size == (72, 42)
+    with Image.open(prepared["mask_path"]) as mask:
+        assert mask.size == (72, 42)
+
+
+def test_prepare_outpaint_assets_prefers_explicit_mask_override(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    refs_dir = store.project_dir(proj.id) / "assets" / "refs"
+    masks_dir = store.project_dir(proj.id) / "assets" / "masks"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    masks_dir.mkdir(parents=True, exist_ok=True)
+
+    Image.new("RGB", (64, 32), (20, 40, 60)).save(refs_dir / "source.png")
+    Image.new("L", (64, 32), 255).save(masks_dir / "override.png")
+
+    prepared = studio_app._prepare_still_scene_assets(
+        proj.id,
+        {
+            "source_asset": "assets/refs/source.png",
+            "inpaint_mask": "assets/masks/override.png",
+            "outpaint": {"top_px": 10, "right_px": 5, "bottom_px": 0, "left_px": 3},
+            "width": 64,
+            "height": 32,
+        },
+        "outpaint",
+    )
+
+    assert prepared["mask_source"] == "explicit_mask_with_margins"
+    with Image.open(prepared["source_path"]) as expanded:
+        assert expanded.size == (72, 42)
+    with Image.open(prepared["mask_path"]) as mask:
+        assert mask.size == (72, 42)
+
+
+def test_export_comfyui_workflows_writes_multi_controlnet_refs(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    proj.meta["last_plan"] = {
+        "variants": [
+            {
+                "name": "Variant 1",
+                "scenes": [{"start_s": 0, "end_s": 8, "prompt": "neon skyline"}],
+            }
+        ]
+    }
+    store.save(proj)
+
+    refs_dir = store.project_dir(proj.id) / "assets" / "refs"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(refs_dir / "source.png")
+    Image.new("RGB", (64, 64), (0, 255, 0)).save(refs_dir / "depth.png")
+
+    monkeypatch.setattr(
+        studio_app,
+        "_resolve_still_scene_selection",
+        lambda **kwargs: {
+            "checkpoint": "base.safetensors",
+            "workflow_family": "controlnet",
+            "controlnet_name": None,
+            "conditioning_mode": "raw",
+            "engine": "comfyui",
+            "family": "sdxl",
+        },
+    )
+    monkeypatch.setattr(
+        studio_app,
+        "_normalize_controlnet_units",
+        lambda raw_units, **kwargs: [
+            {
+                "controlnet_name": "controlnet-canny.safetensors",
+                "reference_asset": "assets/refs/source.png",
+                "conditioning_mode": "edge",
+                "strength": 0.8,
+                "start_percent": 0.0,
+                "end_percent": 1.0,
+            },
+            {
+                "controlnet_name": "controlnet-depth.safetensors",
+                "reference_asset": "assets/refs/depth.png",
+                "conditioning_mode": "raw",
+                "strength": 0.65,
+                "start_percent": 0.1,
+                "end_percent": 0.9,
+            },
+        ],
+    )
+    monkeypatch.setattr(studio_app, "_prepare_condition_image", lambda project_id, path, mode: path)
+    monkeypatch.setattr(studio_app.comfy, "controlnet_workflow", lambda **kwargs: {"workflow": kwargs})
+
+    result = studio_app.export_comfyui_workflows(
+        proj.id,
+        variant_index=0,
+        model_id="hf_sdxl_base_1_0",
+        workflow_family="controlnet",
+        controlnet_units_json=json.dumps(
+            [
+                {
+                    "model": "hf_sdxl_controlnet_canny",
+                    "reference_asset": "assets/refs/source.png",
+                    "conditioning_mode": "edge",
+                },
+                {
+                    "model": "hf_sdxl_controlnet_depth",
+                    "reference_asset": "assets/refs/depth.png",
+                    "conditioning_mode": "raw",
+                },
+            ]
+        ),
+    )
+
+    assert result["ok"] is True
+    exported = store.project_dir(proj.id) / result["files"][0]
+    payload = json.loads(exported.read_text(encoding="utf-8"))
+    units = payload["workflow"]["controlnet_units"]
+    assert len(units) == 2
+    assert units[0]["reference_image"].startswith("refs/")
+    assert units[1]["reference_image"].startswith("refs/")
+
+
+def test_export_comfyui_workflows_rejects_internal_still_models(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    proj.meta["last_plan"] = {
+        "variants": [
+            {
+                "name": "Variant 1",
+                "scenes": [{"start_s": 0, "end_s": 8, "prompt": "neon skyline"}],
+            }
+        ]
+    }
+    store.save(proj)
+
+    monkeypatch.setattr(
+        studio_app,
+        "_resolve_still_scene_selection",
+        lambda **kwargs: {
+            "checkpoint": None,
+            "workflow_family": "txt2img",
+            "controlnet_name": None,
+            "conditioning_mode": "raw",
+            "engine": "internal",
+            "family": "sdxl",
+            "model_path": Path(tmp_path / "internal-model"),
+        },
+    )
+
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        studio_app.export_comfyui_workflows(
+            proj.id,
+            variant_index=0,
+            model_id="hf_sdxl_internal",
+            workflow_family="txt2img",
+        )
+
+    assert exc.value.code == "EXPORT_ENGINE_UNSUPPORTED"

@@ -12,7 +12,16 @@ type CatalogEntry = {
   kind: string;
   source?: string;
   filename?: string;
+  family?: string;
+  engine?: string;
+  supports_txt2img?: boolean;
+  supports_img2img?: boolean;
+  supports_inpaint?: boolean;
+  supports_outpaint?: boolean;
+  supports_controlnet?: boolean;
   render?: {
+    engine?: string;
+    family?: string;
     checkpoint_name?: string;
     controlnet_name?: string;
     svd_checkpoint?: string;
@@ -25,6 +34,25 @@ type SelectedLora = {
   name: string;
   label: string;
   weight: number;
+};
+
+type ConditioningMode = "raw" | "blur" | "edge" | "external";
+
+type ControlNetUnitDraft = {
+  key: string;
+  model: string;
+  reference_asset: string;
+  conditioning_mode: ConditioningMode;
+  strength: number;
+  start_percent: number;
+  end_percent: number;
+};
+
+type OutpaintDraft = {
+  top_px: number;
+  right_px: number;
+  bottom_px: number;
+  left_px: number;
 };
 
 const SAMPLER_OPTIONS = [
@@ -57,15 +85,17 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   const [maxFramesPerScene, setMaxFramesPerScene] = useState<number>(240);
   const [motionContextLength, setMotionContextLength] = useState<number>(16);
   const [motionContextOverlap, setMotionContextOverlap] = useState<number>(4);
-  const [stillWorkflow, setStillWorkflow] = useState<"txt2img" | "controlnet">("txt2img");
-  const [selectedStillModelId, setSelectedStillModelId] = useState<string>("hf_sd35_large_turbo_ckpt");
+  const [stillWorkflow, setStillWorkflow] = useState<"txt2img" | "img2img" | "inpaint" | "outpaint" | "controlnet">("txt2img");
+  const [selectedStillModelId, setSelectedStillModelId] = useState<string>("hf_sdxl_base_1_0");
   const [selectedMotionModelId, setSelectedMotionModelId] = useState<string>("hf_sd35_large_turbo_ckpt");
   const [selectedSvdModelId, setSelectedSvdModelId] = useState<string>("hf_svd_xt_1_1");
-  const [selectedControlnetModelId, setSelectedControlnetModelId] = useState<string>("hf_sd35_controlnet_blur");
-  const [controlnetStrength, setControlnetStrength] = useState<number>(0.8);
-  const [conditioningMode, setConditioningMode] = useState<"raw" | "blur" | "edge" | "external">("blur");
-  const [referenceAsset, setReferenceAsset] = useState<string>("");
+  const [sourceAsset, setSourceAsset] = useState<string>("");
+  const [stillMaskAsset, setStillMaskAsset] = useState<string>("");
+  const [controlnetUnits, setControlnetUnits] = useState<ControlNetUnitDraft[]>([]);
+  const [outpaint, setOutpaint] = useState<OutpaintDraft>({ top_px: 0, right_px: 0, bottom_px: 0, left_px: 0 });
+  const [denoiseStrength, setDenoiseStrength] = useState<number>(0.75);
   const [referenceUploadFile, setReferenceUploadFile] = useState<File | null>(null);
+  const [workflowMaskUploadFile, setWorkflowMaskUploadFile] = useState<File | null>(null);
   const [renderWidth, setRenderWidth] = useState<number>(Number(savedRenderDefaults.stillWidth ?? 1024));
   const [renderHeight, setRenderHeight] = useState<number>(Number(savedRenderDefaults.stillHeight ?? 576));
   const [renderSteps, setRenderSteps] = useState<number>(Number(savedRenderDefaults.stillSteps ?? 28));
@@ -206,6 +236,10 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     () => modelCatalog.filter((m) => (m.render?.render_modes || []).includes("stills") && m.kind === "checkpoint"),
     [modelCatalog]
   );
+  const stillModels = useMemo(
+    () => modelCatalog.filter((m) => (m.render?.render_modes || []).includes("stills") && (m.kind === "checkpoint" || m.kind === "diffusers")),
+    [modelCatalog]
+  );
   const controlnetModels = useMemo(
     () => modelCatalog.filter((m) => m.kind === "controlnet"),
     [modelCatalog]
@@ -223,12 +257,8 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     [modelCatalog, installedModels]
   );
   const selectedStillModel = useMemo(
-    () => comfyStillModels.find((m) => m.id === selectedStillModelId) || comfyStillModels[0] || null,
-    [comfyStillModels, selectedStillModelId]
-  );
-  const selectedControlnetModel = useMemo(
-    () => controlnetModels.find((m) => m.id === selectedControlnetModelId) || controlnetModels[0] || null,
-    [controlnetModels, selectedControlnetModelId]
+    () => stillModels.find((m) => m.id === selectedStillModelId) || stillModels[0] || null,
+    [stillModels, selectedStillModelId]
   );
   const selectedMotionModel = useMemo(
     () => comfyStillModels.find((m) => m.id === selectedMotionModelId) || comfyStillModels[0] || null,
@@ -238,6 +268,48 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     () => svdModels.find((m) => m.id === selectedSvdModelId) || svdModels[0] || null,
     [svdModels, selectedSvdModelId]
   );
+  const selectedStillEngine = String(selectedStillModel?.engine || selectedStillModel?.render?.engine || (selectedStillModel?.kind === "diffusers" ? "internal" : "comfyui"));
+  const selectedStillFamily = String(selectedStillModel?.family || selectedStillModel?.render?.family || "").toLowerCase();
+  const canStillTxt2img = selectedStillModel?.supports_txt2img !== false;
+  const canStillImg2img = !!selectedStillModel?.supports_img2img;
+  const canStillInpaint = !!selectedStillModel?.supports_inpaint;
+  const canStillOutpaint = !!selectedStillModel?.supports_outpaint;
+  const canStillControlnet = !!selectedStillModel?.supports_controlnet;
+  const isControlnetCompatible = (model: CatalogEntry) => {
+    const controlEngine = String(model.engine || model.render?.engine || (model.kind === "controlnet" && model.source === "hf" ? "comfyui" : "comfyui")).toLowerCase();
+    const controlFamily = String(model.family || model.render?.family || "").toLowerCase();
+    if (installedModels[model.id] === false) return false;
+    if (selectedStillEngine && controlEngine && selectedStillEngine !== controlEngine) return false;
+    if (selectedStillEngine === "internal" && selectedStillFamily === "sd35") return false;
+    if (selectedStillFamily && controlFamily && selectedStillFamily !== controlFamily) return false;
+    return true;
+  };
+  const compatibleControlnetModels = useMemo(
+    () => controlnetModels.filter((m) => isControlnetCompatible(m)),
+    [controlnetModels, installedModels, selectedStillEngine, selectedStillFamily]
+  );
+  const modelFamilyLabel = (family?: string | null) => {
+    const normalized = String(family || "").trim().toLowerCase();
+    if (normalized === "sd15") return "SD1.5";
+    if (normalized === "sdxl") return "SDXL";
+    if (normalized === "sd35" || normalized === "sd3") return "SD3.5";
+    return normalized ? normalized.toUpperCase() : "Unknown";
+  };
+  const modelEngineLabel = (engine?: string | null, kind?: string) => {
+    const normalized = String(engine || "").trim().toLowerCase();
+    if (normalized === "internal" || kind === "diffusers") return "Internal";
+    return "ComfyUI";
+  };
+  const controlnetBlockedReason = useMemo(() => {
+    if (!canStillControlnet) return "The selected base model does not advertise ControlNet support.";
+    if (selectedStillEngine === "internal" && selectedStillFamily === "sd35") {
+      return "Internal SD3.5 still models do not support ControlNet in this phase.";
+    }
+    if (!compatibleControlnetModels.length) {
+      return "No compatible ControlNet models are currently installed for this base model and engine.";
+    }
+    return "";
+  }, [canStillControlnet, compatibleControlnetModels, selectedStillEngine, selectedStillFamily]);
   const internalHostedVisible = !!renderProviders?.stability?.visible;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
@@ -280,6 +352,42 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     seed: parsedRenderSeed,
     loras: selectedLoras.map((item) => ({ name: item.name, weight: item.weight })),
   });
+
+  const buildStillWorkflowPayload = () => {
+    const payload: Record<string, any> = {
+      workflow_family: stillWorkflow,
+      ...buildDiffusionPayload(),
+    };
+    if (stillWorkflow === "img2img" || stillWorkflow === "inpaint" || stillWorkflow === "outpaint") {
+      payload.source_asset = sourceAsset || undefined;
+      payload.denoise_strength = denoiseStrength;
+    }
+    if (stillWorkflow === "inpaint") {
+      payload.inpaint_mask = stillMaskAsset || undefined;
+    }
+    if (stillWorkflow === "outpaint") {
+      if (stillMaskAsset) payload.inpaint_mask = stillMaskAsset;
+      payload.outpaint = {
+        top_px: Math.max(0, Math.trunc(outpaint.top_px || 0)),
+        right_px: Math.max(0, Math.trunc(outpaint.right_px || 0)),
+        bottom_px: Math.max(0, Math.trunc(outpaint.bottom_px || 0)),
+        left_px: Math.max(0, Math.trunc(outpaint.left_px || 0)),
+      };
+    }
+    if (stillWorkflow === "controlnet") {
+      payload.controlnet_units = controlnetUnits
+        .filter((unit) => unit.model && unit.reference_asset)
+        .map((unit) => ({
+          model: unit.model,
+          reference_asset: unit.reference_asset,
+          conditioning_mode: unit.conditioning_mode,
+          strength: unit.strength,
+          start_percent: unit.start_percent,
+          end_percent: unit.end_percent,
+        }));
+    }
+    return payload;
+  };
 
   useEffect(() => {
     const preferred = String(hardware?.hardware?.device_preference || "auto");
@@ -417,9 +525,9 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   }, [projectId, selectedVariant, renderPreset]);
 
   useEffect(() => {
-    if (selectedStillModelId || !comfyStillModels.length) return;
-    setSelectedStillModelId(comfyStillModels[0].id);
-  }, [comfyStillModels, selectedStillModelId]);
+    if (selectedStillModelId || !stillModels.length) return;
+    setSelectedStillModelId(stillModels[0].id);
+  }, [stillModels, selectedStillModelId]);
 
   useEffect(() => {
     if (selectedMotionModelId || !comfyStillModels.length) return;
@@ -427,20 +535,36 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   }, [comfyStillModels, selectedMotionModelId]);
 
   useEffect(() => {
-    if (selectedControlnetModelId || !controlnetModels.length) return;
-    setSelectedControlnetModelId(controlnetModels[0].id);
-  }, [controlnetModels, selectedControlnetModelId]);
-
-  useEffect(() => {
     if (selectedSvdModelId || !svdModels.length) return;
     setSelectedSvdModelId(svdModels[0].id);
   }, [selectedSvdModelId, svdModels]);
 
   useEffect(() => {
-    if (stillWorkflow === "controlnet" && selectedControlnetModel?.render?.conditioning_mode) {
-      setConditioningMode(selectedControlnetModel.render.conditioning_mode as any);
+    const supportedWorkflows = [
+      canStillTxt2img ? "txt2img" : null,
+      canStillImg2img ? "img2img" : null,
+      canStillInpaint ? "inpaint" : null,
+      canStillOutpaint ? "outpaint" : null,
+      canStillControlnet ? "controlnet" : null,
+    ].filter(Boolean) as Array<"txt2img" | "img2img" | "inpaint" | "outpaint" | "controlnet">;
+    if (supportedWorkflows.length && !supportedWorkflows.includes(stillWorkflow)) {
+      setStillWorkflow(supportedWorkflows[0]);
     }
-  }, [selectedControlnetModel, stillWorkflow]);
+  }, [stillWorkflow, canStillTxt2img, canStillImg2img, canStillInpaint, canStillOutpaint, canStillControlnet]);
+
+  useEffect(() => {
+    setControlnetUnits((current) => current.map((unit) => {
+      if (isControlnetCompatible(controlnetModels.find((model) => model.id === unit.model) || { id: "", name: "", kind: "controlnet" } as CatalogEntry)) {
+        return unit;
+      }
+      const fallback = compatibleControlnetModels[0];
+      return {
+        ...unit,
+        model: fallback?.id || "",
+        conditioning_mode: (fallback?.render?.conditioning_mode as ConditioningMode) || unit.conditioning_mode || "raw",
+      };
+    }));
+  }, [compatibleControlnetModels, controlnetModels, selectedStillEngine, selectedStillFamily]);
 
   useEffect(() => {
     refreshInternalPreflight().catch(() => {});
@@ -637,20 +761,39 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     setSelectedLoras((current) => current.filter((item) => item.name !== name));
   };
 
+  const addControlnetUnit = () => {
+    const fallbackModel = compatibleControlnetModels[0];
+    setControlnetUnits((current) => [
+      ...current,
+      {
+        key: `${Date.now()}_${current.length}`,
+        model: fallbackModel?.id || "",
+        reference_asset: "",
+        conditioning_mode: (fallbackModel?.render?.conditioning_mode as ConditioningMode) || "raw",
+        strength: 0.8,
+        start_percent: 0,
+        end_percent: 1,
+      },
+    ]);
+  };
+
+  const updateControlnetUnit = (key: string, patch: Partial<ControlNetUnitDraft>) => {
+    setControlnetUnits((current) => current.map((unit) => (unit.key === key ? { ...unit, ...patch } : unit)));
+  };
+
+  const removeControlnetUnit = (key: string) => {
+    setControlnetUnits((current) => current.filter((unit) => unit.key !== key));
+  };
+
   const renderScenes = async () => {
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/comfyui/scenes`, {
+      const d = await apiPost(`/v1/projects/${projectId}/render/stills/scenes`, {
         variant_index: selectedVariant,
         model_id: selectedStillModel?.id || undefined,
         checkpoint: checkpointName || undefined,
-        workflow_family: stillWorkflow,
-        ...buildDiffusionPayload(),
-        reference_asset: stillWorkflow === "controlnet" ? referenceAsset || undefined : undefined,
-        conditioning_mode: stillWorkflow === "controlnet" ? conditioningMode : undefined,
-        controlnet_model: stillWorkflow === "controlnet" ? selectedControlnetModel?.id || undefined : undefined,
-        controlnet_strength: stillWorkflow === "controlnet" ? controlnetStrength : undefined,
+        ...buildStillWorkflowPayload(),
       });
       setInfo(d);
       await refreshProject(projectId);
@@ -734,6 +877,9 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     setErr(null);
     setInfo(null);
     try {
+      if (selectedStillEngine === "internal") {
+        throw new Error("ComfyUI workflow export is only available when the selected still model uses the ComfyUI engine.");
+      }
       const params = new URLSearchParams({
         variant_index: String(selectedVariant),
         model_id: selectedStillModel?.id || "",
@@ -747,10 +893,29 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
       params.set("negative_prompt", renderNegativePrompt);
       if (parsedRenderSeed != null) params.set("seed", String(parsedRenderSeed));
       if (selectedLoras.length) params.set("loras_json", JSON.stringify(selectedLoras.map((item) => ({ name: item.name, weight: item.weight }))));
+      if (stillWorkflow === "img2img" || stillWorkflow === "inpaint" || stillWorkflow === "outpaint") {
+        if (sourceAsset) params.set("source_asset", sourceAsset);
+        params.set("denoise_strength", String(denoiseStrength));
+      }
+      if (stillWorkflow === "inpaint" && stillMaskAsset) {
+        params.set("inpaint_mask", stillMaskAsset);
+      }
+      if (stillWorkflow === "outpaint") {
+        if (stillMaskAsset) params.set("inpaint_mask", stillMaskAsset);
+        params.set("outpaint_json", JSON.stringify(outpaint));
+      }
       if (stillWorkflow === "controlnet") {
-        if (referenceAsset) params.set("reference_asset", referenceAsset);
-        if (selectedControlnetModel?.id) params.set("controlnet_model", selectedControlnetModel.id);
-        params.set("conditioning_mode", conditioningMode);
+        const units = controlnetUnits
+          .filter((unit) => unit.model && unit.reference_asset)
+          .map((unit) => ({
+            model: unit.model,
+            reference_asset: unit.reference_asset,
+            conditioning_mode: unit.conditioning_mode,
+            strength: unit.strength,
+            start_percent: unit.start_percent,
+            end_percent: unit.end_percent,
+          }));
+        if (units.length) params.set("controlnet_units_json", JSON.stringify(units));
       }
       const d = await apiGet(`/v1/projects/${projectId}/export/comfyui_workflows?${params.toString()}`);
       setInfo(d);
@@ -767,6 +932,18 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
       await apiUpload(`/v1/projects/${projectId}/assets/refs`, referenceUploadFile);
       setReferenceUploadFile(null);
       await refreshReferenceAssets(projectId);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const uploadWorkflowMask = async () => {
+    if (!workflowMaskUploadFile || !projectId) return;
+    setErr(null);
+    try {
+      await apiUpload(`/v1/projects/${projectId}/assets/mask`, workflowMaskUploadFile);
+      setWorkflowMaskUploadFile(null);
       await refreshProject(projectId);
     } catch (e: any) {
       setErr(String(e));
@@ -1558,25 +1735,38 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               </div>
 
               <div className="row" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <div style={{ minWidth: 260 }}>
+                <div style={{ minWidth: 320, flex: 2 }}>
                   <div className="small" style={{ fontWeight: 800 }}>Studio still model</div>
                   <select value={selectedStillModel?.id || ""} onChange={(e) => setSelectedStillModelId(e.target.value)}>
-                    {comfyStillModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.name}</option>
+                    {stillModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {`${m.name} • ${modelEngineLabel(m.engine || m.render?.engine, m.kind)} • ${modelFamilyLabel(m.family || m.render?.family)}${installedModels[m.id] === false ? " (not installed)" : ""}`}
+                      </option>
                     ))}
                   </select>
                 </div>
-                <div style={{ minWidth: 260 }}>
+                <div style={{ minWidth: 260, flex: 1 }}>
                   <div className="small" style={{ fontWeight: 800 }}>Manual checkpoint override</div>
                   <input
                     value={checkpointName}
                     onChange={(e) => setCheckpointName(e.target.value)}
-                    placeholder={selectedStillModel?.render?.checkpoint_name || "leave blank for catalog default"}
+                    placeholder={
+                      selectedStillEngine === "comfyui"
+                        ? selectedStillModel?.render?.checkpoint_name || "leave blank for catalog default"
+                        : "internal models use the selected diffusers asset"
+                    }
+                    disabled={selectedStillEngine !== "comfyui"}
                   />
                 </div>
-                <div className="small" style={{ opacity: 0.8, flex: 1, minWidth: 220 }}>
-                  Studio maps these catalog entries to the installed Stability checkpoints so you do not have to remember filenames.
+                <div className="small" style={{ opacity: 0.8, flex: 1, minWidth: 260 }}>
+                  {selectedStillEngine === "internal"
+                    ? "Studio routes this still model through the internal diffusers adapter and validates workflow compatibility before enqueue."
+                    : "Studio routes this still model through ComfyUI checkpoints and exports matching workflows when requested."}
                 </div>
+              </div>
+              <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
+                Active still engine: <b>{modelEngineLabel(selectedStillEngine, selectedStillModel?.kind)}</b> • family <b>{modelFamilyLabel(selectedStillFamily)}</b>
+                {installedModels[selectedStillModel?.id || ""] === false ? <> • <span style={{ color: "var(--warning, #b58900)" }}>not installed locally</span></> : null}
               </div>
               <div className="card" style={{ marginTop: 10 }}>
                 <div style={{ fontWeight: 900, marginBottom: 8 }}>Generation settings</div>
@@ -1674,7 +1864,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   )}
                 </div>
               </div>
-              <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <label className="small">Mode</label>
                 <select value={renderMode} onChange={(e) => setRenderMode(e.target.value as any)}>
                   <option value="stills">Stills (1 image/scene)</option>
@@ -1695,8 +1885,11 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   <>
                     <label className="small">Still workflow</label>
                     <select value={stillWorkflow} onChange={(e) => setStillWorkflow(e.target.value as any)}>
-                      <option value="txt2img">Text-to-image</option>
-                      <option value="controlnet">ControlNet reference</option>
+                      {canStillTxt2img ? <option value="txt2img">Text-to-image</option> : null}
+                      {canStillImg2img ? <option value="img2img">Image-to-image</option> : null}
+                      {canStillInpaint ? <option value="inpaint">Inpaint</option> : null}
+                      {canStillOutpaint ? <option value="outpaint">Outpaint</option> : null}
+                      {canStillControlnet ? <option value="controlnet">ControlNet</option> : null}
                     </select>
                   </>
                 )}
@@ -1734,48 +1927,177 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 )}
               </div>
 
-              {renderMode === "stills" && stillWorkflow === "controlnet" ? (
+              {renderMode === "stills" ? (
                 <div className="card" style={{ marginTop: 10 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Reference-driven ControlNet</div>
-                  <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <div style={{ minWidth: 260 }}>
-                      <div className="small">ControlNet model</div>
-                      <select value={selectedControlnetModel?.id || ""} onChange={(e) => setSelectedControlnetModelId(e.target.value)}>
-                        {controlnetModels.map((m) => (
-                          <option key={m.id} value={m.id}>{m.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div style={{ minWidth: 180 }}>
-                      <div className="small">Conditioning mode</div>
-                      <select value={conditioningMode} onChange={(e) => setConditioningMode(e.target.value as any)}>
-                        <option value="raw">Raw image</option>
-                        <option value="blur">Blur pass</option>
-                        <option value="edge">Edge map</option>
-                        <option value="external">External-prepared map</option>
-                      </select>
-                    </div>
-                    <div style={{ minWidth: 140 }}>
-                      <div className="small">Strength</div>
-                      <input type="number" min={0} max={2} step={0.1} value={controlnetStrength} onChange={(e) => setControlnetStrength(Number(e.target.value))} />
-                    </div>
-                  </div>
-                  <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-                    <div style={{ minWidth: 320 }}>
-                      <div className="small">Reference image</div>
-                      <select value={referenceAsset} onChange={(e) => setReferenceAsset(e.target.value)}>
-                        <option value="">Select project reference</option>
-                        {projectAssets.refs.map((asset) => (
-                          <option key={asset.path} value={asset.path}>{asset.path}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <input type="file" accept="image/*" onChange={(e) => setReferenceUploadFile(e.target.files?.[0] || null)} />
-                    <button className="secondary" disabled={!referenceUploadFile || !projectId} onClick={uploadReferenceAsset}>Upload reference</button>
-                  </div>
-                  <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
-                    Blur is the smoothest built-in path. Edge creates a quick structure map. External expects a pre-made conditioning image such as a depth map.
-                  </div>
+                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Workflow inputs</div>
+                  {(stillWorkflow === "img2img" || stillWorkflow === "inpaint" || stillWorkflow === "outpaint") ? (
+                    <>
+                      <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                        <div style={{ minWidth: 340, flex: 2 }}>
+                          <div className="small">Source image asset</div>
+                          <select value={sourceAsset} onChange={(e) => setSourceAsset(e.target.value)}>
+                            <option value="">Select project reference</option>
+                            {projectAssets.refs.map((asset) => (
+                              <option key={asset.path} value={asset.path}>{asset.path}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ minWidth: 140 }}>
+                          <div className="small">Denoise strength</div>
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={denoiseStrength}
+                            onChange={(e) => setDenoiseStrength(Number(e.target.value))}
+                          />
+                        </div>
+                        <div style={{ minWidth: 220 }}>
+                          <div className="small">Upload new source</div>
+                          <input type="file" accept="image/*" onChange={(e) => setReferenceUploadFile(e.target.files?.[0] || null)} />
+                        </div>
+                        <button className="secondary" disabled={!referenceUploadFile || !projectId} onClick={uploadReferenceAsset}>Upload source</button>
+                      </div>
+                      {(stillWorkflow === "inpaint" || stillWorkflow === "outpaint") ? (
+                        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                          <div style={{ minWidth: 340, flex: 2 }}>
+                            <div className="small">{stillWorkflow === "outpaint" ? "Optional mask override" : "Inpaint mask asset"}</div>
+                            <select value={stillMaskAsset} onChange={(e) => setStillMaskAsset(e.target.value)}>
+                              <option value="">{stillWorkflow === "outpaint" ? "Generate mask from outpaint margins" : "Select project mask"}</option>
+                              {maskAssets.map((asset: string) => (
+                                <option key={asset} value={asset}>{asset}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div style={{ minWidth: 220 }}>
+                            <div className="small">Upload new mask</div>
+                            <input type="file" accept="image/*" onChange={(e) => setWorkflowMaskUploadFile(e.target.files?.[0] || null)} />
+                          </div>
+                          <button className="secondary" disabled={!workflowMaskUploadFile || !projectId} onClick={uploadWorkflowMask}>Upload mask</button>
+                        </div>
+                      ) : null}
+                      {stillWorkflow === "outpaint" ? (
+                        <>
+                          <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                            <div style={{ minWidth: 120 }}>
+                              <div className="small">Expand top</div>
+                              <input type="number" min={0} max={4096} step={32} value={outpaint.top_px} onChange={(e) => setOutpaint((current) => ({ ...current, top_px: Number(e.target.value) }))} />
+                            </div>
+                            <div style={{ minWidth: 120 }}>
+                              <div className="small">Expand right</div>
+                              <input type="number" min={0} max={4096} step={32} value={outpaint.right_px} onChange={(e) => setOutpaint((current) => ({ ...current, right_px: Number(e.target.value) }))} />
+                            </div>
+                            <div style={{ minWidth: 120 }}>
+                              <div className="small">Expand bottom</div>
+                              <input type="number" min={0} max={4096} step={32} value={outpaint.bottom_px} onChange={(e) => setOutpaint((current) => ({ ...current, bottom_px: Number(e.target.value) }))} />
+                            </div>
+                            <div style={{ minWidth: 120 }}>
+                              <div className="small">Expand left</div>
+                              <input type="number" min={0} max={4096} step={32} value={outpaint.left_px} onChange={(e) => setOutpaint((current) => ({ ...current, left_px: Number(e.target.value) }))} />
+                            </div>
+                          </div>
+                          <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
+                            If no mask override is selected, the backend expands the canvas and generates an outpaint mask from these margins.
+                          </div>
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {stillWorkflow === "controlnet" ? (
+                    <>
+                      <div className="row" style={{ justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                        <div>
+                          <div style={{ fontWeight: 800 }}>ControlNet units</div>
+                          <div className="small" style={{ opacity: 0.82 }}>
+                            Attach one or more conditioning units. Studio validates engine and family compatibility before enqueue.
+                          </div>
+                        </div>
+                        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                          <input type="file" accept="image/*" onChange={(e) => setReferenceUploadFile(e.target.files?.[0] || null)} />
+                          <button className="secondary" disabled={!referenceUploadFile || !projectId} onClick={uploadReferenceAsset}>Upload reference</button>
+                          <button className="secondary" onClick={addControlnetUnit} disabled={!!controlnetBlockedReason}>Add ControlNet unit</button>
+                        </div>
+                      </div>
+                      {controlnetBlockedReason ? (
+                        <div className="small" style={{ marginTop: 8, color: "var(--warning, #b58900)" }}>
+                          {controlnetBlockedReason}
+                        </div>
+                      ) : null}
+                      {controlnetUnits.length ? (
+                        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                          {controlnetUnits.map((unit, index) => (
+                            <div key={unit.key} className="card" style={{ marginTop: 0 }}>
+                              <div className="row" style={{ justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                                <div style={{ fontWeight: 800 }}>Unit {index + 1}</div>
+                                <button className="secondary" onClick={() => removeControlnetUnit(unit.key)}>Remove unit</button>
+                              </div>
+                              <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                                <div style={{ minWidth: 320, flex: 2 }}>
+                                  <div className="small">ControlNet model</div>
+                                  <select
+                                    value={unit.model}
+                                    onChange={(e) => {
+                                      const nextModelId = e.target.value;
+                                      const nextModel = controlnetModels.find((model) => model.id === nextModelId);
+                                      updateControlnetUnit(unit.key, {
+                                        model: nextModelId,
+                                        conditioning_mode: (nextModel?.render?.conditioning_mode as ConditioningMode) || unit.conditioning_mode || "raw",
+                                      });
+                                    }}
+                                  >
+                                    <option value="">Select ControlNet model</option>
+                                    {controlnetModels.map((m) => (
+                                      <option key={m.id} value={m.id} disabled={!isControlnetCompatible(m)}>
+                                        {`${m.name} • ${modelEngineLabel(m.engine || m.render?.engine, m.kind)} • ${modelFamilyLabel(m.family || m.render?.family)}${isControlnetCompatible(m) ? "" : " (incompatible)"}`}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div style={{ minWidth: 180 }}>
+                                  <div className="small">Conditioning mode</div>
+                                  <select value={unit.conditioning_mode} onChange={(e) => updateControlnetUnit(unit.key, { conditioning_mode: e.target.value as ConditioningMode })}>
+                                    <option value="raw">Raw image</option>
+                                    <option value="blur">Blur pass</option>
+                                    <option value="edge">Edge map</option>
+                                    <option value="external">External-prepared map</option>
+                                  </select>
+                                </div>
+                                <div style={{ minWidth: 120 }}>
+                                  <div className="small">Strength</div>
+                                  <input type="number" min={0} max={2} step={0.05} value={unit.strength} onChange={(e) => updateControlnetUnit(unit.key, { strength: Number(e.target.value) })} />
+                                </div>
+                                <div style={{ minWidth: 120 }}>
+                                  <div className="small">Start %</div>
+                                  <input type="number" min={0} max={1} step={0.05} value={unit.start_percent} onChange={(e) => updateControlnetUnit(unit.key, { start_percent: Number(e.target.value) })} />
+                                </div>
+                                <div style={{ minWidth: 120 }}>
+                                  <div className="small">End %</div>
+                                  <input type="number" min={0} max={1} step={0.05} value={unit.end_percent} onChange={(e) => updateControlnetUnit(unit.key, { end_percent: Number(e.target.value) })} />
+                                </div>
+                              </div>
+                              <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                                <div style={{ minWidth: 340, flex: 2 }}>
+                                  <div className="small">Reference image</div>
+                                  <select value={unit.reference_asset} onChange={(e) => updateControlnetUnit(unit.key, { reference_asset: e.target.value })}>
+                                    <option value="">Select project reference</option>
+                                    {projectAssets.refs.map((asset) => (
+                                      <option key={asset.path} value={asset.path}>{asset.path}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="small" style={{ marginTop: 10, opacity: 0.82 }}>
+                          No ControlNet units attached yet.
+                        </div>
+                      )}
+                    </>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1802,8 +2124,13 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
           <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
             <button onClick={verifyEdmg}>Verify EDMG Core</button>
             <button className="secondary" onClick={exportDeforum} disabled={!variantCount}>Export Deforum JSON</button>
-            <button className="secondary" onClick={exportComfyWorkflows} disabled={!variantCount}>Export ComfyUI workflows</button>
+            <button className="secondary" onClick={exportComfyWorkflows} disabled={!variantCount || selectedStillEngine === "internal"}>Export ComfyUI workflows</button>
           </div>
+          {selectedStillEngine === "internal" ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
+              ComfyUI workflow export is disabled while an internal still model is selected.
+            </div>
+          ) : null}
 
           {deforumExports.length > 0 && (
             <div style={{ marginTop: 10 }}>

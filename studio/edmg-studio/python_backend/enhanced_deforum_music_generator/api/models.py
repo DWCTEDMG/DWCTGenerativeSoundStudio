@@ -33,7 +33,7 @@ async def catalog() -> Dict[str, Any]:
     models = load_catalog()
     out = []
     root = _models_root()
-    for name, m in sorted(models.items(), key=lambda kv: kv[0]):
+    for name, m in models.items():
         local_dir = central_model_dir(root, name)
         out.append(
             {

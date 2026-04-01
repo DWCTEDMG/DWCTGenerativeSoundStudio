@@ -34,6 +34,13 @@ class RefinerSettings(BaseModel):
     switch_at: float = Field(default=0.8, ge=0.0, le=1.0)
     steps: int | None = Field(default=None, ge=1, le=80)
 
+
+class OutpaintSettings(BaseModel):
+    top_px: int = Field(default=0, ge=0, le=4096)
+    right_px: int = Field(default=0, ge=0, le=4096)
+    bottom_px: int = Field(default=0, ge=0, le=4096)
+    left_px: int = Field(default=0, ge=0, le=4096)
+
 class HealthResponse(BaseModel):
     ok: bool = True
     version: str = "1.1.0"
@@ -62,6 +69,7 @@ class RenderScenesRequest(BaseModel):
     reference_asset: str | None = None
     source_asset: str | None = None
     inpaint_mask: str | None = None
+    outpaint: OutpaintSettings | None = None
     conditioning_mode: ConditioningMode = "raw"
     controlnet_model: str | None = None
     controlnet_strength: float = Field(default=0.8, ge=0.0, le=2.0)

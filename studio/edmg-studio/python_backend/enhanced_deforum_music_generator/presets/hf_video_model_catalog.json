@@ -17,79 +17,7 @@
         "steps": 50,
         "guidance_scale": 5.0
       },
-      "notes": "Requires recent diffusers with WanPipeline/AutoencoderKLWan. Torch >= 2.4 recommended."
-    },
-    {
-      "name": "hunyuan15-720p-t2v",
-      "display_name": "HunyuanVideo-1.5 720p T2V",
-      "repo_id": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v",
-      "family": "hunyuan_video15",
-      "task": "t2v",
-      "pipeline": "HunyuanVideo15Pipeline",
-      "recommended": {
-        "width": 1280,
-        "height": 720,
-        "num_frames": 121,
-        "fps": 24,
-        "dtype": "bfloat16",
-        "steps": 50,
-        "guidance_scale": 7.0
-      },
-      "notes": "May benefit from attention backends (e.g., kernels)."
-    },
-    {
-      "name": "hunyuan15-720p-i2v",
-      "display_name": "HunyuanVideo-1.5 720p I2V",
-      "repo_id": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v",
-      "family": "hunyuan_video15",
-      "task": "i2v",
-      "pipeline": "HunyuanVideo15ImageToVideoPipeline",
-      "recommended": {
-        "width": 1280,
-        "height": 720,
-        "num_frames": 121,
-        "fps": 24,
-        "dtype": "bfloat16",
-        "steps": 50,
-        "guidance_scale": 7.0
-      },
-      "notes": "Requires input image."
-    },
-    {
-      "name": "cogvideox-5b-t2v",
-      "display_name": "CogVideoX 5B (T2V)",
-      "repo_id": "THUDM/CogVideoX-5b",
-      "family": "cogvideox",
-      "task": "t2v",
-      "pipeline": "CogVideoXPipeline",
-      "recommended": {
-        "width": 720,
-        "height": 480,
-        "num_frames": 49,
-        "fps": 8,
-        "dtype": "float16",
-        "steps": 30,
-        "guidance_scale": 6.0
-      },
-      "notes": "Uses diffusers CogVideoX pipelines."
-    },
-    {
-      "name": "cogvideox-5b-i2v",
-      "display_name": "CogVideoX 5B I2V",
-      "repo_id": "THUDM/CogVideoX-5b-I2V",
-      "family": "cogvideox",
-      "task": "i2v",
-      "pipeline": "CogVideoXImageToVideoPipeline",
-      "recommended": {
-        "width": 720,
-        "height": 480,
-        "num_frames": 49,
-        "fps": 8,
-        "dtype": "float16",
-        "steps": 30,
-        "guidance_scale": 6.0
-      },
-      "notes": "Requires input image."
+      "notes": "Primary recommended HF video backend. Requires recent diffusers with WanPipeline/AutoencoderKLWan. Torch >= 2.4 recommended."
     },
     {
       "name": "svd-xt-img2vid",
@@ -107,7 +35,79 @@
         "steps": 25,
         "guidance_scale": 3.0
       },
-      "notes": "Image-to-video only."
+      "notes": "Short clip / image-to-video fallback when you want a lighter, shorter I2V pass."
+    },
+    {
+      "name": "hunyuan15-720p-t2v",
+      "display_name": "HunyuanVideo-1.5 720p T2V",
+      "repo_id": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v",
+      "family": "hunyuan_video15",
+      "task": "t2v",
+      "pipeline": "HunyuanVideo15Pipeline",
+      "recommended": {
+        "width": 1280,
+        "height": 720,
+        "num_frames": 121,
+        "fps": 24,
+        "dtype": "bfloat16",
+        "steps": 50,
+        "guidance_scale": 7.0
+      },
+      "notes": "Optional benchmark / advanced text-to-video lane. May benefit from attention backends (e.g., kernels)."
+    },
+    {
+      "name": "hunyuan15-720p-i2v",
+      "display_name": "HunyuanVideo-1.5 720p I2V",
+      "repo_id": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v",
+      "family": "hunyuan_video15",
+      "task": "i2v",
+      "pipeline": "HunyuanVideo15ImageToVideoPipeline",
+      "recommended": {
+        "width": 1280,
+        "height": 720,
+        "num_frames": 121,
+        "fps": 24,
+        "dtype": "bfloat16",
+        "steps": 50,
+        "guidance_scale": 7.0
+      },
+      "notes": "Optional benchmark / advanced image-to-video lane. Requires input image."
+    },
+    {
+      "name": "cogvideox-5b-t2v",
+      "display_name": "CogVideoX 5B (T2V)",
+      "repo_id": "THUDM/CogVideoX-5b",
+      "family": "cogvideox",
+      "task": "t2v",
+      "pipeline": "CogVideoXPipeline",
+      "recommended": {
+        "width": 720,
+        "height": 480,
+        "num_frames": 49,
+        "fps": 8,
+        "dtype": "float16",
+        "steps": 30,
+        "guidance_scale": 6.0
+      },
+      "notes": "Optional benchmark text-to-video lane using diffusers CogVideoX pipelines."
+    },
+    {
+      "name": "cogvideox-5b-i2v",
+      "display_name": "CogVideoX 5B I2V",
+      "repo_id": "THUDM/CogVideoX-5b-I2V",
+      "family": "cogvideox",
+      "task": "i2v",
+      "pipeline": "CogVideoXImageToVideoPipeline",
+      "recommended": {
+        "width": 720,
+        "height": 480,
+        "num_frames": 49,
+        "fps": 8,
+        "dtype": "float16",
+        "steps": 30,
+        "guidance_scale": 6.0
+      },
+      "notes": "Optional benchmark image-to-video lane. Requires input image."
     },
     {
       "name": "wan2.2-t2v-a14b",
@@ -125,7 +125,7 @@
         "steps": 50,
         "guidance_scale": 5.0
       },
-      "notes": "Very large (MoE). Prefer high VRAM; can run slower/offload."
+      "notes": "Advanced high-VRAM Wan lane. Very large (MoE); can run slower and may need offload."
     },
     {
       "name": "ltx-video-0.9.8-13b-distilled",
@@ -143,7 +143,7 @@
         "steps": 8,
         "guidance_scale": 1.0
       },
-      "notes": "Often used with optional spatial upscaler: Lightricks/ltxv-spatial-upscaler-0.9.8. Model expects video-compressed condition; see CLI --family ltx."
+      "notes": "Optional advanced I2V lane. Often used with Lightricks/ltxv-spatial-upscaler-0.9.8; see CLI --family ltx."
     }
   ]
 }

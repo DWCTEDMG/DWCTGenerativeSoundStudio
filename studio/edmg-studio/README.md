@@ -45,7 +45,7 @@ When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard
 - Lets you choose a **Studio Home** folder before large downloads, so project data, Electron data, ComfyUI Portable, and caches can live on `D:\...`
 - Checks **Ollama** availability (local AI)
 - Supports local **OpenAI-compatible** servers such as LM Studio or `llama.cpp` server through Studio Settings
-- Lets you **pull the default model** via a button
+- Lets you **pull the default model** (`qwen3:8b`) via a button
 - Checks **ComfyUI** availability and can **download + extract ComfyUI Portable** on Windows
 - Verifies **FFmpeg** for MP4 assembly, preferring the Studio-bundled binary when present
 
@@ -70,12 +70,34 @@ Install/storage split:
 - `EDMG_AI_MODE` (default: `local`)
 - `EDMG_AI_PROVIDER` (default: `ollama`)
 - `EDMG_AI_OLLAMA_URL` (default: `http://127.0.0.1:11434`)
-- `EDMG_AI_OLLAMA_MODEL` (default: `qwen2.5:7b-instruct`)
+- `EDMG_AI_OLLAMA_MODEL` (default: `qwen3:8b`)
+- `EDMG_AI_OPENAI_COMPAT_BASE_URL` (default: `http://127.0.0.1:8000`)
+- `EDMG_AI_OPENAI_COMPAT_MODEL` (default: `qwen3-8b`)
+- `EDMG_AI_OPENAI_COMPAT_API_KEY` (optional)
 - `EDMG_COMFYUI_URL` (default: `http://127.0.0.1:8188`)
-- `EDMG_COMFYUI_CHECKPOINT` (default: `sdxl_base_1.0.safetensors`)
+- `EDMG_COMFYUI_CHECKPOINT` (default: `sd_xl_base_1.0.safetensors`)
 - `EDMG_FFMPEG_PATH` (optional override; packaged Studio prefers its bundled FFmpeg, dev falls back to `ffmpeg` on PATH)
 
-If you need a lighter local planner for weaker CPUs or low-memory systems, set `EDMG_AI_OLLAMA_MODEL=qwen2.5:3b-instruct`.
+If you need a lighter local planner for weaker CPUs or low-memory systems, set `EDMG_AI_OLLAMA_MODEL=qwen3:4b`.
+
+If you use an OpenAI-compatible gateway that exposes a different model alias than `qwen3-8b`,
+override `EDMG_AI_OPENAI_COMPAT_MODEL` to match that server.
+
+## Recommended local model stack
+
+- Planner default: `qwen3:8b`
+- Low-resource planner: `qwen3:4b`
+- Broad still-image default: SDXL Base 1.0
+- Fast still-image option: SD3.5 Large Turbo
+- Reference still guidance: SD3.5 ControlNet Blur, Canny, and Depth
+- Primary HF video backend: Wan2.2 TI2V 5B
+- Short image-to-video fallback: SVD XT Img2Vid
+
+## Hardware tiers
+
+- Low-spec: `qwen3:4b` + SDXL Base 1.0
+- Mid-range: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
+- High-end: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
 
 If `EDMG_STUDIO_HOME` is set, Studio uses it as the root for:
 - backend project data (`<studio-home>/data`)

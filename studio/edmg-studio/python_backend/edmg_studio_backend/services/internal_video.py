@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,14 +57,14 @@ class InternalVideoSettings:
 
 
 class _PipelineCache:
-    _cache: dict[tuple[str, str], Any] = {}
+    _cache: dict[tuple[str, str, str], Any] = {}
 
     @classmethod
-    def get(cls, key: tuple[str, str]) -> Any | None:
+    def get(cls, key: tuple[str, str, str]) -> Any | None:
         return cls._cache.get(key)
 
     @classmethod
-    def set(cls, key: tuple[str, str], value: Any) -> None:
+    def set(cls, key: tuple[str, str, str], value: Any) -> None:
         cls._cache[key] = value
 
 
@@ -77,6 +78,21 @@ class _EmbedCache:
     @classmethod
     def set(cls, key: tuple[str, str], value: Any) -> None:
         cls._cache[key] = value
+
+
+class _ControlNetCache:
+    _cache: dict[tuple[str, str, str], Any] = {}
+
+    @classmethod
+    def get(cls, key: tuple[str, str, str]) -> Any | None:
+        return cls._cache.get(key)
+
+    @classmethod
+    def set(cls, key: tuple[str, str, str], value: Any) -> None:
+        cls._cache[key] = value
+
+
+_STILL_PIPELINE_LOCK = threading.Lock()
 
 
 def _stable_seed_int(*parts: Any, fallback: int = 0) -> int:
@@ -304,6 +320,7 @@ class _Pipes:
     txt2img: Any
     img2img: Any
     device: str
+    inpaint: Any | None = None
     family: str = "sd15"
     backend: str = "diffusers"
 
@@ -324,15 +341,18 @@ def _model_family_from_dir(model_dir: Path) -> str:
     return family
 
 
-def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
+def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
     try:
         import json
         import torch  # type: ignore
         from diffusers import (  # type: ignore
+            StableDiffusion3InpaintPipeline,
             StableDiffusion3Img2ImgPipeline,
             StableDiffusion3Pipeline,
+            StableDiffusionInpaintPipeline,
             StableDiffusionImg2ImgPipeline,
             StableDiffusionPipeline,
+            StableDiffusionXLInpaintPipeline,
             StableDiffusionXLImg2ImgPipeline,
             StableDiffusionXLPipeline,
         )
@@ -344,7 +364,7 @@ def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
             status_code=500,
         ) from e
 
-    cache_key = (str(model_dir), device)
+    cache_key = (str(model_dir), device, str(role or "video"))
     cached = _PipelineCache.get(cache_key)
     if cached is not None:
         return cached
@@ -377,7 +397,17 @@ def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
                 pass
         img = img.to(device)
 
-        pipes = _Pipes(txt2img=txt, img2img=img, device=device, family="sd3", backend="diffusers")
+        inpaint = StableDiffusion3InpaintPipeline(**txt.components)
+        if hasattr(inpaint, "enable_attention_slicing"):
+            inpaint.enable_attention_slicing()
+        if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
+            try:
+                inpaint.enable_xformers_memory_efficient_attention()
+            except Exception:
+                pass
+        inpaint = inpaint.to(device)
+
+        pipes = _Pipes(txt2img=txt, img2img=img, inpaint=inpaint, device=device, family="sd3", backend="diffusers")
     elif family == "sdxl":
         txt = StableDiffusionXLPipeline.from_pretrained(
             str(model_dir),
@@ -404,7 +434,17 @@ def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
                 pass
         img = img.to(device)
 
-        pipes = _Pipes(txt2img=txt, img2img=img, device=device, family="sdxl", backend="diffusers")
+        inpaint = StableDiffusionXLInpaintPipeline(**txt.components)
+        if hasattr(inpaint, "enable_attention_slicing"):
+            inpaint.enable_attention_slicing()
+        if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
+            try:
+                inpaint.enable_xformers_memory_efficient_attention()
+            except Exception:
+                pass
+        inpaint = inpaint.to(device)
+
+        pipes = _Pipes(txt2img=txt, img2img=img, inpaint=inpaint, device=device, family="sdxl", backend="diffusers")
     else:
         txt = StableDiffusionPipeline.from_pretrained(
             str(model_dir),
@@ -431,13 +471,23 @@ def _try_load_diffusers(model_dir: Path, device: str) -> _Pipes:
                 pass
         img = img.to(device)
 
-        pipes = _Pipes(txt2img=txt, img2img=img, device=device, family="sd15", backend="diffusers")
+        inpaint = StableDiffusionInpaintPipeline(**txt.components)
+        if hasattr(inpaint, "enable_attention_slicing"):
+            inpaint.enable_attention_slicing()
+        if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
+            try:
+                inpaint.enable_xformers_memory_efficient_attention()
+            except Exception:
+                pass
+        inpaint = inpaint.to(device)
+
+        pipes = _Pipes(txt2img=txt, img2img=img, inpaint=inpaint, device=device, family="sd15", backend="diffusers")
 
     _PipelineCache.set(cache_key, pipes)
     return pipes
 
 
-def _try_load_directml(model_dir: Path) -> _Pipes:
+def _try_load_directml(model_dir: Path, *, role: str = "video") -> _Pipes:
     family = _model_family_from_dir(model_dir)
     if family not in {"sd15", "sdxl"}:
         raise UserFacingError(
@@ -472,7 +522,7 @@ def _try_load_directml(model_dir: Path) -> _Pipes:
             status_code=500,
         )
 
-    cache_key = (str(model_dir), "directml")
+    cache_key = (str(model_dir), "directml", str(role or "video"))
     cached = _PipelineCache.get(cache_key)
     if cached is not None:
         return cached
@@ -484,20 +534,20 @@ def _try_load_directml(model_dir: Path) -> _Pipes:
     if family == "sdxl":
         txt = ORTStableDiffusionXLPipeline.from_pretrained(str(model_dir), **common_kwargs)
         img = ORTStableDiffusionXLImg2ImgPipeline.from_pretrained(str(model_dir), **common_kwargs)
-        pipes = _Pipes(txt2img=txt, img2img=img, device="directml", family="sdxl", backend="directml")
+        pipes = _Pipes(txt2img=txt, img2img=img, inpaint=None, device="directml", family="sdxl", backend="directml")
     else:
         txt = ORTStableDiffusionPipeline.from_pretrained(str(model_dir), **common_kwargs)
         img = ORTStableDiffusionImg2ImgPipeline.from_pretrained(str(model_dir), **common_kwargs)
-        pipes = _Pipes(txt2img=txt, img2img=img, device="directml", family="sd15", backend="directml")
+        pipes = _Pipes(txt2img=txt, img2img=img, inpaint=None, device="directml", family="sd15", backend="directml")
 
     _PipelineCache.set(cache_key, pipes)
     return pipes
 
 
-def _try_load_pipelines(model_dir: Path, device: str) -> _Pipes:
+def _try_load_pipelines(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
     if device == "directml":
-        return _try_load_directml(model_dir)
-    return _try_load_diffusers(model_dir, device=device)
+        return _try_load_directml(model_dir, role=role)
+    return _try_load_diffusers(model_dir, device=device, role=role)
 
 
 def _device_auto(preference: str = "auto") -> str:
@@ -720,6 +770,335 @@ def _generate_img2img(
         kwargs["generator"] = g
     out = pipes.img2img(**kwargs)
     return out.images[0]
+
+
+def _generate_inpaint(
+    pipes: _Pipes,
+    init_image: "Image.Image",
+    mask_image: "Image.Image",
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    steps: int,
+    cfg: float,
+    seed: int,
+    strength: float,
+) -> "Image.Image":
+    if pipes.inpaint is None:
+        raise UserFacingError(
+            "Internal inpaint pipeline is unavailable for this model/backend.",
+            hint="Use a supported internal diffusers model, or switch the still model to a Comfy checkpoint.",
+            code="INTERNAL_INPAINT_UNAVAILABLE",
+            status_code=400,
+        )
+
+    g = None
+    if pipes.device != "directml":
+        import torch  # type: ignore
+
+        g = torch.Generator(device=pipes.device if pipes.device != "mps" else "cpu")
+        g.manual_seed(int(seed))
+
+    kwargs = dict(
+        prompt=str(prompt or "").strip() or "cinematic",
+        negative_prompt=str(negative_prompt or "").strip(),
+        image=init_image,
+        mask_image=mask_image,
+        strength=float(max(0.0, min(1.0, strength))),
+        width=int(width),
+        height=int(height),
+        num_inference_steps=int(steps),
+        guidance_scale=float(cfg),
+    )
+    if g is not None:
+        kwargs["generator"] = g
+    out = pipes.inpaint(**kwargs)
+    return out.images[0]
+
+
+def _load_controlnet_model(model_dir: Path, family: str, device: str) -> Any:
+    if family not in {"sd15", "sdxl"}:
+        raise UserFacingError(
+            "Internal ControlNet is only available for SD 1.5 and SDXL in this phase.",
+            hint="Use an SD 1.5 or SDXL internal still model for ControlNet, or switch to a Comfy checkpoint.",
+            code="INTERNAL_CONTROLNET_UNSUPPORTED",
+            status_code=400,
+        )
+
+    cache_key = (str(model_dir), family, device)
+    cached = _ControlNetCache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        import torch  # type: ignore
+        from diffusers import ControlNetModel  # type: ignore
+    except Exception as e:
+        raise UserFacingError(
+            "Internal ControlNet runtime is not installed.",
+            hint="Install the internal diffusers runtime and retry.",
+            code="INTERNAL_DEPS",
+            status_code=500,
+        ) from e
+
+    torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32
+    controlnet = ControlNetModel.from_pretrained(str(model_dir), torch_dtype=torch_dtype)
+    if device != "directml":
+        controlnet = controlnet.to(device)
+    _ControlNetCache.set(cache_key, controlnet)
+    return controlnet
+
+
+def _build_controlnet_pipeline(
+    pipes: _Pipes,
+    *,
+    controlnet_dirs: list[Path],
+) -> Any:
+    if pipes.family not in {"sd15", "sdxl"}:
+        raise UserFacingError(
+            "Internal ControlNet is only available for SD 1.5 and SDXL in this phase.",
+            hint="Use an SD 1.5 or SDXL internal still model for ControlNet, or switch to a Comfy checkpoint.",
+            code="INTERNAL_CONTROLNET_UNSUPPORTED",
+            status_code=400,
+        )
+
+    try:
+        from diffusers import (  # type: ignore
+            MultiControlNetModel,
+            StableDiffusionControlNetPipeline,
+            StableDiffusionXLControlNetPipeline,
+        )
+    except Exception as e:
+        raise UserFacingError(
+            "Internal ControlNet runtime is not installed.",
+            hint="Install the internal diffusers runtime and retry.",
+            code="INTERNAL_DEPS",
+            status_code=500,
+        ) from e
+
+    models = [_load_controlnet_model(model_dir, pipes.family, pipes.device) for model_dir in controlnet_dirs]
+    if not models:
+        raise UserFacingError(
+            "No internal ControlNet models were provided.",
+            hint="Choose one or more compatible internal ControlNet units before retrying.",
+            code="INTERNAL_CONTROLNET_MISSING",
+            status_code=400,
+        )
+    controlnet = models[0] if len(models) == 1 else MultiControlNetModel(models)
+    base_components = dict(getattr(pipes.txt2img, "components", {}) or {})
+    base_components.pop("controlnet", None)
+    if pipes.family == "sdxl":
+        pipeline = StableDiffusionXLControlNetPipeline(controlnet=controlnet, **base_components)
+    else:
+        pipeline = StableDiffusionControlNetPipeline(controlnet=controlnet, **base_components)
+    if hasattr(pipeline, "enable_attention_slicing"):
+        pipeline.enable_attention_slicing()
+    if pipes.device == "cuda" and hasattr(pipeline, "enable_xformers_memory_efficient_attention"):
+        try:
+            pipeline.enable_xformers_memory_efficient_attention()
+        except Exception:
+            pass
+    if pipes.device != "directml":
+        pipeline = pipeline.to(pipes.device)
+    return pipeline
+
+
+def _apply_loras(pipeline: Any, loras: tuple[dict[str, Any], ...]) -> list[str]:
+    loaded: list[str] = []
+    weights: list[float] = []
+    if not loras or not hasattr(pipeline, "load_lora_weights"):
+        return loaded
+    for idx, item in enumerate(loras):
+        lora_path = str(item.get("path") or item.get("filename") or item.get("name") or "").strip()
+        if not lora_path:
+            continue
+        adapter_name = f"edmg_lora_{idx}"
+        pipeline.load_lora_weights(lora_path, adapter_name=adapter_name)
+        loaded.append(adapter_name)
+        weights.append(float(item.get("weight", 1.0)))
+    if loaded and hasattr(pipeline, "set_adapters"):
+        try:
+            pipeline.set_adapters(loaded, adapter_weights=weights)
+        except TypeError:
+            pipeline.set_adapters(loaded, weights)
+    return loaded
+
+
+def _clear_loras(pipeline: Any, adapter_names: list[str]) -> None:
+    if not adapter_names:
+        return
+    try:
+        if hasattr(pipeline, "delete_adapters"):
+            pipeline.delete_adapters(adapter_names)
+        elif hasattr(pipeline, "unload_lora_weights"):
+            pipeline.unload_lora_weights()
+    except Exception:
+        pass
+
+
+def _load_render_image(path: Path, *, mode: str, size: tuple[int, int] | None = None) -> "Image.Image":
+    _require_pillow()
+    with Image.open(path) as image:
+        result = image.convert(mode)
+        if size is not None and result.size != size:
+            resample = Image.BICUBIC if mode != "L" else Image.BILINEAR
+            result = result.resize(size, resample=resample)
+        return result
+
+
+def render_internal_still_image(
+    *,
+    model_dir: Path,
+    settings: InternalVideoSettings,
+    workflow_family: str,
+    prompt: str,
+    source_image_path: Path | None = None,
+    mask_image_path: Path | None = None,
+    controlnet_units: list[dict[str, Any]] | None = None,
+    denoise_strength: float = 0.75,
+    log_fn=None,
+) -> dict[str, Any]:
+    family = _model_family_from_dir(model_dir)
+    requested_device = _device_auto(settings.device_preference)
+    device = requested_device
+    if requested_device == "directml" and (
+        workflow_family in {"inpaint", "outpaint", "controlnet"} or bool(settings.loras) or family == "sd3"
+    ):
+        device = "cpu"
+    pipes = _try_load_pipelines(model_dir, device=device, role="still")
+    width = int(settings.width)
+    height = int(settings.height)
+    negative_prompt = str(settings.negative_prompt or "").strip()
+    seed = int(settings.seed if settings.seed is not None else _stable_seed_int(prompt, width, height, workflow_family, fallback=1337))
+    prompt_embeds = _encode_prompt(pipes, prompt)
+    negative_embeds = _encode_prompt(pipes, negative_prompt) if negative_prompt else ""
+
+    def _log(message: str) -> None:
+        if callable(log_fn):
+            log_fn(message)
+
+    with _STILL_PIPELINE_LOCK:
+        pipeline = None
+        loaded_adapters: list[str] = []
+        try:
+            if workflow_family == "controlnet":
+                units = list(controlnet_units or [])
+                controlnet_dirs = [Path(str(unit.get("path") or "")) for unit in units if str(unit.get("path") or "").strip()]
+                pipeline = _build_controlnet_pipeline(pipes, controlnet_dirs=controlnet_dirs)
+            elif workflow_family in {"inpaint", "outpaint"}:
+                pipeline = pipes.inpaint
+            elif workflow_family == "img2img":
+                pipeline = pipes.img2img
+            else:
+                pipeline = pipes.txt2img
+            loaded_adapters = _apply_loras(pipeline, settings.loras)
+
+            if workflow_family == "img2img":
+                if source_image_path is None:
+                    raise UserFacingError(
+                        "No source image selected for img2img",
+                        hint="Choose a project source image before running img2img.",
+                        code="IMG2IMG_SOURCE_MISSING",
+                        status_code=400,
+                    )
+                init_image = _load_render_image(source_image_path, mode="RGB", size=(width, height))
+                image = _generate_img2img(
+                    pipes,
+                    init_image,
+                    prompt_embeds,
+                    negative_embeds,
+                    width,
+                    height,
+                    int(settings.steps),
+                    float(settings.cfg),
+                    seed,
+                    float(max(0.0, min(1.0, denoise_strength))),
+                )
+            elif workflow_family in {"inpaint", "outpaint"}:
+                if source_image_path is None or mask_image_path is None:
+                    raise UserFacingError(
+                        "Source image or mask is missing for inpaint/outpaint",
+                        hint="Choose both a source image and a mask before running the render.",
+                        code="INPAINT_ASSETS_MISSING",
+                        status_code=400,
+                    )
+                init_image = _load_render_image(source_image_path, mode="RGB", size=(width, height))
+                mask_image = _load_render_image(mask_image_path, mode="L", size=(width, height))
+                image = _generate_inpaint(
+                    pipes,
+                    init_image,
+                    mask_image,
+                    prompt=str(prompt or ""),
+                    negative_prompt=negative_prompt,
+                    width=width,
+                    height=height,
+                    steps=int(settings.steps),
+                    cfg=float(settings.cfg),
+                    seed=seed,
+                    strength=float(max(0.0, min(1.0, denoise_strength))),
+                )
+            elif workflow_family == "controlnet":
+                units = list(controlnet_units or [])
+                if not units:
+                    raise UserFacingError(
+                        "No compatible ControlNet units were provided.",
+                        hint="Attach one or more ControlNet units before running the render.",
+                        code="CONTROLNET_MISSING",
+                        status_code=400,
+                    )
+                control_images = [
+                    _load_render_image(Path(str(unit.get("reference_path") or unit.get("path_reference") or unit.get("reference_image_path") or "")), mode="RGB", size=(width, height))
+                    for unit in units
+                ]
+                scales = [float(unit.get("strength", 0.8)) for unit in units]
+                starts = [float(unit.get("start_percent", 0.0)) for unit in units]
+                ends = [float(unit.get("end_percent", 1.0)) for unit in units]
+                g = None
+                if device != "directml":
+                    import torch  # type: ignore
+
+                    g = torch.Generator(device=device if device != "mps" else "cpu")
+                    g.manual_seed(seed)
+                kwargs = {
+                    "prompt": str(prompt or "").strip() or "cinematic",
+                    "negative_prompt": negative_prompt,
+                    "image": control_images[0] if len(control_images) == 1 else control_images,
+                    "width": width,
+                    "height": height,
+                    "num_inference_steps": int(settings.steps),
+                    "guidance_scale": float(settings.cfg),
+                    "controlnet_conditioning_scale": scales[0] if len(scales) == 1 else scales,
+                    "control_guidance_start": starts[0] if len(starts) == 1 else starts,
+                    "control_guidance_end": ends[0] if len(ends) == 1 else ends,
+                }
+                if g is not None:
+                    kwargs["generator"] = g
+                image = pipeline(**kwargs).images[0]
+            else:
+                image = _generate_txt2img(
+                    pipes,
+                    prompt_embeds,
+                    negative_embeds,
+                    width,
+                    height,
+                    int(settings.steps),
+                    float(settings.cfg),
+                    seed,
+                )
+            if device != requested_device:
+                _log(f"Internal still render fell back from {requested_device} to {device} for {workflow_family}.")
+            return {
+                "image": image,
+                "device": device,
+                "requested_device": requested_device,
+                "family": pipes.family,
+                "backend": pipes.backend,
+                "seed": seed,
+            }
+        finally:
+            if pipeline is not None:
+                _clear_loras(pipeline, loaded_adapters)
 
 
 def _scene_keyframe_times(scenes: list[dict[str, Any]], interval_s: float) -> list[float]:
