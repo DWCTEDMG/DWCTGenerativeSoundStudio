@@ -50,6 +50,34 @@ def test_default_workflow_chains_loras_into_sampler():
     assert positive["inputs"]["clip"] == [final_lora_node, 1]
 
 
+def test_img2img_workflow_appends_hires_fix_and_refiner_nodes():
+    wf = comfy.img2img_workflow(
+        checkpoint="base.safetensors",
+        prompt="neon skyline",
+        negative_prompt="low quality",
+        seed=321,
+        width=768,
+        height=432,
+        steps=24,
+        cfg=6.5,
+        sampler="euler",
+        source_image="source.png",
+        hires_fix={"enabled": True, "scale": 1.75, "steps": 12, "denoise": 0.3, "upscaler": "latent_bicubic"},
+        refiner={"model": "sdxl_refiner.safetensors", "switch_at": 0.8, "steps": 8, "checkpoint": "sdxl_refiner.safetensors"},
+        upscaler="latent_bicubic",
+    )
+
+    sampler_nodes = [node for node in wf.values() if node.get("class_type") == "KSampler"]
+    checkpoint_nodes = [node for node in wf.values() if node.get("class_type") == "CheckpointLoaderSimple"]
+    latent_upscales = [node for node in wf.values() if node.get("class_type") == "LatentUpscaleBy"]
+
+    assert len(sampler_nodes) == 3
+    assert len(checkpoint_nodes) == 2
+    assert latent_upscales
+    assert latent_upscales[0]["inputs"]["upscale_method"] == "bicubic"
+    assert any(node.get("inputs", {}).get("ckpt_name") == "sdxl_refiner.safetensors" for node in checkpoint_nodes)
+
+
 def test_run_comfyui_scene_writes_metadata_sidecar(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
@@ -122,6 +150,56 @@ def test_run_comfyui_scene_writes_metadata_sidecar(tmp_path, monkeypatch):
     assert metadata["base_model"]["checkpoint"] == "base.safetensors"
     assert metadata["loras"][0]["filename"] == "cinematic-detail.safetensors"
     assert metadata["output"]["image"].replace("\\", "/") == "outputs/images/scene.png"
+
+
+def test_run_internal_still_scene_uses_final_image_size_in_metadata(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    model_dir = tmp_path / "internal-model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda model_id: model_dir)
+    monkeypatch.setattr(
+        studio_app,
+        "render_internal_still_image",
+        lambda **kwargs: {
+            "image": Image.new("RGB", (160, 96), (32, 64, 96)),
+            "device": "cpu",
+            "requested_device": "cpu",
+            "family": "sdxl",
+            "backend": "diffusers",
+            "seed": 55,
+        },
+    )
+
+    out_path = store.project_dir(proj.id) / "outputs" / "images" / "internal_scene.png"
+    result = studio_app._run_internal_still_scene(
+        proj.id,
+        "job-internal",
+        {
+            "variant_index": 0,
+            "scene_index": 0,
+            "model_id": "hf_sdxl_internal",
+            "family": "sdxl",
+            "prompt": "A widescreen skyline",
+            "negative_prompt": "blurry",
+            "seed": 55,
+            "width": 96,
+            "height": 64,
+            "steps": 20,
+            "cfg": 7.0,
+            "sampler": "euler",
+            "workflow_family": "txt2img",
+            "hires_fix": {"enabled": True, "scale": 1.5, "denoise": 0.3},
+            "out_path": str(out_path),
+        },
+    )
+
+    metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
+    assert metadata["width"] == 160
+    assert metadata["height"] == 96
+    assert metadata["hires_fix"]["scale"] == 1.5
 
 
 def test_prepare_outpaint_assets_generates_canvas_and_mask(tmp_path, monkeypatch):

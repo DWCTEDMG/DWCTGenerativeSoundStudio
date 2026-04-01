@@ -42,7 +42,9 @@ class InternalVideoSettings:
     model_id: str = "hf_sd15_internal"
     loras: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     vae: str | None = None
+    hires_fix: dict[str, Any] | None = None
     refiner: dict[str, Any] | None = None
+    upscaler: str | None = None
     render_tier: str = "auto"
     device_preference: str = "auto"
 
@@ -285,7 +287,9 @@ def _render_signature(
         "model_id": str(settings.model_id),
         "loras_digest": _json_digest(list(settings.loras)),
         "vae": str(settings.vae or ""),
+        "hires_fix": settings.hires_fix or None,
         "refiner": settings.refiner or None,
+        "upscaler": str(settings.upscaler or ""),
         "render_tier": str(settings.render_tier),
         "device_preference": str(settings.device_preference),
         "temporal_mode": str(settings.temporal_mode),
@@ -947,6 +951,155 @@ def _load_render_image(path: Path, *, mode: str, size: tuple[int, int] | None = 
         return result
 
 
+def _fit_render_image(image: "Image.Image", *, size: tuple[int, int], mode: str) -> "Image.Image":
+    if image.size == size:
+        return image.copy()
+    target_w, target_h = size
+    resample = Image.BICUBIC if mode != "L" else Image.BILINEAR
+    scale = max(target_w / max(1, image.width), target_h / max(1, image.height))
+    resized = image.resize(
+        (max(1, int(round(image.width * scale))), max(1, int(round(image.height * scale)))),
+        resample=resample,
+    )
+    left = max(0, int(round((resized.width - target_w) / 2)))
+    top = max(0, int(round((resized.height - target_h) / 2)))
+    return resized.crop((left, top, left + target_w, top + target_h))
+
+
+def _load_render_source_image(path: Path, *, size: tuple[int, int]) -> "Image.Image":
+    _require_pillow()
+    with Image.open(path) as image:
+        rgb = image.convert("RGB")
+        return _fit_render_image(rgb, size=size, mode="RGB")
+
+
+def _pil_upscale_resample(upscaler: str | None) -> int:
+    raw = str(upscaler or "").strip().lower()
+    if raw.startswith("latent_"):
+        raw = raw[len("latent_") :]
+    elif raw.startswith("pixel_"):
+        raw = raw[len("pixel_") :]
+    mapping = {
+        "nearest": Image.NEAREST,
+        "nearest-exact": Image.NEAREST,
+        "nearest_exact": Image.NEAREST,
+        "bilinear": Image.BILINEAR,
+        "area": Image.BOX,
+        "bicubic": Image.BICUBIC,
+        "bislerp": Image.BICUBIC,
+        "lanczos": Image.LANCZOS,
+    }
+    return mapping.get(raw, Image.LANCZOS)
+
+
+def _upscale_render_image(image: "Image.Image", *, scale: float, upscaler: str | None) -> "Image.Image":
+    normalized_scale = float(max(1.0, scale))
+    target_size = (
+        max(1, int(round(image.width * normalized_scale))),
+        max(1, int(round(image.height * normalized_scale))),
+    )
+    if target_size == image.size:
+        return image.copy()
+    return image.resize(target_size, resample=_pil_upscale_resample(upscaler))
+
+
+def _apply_hires_fix(
+    pipes: _Pipes,
+    image: "Image.Image",
+    *,
+    prompt_embeds: Any,
+    negative_embeds: Any,
+    settings: InternalVideoSettings,
+    seed: int,
+) -> "Image.Image":
+    hires_cfg = settings.hires_fix if isinstance(settings.hires_fix, dict) and settings.hires_fix.get("enabled", True) else None
+    if not hires_cfg:
+        return image
+    scale = float(hires_cfg.get("scale") or 1.0)
+    if scale <= 1.0:
+        return image
+    upscaled = _upscale_render_image(
+        image,
+        scale=scale,
+        upscaler=str(hires_cfg.get("upscaler") or settings.upscaler or ""),
+    )
+    return _generate_img2img(
+        pipes,
+        upscaled,
+        prompt_embeds,
+        negative_embeds,
+        upscaled.width,
+        upscaled.height,
+        int(hires_cfg.get("steps") or settings.steps),
+        float(settings.cfg),
+        int(seed) + 1,
+        float(max(0.0, min(1.0, hires_cfg.get("denoise", 0.35)))),
+    )
+
+
+def _apply_refiner(
+    base_pipes: _Pipes,
+    image: "Image.Image",
+    *,
+    prompt: str,
+    negative_prompt: str,
+    settings: InternalVideoSettings,
+    seed: int,
+    device: str,
+    log_fn=None,
+) -> "Image.Image":
+    refiner_cfg = settings.refiner if isinstance(settings.refiner, dict) else None
+    if not refiner_cfg:
+        return image
+
+    refiner_pipes = base_pipes
+    refiner_model = str(refiner_cfg.get("model") or "").strip()
+    refiner_path_raw = str(refiner_cfg.get("path") or "").strip()
+    if refiner_model and not refiner_path_raw:
+        raise UserFacingError(
+            "Internal refiner model is not installed",
+            hint="Install or select a compatible internal refiner model before enabling the refiner pass.",
+            code="INTERNAL_REFINER_MISSING",
+            status_code=400,
+        )
+
+    if refiner_path_raw:
+        refiner_dir = Path(refiner_path_raw)
+        if not refiner_dir.exists():
+            raise UserFacingError(
+                "Internal refiner model path does not exist",
+                hint="Reinstall the selected internal refiner model, then retry.",
+                code="INTERNAL_REFINER_MISSING",
+                status_code=400,
+            )
+        base_path_raw = str(refiner_cfg.get("base_path") or "").strip()
+        should_load_dedicated_refiner = True
+        if base_path_raw:
+            should_load_dedicated_refiner = refiner_dir.resolve() != Path(base_path_raw).resolve()
+        if should_load_dedicated_refiner:
+            refiner_pipes = _try_load_pipelines(refiner_dir, device=device, role="still")
+            if callable(log_fn):
+                log_fn(f"Using dedicated refiner model: {refiner_model or refiner_dir.name}")
+
+    prompt_embeds = _encode_prompt(refiner_pipes, prompt)
+    negative_embeds = _encode_prompt(refiner_pipes, negative_prompt) if negative_prompt else ""
+    switch_at = float(refiner_cfg.get("switch_at", 0.8))
+    switch_at = max(0.0, min(1.0, switch_at))
+    refiner_steps = int(refiner_cfg.get("steps") or max(6, round(int(settings.steps) * max(0.2, 1.0 - switch_at))))
+    return _generate_img2img(
+        refiner_pipes,
+        image,
+        prompt_embeds,
+        negative_embeds,
+        image.width,
+        image.height,
+        refiner_steps,
+        float(settings.cfg),
+        int(seed) + 2,
+        float(max(0.05, min(1.0, 1.0 - switch_at))),
+    )
+
+
 def render_internal_still_image(
     *,
     model_dir: Path,
@@ -980,7 +1133,15 @@ def render_internal_still_image(
 
     with _STILL_PIPELINE_LOCK:
         pipeline = None
-        loaded_adapters: list[str] = []
+        adapter_targets: list[tuple[Any, list[str]]] = []
+
+        def _apply_pipeline_loras(target: Any) -> None:
+            if target is None:
+                return
+            if any(existing is target for existing, _ in adapter_targets):
+                return
+            adapter_targets.append((target, _apply_loras(target, settings.loras)))
+
         try:
             if workflow_family == "controlnet":
                 units = list(controlnet_units or [])
@@ -992,7 +1153,8 @@ def render_internal_still_image(
                 pipeline = pipes.img2img
             else:
                 pipeline = pipes.txt2img
-            loaded_adapters = _apply_loras(pipeline, settings.loras)
+            for candidate in (pipes.txt2img, pipes.img2img, pipes.inpaint, pipeline):
+                _apply_pipeline_loras(candidate)
 
             if workflow_family == "img2img":
                 if source_image_path is None:
@@ -1002,7 +1164,7 @@ def render_internal_still_image(
                         code="IMG2IMG_SOURCE_MISSING",
                         status_code=400,
                     )
-                init_image = _load_render_image(source_image_path, mode="RGB", size=(width, height))
+                init_image = _load_render_source_image(source_image_path, size=(width, height))
                 image = _generate_img2img(
                     pipes,
                     init_image,
@@ -1023,7 +1185,7 @@ def render_internal_still_image(
                         code="INPAINT_ASSETS_MISSING",
                         status_code=400,
                     )
-                init_image = _load_render_image(source_image_path, mode="RGB", size=(width, height))
+                init_image = _load_render_source_image(source_image_path, size=(width, height))
                 mask_image = _load_render_image(mask_image_path, mode="L", size=(width, height))
                 image = _generate_inpaint(
                     pipes,
@@ -1086,6 +1248,24 @@ def render_internal_still_image(
                     float(settings.cfg),
                     seed,
                 )
+            image = _apply_hires_fix(
+                pipes,
+                image,
+                prompt_embeds=prompt_embeds,
+                negative_embeds=negative_embeds,
+                settings=settings,
+                seed=seed,
+            )
+            image = _apply_refiner(
+                pipes,
+                image,
+                prompt=str(prompt or ""),
+                negative_prompt=negative_prompt,
+                settings=settings,
+                seed=seed,
+                device=device,
+                log_fn=log_fn,
+            )
             if device != requested_device:
                 _log(f"Internal still render fell back from {requested_device} to {device} for {workflow_family}.")
             return {
@@ -1097,8 +1277,8 @@ def render_internal_still_image(
                 "seed": seed,
             }
         finally:
-            if pipeline is not None:
-                _clear_loras(pipeline, loaded_adapters)
+            for target, adapters in adapter_targets:
+                _clear_loras(target, adapters)
 
 
 def _scene_keyframe_times(scenes: list[dict[str, Any]], interval_s: float) -> list[float]:

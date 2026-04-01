@@ -4502,6 +4502,14 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
     actual_width = int(prepared_assets.get("width") or payload.get("width") or 1024)
     actual_height = int(prepared_assets.get("height") or payload.get("height") or 576)
     controlnet_units = _prepare_internal_controlnet_units(project_id, list(payload.get("controlnet_units") or []))
+    resolved_refiner = dict(payload.get("refiner")) if isinstance(payload.get("refiner"), dict) else None
+    if resolved_refiner is not None:
+        resolved_refiner["base_path"] = str(model_path)
+        refiner_model = str(resolved_refiner.get("model") or "").strip()
+        if refiner_model:
+            refiner_asset = models.resolve_internal_asset(refiner_model, folder="diffusers", allowed_kinds={"diffusers"})
+            resolved_refiner["path"] = str(refiner_asset.get("path") or "")
+            resolved_refiner["family"] = refiner_asset.get("family")
     settings_obj = InternalVideoSettings(
         width=actual_width,
         height=actual_height,
@@ -4513,7 +4521,9 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
         model_id=model_id or str(payload.get("family") or "internal_still"),
         loras=tuple(_normalize_render_loras(payload.get("loras"))),
         vae=str(payload.get("vae") or "").strip() or None,
-        refiner=payload.get("refiner") if isinstance(payload.get("refiner"), dict) else None,
+        hires_fix=dict(payload.get("hires_fix")) if isinstance(payload.get("hires_fix"), dict) else None,
+        refiner=resolved_refiner,
+        upscaler=str(payload.get("upscaler") or "").strip() or None,
         device_preference="auto",
     )
 
@@ -4524,6 +4534,18 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
             for item in settings_obj.loras
         )
         jobs.append_log(project_id, job_id, f"LoRAs: {lora_log}")
+    if settings_obj.hires_fix and settings_obj.hires_fix.get("enabled", True):
+        jobs.append_log(
+            project_id,
+            job_id,
+            f"Hires fix: scale {float(settings_obj.hires_fix.get('scale', 1.5)):.2f} • denoise {float(settings_obj.hires_fix.get('denoise', 0.35)):.2f}",
+        )
+    if resolved_refiner:
+        jobs.append_log(
+            project_id,
+            job_id,
+            f"Refiner pass: {str(resolved_refiner.get('model') or 'base-model')} • switch {float(resolved_refiner.get('switch_at', 0.8)):.2f}",
+        )
 
     result = render_internal_still_image(
         model_dir=model_path,
@@ -4539,12 +4561,13 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result["image"].save(out_path)
+    final_width, final_height = result["image"].size
 
     metadata = _build_generation_metadata(
         project_id=project_id,
         job_id=job_id,
         output_path=out_path,
-        payload={**payload, "width": actual_width, "height": actual_height},
+        payload={**payload, "width": final_width, "height": final_height, "refiner": resolved_refiner},
         workflow_family=workflow_family,
         checkpoint=str(model_path.name),
         loras=list(settings_obj.loras),
@@ -4612,6 +4635,17 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
     conditioning_mode = str(selection.get("conditioning_mode") or "raw")
     resolved_loras = _normalize_render_loras(payload.get("loras"))
     vae_name = _resolve_optional_comfy_asset_name(payload.get("vae"), folder="vae", allowed_kinds={"vae"})
+    hires_fix = dict(payload.get("hires_fix")) if isinstance(payload.get("hires_fix"), dict) else None
+    upscaler = str(payload.get("upscaler") or "").strip() or None
+    resolved_refiner = dict(payload.get("refiner")) if isinstance(payload.get("refiner"), dict) else None
+    if resolved_refiner is not None:
+        refiner_model = str(resolved_refiner.get("model") or "").strip()
+        if refiner_model:
+            resolved_refiner["checkpoint"] = _resolve_optional_comfy_asset_name(
+                refiner_model,
+                folder="checkpoints",
+                allowed_kinds={"checkpoint"},
+            )
     metadata_controlnet_units: list[dict[str, Any]] = []
     prepared_assets = _prepare_still_scene_assets(project_id, payload, workflow_family)
     actual_width = int(prepared_assets.get("width") or width)
@@ -4679,6 +4713,9 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 loras=resolved_loras,
                 vae_name=vae_name,
                 controlnet_units=prepared_units,
+                hires_fix=hires_fix,
+                refiner=resolved_refiner,
+                upscaler=upscaler,
             )
             jobs.append_log(
                 project_id,
@@ -4710,6 +4747,9 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 filename_prefix=f"edmg_img2img_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
                 loras=resolved_loras,
                 vae_name=vae_name,
+                hires_fix=hires_fix,
+                refiner=resolved_refiner,
+                upscaler=upscaler,
             )
         elif workflow_family in {"inpaint", "outpaint"}:
             source_path = prepared_assets.get("source_path")
@@ -4740,6 +4780,9 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 filename_prefix=f"edmg_{workflow_family}_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
                 loras=resolved_loras,
                 vae_name=vae_name,
+                hires_fix=hires_fix,
+                refiner=resolved_refiner,
+                upscaler=upscaler,
             )
         else:
             wf = comfy.default_workflow(
@@ -4755,6 +4798,9 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                 filename_prefix=f"edmg_still_v{variant_index:02d}_scene{scene_index:03d}_{job_id[:6]}",
                 loras=resolved_loras,
                 vae_name=vae_name,
+                hires_fix=hires_fix,
+                refiner=resolved_refiner,
+                upscaler=upscaler,
             )
         if resolved_loras:
             lora_log = ", ".join(
@@ -4768,6 +4814,18 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
             )
         if vae_name:
             jobs.append_log(project_id, job_id, f"VAE override: {vae_name}")
+        if hires_fix and hires_fix.get("enabled", True):
+            jobs.append_log(
+                project_id,
+                job_id,
+                f"Hires fix: scale {float(hires_fix.get('scale', 1.5)):.2f} • denoise {float(hires_fix.get('denoise', 0.35)):.2f}",
+            )
+        if resolved_refiner:
+            jobs.append_log(
+                project_id,
+                job_id,
+                f"Refiner pass: {str(resolved_refiner.get('model') or resolved_refiner.get('checkpoint') or 'base-checkpoint')} • switch {float(resolved_refiner.get('switch_at', 0.8)):.2f}",
+            )
 
         submit = comfy.submit_prompt(node_url, wf)
         prompt_id = submit.get("prompt_id")
@@ -4801,11 +4859,20 @@ def _run_comfyui_scene(project_id: str, job_id: str, payload: dict[str, Any]) ->
                     out_path = out_dir / out_name
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_bytes(img_bytes)
+                final_width = actual_width
+                final_height = actual_height
+                if Image is not None:
+                    try:
+                        with Image.open(out_path) as generated_image:
+                            final_width, final_height = generated_image.size
+                    except Exception:
+                        final_width = actual_width
+                        final_height = actual_height
                 metadata = _build_generation_metadata(
                     project_id=project_id,
                     job_id=job_id,
                     output_path=out_path,
-                    payload={**payload, "width": actual_width, "height": actual_height},
+                    payload={**payload, "width": final_width, "height": final_height, "refiner": resolved_refiner},
                     workflow_family=workflow_family,
                     checkpoint=checkpoint,
                     loras=resolved_loras,
@@ -6564,6 +6631,9 @@ def export_comfyui_workflows(
     loras_json: str | None = None,
     outpaint_json: str | None = None,
     controlnet_units_json: str | None = None,
+    hires_fix_json: str | None = None,
+    refiner_json: str | None = None,
+    upscaler: str | None = None,
 ):
     """Compile plan scenes into per-scene ComfyUI workflow JSON files."""
     proj = store.get(project_id)
@@ -6609,6 +6679,36 @@ def export_comfyui_workflows(
                 hint="Retry the export after re-entering the outpaint margins.",
                 code="OUTPAINT_INVALID",
                 status_code=400,
+            )
+    parsed_hires_fix = None
+    if hires_fix_json:
+        try:
+            parsed_hires_fix = json.loads(hires_fix_json)
+        except Exception:
+            raise UserFacingError(
+                "Invalid hires-fix settings",
+                hint="Retry the export after re-entering the hires-fix controls.",
+                code="HIRES_FIX_INVALID",
+                status_code=400,
+            )
+    parsed_refiner = None
+    if refiner_json:
+        try:
+            parsed_refiner = json.loads(refiner_json)
+        except Exception:
+            raise UserFacingError(
+                "Invalid refiner settings",
+                hint="Retry the export after re-entering the refiner controls.",
+                code="REFINER_INVALID",
+                status_code=400,
+            )
+    if isinstance(parsed_refiner, dict):
+        refiner_model = str(parsed_refiner.get("model") or "").strip()
+        if refiner_model:
+            parsed_refiner["checkpoint"] = _resolve_optional_comfy_asset_name(
+                refiner_model,
+                folder="checkpoints",
+                allowed_kinds={"checkpoint"},
             )
     if workflow_family == "controlnet" and not raw_controlnet_units and controlnet_model and reference_asset:
         raw_controlnet_units = [
@@ -6742,6 +6842,9 @@ def export_comfyui_workflows(
                 filename_prefix=f"scene_{idx:03d}",
                 loras=loras,
                 controlnet_units=exported_controlnet_units,
+                hires_fix=parsed_hires_fix,
+                refiner=parsed_refiner,
+                upscaler=upscaler,
             )
         elif workflow_kind == "img2img":
             wf = comfy.img2img_workflow(
@@ -6758,6 +6861,9 @@ def export_comfyui_workflows(
                 denoise_strength=resolved_denoise,
                 filename_prefix=f"scene_{idx:03d}",
                 loras=loras,
+                hires_fix=parsed_hires_fix,
+                refiner=parsed_refiner,
+                upscaler=upscaler,
             )
         elif workflow_kind == "inpaint":
             wf = comfy.inpaint_workflow(
@@ -6775,6 +6881,9 @@ def export_comfyui_workflows(
                 denoise_strength=float(denoise_strength if denoise_strength is not None else 0.8),
                 filename_prefix=f"scene_{idx:03d}",
                 loras=loras,
+                hires_fix=parsed_hires_fix,
+                refiner=parsed_refiner,
+                upscaler=upscaler,
             )
         elif workflow_kind == "outpaint":
             wf = comfy.outpaint_workflow(
@@ -6792,6 +6901,9 @@ def export_comfyui_workflows(
                 denoise_strength=float(denoise_strength if denoise_strength is not None else 0.8),
                 filename_prefix=f"scene_{idx:03d}",
                 loras=loras,
+                hires_fix=parsed_hires_fix,
+                refiner=parsed_refiner,
+                upscaler=upscaler,
             )
         else:
             wf = comfy.default_workflow(
@@ -6805,6 +6917,9 @@ def export_comfyui_workflows(
                 cfg=resolved_cfg,
                 sampler=resolved_sampler,
                 loras=loras,
+                hires_fix=parsed_hires_fix,
+                refiner=parsed_refiner,
+                upscaler=upscaler,
             )
         p = out_dir / f"scene_{idx:03d}.json"
         p.write_text(json.dumps(wf, ensure_ascii=False, indent=2), encoding="utf-8")

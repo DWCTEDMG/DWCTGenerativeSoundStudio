@@ -40,6 +40,66 @@ export default function Outputs(props: PageProps) {
   const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
   const activeInternalJobs = (outs?.active_internal_jobs || []) as any[];
 
+  const renderMetadataCard = (entry: any) => {
+    const metadata = entry?.metadata;
+    const metadataPath = entry?.metadata_path;
+    const baseModel = metadata?.base_model || {};
+    const output = metadata?.output || {};
+    const loras = Array.isArray(metadata?.loras) ? metadata.loras : [];
+    const controlnetUnits = Array.isArray(metadata?.controlnet_units) ? metadata.controlnet_units : [];
+    const outpaint = metadata?.outpaint && typeof metadata.outpaint === "object" ? metadata.outpaint : null;
+    const prompt = String(metadata?.prompt || "").trim();
+    const negativePrompt = String(metadata?.negative_prompt || "").trim();
+
+    if (!metadata && !metadataPath) return null;
+
+    return (
+      <div style={{ marginTop: 10, border: "1px solid var(--border)", borderRadius: 12, padding: 10 }}>
+        <div className="row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ fontWeight: 800 }}>Generation metadata</div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            {metadataPath ? (
+              <button className="secondary" onClick={(e) => { e.stopPropagation(); handleArtifactPathAction("metadata sidecar", metadataPath, "reveal"); }}>
+                {desktopActionLabel("reveal", "metadata sidecar")}
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+          {metadata?.workflow_family ? <>Workflow <b>{metadata.workflow_family}</b> • </> : null}
+          {metadata?.engine ? <>Engine <b>{String(metadata.engine)}</b> • </> : null}
+          {metadata?.model_family ? <>Family <b>{String(metadata.model_family).toUpperCase()}</b> • </> : null}
+          {baseModel?.model_id ? <>Model <b>{String(baseModel.model_id)}</b></> : baseModel?.checkpoint ? <>Model <b>{String(baseModel.checkpoint)}</b></> : null}
+        </div>
+        <div className="small" style={{ marginTop: 6, opacity: 0.88 }}>
+          Seed <b>{metadata?.seed ?? "auto"}</b> • Sampler <b>{metadata?.sampler || "default"}</b> • Steps <b>{metadata?.steps ?? "-"}</b> • CFG <b>{metadata?.cfg ?? "-"}</b>
+        </div>
+        {prompt ? <div className="small" style={{ marginTop: 8 }}><b>Prompt:</b> {prompt}</div> : null}
+        {negativePrompt ? <div className="small" style={{ marginTop: 4, opacity: 0.84 }}><b>Negative:</b> {negativePrompt}</div> : null}
+        <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>
+          {metadata?.source_asset ? <>Source <b>{String(metadata.source_asset)}</b> • </> : null}
+          {metadata?.mask_source ? <>Mask <b>{String(metadata.mask_source)}</b> • </> : null}
+          {output?.image ? <>Output <b>{String(output.image)}</b></> : output?.video ? <>Output <b>{String(output.video)}</b></> : null}
+        </div>
+        {outpaint ? (
+          <div className="small" style={{ marginTop: 6, opacity: 0.84 }}>
+            Outpaint margins <b>{`T${outpaint.top_px || 0} R${outpaint.right_px || 0} B${outpaint.bottom_px || 0} L${outpaint.left_px || 0}`}</b>
+          </div>
+        ) : null}
+        {loras.length ? (
+          <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
+            LoRAs <b>{loras.map((item: any) => `${String(item.name || item.filename || "lora")}@${Number(item.weight ?? 1).toFixed(2)}`).join(", ")}</b>
+          </div>
+        ) : null}
+        {controlnetUnits.length ? (
+          <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
+            ControlNet <b>{controlnetUnits.map((item: any) => `${String(item.controlnet_name || item.model || "unit")}@${Number(item.strength ?? 0.8).toFixed(2)}`).join(", ")}</b>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const handleArtifactPathAction = async (label: string, value: string | null | undefined, mode: "reveal" | "open") => {
     if (!value) return;
     try {
@@ -263,6 +323,7 @@ export default function Outputs(props: PageProps) {
                   <video controls style={{ width: "100%", borderRadius: 12, border: "1px solid var(--border)" }}>
                     <source src={fileUrl(projectId, v.path)} />
                   </video>
+                  {renderMetadataCard(v)}
                 </div>
               ))}
             </div>
@@ -282,7 +343,13 @@ export default function Outputs(props: PageProps) {
                     </div>
                     <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
                       <button className="secondary" onClick={(e) => { e.stopPropagation(); handleArtifactPathAction("image", im.path, "reveal"); }}>{desktopActionLabel("reveal", "image")}</button>
+                      {im.metadata_path ? (
+                        <button className="secondary" onClick={(e) => { e.stopPropagation(); handleArtifactPathAction("metadata sidecar", im.metadata_path, "reveal"); }}>
+                          {desktopActionLabel("reveal", "metadata")}
+                        </button>
+                      ) : null}
                     </div>
+                    {renderMetadataCard(im)}
                   </div>
                 ))}
               </div>
@@ -302,8 +369,10 @@ export default function Outputs(props: PageProps) {
           </div>
 
           <div className="card" style={{ marginTop: 14 }}>
-            <div style={{ fontWeight: 800, marginBottom: 10 }}>Metadata</div>
-            <pre>{JSON.stringify(outs, null, 2)}</pre>
+            <details>
+              <summary style={{ cursor: "pointer", fontWeight: 800 }}>Raw output payload</summary>
+              <pre style={{ marginTop: 10 }}>{JSON.stringify(outs, null, 2)}</pre>
+            </details>
           </div>
         </div>
       )}

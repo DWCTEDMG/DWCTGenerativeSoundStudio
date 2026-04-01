@@ -176,6 +176,8 @@ describe("Render page", () => {
     fireEvent.change(workflowSelect, { target: { value: "outpaint" } });
     expect(await screen.findByText("Expand top")).toBeTruthy();
     expect(await screen.findByText("Optional mask override")).toBeTruthy();
+    expect(await screen.findByText("Use source as stage background")).toBeTruthy();
+    expect(await screen.findByText("Enhancement passes")).toBeTruthy();
 
     fireEvent.change(screen.getByDisplayValue("Outpaint"), { target: { value: "controlnet" } });
     const addUnitButton = await screen.findByRole("button", { name: "Add ControlNet unit" });
@@ -184,6 +186,7 @@ describe("Render page", () => {
     expect(await screen.findByText("Unit 1")).toBeTruthy();
     expect(await screen.findByRole("option", { name: /SDXL Canny ControlNet/ })).toBeTruthy();
     expect(await screen.findByText("assets/refs/source.png")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Duplicate" })).toBeTruthy();
   }, 10000);
 
   it("disables controlnet workflows for internal sd3.5 still models", async () => {

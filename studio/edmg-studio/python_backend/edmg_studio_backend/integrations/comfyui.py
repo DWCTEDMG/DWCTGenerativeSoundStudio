@@ -181,6 +181,146 @@ def _append_controlnet_units(
         current_negative = (apply_node, 1)
     return current_positive, current_negative
 
+
+def _normalize_upscale_method(upscaler: str | None) -> str:
+    raw = str(upscaler or "").strip().lower()
+    if raw.startswith("latent_"):
+        raw = raw[len("latent_") :]
+    elif raw.startswith("pixel_"):
+        raw = raw[len("pixel_") :]
+    mapping = {
+        "nearest": "nearest-exact",
+        "nearest_exact": "nearest-exact",
+        "nearest-exact": "nearest-exact",
+        "bilinear": "bilinear",
+        "area": "area",
+        "bicubic": "bicubic",
+        "bislerp": "bislerp",
+        "lanczos": "bicubic",
+    }
+    return mapping.get(raw, "bislerp")
+
+
+def _append_hires_fix_and_refiner(
+    workflow: dict[str, Any],
+    *,
+    checkpoint: str,
+    prompt: str,
+    negative_prompt: str,
+    seed: int,
+    steps: int,
+    cfg: float,
+    sampler: str,
+    model_ref: NodeRef,
+    clip_ref: NodeRef,
+    vae_ref: NodeRef,
+    positive_ref: NodeRef,
+    negative_ref: NodeRef,
+    sample_ref: NodeRef,
+    hires_fix: dict[str, Any] | None = None,
+    refiner: dict[str, Any] | None = None,
+    upscaler: str | None = None,
+) -> tuple[NodeRef, NodeRef]:
+    current_model = model_ref
+    current_clip = clip_ref
+    current_vae = vae_ref
+    current_positive = positive_ref
+    current_negative = negative_ref
+    current_sample = sample_ref
+
+    hires_cfg = hires_fix if isinstance(hires_fix, dict) and hires_fix.get("enabled", True) else None
+    if hires_cfg:
+        scale = float(hires_cfg.get("scale") or 1.0)
+        if scale > 1.0:
+            upscale_node = _next_node_id(workflow)
+            workflow[upscale_node] = {
+                "class_type": "LatentUpscaleBy",
+                "inputs": {
+                    "samples": _ref(*current_sample),
+                    "upscale_method": _normalize_upscale_method(str(hires_cfg.get("upscaler") or upscaler or "")),
+                    "scale_by": scale,
+                },
+            }
+            hires_sample = _next_node_id(workflow)
+            workflow[hires_sample] = {
+                "class_type": "KSampler",
+                "inputs": {
+                    "seed": int(seed) + 1,
+                    "steps": int(hires_cfg.get("steps") or steps),
+                    "cfg": float(cfg),
+                    "sampler_name": sampler,
+                    "scheduler": "normal",
+                    "denoise": float(hires_cfg.get("denoise", 0.35)),
+                    "model": _ref(*current_model),
+                    "positive": _ref(*current_positive),
+                    "negative": _ref(*current_negative),
+                    "latent_image": _ref(upscale_node, 0),
+                },
+            }
+            current_sample = (hires_sample, 0)
+
+    refiner_cfg = refiner if isinstance(refiner, dict) else None
+    if refiner_cfg:
+        decode_for_refiner = _next_node_id(workflow)
+        workflow[decode_for_refiner] = {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": _ref(*current_sample), "vae": _ref(*current_vae)},
+        }
+
+        refiner_checkpoint = str(refiner_cfg.get("checkpoint") or refiner_cfg.get("model") or "").strip()
+        if refiner_checkpoint and refiner_checkpoint != checkpoint:
+            refiner_checkpoint_node = _next_node_id(workflow)
+            workflow[refiner_checkpoint_node] = {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": refiner_checkpoint},
+            }
+            current_model = (refiner_checkpoint_node, 0)
+            current_clip = (refiner_checkpoint_node, 1)
+            current_vae = (refiner_checkpoint_node, 2)
+
+            refiner_pos = _next_node_id(workflow)
+            workflow[refiner_pos] = {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": prompt, "clip": _ref(*current_clip)},
+            }
+            refiner_neg = _next_node_id(workflow)
+            workflow[refiner_neg] = {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": negative_prompt, "clip": _ref(*current_clip)},
+            }
+            current_positive = (refiner_pos, 0)
+            current_negative = (refiner_neg, 0)
+
+        refiner_encode = _next_node_id(workflow)
+        workflow[refiner_encode] = {
+            "class_type": "VAEEncode",
+            "inputs": {"pixels": _ref(decode_for_refiner, 0), "vae": _ref(*current_vae)},
+        }
+
+        switch_at = float(refiner_cfg.get("switch_at", 0.8))
+        switch_at = max(0.0, min(1.0, switch_at))
+        refiner_steps = int(refiner_cfg.get("steps") or max(6, round(int(steps) * max(0.2, 1.0 - switch_at))))
+        refiner_denoise = max(0.05, min(1.0, 1.0 - switch_at))
+        refiner_sample = _next_node_id(workflow)
+        workflow[refiner_sample] = {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": int(seed) + 2,
+                "steps": refiner_steps,
+                "cfg": float(cfg),
+                "sampler_name": sampler,
+                "scheduler": "normal",
+                "denoise": refiner_denoise,
+                "model": _ref(*current_model),
+                "positive": _ref(*current_positive),
+                "negative": _ref(*current_negative),
+                "latent_image": _ref(refiner_encode, 0),
+            },
+        }
+        current_sample = (refiner_sample, 0)
+
+    return current_sample, current_vae
+
 def default_workflow(
     checkpoint: str,
     prompt: str,
@@ -194,6 +334,9 @@ def default_workflow(
     filename_prefix: str = "edmg_studio",
     loras: list[dict[str, Any]] | None = None,
     vae_name: str | None = None,
+    hires_fix: dict[str, Any] | None = None,
+    refiner: dict[str, Any] | None = None,
+    upscaler: str | None = None,
 ) -> dict[str, Any]:
     """Basic SD txt2img workflow (single image)."""
     workflow: dict[str, Any] = {
@@ -232,10 +375,29 @@ def default_workflow(
             "latent_image": _ref(latent_node, 0),
         },
     }
+    final_sample_ref, final_vae_ref = _append_hires_fix_and_refiner(
+        workflow,
+        checkpoint=checkpoint,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        seed=seed,
+        steps=steps,
+        cfg=cfg,
+        sampler=sampler,
+        model_ref=model_ref,
+        clip_ref=clip_ref,
+        vae_ref=vae_ref,
+        positive_ref=(pos_node, 0),
+        negative_ref=(neg_node, 0),
+        sample_ref=(sample_node, 0),
+        hires_fix=hires_fix,
+        refiner=refiner,
+        upscaler=upscaler,
+    )
     decode_node = _next_node_id(workflow)
     workflow[decode_node] = {
         "class_type": "VAEDecode",
-        "inputs": {"samples": _ref(sample_node, 0), "vae": _ref(*vae_ref)},
+        "inputs": {"samples": _ref(*final_sample_ref), "vae": _ref(*final_vae_ref)},
     }
     save_node = _next_node_id(workflow)
     workflow[save_node] = {
@@ -260,6 +422,9 @@ def img2img_workflow(
     filename_prefix: str = "edmg_studio_img2img",
     loras: list[dict[str, Any]] | None = None,
     vae_name: str | None = None,
+    hires_fix: dict[str, Any] | None = None,
+    refiner: dict[str, Any] | None = None,
+    upscaler: str | None = None,
 ) -> dict[str, Any]:
     workflow: dict[str, Any] = {
         "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": checkpoint}},
@@ -298,10 +463,29 @@ def img2img_workflow(
             "latent_image": _ref(encode_node, 0),
         },
     }
+    final_sample_ref, final_vae_ref = _append_hires_fix_and_refiner(
+        workflow,
+        checkpoint=checkpoint,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        seed=seed,
+        steps=steps,
+        cfg=cfg,
+        sampler=sampler,
+        model_ref=model_ref,
+        clip_ref=clip_ref,
+        vae_ref=vae_ref,
+        positive_ref=(pos_node, 0),
+        negative_ref=(neg_node, 0),
+        sample_ref=(sample_node, 0),
+        hires_fix=hires_fix,
+        refiner=refiner,
+        upscaler=upscaler,
+    )
     decode_node = _next_node_id(workflow)
     workflow[decode_node] = {
         "class_type": "VAEDecode",
-        "inputs": {"samples": _ref(sample_node, 0), "vae": _ref(*vae_ref)},
+        "inputs": {"samples": _ref(*final_sample_ref), "vae": _ref(*final_vae_ref)},
     }
     save_node = _next_node_id(workflow)
     workflow[save_node] = {
@@ -327,6 +511,9 @@ def inpaint_workflow(
     filename_prefix: str = "edmg_studio_inpaint",
     loras: list[dict[str, Any]] | None = None,
     vae_name: str | None = None,
+    hires_fix: dict[str, Any] | None = None,
+    refiner: dict[str, Any] | None = None,
+    upscaler: str | None = None,
 ) -> dict[str, Any]:
     workflow: dict[str, Any] = {
         "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": checkpoint}},
@@ -371,10 +558,29 @@ def inpaint_workflow(
             "latent_image": _ref(encode_node, 0),
         },
     }
+    final_sample_ref, final_vae_ref = _append_hires_fix_and_refiner(
+        workflow,
+        checkpoint=checkpoint,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        seed=seed,
+        steps=steps,
+        cfg=cfg,
+        sampler=sampler,
+        model_ref=model_ref,
+        clip_ref=clip_ref,
+        vae_ref=vae_ref,
+        positive_ref=(pos_node, 0),
+        negative_ref=(neg_node, 0),
+        sample_ref=(sample_node, 0),
+        hires_fix=hires_fix,
+        refiner=refiner,
+        upscaler=upscaler,
+    )
     decode_node = _next_node_id(workflow)
     workflow[decode_node] = {
         "class_type": "VAEDecode",
-        "inputs": {"samples": _ref(sample_node, 0), "vae": _ref(*vae_ref)},
+        "inputs": {"samples": _ref(*final_sample_ref), "vae": _ref(*final_vae_ref)},
     }
     save_node = _next_node_id(workflow)
     workflow[save_node] = {
@@ -400,6 +606,9 @@ def outpaint_workflow(
     filename_prefix: str = "edmg_studio_outpaint",
     loras: list[dict[str, Any]] | None = None,
     vae_name: str | None = None,
+    hires_fix: dict[str, Any] | None = None,
+    refiner: dict[str, Any] | None = None,
+    upscaler: str | None = None,
 ) -> dict[str, Any]:
     # Outpainting uses the same graph as inpainting after the caller prepares an
     # expanded canvas + mask. The runtime/UI canvas expansion step plugs in later.
@@ -419,6 +628,9 @@ def outpaint_workflow(
         filename_prefix=filename_prefix,
         loras=loras,
         vae_name=vae_name,
+        hires_fix=hires_fix,
+        refiner=refiner,
+        upscaler=upscaler,
     )
 
 
@@ -441,6 +653,9 @@ def controlnet_workflow(
     loras: list[dict[str, Any]] | None = None,
     vae_name: str | None = None,
     controlnet_units: list[dict[str, Any]] | None = None,
+    hires_fix: dict[str, Any] | None = None,
+    refiner: dict[str, Any] | None = None,
+    upscaler: str | None = None,
 ) -> dict[str, Any]:
     workflow: dict[str, Any] = {
         "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": checkpoint}},
@@ -496,10 +711,29 @@ def controlnet_workflow(
             "latent_image": _ref(latent_node, 0),
         },
     }
+    final_sample_ref, final_vae_ref = _append_hires_fix_and_refiner(
+        workflow,
+        checkpoint=checkpoint,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        seed=seed,
+        steps=steps,
+        cfg=cfg,
+        sampler=sampler,
+        model_ref=model_ref,
+        clip_ref=clip_ref,
+        vae_ref=vae_ref,
+        positive_ref=positive_ref,
+        negative_ref=negative_ref,
+        sample_ref=(sample_node, 0),
+        hires_fix=hires_fix,
+        refiner=refiner,
+        upscaler=upscaler,
+    )
     decode_node = _next_node_id(workflow)
     workflow[decode_node] = {
         "class_type": "VAEDecode",
-        "inputs": {"samples": _ref(sample_node, 0), "vae": _ref(*vae_ref)},
+        "inputs": {"samples": _ref(*final_sample_ref), "vae": _ref(*final_vae_ref)},
     }
     save_node = _next_node_id(workflow)
     workflow[save_node] = {

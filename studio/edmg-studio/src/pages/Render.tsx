@@ -55,6 +55,21 @@ type OutpaintDraft = {
   left_px: number;
 };
 
+type HiresFixDraft = {
+  enabled: boolean;
+  scale: number;
+  steps: number;
+  denoise: number;
+  upscaler: string;
+};
+
+type RefinerDraft = {
+  enabled: boolean;
+  model: string;
+  switch_at: number;
+  steps: number;
+};
+
 const SAMPLER_OPTIONS = [
   "euler",
   "euler_ancestral",
@@ -63,6 +78,14 @@ const SAMPLER_OPTIONS = [
   "dpmpp_2m_sde",
   "dpmpp_sde",
   "ddim",
+];
+
+const UPSCALER_OPTIONS = [
+  { value: "latent_bislerp", label: "Latent bislerp" },
+  { value: "latent_bicubic", label: "Latent bicubic" },
+  { value: "latent_bilinear", label: "Latent bilinear" },
+  { value: "pixel_lanczos", label: "Pixel Lanczos" },
+  { value: "pixel_bicubic", label: "Pixel bicubic" },
 ];
 
 export default function Render({ onNavigate }: { onNavigate?: (page: any) => void }) {
@@ -105,6 +128,19 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     String(savedRenderDefaults.stillNegativePrompt || "blurry, low quality, watermark, text, logo")
   );
   const [renderSeed, setRenderSeed] = useState<string>(String(savedRenderDefaults.stillSeed || ""));
+  const [hiresFix, setHiresFix] = useState<HiresFixDraft>({
+    enabled: Boolean(savedRenderDefaults.hiresFixEnabled ?? false),
+    scale: Number(savedRenderDefaults.hiresFixScale ?? 1.5),
+    steps: Number(savedRenderDefaults.hiresFixSteps ?? 0),
+    denoise: Number(savedRenderDefaults.hiresFixDenoise ?? 0.35),
+    upscaler: String(savedRenderDefaults.stillUpscaler || "latent_bislerp"),
+  });
+  const [refiner, setRefiner] = useState<RefinerDraft>({
+    enabled: Boolean(savedRenderDefaults.refinerEnabled ?? false),
+    model: String(savedRenderDefaults.refinerModel || ""),
+    switch_at: Number(savedRenderDefaults.refinerSwitchAt ?? 0.8),
+    steps: Number(savedRenderDefaults.refinerSteps ?? 0),
+  });
   const [selectedLoras, setSelectedLoras] = useState<SelectedLora[]>([]);
   const [loraToAdd, setLoraToAdd] = useState<string>("");
 
@@ -310,6 +346,19 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     }
     return "";
   }, [canStillControlnet, compatibleControlnetModels, selectedStillEngine, selectedStillFamily]);
+  const compatibleRefinerModels = useMemo(
+    () => stillModels.filter((model) => {
+      if (!model?.id || model.id === selectedStillModel?.id) return false;
+      if (installedModels[model.id] === false) return false;
+      const modelEngine = String(model.engine || model.render?.engine || (model.kind === "diffusers" ? "internal" : "comfyui")).toLowerCase();
+      const modelFamily = String(model.family || model.render?.family || "").toLowerCase();
+      if (selectedStillEngine && modelEngine !== selectedStillEngine) return false;
+      if (selectedStillFamily && modelFamily && modelFamily !== selectedStillFamily) return false;
+      if (selectedStillEngine === "comfyui") return model.kind === "checkpoint";
+      return model.kind === "diffusers";
+    }),
+    [installedModels, selectedStillEngine, selectedStillFamily, selectedStillModel?.id, stillModels]
+  );
   const internalHostedVisible = !!renderProviders?.stability?.visible;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
@@ -354,6 +403,7 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   });
 
   const buildStillWorkflowPayload = () => {
+    const upscaler = hiresFix.upscaler || "latent_bislerp";
     const payload: Record<string, any> = {
       workflow_family: stillWorkflow,
       ...buildDiffusionPayload(),
@@ -385,6 +435,23 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
           start_percent: unit.start_percent,
           end_percent: unit.end_percent,
         }));
+    }
+    if (hiresFix.enabled) {
+      payload.hires_fix = {
+        enabled: true,
+        scale: Math.max(1, Number(hiresFix.scale || 1.5)),
+        denoise: Math.max(0, Math.min(1, Number(hiresFix.denoise || 0.35))),
+        upscaler,
+        ...(Number(hiresFix.steps) > 0 ? { steps: Math.trunc(Number(hiresFix.steps)) } : {}),
+      };
+      payload.upscaler = upscaler;
+    }
+    if (refiner.enabled) {
+      payload.refiner = {
+        switch_at: Math.max(0, Math.min(1, Number(refiner.switch_at || 0.8))),
+        ...(refiner.model ? { model: refiner.model } : {}),
+        ...(Number(refiner.steps) > 0 ? { steps: Math.trunc(Number(refiner.steps)) } : {}),
+      };
     }
     return payload;
   };
@@ -506,8 +573,17 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
       stillSampler: renderSampler,
       stillNegativePrompt: renderNegativePrompt,
       stillSeed: renderSeed,
+      stillUpscaler: hiresFix.upscaler,
+      hiresFixEnabled: hiresFix.enabled,
+      hiresFixScale: hiresFix.scale,
+      hiresFixSteps: hiresFix.steps,
+      hiresFixDenoise: hiresFix.denoise,
+      refinerEnabled: refiner.enabled,
+      refinerModel: refiner.model,
+      refinerSwitchAt: refiner.switch_at,
+      refinerSteps: refiner.steps,
     });
-  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed]);
+  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed, hiresFix, refiner]);
 
   useEffect(() => {
     if (!loraToAdd && loraModels.length) setLoraToAdd(loraModels[0].id);
@@ -565,6 +641,14 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
       };
     }));
   }, [compatibleControlnetModels, controlnetModels, selectedStillEngine, selectedStillFamily]);
+
+  useEffect(() => {
+    if (!refiner.enabled || !refiner.model) return;
+    const stillValid = compatibleRefinerModels.some((model) => model.id === refiner.model);
+    if (!stillValid) {
+      setRefiner((current) => ({ ...current, model: "" }));
+    }
+  }, [compatibleRefinerModels, refiner.enabled, refiner.model]);
 
   useEffect(() => {
     refreshInternalPreflight().catch(() => {});
@@ -781,6 +865,29 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     setControlnetUnits((current) => current.map((unit) => (unit.key === key ? { ...unit, ...patch } : unit)));
   };
 
+  const duplicateControlnetUnit = (key: string) => {
+    setControlnetUnits((current) => {
+      const index = current.findIndex((unit) => unit.key === key);
+      if (index < 0) return current;
+      const next = [...current];
+      const unit = current[index];
+      next.splice(index + 1, 0, { ...unit, key: `${Date.now()}_${index}_dup` });
+      return next;
+    });
+  };
+
+  const moveControlnetUnit = (key: string, direction: -1 | 1) => {
+    setControlnetUnits((current) => {
+      const index = current.findIndex((unit) => unit.key === key);
+      const targetIndex = index + direction;
+      if (index < 0 || targetIndex < 0 || targetIndex >= current.length) return current;
+      const next = [...current];
+      const [unit] = next.splice(index, 1);
+      next.splice(targetIndex, 0, unit);
+      return next;
+    });
+  };
+
   const removeControlnetUnit = (key: string) => {
     setControlnetUnits((current) => current.filter((unit) => unit.key !== key));
   };
@@ -917,6 +1024,23 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
           }));
         if (units.length) params.set("controlnet_units_json", JSON.stringify(units));
       }
+      if (hiresFix.enabled) {
+        params.set("hires_fix_json", JSON.stringify({
+          enabled: true,
+          scale: Math.max(1, Number(hiresFix.scale || 1.5)),
+          denoise: Math.max(0, Math.min(1, Number(hiresFix.denoise || 0.35))),
+          upscaler: hiresFix.upscaler || "latent_bislerp",
+          ...(Number(hiresFix.steps) > 0 ? { steps: Math.trunc(Number(hiresFix.steps)) } : {}),
+        }));
+        params.set("upscaler", hiresFix.upscaler || "latent_bislerp");
+      }
+      if (refiner.enabled) {
+        params.set("refiner_json", JSON.stringify({
+          switch_at: Math.max(0, Math.min(1, Number(refiner.switch_at || 0.8))),
+          ...(refiner.model ? { model: refiner.model } : {}),
+          ...(Number(refiner.steps) > 0 ? { steps: Math.trunc(Number(refiner.steps)) } : {}),
+        }));
+      }
       const d = await apiGet(`/v1/projects/${projectId}/export/comfyui_workflows?${params.toString()}`);
       setInfo(d);
       await refreshProject(projectId);
@@ -965,6 +1089,8 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   };
 
 const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
+  const sourceAssetPreviewUrl = sourceAsset ? fileUrl(projectId, sourceAsset) : "";
+  const maskAssetPreviewUrl = stillMaskAsset ? fileUrl(projectId, stillMaskAsset) : "";
   const deforumExports = project?.meta?.exports?.deforum || [];
   const comfyExports = project?.meta?.exports?.comfyui || [];
 
@@ -1958,7 +2084,25 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                           <input type="file" accept="image/*" onChange={(e) => setReferenceUploadFile(e.target.files?.[0] || null)} />
                         </div>
                         <button className="secondary" disabled={!referenceUploadFile || !projectId} onClick={uploadReferenceAsset}>Upload source</button>
+                        <button
+                          className="secondary"
+                          disabled={!sourceAsset || !projectId}
+                          onClick={() => setEditorBgUrl(sourceAsset ? fileUrl(projectId, sourceAsset) : null)}
+                        >
+                          Use source as stage background
+                        </button>
                       </div>
+                      {sourceAsset ? (
+                        <div className="row" style={{ gap: 12, flexWrap: "wrap", alignItems: "flex-start", marginTop: 10 }}>
+                          <div style={{ width: 180 }}>
+                            <img src={sourceAssetPreviewUrl} style={{ width: "100%", borderRadius: 12, border: "1px solid var(--border)" }} />
+                            <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>Source preview</div>
+                          </div>
+                          <div className="small" style={{ maxWidth: 420, opacity: 0.85 }}>
+                            Studio keeps this workflow asset-driven. If you need to paint or align a mask, load the source into the stage background here and use the mask tools further down the page, then come back and select the saved project mask.
+                          </div>
+                        </div>
+                      ) : null}
                       {(stillWorkflow === "inpaint" || stillWorkflow === "outpaint") ? (
                         <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
                           <div style={{ minWidth: 340, flex: 2 }}>
@@ -1975,6 +2119,20 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                             <input type="file" accept="image/*" onChange={(e) => setWorkflowMaskUploadFile(e.target.files?.[0] || null)} />
                           </div>
                           <button className="secondary" disabled={!workflowMaskUploadFile || !projectId} onClick={uploadWorkflowMask}>Upload mask</button>
+                          <button className="secondary" onClick={loadEditorBackground} disabled={!projectId}>Use latest output as stage background</button>
+                        </div>
+                      ) : null}
+                      {(stillWorkflow === "inpaint" || stillWorkflow === "outpaint") && stillMaskAsset ? (
+                        <div className="row" style={{ gap: 12, flexWrap: "wrap", alignItems: "flex-start", marginTop: 10 }}>
+                          <div style={{ width: 180 }}>
+                            <img src={maskAssetPreviewUrl} style={{ width: "100%", borderRadius: 12, border: "1px solid var(--border)" }} />
+                            <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                              {stillWorkflow === "outpaint" ? "Mask override preview" : "Mask preview"}
+                            </div>
+                          </div>
+                          <div className="small" style={{ maxWidth: 420, opacity: 0.85 }}>
+                            Bright areas are preserved as editable regions in the backend inpaint pass. For outpaint, leaving this empty keeps the automatic edge-expansion mask path.
+                          </div>
                         </div>
                       ) : null}
                       {stillWorkflow === "outpaint" ? (
@@ -2030,8 +2188,18 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                           {controlnetUnits.map((unit, index) => (
                             <div key={unit.key} className="card" style={{ marginTop: 0 }}>
                               <div className="row" style={{ justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                                <div style={{ fontWeight: 800 }}>Unit {index + 1}</div>
-                                <button className="secondary" onClick={() => removeControlnetUnit(unit.key)}>Remove unit</button>
+                                <div>
+                                  <div style={{ fontWeight: 800 }}>Unit {index + 1}</div>
+                                  <div className="small" style={{ opacity: 0.78 }}>
+                                    {unit.reference_asset ? `${unit.conditioning_mode} • ${unit.reference_asset.split("/").slice(-1)[0]}` : "Select a conditioning reference to complete this unit."}
+                                  </div>
+                                </div>
+                                <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                                  <button className="secondary" onClick={() => moveControlnetUnit(unit.key, -1)} disabled={index === 0}>Move up</button>
+                                  <button className="secondary" onClick={() => moveControlnetUnit(unit.key, 1)} disabled={index === controlnetUnits.length - 1}>Move down</button>
+                                  <button className="secondary" onClick={() => duplicateControlnetUnit(unit.key)}>Duplicate</button>
+                                  <button className="secondary" onClick={() => removeControlnetUnit(unit.key)}>Remove unit</button>
+                                </div>
                               </div>
                               <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
                                 <div style={{ minWidth: 320, flex: 2 }}>
@@ -2088,6 +2256,17 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                                   </select>
                                 </div>
                               </div>
+                              {unit.reference_asset ? (
+                                <div className="row" style={{ gap: 12, flexWrap: "wrap", alignItems: "flex-start", marginTop: 10 }}>
+                                  <div style={{ width: 160 }}>
+                                    <img src={fileUrl(projectId, unit.reference_asset)} style={{ width: "100%", borderRadius: 12, border: "1px solid var(--border)" }} />
+                                    <div className="small" style={{ marginTop: 6, opacity: 0.8 }}>Reference preview</div>
+                                  </div>
+                                  <div className="small" style={{ maxWidth: 420, opacity: 0.82 }}>
+                                    Conditioning runs in the listed order. Duplicate or reorder units when you want one structural pass to land before another.
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                           ))}
                         </div>
@@ -2098,6 +2277,84 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       )}
                     </>
                   ) : null}
+
+                  <div className="card" style={{ marginTop: 12 }}>
+                    <div style={{ fontWeight: 800, marginBottom: 8 }}>Enhancement passes</div>
+                    <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <label className="small row" style={{ gap: 6, alignItems: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={hiresFix.enabled}
+                          onChange={(e) => setHiresFix((current) => ({ ...current, enabled: e.target.checked }))}
+                        />
+                        Enable hires fix
+                      </label>
+                      <div className="small" style={{ opacity: 0.82 }}>
+                        Renders the base still first, then runs a higher-resolution img2img refinement pass.
+                      </div>
+                    </div>
+                    {hiresFix.enabled ? (
+                      <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                        <div style={{ minWidth: 120 }}>
+                          <div className="small">Scale</div>
+                          <input type="number" min={1} max={4} step={0.05} value={hiresFix.scale} onChange={(e) => setHiresFix((current) => ({ ...current, scale: Number(e.target.value) }))} />
+                        </div>
+                        <div style={{ minWidth: 120 }}>
+                          <div className="small">Steps override</div>
+                          <input type="number" min={0} max={80} step={1} value={hiresFix.steps} onChange={(e) => setHiresFix((current) => ({ ...current, steps: Number(e.target.value) }))} />
+                        </div>
+                        <div style={{ minWidth: 120 }}>
+                          <div className="small">Denoise</div>
+                          <input type="number" min={0} max={1} step={0.05} value={hiresFix.denoise} onChange={(e) => setHiresFix((current) => ({ ...current, denoise: Number(e.target.value) }))} />
+                        </div>
+                        <div style={{ minWidth: 220 }}>
+                          <div className="small">Upscaler</div>
+                          <select value={hiresFix.upscaler} onChange={(e) => setHiresFix((current) => ({ ...current, upscaler: e.target.value }))}>
+                            {UPSCALER_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 14 }}>
+                      <label className="small row" style={{ gap: 6, alignItems: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={refiner.enabled}
+                          onChange={(e) => setRefiner((current) => ({ ...current, enabled: e.target.checked }))}
+                        />
+                        Enable refiner pass
+                      </label>
+                      <div className="small" style={{ opacity: 0.82 }}>
+                        Optional second img2img pass. Leave the model empty to reuse the base still model.
+                      </div>
+                    </div>
+                    {refiner.enabled ? (
+                      <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                        <div style={{ minWidth: 320, flex: 2 }}>
+                          <div className="small">Refiner model</div>
+                          <select value={refiner.model} onChange={(e) => setRefiner((current) => ({ ...current, model: e.target.value }))}>
+                            <option value="">Reuse base still model</option>
+                            {compatibleRefinerModels.map((model) => (
+                              <option key={model.id} value={model.id}>
+                                {`${model.name} • ${modelEngineLabel(model.engine || model.render?.engine, model.kind)} • ${modelFamilyLabel(model.family || model.render?.family)}`}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ minWidth: 120 }}>
+                          <div className="small">Switch at</div>
+                          <input type="number" min={0} max={1} step={0.05} value={refiner.switch_at} onChange={(e) => setRefiner((current) => ({ ...current, switch_at: Number(e.target.value) }))} />
+                        </div>
+                        <div style={{ minWidth: 120 }}>
+                          <div className="small">Steps override</div>
+                          <input type="number" min={0} max={80} step={1} value={refiner.steps} onChange={(e) => setRefiner((current) => ({ ...current, steps: Number(e.target.value) }))} />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
 

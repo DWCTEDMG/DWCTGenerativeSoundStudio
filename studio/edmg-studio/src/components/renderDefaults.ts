@@ -12,6 +12,15 @@ export type StudioRenderDefaults = {
   stillSampler?: string;
   stillNegativePrompt?: string;
   stillSeed?: string;
+  stillUpscaler?: string;
+  hiresFixEnabled?: boolean;
+  hiresFixScale?: number;
+  hiresFixSteps?: number;
+  hiresFixDenoise?: number;
+  refinerEnabled?: boolean;
+  refinerModel?: string;
+  refinerSwitchAt?: number;
+  refinerSteps?: number;
 };
 
 const KEY = "edmg_render_defaults";
