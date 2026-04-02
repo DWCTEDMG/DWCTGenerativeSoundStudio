@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -30,6 +31,21 @@ def health() -> HealthResponse:
     return HealthResponse(ok=True, provider=provider.name, model=getattr(provider, "model", None))
 
 
+async def _persist_upload_to_tempfile(file: UploadFile, *, suffix: str, chunk_size: int = 1024 * 1024) -> str:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            tmp.write(chunk)
+        tmp_path = tmp.name
+    try:
+        await file.close()
+    except Exception:
+        pass
+    return tmp_path
+
+
 @app.post("/v1/plan", response_model=PlanResponse)
 def plan(req: PlanRequest) -> PlanResponse:
     return provider.plan(req)
@@ -43,15 +59,18 @@ async def transcribe_audio(file: UploadFile = File(...), model_size: str = "smal
         raise HTTPException(status_code=501, detail=str(e))
 
     suffix = "." + (file.filename.split(".")[-1] if file.filename and "." in file.filename else "wav")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    tmp_path = await _persist_upload_to_tempfile(file, suffix=suffix)
 
     try:
         text = transcribe(tmp_path, model_size=model_size)
         return {"text": text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 @app.post("/v1/audio_features")
@@ -62,12 +81,15 @@ async def audio_features(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=501, detail=str(e))
 
     suffix = "." + (file.filename.split(".")[-1] if file.filename and "." in file.filename else "wav")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    tmp_path = await _persist_upload_to_tempfile(file, suffix=suffix)
 
     try:
         feats = lightweight_audio_features(tmp_path)
         return feats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass

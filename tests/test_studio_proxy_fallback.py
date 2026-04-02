@@ -281,3 +281,26 @@ def test_job_detail_endpoint_returns_checkpoint_and_log_metadata(tmp_path, monke
             assert payload["outputs"]["checkpoint_exists"] is True
             assert payload["outputs"]["render_meta_exists"] is True
             assert payload["outputs"]["cache_paths"]["frames_dir"] == "frames_dir"
+
+
+def test_audio_upload_endpoint_persists_large_audio_payload(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    payload = (b"riff" * 4096) + b"tail"
+
+    with TestClient(studio_app.app) as client:
+        response = client.post(
+            f"/v1/projects/{proj.id}/assets/audio",
+            files={"file": ("long.wav", payload, "audio/wav")},
+        )
+
+    assert response.status_code == 200
+    audio_path = store.project_dir(proj.id) / "assets" / "audio" / "long.wav"
+    assert audio_path.read_bytes() == payload
+
+    saved = store.get(proj.id)
+    assert saved is not None
+    assert saved.meta["audio"]["filename"] == "long.wav"
+    assert saved.meta["audio"]["size_bytes"] == len(payload)

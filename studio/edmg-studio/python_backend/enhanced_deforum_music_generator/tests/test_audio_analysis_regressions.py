@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import numpy as np
 import pytest
 import soundfile as sf
 import librosa
+from types import SimpleNamespace
 
+from enhanced_deforum_music_generator import config_system_complete
 from enhanced_deforum_music_generator.config.config_system import AudioConfig
+from enhanced_deforum_music_generator.config.config_system import LyricsConfig
 from enhanced_deforum_music_generator.core.audio_analyzer import AudioAnalyzer
+from enhanced_deforum_music_generator.core import lyrics_analyzer as lyrics_analyzer_module
+from enhanced_deforum_music_generator.optimized_components import create_optimized_analyzer
+from edmg_ai_service import app as ai_service_app
 from edmg_ai_service.audio import lightweight_audio_features
 from edmg_ai_service import asr as asr_module
 
@@ -79,3 +87,67 @@ def test_transcribe_filters_short_low_confidence_hallucinations(monkeypatch):
     monkeypatch.setattr(asr_module, "_load_model", lambda model_size: FakeModel())
 
     assert asr_module.transcribe("instrumental.wav", model_size="small") == ""
+
+
+def test_long_form_audio_defaults_allow_30_minutes():
+    assert config_system_complete.AudioConfig().max_duration == 1800
+    assert config_system_complete.AudioConfigModel().max_duration == 1800
+    assert create_optimized_analyzer().max_duration == 1800
+
+
+def test_ai_service_upload_helper_streams_chunks_to_tempfile():
+    class FakeUpload:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+            self.closed = False
+
+        async def read(self, _chunk_size: int = -1):
+            if self._chunks:
+                return self._chunks.pop(0)
+            return b""
+
+        async def close(self):
+            self.closed = True
+
+    upload = FakeUpload([b"ab", b"cdef", b"ghi"])
+    tmp_path_str = asyncio.run(
+        ai_service_app._persist_upload_to_tempfile(upload, suffix=".wav", chunk_size=2)
+    )
+
+    try:
+        assert os.path.exists(tmp_path_str)
+        with open(tmp_path_str, "rb") as handle:
+            assert handle.read() == b"abcdefghi"
+        assert upload.closed is True
+    finally:
+        if os.path.exists(tmp_path_str):
+            os.remove(tmp_path_str)
+
+
+def test_lyric_analyzer_accepts_modern_lyrics_config(monkeypatch):
+    class FakeWhisperModel:
+        def transcribe(self, audio_file, **kwargs):
+            assert audio_file == "song.wav"
+            assert kwargs["language"] == "en"
+            return {"text": "long form spoken word transcript"}
+
+    loaded = {}
+
+    def fake_load_model(model_name: str):
+        loaded["model_name"] = model_name
+        return FakeWhisperModel()
+
+    monkeypatch.setattr(lyrics_analyzer_module, "WHISPER_AVAILABLE", True)
+    monkeypatch.setattr(
+        lyrics_analyzer_module,
+        "whisper",
+        SimpleNamespace(load_model=fake_load_model),
+        raising=False,
+    )
+
+    analyzer = lyrics_analyzer_module.LyricAnalyzer(
+        LyricsConfig(provider="whisper", model="tiny", language="en")
+    )
+
+    assert loaded["model_name"] == "tiny"
+    assert analyzer._transcribe_audio("song.wav") == "long form spoken word transcript"

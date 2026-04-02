@@ -18,6 +18,21 @@ except Exception:  # pragma: no cover
 router = APIRouter()
 
 
+async def _persist_upload_to_tempfile(file: UploadFile, *, suffix: str, chunk_size: int = 1024 * 1024) -> str:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            tmp.write(chunk)
+        tmp_path = tmp.name
+    try:
+        await file.close()
+    except Exception:
+        pass
+    return tmp_path
+
+
 @router.post("/analyze-audio")
 async def analyze_audio(file: UploadFile = File(...), enable_lyrics: bool = False, max_duration: int = 1800):
     """Analyze an uploaded audio file.
@@ -30,14 +45,11 @@ async def analyze_audio(file: UploadFile = File(...), enable_lyrics: bool = Fals
     - `max_duration` defaults to 30 minutes for full-song music video workflows.
     """
     analyzer = AudioAnalyzer(AudioConfig(max_duration=int(max_duration)))
-    contents = await file.read()
     suffix = Path(file.filename or "").suffix
 
     tmp_path: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(contents)
-            tmp_path = tmp.name
+        tmp_path = await _persist_upload_to_tempfile(file, suffix=suffix)
 
         result = analyzer.analyze(tmp_path, enable_cache=True)
 

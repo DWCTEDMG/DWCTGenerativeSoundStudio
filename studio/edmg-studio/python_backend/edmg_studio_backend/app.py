@@ -2586,9 +2586,19 @@ if HAS_MULTIPART:
         audio_dir.mkdir(parents=True, exist_ok=True)
         name = (file.filename or "audio.wav").replace("\\", "_").replace("/", "_")
         out = audio_dir / name
-        data = await file.read()
-        out.write_bytes(data)
-        store.set_audio(project_id, name, len(data))
+        size = 0
+        with out.open("wb") as handle:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                size += len(chunk)
+        try:
+            await file.close()
+        except Exception:
+            pass
+        store.set_audio(project_id, name, size)
         return {"ok": True, "path": str(out)}
 else:
     @app.post("/v1/projects/{project_id}/assets/audio")

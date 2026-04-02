@@ -17,7 +17,7 @@ class AudioConfig:
     sample_rate: int = 22050
     chunk_size: int = 30
     chunk_threshold: int = 60
-    max_duration: int = 600
+    max_duration: int = 1800
     cache_dir: Optional[str] = "data/cache"
     enable_noise_reduction: bool = True
     normalize_audio: bool = True
@@ -278,7 +278,7 @@ class Config:
 # Pydantic models for API validation
 class AudioConfigModel(BaseModel):
     sample_rate: int = 22050
-    max_duration: int = 600
+    max_duration: int = 1800
     enable_noise_reduction: bool = True
 
 class GenerationRequest(BaseModel):
