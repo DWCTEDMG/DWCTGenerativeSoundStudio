@@ -102,7 +102,7 @@ None of these route paths import the A1111 connector.
 
 ## Safe-delete list
 
-These are the lowest-risk removals once you choose to do a deletion pass:
+These were the lowest-risk removals, and they have now been applied in the follow-up cleanup pass:
 
 - `.gitmodules` entry for `external/stable-diffusion-webui`
 - `studio/edmg-studio/python_backend/integrations/a1111_connector.py`
@@ -122,12 +122,14 @@ These should not be removed without a separate decision on optional EDMG tooling
 
 ## Minimal cleanup patch applied
 
-This patch does not delete source files.
+This cleanup now applies both packaging and source-level safe removals:
 
-It does one proven-safe cleanup only:
+- remove the stale `.gitmodules` entry for `external/stable-diffusion-webui`
+- delete the unused top-level compatibility shim `studio/edmg-studio/python_backend/integrations/a1111_connector.py`
+- delete the duplicate root test `tests/test_a1111_connector.py`
 
 - `studio/edmg-studio/python_backend/pyinstaller.spec`
   - exclude `integrations.a1111_connector`
   - exclude `enhanced_deforum_music_generator.integrations.a1111_connector`
 
-That reduces packaged runtime drift without removing optional dev-only source.
+That reduces packaged runtime drift without removing the remaining optional EDMG A1111 helper implementation under `enhanced_deforum_music_generator`.
