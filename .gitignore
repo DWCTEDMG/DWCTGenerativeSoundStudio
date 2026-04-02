@@ -82,6 +82,8 @@ studio/edmg-studio/cache/
 studio/edmg-studio/logs/
 studio/edmg-studio/external/
 studio/edmg-studio/_legacy_migrations/
+studio/edmg-studio/python_backend/.codex-pyinstaller-build/
+studio/edmg-studio/python_backend/.codex-pyinstaller-dist/
 studio/edmg-studio/launcher_env.json
 studio/edmg-studio/electron/
 studio/edmg-studio/electron-resources/backend/*.exe
