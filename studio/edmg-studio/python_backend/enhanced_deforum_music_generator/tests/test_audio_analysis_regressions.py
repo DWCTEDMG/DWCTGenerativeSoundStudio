@@ -89,6 +89,43 @@ def test_transcribe_filters_short_low_confidence_hallucinations(monkeypatch):
     assert asr_module.transcribe("instrumental.wav", model_size="small") == ""
 
 
+def test_transcribe_detailed_returns_segment_metadata(monkeypatch):
+    class FakeInfo:
+        duration = 612.4
+        duration_after_vad = 598.2
+        language = "en"
+
+    class FakeSegment:
+        def __init__(self, start, end, text):
+            self.start = start
+            self.end = end
+            self.text = text
+            self.no_speech_prob = 0.02
+            self.avg_logprob = -0.2
+
+    class FakeModel:
+        def transcribe(self, *args, **kwargs):
+            assert kwargs["without_timestamps"] is False
+            return iter((
+                FakeSegment(0.0, 4.2, "First long-form section."),
+                FakeSegment(302.0, 307.5, "Middle transcript cue."),
+                FakeSegment(594.0, 598.2, "Final transcript cue."),
+            )), FakeInfo()
+
+    monkeypatch.setattr(asr_module, "_load_model", lambda model_size: FakeModel())
+
+    result = asr_module.transcribe_detailed("longform.wav", model_size="small")
+
+    assert result["language"] == "en"
+    assert result["duration_s"] == pytest.approx(612.4)
+    assert result["duration_after_vad_s"] == pytest.approx(598.2)
+    assert result["segment_count"] == 3
+    assert result["word_count"] >= 6
+    assert result["text"].startswith("First long-form section.")
+    assert result["segments"][1]["start"] == pytest.approx(302.0)
+    assert result["segments"][2]["text"] == "Final transcript cue."
+
+
 def test_long_form_audio_defaults_allow_30_minutes():
     assert config_system_complete.AudioConfig().max_duration == 1800
     assert config_system_complete.AudioConfigModel().max_duration == 1800

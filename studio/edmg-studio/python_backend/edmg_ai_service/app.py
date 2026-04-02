@@ -54,7 +54,7 @@ def plan(req: PlanRequest) -> PlanResponse:
 @app.post("/v1/transcribe")
 async def transcribe_audio(file: UploadFile = File(...), model_size: str = "small") -> dict:
     try:
-        from .asr import transcribe
+        from .asr import transcribe_detailed
     except Exception as e:
         raise HTTPException(status_code=501, detail=str(e))
 
@@ -62,8 +62,7 @@ async def transcribe_audio(file: UploadFile = File(...), model_size: str = "smal
     tmp_path = await _persist_upload_to_tempfile(file, suffix=suffix)
 
     try:
-        text = transcribe(tmp_path, model_size=model_size)
-        return {"text": text}
+        return transcribe_detailed(tmp_path, model_size=model_size)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

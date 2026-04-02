@@ -116,13 +116,12 @@ class LocalAiDirectorClient:
     def transcribe(self, audio_path: str, model_size: str = "small") -> dict[str, Any]:
         try:
             self._ensure_import_path()
-            from edmg_ai_service.asr import transcribe
+            from edmg_ai_service.asr import transcribe_detailed
         except Exception as e:
             return {"text": None, "note": f"transcription not available: {e}"}
 
         try:
-            text = transcribe(audio_path, model_size=model_size)
-            return {"text": text}
+            return transcribe_detailed(audio_path, model_size=model_size)
         except Exception as e:
             return {"text": None, "error": str(e)}
 

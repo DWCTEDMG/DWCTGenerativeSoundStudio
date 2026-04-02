@@ -2678,54 +2678,23 @@ def analyze_audio(project_id: str):
         raise HTTPException(400, "No audio uploaded")
     audio_path = store.project_dir(project_id) / "assets" / "audio" / audio_meta["filename"]
 
-    feats = {}
-    trans = {}
-    # Prefer EDMG-core AudioAnalyzer (richer beats/energy) when deps are available.
+    feats = _collect_audio_analysis_features(audio_path)
     try:
-        from enhanced_deforum_music_generator.core.audio_analyzer import AudioAnalyzer  # type: ignore
-        from enhanced_deforum_music_generator.config.config_system import AudioConfig  # type: ignore
-
-        analyzer = AudioAnalyzer(AudioConfig())
-        af = analyzer.analyze_features(str(audio_path))
-        # Keep only JSON-friendly fields
-        energy = list(getattr(af, "energy", []) or [])
-        if energy:
-            mn = min(energy)
-            mx = max(energy)
-            if mx > mn:
-                energy = [(float(e) - mn) / (mx - mn) for e in energy]
-            energy = [max(0.0, min(1.0, float(e))) for e in energy]
-        feats = {
-            "duration_s": float(getattr(af, "duration", 0.0) or 0.0),
-            "bpm": float(getattr(af, "tempo", 0.0) or 0.0),
-            "tempo_bpm": float(getattr(af, "tempo", 0.0) or 0.0),
-            "beats": [float(x) for x in (getattr(af, "beats", []) or [])],
-            "energy": energy,
-        }
-    except Exception:
-        # Fallback to local feature extractors so audio analysis does not depend on the AI client.
-        try:
-            from edmg_ai_service.audio import lightweight_audio_features  # type: ignore
-
-            feats = lightweight_audio_features(str(audio_path))
-        except Exception as e:
-            feats = {"error": f"audio_features failed: {e}"}
-
-    try:
-        from edmg_ai_service.asr import transcribe as local_transcribe  # type: ignore
-
-        transcript_result = local_transcribe(str(audio_path), model_size="small")
-        if isinstance(transcript_result, dict):
-            trans = transcript_result
-        else:
-            trans = {"text": str(transcript_result or "")}
+        transcript_result = ai.transcribe(str(audio_path), model_size="small")
+        trans = transcript_result if isinstance(transcript_result, dict) else {"text": str(transcript_result or "")}
     except Exception as e:
         trans = {"error": f"transcribe failed: {e}"}
 
-    analysis = {"features": feats, "transcript": trans, "timestamp": time.time()}
+    analysis = _enrich_project_audio_analysis(
+        getattr(proj, "name", "Untitled project"),
+        {"features": feats, "transcript": trans, "timestamp": time.time()},
+    )
     duration_s = _analysis_duration_s(analysis)
     if duration_s:
         analysis["duration_s"] = float(duration_s)
+    analysis_path = _write_project_analysis_snapshot(project_id, analysis)
+    if analysis_path:
+        analysis["analysis_path"] = analysis_path
     proj.meta["analysis"] = analysis
     store.save(proj)
     return {"ok": True, "analysis": analysis}
@@ -2782,10 +2751,294 @@ def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirect
 def _analysis_transcript_text(analysis: dict[str, Any]) -> str:
     raw = (analysis or {}).get("transcript")
     if isinstance(raw, dict):
-        return str(raw.get("text") or "")
+        text = str(raw.get("text") or "").strip()
+        if text:
+            return text
+        segments = raw.get("segments") if isinstance(raw.get("segments"), list) else []
+        return " ".join(
+            [str(seg.get("text") or "").strip() for seg in segments if isinstance(seg, dict) and str(seg.get("text") or "").strip()]
+        ).strip()
     if isinstance(raw, str):
         return raw
     return ""
+
+
+def _analysis_transcript_segments(analysis: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = (analysis or {}).get("transcript")
+    if isinstance(raw, dict) and isinstance(raw.get("segments"), list):
+        out: list[dict[str, Any]] = []
+        for item in raw.get("segments") or []:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            try:
+                start = float(item.get("start") or 0.0)
+            except Exception:
+                start = 0.0
+            try:
+                end = float(item.get("end") or start)
+            except Exception:
+                end = start
+            out.append({"start": max(0.0, start), "end": max(start, end), "text": text})
+        return out
+    return []
+
+
+def _normalize_curve(values: Any) -> list[float]:
+    out = _coerce_float_list(values)
+    if not out:
+        return []
+    mn = min(out)
+    mx = max(out)
+    if mx > mn:
+        out = [(float(v) - mn) / (mx - mn) for v in out]
+    return [max(0.0, min(1.0, float(v))) for v in out]
+
+
+def _collect_audio_analysis_features(audio_path: Path) -> dict[str, Any]:
+    try:
+        from enhanced_deforum_music_generator.core.audio_analyzer import AudioAnalyzer  # type: ignore
+        from enhanced_deforum_music_generator.config.config_system import AudioConfig  # type: ignore
+
+        analyzer = AudioAnalyzer(AudioConfig())
+        af = analyzer.analyze_features(str(audio_path))
+        return {
+            "duration_s": float(getattr(af, "duration", 0.0) or 0.0),
+            "bpm": float(getattr(af, "tempo", 0.0) or 0.0),
+            "tempo_bpm": float(getattr(af, "tempo", 0.0) or 0.0),
+            "beats": [float(x) for x in (getattr(af, "beats", []) or [])],
+            "energy": _normalize_curve(getattr(af, "energy", []) or []),
+            "onset_strength": _normalize_curve(getattr(af, "onset_strength", []) or []),
+            "onset_times": [float(x) for x in (getattr(af, "onset_times", []) or [])],
+            "spectral_centroid": [float(x) for x in (getattr(af, "spectral_centroid", []) or [])],
+            "spectral_rolloff": [float(x) for x in (getattr(af, "spectral_rolloff", []) or [])],
+            "rms_energy": _normalize_curve(getattr(af, "rms_energy", []) or []),
+        }
+    except Exception:
+        try:
+            from edmg_ai_service.audio import lightweight_audio_features  # type: ignore
+
+            return lightweight_audio_features(str(audio_path))
+        except Exception as e:
+            return {"error": f"audio_features failed: {e}"}
+
+
+def _normalize_transcript_payload(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, str):
+        raw = {"text": raw}
+    elif not isinstance(raw, dict):
+        raw = {}
+
+    text = str(raw.get("text") or "").strip()
+    segments: list[dict[str, Any]] = []
+    if isinstance(raw.get("segments"), list):
+        for item in raw.get("segments") or []:
+            if not isinstance(item, dict):
+                continue
+            seg_text = str(item.get("text") or "").strip()
+            if not seg_text:
+                continue
+            try:
+                start = float(item.get("start") or 0.0)
+            except Exception:
+                start = 0.0
+            try:
+                end = float(item.get("end") or start)
+            except Exception:
+                end = start
+            segments.append({"start": max(0.0, start), "end": max(start, end), "text": seg_text})
+
+    if not text and segments:
+        text = "\n".join(seg["text"] for seg in segments).strip()
+
+    duration_s = _pick_raw_number(raw, ["duration_s", "duration"])
+    duration_after_vad_s = _pick_raw_number(raw, ["duration_after_vad_s"])
+    word_count = int(raw.get("word_count") or len(text.split()))
+    return {
+        "text": text,
+        "segments": segments,
+        "language": str(raw.get("language") or ""),
+        "duration_s": float(duration_s or 0.0),
+        "duration_after_vad_s": float(duration_after_vad_s or 0.0),
+        "segment_count": int(raw.get("segment_count") or len(segments)),
+        "word_count": word_count,
+        "model_size": str(raw.get("model_size") or "small"),
+        "source": str(raw.get("source") or "transcribe"),
+        **({"error": str(raw.get("error"))} if raw.get("error") else {}),
+        **({"note": str(raw.get("note"))} if raw.get("note") else {}),
+    }
+
+
+def _analysis_top_keywords(text: str, limit: int = 12) -> list[str]:
+    counts: dict[str, int] = {}
+    for token in _creative_tokenize(text):
+        counts[token] = counts.get(token, 0) + 1
+    return [token for token, _count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]]
+
+
+def _analysis_theme_terms(text: str, limit: int = 8) -> list[str]:
+    try:
+        from enhanced_deforum_music_generator.core.nlp_processor import NLPProcessor  # type: ignore
+
+        terms = NLPProcessor({"max_themes": limit}).extract_themes(text)
+    except Exception:
+        terms = []
+    merged: list[str] = []
+    for token in list(terms or []) + _analysis_top_keywords(text, limit=limit):
+        clean = str(token or "").strip().lower()
+        if clean and clean not in merged:
+            merged.append(clean)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def _analysis_summary_text(text: str, segments: list[dict[str, Any]]) -> str:
+    candidates: list[str] = []
+    if segments:
+        picks = [segments[0], segments[len(segments) // 2], segments[-1]]
+        for seg in picks:
+            cue = str(seg.get("text") or "").strip()
+            if cue and cue not in candidates:
+                candidates.append(cue)
+    if not candidates:
+        for sentence in _analysis_transcript_sentences({"transcript": {"text": text}}):
+            if sentence not in candidates:
+                candidates.append(sentence)
+            if len(candidates) >= 3:
+                break
+    return " ".join(candidates[:3]).strip()
+
+
+def _derive_longform_analysis_sections(
+    title: str,
+    analysis: dict[str, Any],
+    tags: list[str],
+    *,
+    preset: str = "cinematic",
+    sensitivity: float = 1.0,
+    max_sections: int = 12,
+) -> list[dict[str, Any]]:
+    segments = _analysis_transcript_segments(analysis)
+    duration_s = _analysis_duration_s(analysis) or 0.0
+    if duration_s <= 0.0 and segments:
+        duration_s = max(float(seg.get("end") or 0.0) for seg in segments)
+    overall = _infer_reactivity_metrics(analysis)
+    energy_curve = list(overall.get("energy_curve") or [])
+
+    if not segments:
+        return _derive_reactive_sections(
+            overall,
+            duration_s,
+            _analysis_transcript_sentences(analysis),
+            tags[:8],
+            title,
+            preset,
+            sensitivity,
+            max_sections=min(8, max(3, int(max_sections))),
+        )
+
+    desired = max(3, min(int(max_sections), int(math.ceil(max(duration_s, 1.0) / 60.0))))
+    window_s = max(20.0, duration_s / max(1, desired))
+    sections: list[dict[str, Any]] = []
+    for index in range(desired):
+        start_s = float(index) * window_s
+        end_s = duration_s if index == desired - 1 else min(duration_s, float(index + 1) * window_s)
+        bucket = [
+            seg for seg in segments
+            if float(seg.get("end") or 0.0) > start_s and float(seg.get("start") or 0.0) < end_s
+        ]
+        if not bucket:
+            midpoint = (start_s + end_s) / 2.0
+            nearest = min(segments, key=lambda seg: abs((((float(seg.get("start") or 0.0) + float(seg.get("end") or 0.0)) / 2.0) - midpoint)))
+            bucket = [nearest]
+        cue_text = " ".join(str(seg.get("text") or "").strip() for seg in bucket[:3]).strip()
+        bucket_tags = _analysis_top_keywords(cue_text, limit=4) or list(tags[:4])
+        metrics = _scene_metrics_from_curve(
+            index,
+            desired,
+            {"start_s": start_s, "end_s": end_s},
+            overall,
+            duration_s,
+            energy_curve,
+        )
+        band_scores = {
+            "bass": float(metrics.get("bass") or 0.0),
+            "mid": float(metrics.get("mid") or 0.0),
+            "treble": float(metrics.get("treble") or 0.0),
+        }
+        band = max(band_scores.items(), key=lambda item: item[1])[0]
+        label = _creative_section_label(index, desired, float(metrics.get("energy") or 0.0), band)
+        camera_hint, motion_hint_base = _creative_section_hints(label, band)
+        params = _compute_reactive_params(metrics, preset, sensitivity)
+        motion_hint = f"{motion_hint_base} {_creative_motion_hint(params)}".strip()
+        focus = ", ".join(bucket_tags[:3]) if bucket_tags else ", ".join(tags[:3]) or "cinematic continuity"
+        prompt = (
+            f"{title or 'Untitled project'}, {label.lower()}, {band}-led motion language, "
+            f"{preset} music-film framing, themes: {focus}"
+        )
+        sections.append(
+            {
+                "index": index,
+                "name": label,
+                "start_s": start_s,
+                "end_s": max(start_s + 0.2, end_s),
+                "duration_s": max(0.2, end_s - start_s),
+                "energy": float(metrics.get("energy") or 0.0),
+                "energy_label": _creative_energy_label(float(metrics.get("energy") or 0.0)),
+                "prompt": prompt,
+                "transcript_cue": cue_text or "No transcript cue available; drive the section from the energy arc.",
+                "camera_hint": camera_hint,
+                "motion_hint": motion_hint,
+                "band": band,
+                "keywords": bucket_tags,
+                "avg_energy": float(metrics.get("energy") or 0.0),
+                "peak_energy": float(metrics.get("energy") or 0.0),
+                "reactive_params": params,
+                "scene_source": "analysis_fallback",
+            }
+        )
+    return sections
+
+
+def _enrich_project_audio_analysis(title: str, analysis: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {
+        "features": dict((analysis or {}).get("features") or {}),
+        "transcript": _normalize_transcript_payload((analysis or {}).get("transcript")),
+        "timestamp": float((analysis or {}).get("timestamp") or time.time()),
+    }
+    transcript_text = _analysis_transcript_text(normalized)
+    transcript_segments = _analysis_transcript_segments(normalized)
+    tags = _analysis_top_keywords(transcript_text, limit=12)
+    themes = _analysis_theme_terms(transcript_text, limit=8)
+    emotion_scores = _creative_emotion_scores(_creative_tokenize(transcript_text), limit=4)
+    normalized["summary"] = _analysis_summary_text(transcript_text, transcript_segments)
+    normalized["tags"] = list(dict.fromkeys([*themes, *tags]))[:12]
+    normalized["themes"] = themes
+    normalized["emotions"] = emotion_scores
+    normalized["sections"] = _derive_longform_analysis_sections(title, normalized, normalized["tags"])
+    normalized["transcript"]["segment_count"] = len(transcript_segments)
+    normalized["transcript"]["word_count"] = int(normalized["transcript"].get("word_count") or len(transcript_text.split()))
+    return normalized
+
+
+def _write_project_analysis_snapshot(project_id: str, analysis: dict[str, Any]) -> str | None:
+    try:
+        pdir = store.project_dir(project_id)
+        rel = Path("analysis") / "audio_analysis.json"
+        target = pdir / rel
+        tmp = target.with_suffix(".json.tmp")
+        payload = json.dumps(analysis, ensure_ascii=False, indent=2)
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+        return str(rel).replace("\\", "/")
+    except Exception:
+        return None
 
 def _coerce_float_list(v: Any) -> list[float]:
     if not v:
@@ -3624,14 +3877,16 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
     transcript_text = _analysis_transcript_text(analysis).strip()
     transcript_sentences = _analysis_transcript_sentences(analysis)
     hooks = _creative_hooks(transcript_sentences)
-    motifs = _analysis_motifs(variant if isinstance(variant, dict) else {}, transcript_text)
+    saved_tags = list(analysis.get("tags") or []) if isinstance(analysis, dict) else []
+    motifs = list(dict.fromkeys([*saved_tags, *_analysis_motifs(variant if isinstance(variant, dict) else {}, transcript_text)]))[:8]
     emotion_tokens = _creative_tokenize(" ".join([transcript_text, *[str(scene.get("prompt") or "") for scene in scenes if isinstance(scene, dict)]]))
     emotions = _creative_emotion_scores(emotion_tokens)
     overall = _infer_reactivity_metrics(analysis if isinstance(analysis, dict) else {})
     energy_curve = list(overall.get("energy_curve") or [])
     waveform = list(overall.get("waveform") or [])
     duration_s = float(overall.get("duration_s") or 0.0)
-    fallback_sections = _derive_reactive_sections(
+    saved_sections = list(analysis.get("sections") or []) if isinstance(analysis, dict) and isinstance(analysis.get("sections"), list) else []
+    fallback_sections = saved_sections or _derive_reactive_sections(
         overall,
         duration_s,
         transcript_sentences,
@@ -3746,6 +4001,9 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         "hooks": hooks,
         "motifs": motifs,
         "transcript_line_count": len(transcript_sentences),
+        "segment_count": len(_analysis_transcript_segments(analysis)),
+        "section_count": len(fallback_sections),
+        "themes": list(analysis.get("themes") or []) if isinstance(analysis, dict) else [],
     }
     llm_contract = _build_creative_contract(
         proj,
@@ -3792,7 +4050,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         "waveform": waveform,
         "motifs": motifs,
         "transcript_text": transcript_text,
-        "transcript_summary": " ".join(transcript_sentences[:3]),
+        "transcript_summary": str(analysis.get("summary") or "").strip() or " ".join(transcript_sentences[:3]),
         "narrative_analysis": narrative_analysis,
         "sections": fallback_sections,
         "scenes": packed_scenes,
