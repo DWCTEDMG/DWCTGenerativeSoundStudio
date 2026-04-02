@@ -439,7 +439,7 @@ class ModelManager:
             fname = str(e.get("filename") or "")
 
             if engine == "internal":
-                out[mid] = bool((self._internal_models_dir(folder) / mid).exists())
+                out[mid] = self._internal_asset_installed(e, self._internal_models_dir(folder) / mid)
                 continue
 
             if fname:
@@ -456,6 +456,23 @@ class ModelManager:
         if legacy_root is not None:
             dirs.append(legacy_root)
         return dirs
+
+    def _internal_asset_installed(self, entry: dict[str, Any], path: Path) -> bool:
+        if not path.exists():
+            return False
+
+        kind = str(entry.get("kind") or "").strip().lower()
+        if kind == "diffusers":
+            return (path / "model_index.json").exists()
+        if kind == "controlnet":
+            if not (path / "config.json").exists():
+                return False
+            return any(
+                candidate.exists()
+                for pattern in ("diffusion_pytorch_model*.safetensors", "diffusion_pytorch_model*.bin")
+                for candidate in path.glob(pattern)
+            )
+        return True
 
     def _find_existing_comfy_file(self, folder: str, ref: str) -> Path | None:
         raw = str(ref or "").strip()
@@ -805,7 +822,7 @@ class ModelManager:
         folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
         if engine == "internal":
             p = (self._internal_models_dir(folder) / model_id)
-            return p if p.exists() else None
+            return p if self._internal_asset_installed(entry, p) else None
         if engine == "runtime_bundle":
             p = self._internal_models_dir(folder) / model_id
             return p if p.exists() else None

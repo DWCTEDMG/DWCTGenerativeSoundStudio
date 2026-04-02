@@ -4453,6 +4453,15 @@ def _prepare_still_scene_assets(project_id: str, payload: dict[str, Any], workfl
 def _prepare_internal_controlnet_units(project_id: str, units: list[dict[str, Any]]) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
     for unit in units:
+        model_ref = str(unit.get("model") or unit.get("controlnet_name") or "").strip()
+        if not model_ref:
+            raise UserFacingError(
+                "ControlNet model is missing",
+                hint="Pick an internal ControlNet model before running the render.",
+                code="CONTROLNET_MODEL_MISSING",
+                status_code=400,
+            )
+        asset = models.resolve_internal_asset(model_ref, folder="controlnet", allowed_kinds={"controlnet"})
         ref_path = _resolve_project_reference_path(project_id, str(unit.get("reference_asset") or ""))
         if ref_path is None:
             raise UserFacingError(
@@ -4462,7 +4471,14 @@ def _prepare_internal_controlnet_units(project_id: str, units: list[dict[str, An
                 status_code=400,
             )
         conditioned = _prepare_condition_image(project_id, ref_path, str(unit.get("conditioning_mode") or "raw"))
-        prepared.append({**unit, "reference_path": str(conditioned)})
+        prepared.append(
+            {
+                **unit,
+                "path": str(asset.get("path") or ""),
+                "family": asset.get("family"),
+                "reference_path": str(conditioned),
+            }
+        )
     return prepared
 
 
@@ -4470,8 +4486,9 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
     prompt = str(payload.get("prompt") or "")
     workflow_family = str(payload.get("workflow_family") or "txt2img")
     model_id = str(payload.get("model_id") or "")
-    model_path = Path(str(payload.get("model_path") or ""))
-    if not model_path.exists():
+    raw_model_path = str(payload.get("model_path") or "").strip()
+    model_path = Path(raw_model_path) if raw_model_path else None
+    if model_path is None or not model_path.exists():
         installed = models.installed_path(model_id)
         if installed is None:
             raise UserFacingError(

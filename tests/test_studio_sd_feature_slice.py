@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from edmg_studio_backend import app as studio_app
 from edmg_studio_backend.integrations import comfyui as comfy
+from edmg_studio_backend.services.model_manager import ModelManager
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
 from PIL import Image
@@ -202,6 +203,91 @@ def test_run_internal_still_scene_uses_final_image_size_in_metadata(tmp_path, mo
     assert metadata["hires_fix"]["scale"] == 1.5
 
 
+def test_run_internal_still_scene_uses_installed_model_path_and_resolves_internal_controlnet_units(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    refs_dir = store.project_dir(proj.id) / "assets" / "refs"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    source_path = refs_dir / "source.png"
+    Image.new("RGB", (64, 64), (24, 48, 72)).save(source_path)
+
+    model_dir = tmp_path / "internal-model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    controlnet_dir = tmp_path / "internal-controlnet"
+    controlnet_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda model_id: model_dir if model_id == "hf_sdxl_internal" else None)
+    monkeypatch.setattr(
+        studio_app.models,
+        "resolve_internal_asset",
+        lambda ref, **kwargs: {
+            "id": ref,
+            "name": "SDXL Canny Internal",
+            "path": str(controlnet_dir),
+            "family": "sdxl",
+        },
+    )
+    monkeypatch.setattr(studio_app, "_prepare_condition_image", lambda project_id, path, mode: path)
+
+    captured: dict[str, object] = {}
+
+    def _fake_render_internal_still_image(**kwargs):
+        captured.update(kwargs)
+        return {
+            "image": Image.new("RGB", (96, 64), (12, 24, 36)),
+            "device": "cpu",
+            "requested_device": "cpu",
+            "family": "sdxl",
+            "backend": "diffusers",
+            "seed": 303,
+        }
+
+    monkeypatch.setattr(studio_app, "render_internal_still_image", _fake_render_internal_still_image)
+
+    out_path = store.project_dir(proj.id) / "outputs" / "images" / "internal_controlnet.png"
+    studio_app._run_internal_still_scene(
+        proj.id,
+        "job-controlnet",
+        {
+            "variant_index": 0,
+            "scene_index": 0,
+            "model_id": "hf_sdxl_internal",
+            "family": "sdxl",
+            "workflow_family": "controlnet",
+            "prompt": "Structured architecture study",
+            "negative_prompt": "blurry",
+            "seed": 303,
+            "width": 96,
+            "height": 64,
+            "steps": 12,
+            "cfg": 6.0,
+            "sampler": "euler",
+            "controlnet_units": [
+                {
+                    "controlnet_name": "hf_sdxl_controlnet_canny_internal",
+                    "reference_asset": "assets/refs/source.png",
+                    "conditioning_mode": "edge",
+                    "strength": 0.7,
+                    "start_percent": 0.0,
+                    "end_percent": 1.0,
+                }
+            ],
+            "out_path": str(out_path),
+        },
+    )
+
+    assert captured["model_dir"] == model_dir
+    assert captured["workflow_family"] == "controlnet"
+    units = captured["controlnet_units"]
+    assert isinstance(units, list) and len(units) == 1
+    unit = units[0]
+    assert unit["path"] == str(controlnet_dir)
+    assert unit["family"] == "sdxl"
+    assert unit["reference_path"] == str(source_path)
+
+
 def test_prepare_outpaint_assets_generates_canvas_and_mask(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
@@ -390,3 +476,60 @@ def test_export_comfyui_workflows_rejects_internal_still_models(tmp_path, monkey
         )
 
     assert exc.value.code == "EXPORT_ENGINE_UNSUPPORTED"
+
+
+def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatch):
+    manager = ModelManager(
+        data_dir=tmp_path / "data",
+        models_dir=tmp_path / "models",
+        external_dir=tmp_path / "external",
+        comfyui_url="http://127.0.0.1:8188",
+        ollama_url="http://127.0.0.1:11434",
+    )
+    entries = {
+        "hf_sdxl_internal": {
+            "id": "hf_sdxl_internal",
+            "name": "SDXL Internal",
+            "kind": "diffusers",
+            "target": {"engine": "internal", "folder": "diffusers"},
+            "family": "sdxl",
+        },
+        "hf_sdxl_controlnet_canny_internal": {
+            "id": "hf_sdxl_controlnet_canny_internal",
+            "name": "SDXL ControlNet Canny Internal",
+            "kind": "controlnet",
+            "target": {"engine": "internal", "folder": "controlnet"},
+            "family": "sdxl",
+        },
+    }
+    monkeypatch.setattr(manager, "_find_entry", lambda model_id: entries.get(model_id))
+
+    model_dir = manager._internal_models_dir("diffusers") / "hf_sdxl_internal"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    assert manager.installed_path("hf_sdxl_internal") is None
+    (model_dir / "model_index.json").write_text("{}", encoding="utf-8")
+    assert manager.installed_path("hf_sdxl_internal") == model_dir
+
+    controlnet_dir = manager._internal_models_dir("controlnet") / "hf_sdxl_controlnet_canny_internal"
+    controlnet_dir.mkdir(parents=True, exist_ok=True)
+    assert manager.installed_path("hf_sdxl_controlnet_canny_internal") is None
+
+    (controlnet_dir / "config.json").write_text("{}", encoding="utf-8")
+    assert manager.installed_path("hf_sdxl_controlnet_canny_internal") is None
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        manager.resolve_internal_asset(
+            "hf_sdxl_controlnet_canny_internal",
+            folder="controlnet",
+            allowed_kinds={"controlnet"},
+        )
+    assert "not installed" in str(exc.value).lower()
+
+    (controlnet_dir / "diffusion_pytorch_model.safetensors").write_text("weights", encoding="utf-8")
+    assert manager.installed_path("hf_sdxl_controlnet_canny_internal") == controlnet_dir
+    resolved = manager.resolve_internal_asset(
+        "hf_sdxl_controlnet_canny_internal",
+        folder="controlnet",
+        allowed_kinds={"controlnet"},
+    )
+    assert resolved["path"] == str(controlnet_dir)
+    assert resolved["family"] == "sdxl"
