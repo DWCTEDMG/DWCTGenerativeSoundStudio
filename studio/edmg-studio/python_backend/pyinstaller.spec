@@ -28,6 +28,13 @@ hidden += collect_submodules("core")
 hidden += collect_submodules("config")
 hidden += collect_submodules("integrations")
 
+# Studio runtime does not invoke the legacy A1111 connector modules.
+excluded_legacy = {
+    "integrations.a1111_connector",
+    "enhanced_deforum_music_generator.integrations.a1111_connector",
+}
+hidden = [module for module in hidden if module not in excluded_legacy]
+
 a = Analysis(
     [str(here / "backend_entry.py")],
     pathex=[str(here)],
@@ -37,7 +44,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=sorted(excluded_legacy),
     noarchive=False,
 )
 

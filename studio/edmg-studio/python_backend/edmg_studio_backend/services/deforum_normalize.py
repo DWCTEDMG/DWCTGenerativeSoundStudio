@@ -1,0 +1,241 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from .deforum_motion import (
+    DeforumMotionScheduleBundle,
+    merge_motion_schedule_bundles,
+    motion_bundle_from_mapping,
+)
+from .deforum_prompt_timeline import normalize_prompt_map
+
+
+@dataclass(frozen=True)
+class UnifiedDeforumRenderContext:
+    prompts: tuple[tuple[int, str], ...] = ()
+    negative_prompts: tuple[tuple[int, str], ...] = ()
+    motion: DeforumMotionScheduleBundle = field(default_factory=DeforumMotionScheduleBundle)
+
+
+def _frame_at_time(seconds: Any, fps: int) -> int:
+    try:
+        return max(0, int(round(float(seconds) * float(max(1, fps)))))
+    except Exception:
+        return 0
+
+
+def _pairs_from_start_end(start_frame: int, end_frame: int, start_value: Any, end_value: Any) -> tuple[tuple[int, float], ...]:
+    try:
+        left = float(start_value)
+        right = float(end_value)
+    except Exception:
+        return ()
+    if start_frame == end_frame:
+        return ((int(start_frame), float(right)),)
+    return ((int(start_frame), float(left)), (int(end_frame), float(right)))
+
+
+def _pairs_from_constant(start_frame: int, end_frame: int, value: Any) -> tuple[tuple[int, float], ...]:
+    return _pairs_from_start_end(start_frame, end_frame, value, value)
+
+
+def _variant_prompt_pairs(variant: dict[str, Any] | None) -> list[tuple[int, str]]:
+    if not isinstance(variant, dict):
+        return []
+    prompts = variant.get("prompts")
+    if isinstance(prompts, dict):
+        return normalize_prompt_map(prompts)
+    return []
+
+
+def _variant_negative_pairs(variant: dict[str, Any] | None) -> list[tuple[int, str]]:
+    if not isinstance(variant, dict):
+        return []
+    prompts = variant.get("negative_prompts")
+    if isinstance(prompts, dict):
+        return normalize_prompt_map(prompts)
+    return []
+
+
+def _scene_prompt_pairs(scenes: list[dict[str, Any]], fps: int) -> list[tuple[int, str]]:
+    pairs: list[tuple[int, str]] = []
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            continue
+        pairs.append((_frame_at_time(scene.get("start_s", 0.0), fps), str(scene.get("prompt") or "")))
+    return normalize_prompt_map(pairs)
+
+
+def _scene_negative_pairs(scenes: list[dict[str, Any]], fps: int) -> list[tuple[int, str]]:
+    pairs: list[tuple[int, str]] = []
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            continue
+        negative = scene.get("negative_prompt")
+        if negative is None:
+            continue
+        pairs.append((_frame_at_time(scene.get("start_s", 0.0), fps), str(negative)))
+    return normalize_prompt_map(pairs)
+
+
+def _prompt_track_pairs(timeline: dict[str, Any] | None, fps: int) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    if not isinstance(timeline, dict):
+        return [], []
+
+    prompt_pairs: list[tuple[int, str]] = []
+    negative_pairs: list[tuple[int, str]] = []
+    tracks = timeline.get("tracks")
+    if not isinstance(tracks, list):
+        return [], []
+
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        if str(track.get("type") or "").lower() != "prompt":
+            continue
+        clips = track.get("clips")
+        if not isinstance(clips, list):
+            continue
+        for clip in clips:
+            if not isinstance(clip, dict):
+                continue
+            data = clip.get("data") if isinstance(clip.get("data"), dict) else {}
+            frame = _frame_at_time(clip.get("start_s", 0.0), fps)
+            if "prompt" in data:
+                prompt_pairs.append((frame, str(data.get("prompt") or "")))
+            if "negative_prompt" in data:
+                negative_pairs.append((frame, str(data.get("negative_prompt") or "")))
+
+    return normalize_prompt_map(prompt_pairs), normalize_prompt_map(negative_pairs)
+
+
+def _motion_track_bundle(timeline: dict[str, Any] | None, fps: int) -> DeforumMotionScheduleBundle:
+    if not isinstance(timeline, dict):
+        return DeforumMotionScheduleBundle()
+
+    tracks = timeline.get("tracks")
+    if not isinstance(tracks, list):
+        return DeforumMotionScheduleBundle()
+
+    bundles: list[DeforumMotionScheduleBundle] = []
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        if str(track.get("type") or "").lower() != "motion":
+            continue
+        clips = track.get("clips")
+        if not isinstance(clips, list):
+            continue
+        for clip in clips:
+            if not isinstance(clip, dict):
+                continue
+            start_frame = _frame_at_time(clip.get("start_s", 0.0), fps)
+            end_frame = _frame_at_time(clip.get("end_s", clip.get("start_s", 0.0)), fps)
+            if end_frame < start_frame:
+                end_frame = start_frame
+
+            data = clip.get("data") if isinstance(clip.get("data"), dict) else {}
+            schedule_map = data.get("motion_schedules") if isinstance(data.get("motion_schedules"), dict) else {}
+
+            direct = {
+                "zoom": data.get("zoom", data.get("zoom_schedule", schedule_map.get("zoom", schedule_map.get("zoom_schedule")))),
+                "angle": data.get(
+                    "angle",
+                    data.get(
+                        "rotation_schedule",
+                        schedule_map.get(
+                            "angle",
+                            schedule_map.get(
+                                "rotation_schedule",
+                                schedule_map.get("rotation_z_schedule", data.get("rotation_deg")),
+                            ),
+                        ),
+                    ),
+                ),
+                "translation_x": data.get(
+                    "translation_x",
+                    data.get("pan_x_schedule", schedule_map.get("translation_x", schedule_map.get("pan_x_schedule", data.get("pan_x")))),
+                ),
+                "translation_y": data.get(
+                    "translation_y",
+                    data.get("pan_y_schedule", schedule_map.get("translation_y", schedule_map.get("pan_y_schedule", data.get("pan_y")))),
+                ),
+                "strength_schedule": data.get("strength_schedule", schedule_map.get("strength_schedule", data.get("strength"))),
+                "cfg_scale_schedule": data.get("cfg_scale_schedule", schedule_map.get("cfg_scale_schedule", data.get("cfg"))),
+                "steps_schedule": data.get("steps_schedule", schedule_map.get("steps_schedule", data.get("steps"))),
+                "denoise_schedule": data.get("denoise_schedule", schedule_map.get("denoise_schedule", data.get("denoise"))),
+            }
+
+            clip_bundle = DeforumMotionScheduleBundle(
+                zoom=_pairs_from_start_end(start_frame, end_frame, data.get("zoom_start", 1.0), data.get("zoom_end", data.get("zoom_start", 1.0))),
+                angle=_pairs_from_start_end(start_frame, end_frame, data.get("rotation_start", 0.0), data.get("rotation_end", data.get("rotation_start", 0.0))),
+                translation_x=_pairs_from_start_end(start_frame, end_frame, data.get("pan_x_start", 0.0), data.get("pan_x_end", data.get("pan_x_start", 0.0))),
+                translation_y=_pairs_from_start_end(start_frame, end_frame, data.get("pan_y_start", 0.0), data.get("pan_y_end", data.get("pan_y_start", 0.0))),
+                strength_schedule=_pairs_from_constant(start_frame, end_frame, data.get("strength")) if data.get("strength") is not None else (),
+                cfg_scale_schedule=_pairs_from_constant(start_frame, end_frame, data.get("cfg")) if data.get("cfg") is not None else (),
+                steps_schedule=_pairs_from_constant(start_frame, end_frame, data.get("steps")) if data.get("steps") is not None else (),
+                denoise_schedule=_pairs_from_constant(start_frame, end_frame, data.get("denoise")) if data.get("denoise") is not None else (),
+            )
+            bundles.append(merge_motion_schedule_bundles(clip_bundle, motion_bundle_from_mapping(direct)))
+
+    return merge_motion_schedule_bundles(*bundles)
+
+
+def _request_override_prompts(overrides: dict[str, Any] | None, key: str) -> list[tuple[int, str]]:
+    if not isinstance(overrides, dict):
+        return []
+    raw = overrides.get(key)
+    if not isinstance(raw, dict):
+        return []
+    return normalize_prompt_map(raw)
+
+
+def _request_override_motion(overrides: dict[str, Any] | None) -> DeforumMotionScheduleBundle:
+    if not isinstance(overrides, dict):
+        return DeforumMotionScheduleBundle()
+    mapped = {
+        "zoom": overrides.get("deforum_zoom"),
+        "angle": overrides.get("deforum_angle"),
+        "translation_x": overrides.get("deforum_translation_x"),
+        "translation_y": overrides.get("deforum_translation_y"),
+        "strength_schedule": overrides.get("deforum_strength_schedule"),
+    }
+    return motion_bundle_from_mapping({key: value for key, value in mapped.items() if value is not None})
+
+
+def build_deforum_render_context(
+    *,
+    scenes: list[dict[str, Any]],
+    timeline: dict[str, Any] | None,
+    variant: dict[str, Any] | None,
+    fps: int,
+    default_negative_prompt: str,
+    overrides: dict[str, Any] | None = None,
+) -> UnifiedDeforumRenderContext:
+    timeline_prompts, timeline_negative = _prompt_track_pairs(timeline, fps)
+    variant_prompts = _variant_prompt_pairs(variant)
+    variant_negative = _variant_negative_pairs(variant)
+    scene_prompts = _scene_prompt_pairs(scenes, fps)
+    scene_negative = _scene_negative_pairs(scenes, fps)
+
+    prompt_override = _request_override_prompts(overrides, "deforum_prompts")
+    negative_override = _request_override_prompts(overrides, "deforum_negative_prompts")
+
+    prompt_pairs = prompt_override or timeline_prompts or variant_prompts or scene_prompts
+    negative_pairs = negative_override or timeline_negative or variant_negative or scene_negative
+    if not negative_pairs and default_negative_prompt:
+        negative_pairs = [(0, default_negative_prompt)]
+
+    variant_motion_raw = variant.get("motion_schedules") if isinstance(variant, dict) and isinstance(variant.get("motion_schedules"), dict) else {}
+    motion = merge_motion_schedule_bundles(
+        motion_bundle_from_mapping(variant_motion_raw),
+        _motion_track_bundle(timeline, fps),
+        _request_override_motion(overrides),
+    )
+
+    return UnifiedDeforumRenderContext(
+        prompts=tuple(prompt_pairs),
+        negative_prompts=tuple(negative_pairs),
+        motion=motion,
+    )

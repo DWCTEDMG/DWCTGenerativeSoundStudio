@@ -6156,6 +6156,20 @@ def _internal_settings_from_payload(
     temporal_mode: str | None = None,
 ) -> InternalVideoSettings:
     refiner = payload.get("refiner") if isinstance(payload.get("refiner"), dict) else None
+    deforum_override_keys = (
+        "deforum_prompts",
+        "deforum_negative_prompts",
+        "deforum_zoom",
+        "deforum_angle",
+        "deforum_translation_x",
+        "deforum_translation_y",
+        "deforum_strength_schedule",
+    )
+    deforum_overrides = {
+        key: payload.get(key)
+        for key in deforum_override_keys
+        if payload.get(key) is not None
+    }
     return InternalVideoSettings(
         fps_render=int(payload.get("fps_render", 2)),
         fps_output=int(payload.get("fps_output", 24)),
@@ -6181,6 +6195,7 @@ def _internal_settings_from_payload(
         anchor_strength=float(payload.get("anchor_strength", 0.20)),
         prompt_blend=bool(payload.get("prompt_blend", True)),
         resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
+        deforum_overrides=deforum_overrides or None,
     )
 
 

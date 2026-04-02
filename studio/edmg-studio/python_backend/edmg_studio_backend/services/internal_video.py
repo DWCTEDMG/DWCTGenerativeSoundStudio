@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import UserFacingError
+from .deforum_motion import DeforumMotionScheduleBundle, evaluate_motion_state
+from .deforum_normalize import UnifiedDeforumRenderContext, build_deforum_render_context
+from .deforum_prompt_timeline import resolve_prompt_frame
+from .deforum_schedule import coerce_schedule_pairs, evaluate_schedule
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -56,6 +60,7 @@ class InternalVideoSettings:
     anchor_strength: float = 0.20
     prompt_blend: bool = True
     resume_existing_frames: bool = True
+    deforum_overrides: dict[str, Any] | None = None
 
 
 class _PipelineCache:
@@ -200,6 +205,7 @@ def describe_proxy_render_cache(
 def _build_work_tag(
     *,
     variant_index: int,
+    variant: dict[str, Any] | None,
     scenes: list[dict[str, Any]],
     timeline: dict[str, Any] | None,
     model_dir: Path,
@@ -209,6 +215,7 @@ def _build_work_tag(
         variant_index=variant_index,
         model_dir=model_dir,
         settings=settings,
+        variant=variant,
         scenes=scenes,
         timeline=timeline,
     )
@@ -222,6 +229,7 @@ def describe_internal_render_cache(
     *,
     project_dir: Path,
     variant_index: int,
+    variant: dict[str, Any] | None,
     scenes: list[dict[str, Any]],
     timeline: dict[str, Any] | None,
     model_dir: Path,
@@ -230,6 +238,7 @@ def describe_internal_render_cache(
 ) -> dict[str, Any]:
     work_tag = _build_work_tag(
         variant_index=variant_index,
+        variant=variant,
         scenes=scenes,
         timeline=timeline,
         model_dir=model_dir,
@@ -268,6 +277,7 @@ def _render_signature(
     variant_index: int,
     model_dir: Path,
     settings: "InternalVideoSettings",
+    variant: dict[str, Any] | None = None,
     scenes: list[dict[str, Any]] | None = None,
     timeline: dict[str, Any] | None = None,
 ) -> str:
@@ -298,6 +308,9 @@ def _render_signature(
         "refine_every_n_frames": int(settings.refine_every_n_frames),
         "anchor_strength": float(settings.anchor_strength),
         "prompt_blend": bool(settings.prompt_blend),
+        "deforum_overrides": settings.deforum_overrides or None,
+        "variant_motion_digest": _json_digest((variant or {}).get("motion_schedules") if isinstance(variant, dict) else None),
+        "variant_prompt_digest": _json_digest((variant or {}).get("prompts") if isinstance(variant, dict) else None),
         "scenes_digest": _json_digest(scenes or []),
         "timeline_digest": _json_digest(_timeline_render_fingerprint(timeline)),
     }
@@ -1381,175 +1394,87 @@ def _ease01(u: float) -> float:
 
 
 def _parse_deforum_schedule(s: str) -> list[tuple[int, float]]:
-    """Parse Deforum schedule string like '0:(0.65), 24:(0.7)' into (frame,value)."""
-    out: list[tuple[int, float]] = []
-    for part in str(s or "").split(","):
-        part = part.strip()
-        if not part:
-            continue
-        m = re.match(r"^(\d+)\s*:\s*\(?\s*([-+]?\d*\.?\d+)\s*\)?$", part)
-        if not m:
-            continue
-        out.append((int(m.group(1)), float(m.group(2))))
-    out.sort(key=lambda x: x[0])
-    # de-dup frames (last wins)
-    dedup: dict[int, float] = {}
-    for f, v in out:
-        dedup[int(f)] = float(v)
-    return sorted(dedup.items(), key=lambda x: x[0])
+    """Back-compat wrapper around the shared schedule parser."""
+    return coerce_schedule_pairs(s)
 
 
 def _eval_schedule(pairs: list[tuple[int, float]], frame: int) -> float | None:
-    if not pairs:
-        return None
-    frame = int(frame)
-    if frame <= pairs[0][0]:
-        return float(pairs[0][1])
-    if frame >= pairs[-1][0]:
-        return float(pairs[-1][1])
-    for i in range(len(pairs) - 1):
-        a, av = pairs[i]
-        b, bv = pairs[i + 1]
-        if a <= frame <= b:
-            w = (frame - a) / max(1e-9, (b - a))
-            return float(av) * (1.0 - w) + float(bv) * w
-    return float(pairs[-1][1])
+    return evaluate_schedule(pairs, frame, default=None)
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, float(v)))
 
 
-def _motion_params_at_time(t: float, timeline: dict[str, Any] | None) -> dict[str, float] | None:
-    """Evaluate motion track at time t.
+def _build_unified_deforum_context(
+    *,
+    scenes: list[dict[str, Any]],
+    timeline: dict[str, Any] | None,
+    variant: dict[str, Any] | None,
+    settings: InternalVideoSettings,
+    fps: int,
+) -> UnifiedDeforumRenderContext:
+    return build_deforum_render_context(
+        scenes=scenes,
+        timeline=timeline,
+        variant=variant,
+        fps=max(1, int(fps)),
+        default_negative_prompt=str(settings.negative_prompt or ""),
+        overrides=settings.deforum_overrides,
+    )
 
-    Expected timeline schema:
-      timeline["tracks"] includes a dict with type=="motion" and clips like:
-        {start_s,end_s,data:{zoom_start,zoom_end,pan_x_start,pan_x_end,pan_y_start,pan_y_end,rotation_start,rotation_end,
-                            strength,cfg,steps}}
-    Returns interpolated values (ease) for zoom/pan/rotation and optional diffusion params.
-    """
-    if not timeline or not isinstance(timeline, dict):
+
+def _prompt_text_for_frame(
+    *,
+    frame_idx: int,
+    scenes: list[dict[str, Any]],
+    timeline: dict[str, Any] | None,
+    deforum_context: UnifiedDeforumRenderContext,
+    fps: int,
+) -> str:
+    prompt = resolve_prompt_frame(deforum_context.prompts, frame_idx, default="")
+    if str(prompt or "").strip():
+        return str(prompt).strip()
+    return _prompt_at_time(scenes, float(frame_idx) / float(max(1, fps)), timeline=timeline) or "cinematic"
+
+
+def _negative_prompt_for_frame(
+    *,
+    frame_idx: int,
+    settings: InternalVideoSettings,
+    deforum_context: UnifiedDeforumRenderContext,
+) -> str:
+    prompt = resolve_prompt_frame(deforum_context.negative_prompts, frame_idx, default=str(settings.negative_prompt or ""))
+    return str(prompt or settings.negative_prompt or "")
+
+
+def _motion_params_at_time(
+    t: float,
+    timeline: dict[str, Any] | None,
+    *,
+    deforum_motion: DeforumMotionScheduleBundle | None = None,
+    fps: int = 24,
+) -> dict[str, float] | None:
+    frame = int(round(float(t) * float(max(1, fps))))
+    motion = deforum_motion
+    if motion is None:
+        motion = build_deforum_render_context(
+            scenes=[],
+            timeline=timeline,
+            variant=None,
+            fps=max(1, int(fps)),
+            default_negative_prompt="",
+        ).motion
+    if not motion.has_camera_motion() and not motion.has_diffusion_controls():
         return None
-    tracks = timeline.get("tracks")
-    if not isinstance(tracks, list):
-        return None
 
-    def _lerp(a: float, b: float, w: float) -> float:
-        return a * (1.0 - w) + b * w
-
-    for tr in tracks:
-        if not isinstance(tr, dict):
-            continue
-        if str(tr.get("type") or "").lower() != "motion":
-            continue
-        clips = tr.get("clips")
-        if not isinstance(clips, list):
-            continue
-        for cl in clips:
-            if not isinstance(cl, dict):
-                continue
-            s = float(cl.get("start_s", 0.0))
-            e = float(cl.get("end_s", s + 1.0))
-            if not (s <= t < e):
-                continue
-            data = cl.get("data") if isinstance(cl.get("data"), dict) else {}
-            u = (t - s) / max(1e-9, (e - s))
-            w = _ease01(u)
-
-            z0 = float((data or {}).get("zoom_start", 1.0))
-            z1 = float((data or {}).get("zoom_end", z0))
-            px0 = float((data or {}).get("pan_x_start", 0.0))
-            px1 = float((data or {}).get("pan_x_end", px0))
-            py0 = float((data or {}).get("pan_y_start", 0.0))
-            py1 = float((data or {}).get("pan_y_end", py0))
-            r0 = float((data or {}).get("rotation_start", 0.0))
-            r1 = float((data or {}).get("rotation_end", r0))
-
-            out: dict[str, float] = {
-                "zoom": _lerp(z0, z1, w),
-                "pan_x": _lerp(px0, px1, w),
-                "pan_y": _lerp(py0, py1, w),
-                "rotation_deg": _lerp(r0, r1, w),
-            }
-            # scalar overrides (legacy)
-            if isinstance((data or {}).get("strength"), (int, float)):
-                out["strength"] = float((data or {}).get("strength"))
-            if isinstance((data or {}).get("cfg"), (int, float)):
-                out["cfg"] = float((data or {}).get("cfg"))
-            if isinstance((data or {}).get("steps"), (int, float)):
-                out["steps"] = float((data or {}).get("steps"))
-
-            # schedule overrides (EDMG motion schedules)
-            fps = 24
-            try:
-                rset = timeline.get("render") if isinstance(timeline, dict) else None
-                if isinstance(rset, dict) and isinstance(rset.get("fps_output"), (int, float)):
-                    fps = int(rset.get("fps_output"))
-                elif isinstance(timeline.get("fps_output"), (int, float)):
-                    fps = int(timeline.get("fps_output"))
-            except Exception:
-                fps = 24
-            fps = max(1, int(fps))
-            frame = int(round(float(t) * float(fps)))
-
-            ms = data.get("motion_schedules") if isinstance(data.get("motion_schedules"), dict) else {}
-            def _get(k: str) -> str:
-                v = (data or {}).get(k)
-                if v is None and ms:
-                    v = ms.get(k)
-                return str(v or "")
-
-            s_strength = _get("strength_schedule")
-            s_cfg = _get("cfg_scale_schedule")
-            s_steps = _get("steps_schedule")
-            s_denoise = _get("denoise_schedule") or ""  # optional alias
-            s_zoom = _get("zoom_schedule") or _get("zoom")
-            s_pan_x = _get("pan_x_schedule")
-            s_pan_y = _get("pan_y_schedule")
-            s_rotation = _get("rotation_schedule") or _get("angle") or _get("rotation_z_schedule")
-
-            if s_strength:
-                v = _eval_schedule(_parse_deforum_schedule(s_strength), frame)
-                if v is not None:
-                    out["strength"] = _clamp(float(v), 0.01, 0.99)
-            if s_denoise:
-                v = _eval_schedule(_parse_deforum_schedule(s_denoise), frame)
-                if v is not None:
-                    out["denoise"] = _clamp(float(v), 0.01, 0.99)
-            if s_cfg:
-                v = _eval_schedule(_parse_deforum_schedule(s_cfg), frame)
-                if v is not None:
-                    out["cfg"] = _clamp(float(v), 1.0, 30.0)
-            if s_steps:
-                v = _eval_schedule(_parse_deforum_schedule(s_steps), frame)
-                if v is not None:
-                    out["steps"] = _clamp(float(v), 4.0, 80.0)
-            if s_zoom:
-                v = _eval_schedule(_parse_deforum_schedule(s_zoom), frame)
-                if v is not None:
-                    out["zoom"] = _clamp(float(v), 0.25, 4.0)
-            if s_pan_x:
-                v = _eval_schedule(_parse_deforum_schedule(s_pan_x), frame)
-                if v is not None:
-                    out["pan_x"] = float(v)
-            if s_pan_y:
-                v = _eval_schedule(_parse_deforum_schedule(s_pan_y), frame)
-                if v is not None:
-                    out["pan_y"] = float(v)
-            if s_rotation:
-                v = _eval_schedule(_parse_deforum_schedule(s_rotation), frame)
-                if v is not None:
-                    out["rotation_deg"] = float(v)
-
-            # heuristic fallback: derive steps/denoise from strength if missing
-            if "steps" not in out and "strength" in out:
-                out["steps"] = _clamp(15.0 * (0.70 + 0.90 * float(out["strength"])), 6.0, 40.0)
-            if "denoise" not in out and "strength" in out:
-                out["denoise"] = _clamp(float(out["strength"]), 0.01, 0.99)
-
-            return out
-    return None
+    state = evaluate_motion_state(frame, motion)
+    out = state.to_renderer_params()
+    if "steps" not in out and "strength" in out:
+        out["steps"] = _clamp(15.0 * (0.70 + 0.90 * float(out["strength"])), 6.0, 40.0)
+    if "denoise" not in out and "strength" in out:
+        out["denoise"] = _clamp(float(out["strength"]), 0.01, 0.99)
+    return out
 
 
 def _camera_keyframes_are_actionable(points: list[dict[str, Any]]) -> bool:
@@ -1573,6 +1498,8 @@ def _camera_at_time(
     *,
     timeline: dict[str, Any] | None,
     fallback_interval_s: float,
+    deforum_motion: DeforumMotionScheduleBundle | None = None,
+    fps: int = 24,
 ) -> tuple[float, float, float, float]:
     """Camera track evaluator.
 
@@ -1613,7 +1540,7 @@ def _camera_at_time(
 
 
     # If camera keyframes are missing, fall back to motion track clips (DAW).
-    mp = _motion_params_at_time(t, timeline)
+    mp = _motion_params_at_time(t, timeline, deforum_motion=deforum_motion, fps=fps)
     if mp:
         return float(mp.get("zoom", 1.0)), float(mp.get("pan_x", 0.0)), float(mp.get("pan_y", 0.0)), float(mp.get("rotation_deg", 0.0))
 
@@ -1782,11 +1709,20 @@ def render_internal_video_variant(
 
     out_w, out_h = settings.width, settings.height
     fps_r = max(1, int(settings.fps_render))
+    fps_schedule = max(1, int(settings.fps_output))
     duration_s = float(variant.get("duration_s") or _infer_duration(scenes))
     total_frames = int(math.ceil(duration_s * fps_r))
+    deforum_context = _build_unified_deforum_context(
+        scenes=scenes,
+        timeline=timeline,
+        variant=variant,
+        settings=settings,
+        fps=fps_schedule,
+    )
 
     work_tag = _build_work_tag(
         variant_index=int(variant.get("index", 0)),
+        variant=variant,
         scenes=scenes,
         timeline=timeline,
         model_dir=model_dir,
@@ -1800,6 +1736,7 @@ def render_internal_video_variant(
     cache_info = describe_internal_render_cache(
         project_dir=project_dir,
         variant_index=int(variant.get("index", 0)),
+        variant=variant,
         scenes=scenes,
         timeline=timeline,
         model_dir=model_dir,
@@ -1826,8 +1763,7 @@ def render_internal_video_variant(
         progress_fn("preparing", 0, total_units, f"Preparing internal render on {device}")
     emit_checkpoint(stage="preparing", status="running", force=True, message=f"Preparing internal render on {device}")
 
-    neg = settings.negative_prompt
-    neg_embeds = _encode_prompt(pipes, neg)
+    default_negative_embeds = _encode_prompt(pipes, settings.negative_prompt)
     if log_fn:
         log_fn(
             f"Render cache tag={work_tag} resume_existing_frames={'yes' if settings.resume_existing_frames else 'no'}"
@@ -1858,7 +1794,20 @@ def render_internal_video_variant(
     for i, t in enumerate(key_times):
         if cancel_check_fn:
             cancel_check_fn()
-        p = _prompt_at_time(scenes, t, timeline=timeline) or "cinematic"
+        schedule_frame = int(round(float(t) * float(fps_schedule)))
+        p = _prompt_text_for_frame(
+            frame_idx=schedule_frame,
+            scenes=scenes,
+            timeline=timeline,
+            deforum_context=deforum_context,
+            fps=fps_schedule,
+        ) or "cinematic"
+        negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
+        negative_embeds = (
+            default_negative_embeds
+            if negative_prompt == settings.negative_prompt
+            else _encode_prompt(pipes, negative_prompt)
+        )
         seed = _stable_seed_int("key", settings.seed, t, p, work_tag)
         if log_fn:
             log_fn(f"Keyframe {i+1}/{len(key_times)} t={t:.2f}s seed={seed} device={device}")
@@ -1866,19 +1815,19 @@ def render_internal_video_variant(
             progress_fn("keyframes", i, total_units, f"Generating keyframe {i+1}/{len(key_times)}")
         emit_checkpoint(stage="keyframes", status="running", message=f"Generating keyframe {i+1}/{len(key_times)}")
         pe = _encode_prompt(pipes, p)
-        mpk = _motion_params_at_time(t, timeline)
+        mpk = _motion_params_at_time(t, timeline, deforum_motion=deforum_context.motion, fps=fps_schedule)
         cfgk = float((mpk or {}).get('cfg', settings.cfg))
         stepsk = int(float((mpk or {}).get('steps', settings.steps)))
         denk = float((mpk or {}).get('denoise', (mpk or {}).get('strength', settings.temporal_strength)))
         if prev_key_img is None or settings.temporal_mode in ("off",):
-            img = _generate_txt2img(pipes, pe, neg_embeds, out_w, out_h, stepsk, cfgk, seed)
+            img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)
         else:
             # Keyframe continuity: anchor to previous keyframe to keep style stable.
             img = _generate_img2img(
                 pipes,
                 init_image=prev_key_img,
                 prompt_embeds=pe,
-                negative_embeds=neg_embeds,
+                negative_embeds=negative_embeds,
                 width=out_w,
                 height=out_h,
                 steps=max(6, int(settings.temporal_steps or max(8, settings.steps - 3))),
@@ -1921,7 +1870,13 @@ def render_internal_video_variant(
             src = key_imgs[a].convert("RGB")
             if a != b:
                 src = Image.blend(src, key_imgs[b].convert("RGB"), float(w))
-            zoom, pan_x, pan_y, rot = _camera_at_time(t, timeline=timeline, fallback_interval_s=settings.keyframe_interval_s)
+            zoom, pan_x, pan_y, rot = _camera_at_time(
+                t,
+                timeline=timeline,
+                fallback_interval_s=settings.keyframe_interval_s,
+                deforum_motion=deforum_context.motion,
+                fps=fps_schedule,
+            )
             fr = _ken_burns_frame(src, out_w, out_h, zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rot)
             frame_paths.append(_save_frame(fr, fi, t))
             if progress_fn:
@@ -1931,7 +1886,13 @@ def render_internal_video_variant(
                 log_fn(f"Rendered frame {fi+1}/{total_frames}")
     else:
         prev_frame = key_imgs[key_times[0]].resize((out_w, out_h), resample=Image.LANCZOS)
-        prev_zoom, prev_px, prev_py, prev_rot = _camera_at_time(0.0, timeline=timeline, fallback_interval_s=settings.keyframe_interval_s)
+        prev_zoom, prev_px, prev_py, prev_rot = _camera_at_time(
+            0.0,
+            timeline=timeline,
+            fallback_interval_s=settings.keyframe_interval_s,
+            deforum_motion=deforum_context.motion,
+            fps=fps_schedule,
+        )
 
         refine_every = max(1, int(settings.refine_every_n_frames))
         steps_refine = int(settings.temporal_steps or max(8, settings.steps - 3))
@@ -1941,9 +1902,16 @@ def render_internal_video_variant(
                 cancel_check_fn()
             t = fi / fps_r
             existing = _frame_path(out_frames, fi)
+            schedule_frame = int(round(float(t) * float(fps_schedule)))
 
             a_t, b_t, w = _key_times_bracket(key_times, t)
-            zoom, pan_x, pan_y, rot = _camera_at_time(t, timeline=timeline, fallback_interval_s=settings.keyframe_interval_s)
+            zoom, pan_x, pan_y, rot = _camera_at_time(
+                t,
+                timeline=timeline,
+                fallback_interval_s=settings.keyframe_interval_s,
+                deforum_motion=deforum_context.motion,
+                fps=fps_schedule,
+            )
 
             if settings.resume_existing_frames and existing.exists():
                 try:
@@ -1959,13 +1927,33 @@ def render_internal_video_variant(
                 except Exception:
                     pass
 
-            mp = _motion_params_at_time(t, timeline)
+            mp = _motion_params_at_time(t, timeline, deforum_motion=deforum_context.motion, fps=fps_schedule)
 
-            a_prompt = _prompt_at_time(scenes, a_t, timeline=timeline) or "cinematic"
-            b_prompt = _prompt_at_time(scenes, b_t, timeline=timeline) or a_prompt
+            a_frame = int(round(float(a_t) * float(fps_schedule)))
+            b_frame = int(round(float(b_t) * float(fps_schedule)))
+            a_prompt = _prompt_text_for_frame(
+                frame_idx=a_frame,
+                scenes=scenes,
+                timeline=timeline,
+                deforum_context=deforum_context,
+                fps=fps_schedule,
+            ) or "cinematic"
+            b_prompt = _prompt_text_for_frame(
+                frame_idx=b_frame,
+                scenes=scenes,
+                timeline=timeline,
+                deforum_context=deforum_context,
+                fps=fps_schedule,
+            ) or a_prompt
             a_e = _encode_prompt(pipes, a_prompt)
             b_e = _encode_prompt(pipes, b_prompt)
             pe = _blend_embeds(a_e, b_e, w) if settings.prompt_blend else a_e
+            negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
+            negative_embeds = (
+                default_negative_embeds
+                if negative_prompt == settings.negative_prompt
+                else _encode_prompt(pipes, negative_prompt)
+            )
 
             rz = zoom / max(1e-6, prev_zoom)
             dpx = pan_x - prev_px
@@ -1988,7 +1976,7 @@ def render_internal_video_variant(
                     pipes,
                     init_image=init,
                     prompt_embeds=pe,
-                    negative_embeds=neg_embeds,
+                    negative_embeds=negative_embeds,
                     width=out_w,
                     height=out_h,
                     steps=int(float((mp or {}).get('steps', steps_refine))),
@@ -2171,12 +2159,21 @@ def render_stability_hosted_video_variant(
 
     out_w, out_h = settings.width, settings.height
     fps_r = max(1, int(settings.fps_render))
+    fps_schedule = max(1, int(settings.fps_output))
     duration_s = float(variant.get("duration_s") or _infer_duration(scenes))
     total_frames = int(math.ceil(duration_s * fps_r))
+    deforum_context = _build_unified_deforum_context(
+        scenes=scenes,
+        timeline=timeline,
+        variant=variant,
+        settings=settings,
+        fps=fps_schedule,
+    )
 
     provider_marker = Path(f"stability_platform/{service}/{model or 'default'}")
     work_tag = _build_work_tag(
         variant_index=int(variant.get("index", 0)),
+        variant=variant,
         scenes=scenes,
         timeline=timeline,
         model_dir=provider_marker,
@@ -2190,6 +2187,7 @@ def render_stability_hosted_video_variant(
     cache_info = describe_internal_render_cache(
         project_dir=project_dir,
         variant_index=int(variant.get("index", 0)),
+        variant=variant,
         scenes=scenes,
         timeline=timeline,
         model_dir=provider_marker,
@@ -2245,7 +2243,15 @@ def render_stability_hosted_video_variant(
     for i, t in enumerate(key_times):
         if cancel_check_fn:
             cancel_check_fn()
-        prompt = _prompt_at_time(scenes, t, timeline=timeline) or "cinematic"
+        schedule_frame = int(round(float(t) * float(fps_schedule)))
+        prompt = _prompt_text_for_frame(
+            frame_idx=schedule_frame,
+            scenes=scenes,
+            timeline=timeline,
+            deforum_context=deforum_context,
+            fps=fps_schedule,
+        ) or "cinematic"
+        negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
         seed = int(hash(f"hosted-key:{t}:{prompt}") & 0x7FFFFFFF)
         if progress_fn:
             progress_fn("keyframes", i, total_units, f"Generating hosted keyframe {i+1}/{len(key_times)}")
@@ -2260,7 +2266,7 @@ def render_stability_hosted_video_variant(
             service=service,
             model=model,
             style_preset=style_preset,
-            negative_prompt=settings.negative_prompt,
+            negative_prompt=negative_prompt,
             seed=seed,
             init_image=(prev_key_img if supports_init and prev_key_img is not None and settings.temporal_mode != "off" else None),
             strength=hosted_strength,
@@ -2294,7 +2300,13 @@ def render_stability_hosted_video_variant(
 
         a, _b, _w = _key_times_bracket(key_times, t)
         src = key_imgs[a]
-        zoom, pan_x, pan_y, rot = _camera_at_time(t, timeline=timeline, fallback_interval_s=settings.keyframe_interval_s)
+        zoom, pan_x, pan_y, rot = _camera_at_time(
+            t,
+            timeline=timeline,
+            fallback_interval_s=settings.keyframe_interval_s,
+            deforum_motion=deforum_context.motion,
+            fps=fps_schedule,
+        )
         fr = _ken_burns_frame(src, out_w, out_h, zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rot)
         _save_frame(fr, fi, t)
         if progress_fn:
@@ -2765,21 +2777,42 @@ def render_internal_diffusion_preview_segment(
     # Render frames
     n = int(math.ceil((end - start) * fps_i))
     prev_img = None
+    fps_schedule = max(1, int(settings.fps_output))
+    deforum_context = _build_unified_deforum_context(
+        scenes=scenes,
+        timeline=timeline,
+        variant=None,
+        settings=settings,
+        fps=fps_schedule,
+    )
 
     # Limit preview cost even if user set aggressive settings
     steps = max(1, min(int(settings.steps), 30))
     cfg = float(settings.cfg)
-    neg = str(settings.negative_prompt or "").strip()
 
     for i in range(n):
         t = start + (i / fps_i)
+        schedule_frame = int(round(float(t) * float(fps_schedule)))
 
         prompt = (prompt_override or "").strip()
         if not prompt:
-            prompt = _prompt_at_time(t, timeline=timeline, scenes=scenes)
+            prompt = _prompt_text_for_frame(
+                frame_idx=schedule_frame,
+                scenes=scenes,
+                timeline=timeline,
+                deforum_context=deforum_context,
+                fps=fps_schedule,
+            )
+        neg = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
 
         # camera motion (camera keyframes -> motion track -> fallback)
-        zoom, pan_x, pan_y, rot = _camera_at_time(t, timeline=timeline, fallback_interval_s=settings.keyframe_interval_s)
+        zoom, pan_x, pan_y, rot = _camera_at_time(
+            t,
+            timeline=timeline,
+            fallback_interval_s=settings.keyframe_interval_s,
+            deforum_motion=deforum_context.motion,
+            fps=fps_schedule,
+        )
 
         # low-cost temporal continuity
         use_img2img = (settings.temporal_mode or "").lower() == "frame_img2img" and prev_img is not None

@@ -176,6 +176,13 @@ class InternalVideoRenderRequest(BaseModel):
     anchor_strength: float = Field(default=0.20, ge=0.0, le=1.0)
     prompt_blend: bool = True
     resume_existing_frames: bool = True
+    deforum_prompts: dict[str, str] | None = None
+    deforum_negative_prompts: dict[str, str] | None = None
+    deforum_zoom: str | dict[str, float] | None = None
+    deforum_angle: str | dict[str, float] | None = None
+    deforum_translation_x: str | dict[str, float] | None = None
+    deforum_translation_y: str | dict[str, float] | None = None
+    deforum_strength_schedule: str | dict[str, float] | None = None
 
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
