@@ -13,6 +13,8 @@ import Cloud from "./pages/Cloud";
 import Settings from "./pages/Settings";
 import Setup from "./pages/Setup";
 import Models from "./pages/Models";
+import AiPlannerLab from "./pages/AiPlannerLab";
+import ReactiveLab from "./pages/ReactiveLab";
 
 function isPage(value: string): value is Page {
   const allowed: Page[] = [
@@ -27,6 +29,8 @@ function isPage(value: string): value is Page {
     "settings",
     "setup",
     "models",
+    "plannerLab",
+    "reactiveLab",
   ];
   return allowed.includes(value as Page);
 }
@@ -120,6 +124,10 @@ export default function App() {
   if (page === "settings") content = <Settings {...commonProps} />;
   if (page === "setup") content = <Setup onNavigate={setPage as any} />;
   if (page === "models") content = <Models {...commonProps} />;
+  if (page === "plannerLab")
+    content = <AiPlannerLab {...commonProps} onNavigate={setPage as any} />;
+  if (page === "reactiveLab")
+    content = <ReactiveLab {...commonProps} onNavigate={setPage as any} />;
 
   const mainClassName = page === "timeline" ? "main main--timeline" : "main";
 
