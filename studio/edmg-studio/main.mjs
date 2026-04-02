@@ -496,6 +496,7 @@ function getStudioPaths(studioHomeOverride = "", storageOverrideValues = null) {
 
   return {
     ...paths,
+    platform: process.platform,
     storageOverrides: trimStorageOverrides(mergedRaw, resolvedHome),
     bootstrapConfigPath: getBootstrapConfigPath(),
     pendingMigration: bootstrapConfig?.pendingMigration ?? null,

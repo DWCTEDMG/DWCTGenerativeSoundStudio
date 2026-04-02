@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
+import { getDesktopPlatformKind, type DesktopPlatformKind } from "../components/desktopArtifacts";
 
 type StorageDraft = {
   studioHome: string;
@@ -18,6 +19,45 @@ const EMPTY_STORAGE_DRAFT: StorageDraft = {
   logsDir: "",
   externalDir: "",
 };
+
+type StorageFieldConfig = {
+  key: keyof StorageDraft;
+  label: string;
+  placeholder: string;
+};
+
+function normalizePlatformKind(rawPlatform: unknown): DesktopPlatformKind {
+  const value = String(rawPlatform ?? "").trim().toLowerCase();
+  if (value.includes("win")) return "windows";
+  if (value.includes("darwin") || value.includes("mac")) return "mac";
+  if (value.includes("linux")) return "linux";
+  return getDesktopPlatformKind();
+}
+
+function joinStoragePath(basePath: string, segment: string, platformKind: DesktopPlatformKind): string {
+  const base = String(basePath || "").trim();
+  if (!base) return "";
+  const separator = platformKind === "windows" ? "\\" : "/";
+  const normalizedBase = base.replace(/[\\/]+$/, "");
+  const normalizedSegment = String(segment || "").trim().replace(/^[\\/]+|[\\/]+$/g, "");
+  return normalizedSegment ? `${normalizedBase}${separator}${normalizedSegment}` : normalizedBase;
+}
+
+function getStorageFieldConfigs(platformKind: DesktopPlatformKind): StorageFieldConfig[] {
+  const homePlaceholder = platformKind === "windows"
+    ? "D:\\EDMG-Studio"
+    : platformKind === "mac"
+      ? "/Users/tyler/EDMG-Studio"
+      : "/home/tyler/EDMG-Studio";
+  return [
+    { key: "studioHome", label: "Studio home", placeholder: homePlaceholder },
+    { key: "dataDir", label: "Project data", placeholder: joinStoragePath(homePlaceholder, "data", platformKind) },
+    { key: "modelsDir", label: "Models", placeholder: joinStoragePath(homePlaceholder, "models", platformKind) },
+    { key: "cacheRoot", label: "Shared cache", placeholder: joinStoragePath(homePlaceholder, "cache", platformKind) },
+    { key: "logsDir", label: "Logs", placeholder: joinStoragePath(homePlaceholder, "logs", platformKind) },
+    { key: "externalDir", label: "External tools", placeholder: joinStoragePath(homePlaceholder, "external", platformKind) },
+  ];
+}
 
 function Badge({ ok, label }: { ok: boolean; label: string }) {
   return (
@@ -105,7 +145,19 @@ async function run(action: string, path: string, body: any = {}) {
   const aiLabel = String(aiConfig?.label ?? "Local Ollama");
   const ollamaRequired = !!aiConfig?.ollama_required;
   const modelRequired = !!aiConfig?.model_required;
-  const fullSetupReady = backendBundleOk && sevenOk && comfyOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
+  const platformKind = normalizePlatformKind(studioPaths?.platform);
+  const isWindows = platformKind === "windows";
+  const ollamaDownloadUrl = isWindows
+    ? "https://ollama.com/download/windows"
+    : platformKind === "linux"
+      ? "https://ollama.com/download/linux"
+      : "https://ollama.com/download";
+  const comfyDocsUrl = isWindows
+    ? "https://docs.comfy.org/installation/comfyui_portable_windows"
+    : "https://docs.comfy.org/";
+  const storageFieldConfigs = getStorageFieldConfigs(platformKind);
+  const setupReady = backendBundleOk && comfyOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
+  const fullSetupReady = isWindows && setupReady && sevenOk;
 
   function deriveStorageLayout(studioHome: string): StorageDraft {
     const home = String(studioHome || "").trim();
@@ -117,11 +169,11 @@ async function run(action: string, path: string, body: any = {}) {
     }
     return {
       studioHome: home,
-      dataDir: `${home}\\data`,
-      modelsDir: `${home}\\models`,
-      cacheRoot: `${home}\\cache`,
-      logsDir: `${home}\\logs`,
-      externalDir: `${home}\\external`,
+      dataDir: joinStoragePath(home, "data", platformKind),
+      modelsDir: joinStoragePath(home, "models", platformKind),
+      cacheRoot: joinStoragePath(home, "cache", platformKind),
+      logsDir: joinStoragePath(home, "logs", platformKind),
+      externalDir: joinStoragePath(home, "external", platformKind),
     };
   }
 
@@ -286,7 +338,7 @@ async function run(action: string, path: string, body: any = {}) {
             />
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            Set this before running Full Setup if you want Studio projects, model downloads, caches, logs, and external tools like ComfyUI Portable to stay on <code>D:\...</code> instead of silently filling <code>C:\</code>.
+            Set this before installing runtimes or model packs if you want Studio projects, model downloads, caches, logs, and external tools to stay under one root instead of filling the default system drive.
           </div>
           {storageCustomLabels.length ? (
             <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>
@@ -294,14 +346,7 @@ async function run(action: string, path: string, body: any = {}) {
             </div>
           ) : null}
           <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-            {[
-              { key: "studioHome", label: "Studio home", placeholder: "D:\\EDMG-Studio" },
-              { key: "dataDir", label: "Project data", placeholder: "D:\\EDMG-Studio\\data" },
-              { key: "modelsDir", label: "Models", placeholder: "D:\\EDMG-Studio\\models" },
-              { key: "cacheRoot", label: "Shared cache", placeholder: "D:\\EDMG-Studio\\cache" },
-              { key: "logsDir", label: "Logs", placeholder: "D:\\EDMG-Studio\\logs" },
-              { key: "externalDir", label: "External tools", placeholder: "D:\\EDMG-Studio\\external" },
-            ].map((field) => (
+            {storageFieldConfigs.map((field) => (
               <div key={field.key} style={{ display: "grid", gridTemplateColumns: "140px 1fr auto", gap: 8, alignItems: "center" }}>
                 <div className="small" style={{ fontWeight: 800 }}>{field.label}</div>
                 <input
@@ -359,13 +404,19 @@ async function run(action: string, path: string, body: any = {}) {
 
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-    <div style={{ fontWeight: 800 }}>0) Full System Setup (One-Click)</div>
-    <Badge ok={fullSetupReady} label={fullSetupReady ? "Ready" : "Setup"} />
+    <div style={{ fontWeight: 800 }}>{isWindows ? "0) Full System Setup (One-Click)" : "0) System Setup"}</div>
+    <Badge ok={isWindows ? fullSetupReady : setupReady} label={isWindows ? (fullSetupReady ? "Ready" : "Setup") : (setupReady ? "Ready" : "Manual")} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    {ollamaRequired
+    {isWindows ? (
+      ollamaRequired
       ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → managed Ollama install → pull model → ComfyUI Portable install + start."
-      : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → ComfyUI Portable install + start. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`}
+      : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → ComfyUI Portable install + start. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
+    ) : (
+      ollamaRequired
+        ? "Linux and macOS use the manual setup path: install the backend runtime here, install Ollama system-wide if needed, pull the configured model, and run a local ComfyUI instance at the configured URL."
+        : `Linux and macOS use the manual setup path: install the backend runtime here and run a local ComfyUI instance. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
+    )}
   </div>
   <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
     Active AI path: <b>{aiLabel}</b>
@@ -374,24 +425,37 @@ async function run(action: string, path: string, body: any = {}) {
     {aiConfig?.provider === "openai_compat" ? <> • API key <b>{aiConfig?.openai_compat_api_key_configured ? "saved" : "not saved"}</b></> : null}
   </div>
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-    <button
-      disabled={busy === "full_cpu"}
-      onClick={() => run("full_cpu", "/v1/setup/full/install", { flavor: "cpu" })}
-    >
-      {busy === "full_cpu" ? "Running…" : "Full Setup (CPU)"}
-    </button>
-    <button
-      disabled={busy === "full_nvidia"}
-      onClick={() => run("full_nvidia", "/v1/setup/full/install", { flavor: "nvidia" })}
-    >
-      {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
-    </button>
-    <button
-      disabled={busy === "full_amd"}
-      onClick={() => run("full_amd", "/v1/setup/full/install", { flavor: "amd", bundle: "studio_bundle_directml" })}
-    >
-      {busy === "full_amd" ? "Running…" : "Full Setup (AMD / DirectML)"}
-    </button>
+    {isWindows ? (
+      <>
+        <button
+          disabled={busy === "full_cpu"}
+          onClick={() => run("full_cpu", "/v1/setup/full/install", { flavor: "cpu" })}
+        >
+          {busy === "full_cpu" ? "Running…" : "Full Setup (CPU)"}
+        </button>
+        <button
+          disabled={busy === "full_nvidia"}
+          onClick={() => run("full_nvidia", "/v1/setup/full/install", { flavor: "nvidia" })}
+        >
+          {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
+        </button>
+        <button
+          disabled={busy === "full_amd"}
+          onClick={() => run("full_amd", "/v1/setup/full/install", { flavor: "amd", bundle: "studio_bundle_directml" })}
+        >
+          {busy === "full_amd" ? "Running…" : "Full Setup (AMD / DirectML)"}
+        </button>
+      </>
+    ) : (
+      <>
+        <button className="secondary" onClick={() => window.edmg?.openExternal?.(ollamaDownloadUrl)}>
+          Open Ollama Install Guide
+        </button>
+        <button className="secondary" onClick={() => window.edmg?.openExternal?.(comfyDocsUrl)}>
+          Open ComfyUI Docs
+        </button>
+      </>
+    )}
     {onNavigate ? (
       <button className="secondary" onClick={() => onNavigate("settings")}>
         Open AI Settings
@@ -408,10 +472,16 @@ async function run(action: string, path: string, body: any = {}) {
   <div className="small" style={{ marginTop: 6 }}>
     Installs the backend audio, ASR, and internal-render Python dependencies into the Studio backend environment.
   </div>
-  <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
-    DirectML available on this machine: <b>{directmlAvailable ? "yes" : "no"}</b>
-    {status?.hardware?.directml_device_name ? <> • device <code>{status.hardware.directml_device_name}</code></> : null}
-  </div>
+  {isWindows ? (
+    <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+      DirectML available on this machine: <b>{directmlAvailable ? "yes" : "no"}</b>
+      {status?.hardware?.directml_device_name ? <> • device <code>{status.hardware.directml_device_name}</code></> : null}
+    </div>
+  ) : (
+    <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+      Linux uses the standard backend runtime bundle. The DirectML runtime remains Windows-only.
+    </div>
+  )}
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
     <button
       disabled={busy === "backend_bundle"}
@@ -419,12 +489,14 @@ async function run(action: string, path: string, body: any = {}) {
     >
       {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime"}
     </button>
-    <button
-      disabled={busy === "backend_bundle_directml"}
-      onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml" })}
-    >
-      {busy === "backend_bundle_directml" ? "Installing…" : "Install AMD / DirectML Runtime"}
-    </button>
+    {isWindows ? (
+      <button
+        disabled={busy === "backend_bundle_directml"}
+        onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml" })}
+      >
+        {busy === "backend_bundle_directml" ? "Installing…" : "Install AMD / DirectML Runtime"}
+      </button>
+    ) : null}
   </div>
   {!backendBundleOk && status?.backend_bundle?.hint && (
     <div className="small" style={{ marginTop: 10 }}>
@@ -436,12 +508,12 @@ async function run(action: string, path: string, body: any = {}) {
       Missing modules: <code>{status.backend_bundle.missing.join(", ")}</code>
     </div>
   )}
-  {!backendBundleDirectmlOk && status?.backend_bundle_directml?.hint ? (
+  {isWindows && !backendBundleDirectmlOk && status?.backend_bundle_directml?.hint ? (
     <div className="small" style={{ marginTop: 10 }}>
       DirectML fix: {status.backend_bundle_directml.hint}
     </div>
   ) : null}
-  {!!status?.backend_bundle_directml?.missing?.length ? (
+  {isWindows && !!status?.backend_bundle_directml?.missing?.length ? (
     <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
       DirectML modules: <code>{status.backend_bundle_directml.missing.join(", ")}</code>
     </div>
@@ -451,20 +523,24 @@ async function run(action: string, path: string, body: any = {}) {
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
     <div style={{ fontWeight: 800 }}>0.5) 7-Zip (Extractor)</div>
-    <Badge ok={sevenOk} label={sevenOk ? "OK" : "Missing"} />
+    <Badge ok={sevenOk} label={isWindows ? (sevenOk ? "OK" : "Missing") : "Optional"} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    Required to extract some .7z archives (BCJ2), including some ComfyUI Portable releases. Studio now keeps the portable CLI under your External tools root.
+    {isWindows
+      ? "Required to extract some .7z archives (BCJ2), including some ComfyUI Portable releases. Studio now keeps the portable CLI under your External tools root."
+      : "Only needed for the Windows ComfyUI Portable workflow. Linux and macOS users can skip this and install ComfyUI manually."}
   </div>
-  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-    <button
-      disabled={busy === "sevenzip"}
-      onClick={() => run("sevenzip", "/v1/setup/7zip/install", {})}
-    >
-      {busy === "sevenzip" ? "Downloading…" : "Download Portable 7-Zip"}
-    </button>
-  </div>
-  {!sevenOk && status?.sevenzip?.hint && (
+  {isWindows ? (
+    <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <button
+        disabled={busy === "sevenzip"}
+        onClick={() => run("sevenzip", "/v1/setup/7zip/install", {})}
+      >
+        {busy === "sevenzip" ? "Downloading…" : "Download Portable 7-Zip"}
+      </button>
+    </div>
+  ) : null}
+  {isWindows && !sevenOk && status?.sevenzip?.hint && (
     <div className="small" style={{ marginTop: 10 }}>
       Fix: {status.sevenzip.hint}
     </div>
@@ -485,18 +561,23 @@ async function run(action: string, path: string, body: any = {}) {
           <div className="small" style={{ marginTop: 6, opacity: 0.9 }}>
             Studio-managed Ollama models live under <code>{status?.ollama?.managed_models_dir ?? "(set your Models path first)"}</code>.
           </div>
+          {!isWindows ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+              Linux support expects a system-installed <code>ollama</code> binary or a custom <code>EDMG_OLLAMA_PATH</code>. The automatic Ollama installer remains Windows-only.
+            </div>
+          ) : null}
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="secondary"
-              onClick={() => window.edmg?.openExternal?.("https://ollama.com/download/windows")}
+              onClick={() => window.edmg?.openExternal?.(ollamaDownloadUrl)}
             >
               Open Ollama Download Page
             </button>
             <button
-              disabled={busy === "ollama"}
+              disabled={!isWindows || busy === "ollama"}
               onClick={() => run("ollama", "/v1/setup/ollama/install_managed", {})}
             >
-              {busy === "ollama" ? "Installing…" : "Install Ollama Into External Tools"}
+              {busy === "ollama" ? "Installing…" : (isWindows ? "Install Ollama Into External Tools" : "Windows-only Managed Install")}
             </button>
             <button
               className="secondary"
@@ -580,31 +661,36 @@ async function run(action: string, path: string, body: any = {}) {
           <div className="small" style={{ marginTop: 6 }}>
             EDMG talks to ComfyUI at <code>{status?.comfyui?.url ?? "http://127.0.0.1:8188"}</code>.
           </div>
+          {!isWindows ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+              Linux support uses a manually installed ComfyUI instance. Start it yourself and keep <code>EDMG_COMFYUI_URL</code> pointed at the running server.
+            </div>
+          ) : null}
 
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="secondary"
-              onClick={() => window.edmg?.openExternal?.("https://docs.comfy.org/installation/comfyui_portable_windows")}
+              onClick={() => window.edmg?.openExternal?.(comfyDocsUrl)}
             >
-              Open ComfyUI Portable Guide
+              {isWindows ? "Open ComfyUI Portable Guide" : "Open ComfyUI Docs"}
             </button>
             <button
-              disabled={busy === "comfyui"}
+              disabled={!isWindows || busy === "comfyui"}
               onClick={() => run("comfyui", "/v1/setup/comfyui/portable/install", { flavor: "cpu" })}
             >
-              {busy === "comfyui" ? "Working…" : "Install ComfyUI Portable (CPU)"}
+              {busy === "comfyui" ? "Working…" : (isWindows ? "Install ComfyUI Portable (CPU)" : "Windows-only Portable Install")}
             </button>
             <button
-              disabled={busy === "comfyui_n"}
+              disabled={!isWindows || busy === "comfyui_n"}
               onClick={() => run("comfyui_n", "/v1/setup/comfyui/portable/install", { flavor: "nvidia" })}
             >
-              {busy === "comfyui_n" ? "Working…" : "Install ComfyUI Portable (NVIDIA)"}
+              {busy === "comfyui_n" ? "Working…" : (isWindows ? "Install ComfyUI Portable (NVIDIA)" : "Windows-only Portable Install")}
             </button>
             <button
-              disabled={busy === "start_comfy"}
+              disabled={!isWindows || busy === "start_comfy"}
               onClick={() => run("start_comfy", "/v1/setup/comfyui/portable/start", { flavor: "cpu" })}
             >
-              {busy === "start_comfy" ? "Starting…" : "Start ComfyUI (CPU)"}
+              {busy === "start_comfy" ? "Starting…" : (isWindows ? "Start ComfyUI (CPU)" : "Windows-only Portable Start")}
             </button>
           </div>
 
@@ -739,11 +825,13 @@ async function run(action: string, path: string, body: any = {}) {
         <div className="card">
           <div style={{ fontWeight: 800 }}>Ready check</div>
           <div className="small" style={{ marginTop: 6 }}>
-            When the backend runtime bundle + Ollama + a model + ComfyUI + FFmpeg are all OK, EDMG Studio is ready to generate. EDMG Core is optional but recommended for the fully unified workflow.
+            {ollamaRequired
+              ? "When the backend runtime bundle + Ollama + a model + ComfyUI + FFmpeg are all OK, EDMG Studio is ready to generate. EDMG Core is optional but recommended for the fully unified workflow."
+              : "When the backend runtime bundle + your active AI provider + ComfyUI + FFmpeg are all OK, EDMG Studio is ready to generate. EDMG Core is optional but recommended for the fully unified workflow."}
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
             <button
-              disabled={!(backendBundleOk && ollamaOk && modelOk && comfyOk && ffOk)}
+              disabled={!setupReady}
               onClick={() => onNavigate?.("workspace")}
             >
               Go to Workspace

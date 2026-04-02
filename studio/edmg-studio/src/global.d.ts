@@ -13,6 +13,7 @@ declare global {
       pickDirectory?: (opts?: any) => Promise<{ ok: boolean; canceled?: boolean; path?: string }>;
       getStudioPaths?: () => Promise<{
         ok: boolean;
+        platform?: string;
         studioHome: string;
         dataDir: string;
         modelsDir: string;

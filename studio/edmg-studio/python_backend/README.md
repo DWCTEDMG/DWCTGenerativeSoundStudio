@@ -6,6 +6,37 @@ pip install -e ".[studio_bundle]"
 edmg-studio-backend serve --host 127.0.0.1 --port 7863
 ```
 
+## Docker (backend only)
+
+This Docker path runs the FastAPI backend only. The Electron desktop shell still runs natively on the host.
+
+Build from `studio/edmg-studio/python_backend`:
+
+```bash
+docker build -t edmg-studio-backend .
+```
+
+Run the backend container with persistent Studio storage:
+
+```bash
+docker run --rm -it \
+  -p 7863:7863 \
+  -v "$(pwd)/data:/studio/data" \
+  -v "$(pwd)/models:/studio/models" \
+  -v "$(pwd)/cache:/studio/cache" \
+  -v "$(pwd)/logs:/studio/logs" \
+  -v "$(pwd)/external:/studio/external" \
+  -e EDMG_AI_OLLAMA_URL=http://host.docker.internal:11434 \
+  -e EDMG_COMFYUI_URL=http://host.docker.internal:8188 \
+  edmg-studio-backend
+```
+
+Notes:
+
+- On Docker Desktop, `host.docker.internal` is usually the easiest way to reach Ollama and ComfyUI running on the host.
+- On native Linux Docker installs, use the host IP or `--network=host` instead.
+- The image installs the Studio backend bundle plus FFmpeg, `libsndfile`, and OpenMP runtime support for the current analysis/transcription stack.
+
 ## Tests
 Install the same backend bundle Studio uses, plus the test extra:
 

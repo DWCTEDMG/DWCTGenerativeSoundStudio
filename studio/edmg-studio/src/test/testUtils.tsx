@@ -39,6 +39,7 @@ export function installEdmgBridge(overrides: Partial<NonNullable<Window["edmg"]>
     openExternal: async () => {},
     getStudioPaths: async () => ({
       ok: true,
+      platform: "win32",
       studioHome: "D:\\EDMG-Studio",
       dataDir: "D:\\EDMG-Studio\\data",
       modelsDir: "D:\\EDMG-Studio\\models",

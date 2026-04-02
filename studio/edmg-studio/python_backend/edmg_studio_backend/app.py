@@ -96,6 +96,7 @@ from .services.setup_wizard import (
     install_backend_bundle,
     _find_ollama_exe,
     _find_7z_exe,
+    managed_ollama_launch_script_path,
 )
 
 settings = Settings()
@@ -1970,6 +1971,7 @@ def _setup_ai_config() -> dict[str, Any]:
 @app.get("/v1/setup/status")
 def setup_status():
     """Installer GUI status for required components."""
+    is_windows = platform.system() == "Windows"
     ai_config = _setup_ai_config()
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
@@ -1981,7 +1983,7 @@ def setup_status():
     except Exception as e:
         ollama_exe_error = str(e)
     ollama["managed_models_dir"] = str(settings.ollama_models_dir)
-    ollama["managed_launch_script"] = str((settings.external_dir / "ollama" / "start_ollama_studio.bat").resolve())
+    ollama["managed_launch_script"] = str(managed_ollama_launch_script_path(settings.external_dir))
     ollama["launch_available"] = bool(ollama_exe)
     ollama["ollama_exe"] = ollama_exe
     ollama["managed_running"] = bool(ollama_managed.running())
@@ -1994,8 +1996,12 @@ def setup_status():
         )
     elif not ollama.get("ok"):
         ollama["hint"] = (
-            f"Studio can install Ollama into {settings.external_dir / 'ollama'} and keep models under "
-            f"{settings.ollama_models_dir}."
+            (
+                f"Studio can install Ollama into {settings.external_dir / 'ollama'} and keep models under "
+                f"{settings.ollama_models_dir}."
+            )
+            if is_windows
+            else "Install Ollama system-wide, or set EDMG_OLLAMA_PATH to your ollama binary, then point Studio at the running Ollama service."
         )
 
     # ComfyUI availability
@@ -2011,7 +2017,11 @@ def setup_status():
                 f"Configured checkpoint `{fallback_from}` is unavailable; Studio will use `{resolved_checkpoint}` until the configured checkpoint is installed."
             )
         else:
-            comfy_hint = None if comfy_ok else "Install and start ComfyUI (Portable) or ComfyUI Desktop, then ensure it is reachable at the configured URL(s)."
+            comfy_hint = None if comfy_ok else (
+                "Install and start ComfyUI (Portable) or ComfyUI Desktop, then ensure it is reachable at the configured URL(s)."
+                if is_windows
+                else "Install and start ComfyUI, then ensure it is reachable at the configured URL(s)."
+            )
         comfy_status = {
             "ok": comfy_ok,
             "url": settings.resolved_comfyui_urls()[0] if settings.resolved_comfyui_urls() else settings.comfyui_url,
@@ -2029,7 +2039,11 @@ def setup_status():
             "checkpoint": settings.comfyui_checkpoint,
             "portable_installed": comfy_portable_installed(settings.external_dir, settings.data_dir),
             "error": str(e),
-            "hint": "Configure EDMG_COMFYUI_URL to a running ComfyUI instance, or install ComfyUI Portable via this wizard.",
+            "hint": (
+                "Configure EDMG_COMFYUI_URL to a running ComfyUI instance, or install ComfyUI Portable via this wizard."
+                if is_windows
+                else "Configure EDMG_COMFYUI_URL to a running ComfyUI instance."
+            ),
         }
 
     ff = check_ffmpeg(settings.ffmpeg_path)
@@ -2044,11 +2058,18 @@ def setup_status():
 
     
     # 7-Zip CLI (needed to extract some .7z archives, e.g., ComfyUI Portable BCJ2)
-    try:
-        seven_path = _find_7z_exe(settings.external_dir, settings.data_dir)
-        seven = {"ok": True, "path": seven_path, "hint": None}
-    except Exception as e:
-        seven = {"ok": False, "path": None, "hint": "Download the portable 7-Zip CLI into the Studio external tools folder, or set EDMG_7Z_PATH."}
+    if not is_windows:
+        seven = {
+            "ok": True,
+            "path": shutil.which("7z") or shutil.which("7zz"),
+            "hint": "Portable 7-Zip install is only needed for the Windows ComfyUI Portable workflow.",
+        }
+    else:
+        try:
+            seven_path = _find_7z_exe(settings.external_dir, settings.data_dir)
+            seven = {"ok": True, "path": seven_path, "hint": None}
+        except Exception:
+            seven = {"ok": False, "path": None, "hint": "Download the portable 7-Zip CLI into the Studio external tools folder, or set EDMG_7Z_PATH."}
 
     hw = _hardware_profile()
     return {

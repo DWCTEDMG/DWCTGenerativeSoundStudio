@@ -26,7 +26,8 @@
     "validate:desktop": "npm run typecheck && npm run test:ui && npm run build && npm run prepare:release-bundle && npm run release:stage-desktop && npm run validate:electron-bridge && npm run validate:desktop-integration && npm run validate:packaged-desktop-smoke",
     "validate:release": "npm run validate:desktop && npm run dist:win && npm run validate:packaged-customer-flow && npm run validate:packaged-upgrade-proof && npm run validate:packaged-zero-state-setup",
     "build:electron": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs --dir -c.directories.app=release/staged-app",
-    "dist:win": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app"
+    "dist:win": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app",
+    "dist:linux": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs -l AppImage --x64 -c.directories.app=release/staged-app"
   },
   "dependencies": {
     "@huggingface/hub": "^2.11.0",
@@ -83,6 +84,12 @@
         "nsis"
       ],
       "artifactName": "${name} Setup ${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Graphics"
     },
     "nsis": {
       "oneClick": false,

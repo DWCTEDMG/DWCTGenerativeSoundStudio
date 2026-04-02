@@ -103,6 +103,11 @@ def _ollama_host_value(url: str) -> str:
     return f"{host}:{port}"
 
 
+def managed_ollama_launch_script_path(external_dir: Path) -> Path:
+    script_name = "start_ollama_studio.bat" if platform.system() == "Windows" else "start_ollama_studio.sh"
+    return (external_dir.resolve() / "ollama" / script_name).resolve()
+
+
 def _find_ollama_exe(external_dir: Path | None = None) -> str:
     env = os.environ.get("EDMG_OLLAMA_PATH")
     if env and Path(env).exists():
@@ -112,12 +117,20 @@ def _find_ollama_exe(external_dir: Path | None = None) -> str:
     candidates: list[Path] = []
     if external_dir is not None:
         external_root = external_dir.expanduser().resolve()
-        candidates.extend(
-            [
-                external_root / "ollama" / "ollama.exe",
-                external_root / "bin" / "ollama.exe",
-            ]
-        )
+        if platform.system() == "Windows":
+            candidates.extend(
+                [
+                    external_root / "ollama" / "ollama.exe",
+                    external_root / "bin" / "ollama.exe",
+                ]
+            )
+        else:
+            candidates.extend(
+                [
+                    external_root / "ollama" / "ollama",
+                    external_root / "bin" / "ollama",
+                ]
+            )
 
     if platform.system() == "Windows" and not ignore_system:
         local_appdata = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
@@ -148,18 +161,31 @@ def write_managed_ollama_launch_script(
 ) -> Path:
     script_dir = (external_dir / "ollama").resolve()
     script_dir.mkdir(parents=True, exist_ok=True)
-    script_path = script_dir / "start_ollama_studio.bat"
+    script_path = managed_ollama_launch_script_path(external_dir)
     models_root = _managed_ollama_models_dir(models_dir)
     host_value = _ollama_host_value(ollama_url)
     command = ollama_exe or "ollama"
-    content = (
-        "@echo off\n"
-        "setlocal\n"
-        f"set \"OLLAMA_MODELS={models_root}\"\n"
-        f"set \"OLLAMA_HOST={host_value}\"\n"
-        f"\"{command}\" serve\n"
-    )
+    if platform.system() == "Windows":
+        content = (
+            "@echo off\n"
+            "setlocal\n"
+            f"set \"OLLAMA_MODELS={models_root}\"\n"
+            f"set \"OLLAMA_HOST={host_value}\"\n"
+            f"\"{command}\" serve\n"
+        )
+    else:
+        escaped_command = str(command).replace('"', '\\"')
+        escaped_models_root = str(models_root).replace('"', '\\"')
+        content = (
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            f"export OLLAMA_MODELS=\"{escaped_models_root}\"\n"
+            f"export OLLAMA_HOST=\"{host_value}\"\n"
+            f"exec \"{escaped_command}\" serve\n"
+        )
     script_path.write_text(content, encoding="utf-8")
+    if platform.system() != "Windows":
+        script_path.chmod(0o755)
     return script_path
 
 
@@ -184,7 +210,7 @@ def check_ollama(ollama_url: str, model: str) -> dict[str, Any]:
             "url": base,
             "model": model,
             "model_present": False,
-            "hint": "Install Ollama for Windows and ensure it is running (it exposes http://127.0.0.1:11434).",
+            "hint": "Install Ollama and ensure it is running (it exposes http://127.0.0.1:11434).",
             "error": str(e),
         }
 
