@@ -40,7 +40,7 @@ from .config import Settings
 from .schemas import (
     HealthResponse, ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
     RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest,
-    CreativeDirectionApplyRequest, ExportDeforumRequest,
+    CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
 )
 from .store.projects import ProjectStore
@@ -79,6 +79,11 @@ from .services.render_settings import (
     STABILITY_SD3_MODELS,
     STABILITY_SERVICES,
     STABILITY_STYLE_PRESETS,
+)
+from .services.workbench_bridge import (
+    merge_reactive_lab_into_timeline,
+    planner_lab_to_canonical_plan,
+    planner_lab_to_project_analysis,
 )
 from .services.setup_wizard import (
     SetupTaskManager,
@@ -4000,6 +4005,150 @@ def _normalize_plan_payload(
     return normalized
 
 
+def _merge_imported_analysis(base: Any, imported: dict[str, Any]) -> dict[str, Any]:
+    current = deepcopy(base) if isinstance(base, dict) else {}
+    incoming = imported if isinstance(imported, dict) else {}
+    base_features = current.get("features") if isinstance(current.get("features"), dict) else {}
+    next_features = incoming.get("features") if isinstance(incoming.get("features"), dict) else {}
+    current["features"] = {**base_features, **next_features}
+
+    transcript = incoming.get("transcript")
+    if isinstance(transcript, dict) and str(transcript.get("text") or "").strip():
+        current["transcript"] = transcript
+
+    tags = []
+    for raw in [*(current.get("tags") or []), *(incoming.get("tags") or [])]:
+        text = str(raw or "").strip()
+        if text and text not in tags:
+            tags.append(text)
+    if tags:
+        current["tags"] = tags
+
+    current["source"] = str(incoming.get("source") or current.get("source") or "imported")
+    return current
+
+
+def _apply_plan_to_project_timeline(proj: Any, *, variant_index: int, overwrite: bool) -> dict[str, Any]:
+    plan = proj.meta.get("last_plan")
+    if not isinstance(plan, dict):
+        raise HTTPException(400, "No plan. Generate a plan first.")
+    variants = plan.get("variants") if isinstance(plan.get("variants"), list) else []
+    vi = int(variant_index or 0)
+    if not variants or vi < 0 or vi >= len(variants):
+        raise HTTPException(400, "Invalid variant_index")
+    variant = variants[vi] if isinstance(variants[vi], dict) else {}
+    scenes = variant.get("scenes") if isinstance(variant.get("scenes"), list) else []
+    duration_s = float(variant.get("duration_s") or plan.get("duration_s") or 60.0)
+
+    timeline = proj.meta.get("timeline") if isinstance(proj.meta.get("timeline"), dict) else {}
+    timeline = {**timeline}
+
+    tracks = timeline.get("tracks") if isinstance(timeline.get("tracks"), list) else []
+    tracks = [t for t in tracks if isinstance(t, dict)]
+
+    def upsert_track(tid: str, name: str, ttype: str, clips: list[dict[str, Any]]) -> None:
+        nonlocal tracks
+        idx = next((i for i, t in enumerate(tracks) if str(t.get("id") or "") == tid or str(t.get("type") or "").lower() == ttype.lower()), -1)
+        if idx >= 0:
+            if overwrite or not tracks[idx].get("clips"):
+                tracks[idx] = {**tracks[idx], "id": tid, "name": name, "type": ttype, "clips": clips}
+        else:
+            tracks.append({"id": tid, "name": name, "type": ttype, "clips": clips})
+
+    prompt_clips: list[dict[str, Any]] = []
+    for i, s in enumerate(scenes):
+        try:
+            ss = float(s.get("start_s", 0.0))
+            ee = float(s.get("end_s", ss + 1.0))
+        except Exception:
+            ss, ee = 0.0, 1.0
+        prompt_clips.append(
+            {
+                "id": f"edmg_prompt_{i}",
+                "start_s": ss,
+                "end_s": ee,
+                "data": {
+                    "prompt": str(s.get("prompt") or "").strip(),
+                    "negative_prompt": str(s.get("negative_prompt") or "").strip(),
+                },
+            }
+        )
+    upsert_track("edmg_prompt", "EDMG Prompts", "prompt", prompt_clips)
+
+    ms = variant.get("motion_schedules") if isinstance(variant.get("motion_schedules"), dict) else {}
+    if not ms:
+        try:
+            aa = _build_public_audio_analysis(proj)
+            from enhanced_deforum_music_generator.core.motion_orchestrator import MotionConfig, motion_schedules  # type: ignore
+            ms = motion_schedules(aa, cfg=MotionConfig(fps=24))
+            steps_sched, denoise_sched = _derive_steps_and_denoise_schedules(aa, fps=24, base_steps=15)
+            ms.setdefault("steps_schedule", steps_sched)
+            ms.setdefault("denoise_schedule", denoise_sched)
+        except Exception:
+            ms = {}
+    motion_clip = {
+        "id": "edmg_motion_0",
+        "start_s": 0.0,
+        "end_s": duration_s,
+        "data": {**ms},
+    }
+    upsert_track("edmg_motion", "EDMG Motion", "motion", [motion_clip])
+
+    timeline["tracks"] = tracks
+
+    cam = timeline.get("camera") if isinstance(timeline.get("camera"), dict) else {}
+    cam = {**cam}
+    kfs = cam.get("keyframes") if isinstance(cam.get("keyframes"), list) else []
+    if overwrite or not kfs:
+        fps = 24
+        zoom_s = str(ms.get("zoom") or "")
+        ang_s = str(ms.get("angle") or "")
+
+        def _parse_sched(s: str) -> list[tuple[int, float]]:
+            pairs = []
+            for part in str(s or "").split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                m = re.match(r"^(\d+)\s*:\s*\(?\s*([-+]?\d*\.?\d+)\s*\)?$", part)
+                if not m:
+                    continue
+                pairs.append((int(m.group(1)), float(m.group(2))))
+            return sorted(pairs, key=lambda x: x[0])
+
+        def _sample(pairs: list[tuple[int, float]], frame: int) -> float:
+            if not pairs:
+                return 0.0
+            if frame <= pairs[0][0]:
+                return float(pairs[0][1])
+            if frame >= pairs[-1][0]:
+                return float(pairs[-1][1])
+            for i in range(len(pairs) - 1):
+                fa, va = pairs[i]
+                fb, vb = pairs[i + 1]
+                if fa <= frame <= fb:
+                    if fb <= fa:
+                        return float(vb)
+                    w = (frame - fa) / max(1.0, (fb - fa))
+                    return float(va) * (1.0 - w) + float(vb) * w
+            return float(pairs[-1][1])
+
+        zp = _parse_sched(zoom_s)
+        ap = _parse_sched(ang_s)
+        frames = sorted({f for f, _ in zp} | {f for f, _ in ap})
+        kfs = []
+        if frames:
+            for f in frames:
+                kfs.append({"t": f / fps, "zoom": _sample(zp, f) or 1.0, "pan_x": 0.0, "pan_y": 0.0, "rotation_deg": _sample(ap, f)})
+        elif duration_s > 0:
+            kfs = [{"t": 0.0, "zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0, "rotation_deg": 0.0}]
+        cam["keyframes"] = kfs
+        timeline["camera"] = cam
+
+    proj.meta["timeline"] = timeline
+    return timeline
+
+
 @app.post("/v1/projects/{project_id}/plan")
 def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
     proj = store.get(project_id)
@@ -4074,134 +4223,81 @@ def apply_plan_to_timeline(project_id: str, req: ApplyPlanRequest):
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not isinstance(plan, dict):
-        raise HTTPException(400, "No plan. Generate a plan first.")
-    variants = plan.get("variants") if isinstance(plan.get("variants"), list) else []
-    vi = int(req.variant_index or 0)
-    if not variants or vi < 0 or vi >= len(variants):
-        raise HTTPException(400, "Invalid variant_index")
-    variant = variants[vi] if isinstance(variants[vi], dict) else {}
-    scenes = variant.get("scenes") if isinstance(variant.get("scenes"), list) else []
-    duration_s = float(variant.get("duration_s") or plan.get("duration_s") or 60.0)
+    timeline = _apply_plan_to_project_timeline(
+        proj,
+        variant_index=int(req.variant_index or 0),
+        overwrite=bool(req.overwrite),
+    )
+    store.save(proj)
+    return {"ok": True, "timeline": timeline, "variant_index": int(req.variant_index or 0)}
 
-    timeline = proj.meta.get("timeline") if isinstance(proj.meta.get("timeline"), dict) else {}
-    timeline = {**timeline}
 
-    # tracks
-    tracks = timeline.get("tracks") if isinstance(timeline.get("tracks"), list) else []
-    tracks = [t for t in tracks if isinstance(t, dict)]
-    overwrite = bool(req.overwrite)
+@app.post("/v1/projects/{project_id}/planner_lab/import")
+def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
 
-    def upsert_track(tid: str, name: str, ttype: str, clips: list[dict[str, Any]]) -> None:
-        nonlocal tracks
-        idx = next((i for i, t in enumerate(tracks) if str(t.get("id") or "") == tid or str(t.get("type") or "").lower() == ttype.lower()), -1)
-        if idx >= 0:
-            if overwrite or not tracks[idx].get("clips"):
-                tracks[idx] = {**tracks[idx], "id": tid, "name": name, "type": ttype, "clips": clips}
-        else:
-            tracks.append({"id": tid, "name": name, "type": ttype, "clips": clips})
+    imported_analysis = planner_lab_to_project_analysis(req.analysis)
+    if imported_analysis:
+        proj.meta["analysis"] = _merge_imported_analysis(proj.meta.get("analysis"), imported_analysis)
 
-    # prompt track
-    prompt_clips: list[dict[str, Any]] = []
-    for i, s in enumerate(scenes):
-        try:
-            ss = float(s.get("start_s", 0.0))
-            ee = float(s.get("end_s", ss + 1.0))
-        except Exception:
-            ss, ee = 0.0, 1.0
-        prompt_clips.append(
-            {
-                "id": f"edmg_prompt_{i}",
-                "start_s": ss,
-                "end_s": ee,
-                "data": {
-                    "prompt": str(s.get("prompt") or "").strip(),
-                    "negative_prompt": str(s.get("negative_prompt") or "").strip(),
-                },
-            }
-        )
-    upsert_track("edmg_prompt", "EDMG Prompts", "prompt", prompt_clips)
-
-    # motion track: store schedules directly on clip.data
-    ms = variant.get("motion_schedules") if isinstance(variant.get("motion_schedules"), dict) else {}
-    if not ms:
-        # best-effort: derive from analysis
-        try:
-            aa = _build_public_audio_analysis(proj)
-            from enhanced_deforum_music_generator.core.motion_orchestrator import MotionConfig, motion_schedules  # type: ignore
-            ms = motion_schedules(aa, cfg=MotionConfig(fps=24))
-            steps_sched, denoise_sched = _derive_steps_and_denoise_schedules(aa, fps=24, base_steps=15)
-            ms.setdefault("steps_schedule", steps_sched)
-            ms.setdefault("denoise_schedule", denoise_sched)
-        except Exception:
-            ms = {}
-    motion_clip = {
-        "id": "edmg_motion_0",
-        "start_s": 0.0,
-        "end_s": duration_s,
-        "data": {**ms},
+    imported_plan = planner_lab_to_canonical_plan(req.analysis, req.plan, req.settings)
+    scene_counts = [
+        len(variant.get("scenes") or [])
+        for variant in list(imported_plan.get("variants") or [])
+        if isinstance(variant, dict)
+    ]
+    normalized_plan = _normalize_plan_payload(
+        imported_plan,
+        requested_variants=max(1, len(imported_plan.get("variants") or [])),
+        requested_max_scenes=max(scene_counts or [1]),
+        duration_s_hint=_analysis_duration_s(proj.meta.get("analysis") or imported_analysis),
+    )
+    proj.meta["last_plan"] = normalized_plan
+    proj.meta["last_planner_lab"] = {
+        "analysis": deepcopy(req.analysis),
+        "plan": deepcopy(req.plan),
+        "settings": deepcopy(req.settings),
+        "imported_at": time.time(),
     }
-    upsert_track("edmg_motion", "EDMG Motion", "motion", [motion_clip])
 
-    timeline["tracks"] = tracks
+    timeline = None
+    if req.apply_timeline:
+        timeline = _apply_plan_to_project_timeline(
+            proj,
+            variant_index=0,
+            overwrite=bool(req.overwrite_timeline),
+        )
 
-    # camera keyframes (from zoom + angle schedules) if empty or overwrite
-    cam = timeline.get("camera") if isinstance(timeline.get("camera"), dict) else {}
-    cam = {**cam}
-    kfs = cam.get("keyframes") if isinstance(cam.get("keyframes"), list) else []
-    if overwrite or not kfs:
-        fps = 24
-        zoom_s = str(ms.get("zoom") or "")
-        ang_s = str(ms.get("angle") or "")
-        def _parse_sched(s: str) -> list[tuple[int, float]]:
-            pairs = []
-            for part in str(s or "").split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                m = re.match(r"^(\d+)\s*:\s*\(?\s*([-+]?\d*\.?\d+)\s*\)?$", part)
-                if not m:
-                    continue
-                pairs.append((int(m.group(1)), float(m.group(2))))
-            return sorted(pairs, key=lambda x: x[0])
+    store.save(proj)
+    return {"ok": True, "plan": normalized_plan, "timeline": timeline}
 
-        def _sample(pairs: list[tuple[int, float]], frame: int) -> float:
-            if not pairs:
-                return 0.0
-            if frame <= pairs[0][0]:
-                return float(pairs[0][1])
-            if frame >= pairs[-1][0]:
-                return float(pairs[-1][1])
-            for i in range(len(pairs) - 1):
-                a, av = pairs[i]
-                b, bv = pairs[i + 1]
-                if a <= frame <= b:
-                    w = (frame - a) / max(1e-9, (b - a))
-                    return float(av) * (1.0 - w) + float(bv) * w
-            return float(pairs[-1][1])
 
-        zoom_pairs = _parse_sched(zoom_s)
-        ang_pairs = _parse_sched(ang_s)
-        frames = sorted({0, *[f for f, _ in zoom_pairs], *[f for f, _ in ang_pairs]})
-        if len(frames) > 64:
-            step = max(1, len(frames) // 64)
-            frames = frames[::step]
-        out = []
-        for f in frames:
-            out.append(
-                {
-                    "t": float(f) / float(fps),
-                    "zoom": _sample(zoom_pairs, f) if zoom_pairs else 1.0,
-                    "pan_x": 0.0,
-                    "pan_y": 0.0,
-                    "rotation_deg": _sample(ang_pairs, f) if ang_pairs else 0.0,
-                }
-            )
-        cam["keyframes"] = out
-        timeline["camera"] = cam
+@app.post("/v1/projects/{project_id}/reactive_lab/apply")
+def apply_reactive_lab(project_id: str, req: ReactiveLabApplyRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
 
+    payload = {
+        "metadata": deepcopy(req.metadata),
+        "keyframes": deepcopy(req.keyframes),
+        "beat_markers": deepcopy(req.beat_markers),
+        "cue_events": deepcopy(req.cue_events),
+        "sections": deepcopy(req.sections),
+        "repair_suggestions": deepcopy(req.repair_suggestions),
+        "schedules": deepcopy(req.schedules),
+        "handoff_manifest": deepcopy(req.handoff_manifest),
+    }
+    timeline = merge_reactive_lab_into_timeline(
+        proj.meta.get("timeline"),
+        payload,
+        overwrite_motion_track=bool(req.overwrite_motion_track),
+        overwrite_camera=bool(req.overwrite_camera),
+    )
     proj.meta["timeline"] = timeline
+    proj.meta["last_reactive_lab"] = {**payload, "applied_at": time.time()}
     store.save(proj)
     return {"ok": True, "timeline": timeline}
 

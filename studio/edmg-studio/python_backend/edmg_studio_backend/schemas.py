@@ -187,6 +187,27 @@ class CreativeDirectionApplyRequest(BaseModel):
     overwrite_tracks: bool = True
     overwrite_camera: bool = False
 
+
+class PlannerLabImportRequest(BaseModel):
+    analysis: dict[str, Any] = Field(default_factory=dict)
+    plan: dict[str, Any] = Field(default_factory=dict)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    apply_timeline: bool = True
+    overwrite_timeline: bool = True
+
+
+class ReactiveLabApplyRequest(BaseModel):
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    keyframes: list[dict[str, Any]] = Field(default_factory=list)
+    beat_markers: list[dict[str, Any]] = Field(default_factory=list)
+    cue_events: list[dict[str, Any]] = Field(default_factory=list)
+    sections: list[dict[str, Any]] = Field(default_factory=list)
+    repair_suggestions: list[dict[str, Any]] = Field(default_factory=list)
+    schedules: dict[str, Any] = Field(default_factory=dict)
+    handoff_manifest: dict[str, Any] = Field(default_factory=dict)
+    overwrite_motion_track: bool = True
+    overwrite_camera: bool = True
+
 class ExportDeforumRequest(BaseModel):
     variant_index: int = 0
     fps: int = 30

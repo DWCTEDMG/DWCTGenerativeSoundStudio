@@ -1504,6 +1504,10 @@ def _motion_params_at_time(t: float, timeline: dict[str, Any] | None) -> dict[st
             s_cfg = _get("cfg_scale_schedule")
             s_steps = _get("steps_schedule")
             s_denoise = _get("denoise_schedule") or ""  # optional alias
+            s_zoom = _get("zoom_schedule") or _get("zoom")
+            s_pan_x = _get("pan_x_schedule")
+            s_pan_y = _get("pan_y_schedule")
+            s_rotation = _get("rotation_schedule") or _get("angle") or _get("rotation_z_schedule")
 
             if s_strength:
                 v = _eval_schedule(_parse_deforum_schedule(s_strength), frame)
@@ -1521,6 +1525,22 @@ def _motion_params_at_time(t: float, timeline: dict[str, Any] | None) -> dict[st
                 v = _eval_schedule(_parse_deforum_schedule(s_steps), frame)
                 if v is not None:
                     out["steps"] = _clamp(float(v), 4.0, 80.0)
+            if s_zoom:
+                v = _eval_schedule(_parse_deforum_schedule(s_zoom), frame)
+                if v is not None:
+                    out["zoom"] = _clamp(float(v), 0.25, 4.0)
+            if s_pan_x:
+                v = _eval_schedule(_parse_deforum_schedule(s_pan_x), frame)
+                if v is not None:
+                    out["pan_x"] = float(v)
+            if s_pan_y:
+                v = _eval_schedule(_parse_deforum_schedule(s_pan_y), frame)
+                if v is not None:
+                    out["pan_y"] = float(v)
+            if s_rotation:
+                v = _eval_schedule(_parse_deforum_schedule(s_rotation), frame)
+                if v is not None:
+                    out["rotation_deg"] = float(v)
 
             # heuristic fallback: derive steps/denoise from strength if missing
             if "steps" not in out and "strength" in out:

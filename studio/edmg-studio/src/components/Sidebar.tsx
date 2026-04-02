@@ -11,7 +11,9 @@ export type Page =
   | "cloud"
   | "settings"
   | "setup"
-  | "models";
+  | "models"
+  | "plannerLab"
+  | "reactiveLab";
 
 export default function Sidebar({
   page,
@@ -30,6 +32,8 @@ export default function Sidebar({
     ["outputs", "Outputs"],
     ["cloud", "Cloud"],
     ["models", "Models"],
+    ["plannerLab", "AI Planner Lab"],
+    ["reactiveLab", "Reactive Lab"],
     ["settings", "Settings"],
     ["setup", "Setup"],
   ];
