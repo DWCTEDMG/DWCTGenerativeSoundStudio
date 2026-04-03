@@ -27,12 +27,6 @@ class AnimationConfig:
     resolution: str = "512x512"
 
 @dataclass
-class A1111Config:
-    host: str = "127.0.0.1"
-    port: int = 7860
-    timeout: int = 120
-
-@dataclass
 class InterfaceConfig:
     server_port: int = 7862
     enable_sharing: bool = False
@@ -52,7 +46,6 @@ class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     lyrics: LyricsConfig = field(default_factory=LyricsConfig)
     animation: AnimationConfig = field(default_factory=AnimationConfig)
-    a1111: A1111Config = field(default_factory=A1111Config)
     interface: InterfaceConfig = field(default_factory=InterfaceConfig)
     advanced: AdvancedConfig = field(default_factory=AdvancedConfig)
 
@@ -64,7 +57,6 @@ class Config:
             audio=AudioConfig(**data.get("audio", {})),
             lyrics=LyricsConfig(**data.get("lyrics", {})),
             animation=AnimationConfig(**data.get("animation", {})),
-            a1111=A1111Config(**data.get("a1111", {})),
             interface=InterfaceConfig(**data.get("interface", {})),
             advanced=AdvancedConfig(**data.get("advanced", {})),
         )

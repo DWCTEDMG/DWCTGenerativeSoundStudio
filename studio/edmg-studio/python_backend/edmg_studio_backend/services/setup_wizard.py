@@ -15,7 +15,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -876,6 +876,53 @@ def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle") -> No
     SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` is ready.")
 
 
+def _resolve_7zip_cli_download(page_url: str, html: str) -> tuple[str, str]:
+    """Return the portable 7-Zip CLI URL and filename from the upstream download page."""
+
+    patterns = (
+        r'href="([^"]*7zr\.exe[^"]*)"',
+        r"href='([^']*7zr\.exe[^']*)'",
+    )
+    match = None
+    for pattern in patterns:
+        match = re.search(pattern, html, re.IGNORECASE)
+        if match:
+            break
+    if not match:
+        raise RuntimeError("Could not locate portable 7-Zip CLI link on 7-zip.org download page.")
+
+    href = match.group(1).strip()
+    url = urljoin(page_url, href)
+    fname = Path(urlparse(url).path).name or "7zr.exe"
+    return url, fname
+
+
+def _7zip_cli_download_candidates(page_url: str, html: str | None = None) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+
+    explicit = str(os.environ.get("EDMG_7ZIP_URL") or "").strip()
+    if explicit:
+        candidates.append((explicit, Path(urlparse(explicit).path).name or "7zr.exe"))
+
+    candidates.append(("https://github.com/ip7z/7zip/releases/latest/download/7zr.exe", "7zr.exe"))
+
+    if html:
+        try:
+            candidates.append(_resolve_7zip_cli_download(page_url, html))
+        except Exception:
+            pass
+
+    deduped: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for url, fname in candidates:
+        key = url.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((url, fname))
+    return deduped
+
+
 def download_and_install_7zip(task: SetupTask, external_dir: Path, data_dir: Path | None = None) -> None:
     """Download a portable 7-Zip CLI into the Studio external-tools root."""
     if platform.system() != "Windows":
@@ -895,38 +942,45 @@ def download_and_install_7zip(task: SetupTask, external_dir: Path, data_dir: Pat
     download_dir.mkdir(parents=True, exist_ok=True)
 
     page_url = "https://7-zip.org/download.html"
-    SetupTaskManager.log(task, f"Fetching 7-Zip download page: {page_url}")
-    r = requests.get(page_url, timeout=30)
-    r.raise_for_status()
-    html = r.text
+    html: str | None = None
+    try:
+        SetupTaskManager.log(task, f"Fetching 7-Zip download page: {page_url}")
+        r = requests.get(page_url, timeout=30)
+        r.raise_for_status()
+        html = r.text
+    except Exception as exc:
+        SetupTaskManager.log(task, f"7-Zip page fetch unavailable; falling back to direct release URL. ({exc})")
 
-    m = re.search(r'href="(a/7zr\.exe)"', html, re.IGNORECASE)
-    if not m:
-        m = re.search(r'href="(a/[^"]*7zr[^"]*\.exe)"', html, re.IGNORECASE)
-    if not m:
-        raise RuntimeError("Could not locate portable 7-Zip CLI link on 7-zip.org download page.")
+    last_error: Exception | None = None
+    portable_exe = dest_dir / "7zr.exe"
+    for url, fname in _7zip_cli_download_candidates(page_url, html):
+        archive = download_dir / fname
+        portable_exe = dest_dir / fname
+        try:
+            SetupTaskManager.log(task, f"Downloading portable 7-Zip CLI: {url}")
+            with requests.get(url, stream=True, timeout=60) as rr:
+                rr.raise_for_status()
+                total = int(rr.headers.get("content-length") or "0")
+                got = 0
+                with open(archive, "wb") as f:
+                    for chunk in rr.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        got += len(chunk)
+                        if total > 0:
+                            task.progress = min(0.95, got / total)
 
-    rel = m.group(1)
-    url = "https://7-zip.org/" + rel.lstrip("/")
-    fname = Path(rel).name
-    archive = download_dir / fname
-    portable_exe = dest_dir / fname
+            shutil.copy2(archive, portable_exe)
+            break
+        except Exception as exc:
+            last_error = exc
+            SetupTaskManager.log(task, f"Portable 7-Zip download failed from {url}: {exc}")
+    else:
+        if last_error is not None:
+            raise RuntimeError(str(last_error))
+        raise RuntimeError("Could not resolve a portable 7-Zip CLI download URL.")
 
-    SetupTaskManager.log(task, f"Downloading portable 7-Zip CLI: {url}")
-    with requests.get(url, stream=True, timeout=60) as rr:
-        rr.raise_for_status()
-        total = int(rr.headers.get("content-length") or "0")
-        got = 0
-        with open(archive, "wb") as f:
-            for chunk in rr.iter_content(chunk_size=1024 * 1024):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                got += len(chunk)
-                if total > 0:
-                    task.progress = min(0.95, got / total)
-
-    shutil.copy2(archive, portable_exe)
     task.progress = 0.97
     SetupTaskManager.log(task, f"Validating portable 7-Zip CLI: {portable_exe}")
     probe = subprocess.run([str(portable_exe), "i"], capture_output=True, text=True, timeout=10)

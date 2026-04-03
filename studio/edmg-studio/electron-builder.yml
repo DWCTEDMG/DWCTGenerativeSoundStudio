@@ -30,6 +30,12 @@
     ],
     "artifactName": "${name} Setup ${version}.${ext}"
   },
+  "linux": {
+    "target": [
+      "AppImage"
+    ],
+    "category": "Graphics"
+  },
   "nsis": {
     "oneClick": false,
     "perMachine": false,

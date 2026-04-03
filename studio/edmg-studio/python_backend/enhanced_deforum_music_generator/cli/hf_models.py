@@ -1,6 +1,6 @@
 """enhanced_deforum_music_generator.cli.hf_models
 
-Manage HF video model catalog downloads and wiring.
+Manage HF video model catalog downloads and ComfyUI wiring.
 
 Examples:
     python -m enhanced_deforum_music_generator.cli.hf_models list
@@ -17,7 +17,6 @@ from enhanced_deforum_music_generator.integrations.hf_model_manager import (
     load_catalog,
     ensure_downloaded_from_catalog,
     wire_hf_video_model_to_comfyui,
-    wire_hf_video_model_to_a1111,
 )
 
 
@@ -32,11 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     dl.add_argument("--models-root", default="models_store")
     dl.add_argument("--token", default=None)
 
-    w = sub.add_parser("wire", help="Wire a downloaded model into ComfyUI and/or A1111.")
+    w = sub.add_parser("wire", help="Wire a downloaded model into ComfyUI.")
     w.add_argument("name")
     w.add_argument("--models-root", default="models_store")
     w.add_argument("--comfyui-root", default=None)
-    w.add_argument("--a1111-root", default=None)
     w.add_argument("--prefer-link", action="store_true")
 
     return p
@@ -72,14 +70,6 @@ def main(argv: list[str] | None = None) -> int:
                 prefer_link=args.prefer_link,
             )
             print(f"ComfyUI: {dst} ({method})")
-        if args.a1111_root:
-            dst, method = wire_hf_video_model_to_a1111(
-                local_dir,
-                a1111_root=Path(args.a1111_root).expanduser().resolve(),
-                model_name=args.name,
-                prefer_link=args.prefer_link,
-            )
-            print(f"A1111: {dst} ({method})")
         return 0
 
     raise AssertionError("unreachable")

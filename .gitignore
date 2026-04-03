@@ -59,8 +59,6 @@ TEST_REPORT.json
 # ----------------------------
 external/*
 !external/
-!external/stable-diffusion-webui
-!external/stable-diffusion-webui/
 !external/ComfyUI
 !external/ComfyUI/
 

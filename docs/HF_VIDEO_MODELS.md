@@ -1,7 +1,7 @@
 # HF Video Models (Diffusers) — EDMG helper
 
 EDMG ships a small Hugging Face *catalog* of strong video-generation models in Diffusers format and provides
-a download + wiring helper for ComfyUI/A1111.
+a download + wiring helper for ComfyUI.
 
 ## Recommended order
 
@@ -29,7 +29,7 @@ Provide:
 - a model from the dropdown
 - optional HF token (or set `HF_TOKEN`)
 - `models_root` (central store)
-- optional ComfyUI root and/or A1111 root
+- optional ComfyUI root
 
 EDMG downloads into:
 
@@ -38,7 +38,6 @@ EDMG downloads into:
 and wires into:
 
 - ComfyUI: `<comfyui_root>/models/video/<model_name>/`
-- A1111: `<a1111_root>/models/video/<model_name>/`
 
 ## Generate a clip with Diffusers (CLI)
 

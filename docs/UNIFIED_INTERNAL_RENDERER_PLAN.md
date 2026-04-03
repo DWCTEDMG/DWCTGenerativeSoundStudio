@@ -67,4 +67,4 @@ The end state is one unified Studio renderer:
 - one internal diffusion render loop
 - Deforum-style schedules as utility/support code only
 
-No AUTOMATIC1111 runtime dependency was added.
+No external WebUI runtime dependency was added.
