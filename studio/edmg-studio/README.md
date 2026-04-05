@@ -31,6 +31,19 @@ pip install -e ".[studio_bundle]"
 edmg-studio-backend serve --host 127.0.0.1 --port 7863
 ```
 
+### Lightning backend helpers
+From `studio/edmg-studio/`:
+
+```bash
+bash scripts/start_lightning_backend.sh
+```
+
+Detached variant with PID and log files under `EDMG_STUDIO_HOME/logs/lightning-backend`:
+
+```bash
+bash scripts/start_lightning_backend_nohup.sh
+```
+
 ### UI
 ```bash
 npm install

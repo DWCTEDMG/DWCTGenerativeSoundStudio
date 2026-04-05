@@ -6444,6 +6444,7 @@ def _hosted_render_preflight_data(
     cache = describe_internal_render_cache(
         project_dir=store.project_dir(project_id),
         variant_index=variant_index,
+        variant=variant,
         scenes=scenes,
         timeline=(proj.meta.get("timeline") or None),
         model_dir=Path(f"stability_platform/{hosted_service}/{hosted_model}"),
@@ -6546,6 +6547,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     cache = describe_internal_render_cache(
         project_dir=store.project_dir(project_id),
         variant_index=int(payload.get("variant_index", 0)),
+        variant=variant,
         scenes=scenes,
         timeline=timeline if isinstance(timeline, dict) else None,
         model_dir=model_path,
