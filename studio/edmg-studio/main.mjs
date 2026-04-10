@@ -166,10 +166,18 @@ function pathExistsSync(targetPath) {
   }
 }
 
+function configuredPathHasAvailableRoot(resolvedPath) {
+  if (!resolvedPath || !IS_WINDOWS) return true;
+  const root = path.parse(resolvedPath).root;
+  if (!root) return true;
+  return pathExistsSync(root);
+}
+
 function resolveConfiguredPath(rawValue) {
   const value = String(rawValue ?? "").trim();
   if (!value) return "";
   const resolved = path.resolve(value);
+  if (!configuredPathHasAvailableRoot(resolved)) return "";
   return resolved.toLowerCase().includes("app.asar") ? "" : resolved;
 }
 

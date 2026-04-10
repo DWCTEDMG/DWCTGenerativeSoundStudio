@@ -167,6 +167,30 @@ def _user_appdata_dir() -> Path:
 def _bootstrap_config_path() -> Path:
     return _user_appdata_dir() / "EDMG Studio" / BOOTSTRAP_CONFIG_BASENAME
 
+def _saved_path_if_usable(raw_value: str | None) -> Path | None:
+    value = str(raw_value or "").strip()
+    if not value:
+        return None
+    candidate = Path(value).expanduser()
+    try:
+        resolved = candidate.resolve()
+    except Exception:
+        try:
+            resolved = candidate.absolute()
+        except Exception:
+            return None
+
+    if os.name == "nt":
+        anchor = resolved.anchor
+        if anchor:
+            try:
+                if not Path(anchor).exists():
+                    return None
+            except Exception:
+                return None
+
+    return resolved
+
 def _derive_studio_home(data_dir: Path) -> Path:
     return data_dir.expanduser().resolve().parent
 
@@ -266,18 +290,18 @@ def _default_data_dir() -> Path:
 
     bootstrap = _read_json(_bootstrap_config_path(), default={})
     if isinstance(bootstrap, dict):
-        saved_home = str(bootstrap.get("studioHome") or "").strip()
-        if saved_home:
-            return (Path(saved_home).expanduser().resolve() / "data")
+        saved_home = _saved_path_if_usable(bootstrap.get("studioHome"))
+        if saved_home is not None:
+            return (saved_home / "data")
 
     cfg = _read_json(LAUNCHER_ENV_PATH, default={})
     if isinstance(cfg, dict):
-        saved_home = str(cfg.get("EDMG_STUDIO_HOME") or "").strip()
-        if saved_home:
-            return (Path(saved_home).expanduser().resolve() / "data")
-        saved_data = str(cfg.get("EDMG_STUDIO_DATA_DIR") or "").strip()
-        if saved_data:
-            return Path(saved_data).expanduser().resolve()
+        saved_home = _saved_path_if_usable(cfg.get("EDMG_STUDIO_HOME"))
+        if saved_home is not None:
+            return (saved_home / "data")
+        saved_data = _saved_path_if_usable(cfg.get("EDMG_STUDIO_DATA_DIR"))
+        if saved_data is not None:
+            return saved_data
 
     return (STUDIO_DIR / "data").resolve()
 
@@ -295,20 +319,20 @@ def _ensure_data_dir_env() -> Path:
 
     bootstrap = _read_json(_bootstrap_config_path(), default={})
     if isinstance(bootstrap, dict):
-        saved_home = str(bootstrap.get("studioHome") or "").strip()
-        if saved_home:
-            _, p = _persist_studio_location(studio_home=Path(saved_home))
+        saved_home = _saved_path_if_usable(bootstrap.get("studioHome"))
+        if saved_home is not None:
+            _, p = _persist_studio_location(studio_home=saved_home)
             return p
 
     cfg = _read_json(LAUNCHER_ENV_PATH, default={})
     if isinstance(cfg, dict):
-        saved_home = str(cfg.get("EDMG_STUDIO_HOME") or "").strip()
-        if saved_home:
-            _, p = _persist_studio_location(studio_home=Path(saved_home))
+        saved_home = _saved_path_if_usable(cfg.get("EDMG_STUDIO_HOME"))
+        if saved_home is not None:
+            _, p = _persist_studio_location(studio_home=saved_home)
             return p
-        saved = str(cfg.get("EDMG_STUDIO_DATA_DIR") or "").strip()
-        if saved:
-            _, p = _persist_studio_location(data_dir=Path(saved))
+        saved = _saved_path_if_usable(cfg.get("EDMG_STUDIO_DATA_DIR"))
+        if saved is not None:
+            _, p = _persist_studio_location(data_dir=saved)
             return p
 
     _, p = _persist_studio_location(data_dir=_default_data_dir())
