@@ -12,6 +12,12 @@ The older standalone-engine installers, duplicate Electron shell, and extra
 README entrypoints have been retired so the repo presents one product instead
 of multiple competing workflows.
 
+The legacy standalone web UI prototypes have also been retired. Their planning
+and audio-reactive capabilities now live inside the Studio app workbenches:
+
+- `studio/edmg-studio/src/workbenches/AiNlpWorkbench.tsx`
+- `studio/edmg-studio/src/workbenches/AudioReactiveWorkbench.tsx`
+
 ## Canonical launch
 
 Windows:

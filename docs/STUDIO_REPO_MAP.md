@@ -35,10 +35,14 @@ alternative install flows.
 
 ## Legacy surfaces retired from the public repo entry
 
-The old standalone installers, duplicate desktop shell, and extra top-level
-README entrypoints have been removed. Archived or reference-only material that
-still remains should be treated as implementation detail, not as competing
-product surfaces.
+The old standalone installers, duplicate desktop shell, extra top-level README
+entrypoints, and archived standalone web UI prototypes have been removed from
+the active product surface.
+
+The Studio app now owns those workflows directly through:
+
+- `studio/edmg-studio/src/workbenches/AiNlpWorkbench.tsx`
+- `studio/edmg-studio/src/workbenches/AudioReactiveWorkbench.tsx`
 
 ## Release and validation
 
