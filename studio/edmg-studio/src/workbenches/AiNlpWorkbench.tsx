@@ -165,7 +165,10 @@ type AiNlpWorkbenchProps = {
   studioProjectId?: string;
   studioProjectName?: string;
   onSyncToStudio?: (payload: PlannerLabSyncPayload) => Promise<string | void>;
+  compact?: boolean;
 };
+
+type PlannerWorkbenchSection = 'setup' | 'prompts' | 'storyboard' | 'repairs';
 
 const AudioContextCtor: typeof AudioContext | undefined =
   typeof window !== 'undefined'
@@ -702,6 +705,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
   studioProjectId,
   studioProjectName,
   onSyncToStudio,
+  compact = false,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -723,6 +727,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
   const [studioSyncing, setStudioSyncing] = useState(false);
   const [studioSyncMessage, setStudioSyncMessage] = useState<string | null>(null);
   const [studioSyncError, setStudioSyncError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<PlannerWorkbenchSection>('setup');
 
   const approvedCount = useMemo(() => plan?.scenes.filter((scene) => scene.approved).length ?? 0, [plan]);
   const repairCount = useMemo(() => plan?.scenes.filter((scene) => scene.status === 'needs-repair').length ?? 0, [plan]);
@@ -768,6 +773,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
       });
       setAnalysis(nextAnalysis);
       setPlan(nextPlan);
+      setActiveSection('prompts');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not analyze that file.');
     } finally {
@@ -791,6 +797,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
       negativePromptSeed,
     });
     setPlan(nextPlan);
+    setActiveSection('prompts');
   };
 
   const syncToStudio = async (): Promise<void> => {
@@ -802,6 +809,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
     setStudioSyncError(null);
     try {
       const result = await onSyncToStudio(payload);
+      setActiveSection('storyboard');
       setStudioSyncMessage(
         typeof result === 'string' && result.trim()
           ? result
@@ -1052,8 +1060,15 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
     downloadText(`music-scene-plan-${Date.now()}.csv`, rows, 'text/csv');
   };
 
+  const sectionTabs: Array<{ id: PlannerWorkbenchSection; label: string; meta: string }> = [
+    { id: 'setup', label: 'Setup', meta: audioFile ? 'audio loaded' : 'add track' },
+    { id: 'prompts', label: 'Prompt Pack', meta: plan ? `${plan.scenes.length} scenes` : 'run planning' },
+    { id: 'storyboard', label: 'Storyboard', meta: plan ? `${plan.scenePlan.length} beats` : 'plan first' },
+    { id: 'repairs', label: 'Repairs', meta: plan ? `${plan.renderManifest.repairSceneIds.length} flagged` : 'idle' },
+  ];
+
   return (
-    <div className="mx-auto max-w-7xl space-y-8 bg-slate-50 p-6 text-slate-900">
+    <div className={`plannerLab-root ${compact ? 'plannerLab-root--compact' : ''} mx-auto max-w-7xl space-y-8 bg-slate-50 p-6 text-slate-900`}>
       <section className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -1061,9 +1076,9 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
               <Sparkles size={16} />
               AI-directed · tool-executed · human-supervised
             </div>
-            <h1 className="flex items-center gap-3 text-4xl font-bold tracking-tight">
+            <h1 className={`flex items-center gap-3 font-bold tracking-tight ${compact ? 'text-2xl' : 'text-4xl'}`}>
               <Music className="text-blue-600" />
-              Music Video AI Director
+              {compact ? 'AI Planner' : 'Music Video AI Director'}
             </h1>
             <p className="mt-3 max-w-3xl text-slate-600">
               This tool treats AI as the planner: it breaks down the song, generates the prompt pack, scene plan, rerender guidance, and repair passes — then you approve only what has taste.
@@ -1105,7 +1120,51 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
         </div>
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+      <details className="plannerLab-guide">
+        <summary className="plannerLab-guideSummary">Quick guide and capabilities</summary>
+        <div className="plannerLab-guideBody">
+          <div className="guide-grid">
+            <section className="guide-block">
+              <div className="guide-kicker">What this tool does</div>
+              <p>This planner turns a song and creative brief into a structured visual plan. It keeps setup, prompt writing, storyboard review, and repair strategy in separate tabs so you can focus without scrolling through the full stack every time.</p>
+            </section>
+            <section className="guide-block">
+              <div className="guide-kicker">Capabilities</div>
+              <ul className="guide-list">
+                <li>Generate prompt packs tuned for cinematic, music-video, experimental, documentary, or storyboard output.</li>
+                <li>Approve strong scenes, flag weak scenes, and prepare rerender and repair passes.</li>
+                <li>Export or sync the planner output into the Studio renderer when you are satisfied with the plan.</li>
+              </ul>
+            </section>
+            <section className="guide-block">
+              <div className="guide-kicker">Recommended flow</div>
+              <ul className="guide-list">
+                <li>Start in Setup, load the track, and choose the analysis and prompt settings that match the target look.</li>
+                <li>Move into Prompt Pack to refine scene language, then open Storyboard to check timing and reading order.</li>
+                <li>Use Repairs for scenes that need recovery, then sync the plan when it is ready to become the saved Studio version.</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <div className="plannerLab-tabs" role="tablist" aria-label="Planner sections">
+        {sectionTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeSection === tab.id}
+            className={`plannerLab-tab${activeSection === tab.id ? ' is-active' : ''}`}
+            onClick={() => setActiveSection(tab.id)}
+          >
+            <span>{tab.label}</span>
+            <span className="plannerLab-tabMeta">{tab.meta}</span>
+          </button>
+        ))}
+      </div>
+
+      {activeSection === 'setup' ? <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="mb-4 flex items-center gap-2 text-lg font-semibold">
             <Upload className="text-blue-600" size={20} />
@@ -1204,9 +1263,9 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
             ) : <div className="rounded-2xl bg-slate-50 p-6 text-sm text-slate-500">Approval state appears after the AI planning pass.</div>}
           </div>
         </div>
-      </section>
+      </section> : null}
 
-      {plan ? (
+      {plan && activeSection === 'prompts' ? (
         <>
           <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><Zap className="text-amber-500" size={20} />Executive AI plan</div>
@@ -1246,29 +1305,53 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
             </div>
           </section>
 
-          <section className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-            <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-              <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><LayoutGrid className="text-emerald-600" size={20} />Scene plan</div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-slate-200 text-sm">
-                  <thead><tr className="text-left text-slate-500"><th className="px-3 py-3 font-medium">Time</th><th className="px-3 py-3 font-medium">Section</th><th className="px-3 py-3 font-medium">Shot</th><th className="px-3 py-3 font-medium">Transition</th><th className="px-3 py-3 font-medium">Approved</th></tr></thead>
-                  <tbody className="divide-y divide-slate-100">{plan.scenePlan.map((scene) => <tr key={scene.id}><td className="px-3 py-3 text-slate-600">{scene.startTime}–{scene.endTime}</td><td className="px-3 py-3 text-slate-700">{scene.sectionLabel}</td><td className="px-3 py-3 text-slate-700">{scene.shotType}</td><td className="px-3 py-3 text-slate-700">{scene.transitionCue}</td><td className="px-3 py-3 text-slate-700">{scene.approved ? 'yes' : 'no'}</td></tr>)}</tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-                <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><RefreshCcw className="text-violet-600" size={20} />Rerender suggestions</div>
-                <div className="space-y-3">{plan.rerenderSuggestions.map((item) => <div key={item.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="font-medium text-slate-800">Scene {item.sceneId}</div><div className="mt-1 text-slate-600">{item.reason}</div><div className="mt-2 text-slate-700"><strong>Prompt adjustment:</strong> {item.promptAdjustment}</div><div className="mt-1 text-slate-700"><strong>Execution note:</strong> {item.executionNote}</div></div>)}</div>
-              </div>
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-                <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><Wrench className="text-orange-600" size={20} />Section repair passes</div>
-                <div className="space-y-3">{plan.repairPasses.map((item) => <div key={item.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="font-medium text-slate-800">Scene {item.sceneId}</div><div className="mt-1 text-slate-600">{item.issue}</div><div className="mt-2 text-slate-700"><strong>Fix strategy:</strong> {item.fixStrategy}</div></div>)}</div>
-              </div>
-            </div>
-          </section>
         </>
+      ) : null}
+
+      {plan && activeSection === 'storyboard' ? (
+        <section className="grid gap-6 xl:grid-cols-[1fr_1fr]">
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><LayoutGrid className="text-emerald-600" size={20} />Scene plan</div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead><tr className="text-left text-slate-500"><th className="px-3 py-3 font-medium">Time</th><th className="px-3 py-3 font-medium">Section</th><th className="px-3 py-3 font-medium">Shot</th><th className="px-3 py-3 font-medium">Transition</th><th className="px-3 py-3 font-medium">Approved</th></tr></thead>
+                <tbody className="divide-y divide-slate-100">{plan.scenePlan.map((scene) => <tr key={scene.id}><td className="px-3 py-3 text-slate-600">{scene.startTime}–{scene.endTime}</td><td className="px-3 py-3 text-slate-700">{scene.sectionLabel}</td><td className="px-3 py-3 text-slate-700">{scene.shotType}</td><td className="px-3 py-3 text-slate-700">{scene.transitionCue}</td><td className="px-3 py-3 text-slate-700">{scene.approved ? 'yes' : 'no'}</td></tr>)}</tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><Film className="text-blue-600" size={20} />Storyboard reading order</div>
+            <div className="space-y-3">
+              {plan.scenes.map((scene) => (
+                <div key={scene.id} className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-700">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-slate-900">{scene.title}</div>
+                      <div className="text-xs uppercase tracking-wide text-slate-500">{scene.shotType}</div>
+                    </div>
+                    <div className="rounded-full bg-slate-200 px-2 py-1 text-xs">{scene.approved ? 'approved' : scene.status}</div>
+                  </div>
+                  <div className="mt-3">{scene.text}</div>
+                  <div className="mt-3 text-slate-600"><strong>Transition:</strong> {scene.transitionCue}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {plan && activeSection === 'repairs' ? (
+        <section className="grid gap-6 xl:grid-cols-[1fr_1fr]">
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><RefreshCcw className="text-violet-600" size={20} />Rerender suggestions</div>
+            <div className="space-y-3">{plan.rerenderSuggestions.map((item) => <div key={item.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="font-medium text-slate-800">Scene {item.sceneId}</div><div className="mt-1 text-slate-600">{item.reason}</div><div className="mt-2 text-slate-700"><strong>Prompt adjustment:</strong> {item.promptAdjustment}</div><div className="mt-1 text-slate-700"><strong>Execution note:</strong> {item.executionNote}</div></div>)}</div>
+          </div>
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><Wrench className="text-orange-600" size={20} />Section repair passes</div>
+            <div className="space-y-3">{plan.repairPasses.map((item) => <div key={item.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="font-medium text-slate-800">Scene {item.sceneId}</div><div className="mt-1 text-slate-600">{item.issue}</div><div className="mt-2 text-slate-700"><strong>Fix strategy:</strong> {item.fixStrategy}</div></div>)}</div>
+          </div>
+        </section>
       ) : null}
     </div>
   );

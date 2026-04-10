@@ -547,6 +547,81 @@ th {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.workspace-flowTabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 10px;
+  z-index: 5;
+  padding: 4px 0;
+}
+.workspace-flowTab {
+  min-width: 0;
+  flex: 1 1 180px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid rgba(111, 162, 212, 0.16);
+  background: rgba(8, 18, 24, 0.72);
+}
+.workspace-flowTab.is-active {
+  background: rgba(32, 91, 138, 0.46);
+  border-color: rgba(117, 185, 241, 0.42);
+}
+.workspace-flowTabMeta {
+  font-size: 11px;
+  color: #9dafc0;
+  white-space: nowrap;
+}
+.workspace-guideCard,
+.timeline-guideCard {
+  background: linear-gradient(180deg, rgba(8, 18, 24, 0.94) 0%, rgba(7, 16, 21, 0.9) 100%);
+}
+.workspace-guideSummary,
+.timeline-guideSummary {
+  cursor: pointer;
+  font-weight: 800;
+}
+.workspace-guideBody,
+.timeline-guideBody {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #b8c7d8;
+  line-height: 1.5;
+}
+.guide-grid {
+  display: grid;
+  gap: 14px;
+}
+.guide-block {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+}
+.guide-kicker {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+}
+.guide-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+.guide-list li {
+  line-height: 1.45;
+}
 .workspace-stat {
   min-width: 148px;
   padding: 9px 11px;
@@ -631,14 +706,34 @@ th {
   align-items: center;
   flex-wrap: wrap;
 }
+.workspace-timelineZoomGroup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.workspace-zoomButtons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.workspace-zoomReadout {
+  min-width: 72px;
+  text-align: right;
+}
 .workspace-timelineRange {
   width: min(240px, 100%);
 }
 .workspace-timelineScroller {
   overflow-x: auto;
+  scroll-behavior: smooth;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(8, 16, 22, 0.95) 0%, rgba(7, 14, 19, 0.95) 100%);
+}
+.workspace-timelineHint,
+.workspace-sceneMeta {
+  color: #9dafc0;
 }
 .workspace-timelineCanvas {
   padding: 12px;
@@ -694,8 +789,158 @@ th {
   cursor: pointer;
   font-weight: 800;
 }
+.workspace-panel,
+.workspace-workbenchCard {
+  background: linear-gradient(180deg, rgba(8, 18, 24, 0.94) 0%, rgba(7, 16, 21, 0.9) 100%);
+}
+.workspace-panelHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+.workspace-panelActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.workspace-storyboardStack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.workspace-storyboardMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.workspace-storyboardField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+}
+.workspace-storyboardField span {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8ea0b3;
+}
+.workspace-storyboardActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.workspace-storyboardGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.workspace-storyboardCard,
+.workspace-storyboardEmpty {
+  background: linear-gradient(180deg, rgba(8, 18, 24, 0.94) 0%, rgba(7, 16, 21, 0.9) 100%);
+}
+.workspace-storyboardCardHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+.workspace-storyboardCard h3 {
+  margin: 6px 0 0;
+  font-size: 17px;
+}
+.workspace-storyboardIndex {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #94b7d8;
+}
+.workspace-storyboardPrompt {
+  margin-top: 14px;
+  line-height: 1.55;
+}
+.workspace-storyboardNote {
+  margin-top: 10px;
+  color: #9dafc0;
+}
 .workspace-footerNote {
   margin-top: 2px;
+}
+
+.plannerLab-root--compact {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+.plannerLab-guide {
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 14px 16px;
+}
+.plannerLab-guideSummary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.plannerLab-guideBody {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #475569;
+  line-height: 1.55;
+}
+.plannerLab-tabs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 10px;
+  z-index: 5;
+  padding: 4px 0;
+}
+.plannerLab-tab {
+  min-width: 0;
+  flex: 1 1 180px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 13px;
+  border-radius: 14px;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+}
+.plannerLab-tab.is-active {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(219, 234, 254, 0.92);
+}
+.plannerLab-tabMeta {
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+}
+.plannerLab-guide .guide-block {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(248, 250, 252, 0.92);
+}
+.plannerLab-guide .guide-kicker {
+  color: #2563eb;
+}
+
+@media (min-width: 900px) {
+  .guide-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .timeline-page {
@@ -801,6 +1046,24 @@ th {
   gap: 6px;
   min-width: 128px;
   flex: 1 1 128px;
+}
+.timeline-zoomControls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.timeline-zoomControls input[type="range"] {
+  width: min(220px, 100%);
+}
+.timeline-zoomMeta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.timeline-zoomMeta input[type="number"] {
+  width: 96px;
 }
 .timeline-miniLabel {
   font-size: 11px;
@@ -986,6 +1249,7 @@ th {
 }
 .timeline-boardScroll {
   overflow: auto;
+  scroll-behavior: smooth;
   min-width: 0;
   background: #0a1219;
 }

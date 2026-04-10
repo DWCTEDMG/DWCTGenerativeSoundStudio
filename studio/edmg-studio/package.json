@@ -33,6 +33,7 @@
     "@huggingface/hub": "^2.11.0",
     "lucide-react": "^0.542.0",
     "react": "^18.3.1",
+    "react-compiler-runtime": "^1.0.0",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
@@ -44,17 +45,19 @@
     "@typescript-eslint/eslint-plugin": "^8.57.1",
     "@typescript-eslint/parser": "^8.57.1",
     "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.21",
+    "babel-plugin-react-compiler": "^1.0.0",
     "concurrently": "^9.2.1",
     "electron": "41.0.3",
     "electron-builder": "^26.8.1",
     "eslint": "^10.0.3",
     "globals": "^17.4.0",
     "jsdom": "^26.1.0",
-    "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
+    "vite-plugin-babel": "^1.6.0",
     "vitest": "^3.2.4",
     "wait-on": "^7.2.0"
   },

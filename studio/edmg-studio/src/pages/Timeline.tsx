@@ -15,6 +15,9 @@ type Selected =
 
 type DockSection = "inspector" | "proxy" | "diffusion" | "curves";
 
+const TIMELINE_MIN_ZOOM = 36;
+const TIMELINE_MAX_ZOOM = 240;
+
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
@@ -246,6 +249,7 @@ export default function Timeline({}: PageProps) {
   const [audioUrl, setAudioUrl] = useState<string>("");
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
 
   const [peaks, setPeaks] = useState<number[]>([]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -323,6 +327,28 @@ export default function Timeline({}: PageProps) {
     setIsPlaying(false);
   }, [audioUrl]);
 
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+
+    const handlePlay = () => setIsPlaying(true);
+    const handlePause = () => setIsPlaying(false);
+    const handleEnded = () => setIsPlaying(false);
+    const handleTimeUpdate = () => setPlayheadS(audioEl.currentTime || 0);
+
+    audioEl.addEventListener("play", handlePlay);
+    audioEl.addEventListener("pause", handlePause);
+    audioEl.addEventListener("ended", handleEnded);
+    audioEl.addEventListener("timeupdate", handleTimeUpdate);
+
+    return () => {
+      audioEl.removeEventListener("play", handlePlay);
+      audioEl.removeEventListener("pause", handlePause);
+      audioEl.removeEventListener("ended", handleEnded);
+      audioEl.removeEventListener("timeupdate", handleTimeUpdate);
+    };
+  }, [audioUrl]);
+
   // draw waveform
   useEffect(() => {
     const c = canvasRef.current;
@@ -372,6 +398,46 @@ export default function Timeline({}: PageProps) {
   };
 
   const clipPx = (t: number) => Math.round(t * pxPerSecond);
+
+  const setTimelineZoomWithFocus = (nextZoom: number, focusSeconds?: number) => {
+    const scroller = timelineScrollRef.current;
+    const clamped = clamp(nextZoom, TIMELINE_MIN_ZOOM, TIMELINE_MAX_ZOOM);
+    if (!scroller) {
+      setPxPerSecond(clamped);
+      return;
+    }
+
+    const currentZoom = Math.max(1, pxPerSecond);
+    const focus =
+      focusSeconds ??
+      (scroller.scrollLeft + scroller.clientWidth / 2) / currentZoom;
+    setPxPerSecond(clamped);
+    requestAnimationFrame(() => {
+      scroller.scrollTo({
+        left: Math.max(0, focus * clamped - scroller.clientWidth / 2),
+        behavior: "smooth",
+      });
+    });
+  };
+
+  const fitTimelineZoom = () => {
+    const scroller = timelineScrollRef.current;
+    const viewport = scroller?.clientWidth ?? 1100;
+    const nextZoom = (Math.max(320, viewport) - 96) / Math.max(durationS, 8);
+    setTimelineZoomWithFocus(nextZoom, 0);
+  };
+
+  const onTimelineWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    const scroller = timelineScrollRef.current;
+    if (!scroller) return;
+    event.preventDefault();
+    const rect = scroller.getBoundingClientRect();
+    const focusSeconds =
+      (scroller.scrollLeft + (event.clientX - rect.left)) / Math.max(1, pxPerSecond);
+    const nextZoom = event.deltaY < 0 ? pxPerSecond * 1.1 : pxPerSecond / 1.1;
+    setTimelineZoomWithFocus(nextZoom, focusSeconds);
+  };
 
   const dragRef = useRef<any>(null);
 
@@ -1059,12 +1125,33 @@ export default function Timeline({}: PageProps) {
             </div>
             <div className="timeline-miniField">
               <span className="timeline-miniLabel">Zoom</span>
-              <input
-                type="number"
-                step={5}
-                value={pxPerSecond}
-                onChange={(e) => setPxPerSecond(Number(e.target.value))}
-              />
+              <div className="timeline-zoomControls">
+                <button className="secondary" type="button" onClick={() => setTimelineZoomWithFocus(pxPerSecond / 1.18)}>
+                  -
+                </button>
+                <input
+                  type="range"
+                  min={TIMELINE_MIN_ZOOM}
+                  max={TIMELINE_MAX_ZOOM}
+                  value={pxPerSecond}
+                  onChange={(e) => setTimelineZoomWithFocus(Number(e.target.value))}
+                />
+                <button className="secondary" type="button" onClick={() => setTimelineZoomWithFocus(pxPerSecond * 1.18)}>
+                  +
+                </button>
+                <button className="secondary" type="button" onClick={fitTimelineZoom}>
+                  Fit
+                </button>
+              </div>
+              <div className="timeline-zoomMeta">
+                <input
+                  type="number"
+                  step={5}
+                  value={pxPerSecond}
+                  onChange={(e) => setTimelineZoomWithFocus(Number(e.target.value))}
+                />
+                <span className="small">Ctrl/Cmd + wheel zoom</span>
+              </div>
             </div>
             <div className="timeline-toolbarActions">
               <button className="primary" onClick={playPause}>
@@ -1132,9 +1219,6 @@ export default function Timeline({}: PageProps) {
           src={audioUrl}
           controls
           className="timeline-audioControl"
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
         />
       ) : (
         <div className="small timeline-audioEmpty">No audio uploaded for this project.</div>
@@ -1272,7 +1356,11 @@ export default function Timeline({}: PageProps) {
           </div>
         </div>
 
-        <div className="timeline-boardScroll">
+        <div
+          className="timeline-boardScroll"
+          ref={timelineScrollRef}
+          onWheel={onTimelineWheel}
+        >
           <div className="timeline-boardCanvas" style={timelineSurfaceStyle}>
             <div className="timeline-rulerRow">
               {rulerTicks.map((tick) => (
@@ -1957,6 +2045,33 @@ export default function Timeline({}: PageProps) {
     <div className="timeline-page" onKeyDown={onKeyDown} tabIndex={0} style={{ outline: "none" }}>
       {pageHeader}
       {toolbarCard}
+      <details className="card timeline-guideCard">
+        <summary className="timeline-guideSummary">Quick guide and capabilities</summary>
+        <div className="timeline-guideBody">
+          <div className="guide-grid">
+            <section className="guide-block">
+              <div className="guide-kicker">What this view does</div>
+              <p>Timeline is the full arrangement editor for the saved Studio plan. It combines prompt clips, motion clips, overlays, camera moves, and look-development tools in one horizontal workspace.</p>
+            </section>
+            <section className="guide-block">
+              <div className="guide-kicker">Capabilities</div>
+              <ul className="guide-list">
+                <li>Play audio, move the playhead, switch variants, and review timing against the active soundtrack.</li>
+                <li>Zoom with buttons, slider, numeric entry, Fit, or Ctrl/Cmd plus mouse wheel.</li>
+                <li>Use the dock for inspector, proxy renders, look-dev, and motion-curve editing without removing advanced controls.</li>
+              </ul>
+            </section>
+            <section className="guide-block">
+              <div className="guide-kicker">Recommended flow</div>
+              <ul className="guide-list">
+                <li>Start in Fit mode to see the whole arrangement, then zoom into dense sections for clip or keyframe edits.</li>
+                <li>Keep the inspector open for clip-level adjustments, and switch to proxy or look-dev when you need validation renders.</li>
+                <li>Use Timeline after Workspace or Storyboard when the plan is ready for precise arrangement and finishing decisions.</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </details>
       {err ? (
         <div className="card timeline-errorBanner">
           <div className="small">{err}</div>
