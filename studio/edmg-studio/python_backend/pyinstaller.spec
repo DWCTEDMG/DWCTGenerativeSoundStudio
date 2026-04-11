@@ -2,11 +2,38 @@
 # Build from: studio/edmg-studio/python_backend
 
 import os
+import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+
+from pyinstaller_support import ensure_installed_pycparser_compat_modules, ensure_nltk_resources
 
 here = Path(os.getcwd()).resolve()
+build_assets_dir = here / "build" / "pyinstaller-support"
+nltk_data_dir = build_assets_dir / "nltk_data"
+
+
+def safe_collect(collector, *args, **kwargs):
+    try:
+        return collector(*args, **kwargs)
+    except Exception:
+        return []
+
+
+def collect_windows_support_binaries():
+    if os.name != "nt":
+        return []
+    bin_dir = Path(sys.prefix) / "Library" / "bin"
+    binaries = []
+    for pattern in ("tbb*.dll", "tcmlib*.dll"):
+        for candidate in sorted(bin_dir.glob(pattern)):
+            binaries.append((str(candidate), "."))
+    return binaries
+
+
+ensure_installed_pycparser_compat_modules()
+ensure_nltk_resources(nltk_data_dir)
 
 hidden = []
 hidden += collect_submodules("uvicorn")
@@ -17,6 +44,14 @@ hidden += collect_submodules("yaml")
 hidden += collect_submodules("nltk")
 hidden += collect_submodules("textblob")
 hidden += collect_submodules("spacy")
+hidden += [
+    "matplotlib",
+    "matplotlib.pyplot",
+    "matplotlib.animation",
+    "matplotlib.backends.backend_agg",
+    "pycparser.lextab",
+    "pycparser.yacctab",
+]
 
 # Explicit first-party packages used by the backend.
 hidden += collect_submodules("edmg_studio_backend")
@@ -28,15 +63,28 @@ hidden += collect_submodules("core")
 hidden += collect_submodules("config")
 hidden += collect_submodules("integrations")
 
+datas = []
+datas += safe_collect(collect_data_files, "matplotlib")
+datas += safe_collect(collect_data_files, "nltk")
+datas += safe_collect(copy_metadata, "matplotlib")
+datas += safe_collect(copy_metadata, "nltk")
+datas += safe_collect(copy_metadata, "pycparser")
+if nltk_data_dir.exists():
+    datas.append((str(nltk_data_dir), "nltk_data"))
+
+binaries = []
+if os.name == "nt":
+    binaries += collect_windows_support_binaries()
+
 a = Analysis(
     [str(here / "backend_entry.py")],
     pathex=[str(here)],
-    binaries=[],
-    datas=[],
+    binaries=binaries,
+    datas=datas,
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(here / "pyinstaller_runtime_hook.py")],
     excludes=[],
     noarchive=False,
 )

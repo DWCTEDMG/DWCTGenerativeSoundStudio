@@ -67,6 +67,7 @@ def _managed_env(cache_root: Optional[Path]) -> Optional[dict[str, str]]:
             "TORCH_HOME": str(paths["torch"]),
             "NLTK_DATA": str(paths["nltk"]),
             "WHISPER_CACHE_DIR": str(paths["whisper"]),
+            "MPLBACKEND": "Agg",
             "MPLCONFIGDIR": str(paths["matplotlib"]),
             "TMP": str(paths["tmp"]),
             "TEMP": str(paths["tmp"]),
@@ -151,6 +152,15 @@ def _post_install(
     if not skip_corpora:
         _run(
             [str(py), "-c", "import nltk; nltk.download('punkt', quiet=True); nltk.download('stopwords', quiet=True)"],
+            cwd=STUDIO_ROOT,
+            env=_backend_env(env),
+        )
+        _run(
+            [
+                str(py),
+                "-c",
+                "import nltk; nltk.download('punkt_tab', quiet=True); nltk.download('vader_lexicon', quiet=True)",
+            ],
             cwd=STUDIO_ROOT,
             env=_backend_env(env),
         )

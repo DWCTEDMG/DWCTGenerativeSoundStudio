@@ -907,6 +907,7 @@ func BuildManagedBackendEnv(cfg BootstrapConfig, paths StoragePaths, host string
 		"TORCH_HOME":                     filepath.Join(paths.CacheRoot, "torch"),
 		"NLTK_DATA":                      filepath.Join(paths.CacheRoot, "nltk_data"),
 		"WHISPER_CACHE_DIR":              filepath.Join(paths.CacheRoot, "whisper"),
+		"MPLBACKEND":                     "Agg",
 		"MPLCONFIGDIR":                   filepath.Join(paths.CacheRoot, "matplotlib"),
 		"TMP":                            filepath.Join(paths.CacheRoot, "tmp"),
 		"TEMP":                           filepath.Join(paths.CacheRoot, "tmp"),

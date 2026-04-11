@@ -101,6 +101,7 @@ export function createBackendRuntime({
       EDMG_STUDIO_BACKEND_HOST: backendHost,
       EDMG_STUDIO_BACKEND_PORT: String(backendPort),
       EDMG_FFMPEG_PATH: ffmpegPath,
+      MPLBACKEND: process.env.MPLBACKEND || "Agg",
     };
 
     for (const key of [
