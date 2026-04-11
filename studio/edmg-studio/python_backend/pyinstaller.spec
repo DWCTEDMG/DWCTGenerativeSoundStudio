@@ -12,6 +12,7 @@ from pyinstaller_support import ensure_installed_pycparser_compat_modules, ensur
 here = Path(os.getcwd()).resolve()
 build_assets_dir = here / "build" / "pyinstaller-support"
 nltk_data_dir = build_assets_dir / "nltk_data"
+hooks_dir = here / "pyinstaller_hooks"
 
 
 def safe_collect(collector, *args, **kwargs):
@@ -49,6 +50,8 @@ hidden += [
     "matplotlib.pyplot",
     "matplotlib.animation",
     "matplotlib.backends.backend_agg",
+    "tensorboard",
+    "tzdata",
     "pycparser.lextab",
     "pycparser.yacctab",
 ]
@@ -66,8 +69,12 @@ hidden += collect_submodules("integrations")
 datas = []
 datas += safe_collect(collect_data_files, "matplotlib")
 datas += safe_collect(collect_data_files, "nltk")
+datas += safe_collect(collect_data_files, "tensorboard")
+datas += safe_collect(collect_data_files, "tzdata")
 datas += safe_collect(copy_metadata, "matplotlib")
 datas += safe_collect(copy_metadata, "nltk")
+datas += safe_collect(copy_metadata, "tensorboard")
+datas += safe_collect(copy_metadata, "tzdata")
 datas += safe_collect(copy_metadata, "pycparser")
 if nltk_data_dir.exists():
     datas.append((str(nltk_data_dir), "nltk_data"))
@@ -82,7 +89,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hidden,
-    hookspath=[],
+    hookspath=[str(hooks_dir)],
     hooksconfig={},
     runtime_hooks=[str(here / "pyinstaller_runtime_hook.py")],
     excludes=[],

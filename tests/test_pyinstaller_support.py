@@ -34,3 +34,21 @@ def test_ensure_pycparser_compat_modules_creates_legacy_tables(tmp_path):
     assert {path.name for path in created} == {"lextab.py", "yacctab.py"}
     assert "Compatibility stub" in (package_dir / "lextab.py").read_text(encoding="utf-8")
     assert "_lr_action = {}" in (package_dir / "yacctab.py").read_text(encoding="utf-8")
+
+
+def test_local_scipy_hook_avoids_missing_cdflib_false_positive():
+    repo_root = Path(__file__).resolve().parents[1]
+    hook_path = (
+        repo_root
+        / "studio"
+        / "edmg-studio"
+        / "python_backend"
+        / "pyinstaller_hooks"
+        / "hook-scipy.special._ufuncs.py"
+    )
+
+    hook_text = hook_path.read_text(encoding="utf-8")
+
+    assert 'hiddenimports = ["scipy.special._ufuncs_cxx"]' in hook_text
+    assert '"scipy.special._special_ufuncs"' in hook_text
+    assert '"scipy.special._cdflib"' not in hook_text

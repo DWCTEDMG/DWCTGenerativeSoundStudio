@@ -39,6 +39,7 @@ core = [
   "spacy>=3.5.0",
   "textblob>=0.17.0",
   "nltk>=3.8.0",
+  "tzdata>=2024.1",
   "python-dotenv>=0.21.0",
   "tbb>=2021.0; platform_system == 'Windows'",
 ]
@@ -48,6 +49,7 @@ internal = [
   "accelerate>=0.33.0",
   "safetensors>=0.4.3",
   "torch>=2.2.0",
+  "tensorboard>=2.16.0",
 ]
 directml = [
   "onnxruntime-directml>=1.18.0; platform_system == 'Windows'",
@@ -66,9 +68,11 @@ full = [
   "accelerate>=0.33.0",
   "safetensors>=0.4.3",
   "torch>=2.2.0",
+  "tensorboard>=2.16.0",
   "spacy>=3.5.0",
   "textblob>=0.17.0",
   "nltk>=3.8.0",
+  "tzdata>=2024.1",
   "python-dotenv>=0.21.0",
   "tbb>=2021.0; platform_system == 'Windows'",
 ]
@@ -85,9 +89,11 @@ studio_bundle = [
   "accelerate>=0.33.0",
   "safetensors>=0.4.3",
   "torch>=2.2.0",
+  "tensorboard>=2.16.0",
   "spacy>=3.5.0",
   "textblob>=0.17.0",
   "nltk>=3.8.0",
+  "tzdata>=2024.1",
   "python-dotenv>=0.21.0",
   "tbb>=2021.0; platform_system == 'Windows'",
 ]
@@ -104,9 +110,11 @@ studio_bundle_directml = [
   "accelerate>=0.33.0",
   "safetensors>=0.4.3",
   "torch>=2.2.0",
+  "tensorboard>=2.16.0",
   "spacy>=3.5.0",
   "textblob>=0.17.0",
   "nltk>=3.8.0",
+  "tzdata>=2024.1",
   "python-dotenv>=0.21.0",
   "tbb>=2021.0; platform_system == 'Windows'",
   "onnxruntime-directml>=1.18.0; platform_system == 'Windows'",
