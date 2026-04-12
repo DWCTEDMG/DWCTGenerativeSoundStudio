@@ -23,7 +23,8 @@ Open PowerShell in repo root and run:
 
 Outputs:
 
-- `studio/edmg-studio/release/` (electron-builder output)
+- `studio/edmg-studio/dist/` (final electron-builder output: installer + unpacked app)
+- `studio/edmg-studio/release/staged-app/` (intermediate staged app passed to electron-builder)
 
 ## What gets bundled
 

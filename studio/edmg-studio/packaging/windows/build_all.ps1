@@ -318,4 +318,5 @@ Invoke-Checked "npm run dist:win" {
 }
 Pop-Location
 
-Write-Host "Done. See: studio/edmg-studio/release/" -ForegroundColor Green
+Write-Host "Done. Final installer artifacts: studio/edmg-studio/dist/" -ForegroundColor Green
+Write-Host "Staged desktop app: studio/edmg-studio/release/staged-app/" -ForegroundColor Cyan
