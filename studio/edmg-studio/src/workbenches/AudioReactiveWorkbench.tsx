@@ -108,6 +108,7 @@ type AudioReactiveWorkbenchProps = {
   studioProjectId?: string;
   studioProjectName?: string;
   onSyncToStudio?: (payload: ReactiveLabSyncPayload) => Promise<string | void>;
+  compact?: boolean;
 };
 
 const DEFAULT_PARAMS: ReactiveParams = {
@@ -498,6 +499,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   studioProjectId,
   studioProjectName,
   onSyncToStudio,
+  compact = false,
 }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -932,16 +934,24 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
 
   const waveformBars = useMemo(() => Array.from(audioData.slice(0, 48)), [audioData]);
   const spectrumBars = useMemo(() => Array.from(frequencyData.slice(0, 48)), [frequencyData]);
+  const rootClassName = compact
+    ? 'min-h-0 bg-transparent p-0 text-slate-100'
+    : 'min-h-screen bg-slate-950 p-6 text-slate-100';
+  const frameClassName = compact ? 'mx-0 max-w-none space-y-6' : 'mx-auto max-w-7xl space-y-6';
+  const introCardClassName = compact
+    ? 'rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-sm'
+    : 'rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur-sm';
+  const titleClassName = compact ? 'text-2xl font-bold tracking-tight' : 'text-4xl font-bold tracking-tight';
 
   return (
-    <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
+    <div className={rootClassName}>
       <audio ref={audioRef} src={audioUrl ?? undefined} onEnded={() => setIsPlaying(false)} hidden />
-      <div className="mx-auto max-w-7xl space-y-6">
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur-sm">
+      <div className={frameClassName}>
+        <section className={introCardClassName}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-cyan-500/15 px-3 py-1 text-sm font-medium text-cyan-300"><Waves size={16} />AI-directed reactive scheduling</div>
-              <h1 className="text-4xl font-bold tracking-tight">Audio Reactive Generator</h1>
+              <h1 className={titleClassName}>Audio Reactive Generator</h1>
               <p className="mt-3 max-w-3xl text-slate-300">This tool treats AI-like orchestration as the planner and the schedule generator as the executor: it extracts cues, sections, repair suggestions, and export-ready schedules — then you approve the parts worth rendering.</p>
             </div>
             <div className="flex flex-wrap gap-3">

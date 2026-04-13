@@ -15,8 +15,8 @@ type Selected =
 
 type DockSection = "inspector" | "proxy" | "diffusion" | "curves";
 
-const TIMELINE_MIN_ZOOM = 36;
-const TIMELINE_MAX_ZOOM = 240;
+const TIMELINE_MIN_ZOOM = 4;
+const TIMELINE_MAX_ZOOM = 360;
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -256,6 +256,7 @@ export default function Timeline({}: PageProps) {
 
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const previewTimer = useRef<any>(null);
+  const autoFitKeyRef = useRef<string>("");
 
   const [proxyUrl, setProxyUrl] = useState<string>("");
   const [proxyStart, setProxyStart] = useState<number>(0);
@@ -413,10 +414,15 @@ export default function Timeline({}: PageProps) {
       (scroller.scrollLeft + scroller.clientWidth / 2) / currentZoom;
     setPxPerSecond(clamped);
     requestAnimationFrame(() => {
-      scroller.scrollTo({
-        left: Math.max(0, focus * clamped - scroller.clientWidth / 2),
-        behavior: "smooth",
-      });
+      const nextLeft = Math.max(0, focus * clamped - scroller.clientWidth / 2);
+      if (typeof scroller.scrollTo === "function") {
+        scroller.scrollTo({
+          left: nextLeft,
+          behavior: "smooth",
+        });
+      } else {
+        scroller.scrollLeft = nextLeft;
+      }
     });
   };
 
@@ -426,6 +432,21 @@ export default function Timeline({}: PageProps) {
     const nextZoom = (Math.max(320, viewport) - 96) / Math.max(durationS, 8);
     setTimelineZoomWithFocus(nextZoom, 0);
   };
+
+  useEffect(() => {
+    if (!projectId || durationS <= 0) return;
+    const key = `${projectId}:${selectedVariant}:${durationS.toFixed(2)}`;
+    if (autoFitKeyRef.current === key) return;
+    autoFitKeyRef.current = key;
+    const useRaf = typeof window.requestAnimationFrame === "function";
+    const handle = useRaf
+      ? window.requestAnimationFrame(() => fitTimelineZoom())
+      : window.setTimeout(() => fitTimelineZoom(), 0);
+    return () => {
+      if (useRaf) window.cancelAnimationFrame(handle);
+      else window.clearTimeout(handle);
+    };
+  }, [projectId, selectedVariant, durationS]);
 
   const onTimelineWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     if (!(event.ctrlKey || event.metaKey)) return;
@@ -1018,7 +1039,12 @@ export default function Timeline({}: PageProps) {
 
   const bpm = _bpm();
   const beatGrid = _beatGrid();
-  const timelineCanvasWidth = Math.max(1320, Math.ceil(durationS * pxPerSecond) + 120);
+  const timelineViewportWidth = timelineScrollRef.current?.clientWidth ?? 0;
+  const timelineCanvasWidth = Math.max(
+    720,
+    timelineViewportWidth,
+    Math.ceil(durationS * pxPerSecond) + 120,
+  );
   const rulerStepS = pxPerSecond >= 180 ? 1 : pxPerSecond >= 120 ? 2 : pxPerSecond >= 72 ? 4 : 8;
   const rulerEnd = Math.ceil(durationS / Math.max(1, rulerStepS)) * rulerStepS;
   const rulerTicks = Array.from(
@@ -1056,8 +1082,8 @@ export default function Timeline({}: PageProps) {
           <span className="badge">{timelineDirty ? "Unsaved edits" : "Saved"}</span>
         </div>
         <div className="small timeline-headerCopy">
-          Console-style top bar, fixed track headers, wide arrange canvas, and a utility dock that
-          keeps deep controls available without flooding the screen.
+          Console-style top bar, fixed track headers, fit-all overview zoom, and a utility dock
+          that keeps deep controls available without flooding the screen.
         </div>
       </div>
       <div className="timeline-statusStrip">
@@ -1140,7 +1166,7 @@ export default function Timeline({}: PageProps) {
                   +
                 </button>
                 <button className="secondary" type="button" onClick={fitTimelineZoom}>
-                  Fit
+                  Fit all
                 </button>
               </div>
               <div className="timeline-zoomMeta">

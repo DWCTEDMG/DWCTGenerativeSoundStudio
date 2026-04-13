@@ -4,11 +4,12 @@ import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
 import { useUiMode } from "../components/uiMode";
 import type { PageProps } from "../types/pageProps";
 import AiNlpWorkbench from "../workbenches/AiNlpWorkbench";
+import AudioReactiveWorkbench from "../workbenches/AudioReactiveWorkbench";
 
-type WorkspaceView = "overview" | "planner" | "storyboard";
+type WorkspaceView = "overview" | "planner" | "reactive" | "storyboard";
 
-const WORKSPACE_MIN_ZOOM = 20;
-const WORKSPACE_MAX_ZOOM = 160;
+const WORKSPACE_MIN_ZOOM = 4;
+const WORKSPACE_MAX_ZOOM = 240;
 
 function clampZoom(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
@@ -44,6 +45,7 @@ export default function Workspace({ onNavigate }: PageProps) {
   const [info, setInfo] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
+  const previewAutoFitKeyRef = useRef<string>("");
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
@@ -145,6 +147,13 @@ export default function Workspace({ onNavigate }: PageProps) {
     return `${project?.name || "Selected project"} now has synced planner analysis, canonical storyboard scenes, and renderer prompt/motion tracks.`;
   };
 
+  const syncReactiveLab = async (payload: any) => {
+    if (!projectId) throw new Error("Select a Studio project before applying reactive motion to the renderer.");
+    await apiPost(`/v1/projects/${projectId}/reactive_lab/apply`, payload);
+    await refreshProject(projectId);
+    return `${project?.name || "Selected project"} now has the reactive motion track and camera data wired into the internal renderer timeline.`;
+  };
+
   const setTimelineZoomWithFocus = (nextZoom: number, focusSeconds?: number) => {
     const scroller = timelineScrollerRef.current;
     const clamped = clampZoom(nextZoom, WORKSPACE_MIN_ZOOM, WORKSPACE_MAX_ZOOM);
@@ -159,10 +168,15 @@ export default function Workspace({ onNavigate }: PageProps) {
     const focus = Math.max(0, focusSeconds ?? fallbackFocus);
     setTimelineZoom(clamped);
     requestAnimationFrame(() => {
-      scroller.scrollTo({
-        left: Math.max(0, focus * clamped - rect.width / 2),
-        behavior: "smooth",
-      });
+      const nextLeft = Math.max(0, focus * clamped - rect.width / 2);
+      if (typeof scroller.scrollTo === "function") {
+        scroller.scrollTo({
+          left: nextLeft,
+          behavior: "smooth",
+        });
+      } else {
+        scroller.scrollLeft = nextLeft;
+      }
     });
   };
 
@@ -189,6 +203,26 @@ export default function Workspace({ onNavigate }: PageProps) {
     setTimelineZoomWithFocus(nextZoom, focusSeconds);
   };
 
+  useEffect(() => {
+    const maxDur = Math.max(
+      Number(durationS) || 0,
+      Number(variantScenes[variantScenes.length - 1]?.end_s ?? 0),
+      30,
+    );
+    if (!projectId || !maxDur) return;
+    const key = `${projectId}:${selectedVariant}:${variantScenes.length}:${maxDur.toFixed(2)}`;
+    if (previewAutoFitKeyRef.current === key) return;
+    previewAutoFitKeyRef.current = key;
+    const useRaf = typeof window.requestAnimationFrame === "function";
+    const handle = useRaf
+      ? window.requestAnimationFrame(() => fitTimelinePreview())
+      : window.setTimeout(() => fitTimelinePreview(), 0);
+    return () => {
+      if (useRaf) window.cancelAnimationFrame(handle);
+      else window.clearTimeout(handle);
+    };
+  }, [projectId, selectedVariant, variantScenes, durationS]);
+
   const TimelinePreview = ({ detailed = false }: { detailed?: boolean }) => {
     if (!variantScenes.length) return <div className="small">No scenes. Generate a plan to see a timeline.</div>;
     const lastEnd = Number(variantScenes[variantScenes.length - 1]?.end_s ?? 60);
@@ -211,7 +245,7 @@ export default function Workspace({ onNavigate }: PageProps) {
                 +
               </button>
               <button className="secondary" type="button" onClick={fitTimelinePreview}>
-                Fit
+                Fit all
               </button>
             </div>
           </div>
@@ -289,6 +323,7 @@ export default function Workspace({ onNavigate }: PageProps) {
   const workflowTabs: Array<{ id: WorkspaceView; label: string; meta: string }> = [
     { id: "overview", label: "Overview", meta: `${variantCount || 0} variants` },
     { id: "planner", label: "AI Planner", meta: audioReady ? "ready to run" : "audio first" },
+    { id: "reactive", label: "Reactive Lab", meta: analysisReady ? "audio-driven motion" : "analyze first" },
     { id: "storyboard", label: "Storyboard", meta: storyboardReady ? `${variantScenes.length} scenes` : "sync or plan first" },
   ];
 
@@ -347,22 +382,22 @@ export default function Workspace({ onNavigate }: PageProps) {
             <div className="guide-grid">
               <section className="guide-block">
                 <div className="guide-kicker">What this view does</div>
-                <p>Overview is the operator surface for project intake, analysis, variant generation, and first-pass timeline review. It is the fastest place to confirm that a project is ready before moving deeper into planning or rendering.</p>
+                <p>Overview is the operator surface for project intake, analysis, variant generation, reactive prep, and first-pass timeline review. It is the fastest place to confirm that a project is ready before moving deeper into planning or rendering.</p>
               </section>
               <section className="guide-block">
                 <div className="guide-kicker">Capabilities</div>
                 <ul className="guide-list">
                   <li>Upload the song and run analysis plus transcription.</li>
                   <li>Add reference images that influence style, character, or mood.</li>
-                  <li>Generate plan variants, inspect scene pacing, and apply or overwrite the timeline.</li>
+                  <li>Generate plan variants, open the integrated planner or reactive lab, and apply or overwrite the timeline.</li>
                 </ul>
               </section>
               <section className="guide-block">
                 <div className="guide-kicker">Recommended flow</div>
                 <ul className="guide-list">
                   <li>Choose the project, upload audio, and confirm references are attached.</li>
-                  <li>Review Creative Direction, then use Timeline Preview to verify rhythm and coverage.</li>
-                  <li>Open AI Planner for deeper prompt work or open Storyboard when you want dense scene-by-scene review.</li>
+                  <li>Review Creative Direction, then use Timeline Preview to verify rhythm and full-track coverage.</li>
+                  <li>Open AI Planner for scene design, Reactive Lab for motion scheduling, or Storyboard for dense scene-by-scene review.</li>
                 </ul>
               </section>
             </div>
@@ -385,7 +420,30 @@ export default function Workspace({ onNavigate }: PageProps) {
                 <ul className="guide-list">
                   <li>Use Setup for audio and planning controls, then move into Prompt Pack for scene review.</li>
                   <li>Open Storyboard to read the ordered shot list, and use Repairs only when specific scenes need recovery.</li>
-                  <li>Use Sync to internal renderer when the plan is ready to become the saved Studio storyboard and timeline base.</li>
+                  <li>Use Sync to internal renderer when the plan is ready to become the saved Studio storyboard and timeline base, while the standalone Planner Lab stays available from the sidebar.</li>
+                </ul>
+              </section>
+            </div>
+          ) : workspaceView === "reactive" ? (
+            <div className="guide-grid">
+              <section className="guide-block">
+                <div className="guide-kicker">What this view does</div>
+                <p>Reactive Lab turns saved audio analysis into motion, cue, and camera schedules that can be applied into the renderer timeline without breaking the standalone lab workflow.</p>
+              </section>
+              <section className="guide-block">
+                <div className="guide-kicker">Capabilities</div>
+                <ul className="guide-list">
+                  <li>Build deterministic keyframes from the current track and inspect section energy before render.</li>
+                  <li>Export handoff bundles, cue CSVs, and compressed schedules for downstream tools.</li>
+                  <li>Apply approved reactive motion directly into the project timeline and renderer camera data.</li>
+                </ul>
+              </section>
+              <section className="guide-block">
+                <div className="guide-kicker">Recommended flow</div>
+                <ul className="guide-list">
+                  <li>Run audio analysis first so the reactive pass starts from the saved project track.</li>
+                  <li>Use Fit all in the preview to see the whole track before approving dense sections.</li>
+                  <li>Apply to the internal renderer, then open Timeline for clip refinement or Render for final output.</li>
                 </ul>
               </section>
             </div>
@@ -406,7 +464,7 @@ export default function Workspace({ onNavigate }: PageProps) {
               <section className="guide-block">
                 <div className="guide-kicker">Recommended flow</div>
                 <ul className="guide-list">
-                  <li>Use Fit to see the full sequence, then zoom into dense sections when a transition needs closer review.</li>
+                  <li>Use Fit all to see the full sequence, then zoom into dense sections when a transition needs closer review.</li>
                   <li>Read the scene cards in order to confirm narrative continuity and prompt variety.</li>
                   <li>Apply the version you want, then open Timeline for detailed arrangement edits.</li>
                 </ul>
@@ -516,6 +574,9 @@ export default function Workspace({ onNavigate }: PageProps) {
               <button className="secondary" onClick={() => setWorkspaceView("planner")} disabled={!projectId}>
                 Open AI Planner
               </button>
+              <button className="secondary" onClick={() => setWorkspaceView("reactive")} disabled={!projectId || !analysisReady}>
+                Open Reactive Lab
+              </button>
             </div>
             </>
           ) : (
@@ -526,12 +587,14 @@ export default function Workspace({ onNavigate }: PageProps) {
           <div className="workspace-section">
             <div className="workspace-sectionHead">
               <div className="workspace-sectionTitle">Handoff</div>
-              <div className="small">Move from planning into rendering and output review.</div>
+              <div className="small">Move from planning and reactive motion into arrangement, rendering, and output review.</div>
             </div>
           <div className="small" style={{ marginBottom: 10 }}>
-            Workspace is for planning. Rendering, queue control, and exports live in the Render page.
+            Workspace is the integrated hub. Standalone Planner Lab and Reactive Lab remain available from the sidebar when you want full-screen specialist views.
           </div>
           <div className="row workspace-actionRow" style={{ gap: 10, flexWrap: "wrap" }}>
+            <button className="secondary" onClick={() => setWorkspaceView("planner")} disabled={!projectId}>Planner</button>
+            <button className="secondary" onClick={() => setWorkspaceView("reactive")} disabled={!projectId || !analysisReady}>Reactive Lab</button>
             <button onClick={() => onNavigate?.("render")} disabled={!plan?.variants?.length}>Go to Render</button>
             <button className="secondary" onClick={() => setWorkspaceView("storyboard")} disabled={!storyboardReady}>Open Storyboard</button>
             <button className="secondary" onClick={() => onNavigate?.("outputs")}>Outputs</button>
@@ -598,6 +661,9 @@ export default function Workspace({ onNavigate }: PageProps) {
               <button className="secondary" onClick={() => setWorkspaceView("overview")}>
                 Back to overview
               </button>
+              <button className="secondary" onClick={() => onNavigate?.("plannerLab")} disabled={!projectId}>
+                Open standalone
+              </button>
               <button className="secondary" onClick={() => setWorkspaceView("storyboard")} disabled={!storyboardReady}>
                 Saved storyboard
               </button>
@@ -608,6 +674,39 @@ export default function Workspace({ onNavigate }: PageProps) {
             studioProjectId={projectId}
             studioProjectName={project?.name || ""}
             onSyncToStudio={syncPlannerLab}
+          />
+        </div>
+      ) : null}
+
+      {workspaceView === "reactive" ? (
+        <div className="workspace-panel card workspace-workbenchCard">
+          <div className="workspace-panelHeader">
+            <div>
+              <div className="workspace-sectionTitle">Reactive Lab + Renderer Handoff</div>
+              <div className="small">
+                Reactive scheduling now lives inside the current project workflow so motion, cueing, and renderer handoff stay tied to the same session.
+              </div>
+            </div>
+            <div className="workspace-panelActions">
+              <button className="secondary" onClick={() => setWorkspaceView("overview")}>
+                Back to overview
+              </button>
+              <button className="secondary" onClick={() => onNavigate?.("reactiveLab")} disabled={!projectId}>
+                Open standalone
+              </button>
+              <button className="secondary" onClick={() => onNavigate?.("timeline")} disabled={!analysisReady}>
+                Open Timeline
+              </button>
+              <button onClick={() => onNavigate?.("render")} disabled={!analysisReady}>
+                Go to Render
+              </button>
+            </div>
+          </div>
+          <AudioReactiveWorkbench
+            compact
+            studioProjectId={projectId}
+            studioProjectName={project?.name || ""}
+            onSyncToStudio={syncReactiveLab}
           />
         </div>
       ) : null}
@@ -694,7 +793,7 @@ export default function Workspace({ onNavigate }: PageProps) {
       ) : null}
 
       <div className="small workspace-footerNote">
-        Use Outputs to view images/videos. The backend runs an always-on worker by default; Render Queue lets you inspect jobs/logs and retry/cancel.
+        Use Outputs to view images/videos. The backend runs an always-on worker by default; Render Queue lets you inspect jobs/logs and retry/cancel, while the sidebar keeps standalone labs available when you want them separate.
       </div>
     </div>
   );

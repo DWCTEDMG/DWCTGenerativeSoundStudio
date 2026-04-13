@@ -35,6 +35,7 @@ describe("Timeline page", () => {
 
     expect(await screen.findByText("Timeline")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Play" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Fit all" })).toBeTruthy();
 
     await waitFor(() => expect(document.querySelector("audio")).toBeTruthy());
     const audio = document.querySelector("audio");

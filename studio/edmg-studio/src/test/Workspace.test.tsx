@@ -1,5 +1,5 @@
 import React from "react";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import Workspace from "../pages/Workspace";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
@@ -84,5 +84,8 @@ describe("Workspace page", () => {
     expect(await screen.findByRole("button", { name: "Timeline patch" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "LLM contract" })).toBeTruthy();
     expect(await screen.findByText(/Transcript anchor/i)).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Reactive Lab/i }));
+    expect(await screen.findByText("Reactive Lab + Renderer Handoff")).toBeTruthy();
   });
 });

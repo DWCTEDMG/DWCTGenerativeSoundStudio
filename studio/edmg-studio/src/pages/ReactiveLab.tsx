@@ -22,7 +22,7 @@ export default function ReactiveLab({ onNavigate }: PageProps) {
           <h1>Reactive Lab</h1>
           <div className="small studio-workbenchCopy">
             Generate audio-reactive schedules, cue events, and handoff manifests here, then
-            shape timing and renders in the main Studio timeline.
+            continue in Workspace, Timeline, and Render with the canonical Studio flow.
           </div>
         </div>
         <div className="studio-workbenchProjectRow">
@@ -43,6 +43,7 @@ export default function ReactiveLab({ onNavigate }: PageProps) {
           </div>
         </div>
         <div className="row studio-workbenchActions">
+          <button onClick={() => onNavigate?.("workspace")}>Workspace</button>
           <button onClick={() => onNavigate?.("timeline")}>Timeline</button>
           <button className="secondary" onClick={() => onNavigate?.("render")}>
             Render
