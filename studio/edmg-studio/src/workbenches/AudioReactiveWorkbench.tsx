@@ -16,6 +16,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
+import { ProgressBar } from '../components/ProgressBar';
 
 type MappingPreset = 'cinematic' | 'psychedelic' | 'ambient' | 'percussive';
 type RenderMode = 'smooth' | 'cut-heavy' | 'performance-led' | 'ambient';
@@ -974,6 +975,16 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
               <div className="mt-1">
                 Apply stores the full reactive bundle in project metadata, then updates the canonical motion track and camera data the internal renderer reads during render.
               </div>
+              {studioSyncing ? (
+                <div className="mt-3">
+                  <ProgressBar
+                    value={78}
+                    label="Reactive handoff"
+                    detail="Writing cue schedules, section metadata, and motion/camera tracks."
+                    compact
+                  />
+                </div>
+              ) : null}
               {studioSyncMessage && <div className="mt-3 rounded-xl bg-emerald-500/15 px-3 py-2 text-emerald-200">{studioSyncMessage}</div>}
               {studioSyncError && <div className="mt-3 rounded-xl bg-rose-500/15 px-3 py-2 text-rose-200">{studioSyncError}</div>}
             </div>

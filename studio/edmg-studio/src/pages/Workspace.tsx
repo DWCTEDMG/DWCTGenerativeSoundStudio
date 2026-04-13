@@ -1,15 +1,27 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import { ProgressBar } from "../components/ProgressBar";
+import { useOperationProgress } from "../components/useOperationProgress";
+import { useStudioSession } from "../components/studioSession";
 import { useUiMode } from "../components/uiMode";
 import type { PageProps } from "../types/pageProps";
 import AiNlpWorkbench from "../workbenches/AiNlpWorkbench";
 import AudioReactiveWorkbench from "../workbenches/AudioReactiveWorkbench";
 
 type WorkspaceView = "overview" | "planner" | "reactive" | "storyboard";
+type OverviewSectionId = "project" | "audio" | "references" | "plan" | "handoff";
 
 const WORKSPACE_MIN_ZOOM = 4;
 const WORKSPACE_MAX_ZOOM = 240;
+
+const DEFAULT_OVERVIEW_SECTIONS: Record<OverviewSectionId, boolean> = {
+  project: true,
+  audio: true,
+  references: false,
+  plan: true,
+  handoff: true,
+};
 
 function clampZoom(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
@@ -23,11 +35,52 @@ function bytes(n: number) {
   return `${v.toFixed(u === 0 ? 0 : 2)} ${units[u]}`;
 }
 
+function OverviewSection(props: {
+  id: OverviewSectionId;
+  title: string;
+  description: string;
+  progress: number;
+  open: boolean;
+  onToggle: (id: OverviewSectionId, open: boolean) => void;
+  children: React.ReactNode;
+}) {
+  const { id, title, description, progress, open, onToggle, children } = props;
+
+  return (
+    <details
+      className={`workspace-accordionSection${open ? " is-open" : ""}`}
+      open={open}
+      onToggle={(event) => onToggle(id, (event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className="workspace-accordionSummary">
+        <div className="workspace-accordionHead">
+          <div>
+            <div className="workspace-sectionTitle">{title}</div>
+            <div className="small">{description}</div>
+          </div>
+          <div className="workspace-accordionMeta">
+            <span className="badge">{Math.round(progress)}%</span>
+            <ProgressBar value={progress} compact />
+          </div>
+        </div>
+      </summary>
+      <div className="workspace-accordionBody">{children}</div>
+    </details>
+  );
+}
+
 export default function Workspace({ onNavigate }: PageProps) {
   const { mode: uiMode } = useUiMode();
+  const {
+    projectId,
+    setProjectId,
+    selectedVariant,
+    setSelectedVariant,
+    lastHandoff,
+    noteHandoff,
+  } = useStudioSession();
   const backendUrl = useMemo(() => getBackendUrl(), []);
   const [projects, setProjects] = useState<any[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
   const [project, setProject] = useState<any>(null);
 
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -35,17 +88,19 @@ export default function Workspace({ onNavigate }: PageProps) {
   const [assets, setAssets] = useState<any>(null);
   const [analysis, setAnalysis] = useState<any>(null);
   const [plan, setPlan] = useState<any>(null);
-  const [selectedVariant, setSelectedVariant] = useState<number>(0);
 
   const [planMode, setPlanMode] = useState<"auto" | "ai" | "local">("auto");
 
   const [timelineZoom, setTimelineZoom] = useState<number>(60); // px per second
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("overview");
+  const [overviewSections, setOverviewSections] =
+    useState<Record<OverviewSectionId, boolean>>(DEFAULT_OVERVIEW_SECTIONS);
 
   const [info, setInfo] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewAutoFitKeyRef = useRef<string>("");
+  const { progress, runOperation } = useOperationProgress();
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
@@ -60,6 +115,10 @@ export default function Workspace({ onNavigate }: PageProps) {
     setProject(d.project);
     setAnalysis(d.project?.meta?.analysis || null);
     setPlan(d.project?.meta?.last_plan || null);
+    const variantCount = Array.isArray(d.project?.meta?.last_plan?.variants)
+      ? d.project.meta.last_plan.variants.length
+      : 0;
+    if (variantCount > 0 && selectedVariant > variantCount - 1) setSelectedVariant(0);
     try {
       const a = await apiGet(`/v1/projects/${id}/assets`);
       setAssets(a.assets);
@@ -76,22 +135,55 @@ export default function Workspace({ onNavigate }: PageProps) {
   const uploadAudio = async () => {
     if (!audioFile) return;
     setErr(null); setInfo(null);
-    await apiUpload(`/v1/projects/${projectId}/assets/audio`, audioFile);
-    await refreshProject(projectId);
+    try {
+      await runOperation(
+        {
+          label: "Uploading audio",
+          detail: audioFile.name,
+          successDetail: "Track uploaded and project refreshed.",
+        },
+        async () => {
+          await apiUpload(`/v1/projects/${projectId}/assets/audio`, audioFile);
+          await refreshProject(projectId);
+        },
+      );
+    } catch (e: any) {
+      setErr(String(e));
+    }
   };
 
   const uploadRef = async () => {
     if (!refFile) return;
     setErr(null); setInfo(null);
-    await apiUpload(`/v1/projects/${projectId}/assets/refs`, refFile);
-    setRefFile(null);
-    await refreshProject(projectId);
+    try {
+      await runOperation(
+        {
+          label: "Uploading reference",
+          detail: refFile.name,
+          successDetail: "Reference image saved to the current project.",
+        },
+        async () => {
+          await apiUpload(`/v1/projects/${projectId}/assets/refs`, refFile);
+          setRefFile(null);
+          await refreshProject(projectId);
+        },
+      );
+    } catch (e: any) {
+      setErr(String(e));
+    }
   };
 
   const runAnalysis = async () => {
     setErr(null); setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/analyze_audio`, {});
+      const d = await runOperation(
+        {
+          label: "Analyzing audio",
+          detail: "Beat detection, transcription, and feature extraction.",
+          successDetail: "Analysis complete.",
+        },
+        () => apiPost(`/v1/projects/${projectId}/analyze_audio`, {}),
+      );
       setAnalysis(d);
       await refreshProject(projectId);
     } catch (e: any) { setErr(String(e)); }
@@ -100,12 +192,20 @@ export default function Workspace({ onNavigate }: PageProps) {
   const generatePlan = async () => {
     setErr(null); setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/plan?mode=${planMode}`, {
-        title: project?.name || "Untitled",
-        style_prefs: "cinematic, coherent subject, high detail, consistent style",
-        num_variants: 3,
-        max_scenes: 12
-      });
+      const d = await runOperation(
+        {
+          label: "Generating plan variants",
+          detail: `Mode: ${planMode}`,
+          successDetail: "Plan variants refreshed for the active project.",
+        },
+        () =>
+          apiPost(`/v1/projects/${projectId}/plan?mode=${planMode}`, {
+            title: project?.name || "Untitled",
+            style_prefs: "cinematic, coherent subject, high detail, consistent style",
+            num_variants: 3,
+            max_scenes: 12
+          }),
+      );
       setPlan(d);
       setSelectedVariant(0);
       await refreshProject(projectId);
@@ -123,15 +223,36 @@ export default function Workspace({ onNavigate }: PageProps) {
   const analysisReady = Boolean(analysis);
   const audioReady = Boolean(project?.meta?.audio);
   const storyboardReady = Boolean(variantScenes.length);
+  const plannerImportedAt = Number(project?.meta?.last_planner_lab?.imported_at || 0);
+  const reactiveAppliedAt = Number(project?.meta?.last_reactive_lab?.applied_at || 0);
+  const plannerSceneCount = Number(project?.meta?.last_plan?.variants?.[selectedVariant]?.scenes?.length || 0);
+  const reactiveSectionCount = Number(project?.meta?.last_reactive_lab?.sections?.length || 0);
+  const projectProgress = projectId ? 100 : 0;
+  const audioProgress = analysisReady ? 100 : audioReady ? 58 : 0;
+  const referenceProgress = refAssets.length ? Math.min(100, 30 + refAssets.length * 22) : 0;
+  const planProgress = storyboardReady ? 100 : variantCount ? 70 : 0;
+  const handoffProgress = reactiveAppliedAt ? 100 : plannerImportedAt ? 62 : 0;
+
+  const toggleOverviewSection = (sectionId: OverviewSectionId, isOpen: boolean) => {
+    setOverviewSections((current) => ({ ...current, [sectionId]: isOpen }));
+  };
 
   const applyTimelinePlan = async (overwrite: boolean) => {
     if (!projectId || !plan?.variants?.length) return;
     setErr(null);
     try {
-      await apiPost(`/v1/projects/${projectId}/timeline/apply_plan`, {
-        variant_index: selectedVariant,
-        overwrite,
-      });
+      await runOperation(
+        {
+          label: overwrite ? "Overwriting timeline" : "Applying plan to timeline",
+          detail: `Variant ${selectedVariant + 1}`,
+          successDetail: "Timeline updated from the selected storyboard variant.",
+        },
+        () =>
+          apiPost(`/v1/projects/${projectId}/timeline/apply_plan`, {
+            variant_index: selectedVariant,
+            overwrite,
+          }),
+      );
       await refreshProject(projectId);
       setWorkspaceView("storyboard");
     } catch (e: any) {
@@ -141,16 +262,46 @@ export default function Workspace({ onNavigate }: PageProps) {
 
   const syncPlannerLab = async (payload: any) => {
     if (!projectId) throw new Error("Select a Studio project before syncing the planner into the renderer.");
-    await apiPost(`/v1/projects/${projectId}/planner_lab/import`, payload);
-    await refreshProject(projectId);
+    await runOperation(
+      {
+        label: "Syncing planner handoff",
+        detail: "Importing planner scenes and renderer prompts.",
+        successDetail: "Planner handoff applied to the current session.",
+      },
+      async () => {
+        await apiPost(`/v1/projects/${projectId}/planner_lab/import`, payload);
+        await refreshProject(projectId);
+      },
+    );
+    noteHandoff({
+      type: "planner",
+      projectId,
+      at: Date.now(),
+      summary: `${project?.name || "Selected project"} planner scenes and prompt tracks synced.`,
+    });
     setWorkspaceView("storyboard");
     return `${project?.name || "Selected project"} now has synced planner analysis, canonical storyboard scenes, and renderer prompt/motion tracks.`;
   };
 
   const syncReactiveLab = async (payload: any) => {
     if (!projectId) throw new Error("Select a Studio project before applying reactive motion to the renderer.");
-    await apiPost(`/v1/projects/${projectId}/reactive_lab/apply`, payload);
-    await refreshProject(projectId);
+    await runOperation(
+      {
+        label: "Syncing reactive handoff",
+        detail: "Applying motion schedules and camera keyframes.",
+        successDetail: "Reactive handoff applied to the timeline.",
+      },
+      async () => {
+        await apiPost(`/v1/projects/${projectId}/reactive_lab/apply`, payload);
+        await refreshProject(projectId);
+      },
+    );
+    noteHandoff({
+      type: "reactive",
+      projectId,
+      at: Date.now(),
+      summary: `${project?.name || "Selected project"} reactive motion track and camera data synced.`,
+    });
     return `${project?.name || "Selected project"} now has the reactive motion track and camera data wired into the internal renderer timeline.`;
   };
 
@@ -373,6 +524,38 @@ export default function Workspace({ onNavigate }: PageProps) {
         ))}
       </div>
 
+      <div className="workspace-sessionStrip">
+        <div className="workspace-sessionCard">
+          <div className="workspace-sessionLabel">Shared session</div>
+          <div className="workspace-sessionValue">
+            {project?.name || "No active project"} • {selectedVariantName}
+          </div>
+          <div className="small">
+            Workspace, Timeline, and the standalone labs now follow the same active project and variant.
+          </div>
+        </div>
+        {lastHandoff ? (
+          <div className="workspace-sessionCard workspace-sessionCard--accent">
+            <div className="workspace-sessionLabel">Last handoff</div>
+            <div className="workspace-sessionValue">
+              {lastHandoff.type === "planner" ? "Planner sync" : "Reactive sync"}
+            </div>
+            <div className="small">{lastHandoff.summary}</div>
+          </div>
+        ) : null}
+      </div>
+
+      {progress.label ? (
+        <div className="card workspace-progressCard">
+          <ProgressBar
+            value={progress.value}
+            label={progress.label}
+            detail={progress.detail}
+            tone={progress.tone}
+          />
+        </div>
+      ) : null}
+
       <details className="card workspace-guideCard">
         <summary className="workspace-guideSummary">
           {workspaceView === "overview" ? "Quick guide and capabilities" : workspaceView === "planner" ? "Planner guide and capabilities" : "Storyboard guide and capabilities"}
@@ -476,131 +659,156 @@ export default function Workspace({ onNavigate }: PageProps) {
 
       {workspaceView === "overview" ? <div className="workspace-shell">
         <div className="card workspace-sideCard">
-          <div className="workspace-section">
-            <div className="workspace-sectionHead">
-              <div className="workspace-sectionTitle">Project</div>
-              <div className="small">Choose the active session and inspect current ingest status.</div>
-            </div>
-          {projects.length ? (
-            <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          ) : (
-            <div className="small">No projects yet. Create one in Projects tab.</div>
-          )}
-          </div>
-
-          <div className="workspace-section">
-            <div className="workspace-sectionHead">
-              <div className="workspace-sectionTitle">Audio</div>
-              <div className="small">Upload the track, then analyze and transcribe it.</div>
-            </div>
-          <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files?.[0] || null)} />
-          <div className="row workspace-actionRow" style={{ marginTop: 10 }}>
-            <button onClick={uploadAudio} disabled={!audioFile || !projectId}>Upload</button>
-            <button className="secondary" onClick={runAnalysis} disabled={!projectId}>Analyze + Transcribe</button>
-          </div>
-          {project?.meta?.audio && (
-            <div className="small" style={{ marginTop: 10 }}>
-              uploaded: {project.meta.audio.filename} ({bytes(project.meta.audio.size_bytes)})
-            </div>
-          )}
-          </div>
-
-          <div className="workspace-section">
-            <div className="workspace-sectionHead">
-              <div className="workspace-sectionTitle">Reference Assets</div>
-              <div className="small">Style and character anchors that guide image and motion prompts.</div>
-            </div>
-          <div className="small">Reference images (style/character anchors)</div>
-          <input type="file" accept="image/*" onChange={(e) => setRefFile(e.target.files?.[0] || null)} />
-          <div className="row workspace-actionRow" style={{ marginTop: 10 }}>
-            <button onClick={uploadRef} disabled={!refFile || !projectId}>Upload ref</button>
-            <button className="secondary" onClick={() => projectId && refreshProject(projectId)} disabled={!projectId}>Refresh assets</button>
-          </div>
-          <div className="workspace-assetsGrid">
-            {refAssets.map((r: any) => (
-              <a key={r.path} href={fileUrl(projectId, r.path)} target="_blank" rel="noreferrer">
-                <img src={fileUrl(projectId, r.path)} className="workspace-assetThumb" />
-              </a>
-            ))}
-            {!refAssets.length && <div className="small">No refs yet.</div>}
-          </div>
-          </div>
-
-          <div className="workspace-section">
-            <div className="workspace-sectionHead">
-              <div className="workspace-sectionTitle">Plan Variants</div>
-              <div className="small">Generate multiple scene structures, then apply the best one to the timeline.</div>
-            </div>
-          <div className="row workspace-actionRow" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <label className="small row" style={{ gap: 6, alignItems: "center" }}>
-              Plan mode
-              <select value={planMode} onChange={(e) => setPlanMode(e.target.value as any)}>
-                <option value="auto">Auto</option>
-                <option value="ai">AI-only</option>
-                <option value="local">Local-only</option>
-              </select>
-            </label>
-            <button onClick={generatePlan} disabled={!projectId}>Generate Plan Variants</button>
-          </div>
-
-          {plan?.variants?.length ? (
-            <>
-            <div style={{ marginTop: 12 }}>
-              <div className="small">Select variant</div>
-              <select value={selectedVariant} onChange={(e) => setSelectedVariant(Number(e.target.value))}>
-                {plan.variants.map((v: any, idx: number) => (
-                  <option key={idx} value={idx}>{idx + 1}. {v.name}</option>
+          <OverviewSection
+            id="project"
+            title="Project"
+            description="Choose the active session and inspect current ingest status."
+            progress={projectProgress}
+            open={overviewSections.project}
+            onToggle={toggleOverviewSection}
+          >
+            {projects.length ? (
+              <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
-            </div>
-            <div className="row workspace-actionRow" style={{ gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-              <button
-                onClick={() => void applyTimelinePlan(false)}
-                disabled={!projectId || !plan?.variants?.length}
-              >
-                Apply variant to timeline
-              </button>
-              <button
-                className="secondary"
-                onClick={() => void applyTimelinePlan(true)}
-                disabled={!projectId || !plan?.variants?.length}
-              >
-                Apply (overwrite)
-              </button>
-              <button className="secondary" onClick={() => setWorkspaceView("planner")} disabled={!projectId}>
-                Open AI Planner
-              </button>
-              <button className="secondary" onClick={() => setWorkspaceView("reactive")} disabled={!projectId || !analysisReady}>
-                Open Reactive Lab
-              </button>
-            </div>
-            </>
-          ) : (
-            <div className="small" style={{ marginTop: 10 }}>No plan generated yet.</div>
-          )}
-          </div>
+            ) : (
+              <div className="small">No projects yet. Create one in Projects tab.</div>
+            )}
+          </OverviewSection>
 
-          <div className="workspace-section">
-            <div className="workspace-sectionHead">
-              <div className="workspace-sectionTitle">Handoff</div>
-              <div className="small">Move from planning and reactive motion into arrangement, rendering, and output review.</div>
+          <OverviewSection
+            id="audio"
+            title="Audio"
+            description="Upload the track, then analyze and transcribe it."
+            progress={audioProgress}
+            open={overviewSections.audio}
+            onToggle={toggleOverviewSection}
+          >
+            <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files?.[0] || null)} />
+            <div className="row workspace-actionRow" style={{ marginTop: 10 }}>
+              <button onClick={uploadAudio} disabled={!audioFile || !projectId}>Upload</button>
+              <button className="secondary" onClick={runAnalysis} disabled={!projectId}>Analyze + Transcribe</button>
             </div>
-          <div className="small" style={{ marginBottom: 10 }}>
-            Workspace is the integrated hub. Standalone Planner Lab and Reactive Lab remain available from the sidebar when you want full-screen specialist views.
-          </div>
-          <div className="row workspace-actionRow" style={{ gap: 10, flexWrap: "wrap" }}>
-            <button className="secondary" onClick={() => setWorkspaceView("planner")} disabled={!projectId}>Planner</button>
-            <button className="secondary" onClick={() => setWorkspaceView("reactive")} disabled={!projectId || !analysisReady}>Reactive Lab</button>
-            <button onClick={() => onNavigate?.("render")} disabled={!plan?.variants?.length}>Go to Render</button>
-            <button className="secondary" onClick={() => setWorkspaceView("storyboard")} disabled={!storyboardReady}>Open Storyboard</button>
-            <button className="secondary" onClick={() => onNavigate?.("outputs")}>Outputs</button>
-            <button className="secondary" onClick={() => onNavigate?.("queue")}>Render Queue</button>
-          </div>
-          </div>
+            {project?.meta?.audio && (
+              <div className="small" style={{ marginTop: 10 }}>
+                uploaded: {project.meta.audio.filename} ({bytes(project.meta.audio.size_bytes)})
+              </div>
+            )}
+          </OverviewSection>
+
+          <OverviewSection
+            id="references"
+            title="Reference Assets"
+            description="Style and character anchors that guide image and motion prompts."
+            progress={referenceProgress}
+            open={overviewSections.references}
+            onToggle={toggleOverviewSection}
+          >
+            <div className="small">Reference images (style/character anchors)</div>
+            <input type="file" accept="image/*" onChange={(e) => setRefFile(e.target.files?.[0] || null)} />
+            <div className="row workspace-actionRow" style={{ marginTop: 10 }}>
+              <button onClick={uploadRef} disabled={!refFile || !projectId}>Upload ref</button>
+              <button className="secondary" onClick={() => projectId && refreshProject(projectId)} disabled={!projectId}>Refresh assets</button>
+            </div>
+            <div className="workspace-assetsGrid">
+              {refAssets.map((r: any) => (
+                <a key={r.path} href={fileUrl(projectId, r.path)} target="_blank" rel="noreferrer">
+                  <img src={fileUrl(projectId, r.path)} className="workspace-assetThumb" />
+                </a>
+              ))}
+              {!refAssets.length && <div className="small">No refs yet.</div>}
+            </div>
+          </OverviewSection>
+
+          <OverviewSection
+            id="plan"
+            title="Plan Variants"
+            description="Generate multiple scene structures, then apply the best one to the timeline."
+            progress={planProgress}
+            open={overviewSections.plan}
+            onToggle={toggleOverviewSection}
+          >
+            <div className="row workspace-actionRow" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <label className="small row" style={{ gap: 6, alignItems: "center" }}>
+                Plan mode
+                <select value={planMode} onChange={(e) => setPlanMode(e.target.value as any)}>
+                  <option value="auto">Auto</option>
+                  <option value="ai">AI-only</option>
+                  <option value="local">Local-only</option>
+                </select>
+              </label>
+              <button onClick={generatePlan} disabled={!projectId}>Generate Plan Variants</button>
+            </div>
+
+            {plan?.variants?.length ? (
+              <>
+              <div style={{ marginTop: 12 }}>
+                <div className="small">Select variant</div>
+                <select value={selectedVariant} onChange={(e) => setSelectedVariant(Number(e.target.value))}>
+                  {plan.variants.map((v: any, idx: number) => (
+                    <option key={idx} value={idx}>{idx + 1}. {v.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="row workspace-actionRow" style={{ gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => void applyTimelinePlan(false)}
+                  disabled={!projectId || !plan?.variants?.length}
+                >
+                  Apply variant to timeline
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => void applyTimelinePlan(true)}
+                  disabled={!projectId || !plan?.variants?.length}
+                >
+                  Apply (overwrite)
+                </button>
+                <button className="secondary" onClick={() => setWorkspaceView("planner")} disabled={!projectId}>
+                  Open AI Planner
+                </button>
+                <button className="secondary" onClick={() => setWorkspaceView("reactive")} disabled={!projectId || !analysisReady}>
+                  Open Reactive Lab
+                </button>
+              </div>
+              </>
+            ) : (
+              <div className="small" style={{ marginTop: 10 }}>No plan generated yet.</div>
+            )}
+          </OverviewSection>
+
+          <OverviewSection
+            id="handoff"
+            title="Handoff"
+            description="Move from planning and reactive motion into arrangement, rendering, and output review."
+            progress={handoffProgress}
+            open={overviewSections.handoff}
+            onToggle={toggleOverviewSection}
+          >
+            <div className="small" style={{ marginBottom: 10 }}>
+              Workspace is the integrated hub. Standalone Planner Lab and Reactive Lab remain available from the sidebar when you want full-screen specialist views.
+            </div>
+            <div className="workspace-handoffGrid">
+              <div className="workspace-handoffCard">
+                <div className="workspace-handoffLabel">Planner handoff</div>
+                <strong>{plannerImportedAt ? `${plannerSceneCount} scenes synced` : "Not synced yet"}</strong>
+              </div>
+              <div className="workspace-handoffCard">
+                <div className="workspace-handoffLabel">Reactive handoff</div>
+                <strong>{reactiveAppliedAt ? `${reactiveSectionCount} sections applied` : "Not synced yet"}</strong>
+              </div>
+            </div>
+            <div className="row workspace-actionRow" style={{ gap: 10, flexWrap: "wrap" }}>
+              <button className="secondary" onClick={() => setWorkspaceView("planner")} disabled={!projectId}>Planner</button>
+              <button className="secondary" onClick={() => setWorkspaceView("reactive")} disabled={!projectId || !analysisReady}>Reactive Lab</button>
+              <button onClick={() => onNavigate?.("render")} disabled={!plan?.variants?.length}>Go to Render</button>
+              <button className="secondary" onClick={() => setWorkspaceView("storyboard")} disabled={!storyboardReady}>Open Storyboard</button>
+              <button className="secondary" onClick={() => onNavigate?.("outputs")}>Outputs</button>
+              <button className="secondary" onClick={() => onNavigate?.("queue")}>Render Queue</button>
+            </div>
+          </OverviewSection>
 
           {err && <div style={{ marginTop: 12, color: "var(--danger)" }}>{err}</div>}
         </div>

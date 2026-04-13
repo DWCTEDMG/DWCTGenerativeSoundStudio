@@ -2,6 +2,7 @@ import React from "react";
 import { render } from "@testing-library/react";
 import { vi } from "vitest";
 import { UiModeProvider } from "../components/uiMode";
+import { StudioSessionProvider } from "../components/studioSession";
 
 type MockRouteHandler =
   | unknown
@@ -81,5 +82,9 @@ export function installFetchMock(routes: MockRouteMap) {
 }
 
 export function renderWithStudio(ui: React.ReactElement) {
-  return render(<UiModeProvider>{ui}</UiModeProvider>);
+  return render(
+    <StudioSessionProvider>
+      <UiModeProvider>{ui}</UiModeProvider>
+    </StudioSessionProvider>,
+  );
 }

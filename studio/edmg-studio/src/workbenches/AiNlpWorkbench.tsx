@@ -17,6 +17,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
+import { ProgressBar } from '../components/ProgressBar';
 
 type AnalysisFocus = 'balanced' | 'emotion' | 'visual';
 type PromptStyle = 'cinematic' | 'music-video' | 'experimental' | 'documentary';
@@ -1115,6 +1116,16 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
           <div className="mt-1">
             Sync stores the full planner lab analysis and raw plan in project metadata, then derives canonical Studio analysis, `last_plan`, and prompt/motion timeline tracks for the internal renderer.
           </div>
+          {studioSyncing ? (
+            <div className="mt-3">
+              <ProgressBar
+                value={78}
+                label="Planner handoff"
+                detail="Writing planner metadata, variants, and timeline prompt tracks."
+                compact
+              />
+            </div>
+          ) : null}
           {studioSyncMessage && <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-emerald-700">{studioSyncMessage}</div>}
           {studioSyncError && <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-rose-700">{studioSyncError}</div>}
         </div>

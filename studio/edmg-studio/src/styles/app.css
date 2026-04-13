@@ -125,6 +125,58 @@ select:focus {
   color: var(--muted);
   background: rgba(9, 25, 28, 0.74);
 }
+.progressBar {
+  display: grid;
+  gap: 6px;
+}
+.progressBar--compact {
+  gap: 4px;
+  min-width: 120px;
+}
+.progressBar-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+.progressBar-label,
+.progressBar-value {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.progressBar-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.progressBar--compact .progressBar-track {
+  height: 6px;
+}
+.progressBar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(80, 208, 223, 0.92) 0%, rgba(86, 147, 255, 0.92) 100%);
+  transition: width 180ms ease;
+}
+.progressBar[data-tone="success"] .progressBar-fill {
+  background: linear-gradient(90deg, rgba(93, 238, 181, 0.92) 0%, rgba(73, 195, 134, 0.92) 100%);
+}
+.progressBar[data-tone="warning"] .progressBar-fill {
+  background: linear-gradient(90deg, rgba(255, 195, 82, 0.92) 0%, rgba(255, 147, 69, 0.92) 100%);
+}
+.progressBar[data-tone="danger"] .progressBar-fill {
+  background: linear-gradient(90deg, rgba(255, 136, 102, 0.92) 0%, rgba(255, 98, 98, 0.92) 100%);
+}
+.progressBar-detail {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
 .insight-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -619,6 +671,43 @@ th {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.workspace-sessionStrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.workspace-sessionCard,
+.timeline-sessionCard {
+  padding: 12px 14px;
+  border: 1px solid rgba(111, 162, 212, 0.18);
+  border-radius: 14px;
+  background: rgba(8, 18, 24, 0.72);
+  display: grid;
+  gap: 4px;
+}
+.workspace-sessionCard--accent,
+.timeline-sessionCard--accent {
+  background:
+    linear-gradient(180deg, rgba(25, 59, 91, 0.76) 0%, rgba(14, 35, 58, 0.76) 100%);
+  border-color: rgba(120, 186, 242, 0.3);
+}
+.workspace-sessionLabel,
+.timeline-sessionLabel {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #94b7d8;
+}
+.workspace-sessionValue,
+.timeline-sessionValue {
+  font-size: 16px;
+  font-weight: 900;
+}
+.workspace-progressCard,
+.timeline-progressCard {
+  padding: 12px 14px;
+}
 .workspace-flowTabs {
   display: flex;
   gap: 8px;
@@ -725,6 +814,60 @@ th {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+.workspace-accordionSection {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+.workspace-accordionSummary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 14px;
+}
+.workspace-accordionSummary::-webkit-details-marker {
+  display: none;
+}
+.workspace-accordionHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+}
+.workspace-accordionMeta {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+  min-width: 120px;
+}
+.workspace-accordionBody {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.workspace-handoffGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.workspace-handoffCard {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(8, 18, 24, 0.72);
+  display: grid;
+  gap: 4px;
+}
+.workspace-handoffLabel,
+.timeline-handoffLabel {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #94b7d8;
 }
 .workspace-mainStack {
   display: flex;
@@ -1021,6 +1164,11 @@ th {
   gap: 14px;
   min-width: 0;
 }
+.timeline-sessionStrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
 .timeline-pageHeader {
   display: flex;
   justify-content: space-between;
@@ -1198,15 +1346,14 @@ th {
   overflow: hidden;
 }
 .timeline-dockTabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   padding: 12px 12px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  flex-wrap: wrap;
 }
 .timeline-dockTab {
   min-width: 0;
-  flex: 1 1 110px;
   padding: 9px 10px;
   border-radius: 10px;
   box-shadow: none;
@@ -1272,7 +1419,7 @@ th {
   overflow: hidden;
   background: #091118;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: var(--timeline-rail-width, 220px) minmax(0, 1fr);
   min-width: 0;
 }
 .timeline-boardRail {
@@ -1280,7 +1427,7 @@ th {
   border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 .timeline-railCell {
-  min-height: 64px;
+  min-height: var(--timeline-lane-height, 64px);
   padding: 12px 12px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
@@ -1292,7 +1439,7 @@ th {
   min-height: 54px;
 }
 .timeline-railCell--wave {
-  min-height: 106px;
+  min-height: var(--timeline-wave-height, 106px);
 }
 .timeline-railTitle {
   font-size: 13px;
@@ -1350,12 +1497,12 @@ th {
   height: 54px;
 }
 .timeline-waveformRow {
-  height: 106px;
+  height: var(--timeline-wave-height, 106px);
   cursor: pointer;
 }
 .timeline-waveformCanvas {
   display: block;
-  height: 92px;
+  height: calc(var(--timeline-wave-height, 106px) - 14px);
   margin: 7px 0 0;
 }
 .timeline-rulerTick {
@@ -1377,7 +1524,7 @@ th {
   white-space: nowrap;
 }
 .timeline-laneRow {
-  height: 64px;
+  height: var(--timeline-lane-height, 64px);
   overflow: hidden;
 }
 .timeline-playhead {
@@ -1392,8 +1539,8 @@ th {
 }
 .timeline-laneClip {
   position: absolute;
-  top: 12px;
-  height: 40px;
+  top: var(--timeline-clip-top, 12px);
+  height: var(--timeline-clip-height, 40px);
   border-radius: 10px;
   padding: 10px 14px;
   overflow: hidden;
@@ -1444,7 +1591,7 @@ th {
 }
 .timeline-keyframe {
   position: absolute;
-  top: 24px;
+  top: var(--timeline-keyframe-top, 24px);
   width: 14px;
   height: 14px;
   transform: rotate(45deg);
@@ -1520,6 +1667,18 @@ th {
 .timeline-emptyState {
   opacity: 0.84;
 }
+.timeline-handoffGrid {
+  display: grid;
+  gap: 10px;
+}
+.timeline-handoffCard {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(8, 18, 24, 0.72);
+  display: grid;
+  gap: 6px;
+}
 
 @media (max-width: 1100px) {
   .insight-grid,
@@ -1575,13 +1734,16 @@ th {
   .timeline-statusStrip {
     justify-content: flex-start;
   }
+  .workspace-handoffGrid {
+    grid-template-columns: 1fr;
+  }
 }
 @media (max-width: 900px) {
   .workspace-assetsGrid {
     grid-template-columns: 1fr;
   }
   .timeline-board {
-    grid-template-columns: 180px minmax(0, 1fr);
+    grid-template-columns: minmax(160px, var(--timeline-rail-width, 180px)) minmax(0, 1fr);
   }
   .timeline-miniField {
     min-width: 100%;

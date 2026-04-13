@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost, getBackendUrl } from "../components/api";
+import { ProgressBar } from "../components/ProgressBar";
+import { useOperationProgress } from "../components/useOperationProgress";
+import { useStudioSession } from "../components/studioSession";
 import type { PageProps } from "../types/pageProps";
 
 type AnyDict = Record<string, any>;
@@ -13,7 +16,8 @@ type Selected =
   | { kind: "camera"; kfIdx: number }
   | null;
 
-type DockSection = "inspector" | "proxy" | "diffusion" | "curves";
+type DockSection = "handoffs" | "inspector" | "proxy" | "diffusion" | "curves";
+type TimelineDensity = "compact" | "comfortable";
 
 const TIMELINE_MIN_ZOOM = 4;
 const TIMELINE_MAX_ZOOM = 360;
@@ -225,14 +229,20 @@ function fmtLabel(trackType: string, clip: Clip): string {
 }
 
 export default function Timeline({}: PageProps) {
+  const {
+    projectId,
+    setProjectId,
+    selectedVariant,
+    setSelectedVariant,
+    lastHandoff,
+    clearHandoff,
+  } = useStudioSession();
   const backendUrl = useMemo(() => getBackendUrl(), []);
 
   const [projects, setProjects] = useState<any[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
   const [project, setProject] = useState<any>(null);
 
   const [plan, setPlan] = useState<any>(null);
-  const [selectedVariant, setSelectedVariant] = useState<number>(0);
 
   const [timeline, setTimeline] = useState<AnyDict>({});
   const [timelineDirty, setTimelineDirty] = useState(false);
@@ -259,11 +269,13 @@ export default function Timeline({}: PageProps) {
   const autoFitKeyRef = useRef<string>("");
 
   const [proxyUrl, setProxyUrl] = useState<string>("");
+  const [proxyBusy, setProxyBusy] = useState(false);
   const [proxyStart, setProxyStart] = useState<number>(0);
   const [proxyEnd, setProxyEnd] = useState<number>(5);
   const [proxyFps, setProxyFps] = useState<number>(6);
 
   const [diffUrl, setDiffUrl] = useState<string>("");
+  const [diffBusy, setDiffBusy] = useState(false);
   const [diffStart, setDiffStart] = useState<number>(0);
   const [diffEnd, setDiffEnd] = useState<number>(2);
   const [diffFps, setDiffFps] = useState<number>(2);
@@ -273,9 +285,11 @@ export default function Timeline({}: PageProps) {
   const [diffW, setDiffW] = useState<number>(512);
   const [diffH, setDiffH] = useState<number>(512);
   const [diffModel, setDiffModel] = useState<string>("auto");
-  const [dockSection, setDockSection] = useState<DockSection>("inspector");
+  const [dockSection, setDockSection] = useState<DockSection>("handoffs");
+  const [timelineDensity, setTimelineDensity] = useState<TimelineDensity>("compact");
 
   const [err, setErr] = useState<string | null>(null);
+  const { progress, runOperation } = useOperationProgress();
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
@@ -305,6 +319,8 @@ export default function Timeline({}: PageProps) {
     else setAudioUrl("");
 
     setPlan(p?.meta?.last_plan || null);
+    const variantCount = Array.isArray(p?.meta?.last_plan?.variants) ? p.meta.last_plan.variants.length : 0;
+    if (variantCount > 0 && selectedVariant > variantCount - 1) setSelectedVariant(0);
   };
 
   useEffect(() => {
@@ -447,6 +463,10 @@ export default function Timeline({}: PageProps) {
       else window.clearTimeout(handle);
     };
   }, [projectId, selectedVariant, durationS]);
+
+  useEffect(() => {
+    if (lastHandoff && lastHandoff.projectId === projectId) setDockSection("handoffs");
+  }, [lastHandoff, projectId]);
 
   const onTimelineWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     if (!(event.ctrlKey || event.metaKey)) return;
@@ -594,11 +614,19 @@ export default function Timeline({}: PageProps) {
     if (!projectId) return;
     setErr(null);
     try {
-      const saved = await apiPost(`/v1/projects/${projectId}/timeline`, { timeline });
+      const saved = await runOperation(
+        {
+          label: "Saving timeline",
+          detail: "Persisting arrangement edits for the active session.",
+          successDetail: "Timeline saved.",
+        },
+        () => apiPost(`/v1/projects/${projectId}/timeline`, { timeline }),
+      );
       setTimeline(saved?.timeline || timeline);
       setTimelineDirty(false);
       // invalidate proxy preview on save
       setProxyUrl("");
+      setProxyBusy(false);
     } catch (e: any) {
       setErr(String(e));
     }
@@ -954,6 +982,7 @@ export default function Timeline({}: PageProps) {
     if (!projectId) return;
     const s = clamp(Number(diffStart), 0, durationS);
     const e = clamp(Number(diffEnd), s + 0.05, durationS);
+    setDiffBusy(true);
     setDiffUrl(
       `${backendUrl}/v1/projects/${projectId}/preview/diffusion_segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}` +
         `&w=${encodeURIComponent(String(diffW))}&h=${encodeURIComponent(String(diffH))}` +
@@ -1011,6 +1040,7 @@ export default function Timeline({}: PageProps) {
     if (!projectId) return;
     const s = clamp(Number(proxyStart), 0, durationS);
     const e = clamp(Number(proxyEnd), s + 0.05, durationS);
+    setProxyBusy(true);
     setProxyUrl(
       `${backendUrl}/v1/projects/${projectId}/preview/segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}&w=768&h=432&fps=${encodeURIComponent(String(proxyFps))}&force=1&v=${Date.now()}`,
     );
@@ -1057,6 +1087,21 @@ export default function Timeline({}: PageProps) {
       : bpm
         ? `BPM fallback ${bpm.toFixed(1)}`
         : "Run Analyze or set BPM to enable quantize";
+  const plannerLabMeta = project?.meta?.last_planner_lab || null;
+  const reactiveLabMeta = project?.meta?.last_reactive_lab || null;
+  const plannerImportedAt = Number(plannerLabMeta?.imported_at || 0);
+  const reactiveAppliedAt = Number(reactiveLabMeta?.applied_at || 0);
+  const handoffReadyCount = [plannerImportedAt > 0, reactiveAppliedAt > 0].filter(Boolean).length;
+  const plannerVariantCount = Array.isArray(plan?.variants) ? plan.variants.length : 0;
+  const plannerSceneCount = Array.isArray(plan?.variants?.[selectedVariant]?.scenes)
+    ? plan.variants[selectedVariant].scenes.length
+    : 0;
+  const reactiveCueCount = Array.isArray(reactiveLabMeta?.cue_events) ? reactiveLabMeta.cue_events.length : 0;
+  const reactiveSectionCount = Array.isArray(reactiveLabMeta?.sections) ? reactiveLabMeta.sections.length : 0;
+  const densityConfig =
+    timelineDensity === "compact"
+      ? { rail: 196, lane: 54, wave: 92, clipTop: 9, clipHeight: 34, keyframeTop: 19 }
+      : { rail: 220, lane: 64, wave: 106, clipTop: 12, clipHeight: 40, keyframeTop: 24 };
   const pickedSelection =
     selected?.kind === "track" ? selectedTrackClip(selected) : null;
   const selectionStatus =
@@ -1069,6 +1114,12 @@ export default function Timeline({}: PageProps) {
           : "No selection";
   const timelineSurfaceStyle = {
     width: timelineCanvasWidth,
+    ["--timeline-rail-width" as any]: `${densityConfig.rail}px`,
+    ["--timeline-lane-height" as any]: `${densityConfig.lane}px`,
+    ["--timeline-wave-height" as any]: `${densityConfig.wave}px`,
+    ["--timeline-clip-top" as any]: `${densityConfig.clipTop}px`,
+    ["--timeline-clip-height" as any]: `${densityConfig.clipHeight}px`,
+    ["--timeline-keyframe-top" as any]: `${densityConfig.keyframeTop}px`,
     ["--timeline-major-grid" as any]: `${Math.max(pxPerSecond, 24)}px`,
     ["--timeline-minor-grid" as any]: `${Math.max(pxPerSecond / 4, 12)}px`,
   } as React.CSSProperties;
@@ -1082,8 +1133,8 @@ export default function Timeline({}: PageProps) {
           <span className="badge">{timelineDirty ? "Unsaved edits" : "Saved"}</span>
         </div>
         <div className="small timeline-headerCopy">
-          Console-style top bar, fixed track headers, fit-all overview zoom, and a utility dock
-          that keeps deep controls available without flooding the screen.
+          Console-style top bar, shared session state, fit-all overview zoom, and a utility dock
+          that keeps planning and reactive handoffs visible without flooding the screen.
         </div>
       </div>
       <div className="timeline-statusStrip">
@@ -1098,6 +1149,10 @@ export default function Timeline({}: PageProps) {
         <div className="timeline-stat">
           <span className="small">Selection</span>
           <strong>{selectionStatus}</strong>
+        </div>
+        <div className="timeline-stat">
+          <span className="small">Handoffs</span>
+          <strong>{handoffReadyCount}/2 ready</strong>
         </div>
       </div>
     </div>
@@ -1212,6 +1267,13 @@ export default function Timeline({}: PageProps) {
                 <option value="1">1 beat</option>
                 <option value="0.5">1/2 beat</option>
                 <option value="0.25">1/4 beat</option>
+              </select>
+            </div>
+            <div className="timeline-miniField">
+              <span className="timeline-miniLabel">Density</span>
+              <select value={timelineDensity} onChange={(e) => setTimelineDensity(e.target.value as TimelineDensity)}>
+                <option value="compact">Compact</option>
+                <option value="comfortable">Comfortable</option>
               </select>
             </div>
             <div className="timeline-toolbarActions timeline-toolbarActions--wide">
@@ -1706,6 +1768,50 @@ export default function Timeline({}: PageProps) {
     </div>
   );
 
+  const handoffsPanel = (
+    <div className="timeline-dockPanel">
+      <div className="timeline-panelHeader">
+        <div>
+          <div className="timeline-panelTitle">Session Handoffs</div>
+          <div className="small">
+            Planner and Reactive Lab sync status stays visible here while you arrange the track.
+          </div>
+        </div>
+        <span className="badge">{handoffReadyCount}/2 ready</span>
+      </div>
+      <div className="timeline-handoffGrid">
+        <div className="timeline-handoffCard">
+          <div className="timeline-handoffLabel">Planner</div>
+          <strong>{plannerImportedAt ? `${plannerVariantCount} variants available` : "Awaiting planner sync"}</strong>
+          <div className="small">
+            {plannerImportedAt
+              ? `${plannerSceneCount} scenes in the active variant.`
+              : "Open Workspace or AI Planner Lab to import storyboard and prompt tracks."}
+          </div>
+          <ProgressBar value={plannerImportedAt ? 100 : plannerVariantCount ? 72 : 0} compact />
+        </div>
+        <div className="timeline-handoffCard">
+          <div className="timeline-handoffLabel">Reactive</div>
+          <strong>{reactiveAppliedAt ? `${reactiveCueCount} cues wired` : "Awaiting reactive sync"}</strong>
+          <div className="small">
+            {reactiveAppliedAt
+              ? `${reactiveSectionCount} reactive sections are merged into motion/camera tracks.`
+              : "Open Workspace or Reactive Lab to apply motion schedules and camera data."}
+          </div>
+          <ProgressBar value={reactiveAppliedAt ? 100 : 0} compact />
+        </div>
+      </div>
+      <div className="timeline-inlineActions">
+        <button className="secondary" onClick={() => setDockSection("inspector")}>
+          Open inspector
+        </button>
+        <button className="secondary" onClick={() => clearHandoff()} disabled={!lastHandoff}>
+          Clear notice
+        </button>
+      </div>
+    </div>
+  );
+
   const proxyPanel = (
     <div className="timeline-dockPanel">
       <div className="timeline-panelHeader">
@@ -1742,13 +1848,27 @@ export default function Timeline({}: PageProps) {
         <button className="primary" onClick={generateProxy}>
           Generate
         </button>
-        <button className="secondary" onClick={() => setProxyUrl("")}>
+        <button className="secondary" onClick={() => { setProxyUrl(""); setProxyBusy(false); }}>
           Clear
         </button>
       </div>
+      {proxyBusy ? (
+        <ProgressBar
+          value={68}
+          label="Generating proxy"
+          detail="Waiting for the preview clip to finish writing."
+          compact
+        />
+      ) : null}
       <div className="timeline-monitor timeline-monitor--video">
         {proxyUrl ? (
-          <video src={proxyUrl} controls className="timeline-monitorVideo" />
+          <video
+            src={proxyUrl}
+            controls
+            className="timeline-monitorVideo"
+            onLoadedData={() => setProxyBusy(false)}
+            onError={() => setProxyBusy(false)}
+          />
         ) : (
           <div className="small">No proxy clip generated.</div>
         )}
@@ -1840,13 +1960,27 @@ export default function Timeline({}: PageProps) {
         <button className="primary" onClick={generateDiffusionPreview}>
           Generate
         </button>
-        <button className="secondary" onClick={() => setDiffUrl("")}>
+        <button className="secondary" onClick={() => { setDiffUrl(""); setDiffBusy(false); }}>
           Clear
         </button>
       </div>
+      {diffBusy ? (
+        <ProgressBar
+          value={68}
+          label="Generating diffusion preview"
+          detail="Waiting for the look-dev clip to finish writing."
+          compact
+        />
+      ) : null}
       <div className="timeline-monitor timeline-monitor--video">
         {diffUrl ? (
-          <video src={diffUrl} controls className="timeline-monitorVideo" />
+          <video
+            src={diffUrl}
+            controls
+            className="timeline-monitorVideo"
+            onLoadedData={() => setDiffBusy(false)}
+            onError={() => setDiffBusy(false)}
+          />
         ) : (
           <div className="small">No diffusion preview generated.</div>
         )}
@@ -2033,6 +2167,11 @@ export default function Timeline({}: PageProps) {
 
   const dockTabs: Array<{ id: DockSection; label: string; meta: string }> = [
     {
+      id: "handoffs",
+      label: "Handoffs",
+      meta: `${handoffReadyCount}/2`,
+    },
+    {
       id: "inspector",
       label: "Inspector",
       meta: selected ? selectionStatus : "idle",
@@ -2059,7 +2198,9 @@ export default function Timeline({}: PageProps) {
   ];
 
   const activeDockPanel =
-    dockSection === "proxy"
+    dockSection === "handoffs"
+      ? handoffsPanel
+      : dockSection === "proxy"
       ? proxyPanel
       : dockSection === "diffusion"
         ? diffusionPanel
@@ -2070,6 +2211,36 @@ export default function Timeline({}: PageProps) {
   return (
     <div className="timeline-page" onKeyDown={onKeyDown} tabIndex={0} style={{ outline: "none" }}>
       {pageHeader}
+      <div className="timeline-sessionStrip">
+        <div className="timeline-sessionCard">
+          <div className="timeline-sessionLabel">Shared session</div>
+          <div className="timeline-sessionValue">
+            {project?.name || "No active project"} • {plan?.variants?.[selectedVariant]?.name || `Variant ${selectedVariant + 1}`}
+          </div>
+          <div className="small">
+            Workspace, Timeline, and the standalone labs now follow the same active project and variant.
+          </div>
+        </div>
+        {lastHandoff ? (
+          <div className="timeline-sessionCard timeline-sessionCard--accent">
+            <div className="timeline-sessionLabel">Last handoff</div>
+            <div className="timeline-sessionValue">
+              {lastHandoff.type === "planner" ? "Planner sync" : "Reactive sync"}
+            </div>
+            <div className="small">{lastHandoff.summary}</div>
+          </div>
+        ) : null}
+      </div>
+      {progress.label ? (
+        <div className="card timeline-progressCard">
+          <ProgressBar
+            value={progress.value}
+            label={progress.label}
+            detail={progress.detail}
+            tone={progress.tone}
+          />
+        </div>
+      ) : null}
       {toolbarCard}
       <details className="card timeline-guideCard">
         <summary className="timeline-guideSummary">Quick guide and capabilities</summary>
@@ -2083,14 +2254,16 @@ export default function Timeline({}: PageProps) {
               <div className="guide-kicker">Capabilities</div>
               <ul className="guide-list">
                 <li>Play audio, move the playhead, switch variants, and review timing against the active soundtrack.</li>
-                <li>Zoom with buttons, slider, numeric entry, Fit, or Ctrl/Cmd plus mouse wheel.</li>
-                <li>Use the dock for inspector, proxy renders, look-dev, and motion-curve editing without removing advanced controls.</li>
+                <li>Zoom with buttons, slider, numeric entry, Fit all, or Ctrl/Cmd plus mouse wheel.</li>
+                <li>Switch density between compact and comfortable depending on how many tracks or keyframes you need to see.</li>
+                <li>Use the dock for handoffs, inspector, proxy renders, look-dev, and motion-curve editing without removing advanced controls.</li>
               </ul>
             </section>
             <section className="guide-block">
               <div className="guide-kicker">Recommended flow</div>
               <ul className="guide-list">
-                <li>Start in Fit mode to see the whole arrangement, then zoom into dense sections for clip or keyframe edits.</li>
+                <li>Start in Fit all mode to see the whole arrangement, then zoom into dense sections for clip or keyframe edits.</li>
+                <li>Check the Handoffs tab before editing so planner and reactive sync state is visible without leaving Timeline.</li>
                 <li>Keep the inspector open for clip-level adjustments, and switch to proxy or look-dev when you need validation renders.</li>
                 <li>Use Timeline after Workspace or Storyboard when the plan is ready for precise arrangement and finishing decisions.</li>
               </ul>
