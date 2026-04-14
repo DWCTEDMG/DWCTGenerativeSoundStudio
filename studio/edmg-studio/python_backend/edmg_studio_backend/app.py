@@ -2936,6 +2936,8 @@ def _analysis_summary_text(text: str, segments: list[dict[str, Any]]) -> str:
                 candidates.append(sentence)
             if len(candidates) >= 3:
                 break
+    if not candidates:
+        return "Transcription unavailable. Using audio-only analysis from rhythm, energy, and spectral movement."
     return " ".join(candidates[:3]).strip()
 
 
@@ -3253,6 +3255,33 @@ def _analysis_transcript_sentences(analysis: dict[str, Any]) -> list[str]:
     return [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
 
 
+def _has_usable_transcript(analysis: dict[str, Any]) -> bool:
+    text = _analysis_transcript_text(analysis).strip()
+    if text:
+        return True
+    raw = (analysis or {}).get("transcript")
+    if isinstance(raw, dict) and isinstance(raw.get("segments"), list):
+        return any(str(seg.get("text") or "").strip() for seg in raw.get("segments") if isinstance(seg, dict))
+    return False
+
+
+def _usable_transcript_overlay_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    fallback_prefixes = (
+        "no transcript cue available",
+        "transcription unavailable",
+        "audio-only analysis",
+        "drive the section from the energy arc",
+        "drive the scene from the prompt and energy arc",
+    )
+    if any(lowered.startswith(prefix) for prefix in fallback_prefixes):
+        return ""
+    return text[:180]
+
+
 def _analysis_motifs(variant: dict[str, Any], transcript_text: str, limit: int = 8) -> list[str]:
     feed: list[str] = [transcript_text]
     for scene in list(variant.get("scenes") or []):
@@ -3313,16 +3342,20 @@ def _compute_reactive_params(metrics: dict[str, Any], preset: str, sensitivity: 
     bass = max(0.0, min(1.0, float(metrics.get("bass") or 0.0)))
     mid = max(0.0, min(1.0, float(metrics.get("mid") or 0.0)))
     treble = max(0.0, min(1.0, float(metrics.get("treble") or 0.0)))
+    progress = max(0.0, min(1.0, float(metrics.get("progress") or 0.0)))
+    lateral_phase = math.sin(progress * math.pi * 2.0)
+    vertical_phase = math.cos(progress * math.pi * 1.5)
+    orbit_phase = math.sin(progress * math.pi)
 
     if preset == "psychedelic":
         return {
-            "zoom": 1.0 + math.sin(energy * 9.0) * 0.38 * sens,
-            "rotation_x": energy * sens * 95.0,
-            "rotation_y": bass * sens * 160.0,
-            "rotation_z": treble * sens * 42.0,
-            "translation_x": math.sin(mid * 5.0) * 18.0 * sens,
-            "translation_y": math.cos(treble * 4.0) * 14.0 * sens,
-            "translation_z": -energy * 42.0 * sens,
+            "zoom": 1.0 + (0.08 + energy * 0.16 + orbit_phase * 0.04) * sens,
+            "rotation_x": (energy * 64.0 + vertical_phase * 16.0) * sens,
+            "rotation_y": (bass * 92.0 + lateral_phase * 26.0) * sens,
+            "rotation_z": (treble * 28.0 + lateral_phase * 8.0) * sens,
+            "translation_x": (lateral_phase * (10.0 + bass * 12.0) + math.sin(mid * 6.0) * 6.0) * sens,
+            "translation_y": (vertical_phase * (6.0 + treble * 8.0) + orbit_phase * 4.0) * sens,
+            "translation_z": -(18.0 + energy * 20.0 + bass * 5.0) * sens,
             "cfg_scale": 6.8 + mid * sens * 2.5,
             "strength": 0.56 + treble * sens * 0.22,
             "brightness": 0.48 + mid * sens * 0.36,
@@ -3330,26 +3363,26 @@ def _compute_reactive_params(metrics: dict[str, Any], preset: str, sensitivity: 
         }
     if preset == "ambient":
         return {
-            "zoom": 1.0 + energy * sens * 0.12,
-            "rotation_x": bass * sens * 10.0,
-            "rotation_y": mid * sens * 16.0,
-            "rotation_z": treble * sens * 8.0,
-            "translation_x": math.sin(bass * 4.0) * 12.0 * sens,
-            "translation_y": math.cos(mid * 3.0) * 10.0 * sens,
-            "translation_z": -energy * 12.0 * sens,
+            "zoom": 1.0 + (0.03 + energy * 0.08) * sens,
+            "rotation_x": (bass * 6.0 + vertical_phase * 3.0) * sens,
+            "rotation_y": (mid * 10.0 + lateral_phase * 4.0) * sens,
+            "rotation_z": (treble * 5.0 + orbit_phase * 2.0) * sens,
+            "translation_x": lateral_phase * (4.0 + mid * 5.0) * sens,
+            "translation_y": vertical_phase * (3.0 + treble * 4.0) * sens,
+            "translation_z": -(6.0 + energy * 8.0) * sens,
             "cfg_scale": 6.0 + treble * sens * 1.8,
             "strength": 0.5 + mid * sens * 0.16,
             "brightness": 0.42 + mid * sens * 0.22,
             "contrast": 0.95 + energy * sens * 0.24,
         }
     return {
-        "zoom": 1.0 + energy * sens * 0.28,
-        "rotation_x": mid * sens * 12.0,
-        "rotation_y": math.sin(bass * 4.0) * sens * 34.0,
-        "rotation_z": treble * sens * 10.0,
-        "translation_x": mid * sens * 10.0,
-        "translation_y": treble * sens * 8.0,
-        "translation_z": -energy * sens * 34.0,
+        "zoom": 1.0 + (0.05 + energy * 0.14 + bass * 0.02) * sens,
+        "rotation_x": (mid * 8.0 + vertical_phase * 4.0) * sens,
+        "rotation_y": (math.sin(bass * 4.0) * 16.0 + lateral_phase * 9.0) * sens,
+        "rotation_z": (treble * 7.0 + orbit_phase * 3.5) * sens,
+        "translation_x": (lateral_phase * (6.0 + mid * 8.0 + bass * 5.0)) * sens,
+        "translation_y": (vertical_phase * (3.0 + treble * 5.0)) * sens,
+        "translation_z": -(12.0 + energy * 18.0 + bass * 4.0) * sens,
         "cfg_scale": 7.0 + mid * sens * 2.4,
         "strength": 0.62 + treble * sens * 0.21,
         "brightness": 0.45 + energy * sens * 0.16,
@@ -3369,18 +3402,18 @@ def _creative_energy_label(value: float) -> str:
 
 def _creative_camera_hint(value: float) -> str:
     if value >= 0.82:
-        return "Aggressive push-in, stronger parallax, sharper light contrast, and quicker cut cadence."
+        return "Aggressive push with a lateral sweep, stronger parallax, sharper light contrast, and a quicker axis reset on the cut."
     if value >= 0.64:
-        return "Tracking medium shot with progressive push, controlled drift, and bolder edge lighting."
+        return "Tracking medium shot with progressive push, controlled side travel, and bolder edge lighting around the subject."
     if value >= 0.42:
-        return "Measured dolly or orbit, restrained motion blur, and stable framing for continuity."
-    return "Wide or medium-wide hold, soft drift, longer lens settle, and more negative space."
+        return "Measured dolly, orbit, or lateral pan with restrained motion blur and stable framing for continuity."
+    return "Wide or medium-wide hold with soft side drift, longer lens settle, and more negative space."
 
 
 def _creative_motion_hint(params: dict[str, float]) -> str:
     return (
-        f"Zoom {params['zoom']:.2f}, cfg {params['cfg_scale']:.1f}, strength {params['strength']:.2f}, "
-        f"Z travel {params['translation_z']:.1f}."
+        f"Zoom {params['zoom']:.2f}, pan X {params['translation_x']:.1f}, pan Y {params['translation_y']:.1f}, "
+        f"roll {params['rotation_z']:.1f}, Z travel {params['translation_z']:.1f}, cfg {params['cfg_scale']:.1f}, strength {params['strength']:.2f}."
     )
 
 
@@ -3405,27 +3438,27 @@ def _creative_section_label(index: int, total: int, energy: float, band: str) ->
 def _creative_section_hints(label: str, band: str) -> tuple[str, str]:
     if label == "Drop":
         return (
-            "Fast dolly-in with handheld recovery and sharper light separation.",
-            "Push zoom, stronger negative Z travel, and transient shake accents.",
+            "Fast push with a lateral sweep, foreground occlusion, and sharper light separation.",
+            "Push zoom selectively, extend side travel, and use transient shake accents around impact.",
         )
     if label == "Breath":
         return (
-            "Locked or gently drifting frame with longer lens settle.",
+            "Locked or gently drifting frame with longer lens settle and a soft side drift.",
             "Small XY drift, softer contrast, and more negative space.",
         )
     if band == "treble":
         return (
-            "Lateral glide with highlight streaks and cleaner silhouette edges.",
-            "Particle flicker, quicker spin accents, and brighter edge energy.",
+            "Lateral glide with highlight streaks, cleaner silhouette edges, and subject or light passes across frame.",
+            "Particle flicker, quicker spin accents, and brighter edge energy without losing the camera axis.",
         )
     if band == "bass":
         return (
-            "Low-angle orbit with grounded perspective and denser foreground depth.",
-            "Scale pulses, front-to-back travel, and weighty motion ramps.",
+            "Low-angle arc with grounded perspective, denser foreground depth, and weighty side-to-side travel.",
+            "Scale pulses, front-to-back travel, and weighty motion ramps with occasional lateral shove.",
         )
     return (
-        "Steadicam reveal with measured parallax depth and controlled drift.",
-        "Blend orbit, rise, and moderate contrast ramps for continuity.",
+        "Steadicam reveal with measured parallax depth, a controlled lateral pan, and subtle height changes.",
+        "Blend orbit, rise, and moderate contrast ramps while preserving continuity.",
     )
 
 
@@ -3440,6 +3473,7 @@ def _fallback_scene_metrics(index: int, total: int, overall: dict[str, Any]) -> 
         "treble": max(0.0, min(1.0, float(overall["treble"]) * 0.72 + ratio * 0.18)),
         "duration_s": float(overall.get("duration_s") or 0.0),
         "source": "analysis",
+        "progress": ratio,
     }
 
 
@@ -3521,6 +3555,7 @@ def _derive_reactive_sections(
             "treble": max(0.0, min(1.0, float(overall.get("treble") or 0.0) * 0.82 + ratio * 0.08 + peak_energy * 0.1)),
             "duration_s": max(0.2, (end_idx - start_idx) / max(1.0, total_points) * duration_s),
             "source": "analysis",
+            "progress": ratio,
         }
         params = _compute_reactive_params(metrics, preset, sensitivity)
         camera_hint, motion_hint = _creative_section_hints(label, band)
@@ -3584,6 +3619,7 @@ def _scene_metrics_from_curve(
         "treble": max(0.0, min(1.0, float(overall["treble"]) * 0.78 + ratio * 0.08 + peak * 0.1)),
         "duration_s": max(0.2, end_s - start_s),
         "source": "analysis",
+        "progress": ratio,
     }
 
 
@@ -3617,17 +3653,25 @@ def _build_creative_timeline_patch(
     }
     layers: list[dict[str, Any]] = []
     camera_keyframes: list[dict[str, Any]] = []
+    prev_zoom = 1.0
+    prev_pan_x = 0.0
+    prev_pan_y = 0.0
+    prev_rotation = 0.0
 
     for index, scene in enumerate(packed_scenes):
         start_s = float(scene.get("start_s") or 0.0)
         end_s = max(start_s + 0.2, float(scene.get("end_s") or (start_s + 5.0)))
         params = scene.get("reactive_params") if isinstance(scene.get("reactive_params"), dict) else {}
-        zoom = float(params.get("zoom") or 1.0)
-        zoom_end = zoom + max(0.01, float(scene.get("energy") or 0.0) * 0.04)
+        zoom = float(params.get("zoom") or prev_zoom or 1.0)
+        zoom_start = prev_zoom
+        zoom_end = max(zoom, zoom_start + max(0.01, float(scene.get("energy") or 0.0) * 0.025))
+        pan_x_start = prev_pan_x
+        pan_y_start = prev_pan_y
         pan_x_end = float(params.get("translation_x") or 0.0)
         pan_y_end = float(params.get("translation_y") or 0.0)
-        rotation_start = float(params.get("rotation_z") or 0.0)
-        rotation_end = rotation_start + float(scene.get("energy") or 0.0) * 2.5
+        rotation_target = float(params.get("rotation_z") or 0.0) + float(params.get("rotation_y") or 0.0) * 0.18
+        rotation_start = prev_rotation
+        rotation_end = rotation_target
 
         prompt_track["clips"].append(
             {
@@ -3646,11 +3690,11 @@ def _build_creative_timeline_patch(
                 "start_s": start_s,
                 "end_s": end_s,
                 "data": {
-                    "zoom_start": zoom,
+                    "zoom_start": zoom_start,
                     "zoom_end": zoom_end,
-                    "pan_x_start": 0.0,
+                    "pan_x_start": pan_x_start,
                     "pan_x_end": pan_x_end,
-                    "pan_y_start": 0.0,
+                    "pan_y_start": pan_y_start,
                     "pan_y_end": pan_y_end,
                     "rotation_start": rotation_start,
                     "rotation_end": rotation_end,
@@ -3661,7 +3705,7 @@ def _build_creative_timeline_patch(
             }
         )
 
-        cue_text = str(scene.get("transcript_cue") or scene.get("name") or "").strip()
+        cue_text = _usable_transcript_overlay_text(scene.get("transcript_cue"))
         if cue_text:
             layers.append(
                 {
@@ -3688,9 +3732,9 @@ def _build_creative_timeline_patch(
             [
                 {
                     "t": start_s,
-                    "zoom": zoom,
-                    "pan_x": 0.0,
-                    "pan_y": 0.0,
+                    "zoom": zoom_start,
+                    "pan_x": pan_x_start,
+                    "pan_y": pan_y_start,
                     "rotation_deg": rotation_start,
                 },
                 {
@@ -3702,6 +3746,10 @@ def _build_creative_timeline_patch(
                 },
             ]
         )
+        prev_zoom = zoom_end
+        prev_pan_x = pan_x_end
+        prev_pan_y = pan_y_end
+        prev_rotation = rotation_end
 
     return {
         "ok": bool(packed_scenes),
@@ -3730,6 +3778,10 @@ def _build_creative_deforum_preview(
     zoom_pairs: list[tuple[int, float]] = []
     angle_pairs: list[tuple[int, float]] = []
     translation_pairs: list[tuple[int, float]] = []
+    translation_x_pairs: list[tuple[int, float]] = []
+    translation_y_pairs: list[tuple[int, float]] = []
+    rotation_x_pairs: list[tuple[int, float]] = []
+    rotation_y_pairs: list[tuple[int, float]] = []
     cfg_pairs: list[tuple[int, float]] = []
     strength_pairs: list[tuple[int, float]] = []
     contrast_pairs: list[tuple[int, float]] = []
@@ -3741,13 +3793,21 @@ def _build_creative_deforum_preview(
         prompts[str(start_frame)] = str(scene.get("prompt") or "cinematic").strip() or "cinematic"
         zoom = float(params.get("zoom") or 1.0)
         angle = float(params.get("rotation_y") or params.get("rotation_z") or 0.0)
+        rotation_x = float(params.get("rotation_x") or 0.0)
+        rotation_y = float(params.get("rotation_y") or 0.0)
         translation = float(params.get("translation_z") or 0.0)
+        translation_x = float(params.get("translation_x") or 0.0)
+        translation_y = float(params.get("translation_y") or 0.0)
         cfg = float(params.get("cfg_scale") or 7.0)
         strength = float(params.get("strength") or 0.35)
         contrast = float(params.get("contrast") or 1.0)
         zoom_pairs.extend([(start_frame, zoom), (end_frame, zoom + max(0.01, float(scene.get("energy") or 0.0) * 0.02))])
         angle_pairs.extend([(start_frame, angle), (end_frame, angle + float(scene.get("energy") or 0.0) * 2.0)])
+        rotation_x_pairs.extend([(start_frame, rotation_x), (end_frame, rotation_x)])
+        rotation_y_pairs.extend([(start_frame, rotation_y), (end_frame, rotation_y)])
         translation_pairs.extend([(start_frame, translation), (end_frame, translation - float(scene.get("energy") or 0.0) * 2.0)])
+        translation_x_pairs.extend([(start_frame, translation_x), (end_frame, translation_x)])
+        translation_y_pairs.extend([(start_frame, translation_y), (end_frame, translation_y)])
         cfg_pairs.extend([(start_frame, cfg), (end_frame, cfg)])
         strength_pairs.extend([(start_frame, strength), (end_frame, strength)])
         contrast_pairs.extend([(start_frame, contrast), (end_frame, contrast)])
@@ -3755,6 +3815,10 @@ def _build_creative_deforum_preview(
     schedules = {
         "zoom": _format_schedule_pairs(zoom_pairs) if zoom_pairs else "",
         "angle": _format_schedule_pairs(angle_pairs) if angle_pairs else "",
+        "rotation_3d_x": _format_schedule_pairs(rotation_x_pairs) if rotation_x_pairs else "",
+        "rotation_3d_y": _format_schedule_pairs(rotation_y_pairs) if rotation_y_pairs else "",
+        "translation_x": _format_schedule_pairs(translation_x_pairs) if translation_x_pairs else "",
+        "translation_y": _format_schedule_pairs(translation_y_pairs) if translation_y_pairs else "",
         "translation_z": _format_schedule_pairs(translation_pairs) if translation_pairs else "",
         "cfg_scale_schedule": _format_schedule_pairs(cfg_pairs) if cfg_pairs else "",
         "strength_schedule": _format_schedule_pairs(strength_pairs) if strength_pairs else "",
@@ -3906,6 +3970,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
     hooks = _creative_hooks(transcript_sentences)
     saved_tags = list(analysis.get("tags") or []) if isinstance(analysis, dict) else []
     motifs = list(dict.fromkeys([*saved_tags, *_analysis_motifs(variant if isinstance(variant, dict) else {}, transcript_text)]))[:8]
+    has_transcript = _has_usable_transcript(analysis)
     emotion_tokens = _creative_tokenize(" ".join([transcript_text, *[str(scene.get("prompt") or "") for scene in scenes if isinstance(scene, dict)]]))
     emotions = _creative_emotion_scores(emotion_tokens)
     overall = _infer_reactivity_metrics(analysis if isinstance(analysis, dict) else {})
@@ -3950,7 +4015,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
                 "source": "analysis",
             }
             params = {key: float(value) for key, value in dict(scene.get("reactive_params") or {}).items() if isinstance(value, (int, float))}
-            transcript_cue = str(scene.get("transcript_cue") or "").strip() or "No transcript cue available; drive the section from the energy arc."
+            transcript_cue = str(scene.get("transcript_cue") or "").strip() if has_transcript else ""
             energy_label = str(scene.get("energy_label") or _creative_energy_label(float(metrics["energy"])))
             camera_hint = str(scene.get("camera_hint") or _creative_camera_hint(float(metrics["energy"])))
             motion_hint = str(scene.get("motion_hint") or _creative_motion_hint(params))
@@ -3959,13 +4024,9 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             params = _compute_reactive_params(metrics, preset, sensitivity)
             cue_index = (
                 min(len(transcript_sentences) - 1, int((index / max(1, len(source_scenes) - 1)) * len(transcript_sentences)))
-                if transcript_sentences else -1
+                if transcript_sentences and has_transcript else -1
             )
-            transcript_cue = (
-                transcript_sentences[cue_index]
-                if cue_index >= 0 else
-                "No transcript cue available; drive the scene from the prompt and energy arc."
-            )
+            transcript_cue = transcript_sentences[cue_index] if cue_index >= 0 else ""
             energy_label = _creative_energy_label(float(metrics["energy"]))
             camera_hint = _creative_camera_hint(float(metrics["energy"]))
             motion_hint = _creative_motion_hint(params)
@@ -3994,6 +4055,13 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             if index == 0 else
             f"Continuity: retain the strongest subject and palette cues from scene {index}."
         )
+        audio_anchor = (
+            f"Audio anchor: follow the {energy_label.lower()} section arc with {scene_motifs[0]}."
+            if not transcript_cue and scene_motifs
+            else "Audio anchor: let motion and framing follow the section energy arc."
+            if not transcript_cue
+            else ""
+        )
         prompt_pack = " ".join(
             [
                 prompt,
@@ -4004,6 +4072,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
                 phase_hint,
                 continuity_hint,
                 f"Narrative cue: {transcript_cue}" if transcript_cue else "",
+                audio_anchor,
             ]
         ).strip()
         packed_scenes.append(
@@ -4077,9 +4146,9 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         missing.append("plan")
     ready = bool(packed_scenes or fallback_sections or transcript_text)
     if analysis and scenes:
-        status = "Creative direction is being derived on the backend from the saved project analysis and plan."
+        status = "Creative direction is being derived on the backend from the saved Overview analysis and plan. Planner extends that base, and Reactive Lab can add motion scheduling on top."
     elif analysis and fallback_sections:
-        status = "Plan not found. Using audio-reactive fallback sections derived from saved analysis."
+        status = "Plan not found. Using audio-reactive fallback sections derived from saved Overview analysis."
     elif scenes:
         status = "Audio analysis not found. Using saved plan scenes with narrative fallbacks."
     else:
@@ -4114,6 +4183,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         "notes": [
             "Creative direction now carries audio-reactive sections, timeline patch data, and a Deforum-aligned preview in one Studio-native payload.",
             "Prompt and motion tracks stay in the canonical timeline schema, while lyric cues are translated into compositor text layers.",
+            "Overview analysis remains the canonical source. Planner enriches the storyboard, and Reactive Lab adds motion schedules without replacing the saved story pass.",
         ],
         "status": status,
     }
@@ -4247,6 +4317,119 @@ def _local_plan_from_project(proj: Any, *, title: str, style_prefs: str, num_var
         )
 
     return {"title": title, "duration_s": float(getattr(analysis_obj, "duration", 0.0) or 0.0) or 60.0, "variants": variants, "source": "local"}
+
+
+def _scene_energy_from_analysis(index: int, total: int, analysis: dict[str, Any]) -> float:
+    overall = _infer_reactivity_metrics(analysis if isinstance(analysis, dict) else {})
+    curve = list(overall.get("energy_curve") or [])
+    if curve:
+        pointer = min(len(curve) - 1, max(0, int(round((index / max(1, total - 1)) * (len(curve) - 1)))))
+        try:
+            return max(0.0, min(1.0, float(curve[pointer])))
+        except Exception:
+            pass
+    return max(0.0, min(1.0, 0.3 + (index / max(1, total - 1)) * 0.45 if total > 1 else 0.5))
+
+
+def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
+    plan_out = deepcopy(plan if isinstance(plan, dict) else {})
+    variants = list(plan_out.get("variants") or [])
+    transcript_sentences = _analysis_transcript_sentences(analysis if isinstance(analysis, dict) else {})
+    tags = [str(tag or "").strip() for tag in list((analysis or {}).get("tags") or []) if str(tag or "").strip()]
+    scene_roles = [
+        "opening tableau",
+        "first lift",
+        "world expansion",
+        "pressure turn",
+        "release peak",
+        "afterglow resolve",
+    ]
+    high_energy_moves = [
+        "cross-frame tracking push with the subject moving left-to-right",
+        "decisive lateral sweep through foreground depth",
+        "parallax-heavy drive that resets the camera axis on impact",
+    ]
+    mid_energy_moves = [
+        "measured dolly with lateral travel",
+        "steady side-to-side drift through foreground texture",
+        "motivated pan that follows the subject through the frame",
+    ]
+    low_energy_moves = [
+        "wide hold with a slow pan reveal",
+        "quiet reframing around the subject with soft side drift",
+        "negative-space composition with a restrained lateral glide",
+    ]
+    staging_cues = [
+        "use foreground depth and moving light to keep the frame alive",
+        "let the environment change the camera lane so the section does not repeat the last one",
+        "keep the subject silhouette clear while varying lens distance and frame pressure",
+    ]
+    palette_defaults = [
+        "silver fog and petrol green",
+        "desaturated indigo and moonlit white",
+        "crimson pulse and black chrome",
+        "dusty gold and weathered teal",
+    ]
+    transition_cues = [
+        "bridge into the next beat through motion continuity",
+        "shift the camera lane before the next section lands",
+        "let atmosphere and edge light carry the cut forward",
+        "reset composition pressure on the next downbeat",
+    ]
+
+    for variant_index, raw_variant in enumerate(variants):
+        if not isinstance(raw_variant, dict):
+            continue
+        variant = dict(raw_variant)
+        scenes = list(variant.get("scenes") or [])
+        total = max(1, len(scenes))
+        next_scenes: list[dict[str, Any]] = []
+        for scene_index, raw_scene in enumerate(scenes):
+            if not isinstance(raw_scene, dict):
+                continue
+            scene = dict(raw_scene)
+            role = scene_roles[min(len(scene_roles) - 1, int(round((scene_index / max(1, total - 1)) * (len(scene_roles) - 1))))]
+            energy = _scene_energy_from_analysis(scene_index, total, analysis if isinstance(analysis, dict) else {})
+            motion = (
+                high_energy_moves[(scene_index + variant_index) % len(high_energy_moves)]
+                if energy >= 0.72
+                else mid_energy_moves[(scene_index + variant_index) % len(mid_energy_moves)]
+                if energy >= 0.44
+                else low_energy_moves[(scene_index + variant_index) % len(low_energy_moves)]
+            )
+            staging = staging_cues[(scene_index + variant_index) % len(staging_cues)]
+            cue_index = min(len(transcript_sentences) - 1, scene_index) if transcript_sentences else -1
+            narrative_cue = transcript_sentences[cue_index] if cue_index >= 0 else ""
+            motif_window = list(dict.fromkeys([*tags[scene_index:scene_index + 2], *tags[: max(0, 2 - len(tags[scene_index:scene_index + 2]))]]))[:2]
+            palette_note = motif_window[0] if motif_window else palette_defaults[(scene_index + variant_index) % len(palette_defaults)]
+            continuity = (
+                "continuity: lock the lead subject, palette, and world before introducing stronger motion changes."
+                if scene_index == 0
+                else f"continuity: retain the lead silhouette and {palette_note} palette from scene {scene_index}, but change the camera lane or staging pressure."
+            )
+            additions = [
+                f"section role {role}.",
+                f"camera move {motion}.",
+                f"staging {staging}.",
+                f"palette emphasis {palette_note}.",
+                continuity,
+            ]
+            if motif_window:
+                additions.append(f"scene motifs {', '.join(motif_window)}.")
+            if narrative_cue and narrative_cue.lower() not in str(scene.get('prompt') or '').lower():
+                additions.append(f"narrative cue {narrative_cue}.")
+
+            prompt = str(scene.get("prompt") or "").strip() or "Cinematic image sequence with a coherent subject and controlled atmosphere."
+            scene["prompt"] = " ".join([prompt, *additions]).strip()
+            if not str(scene.get("name") or "").strip() or re.fullmatch(r"scene\s*\d+", str(scene.get("name") or "").strip(), re.IGNORECASE):
+                scene["name"] = role.title()
+            scene["transition"] = str(scene.get("transition") or transition_cues[(scene_index + variant_index) % len(transition_cues)])
+            next_scenes.append(scene)
+        variant["scenes"] = next_scenes
+        variants[variant_index] = variant
+
+    plan_out["variants"] = variants
+    return plan_out
 
 
 def _coerce_scene_time(raw: Any, fallback: float) -> float:
@@ -4559,6 +4742,7 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
             requested_max_scenes=req.max_scenes,
             duration_s_hint=_analysis_duration_s(analysis),
         )
+        plan = _enrich_normalized_plan(plan, analysis if isinstance(analysis, dict) else {})
 
     proj.meta["last_plan"] = plan
     store.save(proj)

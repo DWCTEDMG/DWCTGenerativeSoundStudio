@@ -653,6 +653,22 @@ th {
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+  position: relative;
+  isolation: isolate;
+}
+.workspace-page::before {
+  content: "";
+  position: absolute;
+  inset: -14px;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(4, 12, 16, 0.3) 0%, rgba(4, 12, 16, 0.82) 44%, rgba(4, 12, 16, 0.96) 100%),
+    radial-gradient(circle at 14% 10%, rgba(255, 91, 91, 0.16), transparent 28%),
+    radial-gradient(circle at 78% 12%, rgba(123, 230, 164, 0.14), transparent 24%),
+    url("/workspace-flair.jpg") center/cover no-repeat;
+  opacity: 0.5;
+  filter: saturate(0.9) contrast(1.05);
 }
 .workspace-header {
   display: flex;
@@ -813,7 +829,7 @@ th {
 .workspace-sideCard {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
 }
 .workspace-accordionSection {
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -846,6 +862,42 @@ th {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.workspace-analysisGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.workspace-inlineDetails {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(6, 18, 22, 0.74);
+  overflow: hidden;
+}
+.workspace-inlineDetails summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9fd3ff;
+}
+.workspace-scrollPanel {
+  max-height: 180px;
+  overflow: auto;
+  padding: 0 12px 12px;
+  display: grid;
+  gap: 10px;
+  line-height: 1.5;
+}
+.workspace-scrollPanel p {
+  margin: 0;
+}
+.workspace-chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .workspace-handoffGrid {
   display: grid;
@@ -999,6 +1051,27 @@ th {
   border-radius: 12px;
   padding: 10px 12px;
   background: rgba(7, 18, 22, 0.72);
+}
+.insight-sceneList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.insight-previewText {
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.insight-noteList {
+  display: grid;
+  gap: 6px;
+}
+.insight-details summary {
+  cursor: pointer;
 }
 .workspace-inspectSummary {
   cursor: pointer;
@@ -1690,6 +1763,9 @@ th {
   .insight-grid,
   .insight-meter-grid,
   .insight-params-grid {
+    grid-template-columns: 1fr;
+  }
+  .workspace-analysisGrid {
     grid-template-columns: 1fr;
   }
 }

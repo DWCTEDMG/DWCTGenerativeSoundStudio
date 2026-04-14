@@ -21,7 +21,16 @@ import { ProgressBar } from '../components/ProgressBar';
 
 type MappingPreset = 'cinematic' | 'psychedelic' | 'ambient' | 'percussive';
 type RenderMode = 'smooth' | 'cut-heavy' | 'performance-led' | 'ambient';
-type ScheduleField = 'zoom' | 'rotation_y' | 'rotation_z' | 'translation_z' | 'strength' | 'cfg_scale' | 'brightness';
+type ScheduleField =
+  | 'zoom'
+  | 'rotation_y'
+  | 'rotation_z'
+  | 'translation_x'
+  | 'translation_y'
+  | 'translation_z'
+  | 'strength'
+  | 'cfg_scale'
+  | 'brightness';
 
 type ParameterScaling = { zoom: number; rotation: number; translation: number; color: number };
 type ReactiveParams = {
@@ -261,49 +270,54 @@ function mapMetricsToParams(metrics: AudioMetrics, preset: MappingPreset, sensit
   const { energy, bass, mid, treble } = metrics;
   const wobble = Math.sin(time * 1.5);
   const pulse = Math.sin(time * 3.2);
+  const sweep = Math.sin(time * 0.82);
+  const lift = Math.cos(time * 0.61);
   const sens = sensitivity;
   const next: ReactiveParams = { ...DEFAULT_PARAMS, energy_level: energy, bass_intensity: bass, mid_intensity: mid, treble_intensity: treble };
 
   switch (preset) {
     case 'cinematic':
-      next.zoom = 1 + energy * sens * 0.28 * scaling.zoom;
-      next.rotation_y = wobble * bass * sens * 32 * scaling.rotation;
-      next.translation_z = -energy * sens * 42 * scaling.translation;
-      next.translation_x = Math.sin(time * 0.75) * bass * sens * 8 * scaling.translation;
+      next.zoom = 1 + (0.04 + energy * 0.16 + bass * 0.02) * sens * scaling.zoom;
+      next.rotation_y = (wobble * bass * 18 + sweep * 7) * sens * scaling.rotation;
+      next.rotation_z = sweep * treble * 5 * sens * scaling.rotation;
+      next.translation_z = -(12 + energy * 20 + bass * 4) * sens * scaling.translation;
+      next.translation_x = sweep * (8 + bass * 10 + mid * 6) * sens * scaling.translation;
+      next.translation_y = lift * (3 + treble * 5) * sens * scaling.translation;
       next.cfg_scale = 6.8 + mid * sens * 2.4;
       next.strength = clamp(0.6 + treble * sens * 0.2, 0.45, 0.92);
       next.brightness = clamp(0.48 + energy * 0.25 * scaling.color, 0.2, 1.4);
       next.contrast = clamp(0.95 + dynamicColorSwing(bass, treble) * 0.3 * scaling.color, 0.6, 1.65);
       break;
     case 'psychedelic':
-      next.zoom = 1 + (bass * 0.18 + treble * 0.22) * sens * scaling.zoom;
+      next.zoom = 1 + (0.06 + bass * 0.12 + treble * 0.14) * sens * scaling.zoom;
       next.rotation_z = pulse * (treble * 42 + bass * 18) * sens * scaling.rotation;
       next.rotation_x = wobble * mid * sens * 24 * scaling.rotation;
-      next.translation_x = Math.sin(time * 2.3) * energy * sens * 16 * scaling.translation;
-      next.translation_y = Math.cos(time * 1.8) * treble * sens * 12 * scaling.translation;
-      next.translation_z = -mid * sens * 24 * scaling.translation;
+      next.translation_x = Math.sin(time * 2.3) * (12 + energy * 12) * sens * scaling.translation;
+      next.translation_y = Math.cos(time * 1.8) * (8 + treble * 10) * sens * scaling.translation;
+      next.translation_z = -(10 + mid * 16) * sens * scaling.translation;
       next.cfg_scale = 8 + treble * sens * 2;
       next.strength = clamp(0.64 + energy * 0.22, 0.45, 0.95);
       next.brightness = clamp(0.42 + treble * 0.42 * scaling.color, 0.15, 1.6);
       next.contrast = clamp(1 + bass * 0.35 * scaling.color, 0.7, 1.8);
       break;
     case 'ambient':
-      next.zoom = 1 + mid * sens * 0.12 * scaling.zoom;
-      next.rotation_x = Math.sin(time * 0.55) * bass * sens * 10 * scaling.rotation;
-      next.rotation_y = Math.cos(time * 0.45) * mid * sens * 10 * scaling.rotation;
-      next.translation_y = Math.sin(time * 0.6) * energy * sens * 10 * scaling.translation;
-      next.translation_z = -energy * sens * 14 * scaling.translation;
+      next.zoom = 1 + (0.02 + mid * 0.08) * sens * scaling.zoom;
+      next.rotation_x = Math.sin(time * 0.55) * bass * sens * 8 * scaling.rotation;
+      next.rotation_y = Math.cos(time * 0.45) * mid * sens * 8 * scaling.rotation;
+      next.translation_x = sweep * (4 + mid * 4) * sens * scaling.translation;
+      next.translation_y = Math.sin(time * 0.6) * (3 + energy * 6) * sens * scaling.translation;
+      next.translation_z = -(6 + energy * 8) * sens * scaling.translation;
       next.cfg_scale = 6.2 + mid * 1.3 * sens;
       next.strength = clamp(0.5 + energy * 0.16, 0.38, 0.82);
       next.brightness = clamp(0.5 + mid * 0.18 * scaling.color, 0.2, 1.25);
       next.contrast = clamp(0.9 + bass * 0.16 * scaling.color, 0.65, 1.35);
       break;
     case 'percussive':
-      next.zoom = 1 + bass * sens * 0.36 * scaling.zoom;
+      next.zoom = 1 + (0.05 + bass * 0.18) * sens * scaling.zoom;
       next.rotation_z = pulse * bass * sens * 20 * scaling.rotation;
-      next.translation_x = (bass - 0.5) * sens * 22 * scaling.translation;
-      next.translation_y = (treble - 0.5) * sens * 16 * scaling.translation;
-      next.translation_z = -energy * sens * 30 * scaling.translation;
+      next.translation_x = (sweep * 10 + (bass - 0.5) * 18) * sens * scaling.translation;
+      next.translation_y = (lift * 6 + (treble - 0.5) * 10) * sens * scaling.translation;
+      next.translation_z = -(10 + energy * 16) * sens * scaling.translation;
       next.cfg_scale = 7.4 + treble * sens * 1.6;
       next.strength = clamp(0.62 + bass * 0.2, 0.45, 0.92);
       next.brightness = clamp(0.48 + treble * 0.24 * scaling.color, 0.22, 1.35);
@@ -375,7 +389,7 @@ function buildRepairSuggestions(sections: SectionSummary[]): RepairSuggestion[] 
     id: section.id,
     sectionId: section.id,
     issue: section.avgEnergy > 0.78 ? 'Potential over-aggressive motion or unstable transitions.' : section.avgEnergy < 0.28 ? 'Potentially under-animated section that may feel flat.' : 'Section may need tighter continuity between cues.',
-    action: section.avgEnergy > 0.78 ? 'Lower zoom/rotation scaling, increase smoothing, and preserve camera direction across nearby cuts.' : section.avgEnergy < 0.28 ? 'Increase zoom and brightness bias slightly, or introduce a controlled orbit cue.' : 'Preserve motif continuity and soften abrupt cue changes at the section boundary.',
+    action: section.avgEnergy > 0.78 ? 'Lower zoom and rotation scaling, keep the lateral pan direction stable across nearby cuts, and smooth abrupt direction flips.' : section.avgEnergy < 0.28 ? 'Increase side-to-side drift, brighten the section slightly, or introduce a controlled sweep cue instead of a static hold.' : 'Preserve motif continuity, soften abrupt cue changes at the section boundary, and keep camera travel coherent from one section to the next.',
   }));
 }
 
@@ -388,6 +402,8 @@ function buildSchedules(keyframes: Keyframe[]): Record<ScheduleField, string> {
     zoom: buildSchedule(keyframes, (params) => params.zoom),
     rotation_y: buildSchedule(keyframes, (params) => params.rotation_y),
     rotation_z: buildSchedule(keyframes, (params) => params.rotation_z),
+    translation_x: buildSchedule(keyframes, (params) => params.translation_x),
+    translation_y: buildSchedule(keyframes, (params) => params.translation_y),
     translation_z: buildSchedule(keyframes, (params) => params.translation_z),
     strength: buildSchedule(keyframes, (params) => params.strength),
     cfg_scale: buildSchedule(keyframes, (params) => params.cfg_scale),
@@ -415,6 +431,8 @@ function buildSparseSchedules(schedules: Record<ScheduleField, string>, stride: 
     zoom: sparseSchedule(schedules.zoom, stride),
     rotation_y: sparseSchedule(schedules.rotation_y, stride),
     rotation_z: sparseSchedule(schedules.rotation_z, stride),
+    translation_x: sparseSchedule(schedules.translation_x, stride),
+    translation_y: sparseSchedule(schedules.translation_y, stride),
     translation_z: sparseSchedule(schedules.translation_z, stride),
     strength: sparseSchedule(schedules.strength, stride),
     cfg_scale: sparseSchedule(schedules.cfg_scale, stride),
@@ -440,7 +458,7 @@ function buildRenderHandoffManifest(args: {
     schedules,
     modelHints: {
       executionPriority: renderMode === 'cut-heavy' ? 'render section previews first, then commit only approved peaks' : 'render approved sections in chronological order',
-      continuityPriority: 'carry camera direction and palette rules through adjacent approved sections',
+      continuityPriority: 'carry camera direction, lateral sweep intent, and palette rules through adjacent approved sections',
       fallbackAction: 'if a section fails, rerender only the flagged section using its repair suggestion and keep neighboring seeds stable',
     },
   };
@@ -678,6 +696,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
       avgTreble: averageMetric(activeKeyframes, (frame) => frame.metrics.treble),
       maxZoom: Math.max(...activeKeyframes.map((frame) => frame.params.zoom)),
       maxRotation: Math.max(...activeKeyframes.map((frame) => Math.abs(frame.params.rotation_y))),
+      maxPan: Math.max(...activeKeyframes.map((frame) => Math.max(Math.abs(frame.params.translation_x), Math.abs(frame.params.translation_y)))),
     };
   }, [activeKeyframes]);
 
@@ -920,7 +939,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
       setStudioSyncMessage(
         typeof result === 'string' && result.trim()
           ? result
-          : `Synced reactive schedules into ${studioProjectName || 'the selected Studio project'} and updated the internal renderer motion/camera timeline.`,
+          : `Layered reactive schedules into ${studioProjectName || 'the selected Studio project'} and updated the internal renderer motion/camera timeline without replacing the saved story pass.`,
       );
     } catch (caught) {
       setStudioSyncError(caught instanceof Error ? caught.message : 'Could not sync the reactive lab output into Studio.');
@@ -932,7 +951,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   const exportCsv = (): void => {
     if (!activeKeyframes.length) return;
     const rows = [
-      ['frame', 'time', 'energy', 'bass', 'mid', 'treble', 'zoom', 'rotation_y', 'rotation_z', 'translation_z', 'strength', 'cfg_scale', 'brightness'].join(','),
+      ['frame', 'time', 'energy', 'bass', 'mid', 'treble', 'zoom', 'rotation_y', 'rotation_z', 'translation_x', 'translation_y', 'translation_z', 'strength', 'cfg_scale', 'brightness'].join(','),
       ...activeKeyframes.map((frame) =>
         [
           frame.frame,
@@ -944,6 +963,8 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
           frame.params.zoom.toFixed(4),
           frame.params.rotation_y.toFixed(4),
           frame.params.rotation_z.toFixed(4),
+          frame.params.translation_x.toFixed(4),
+          frame.params.translation_y.toFixed(4),
           frame.params.translation_z.toFixed(4),
           frame.params.strength.toFixed(4),
           frame.params.cfg_scale.toFixed(4),
@@ -1037,7 +1058,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
             <div>
               <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-cyan-500/15 px-3 py-1 text-sm font-medium text-cyan-300"><Waves size={16} />AI-directed reactive scheduling</div>
               <h1 className={titleClassName}>Audio Reactive Generator</h1>
-              <p className="mt-3 max-w-3xl text-slate-300">This tool treats AI-like orchestration as the planner and the schedule generator as the executor: it extracts cues, sections, repair suggestions, and export-ready schedules — then you approve the parts worth rendering.</p>
+              <p className="mt-3 max-w-3xl text-slate-300">This tool takes the saved Overview and Planner story pass, then adds motion scheduling on top: cues, sections, camera travel, and export-ready schedules that you can approve without replacing the underlying storyboard.</p>
             </div>
             <div className="flex flex-wrap gap-3">
               <button onClick={exportBundle} disabled={!activeKeyframes.length} className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"><Download size={16} />Export JSON bundle</button>
@@ -1139,7 +1160,8 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
               <canvas ref={canvasRef} width={900} height={300} className="h-72 w-full rounded-2xl bg-black/40" />
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-2xl bg-black/20 p-3"><div className="text-xs text-slate-400">Zoom</div><div className="text-xl font-semibold">{reactiveParams.zoom.toFixed(3)}</div></div>
-                <div className="rounded-2xl bg-black/20 p-3"><div className="text-xs text-slate-400">Rotation Y</div><div className="text-xl font-semibold">{reactiveParams.rotation_y.toFixed(1)}°</div></div>
+                <div className="rounded-2xl bg-black/20 p-3"><div className="text-xs text-slate-400">Pan X</div><div className="text-xl font-semibold">{reactiveParams.translation_x.toFixed(1)}</div></div>
+                <div className="rounded-2xl bg-black/20 p-3"><div className="text-xs text-slate-400">Pan Y</div><div className="text-xl font-semibold">{reactiveParams.translation_y.toFixed(1)}</div></div>
                 <div className="rounded-2xl bg-black/20 p-3"><div className="text-xs text-slate-400">Strength</div><div className="text-xl font-semibold">{reactiveParams.strength.toFixed(3)}</div></div>
                 <div className="rounded-2xl bg-black/20 p-3"><div className="text-xs text-slate-400">Frame</div><div className="text-xl font-semibold">{currentFrame}</div></div>
               </div>
@@ -1167,6 +1189,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
                   <div className="rounded-2xl bg-black/20 p-4"><div className="text-xs text-slate-400">Avg bass</div><div className="text-2xl font-semibold">{summaryStats.avgBass.toFixed(3)}</div></div>
                   <div className="rounded-2xl bg-black/20 p-4"><div className="text-xs text-slate-400">Peak zoom</div><div className="text-2xl font-semibold">{summaryStats.maxZoom.toFixed(3)}</div></div>
                   <div className="rounded-2xl bg-black/20 p-4"><div className="text-xs text-slate-400">Peak rotation</div><div className="text-2xl font-semibold">{summaryStats.maxRotation.toFixed(1)}°</div></div>
+                  <div className="rounded-2xl bg-black/20 p-4"><div className="text-xs text-slate-400">Peak pan</div><div className="text-2xl font-semibold">{summaryStats.maxPan.toFixed(1)}</div></div>
                 </div>
               ) : <div className="rounded-2xl bg-black/20 p-4 text-sm text-slate-400">Play live audio or build an offline schedule to populate stats.</div>}
             </div>
@@ -1182,7 +1205,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div><div className="text-lg font-semibold">Schedule preview</div><div className="text-xs text-slate-400">Preview is stride-compressed using {scheduleStride}.</div></div>
                 <div className="flex flex-wrap gap-2">
-                  <select value={selectedSchedule} onChange={(e) => setSelectedSchedule(e.target.value as ScheduleField)} className="rounded-xl border border-white/15 bg-slate-900 px-3 py-2 text-sm"><option value="zoom">Zoom</option><option value="rotation_y">Rotation Y</option><option value="rotation_z">Rotation Z</option><option value="translation_z">Translation Z</option><option value="strength">Strength</option><option value="cfg_scale">CFG scale</option><option value="brightness">Brightness</option></select>
+                  <select value={selectedSchedule} onChange={(e) => setSelectedSchedule(e.target.value as ScheduleField)} className="rounded-xl border border-white/15 bg-slate-900 px-3 py-2 text-sm"><option value="zoom">Zoom</option><option value="rotation_y">Rotation Y</option><option value="rotation_z">Rotation Z</option><option value="translation_x">Pan X</option><option value="translation_y">Pan Y</option><option value="translation_z">Translation Z</option><option value="strength">Strength</option><option value="cfg_scale">CFG scale</option><option value="brightness">Brightness</option></select>
                   <button onClick={() => void copySchedulePreview()} disabled={!schedulePreview} className="rounded-xl border border-white/15 px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"><Copy className="mr-2 inline" size={14} />{copiedSchedule ? 'Copied' : 'Copy'}</button>
                 </div>
               </div>

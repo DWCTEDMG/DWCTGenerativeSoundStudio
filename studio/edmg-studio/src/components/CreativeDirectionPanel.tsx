@@ -99,6 +99,20 @@ function prettyJson(value: any) {
   return JSON.stringify(value ?? {}, null, 2);
 }
 
+const TRANSCRIPT_FALLBACK_PREFIXES = [
+  "no transcript cue available",
+  "transcription unavailable",
+  "audio-only analysis",
+  "transcription not enabled",
+];
+
+function usableTranscriptCue(value: string | null | undefined) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const lowered = text.toLowerCase();
+  return TRANSCRIPT_FALLBACK_PREFIXES.some((prefix) => lowered.startsWith(prefix)) ? "" : text;
+}
+
 function Meter({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
     <div className="insight-meter">
@@ -178,6 +192,8 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
   const hooks = payload?.narrative_analysis?.hooks || [];
   const emotions = payload?.narrative_analysis?.emotions || [];
   const missing = payload?.missing || [];
+  const transcriptAnchor = usableTranscriptCue(payload?.transcript_summary || payload?.transcript_text || "");
+  const transcriptDriven = Boolean(usableTranscriptCue(payload?.transcript_text));
 
   const previewText = useMemo(() => {
     if (!payload) {
@@ -355,12 +371,15 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
 
           {payload?.transcript_summary ? (
             <div className="insight-callout" style={{ marginTop: 10 }}>
-              <div className="small" style={{ fontWeight: 900 }}>Transcript anchor</div>
-              <div style={{ marginTop: 6 }}>{payload.transcript_summary}</div>
+              <div className="row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                <div className="small" style={{ fontWeight: 900 }}>{transcriptDriven ? "Transcript anchor" : "Audio analysis anchor"}</div>
+                <span className="badge">{transcriptDriven ? "lyric-driven" : "audio-driven"}</span>
+              </div>
+              <div style={{ marginTop: 6 }}>{transcriptAnchor || payload.transcript_summary}</div>
             </div>
           ) : null}
 
-          <div style={{ marginTop: 12 }}>
+          <div className="insight-sceneList" style={{ marginTop: 12 }}>
             {payload?.scenes?.length ? payload.scenes.map((scene) => (
               <div key={`${scene.index}-${scene.name}`} className="insight-scene-card">
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
@@ -371,7 +390,11 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
                   <div className="badge">{Math.round(scene.energy * 100)}% energy</div>
                 </div>
                 <div style={{ marginTop: 8 }}><strong>Base prompt:</strong> {scene.prompt}</div>
-                <div className="small" style={{ marginTop: 6 }}><strong>Transcript cue:</strong> {scene.transcript_cue}</div>
+                {usableTranscriptCue(scene.transcript_cue) ? (
+                  <div className="small" style={{ marginTop: 6 }}><strong>Transcript cue:</strong> {usableTranscriptCue(scene.transcript_cue)}</div>
+                ) : (
+                  <div className="small" style={{ marginTop: 6 }}><strong>Audio cue:</strong> This section is being driven by energy, continuity, and motion design rather than a transcript line.</div>
+                )}
                 <div className="small" style={{ marginTop: 6 }}><strong>Camera:</strong> {scene.camera_hint}</div>
                 <div className="small" style={{ marginTop: 6 }}><strong>Motion:</strong> {scene.motion_hint}</div>
               </div>
@@ -382,7 +405,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
             )}
           </div>
 
-          <details style={{ marginTop: 12 }} open={!compact}>
+          <details className="insight-details" style={{ marginTop: 12 }} open={!compact}>
             <summary style={{ cursor: "pointer", fontWeight: 800 }}>Exports and previews</summary>
             <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
               {(Object.keys(PREVIEW_LABELS) as PreviewTab[]).map((key) => (
@@ -400,12 +423,13 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
               {PREVIEW_HELP[preview]}
             </div>
             <textarea
+              className="insight-previewText"
               readOnly
               value={previewText}
               style={{ marginTop: 10, minHeight: compact ? 160 : 240 }}
             />
             {payload?.notes?.length ? (
-              <div style={{ marginTop: 10 }}>
+              <div className="insight-noteList" style={{ marginTop: 10 }}>
                 {payload.notes.map((note, index) => (
                   <div key={index} className="small">{note}</div>
                 ))}

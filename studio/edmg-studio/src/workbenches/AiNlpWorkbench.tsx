@@ -181,32 +181,32 @@ const AudioContextCtor: typeof AudioContext | undefined =
 
 const STYLE_PRESETS: Record<PromptStyle, { camera: string[]; lighting: string[]; finish: string[]; edit: string[]; shotTypes: string[] }> = {
   cinematic: {
-    camera: ['anamorphic lens language', 'patient dolly glide', 'crane reveal', 'measured close-up framing'],
+    camera: ['anamorphic lens language', 'patient dolly glide', 'crane reveal', 'measured close-up framing', 'lateral tracking sweep', 'foreground parallax pan'],
     lighting: ['soft rim light', 'motivated practicals', 'twilight contrast', 'volumetric haze'],
     finish: ['35mm texture', 'filmic contrast', 'premium color separation', 'shallow depth of field'],
     edit: ['long dissolves', 'measured rhythm', 'impact cut on musical lift', 'emotional crescendo'],
-    shotTypes: ['wide establishing shot', 'hero medium shot', 'slow profile close-up', 'atmospheric insert'],
+    shotTypes: ['wide establishing shot', 'hero medium shot', 'slow profile close-up', 'atmospheric insert', 'tracking side profile', 'foreground silhouette reveal'],
   },
   'music-video': {
-    camera: ['kinetic handheld drift', 'flash-frame insert', 'snap zoom accent', 'performance-led orbit move'],
+    camera: ['kinetic handheld drift', 'flash-frame insert', 'snap zoom accent', 'performance-led orbit move', 'cross-frame tracking push', 'stage-width lateral whip'],
     lighting: ['pulse-synced practicals', 'neon spill', 'concert backlight', 'color-shifted haze'],
     finish: ['glossy editorial polish', 'high-energy contrast', 'stylized glow', 'dense color hits'],
     edit: ['beat-synced cuts', 'speed-ramped accents', 'performance and texture intercuts', 'section-based escalation'],
-    shotTypes: ['performance close-up', 'choreography wide', 'tracking side profile', 'texture insert'],
+    shotTypes: ['performance close-up', 'choreography wide', 'tracking side profile', 'texture insert', 'crowd-through tracking shot', 'hero run-and-pan frame'],
   },
   experimental: {
-    camera: ['rotational drift', 'macro abstraction', 'surreal push-in', 'fractured perspective'],
+    camera: ['rotational drift', 'macro abstraction', 'surreal push-in', 'fractured perspective', 'lateral smear pass', 'off-axis reveal'],
     lighting: ['spectral wash', 'overexposed edge light', 'color-separated shadows', 'strobing silhouettes'],
     finish: ['mixed-media texture', 'dream logic grade', 'painterly distortions', 'hallucinatory overlays'],
     edit: ['jump-cut discontinuity', 'memory-smear transitions', 'layered recursion', 'collapse and rebuild'],
-    shotTypes: ['abstract macro', 'surreal tableau', 'collision of forms', 'impossible perspective'],
+    shotTypes: ['abstract macro', 'surreal tableau', 'collision of forms', 'impossible perspective', 'through-the-glass profile', 'split-depth insert'],
   },
   documentary: {
-    camera: ['observational handheld frame', 'eye-level patience', 'walking follow shot', 'natural portrait coverage'],
+    camera: ['observational handheld frame', 'eye-level patience', 'walking follow shot', 'natural portrait coverage', 'measured side walk-by', 'quiet shoulder-level pan'],
     lighting: ['window-lit realism', 'practical ambient glow', 'overcast daylight', 'available light texture'],
     finish: ['grounded realism', 'honest grain', 'natural color science', 'minimal post stylization'],
     edit: ['chronological assembly', 'reaction inserts', 'location transitions', 'restraint before climax'],
-    shotTypes: ['observational wide', 'intimate portrait', 'detail cutaway', 'walking follow shot'],
+    shotTypes: ['observational wide', 'intimate portrait', 'detail cutaway', 'walking follow shot', 'street-side profile', 'environmental reaction insert'],
   },
 };
 
@@ -558,6 +558,36 @@ function buildVariants(baseText: string): PromptVariant[] {
   ];
 }
 
+function choosePlannerShotType(preset: typeof STYLE_PRESETS[PromptStyle], index: number, energy: number): string {
+  if (energy > 0.76) {
+    const options = ['tracking side profile', 'hero medium tracking shot', 'cross-frame performance wide', 'foreground wipe reveal'];
+    return options[index % options.length];
+  }
+  if (energy < 0.34) {
+    const options = ['wide atmospheric hold', 'slow profile close-up', 'negative-space portrait', 'reflection-led insert'];
+    return options[index % options.length];
+  }
+  return preset.shotTypes[index % preset.shotTypes.length];
+}
+
+function choosePlannerMovement(direction: CreativeDirection, index: number, energy: number): string {
+  const base = direction.cameraLanguage[index % direction.cameraLanguage.length];
+  const overlays =
+    energy > 0.78
+      ? ['subject crossing frame left-to-right', 'decisive lateral pan reset', 'faster parallax sweep through foreground elements']
+      : energy > 0.56
+      ? ['measured left-to-right travel', 'steady camera drift with environmental parallax', 'motivated subject movement through the frame']
+      : ['soft side drift', 'quiet reframing around the subject', 'gentle pan reveal with stable axis'];
+  return `${base}, ${overlays[index % overlays.length]}`;
+}
+
+function choosePlannerTransitionCue(index: number, total: number, energy: number): string {
+  if (index === total - 1) return 'resolve into a held afterglow frame or a final drift-out with clean motion settle';
+  if (energy > 0.78) return 'cut on impact, then reset the camera axis with a new lateral shove into the next beat';
+  if (energy > 0.56) return 'bridge through motion continuity and let the subject or light source travel across frame into the next beat';
+  return 'bleed through atmosphere, reflection, or a gentle pan continuation before the next section arrives';
+}
+
 function buildRenderManifest(planScenes: PromptScene[], target: PromptTarget, aspectRatio: AspectRatio): RenderManifest {
   const approvedSceneIds = planScenes.filter((scene) => scene.approved).map((scene) => scene.id);
   const rerenderSceneIds = planScenes.filter((scene) => scene.score.overall < 0.64 && !scene.approved).map((scene) => scene.id);
@@ -622,8 +652,8 @@ function buildOrchestrationPlan(args: {
       const pointer = (index * 2 + offset) % Math.max(1, imageryPool.length);
       return imageryPool[pointer];
     }).filter(Boolean);
-    const shotType = preset.shotTypes[index % preset.shotTypes.length];
-    const movement = direction.cameraLanguage[index % direction.cameraLanguage.length];
+    const shotType = choosePlannerShotType(preset, index, segment.energy);
+    const movement = choosePlannerMovement(direction, index, segment.energy);
     const lighting = direction.lightingLanguage[index % direction.lightingLanguage.length];
     const finish = finishCycle[index % finishCycle.length] ?? preset.finish[0];
     const editLanguage = editCycle[index % editCycle.length] ?? preset.edit[0];
@@ -631,18 +661,17 @@ function buildOrchestrationPlan(args: {
     const paletteLead = paletteCycle[index % Math.max(1, paletteCycle.length)] ?? 'neutral steel';
     const paletteSupport = paletteCycle[(index + 1) % Math.max(1, paletteCycle.length)] ?? paletteLead;
     const phase = phaseLabels[Math.min(phaseLabels.length - 1, Math.floor((index / Math.max(1, selectedSegments.length - 1)) * (phaseLabels.length - 1)))];
+    const compositionCue =
+      segment.energy > 0.76
+        ? ['foreground elements streaking by', 'light sources crossing behind the subject', 'camera axis resetting as the beat lands'][index % 3]
+        : segment.energy > 0.5
+        ? ['clear subject silhouette against moving texture', 'parallax depth through environmental layers', 'controlled movement from one edge of frame to the other'][index % 3]
+        : ['negative space holding around the subject', 'slow environmental drift in the background', 'quiet reveal from shadow into the frame'][index % 3];
     const continuityNote =
       index === 0
         ? 'lock the lead subject, palette, and spatial world before introducing stronger motion changes'
-        : `carry the lead silhouette and ${paletteLead} palette from scene ${index}, but shift the framing intent and environment texture`;
-    const transitionCue =
-      index === selectedSegments.length - 1
-        ? 'resolve into a held release image or afterglow frame'
-        : segment.energy > 0.76
-        ? 'cut on the downbeat with a decisive contrast change'
-        : segment.energy > 0.54
-        ? 'let motion and edit rhythm bridge into the next beat'
-        : 'bleed through atmosphere, motion blur, or a light-leak dissolve';
+        : `carry the lead silhouette and ${paletteLead} palette from scene ${index}, but change the camera lane, composition pressure, or environment texture so the section does not repeat`;
+    const transitionCue = choosePlannerTransitionCue(index, selectedSegments.length, segment.energy);
     const hookReference =
       index === 0
         ? `Narrative anchor: ${analysis.hookLine}.`
@@ -650,8 +679,8 @@ function buildOrchestrationPlan(args: {
         ? `Land the sequence back on ${analysis.hookLine}.`
         : '';
     const text = [
-      `${shotType}, ${movement}, ${subjectFocus || 'magnetic lead performer'} staged as a ${phase} around ${imagery.join(', ') || 'a controlled visual world'}.`,
-      `${lighting}, ${finish}, editing energy guided by ${editLanguage}, palette emphasis on ${paletteLead}${paletteSupport && paletteSupport !== paletteLead ? ` with ${paletteSupport} support` : ''}, theme focus ${theme}.`,
+      `${shotType}, ${movement}, ${subjectFocus || 'magnetic lead performer'} staged as a ${phase} around ${imagery.join(', ') || 'a controlled visual world'}, with ${compositionCue}.`,
+      `${lighting}, ${finish}, editing energy guided by ${editLanguage}, palette emphasis on ${paletteLead}${paletteSupport && paletteSupport !== paletteLead ? ` with ${paletteSupport} support` : ''}, theme focus ${theme}, and camera behavior that favors coherent lateral travel over repetitive zooming.`,
       `Segment ${segment.segment} plays as ${segment.sentiment} with ${segment.energyLabel} energy; ${detailText}; ${platformHint}; aspect ratio ${aspectRatio}.`,
       creativeBrief || 'Keep the sequence emotionally legible and visually escalating.',
       continuityNote,
@@ -666,7 +695,7 @@ function buildOrchestrationPlan(args: {
       segment: segment.segment,
       text,
       negativePrompt,
-      rationale: `Uses ${imagery[0] ?? 'primary imagery'} to express ${segment.sentiment} while the ${movement} camera move keeps the section distinct from adjacent beats.`,
+      rationale: `Uses ${imagery[0] ?? 'primary imagery'} to express ${segment.sentiment} while the ${movement} camera move and ${compositionCue} keep the section distinct from adjacent beats.`,
       shotType,
       transitionCue,
       continuityNote,
@@ -684,7 +713,7 @@ function buildOrchestrationPlan(args: {
     endTime: formatClock(selectedSegments[index].endSeconds),
     sectionLabel: selectedSegments[index].sentiment,
     shotType: scene.shotType,
-    movement: direction.cameraLanguage[index % direction.cameraLanguage.length],
+    movement: choosePlannerMovement(direction, index, selectedSegments[index].energy),
     locationHint: imageryPool[index % Math.max(1, imageryPool.length)] ?? 'minimal stage space',
     transitionCue: scene.transitionCue,
     continuityNote: index === 0 ? 'lock character, palette, and environment for recall' : `carry forward ${paletteCycle[index % Math.max(1, paletteCycle.length)] ?? 'the lead palette'} and the subject silhouette`,

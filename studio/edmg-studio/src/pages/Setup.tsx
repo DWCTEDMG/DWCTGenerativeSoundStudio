@@ -661,6 +661,18 @@ async function run(action: string, path: string, body: any = {}) {
           <div className="small" style={{ marginTop: 6 }}>
             Studio's internal renderer is the default path. EDMG can also talk to ComfyUI at <code>{status?.comfyui?.url ?? "http://127.0.0.1:8188"}</code> when you want alternate still or motion workflows.
           </div>
+          <div className="small" style={{ marginTop: 10, opacity: 0.92 }}>
+            To make ComfyUI actually show up inside Studio, four things have to line up in order:
+          </div>
+          <ol className="small" style={{ marginTop: 8, paddingLeft: 18, display: "grid", gap: 6, opacity: 0.9 }}>
+            <li>Setup must install or point Studio at a live ComfyUI server.</li>
+            <li>Models must include a checkpoint or workflow family that uses the <code>ComfyUI</code> engine rather than the internal engine.</li>
+            <li>Render or Timeline only exposes ComfyUI-specific paths when that ComfyUI model is selected for the job.</li>
+            <li>If nothing changes in Render, the usual cause is that ComfyUI is not running, the selected model is still an internal model, or the required workflow or ControlNet assets are not installed yet.</li>
+          </ol>
+          <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+            In other words, installing ComfyUI alone does not switch the product over. It only adds an alternate engine path that becomes available when the active render model is ComfyUI-backed.
+          </div>
           {!isWindows ? (
             <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
               Linux support uses a manually installed ComfyUI instance. Start it yourself only if you want those optional workflows, and keep <code>EDMG_COMFYUI_URL</code> pointed at the running server.

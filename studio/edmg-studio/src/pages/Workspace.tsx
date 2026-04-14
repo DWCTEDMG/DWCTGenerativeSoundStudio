@@ -35,6 +35,46 @@ function bytes(n: number) {
   return `${v.toFixed(u === 0 ? 0 : 2)} ${units[u]}`;
 }
 
+const ANALYSIS_FALLBACK_PREFIXES = [
+  "transcription unavailable",
+  "audio-only analysis",
+  "transcription not enabled",
+  "transcription not available",
+  "transcribe failed",
+];
+
+function looksLikeFallbackTranscript(text: string) {
+  const lowered = String(text || "").trim().toLowerCase();
+  return ANALYSIS_FALLBACK_PREFIXES.some((prefix) => lowered.startsWith(prefix));
+}
+
+function analysisTranscriptText(analysis: any) {
+  const raw = analysis?.transcript;
+  if (typeof raw === "string") return looksLikeFallbackTranscript(raw) ? "" : raw.trim();
+  if (raw && typeof raw === "object") {
+    const direct = String(raw.text || "").trim();
+    if (direct && !looksLikeFallbackTranscript(direct)) return direct;
+    const segments = Array.isArray(raw.segments) ? raw.segments : [];
+    return segments
+      .map((segment) => String(segment?.text || "").trim())
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+  return "";
+}
+
+function analysisSummaryText(analysis: any) {
+  const summary = String(analysis?.summary || "").trim();
+  if (summary) return summary;
+  const transcript = analysisTranscriptText(analysis);
+  if (transcript) return transcript.split(/(?<=[.!?])\s+/).find(Boolean) || transcript;
+  if (analysis) {
+    return "Transcription unavailable. Studio is using audio-only analysis from rhythm, energy, and spectral movement.";
+  }
+  return "Run analysis to generate transcript, audio sections, and the shared creative-direction base.";
+}
+
 function sceneDurationSeconds(scene: any, fallback = 5) {
   const start = Number(scene?.start_s ?? 0);
   const end = Number(scene?.end_s ?? start + fallback);
@@ -216,12 +256,17 @@ export default function Workspace({ onNavigate }: PageProps) {
       const d = await runOperation(
         {
           label: "Analyzing audio",
-          detail: "Beat detection, transcription, and feature extraction.",
+          detail: audioFile ? `Uploading ${audioFile.name}, then running beat detection, transcription, and feature extraction.` : "Beat detection, transcription, and feature extraction.",
           successDetail: "Analysis complete.",
         },
-        () => apiPost(`/v1/projects/${projectId}/analyze_audio`, {}),
+        async () => {
+          if (audioFile) {
+            await apiUpload(`/v1/projects/${projectId}/assets/audio`, audioFile);
+          }
+          return apiPost(`/v1/projects/${projectId}/analyze_audio`, {});
+        },
       );
-      setAnalysis(d);
+      setAnalysis(d?.analysis || d?.project?.meta?.analysis || null);
       await refreshProject(projectId);
     } catch (e: any) { setErr(String(e)); }
   };
@@ -252,6 +297,13 @@ export default function Workspace({ onNavigate }: PageProps) {
   const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
 
   const variantScenes = plan?.variants?.[selectedVariant]?.scenes || [];
+  const analysisFeatures = analysis?.features || {};
+  const transcriptText = analysisTranscriptText(analysis);
+  const transcriptReady = Boolean(transcriptText);
+  const analysisSummary = analysisSummaryText(analysis);
+  const analysisSections = Array.isArray(analysis?.sections) ? analysis.sections : [];
+  const analysisTags = Array.isArray(analysis?.tags) ? analysis.tags.map((tag: any) => String(tag || "").trim()).filter(Boolean) : [];
+  const analysisBpm = Number(analysisFeatures?.bpm || analysisFeatures?.tempo_bpm || analysisFeatures?.tempo || 0);
   const durationS = analysis?.features?.duration_s || analysis?.features?.duration || plan?.duration_s || 0;
   const refAssets = Array.isArray(assets?.refs) ? assets.refs : [];
   const variantCount = Array.isArray(plan?.variants) ? plan.variants.length : 0;
@@ -269,6 +321,8 @@ export default function Workspace({ onNavigate }: PageProps) {
   const referenceProgress = refAssets.length ? Math.min(100, 30 + refAssets.length * 22) : 0;
   const planProgress = storyboardReady ? 100 : variantCount ? 70 : 0;
   const handoffProgress = reactiveAppliedAt ? 100 : plannerImportedAt ? 62 : 0;
+  const analysisActionLabel = audioFile ? "Upload + Analyze" : "Analyze + Transcribe";
+  const transcriptStatusLabel = transcriptReady ? "Transcript ready" : analysisReady ? "Audio-only analysis" : "Waiting";
 
   const toggleOverviewSection = (sectionId: OverviewSectionId, isOpen: boolean) => {
     setOverviewSections((current) => ({ ...current, [sectionId]: isOpen }));
@@ -548,8 +602,8 @@ export default function Workspace({ onNavigate }: PageProps) {
 
   const workflowTabs: Array<{ id: WorkspaceView; label: string; meta: string }> = [
     { id: "overview", label: "Overview", meta: `${variantCount || 0} variants` },
-    { id: "planner", label: "AI Planner", meta: audioReady ? "ready to run" : "audio first" },
-    { id: "reactive", label: "Reactive Lab", meta: analysisReady ? "audio-driven motion" : "analyze first" },
+    { id: "planner", label: "AI Planner", meta: analysisReady ? "optional story pass" : "analyze first" },
+    { id: "reactive", label: "Reactive Lab", meta: analysisReady ? "optional motion pass" : "analyze first" },
     { id: "storyboard", label: "Storyboard", meta: storyboardReady ? `${variantScenes.length} scenes` : "sync or plan first" },
   ];
 
@@ -606,7 +660,7 @@ export default function Workspace({ onNavigate }: PageProps) {
             {project?.name || "No active project"} • {selectedVariantName}
           </div>
           <div className="small">
-            Workspace, Timeline, and the standalone labs now follow the same active project and variant.
+            Overview remains the canonical source. Use the Overview to Reactive path for a fast motion-only pass, or the Overview to Planner to Reactive path when you want a richer story pass first. Timeline and Render consume the same saved session either way.
           </div>
         </div>
         {lastHandoff ? (
@@ -633,52 +687,76 @@ export default function Workspace({ onNavigate }: PageProps) {
 
       <details className="card workspace-guideCard">
         <summary className="workspace-guideSummary">
-          {workspaceView === "overview" ? "Quick guide and capabilities" : workspaceView === "planner" ? "Planner guide and capabilities" : "Storyboard guide and capabilities"}
+          {uiMode === "advanced" ? "Advanced guide and workflow notes" : workspaceView === "overview" ? "Quick guide and capabilities" : workspaceView === "planner" ? "Planner guide and capabilities" : workspaceView === "storyboard" ? "Storyboard guide and capabilities" : "Reactive guide and capabilities"}
         </summary>
         <div className="workspace-guideBody">
           {workspaceView === "overview" ? (
             <div className="guide-grid">
               <section className="guide-block">
                 <div className="guide-kicker">What this view does</div>
-                <p>Overview is the operator surface for project intake, analysis, variant generation, reactive prep, and first-pass timeline review. It is the fastest place to confirm that a project is ready before moving deeper into planning or rendering.</p>
-              </section>
-              <section className="guide-block">
-                <div className="guide-kicker">Capabilities</div>
-                <ul className="guide-list">
-                  <li>Upload the song and run analysis plus transcription.</li>
-                  <li>Add reference images that influence style, character, or mood.</li>
-                  <li>Generate plan variants, open the integrated planner or reactive lab, and apply or overwrite the timeline.</li>
-                </ul>
+                <p>Overview is the canonical intake surface. Upload the track here, run analysis and transcription here, review the first creative direction here, and only then branch into Planner, Reactive Lab, Timeline, or Render if you need deeper control.</p>
               </section>
               <section className="guide-block">
                 <div className="guide-kicker">Recommended flow</div>
                 <ul className="guide-list">
-                  <li>Choose the project, upload audio, and confirm references are attached.</li>
-                  <li>Review Creative Direction, then use Timeline Preview to verify rhythm and full-track coverage.</li>
-                  <li>Open AI Planner for scene design, Reactive Lab for motion scheduling, or Storyboard for dense scene-by-scene review.</li>
+                  <li>Choose the project, pick the track, and use `Analyze + Transcribe`. If a local file is selected, Workspace uploads it first and saves that result into the shared Studio session.</li>
+                  <li>Stay in Overview if the base creative direction is already good enough and you do not need a separate story or motion pass.</li>
+                  <li>Fast path: go straight from Overview into Reactive Lab when the base story already works and you only need camera or motion scheduling.</li>
+                  <li>Deep path: go from Overview into AI Planner when you want richer scene writing or more variety, sync that back, then use Reactive Lab to add schedules on top of the refined story pass.</li>
                 </ul>
               </section>
+              <section className="guide-block">
+                <div className="guide-kicker">What carries forward</div>
+                <ul className="guide-list">
+                  <li>Audio file, transcript, energy sections, tags, and saved storyboard variant are shared with Planner and Reactive Lab automatically.</li>
+                  <li>Timeline Preview lets you verify full-track pacing before going into dense editing.</li>
+                  <li>Storyboard keeps the saved scene order visible even if you never open the full standalone labs.</li>
+                </ul>
+              </section>
+              {uiMode === "advanced" ? (
+                <section className="guide-block">
+                  <div className="guide-kicker">How the stages build</div>
+                  <ul className="guide-list">
+                    <li>`Creative direction` is the first-pass scene package built from the saved Overview analysis and storyboard.</li>
+                    <li>`AI Planner` extends or rewrites scene language and storyboard intent. It does not replace Overview unless you explicitly sync it back into the shared session.</li>
+                    <li>`Reactive Lab` reads the current saved story pass and adds camera or motion schedules like pan, drift, zoom, rotation, and strength. It is meant to layer on top, not overwrite the story.</li>
+                    <li>`Storyboard` and `Timeline` consume whichever saved pass is currently active, whether that is the original Overview direction or the later Planner-synced version.</li>
+                  </ul>
+                </section>
+              ) : null}
+              {uiMode === "advanced" ? (
+                <section className="guide-block">
+                  <div className="guide-kicker">Export surfaces</div>
+                  <ul className="guide-list">
+                    <li>`Prompt pack` is the readable scene-by-scene writing bundle you can review or paste into another generator.</li>
+                    <li>`Timeline patch` is the Studio-native JSON payload that turns the direction into prompt and motion tracks.</li>
+                    <li>`Deforum preview` shows how the same direction would translate into Deforum-style schedules before you render there.</li>
+                    <li>`LLM contract` is the structured backend or debug payload, mainly for inspection or integrations rather than direct rendering.</li>
+                  </ul>
+                </section>
+              ) : null}
             </div>
           ) : workspaceView === "planner" ? (
             <div className="guide-grid">
               <section className="guide-block">
                 <div className="guide-kicker">What this view does</div>
-                <p>The AI Planner is the detailed ideation and prompt-authoring surface. It lets you shape scene intent, prompt detail, storyboard structure, and repair strategy without committing changes until you explicitly sync them.</p>
+                <p>The AI Planner builds on the saved Overview analysis. It is where you push story beats, scene phrasing, continuity, alternates, and repair strategy without giving up the base Overview direction.</p>
               </section>
               <section className="guide-block">
                 <div className="guide-kicker">Capabilities</div>
                 <ul className="guide-list">
-                  <li>Analyze a song, build a scene plan, and generate prompts tuned for different output targets.</li>
-                  <li>Approve scenes, isolate weak scenes, and prepare rerender or repair instructions.</li>
-                  <li>Sync the finished plan into the current Studio project without losing the standalone planner page.</li>
+                  <li>Hydrates the current project audio, transcript, and storyboard automatically.</li>
+                  <li>Lets you lock strong scenes, regenerate weaker scenes, and keep subject/palette continuity while diversifying the shot writing.</li>
+                  <li>Syncs a refined plan back into the same Studio project without losing the standalone planner workflow.</li>
                 </ul>
               </section>
               <section className="guide-block">
                 <div className="guide-kicker">Recommended flow</div>
                 <ul className="guide-list">
-                  <li>Use Setup for audio and planning controls, then move into Prompt Pack for scene review.</li>
-                  <li>Open Storyboard to read the ordered shot list, and use Repairs only when specific scenes need recovery.</li>
-                  <li>Use Sync to internal renderer when the plan is ready to become the saved Studio storyboard and timeline base, while the standalone Planner Lab stays available from the sidebar.</li>
+                  <li>Start here only after Overview has saved the shared session analysis unless you intentionally want a fresh local-only planner pass.</li>
+                  <li>Skip Planner entirely when the Overview story is already strong and you only need motion work.</li>
+                  <li>Regenerate to improve story variety, then lock or approve the scenes you want to keep.</li>
+                  <li>Sync back when you want the refined storyboard to become the new project base for Reactive Lab, Timeline, and Render.</li>
                 </ul>
               </section>
             </div>
@@ -686,22 +764,22 @@ export default function Workspace({ onNavigate }: PageProps) {
             <div className="guide-grid">
               <section className="guide-block">
                 <div className="guide-kicker">What this view does</div>
-                <p>Reactive Lab turns saved audio analysis into motion, cue, and camera schedules that can be applied into the renderer timeline without breaking the standalone lab workflow.</p>
+                <p>Reactive Lab uses the shared Overview analysis and saved storyboard to generate camera and motion schedules. It is for adding motion structure, not for replacing the underlying scene writing.</p>
               </section>
               <section className="guide-block">
                 <div className="guide-kicker">Capabilities</div>
                 <ul className="guide-list">
-                  <li>Build deterministic keyframes from the current track and inspect section energy before render.</li>
-                  <li>Export handoff bundles, cue CSVs, and compressed schedules for downstream tools.</li>
+                  <li>Build deterministic keyframes from the saved track and inspect section energy before render.</li>
+                  <li>Generate pan, depth, rotation, strength, and cue schedules from the audio pass.</li>
                   <li>Apply approved reactive motion directly into the project timeline and renderer camera data.</li>
                 </ul>
               </section>
               <section className="guide-block">
                 <div className="guide-kicker">Recommended flow</div>
                 <ul className="guide-list">
-                  <li>Run audio analysis first so the reactive pass starts from the saved project track.</li>
-                  <li>Use Fit all in the preview to see the whole track before approving dense sections.</li>
-                  <li>Apply to the internal renderer, then open Timeline for clip refinement or Render for final output.</li>
+                  <li>Run Overview analysis first, then come straight here if the base story already works and you only need motion scheduling.</li>
+                  <li>Use Reactive Lab after Planner only when you want those schedules to follow a newly refined story pass instead of the original Overview direction.</li>
+                  <li>Apply to the renderer timeline, then open Timeline or Render for final arrangement and output.</li>
                 </ul>
               </section>
             </div>
@@ -764,13 +842,59 @@ export default function Workspace({ onNavigate }: PageProps) {
             <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files?.[0] || null)} />
             <div className="row workspace-actionRow" style={{ marginTop: 10 }}>
               <button onClick={uploadAudio} disabled={!audioFile || !projectId}>Upload</button>
-              <button className="secondary" onClick={runAnalysis} disabled={!projectId}>Analyze + Transcribe</button>
+              <button className="secondary" onClick={runAnalysis} disabled={!projectId}>{analysisActionLabel}</button>
+            </div>
+            <div className="small">
+              {audioFile
+                ? `Selected file: ${audioFile.name}. Running analysis will save this track into the shared Studio session first.`
+                : "Analyze uses the saved project track. Pick a local file first if you want to replace the current audio and analyze it in one pass."}
             </div>
             {project?.meta?.audio && (
               <div className="small" style={{ marginTop: 10 }}>
                 uploaded: {project.meta.audio.filename} ({bytes(project.meta.audio.size_bytes)})
               </div>
             )}
+            <div className="workspace-analysisGrid">
+              <div className="workspace-handoffCard">
+                <div className="workspace-handoffLabel">Analysis status</div>
+                <strong>{transcriptStatusLabel}</strong>
+              </div>
+              <div className="workspace-handoffCard">
+                <div className="workspace-handoffLabel">Duration</div>
+                <strong>{durationS ? `${durationS.toFixed(1)}s` : "pending"}</strong>
+              </div>
+              <div className="workspace-handoffCard">
+                <div className="workspace-handoffLabel">Tempo</div>
+                <strong>{analysisBpm ? `${Math.round(analysisBpm)} BPM` : "pending"}</strong>
+              </div>
+              <div className="workspace-handoffCard">
+                <div className="workspace-handoffLabel">Sections</div>
+                <strong>{analysisSections.length || 0}</strong>
+              </div>
+            </div>
+            <details className="workspace-inlineDetails" open={analysisReady}>
+              <summary>Analysis summary</summary>
+              <div className="workspace-scrollPanel">
+                <p>{analysisSummary}</p>
+                {analysisTags.length ? (
+                  <div className="workspace-chipRow">
+                    {analysisTags.slice(0, 10).map((tag) => (
+                      <span key={tag} className="badge">{tag}</span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </details>
+            <details className="workspace-inlineDetails" open={uiMode === "advanced" && transcriptReady}>
+              <summary>{transcriptReady ? "Transcript" : "Transcript status"}</summary>
+              <div className="workspace-scrollPanel">
+                {transcriptReady ? (
+                  <p>{transcriptText}</p>
+                ) : (
+                  <p>No transcript is available for this track yet. Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement.</p>
+                )}
+              </div>
+            </details>
           </OverviewSection>
 
           <OverviewSection

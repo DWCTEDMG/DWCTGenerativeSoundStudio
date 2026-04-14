@@ -270,7 +270,14 @@ def build_reactive_camera_keyframes(schedules: dict[str, Any] | None, *, fps: in
     raw_schedules = schedules if isinstance(schedules, dict) else {}
     zoom_points = _parse_schedule_points(str(raw_schedules.get("zoom") or ""))
     rot_points = _parse_schedule_points(str(raw_schedules.get("rotation_z") or ""))
-    frame_points = sorted({frame for frame, _ in zoom_points} | {frame for frame, _ in rot_points})
+    pan_x_points = _parse_schedule_points(str(raw_schedules.get("translation_x") or raw_schedules.get("pan_x") or ""))
+    pan_y_points = _parse_schedule_points(str(raw_schedules.get("translation_y") or raw_schedules.get("pan_y") or ""))
+    frame_points = sorted(
+        {frame for frame, _ in zoom_points}
+        | {frame for frame, _ in rot_points}
+        | {frame for frame, _ in pan_x_points}
+        | {frame for frame, _ in pan_y_points}
+    )
     if not frame_points:
         if duration_s <= 0:
             return []
@@ -282,8 +289,8 @@ def build_reactive_camera_keyframes(schedules: dict[str, Any] | None, *, fps: in
             {
                 "t": max(0.0, float(frame) / float(max(1, fps))),
                 "zoom": _schedule_value(zoom_points, frame, 1.0),
-                "pan_x": 0.0,
-                "pan_y": 0.0,
+                "pan_x": _schedule_value(pan_x_points, frame, 0.0),
+                "pan_y": _schedule_value(pan_y_points, frame, 0.0),
                 "rotation_deg": _schedule_value(rot_points, frame, 0.0),
             }
         )
@@ -294,8 +301,8 @@ def build_reactive_camera_keyframes(schedules: dict[str, Any] | None, *, fps: in
             {
                 "t": duration_s,
                 "zoom": _schedule_value(zoom_points, last_frame, keyframes[-1]["zoom"]),
-                "pan_x": 0.0,
-                "pan_y": 0.0,
+                "pan_x": _schedule_value(pan_x_points, last_frame, keyframes[-1]["pan_x"]),
+                "pan_y": _schedule_value(pan_y_points, last_frame, keyframes[-1]["pan_y"]),
                 "rotation_deg": _schedule_value(rot_points, last_frame, keyframes[-1]["rotation_deg"]),
             }
         )
@@ -372,6 +379,10 @@ def merge_reactive_lab_into_timeline(
         "rotation_y_schedule": str(schedules.get("rotation_y") or ""),
         "rotation_schedule": str(schedules.get("rotation_z") or ""),
         "rotation_z_schedule": str(schedules.get("rotation_z") or ""),
+        "translation_x_schedule": str(schedules.get("translation_x") or ""),
+        "translation_y_schedule": str(schedules.get("translation_y") or ""),
+        "pan_x_schedule": str(schedules.get("translation_x") or ""),
+        "pan_y_schedule": str(schedules.get("translation_y") or ""),
         "translation_z_schedule": str(schedules.get("translation_z") or ""),
         "strength_schedule": str(schedules.get("strength") or ""),
         "cfg_scale_schedule": str(schedules.get("cfg_scale") or ""),
@@ -385,6 +396,10 @@ def merge_reactive_lab_into_timeline(
         "zoom_schedule": motion_schedules["zoom_schedule"],
         "rotation_schedule": motion_schedules["rotation_schedule"],
         "rotation_y_schedule": motion_schedules["rotation_y_schedule"],
+        "translation_x_schedule": motion_schedules["translation_x_schedule"],
+        "translation_y_schedule": motion_schedules["translation_y_schedule"],
+        "pan_x_schedule": motion_schedules["pan_x_schedule"],
+        "pan_y_schedule": motion_schedules["pan_y_schedule"],
         "translation_z_schedule": motion_schedules["translation_z_schedule"],
         "brightness_schedule": motion_schedules["brightness_schedule"],
         "render_mode": str(metadata.get("renderMode") or handoff_manifest.get("renderMode") or ""),

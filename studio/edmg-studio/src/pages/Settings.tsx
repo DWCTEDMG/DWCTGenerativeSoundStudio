@@ -671,6 +671,15 @@ export default function Settings(_props: PageProps) {
         <div className="small">
           Studio now ships curated ComfyUI routing for plain stills, AnimateDiff motion, SVD image-to-video, and reference-driven ControlNet stills. The fallback manual checkpoint override still uses <code>EDMG_COMFYUI_CHECKPOINT</code> when no catalog-backed model is selected.
         </div>
+        <div className="small" style={{ marginTop: 10, opacity: 0.92 }}>
+          Use this mental model:
+        </div>
+        <ul className="guide-list" style={{ marginTop: 8 }}>
+          <li>Setup gets ComfyUI installed and reachable at the configured URL.</li>
+          <li>Models decides which base checkpoints and ControlNet units Studio knows how to route through that ComfyUI server.</li>
+          <li>Render only exposes ComfyUI workflow export and ComfyUI-specific still or motion paths when the selected model actually uses the `ComfyUI` engine and the server capabilities are live.</li>
+          <li>If Render is still acting like nothing changed, the usual cause is one of three things: ComfyUI is not running, the selected model is an `Internal` model rather than a `ComfyUI` model, or the needed workflow family or ControlNet model is not installed yet.</li>
+        </ul>
       </div>
 
       {edmgTemplate && (
