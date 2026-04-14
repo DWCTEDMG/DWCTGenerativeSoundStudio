@@ -35,6 +35,43 @@ function bytes(n: number) {
   return `${v.toFixed(u === 0 ? 0 : 2)} ${units[u]}`;
 }
 
+function sceneDurationSeconds(scene: any, fallback = 5) {
+  const start = Number(scene?.start_s ?? 0);
+  const end = Number(scene?.end_s ?? start + fallback);
+  return Math.max(0.2, end - start || fallback);
+}
+
+function resequenceStoryboardScenes(scenes: any[]) {
+  let cursor = 0;
+  return scenes.map((scene, index) => {
+    const duration = sceneDurationSeconds(scene);
+    const nextScene = {
+      ...scene,
+      name: scene?.name || `Scene ${index + 1}`,
+      start_s: Number(cursor.toFixed(2)),
+      end_s: Number((cursor + duration).toFixed(2)),
+    };
+    cursor += duration;
+    return nextScene;
+  });
+}
+
+function moveStoryboardItem<T>(items: T[], fromIndex: number, toIndex: number) {
+  const next = [...items];
+  const [item] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, item);
+  return next;
+}
+
+function shuffleStoryboardItems<T>(items: T[]) {
+  const next = [...items];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+}
+
 function OverviewSection(props: {
   id: OverviewSectionId;
   title: string;
@@ -258,6 +295,44 @@ export default function Workspace({ onNavigate }: PageProps) {
     } catch (e: any) {
       setErr(String(e));
     }
+  };
+
+  const updateStoryboardScenes = async (nextScenes: any[], detail: string) => {
+    if (!projectId || !plan?.variants?.length) return;
+    setErr(null);
+    const resequencedScenes = resequenceStoryboardScenes(nextScenes);
+    try {
+      const result = await runOperation(
+        {
+          label: "Saving storyboard order",
+          detail,
+          successDetail: "Storyboard order saved to the current project variant.",
+        },
+        () =>
+          apiPost(`/v1/projects/${projectId}/plan/variant`, {
+            variant_index: selectedVariant,
+            scenes: resequencedScenes,
+          }),
+      );
+      if (result?.plan) setPlan(result.plan);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const moveStoryboardScene = async (index: number, direction: -1 | 1) => {
+    const nextIndex = index + direction;
+    if (!variantScenes.length || nextIndex < 0 || nextIndex >= variantScenes.length) return;
+    await updateStoryboardScenes(
+      moveStoryboardItem(variantScenes, index, nextIndex),
+      `Scene ${index + 1} moved ${direction < 0 ? "earlier" : "later"}.`,
+    );
+  };
+
+  const shuffleStoryboardScenes = async () => {
+    if (variantScenes.length < 2) return;
+    await updateStoryboardScenes(shuffleStoryboardItems(variantScenes), "Reordered prompt beats for a different scene flow.");
   };
 
   const syncPlannerLab = async (payload: any) => {
@@ -881,6 +956,8 @@ export default function Workspace({ onNavigate }: PageProps) {
             compact
             studioProjectId={projectId}
             studioProjectName={project?.name || ""}
+            studioProject={project}
+            studioSelectedVariant={selectedVariant}
             onSyncToStudio={syncPlannerLab}
           />
         </div>
@@ -914,6 +991,8 @@ export default function Workspace({ onNavigate }: PageProps) {
             compact
             studioProjectId={projectId}
             studioProjectName={project?.name || ""}
+            studioProject={project}
+            studioSelectedVariant={selectedVariant}
             onSyncToStudio={syncReactiveLab}
           />
         </div>
@@ -955,6 +1034,9 @@ export default function Workspace({ onNavigate }: PageProps) {
                   </select>
                 </label>
                 <div className="workspace-storyboardActions">
+                  <button className="secondary" onClick={() => void shuffleStoryboardScenes()} disabled={variantScenes.length < 2}>
+                    Shuffle scenes
+                  </button>
                   <button onClick={() => void applyTimelinePlan(false)} disabled={!storyboardReady}>
                     Apply to timeline
                   </button>
@@ -980,6 +1062,14 @@ export default function Workspace({ onNavigate }: PageProps) {
                     <div className="small">
                       {Number(scene.start_s ?? index * 5).toFixed(2)}s → {Number(scene.end_s ?? (index * 5 + 5)).toFixed(2)}s
                     </div>
+                  </div>
+                  <div className="workspace-storyboardCardActions">
+                    <button className="secondary" onClick={() => void moveStoryboardScene(index, -1)} disabled={index === 0}>
+                      Move earlier
+                    </button>
+                    <button className="secondary" onClick={() => void moveStoryboardScene(index, 1)} disabled={index === variantScenes.length - 1}>
+                      Move later
+                    </button>
                   </div>
                   <div className="workspace-storyboardPrompt">{scene.prompt || "No prompt yet."}</div>
                   {scene.negative_prompt ? (

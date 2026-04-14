@@ -1070,6 +1070,12 @@ th {
   margin: 6px 0 0;
   font-size: 17px;
 }
+.workspace-storyboardCardActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
 .workspace-storyboardIndex {
   font-size: 11px;
   font-weight: 700;

@@ -5,7 +5,7 @@ import { useStudioWorkbenchProject } from "../workbenches/useStudioWorkbenchProj
 import type { PageProps } from "../types/pageProps";
 
 export default function AiPlannerLab({ onNavigate }: PageProps) {
-  const { projects, projectId, setProjectId, project, refreshProject } = useStudioWorkbenchProject();
+  const { projects, projectId, setProjectId, selectedVariant, project, refreshProject } = useStudioWorkbenchProject();
 
   const syncPlannerLab = async (payload: any) => {
     if (!projectId) throw new Error("Select a Studio project before syncing the planner into the renderer.");
@@ -55,6 +55,8 @@ export default function AiPlannerLab({ onNavigate }: PageProps) {
       <AiNlpWorkbench
         studioProjectId={projectId}
         studioProjectName={project?.name || ""}
+        studioProject={project}
+        studioSelectedVariant={selectedVariant}
         onSyncToStudio={syncPlannerLab}
       />
     </div>

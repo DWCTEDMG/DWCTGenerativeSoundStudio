@@ -79,6 +79,13 @@ const PREVIEW_LABELS: Record<PreviewTab, string> = {
   contract: "LLM contract",
 };
 
+const PREVIEW_HELP: Record<PreviewTab, string> = {
+  "prompt-pack": "The readable scene-by-scene prompt bundle. Use this when you want to copy the direction into a prompt tool, compare scene language, or hand it to another generator.",
+  timeline: "The exact prompt-track payload that can be merged into Studio Timeline. Use this when you want Creative Direction to become real prompt and motion data in the canonical renderer timeline.",
+  deforum: "A Deforum-oriented preview of prompts and motion schedules. Use this as a compatibility layer when you want to inspect how the direction translates into Deforum-style settings before rendering.",
+  contract: "The structured backend payload describing what the creative-direction system believes the narrative package is. Use this for debugging, integrations, or checking what the LLM-facing contract actually contains.",
+};
+
 function clamp01(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
@@ -388,6 +395,9 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
                   {PREVIEW_LABELS[key]}
                 </button>
               ))}
+            </div>
+            <div className="small" style={{ marginTop: 10 }}>
+              {PREVIEW_HELP[preview]}
             </div>
             <textarea
               readOnly

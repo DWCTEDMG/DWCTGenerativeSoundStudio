@@ -41,6 +41,7 @@ from .schemas import (
     HealthResponse, ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
     RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest,
     CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest,
+    StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
 )
 from .store.projects import ProjectStore
@@ -3969,13 +3970,39 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             camera_hint = _creative_camera_hint(float(metrics["energy"]))
             motion_hint = _creative_motion_hint(params)
         prompt = str(scene.get("prompt") or "").strip() or "Cinematic image sequence with a coherent subject and controlled atmosphere."
+        scene_tokens = _analysis_top_keywords(" ".join([name, prompt, transcript_cue]), limit=5)
+        scene_motifs = list(
+            dict.fromkeys(
+                [
+                    *scene_tokens[:3],
+                    *motifs[(index * 2): (index * 2) + 2],
+                    *motifs[: max(0, 2 - len(scene_tokens[:3]))],
+                ]
+            )
+        )[:4]
+        phase_hint = (
+            "Open the visual world clearly before adding pressure."
+            if index == 0 else
+            "Resolve the sequence with a release image and clean afterglow."
+            if index == max(0, len(source_scenes) - 1) else
+            "Push into a distinct section change instead of repeating the previous beat."
+            if float(metrics["energy"]) >= 0.68 else
+            "Use this section to vary texture, framing, or environment while holding continuity."
+        )
+        continuity_hint = (
+            "Continuity: establish subject, palette, and world."
+            if index == 0 else
+            f"Continuity: retain the strongest subject and palette cues from scene {index}."
+        )
         prompt_pack = " ".join(
             [
                 prompt,
                 f"Energy profile: {energy_label}.",
                 camera_hint,
                 f"Motion recipe: {motion_hint}",
-                f"Carry motifs from {', '.join(motifs[:4])}." if motifs else "",
+                f"Scene motifs: {', '.join(scene_motifs)}." if scene_motifs else "",
+                phase_hint,
+                continuity_hint,
                 f"Narrative cue: {transcript_cue}" if transcript_cue else "",
             ]
         ).strip()
@@ -4135,6 +4162,7 @@ def _derive_steps_and_denoise_schedules(analysis_obj: Any, *, fps: int, base_ste
 def _local_plan_from_project(proj: Any, *, title: str, style_prefs: str, num_variants: int, max_scenes: int) -> dict[str, Any]:
     """Deterministic (no-LLM) plan builder using EDMG-core orchestrators."""
     analysis_obj = _build_public_audio_analysis(proj)
+    analysis_meta = (proj.meta.get("analysis") or {}) if hasattr(proj, "meta") else {}
     fps = 24
 
     from enhanced_deforum_music_generator.core.prompt_orchestrator import PromptOrchestrator, OrchestrationConfig  # type: ignore
@@ -4147,6 +4175,16 @@ def _local_plan_from_project(proj: Any, *, title: str, style_prefs: str, num_var
     steps_sched, denoise_sched = _derive_steps_and_denoise_schedules(analysis_obj, fps=fps, base_steps=15)
     motion.setdefault("steps_schedule", steps_sched)
     motion.setdefault("denoise_schedule", denoise_sched)
+    transcript_sentences = _analysis_transcript_sentences(analysis_meta)
+    tags = list(analysis_meta.get("tags") or []) if isinstance(analysis_meta, dict) else []
+    scene_roles = [
+        "opening tableau",
+        "first lift",
+        "world expansion",
+        "pressure turn",
+        "release peak",
+        "afterglow resolve",
+    ]
 
     variants: list[dict[str, Any]] = []
     for vi in range(int(num_variants)):
@@ -4174,8 +4212,28 @@ def _local_plan_from_project(proj: Any, *, title: str, style_prefs: str, num_var
             b = frames[i + 1]
             start_s = float(a) / float(fps_out)
             end_s = float(b) / float(fps_out)
-            p = str(prompts.get(str(int(a))) or prompts.get(str(int(frames[max(0, i - 1)]))) or base_prompt).strip() or base_prompt
-            scenes.append({"start_s": start_s, "end_s": end_s, "prompt": p, "negative_prompt": "blurry, low quality, watermark, text, logo"})
+            prompt_base = str(prompts.get(str(int(a))) or prompts.get(str(int(frames[max(0, i - 1)]))) or base_prompt).strip() or base_prompt
+            role = scene_roles[min(len(scene_roles) - 1, int(round((i / max(1, max(1, len(frames) - 2))) * (len(scene_roles) - 1))))]
+            cue_index = min(len(transcript_sentences) - 1, i) if transcript_sentences else -1
+            narrative_cue = transcript_sentences[cue_index] if cue_index >= 0 else ""
+            motif_window = list(dict.fromkeys([*tags[i:i + 3], *tags[: max(0, 3 - len(tags[i:i + 3]))]]))[:3]
+            prompt_variant = " ".join(
+                [
+                    prompt_base,
+                    f"section role {role}.",
+                    f"scene motifs {', '.join(motif_window)}." if motif_window else "",
+                    f"narrative cue {narrative_cue}" if narrative_cue else "",
+                ]
+            ).strip()
+            scenes.append(
+                {
+                    "name": role.title(),
+                    "start_s": start_s,
+                    "end_s": end_s,
+                    "prompt": prompt_variant,
+                    "negative_prompt": "blurry, low quality, watermark, text, logo",
+                }
+            )
 
         variants.append(
             {
@@ -4519,6 +4577,65 @@ def apply_plan_to_timeline(project_id: str, req: ApplyPlanRequest):
     )
     store.save(proj)
     return {"ok": True, "timeline": timeline, "variant_index": int(req.variant_index or 0)}
+
+
+@app.post("/v1/projects/{project_id}/plan/variant")
+def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    plan = proj.meta.get("last_plan")
+    if not isinstance(plan, dict):
+        raise HTTPException(400, "No plan. Generate a plan first.")
+
+    variants = plan.get("variants") if isinstance(plan.get("variants"), list) else []
+    variant_index = int(req.variant_index or 0)
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "Invalid variant_index")
+
+    variant = variants[variant_index] if isinstance(variants[variant_index], dict) else {}
+    duration_hint = _coerce_scene_time(
+        variant.get("duration_s") if isinstance(variant, dict) else None,
+        _analysis_duration_s(proj.meta.get("analysis") or {}),
+    )
+
+    updated_variant = dict(variant)
+    updated_variant["scenes"] = _normalize_plan_scene_list(
+        req.scenes,
+        duration_s=duration_hint,
+        max_scenes=max(1, len(req.scenes or [])),
+    )
+    updated_variant["duration_s"] = max(
+        duration_hint,
+        max(
+            (_coerce_scene_time(scene.get("end_s"), 0.0) for scene in updated_variant["scenes"]),
+            default=duration_hint or 0.0,
+        ),
+    )
+    variants[variant_index] = updated_variant
+
+    normalized_plan = _normalize_plan_payload(
+        {**plan, "variants": variants},
+        requested_variants=max(1, len(variants)),
+        requested_max_scenes=max([len((item or {}).get("scenes") or []) for item in variants] or [1]),
+        duration_s_hint=_analysis_duration_s(proj.meta.get("analysis") or {}) or plan.get("duration_s"),
+    )
+    proj.meta["last_plan"] = normalized_plan
+
+    planner_lab = proj.meta.get("last_planner_lab")
+    if isinstance(planner_lab, dict):
+        planner_plan = planner_lab.get("plan")
+        if isinstance(planner_plan, dict):
+            planner_variants = planner_plan.get("variants") if isinstance(planner_plan.get("variants"), list) else []
+            if 0 <= variant_index < len(planner_variants) and isinstance(planner_variants[variant_index], dict):
+                planner_variant = dict(planner_variants[variant_index])
+                planner_variant["scenes"] = deepcopy(updated_variant["scenes"])
+                planner_variants[variant_index] = planner_variant
+                planner_lab["plan"] = {**planner_plan, "variants": planner_variants}
+
+    store.save(proj)
+    return {"ok": True, "plan": normalized_plan, "variant_index": variant_index}
 
 
 @app.post("/v1/projects/{project_id}/planner_lab/import")

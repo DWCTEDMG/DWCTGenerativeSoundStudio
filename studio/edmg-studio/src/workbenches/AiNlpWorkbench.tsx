@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Brain,
   CheckCircle2,
@@ -17,6 +17,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
+import { getBackendUrl } from '../components/api';
 import { ProgressBar } from '../components/ProgressBar';
 
 type AnalysisFocus = 'balanced' | 'emotion' | 'visual';
@@ -165,6 +166,8 @@ type PlannerLabSyncPayload = {
 type AiNlpWorkbenchProps = {
   studioProjectId?: string;
   studioProjectName?: string;
+  studioProject?: any;
+  studioSelectedVariant?: number;
   onSyncToStudio?: (payload: PlannerLabSyncPayload) => Promise<string | void>;
   compact?: boolean;
 };
@@ -603,20 +606,59 @@ function buildOrchestrationPlan(args: {
       : target === 'storyboard'
       ? 'favor shot design clarity and staging cues'
       : 'favor cinematic visual detail';
+  const themeCycle = unique(analysis.themes.map((item) => item.theme).filter(Boolean));
+  const paletteCycle = unique(analysis.colorPalette.filter(Boolean));
+  const imageryPool = unique(
+    analysis.visualImagery
+      .map((item) => item.element)
+      .filter(Boolean),
+  );
+  const finishCycle = unique(direction.finishLanguage.filter(Boolean));
+  const editCycle = unique(direction.editLanguage.filter(Boolean));
+  const phaseLabels = ['opening tableau', 'first lift', 'world expansion', 'pressure turn', 'release peak', 'resolution image'];
 
   const scenes: PromptScene[] = selectedSegments.map((segment, index) => {
-    const imagery = analysis.visualImagery.slice(index % 2, index % 2 + 3).concat(analysis.visualImagery.slice(0, 1));
+    const imagery = Array.from({ length: Math.min(3, Math.max(1, imageryPool.length)) }, (_, offset) => {
+      const pointer = (index * 2 + offset) % Math.max(1, imageryPool.length);
+      return imageryPool[pointer];
+    }).filter(Boolean);
     const shotType = preset.shotTypes[index % preset.shotTypes.length];
     const movement = direction.cameraLanguage[index % direction.cameraLanguage.length];
-    const continuityNote = index === 0 ? 'establish the visual world clearly before intensifying motion' : `retain palette and subject continuity from scene ${index}`;
-    const transitionCue = index === selectedSegments.length - 1 ? 'resolve into an afterimage or held frame' : segment.energy > 0.7 ? 'cut on percussive lift or strobe accent' : 'dissolve through movement blur or light leak';
+    const lighting = direction.lightingLanguage[index % direction.lightingLanguage.length];
+    const finish = finishCycle[index % finishCycle.length] ?? preset.finish[0];
+    const editLanguage = editCycle[index % editCycle.length] ?? preset.edit[0];
+    const theme = themeCycle[index % Math.max(1, themeCycle.length)] ?? 'emotional lift';
+    const paletteLead = paletteCycle[index % Math.max(1, paletteCycle.length)] ?? 'neutral steel';
+    const paletteSupport = paletteCycle[(index + 1) % Math.max(1, paletteCycle.length)] ?? paletteLead;
+    const phase = phaseLabels[Math.min(phaseLabels.length - 1, Math.floor((index / Math.max(1, selectedSegments.length - 1)) * (phaseLabels.length - 1)))];
+    const continuityNote =
+      index === 0
+        ? 'lock the lead subject, palette, and spatial world before introducing stronger motion changes'
+        : `carry the lead silhouette and ${paletteLead} palette from scene ${index}, but shift the framing intent and environment texture`;
+    const transitionCue =
+      index === selectedSegments.length - 1
+        ? 'resolve into a held release image or afterglow frame'
+        : segment.energy > 0.76
+        ? 'cut on the downbeat with a decisive contrast change'
+        : segment.energy > 0.54
+        ? 'let motion and edit rhythm bridge into the next beat'
+        : 'bleed through atmosphere, motion blur, or a light-leak dissolve';
+    const hookReference =
+      index === 0
+        ? `Narrative anchor: ${analysis.hookLine}.`
+        : index === selectedSegments.length - 1
+        ? `Land the sequence back on ${analysis.hookLine}.`
+        : '';
     const text = [
-      `${shotType}, ${movement}, ${subjectFocus || 'magnetic lead performer'} moving through ${imagery.map((item) => item.element).slice(0, 3).join(', ')}`,
-      `${direction.lightingLanguage[segment.segment % direction.lightingLanguage.length]}, ${analysis.colorPalette.join(', ')}, ${analysis.themes[0]?.theme ?? 'emotional lift'}, ${analysis.hookLine}`,
-      `segment ${segment.segment} mood is ${segment.sentiment} with ${segment.energyLabel} energy, ${detailText}, ${platformHint}, aspect ratio ${aspectRatio}`,
-      creativeBrief || 'keep the sequence emotionally legible and visually escalating',
+      `${shotType}, ${movement}, ${subjectFocus || 'magnetic lead performer'} staged as a ${phase} around ${imagery.join(', ') || 'a controlled visual world'}.`,
+      `${lighting}, ${finish}, editing energy guided by ${editLanguage}, palette emphasis on ${paletteLead}${paletteSupport && paletteSupport !== paletteLead ? ` with ${paletteSupport} support` : ''}, theme focus ${theme}.`,
+      `Segment ${segment.segment} plays as ${segment.sentiment} with ${segment.energyLabel} energy; ${detailText}; ${platformHint}; aspect ratio ${aspectRatio}.`,
+      creativeBrief || 'Keep the sequence emotionally legible and visually escalating.',
       continuityNote,
-    ].join(', ');
+      hookReference,
+    ]
+      .filter(Boolean)
+      .join(' ');
 
     return {
       id: index + 1,
@@ -624,7 +666,7 @@ function buildOrchestrationPlan(args: {
       segment: segment.segment,
       text,
       negativePrompt,
-      rationale: `Uses ${imagery[0]?.element ?? 'primary imagery'} to express ${segment.sentiment} while matching ${segment.energyLabel} energy.`,
+      rationale: `Uses ${imagery[0] ?? 'primary imagery'} to express ${segment.sentiment} while the ${movement} camera move keeps the section distinct from adjacent beats.`,
       shotType,
       transitionCue,
       continuityNote,
@@ -643,9 +685,9 @@ function buildOrchestrationPlan(args: {
     sectionLabel: selectedSegments[index].sentiment,
     shotType: scene.shotType,
     movement: direction.cameraLanguage[index % direction.cameraLanguage.length],
-    locationHint: analysis.visualImagery[index % analysis.visualImagery.length]?.element ?? 'minimal stage space',
+    locationHint: imageryPool[index % Math.max(1, imageryPool.length)] ?? 'minimal stage space',
     transitionCue: scene.transitionCue,
-    continuityNote: index === 0 ? 'lock character, palette, and environment for recall' : `carry forward ${analysis.colorPalette[0]} and the subject silhouette`,
+    continuityNote: index === 0 ? 'lock character, palette, and environment for recall' : `carry forward ${paletteCycle[index % Math.max(1, paletteCycle.length)] ?? 'the lead palette'} and the subject silhouette`,
     approved: false,
   }));
 
@@ -690,6 +732,312 @@ function buildOrchestrationPlan(args: {
   };
 }
 
+const STUDIO_COLOR_WORDS = [
+  'moonlit white',
+  'petrol green',
+  'desaturated indigo',
+  'silver fog',
+  'amber',
+  'crimson',
+  'cobalt',
+  'emerald',
+  'violet',
+  'teal',
+  'blue',
+  'green',
+  'red',
+  'gold',
+  'orange',
+  'white',
+  'black',
+];
+
+function splitStudioPhrases(values: string[]): string[] {
+  return unique(
+    values
+      .flatMap((value) => String(value || '').split(/[,.]| and /gi))
+      .map((value) => value.trim())
+      .filter((value) => value.length > 4),
+  );
+}
+
+function extractStudioPalette(text: string, fallback: string[]): string[] {
+  const lower = text.toLowerCase();
+  const matches = STUDIO_COLOR_WORDS.filter((color) => lower.includes(color));
+  return unique([...(matches.length ? matches : []), ...fallback]).slice(0, 4);
+}
+
+function buildStudioSentimentProgression(analysis: any, scenes: any[], durationSeconds: number): SentimentSegment[] {
+  const sections = Array.isArray(analysis?.sections) ? analysis.sections : [];
+  if (sections.length) {
+    return sections.map((section: any, index: number) => {
+      const energy = clamp01(Number(section?.energy ?? section?.avg_energy ?? 0.42));
+      return {
+        segment: index + 1,
+        startSeconds: Number(section?.start_s ?? index * (durationSeconds / Math.max(1, sections.length))),
+        endSeconds: Number(section?.end_s ?? (index + 1) * (durationSeconds / Math.max(1, sections.length))),
+        sentiment: String(section?.label || section?.name || section?.energy_label || `section ${index + 1}`).toLowerCase(),
+        energy,
+        energyLabel: String(section?.energy_label || humanizeEnergy(energy)),
+      };
+    });
+  }
+
+  if (scenes.length) {
+    return scenes.map((scene: any, index: number) => {
+      const startSeconds = Number(scene?.start_s ?? index * 5);
+      const endSeconds = Number(scene?.end_s ?? startSeconds + 5);
+      const promptBlob = `${scene?.name || ''} ${scene?.prompt || ''}`.toLowerCase();
+      const energy =
+        clamp01(
+          /burst|flash|impact|strobe|explosive|rush|surge/.test(promptBlob)
+            ? 0.84
+            : /drive|push|kinetic|chase|lift|glow/.test(promptBlob)
+            ? 0.66
+            : /drift|mist|reflect|slow|ambient|quiet/.test(promptBlob)
+            ? 0.34
+            : 0.5,
+        );
+      return {
+        segment: index + 1,
+        startSeconds,
+        endSeconds,
+        sentiment: String(scene?.name || `scene ${index + 1}`).toLowerCase(),
+        energy,
+        energyLabel: humanizeEnergy(energy),
+      };
+    });
+  }
+
+  const fallbackDuration = Math.max(12, durationSeconds || 48);
+  return Array.from({ length: 6 }, (_, index) => {
+    const startSeconds = (fallbackDuration / 6) * index;
+    const endSeconds = (fallbackDuration / 6) * (index + 1);
+    const energy = [0.28, 0.4, 0.52, 0.68, 0.8, 0.46][index] ?? 0.5;
+    return {
+      segment: index + 1,
+      startSeconds,
+      endSeconds,
+      sentiment: energy > 0.72 ? 'peak' : energy > 0.54 ? 'lift' : energy < 0.38 ? 'reflective' : 'build',
+      energy,
+      energyLabel: humanizeEnergy(energy),
+    };
+  });
+}
+
+function synthesizePlannerAnalysisFromStudioProject(project: any, selectedVariant: number): AnalysisResult | null {
+  const meta = project?.meta || {};
+  const studioAnalysis = meta?.analysis || {};
+  const studioPlan = meta?.last_plan || {};
+  const variants = Array.isArray(studioPlan?.variants) ? studioPlan.variants : [];
+  const variant = variants[selectedVariant] || variants[0] || {};
+  const scenes = Array.isArray(variant?.scenes) ? variant.scenes : [];
+  const features = studioAnalysis?.features || {};
+  const durationSeconds = Number(features?.duration_s ?? features?.duration ?? meta?.audio?.duration_s ?? scenes[scenes.length - 1]?.end_s ?? 0);
+  if (!durationSeconds && !scenes.length && !studioAnalysis) return null;
+
+  const transcriptText = String(studioAnalysis?.transcript?.text || studioAnalysis?.summary || '').trim();
+  const transcriptSentence = transcriptText.split(/(?<=[.!?])\s+/).find(Boolean) || transcriptText;
+  const promptTexts = scenes.map((scene: any) => String(scene?.prompt || '')).filter(Boolean);
+  const phraseCandidates = splitStudioPhrases([
+    ...promptTexts,
+    ...scenes.map((scene: any) => String(scene?.name || '')),
+    ...((Array.isArray(studioAnalysis?.tags) ? studioAnalysis.tags : []).map(String)),
+  ]);
+  const visualImagery = phraseCandidates.slice(0, 8).map((element, index) => ({
+    element,
+    category: /city|street|tower|subway|rooftop|neon|tunnel/i.test(element)
+      ? 'urban'
+      : /ocean|water|mist|field|tree|grass|cloud/i.test(element)
+      ? 'nature'
+      : /glow|flare|shadow|light|haze/i.test(element)
+      ? 'lighting'
+      : /grain|dust|glass|smoke|texture/i.test(element)
+      ? 'texture'
+      : 'movement',
+    prominence: clamp01(0.86 - index * 0.08),
+  }));
+  const averageEnergy = clamp01(Number(features?.energy ?? features?.average_energy ?? 0.48));
+  const brightness = clamp01(Number(features?.brightness ?? features?.treble ?? 0.42));
+  const warmth = clamp01(Number(features?.warmth ?? 1 - brightness * 0.45));
+  const dynamicRange = clamp01(Number(features?.dynamic_range ?? features?.dynamicRange ?? 0.46));
+  const zeroCrossingRate = clamp01(Number(features?.zero_crossing_rate ?? 0.22));
+  const motionBias = clamp01(Number(features?.motion_bias ?? averageEnergy * 0.58 + brightness * 0.24 + dynamicRange * 0.18));
+  const emotionsSource = Array.isArray(studioAnalysis?.emotions) ? studioAnalysis.emotions : [];
+  const emotions = emotionsSource.length
+    ? emotionsSource.slice(0, 5).map((emotion: any) => ({
+        emotion: String(emotion?.emotion || emotion?.label || 'mood'),
+        confidence: clamp01(Number(emotion?.score ?? emotion?.confidence ?? 0.62)),
+        intensity: String(emotion?.intensity || summarizeConfidence(Number(emotion?.score ?? emotion?.confidence ?? 0.62))),
+      }))
+    : deriveEmotions(averageEnergy, dynamicRange, warmth, brightness, 'balanced');
+  const themesSource = Array.isArray(studioAnalysis?.themes) ? studioAnalysis.themes : [];
+  const themes = themesSource.length
+    ? themesSource.slice(0, 5).map((theme: any, index: number) => ({
+        theme: String(typeof theme === 'string' ? theme : theme?.theme || `theme ${index + 1}`),
+        confidence: clamp01(Number(typeof theme === 'string' ? 0.72 - index * 0.06 : theme?.confidence ?? 0.72 - index * 0.06)),
+      }))
+    : selectThemes(emotions, 'balanced');
+  const sentimentProgression = buildStudioSentimentProgression(studioAnalysis, scenes, durationSeconds || 48);
+  const curveSource = Array.isArray(features?.energy_curve)
+    ? features.energy_curve
+    : Array.isArray(features?.energy)
+    ? features.energy
+    : Array.isArray(studioAnalysis?.waveform)
+    ? studioAnalysis.waveform
+    : sentimentProgression.map((segment) => segment.energy);
+  const energyCurve = curveSource.map((value: any) => clamp01(Number(value ?? 0.5))).slice(0, 24);
+  const fallbackPalette = PALETTES[Math.round(clamp01((brightness + warmth) / 2) * (PALETTES.length - 1))] ?? PALETTES[0];
+  const colorPalette = extractStudioPalette(
+    `${transcriptText} ${promptTexts.join(' ')} ${phraseCandidates.join(' ')}`,
+    fallbackPalette,
+  );
+
+  return {
+    basicInfo: {
+      fileName: String(meta?.audio?.filename || 'project-audio'),
+      duration: formatDuration(durationSeconds || 0),
+      durationSeconds: durationSeconds || 0,
+      tempo: Math.round(Number(features?.bpm ?? features?.tempo_bpm ?? features?.tempo ?? 96)),
+      key: String(features?.key || 'C'),
+      sampleRate: Math.round(Number(features?.sample_rate ?? 44100)),
+      channels: Math.round(Number(features?.channels ?? 2)),
+    },
+    emotions,
+    themes,
+    visualImagery: visualImagery.length ? visualImagery : selectImagery(brightness, warmth, averageEnergy, 'balanced'),
+    narrativeStructure: String(studioAnalysis?.narrative_structure || deriveNarrativeStructure(sentimentProgression)),
+    sentimentProgression,
+    spectralFeatures: { brightness, warmth, dynamicRange, zeroCrossingRate, averageEnergy, motionBias },
+    colorPalette,
+    motionProfile: unique([
+      averageEnergy > 0.58 ? 'camera movement can stay active' : 'camera movement should remain selective',
+      scenes.length ? `${scenes.length} saved storyboard scenes are already staged in the shared session` : '',
+      brightness > 0.56 ? 'lean into highlights, reflections, and edge light' : 'lean into silhouette and atmosphere',
+    ].filter(Boolean)),
+    notes: unique([
+      transcriptSentence || '',
+      studioAnalysis?.summary || '',
+      scenes.length ? `Hydrated from the saved Studio storyboard variant with ${scenes.length} scenes.` : '',
+    ].filter(Boolean)),
+    hookLine: transcriptSentence || promptTexts[0] || `${themes[0]?.theme ?? 'emotional lift'} told through ${visualImagery[0]?.element ?? 'texture'}`,
+    energyCurve: energyCurve.length ? energyCurve : sentimentProgression.map((segment) => segment.energy),
+  };
+}
+
+function buildPlannerPlanFromStudioProject(args: {
+  project: any;
+  selectedVariant: number;
+  analysis: AnalysisResult;
+  settings: PlannerLabSyncPayload['settings'];
+}): OrchestrationPlan | null {
+  const { project, selectedVariant, analysis, settings } = args;
+  const canonicalPlan = project?.meta?.last_plan || {};
+  const variants = Array.isArray(canonicalPlan?.variants) ? canonicalPlan.variants : [];
+  const variant = variants[selectedVariant] || variants[0] || {};
+  const canonicalScenes = Array.isArray(variant?.scenes) ? variant.scenes : [];
+  const basePlannerPlan = project?.meta?.last_planner_lab?.plan;
+  const canReusePlannerPlan =
+    basePlannerPlan &&
+    typeof basePlannerPlan === 'object' &&
+    Array.isArray(basePlannerPlan?.scenes) &&
+    Array.isArray(basePlannerPlan?.scenePlan) &&
+    basePlannerPlan.scenes.length >= canonicalScenes.length &&
+    canonicalScenes.length > 0;
+  const seedPlan = canReusePlannerPlan
+    ? (basePlannerPlan as OrchestrationPlan)
+    : buildOrchestrationPlan({
+        analysis,
+        style: settings.promptStyle,
+        detail: settings.promptDetail,
+        aspectRatio: settings.aspectRatio,
+        target: settings.target,
+        sceneCount: canonicalScenes.length || settings.sceneCount,
+        subjectFocus: settings.subjectFocus,
+        creativeBrief: settings.creativeBrief,
+        negativePromptSeed: settings.negativePromptSeed,
+      });
+
+  if (!canonicalScenes.length) return seedPlan;
+
+  const studioScenes = canonicalScenes.map((scene: any, index: number) => {
+    const baseScene = seedPlan.scenes[index] || seedPlan.scenes[seedPlan.scenes.length - 1];
+    const matchingSegment =
+      analysis.sentimentProgression[index] ||
+      {
+        segment: index + 1,
+        startSeconds: Number(scene?.start_s ?? index * 5),
+        endSeconds: Number(scene?.end_s ?? index * 5 + 5),
+        sentiment: String(scene?.name || `scene ${index + 1}`).toLowerCase(),
+        energy: clamp01((analysis.energyCurve[index] ?? 0.5) as number),
+        energyLabel: humanizeEnergy((analysis.energyCurve[index] ?? 0.5) as number),
+      };
+    const promptText = String(scene?.prompt || baseScene?.text || '').trim() || 'Cinematic image sequence with a coherent subject and controlled atmosphere.';
+    return {
+      ...baseScene,
+      id: index + 1,
+      title: String(scene?.name || baseScene?.title || `Scene ${index + 1}`),
+      segment: matchingSegment.segment,
+      text: promptText,
+      negativePrompt: String(scene?.negative_prompt || baseScene?.negativePrompt || buildNegativePrompt(settings.negativePromptSeed, settings.target)),
+      rationale: baseScene?.rationale || `Carries the shared Studio creative direction into the planner for scene ${index + 1}.`,
+      shotType: baseScene?.shotType || STYLE_PRESETS[settings.promptStyle].shotTypes[index % STYLE_PRESETS[settings.promptStyle].shotTypes.length],
+      transitionCue: String(scene?.transition || baseScene?.transitionCue || 'bridge into the next beat with motion continuity'),
+      continuityNote: baseScene?.continuityNote || (index === 0 ? 'establish the shared Studio visual world first' : `retain palette and subject continuity from scene ${index}`),
+      approved: Boolean(baseScene?.approved),
+      locked: Boolean(baseScene?.locked),
+      status: baseScene?.status || 'draft',
+      score: scoreScene(matchingSegment, settings.promptDetail),
+      variants: buildVariants(promptText),
+    } satisfies PromptScene;
+  });
+
+  return {
+    ...seedPlan,
+    scenes: studioScenes,
+    scenePlan: canonicalScenes.map((scene: any, index: number) => ({
+      id: index + 1,
+      startTime: formatClock(Number(scene?.start_s ?? index * 5)),
+      endTime: formatClock(Number(scene?.end_s ?? index * 5 + 5)),
+      sectionLabel: analysis.sentimentProgression[index]?.sentiment || String(scene?.name || `scene ${index + 1}`),
+      shotType: studioScenes[index]?.shotType || STYLE_PRESETS[settings.promptStyle].shotTypes[index % STYLE_PRESETS[settings.promptStyle].shotTypes.length],
+      movement: seedPlan.scenePlan[index]?.movement || seedPlan.direction.cameraLanguage[index % seedPlan.direction.cameraLanguage.length],
+      locationHint: analysis.visualImagery[index % Math.max(1, analysis.visualImagery.length)]?.element || 'shared project environment',
+      transitionCue: studioScenes[index]?.transitionCue || seedPlan.scenePlan[index]?.transitionCue || 'bridge into the next beat',
+      continuityNote: studioScenes[index]?.continuityNote || seedPlan.scenePlan[index]?.continuityNote || 'retain subject continuity',
+      approved: studioScenes[index]?.approved || false,
+    })),
+    keywordBank: unique([
+      ...seedPlan.keywordBank,
+      ...analysis.colorPalette,
+      ...analysis.themes.map((item) => item.theme),
+      ...analysis.visualImagery.map((item) => item.element),
+    ]).slice(0, 18),
+    rerenderSuggestions: studioScenes.map((scene, index) => ({
+      id: scene.id,
+      sceneId: scene.id,
+      reason: seedPlan.rerenderSuggestions[index]?.reason || 'Use a rerender only when the shared session prompt is structurally right but visually weak.',
+      promptAdjustment: seedPlan.rerenderSuggestions[index]?.promptAdjustment || 'Tighten the prompt, simplify the background, and reinforce the subject silhouette.',
+      executionNote: seedPlan.rerenderSuggestions[index]?.executionNote || 'Hold palette continuity and camera direction stable across adjacent sections.',
+    })),
+    repairPasses: studioScenes.map((scene, index) => ({
+      id: scene.id,
+      sceneId: scene.id,
+      issue: seedPlan.repairPasses[index]?.issue || 'Potential continuity drift after manual storyboard changes.',
+      fixStrategy: seedPlan.repairPasses[index]?.fixStrategy || 'Run a section repair pass with stronger subject lock and a simpler environmental stack.',
+    })),
+    renderManifest: buildRenderManifest(studioScenes, settings.target, settings.aspectRatio),
+  };
+}
+
+async function fetchStudioAudioFile(projectId: string, fileName: string): Promise<File | null> {
+  if (!projectId || !fileName) return null;
+  const response = await fetch(`${getBackendUrl()}/v1/projects/${projectId}/audio`);
+  if (!response.ok || typeof (response as Response & { blob?: () => Promise<Blob> }).blob !== 'function') return null;
+  const blob = await response.blob();
+  return new File([blob], fileName, { type: blob.type || 'audio/*' });
+}
+
 const MetricBar: React.FC<{ label: string; value: number; accent: string }> = ({ label, value, accent }) => (
   <div>
     <div className="mb-1 flex items-center justify-between text-xs text-slate-600">
@@ -705,10 +1053,13 @@ const MetricBar: React.FC<{ label: string; value: number; accent: string }> = ({
 const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
   studioProjectId,
   studioProjectName,
+  studioProject,
+  studioSelectedVariant = 0,
   onSyncToStudio,
   compact = false,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const studioHydrationKeyRef = useRef('');
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
@@ -728,10 +1079,114 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
   const [studioSyncing, setStudioSyncing] = useState(false);
   const [studioSyncMessage, setStudioSyncMessage] = useState<string | null>(null);
   const [studioSyncError, setStudioSyncError] = useState<string | null>(null);
+  const [studioSeedStatus, setStudioSeedStatus] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<PlannerWorkbenchSection>('setup');
 
   const approvedCount = useMemo(() => plan?.scenes.filter((scene) => scene.approved).length ?? 0, [plan]);
   const repairCount = useMemo(() => plan?.scenes.filter((scene) => scene.status === 'needs-repair').length ?? 0, [plan]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const studioAudioName = String(studioProject?.meta?.audio?.filename || '');
+    const hydrationKey = [
+      studioProjectId || '',
+      studioSelectedVariant,
+      studioAudioName,
+      String(studioProject?.meta?.analysis?.timestamp || ''),
+      String(studioProject?.meta?.last_planner_lab?.imported_at || ''),
+      String(studioProject?.meta?.last_plan?.variants?.[studioSelectedVariant]?.scenes?.length || 0),
+    ].join(':');
+    if (!studioProjectId || !studioProject || hydrationKey === studioHydrationKeyRef.current) return;
+    studioHydrationKeyRef.current = hydrationKey;
+
+    const hydrate = async () => {
+      const seedAnalysis =
+        studioProject?.meta?.last_planner_lab?.analysis && typeof studioProject.meta.last_planner_lab.analysis === 'object'
+          ? (studioProject.meta.last_planner_lab.analysis as AnalysisResult)
+          : synthesizePlannerAnalysisFromStudioProject(studioProject, studioSelectedVariant);
+      if (cancelled || !seedAnalysis) return;
+
+      const savedPlannerSettings = studioProject?.meta?.last_planner_lab?.settings || {};
+      const seedSettings = {
+        analysisFocus: (savedPlannerSettings?.analysisFocus as AnalysisFocus) || analysisFocus,
+        promptStyle: (savedPlannerSettings?.promptStyle as PromptStyle) || promptStyle,
+        promptDetail: (savedPlannerSettings?.promptDetail as PromptDetail) || promptDetail,
+        aspectRatio: (savedPlannerSettings?.aspectRatio as AspectRatio) || aspectRatio,
+        target: (savedPlannerSettings?.target as PromptTarget) || target,
+        sceneCount:
+          Number(studioProject?.meta?.last_plan?.variants?.[studioSelectedVariant]?.scenes?.length || savedPlannerSettings?.sceneCount || sceneCount) || sceneCount,
+        subjectFocus:
+          String(savedPlannerSettings?.subjectFocus || subjectFocus || 'a magnetic central performer'),
+        creativeBrief:
+          String(
+            savedPlannerSettings?.creativeBrief ||
+              studioProject?.meta?.analysis?.summary ||
+              creativeBrief ||
+              'Use emotionally legible visual storytelling with escalating momentum.',
+          ),
+        negativePromptSeed:
+          String(savedPlannerSettings?.negativePromptSeed || negativePromptSeed || 'oversaturated skin, bad hands'),
+        selectedVariantMode:
+          (savedPlannerSettings?.selectedVariantMode as PromptVariantMode) || selectedVariantMode,
+      } satisfies PlannerLabSyncPayload['settings'];
+      setAnalysisFocus(seedSettings.analysisFocus);
+      setPromptStyle(seedSettings.promptStyle);
+      setPromptDetail(seedSettings.promptDetail);
+      setAspectRatio(seedSettings.aspectRatio);
+      setTarget(seedSettings.target);
+      setSceneCount(seedSettings.sceneCount);
+      setSubjectFocus(seedSettings.subjectFocus);
+      setCreativeBrief(seedSettings.creativeBrief);
+      setNegativePromptSeed(seedSettings.negativePromptSeed);
+      setSelectedVariantMode(seedSettings.selectedVariantMode);
+      const seedPlan = buildPlannerPlanFromStudioProject({
+        project: studioProject,
+        selectedVariant: studioSelectedVariant,
+        analysis: seedAnalysis,
+        settings: seedSettings,
+      });
+
+      setAnalysis(seedAnalysis);
+      if (seedPlan) setPlan(seedPlan);
+      setActiveSection(seedPlan?.scenes?.length ? 'prompts' : 'setup');
+      setStudioSeedStatus(
+        `Hydrated from ${studioProjectName || 'the shared Studio project'}: audio, transcript, and storyboard data are already loaded here. Regenerate if you want a fresh planner pass.`,
+      );
+
+      if (studioAudioName && !cancelled) {
+        try {
+          const nextAudioFile = await fetchStudioAudioFile(studioProjectId, studioAudioName);
+          if (!cancelled && nextAudioFile) setAudioFile(nextAudioFile);
+        } catch {
+          if (!cancelled) {
+            setStudioSeedStatus(
+              `Hydrated transcript and storyboard data from ${studioProjectName || 'the shared Studio project'}. Audio could not be reloaded automatically, so choose a local file if you want a new browser-side analysis pass.`,
+            );
+          }
+        }
+      }
+    };
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    analysisFocus,
+    creativeBrief,
+    negativePromptSeed,
+    promptDetail,
+    promptStyle,
+    sceneCount,
+    selectedVariantMode,
+    studioProject,
+    studioProjectId,
+    studioProjectName,
+    studioSelectedVariant,
+    subjectFocus,
+    target,
+    aspectRatio,
+  ]);
 
   const buildStudioPayload = (): PlannerLabSyncPayload | null => {
     if (!analysis || !plan) return null;
@@ -786,7 +1241,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
     if (!analysis) return;
     setStudioSyncMessage(null);
     setStudioSyncError(null);
-    const nextPlan = buildOrchestrationPlan({
+    const rebuiltPlan = buildOrchestrationPlan({
       analysis,
       style: promptStyle,
       detail: promptDetail,
@@ -797,7 +1252,39 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
       creativeBrief,
       negativePromptSeed,
     });
-    setPlan(nextPlan);
+    setPlan((current) => {
+      if (!current) return rebuiltPlan;
+      const lockedScenes = new Map(current.scenes.filter((scene) => scene.locked).map((scene) => [scene.id, scene]));
+      if (!lockedScenes.size) return rebuiltPlan;
+      const nextScenes = rebuiltPlan.scenes.map((scene) => {
+        const locked = lockedScenes.get(scene.id);
+        return locked
+          ? {
+              ...locked,
+              locked: true,
+              variants: buildVariants(locked.text),
+              score: locked.score,
+            }
+          : scene;
+      });
+      return {
+        ...rebuiltPlan,
+        scenes: nextScenes,
+        scenePlan: rebuiltPlan.scenePlan.map((scene) => {
+          const locked = lockedScenes.get(scene.id);
+          return locked
+            ? {
+                ...scene,
+                shotType: locked.shotType,
+                transitionCue: locked.transitionCue,
+                continuityNote: locked.continuityNote,
+                approved: locked.approved,
+              }
+            : scene;
+        }),
+        renderManifest: buildRenderManifest(nextScenes, target, aspectRatio),
+      };
+    });
     setActiveSection('prompts');
   };
 
@@ -1143,7 +1630,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
               <div className="guide-kicker">Capabilities</div>
               <ul className="guide-list">
                 <li>Generate prompt packs tuned for cinematic, music-video, experimental, documentary, or storyboard output.</li>
-                <li>Approve strong scenes, flag weak scenes, and prepare rerender and repair passes.</li>
+                <li>Approve strong scenes, lock the beats you want to preserve from the shared storyboard, and regenerate the rest when you need alternates.</li>
                 <li>Export or sync the planner output into the Studio renderer when you are satisfied with the plan.</li>
               </ul>
             </section>
@@ -1151,7 +1638,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
               <div className="guide-kicker">Recommended flow</div>
               <ul className="guide-list">
                 <li>Start in Setup, load the track, and choose the analysis and prompt settings that match the target look.</li>
-                <li>Move into Prompt Pack to refine scene language, then open Storyboard to check timing and reading order.</li>
+                <li>Move into Prompt Pack to refine scene language, use locks to keep the beats you like, then open Storyboard to check timing and reading order.</li>
                 <li>Use Repairs for scenes that need recovery, then sync the plan when it is ready to become the saved Studio version.</li>
               </ul>
             </section>
@@ -1193,6 +1680,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
                 setAnalysis(null);
                 setPlan(null);
                 setError(null);
+                setStudioSeedStatus(file ? `Using local file ${file.name}. The shared Studio transcript and storyboard can still guide regeneration.` : null);
               }}
             />
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100">
@@ -1201,6 +1689,11 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
             <div className="font-medium">{audioFile ? audioFile.name : 'Click to upload an audio file'}</div>
             <div className="mt-1 text-sm text-slate-500">MP3, WAV, M4A, AAC — fully local browser-side analysis</div>
           </div>
+          {studioSeedStatus ? (
+            <div className="mb-6 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              {studioSeedStatus}
+            </div>
+          ) : null}
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <label className="space-y-2 text-sm"><span className="font-medium text-slate-700">Analysis focus</span><select value={analysisFocus} onChange={(e) => setAnalysisFocus(e.target.value as AnalysisFocus)} className="w-full rounded-xl border border-slate-300 px-3 py-2"><option value="balanced">Balanced</option><option value="emotion">Emotion-led</option><option value="visual">Visual-led</option></select></label>
@@ -1208,7 +1701,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
             <label className="space-y-2 text-sm"><span className="font-medium text-slate-700">Prompt detail</span><select value={promptDetail} onChange={(e) => setPromptDetail(e.target.value as PromptDetail)} className="w-full rounded-xl border border-slate-300 px-3 py-2"><option value="tight">Tight</option><option value="standard">Standard</option><option value="expanded">Expanded</option></select></label>
             <label className="space-y-2 text-sm"><span className="font-medium text-slate-700">Aspect ratio</span><select value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value as AspectRatio)} className="w-full rounded-xl border border-slate-300 px-3 py-2"><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option><option value="21:9">21:9</option></select></label>
             <label className="space-y-2 text-sm"><span className="font-medium text-slate-700">Output target</span><select value={target} onChange={(e) => setTarget(e.target.value as PromptTarget)} className="w-full rounded-xl border border-slate-300 px-3 py-2"><option value="general-video">General video</option><option value="runway">Runway-style</option><option value="deforum">Deforum-style</option><option value="storyboard">Storyboard</option></select></label>
-            <label className="space-y-2 text-sm"><span className="font-medium text-slate-700">Scene count</span><input type="number" min={4} max={8} value={sceneCount} onChange={(e) => setSceneCount(Math.max(4, Math.min(8, parseInt(e.target.value || '6', 10))))} className="w-full rounded-xl border border-slate-300 px-3 py-2" /></label>
+            <label className="space-y-2 text-sm"><span className="font-medium text-slate-700">Scene count</span><input type="number" min={4} max={16} value={sceneCount} onChange={(e) => setSceneCount(Math.max(4, Math.min(16, parseInt(e.target.value || '6', 10))))} className="w-full rounded-xl border border-slate-300 px-3 py-2" /></label>
           </div>
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">

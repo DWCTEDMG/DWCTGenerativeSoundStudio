@@ -16,6 +16,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
+import { getBackendUrl } from '../components/api';
 import { ProgressBar } from '../components/ProgressBar';
 
 type MappingPreset = 'cinematic' | 'psychedelic' | 'ambient' | 'percussive';
@@ -108,6 +109,8 @@ type ReactiveLabSyncPayload = {
 type AudioReactiveWorkbenchProps = {
   studioProjectId?: string;
   studioProjectName?: string;
+  studioProject?: any;
+  studioSelectedVariant?: number;
   onSyncToStudio?: (payload: ReactiveLabSyncPayload) => Promise<string | void>;
   compact?: boolean;
 };
@@ -499,9 +502,12 @@ function savePresets(presets: SavedPreset[]): void {
 const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   studioProjectId,
   studioProjectName,
+  studioProject,
+  studioSelectedVariant = 0,
   onSyncToStudio,
   compact = false,
 }) => {
+  const studioHydrationKeyRef = useRef('');
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -532,6 +538,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   const [studioSyncing, setStudioSyncing] = useState(false);
   const [studioSyncMessage, setStudioSyncMessage] = useState<string | null>(null);
   const [studioSyncError, setStudioSyncError] = useState<string | null>(null);
+  const [studioSeedStatus, setStudioSeedStatus] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -557,6 +564,82 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   const sparseSchedules = useMemo(() => buildSparseSchedules(schedules, scheduleStride), [schedules, scheduleStride]);
   const handoffManifest = useMemo(() => buildRenderHandoffManifest({ sections, cueEvents, repairSuggestions, schedules: sparseSchedules, renderMode, scheduleStride }), [sections, cueEvents, repairSuggestions, sparseSchedules, renderMode, scheduleStride]);
   const schedulePreview = sparseSchedules[selectedSchedule] ?? '';
+
+  useEffect(() => {
+    let cancelled = false;
+    const studioAudioName = String(studioProject?.meta?.audio?.filename || '');
+    const hydrationKey = [
+      studioProjectId || '',
+      studioSelectedVariant,
+      studioAudioName,
+      String(studioProject?.meta?.analysis?.timestamp || ''),
+      String(studioProject?.meta?.last_reactive_lab?.applied_at || ''),
+    ].join(':');
+    if (!studioProjectId || !studioProject || hydrationKey === studioHydrationKeyRef.current) return;
+    studioHydrationKeyRef.current = hydrationKey;
+
+    const hydrate = async () => {
+      const savedReactive = studioProject?.meta?.last_reactive_lab || {};
+      const metadata = savedReactive?.metadata || {};
+
+      if (Array.isArray(savedReactive?.keyframes) && savedReactive.keyframes.length) {
+        setOfflineKeyframes(savedReactive.keyframes);
+        setSectionApproval(
+          Array.isArray(savedReactive?.sections)
+            ? Object.fromEntries(savedReactive.sections.map((section: any) => [section.id, Boolean(section.approved)]))
+            : {},
+        );
+        if (Number.isFinite(Number(metadata?.sensitivity))) setSensitivity(Number(metadata.sensitivity));
+        if (Number.isFinite(Number(metadata?.smoothing))) setSmoothing(Number(metadata.smoothing));
+        if (Number.isFinite(Number(metadata?.fps))) setFps(Number(metadata.fps));
+        if (typeof metadata?.preset === 'string') setMappingPreset(metadata.preset as MappingPreset);
+        if (typeof metadata?.renderMode === 'string') setRenderMode(metadata.renderMode as RenderMode);
+        if (Number.isFinite(Number(metadata?.scheduleStride))) setScheduleStride(Number(metadata.scheduleStride));
+        if (Number.isFinite(Number(metadata?.minCutFrames))) setMinCutFrames(Number(metadata.minCutFrames));
+        if (metadata?.scaling && typeof metadata.scaling === 'object') {
+          setParameterScaling({
+            zoom: Number(metadata.scaling.zoom ?? DEFAULT_SCALING.zoom),
+            rotation: Number(metadata.scaling.rotation ?? DEFAULT_SCALING.rotation),
+            translation: Number(metadata.scaling.translation ?? DEFAULT_SCALING.translation),
+            color: Number(metadata.scaling.color ?? DEFAULT_SCALING.color),
+          });
+        }
+        setStudioSeedStatus(
+          `Hydrated the saved reactive pass from ${studioProjectName || 'the shared Studio project'}. You can keep refining it here or replace it with a new audio run.`,
+        );
+      } else {
+        setStudioSeedStatus(
+          `Using the Overview track from ${studioProjectName || 'the shared Studio project'}. Build a reactive pass here when you want motion schedules, or skip it and keep the core creative direction only.`,
+        );
+      }
+
+      if (!studioAudioName) return;
+      try {
+        const response = await fetch(`${getBackendUrl()}/v1/projects/${studioProjectId}/audio`);
+        if (!response.ok || typeof (response as Response & { blob?: () => Promise<Blob> }).blob !== 'function') return;
+        const blob = await response.blob();
+        if (cancelled) return;
+        const nextUrl = URL.createObjectURL(blob);
+        const nextFile = new File([blob], studioAudioName, { type: blob.type || 'audio/*' });
+        setAudioFile(nextFile);
+        setAudioUrl((current) => {
+          if (current) URL.revokeObjectURL(current);
+          return nextUrl;
+        });
+      } catch {
+        if (!cancelled) {
+          setStudioSeedStatus(
+            `Reactive metadata was hydrated from ${studioProjectName || 'the shared Studio project'}, but the project audio could not be reloaded automatically. Choose a local file if you want playback or a fresh deterministic keyframe pass.`,
+          );
+        }
+      }
+    };
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [studioProject, studioProjectId, studioProjectName, studioSelectedVariant]);
 
   const buildStudioPayload = (): ReactiveLabSyncPayload | null => {
     if (!activeKeyframes.length) return null;
@@ -703,6 +786,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
     setError(null);
     setStudioSyncMessage(null);
     setStudioSyncError(null);
+    setStudioSeedStatus(`Using local file ${file.name}. The shared Studio audio remains the base session, but this local file now drives playback and deterministic keyframe generation here.`);
     setAudioFile(file);
     setOfflineKeyframes([]);
     historyRef.current = [];
@@ -988,6 +1072,11 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
               {studioSyncMessage && <div className="mt-3 rounded-xl bg-emerald-500/15 px-3 py-2 text-emerald-200">{studioSyncMessage}</div>}
               {studioSyncError && <div className="mt-3 rounded-xl bg-rose-500/15 px-3 py-2 text-rose-200">{studioSyncError}</div>}
             </div>
+            {studioSeedStatus ? (
+              <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-500/10 p-4 text-sm text-cyan-100">
+                {studioSeedStatus}
+              </div>
+            ) : null}
           </div>
         </section>
 

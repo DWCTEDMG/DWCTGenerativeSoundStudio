@@ -59,6 +59,11 @@ class ApplyPlanRequest(BaseModel):
     variant_index: int = 0
     overwrite: bool = False
 
+
+class StoryboardVariantUpdateRequest(BaseModel):
+    variant_index: int = 0
+    scenes: list[dict[str, Any]] = Field(default_factory=list)
+
 class RenderScenesRequest(BaseModel):
     """Render one still image per scene."""
     variant_index: int = 0

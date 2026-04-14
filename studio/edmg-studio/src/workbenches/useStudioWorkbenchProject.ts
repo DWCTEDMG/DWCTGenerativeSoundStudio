@@ -5,7 +5,7 @@ import { useStudioSession } from "../components/studioSession";
 export function useStudioWorkbenchProject() {
   const [projects, setProjects] = useState<any[]>([]);
   const [project, setProject] = useState<any>(null);
-  const { projectId, setProjectId } = useStudioSession();
+  const { projectId, setProjectId, selectedVariant, setSelectedVariant } = useStudioSession();
 
   const refreshProjects = async () => {
     const data = await apiGet("/v1/projects");
@@ -41,5 +41,14 @@ export function useStudioWorkbenchProject() {
     else setProject(null);
   }, [projectId]);
 
-  return { projects, projectId, setProjectId, project, refreshProjects, refreshProject };
+  return {
+    projects,
+    projectId,
+    setProjectId,
+    selectedVariant,
+    setSelectedVariant,
+    project,
+    refreshProjects,
+    refreshProject,
+  };
 }

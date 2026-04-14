@@ -43,6 +43,7 @@ describe("Workspace page", () => {
         },
       },
       "/v1/projects/p1/assets": { assets: { refs: [] } },
+      "/v1/projects/p1/audio": {},
       "/v1/projects/p1/creative_direction*": {
         creative_direction: {
           preset: "cinematic",

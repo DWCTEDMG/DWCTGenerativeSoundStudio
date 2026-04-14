@@ -5,7 +5,7 @@ import { useStudioWorkbenchProject } from "../workbenches/useStudioWorkbenchProj
 import type { PageProps } from "../types/pageProps";
 
 export default function ReactiveLab({ onNavigate }: PageProps) {
-  const { projects, projectId, setProjectId, project, refreshProject } = useStudioWorkbenchProject();
+  const { projects, projectId, setProjectId, selectedVariant, project, refreshProject } = useStudioWorkbenchProject();
 
   const syncReactiveLab = async (payload: any) => {
     if (!projectId) throw new Error("Select a Studio project before applying reactive motion to the renderer.");
@@ -56,6 +56,8 @@ export default function ReactiveLab({ onNavigate }: PageProps) {
       <AudioReactiveWorkbench
         studioProjectId={projectId}
         studioProjectName={project?.name || ""}
+        studioProject={project}
+        studioSelectedVariant={selectedVariant}
         onSyncToStudio={syncReactiveLab}
       />
     </div>
