@@ -156,7 +156,7 @@ async function run(action: string, path: string, body: any = {}) {
     ? "https://docs.comfy.org/installation/comfyui_portable_windows"
     : "https://docs.comfy.org/";
   const storageFieldConfigs = getStorageFieldConfigs(platformKind);
-  const setupReady = backendBundleOk && comfyOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
+  const setupReady = backendBundleOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
   const fullSetupReady = isWindows && setupReady && sevenOk;
 
   function deriveStorageLayout(studioHome: string): StorageDraft {
@@ -410,12 +410,12 @@ async function run(action: string, path: string, body: any = {}) {
   <div className="small" style={{ marginTop: 6 }}>
     {isWindows ? (
       ollamaRequired
-      ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → managed Ollama install → pull model → ComfyUI Portable install + start."
-      : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → ComfyUI Portable install + start. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
+      ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → managed Ollama install → pull model → optional ComfyUI Portable install + start for alternate still/motion workflows."
+      : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → optional ComfyUI Portable install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
     ) : (
       ollamaRequired
-        ? "Linux and macOS use the manual setup path: install the backend runtime here, install Ollama system-wide if needed, pull the configured model, and run a local ComfyUI instance at the configured URL."
-        : `Linux and macOS use the manual setup path: install the backend runtime here and run a local ComfyUI instance. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
+        ? "Linux and macOS use the manual setup path: install the backend runtime here, install Ollama system-wide if needed, pull the configured model, and run a local ComfyUI instance only if you want the optional ComfyUI workflows."
+        : `Linux and macOS use the manual setup path: install the backend runtime here and add ComfyUI only if you want the optional ComfyUI workflows. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
     )}
   </div>
   <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
@@ -655,15 +655,15 @@ async function run(action: string, path: string, body: any = {}) {
 
         <div className="card">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 800 }}>3) ComfyUI (Video generation)</div>
-            <Badge ok={comfyOk} label={comfyOk ? "OK" : "Missing"} />
+            <div style={{ fontWeight: 800 }}>3) ComfyUI (Optional still/motion engine)</div>
+            <Badge ok={comfyOk} label={comfyOk ? "Available" : "Optional"} />
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            EDMG talks to ComfyUI at <code>{status?.comfyui?.url ?? "http://127.0.0.1:8188"}</code>.
+            Studio's internal renderer is the default path. EDMG can also talk to ComfyUI at <code>{status?.comfyui?.url ?? "http://127.0.0.1:8188"}</code> when you want alternate still or motion workflows.
           </div>
           {!isWindows ? (
             <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
-              Linux support uses a manually installed ComfyUI instance. Start it yourself and keep <code>EDMG_COMFYUI_URL</code> pointed at the running server.
+              Linux support uses a manually installed ComfyUI instance. Start it yourself only if you want those optional workflows, and keep <code>EDMG_COMFYUI_URL</code> pointed at the running server.
             </div>
           ) : null}
 
@@ -826,8 +826,8 @@ async function run(action: string, path: string, body: any = {}) {
           <div style={{ fontWeight: 800 }}>Ready check</div>
           <div className="small" style={{ marginTop: 6 }}>
             {ollamaRequired
-              ? "When the backend runtime bundle + Ollama + a model + ComfyUI + FFmpeg are all OK, EDMG Studio is ready to generate. EDMG Core is optional but recommended for the fully unified workflow."
-              : "When the backend runtime bundle + your active AI provider + ComfyUI + FFmpeg are all OK, EDMG Studio is ready to generate. EDMG Core is optional but recommended for the fully unified workflow."}
+              ? "When the backend runtime bundle + Ollama + a model + FFmpeg are all OK, EDMG Studio is ready for the default internal-render workflow. ComfyUI remains optional for alternate still/motion paths. EDMG Core is optional but recommended for the fully unified workflow."
+              : "When the backend runtime bundle + your active AI provider + FFmpeg are all OK, EDMG Studio is ready for the default internal-render workflow. ComfyUI remains optional for alternate still/motion paths. EDMG Core is optional but recommended for the fully unified workflow."}
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
             <button

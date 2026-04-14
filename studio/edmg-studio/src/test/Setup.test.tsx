@@ -63,6 +63,6 @@ describe("Setup page", () => {
     expect(await screen.findByText("0) System Setup")).toBeTruthy();
     expect(await screen.findByText(/Linux and macOS use the manual setup path/)).toBeTruthy();
     expect(await screen.findByText(/Linux support expects a system-installed/i)).toBeTruthy();
-    expect(await screen.findByText(/Linux support uses a manually installed ComfyUI instance/i)).toBeTruthy();
+    expect(await screen.findByText(/Linux support uses a manually installed ComfyUI instance.*optional workflows/i)).toBeTruthy();
   });
 });

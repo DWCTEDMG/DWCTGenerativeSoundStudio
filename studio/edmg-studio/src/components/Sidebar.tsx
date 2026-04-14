@@ -110,7 +110,7 @@ export default function Sidebar({
         </div>
       </div>
       <div className="small sidebar-tagline">
-        Desktop UI + local backend + ComfyUI + AI + EDMG Core
+        Desktop UI + local backend + internal renderer + optional ComfyUI + AI + EDMG Core
       </div>
 
       <div className="sidebar-focusCard">

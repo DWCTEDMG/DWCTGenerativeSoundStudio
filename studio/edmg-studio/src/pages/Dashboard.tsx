@@ -47,7 +47,7 @@ export default function Dashboard({ backendUrl, config }: { backendUrl: string; 
             <li>Upload audio</li>
             <li>Analyze/transcribe</li>
             <li>Generate plan variants</li>
-            <li>Render scenes (ComfyUI)</li>
+            <li>Render with the internal renderer by default, or use ComfyUI optionally</li>
             <li>Assemble MP4 (FFmpeg)</li>
             <li>Export Deforum JSON (optional)</li>
           </ol>

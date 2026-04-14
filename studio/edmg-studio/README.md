@@ -5,7 +5,8 @@ A desktop-style "studio" application:
 - **Electron** shell + **React** UI
 - Local **FastAPI** backend for projects, assets, planning, rendering, and outputs
 - Integrates with:
-  - **ComfyUI** for image generation (local or remote)
+  - **Studio internal renderer** as the default built-in render path
+  - **ComfyUI** as an optional still/motion render sidecar (local or remote)
   - In-process **AI providers** for planning/transcription/features (Ollama by default)
   - Optional external **AI service** over HTTP when you want to separate that workload
   - **EDMG Core** (enhanced-deforum-music-generator) for Deforum template/export (optional but recommended)
@@ -17,7 +18,7 @@ A desktop-style "studio" application:
 - Node.js LTS
 - Python `>=3.10,<3.14`
 - FFmpeg on PATH for dev checkouts, or the bundled Studio FFmpeg for packaged builds (used for MP4 assembly)
-- ComfyUI running (default `http://127.0.0.1:8188`)
+- ComfyUI only if you want ComfyUI-backed still or motion workflows (default `http://127.0.0.1:8188`)
 - Planning/transcription run **in-process** by default through the selected provider; no separate AI server is required for the normal Studio path.
 - EDMG Core is included by the default Studio backend bundle/install target
 
@@ -59,7 +60,8 @@ When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard
 - Checks **Ollama** availability (local AI)
 - Supports local **OpenAI-compatible** servers such as LM Studio or `llama.cpp` server through Studio Settings
 - Lets you **pull the default model** (`qwen3:8b`) via a button
-- Checks **ComfyUI** availability and can **download + extract ComfyUI Portable** on Windows
+- Installs the **backend runtime bundle** that powers the internal renderer
+- Checks **ComfyUI** availability and can **download + extract ComfyUI Portable** on Windows when you want the optional ComfyUI path
 - Verifies **FFmpeg** for MP4 assembly, preferring the Studio-bundled binary when present
 
 This keeps the runtime UX like a DAW/game installer: click buttons, no terminal required.
@@ -131,14 +133,20 @@ EDMG Core integration:
 2. Upload audio
 3. Analyze + transcribe (in-process provider by default; optional external AI service)
 4. Generate plan variants
-5. Render scene stills via ComfyUI
+5. Render with the internal renderer by default, or use ComfyUI optionally for supported still/motion workflows
 6. Assemble MP4 (FFmpeg slideshow + audio)
 7. Export Deforum settings (optional)
 
 
-## Motion video rendering (ComfyUI)
+## Default rendering path
 
-Studio supports **motion clips per scene** via two free, local-friendly ComfyUI paths:
+Studio's default render path is the **internal renderer** backed by the Studio backend runtime, local model installs, cache/history, and FFmpeg assembly.
+
+Use ComfyUI only when you explicitly want one of the supported ComfyUI-backed still or motion workflows.
+
+## Optional ComfyUI motion rendering
+
+Studio also supports **motion clips per scene** via two optional, local-friendly ComfyUI paths:
 
 - **AnimateDiff (recommended for longer sequences)**  
   Requires `ComfyUI-AnimateDiff-Evolved` nodes. AnimateDiff supports *unlimited* animation length when you pass Context Options (sliding context windows). 
