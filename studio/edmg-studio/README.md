@@ -9,6 +9,7 @@ A desktop-style "studio" application:
   - **ComfyUI** as an optional still/motion render sidecar (local or remote)
   - In-process **AI providers** for planning/transcription/features (Ollama by default)
   - Optional external **AI service** over HTTP when you want to separate that workload
+  - **OpenClaw** only as an optional operator/automation shell around Studio, not as a required runtime dependency
   - **EDMG Core** (enhanced-deforum-music-generator) for Deforum template/export (optional but recommended)
   - **AWS** + **Lightning.ai** bundle scaffolding
 
@@ -20,6 +21,7 @@ A desktop-style "studio" application:
 - FFmpeg on PATH for dev checkouts, or the bundled Studio FFmpeg for packaged builds (used for MP4 assembly)
 - ComfyUI only if you want ComfyUI-backed still or motion workflows (default `http://127.0.0.1:8188`)
 - Planning/transcription run **in-process** by default through the selected provider; no separate AI server is required for the normal Studio path.
+- OpenClaw is optional and external to the core Studio stack. Studio setup, packaging, planning, and rendering do not require it.
 - EDMG Core is included by the default Studio backend bundle/install target
 
 ### Backend
@@ -65,6 +67,8 @@ When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard
 - Verifies **FFmpeg** for MP4 assembly, preferring the Studio-bundled binary when present
 
 This keeps the runtime UX like a DAW/game installer: click buttons, no terminal required.
+
+OpenClaw is not part of the required Studio install path. If you use it, treat it as an optional operator shell layered around Studio for automation or monitoring rather than as a dependency of the app itself.
 
 Release/operator runbook:
 - [Studio release runbook](../../docs/STUDIO_RELEASE_RUNBOOK.md)
@@ -143,6 +147,12 @@ EDMG Core integration:
 Studio's default render path is the **internal renderer** backed by the Studio backend runtime, local model installs, cache/history, and FFmpeg assembly.
 
 Use ComfyUI only when you explicitly want one of the supported ComfyUI-backed still or motion workflows.
+
+## Optional OpenClaw operator shell
+
+If you want an external automation or operator surface, you can run OpenClaw alongside Studio.
+
+Use it for things like queue triage, operator workflows, or sidecar automation against the Studio environment. Do not treat it as part of the required Studio runtime: Studio startup, setup, backend spawning, packaging, and rendering should all work without OpenClaw present.
 
 ## Optional ComfyUI motion rendering
 
