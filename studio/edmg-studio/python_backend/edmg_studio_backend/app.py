@@ -6565,6 +6565,14 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
 
     model_path = models.installed_path(model_id)
     if not model_path:
+        issue = getattr(models, "internal_asset_issue", lambda _model_id: None)(model_id)
+        if issue == "incomplete":
+            raise UserFacingError(
+                "Internal model install is incomplete",
+                hint="Open Models and reinstall the requested internal model. The local snapshot is missing required weight files.",
+                code="MODEL_NOT_INSTALLED",
+                status_code=400,
+            )
         raise UserFacingError(
             "Internal model not installed",
             hint="Open Models and install the requested internal model, then retry.",

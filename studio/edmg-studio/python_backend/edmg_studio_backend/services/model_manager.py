@@ -457,13 +457,66 @@ class ModelManager:
             dirs.append(legacy_root)
         return dirs
 
+    def _internal_component_has_weights(self, component_dir: Path) -> bool:
+        if not component_dir.exists() or not component_dir.is_dir():
+            return False
+        patterns = (
+            "diffusion_pytorch_model*.safetensors",
+            "diffusion_pytorch_model*.bin",
+            "pytorch_model*.safetensors",
+            "pytorch_model*.bin",
+            "model*.safetensors",
+            "model*.bin",
+            "model.onnx",
+            "model.onnx_data",
+            "openvino_model.bin",
+            "flax_model.msgpack",
+        )
+        return any(
+            candidate.exists()
+            for pattern in patterns
+            for candidate in component_dir.glob(pattern)
+        )
+
+    def _diffusers_snapshot_complete(self, path: Path) -> bool:
+        model_index = path / "model_index.json"
+        if not model_index.exists():
+            return False
+        try:
+            data = json.loads(model_index.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+
+        weightless_markers = (
+            "Tokenizer",
+            "TokenizerFast",
+            "Scheduler",
+            "ImageProcessor",
+            "FeatureExtractor",
+        )
+        required_components: list[str] = []
+        for name, spec in data.items():
+            if not isinstance(name, str) or not isinstance(spec, list) or len(spec) < 2:
+                continue
+            class_name = str(spec[1] or "")
+            if any(marker in class_name for marker in weightless_markers):
+                continue
+            required_components.append(name)
+
+        if not required_components:
+            return False
+
+        return all(self._internal_component_has_weights(path / component) for component in required_components)
+
     def _internal_asset_installed(self, entry: dict[str, Any], path: Path) -> bool:
         if not path.exists():
             return False
 
         kind = str(entry.get("kind") or "").strip().lower()
         if kind == "diffusers":
-            return (path / "model_index.json").exists()
+            return self._diffusers_snapshot_complete(path)
         if kind == "controlnet":
             if not (path / "config.json").exists():
                 return False
@@ -473,6 +526,22 @@ class ModelManager:
                 for candidate in path.glob(pattern)
             )
         return True
+
+    def internal_asset_issue(self, model_id: str) -> str | None:
+        entry = self._find_entry(model_id)
+        if not entry:
+            return None
+        target = entry.get("target") or {}
+        engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+        if engine != "internal":
+            return None
+        folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+        path = self._internal_models_dir(folder) / model_id
+        if not path.exists():
+            return "missing"
+        if self._internal_asset_installed(entry, path):
+            return None
+        return "incomplete"
 
     def _find_existing_comfy_file(self, folder: str, ref: str) -> Path | None:
         raw = str(ref or "").strip()
@@ -624,9 +693,13 @@ class ModelManager:
 
         resolved_path = self.installed_path(str(entry.get("id") or ""))
         if resolved_path is None:
+            issue = self.internal_asset_issue(str(entry.get("id") or ""))
+            hint = "Install the asset in Model Manager, then retry."
+            if issue == "incomplete":
+                hint = "Reinstall the asset in Model Manager. The current local snapshot is missing required weight files."
             raise UserFacingError(
                 f"{entry.get('name') or raw} is not installed",
-                hint="Install the asset in Model Manager, then retry.",
+                hint=hint,
             )
 
         return {

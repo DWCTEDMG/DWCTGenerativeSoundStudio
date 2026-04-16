@@ -507,8 +507,34 @@ def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatc
     model_dir = manager._internal_models_dir("diffusers") / "hf_sdxl_internal"
     model_dir.mkdir(parents=True, exist_ok=True)
     assert manager.installed_path("hf_sdxl_internal") is None
-    (model_dir / "model_index.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model_index.json").write_text(
+        json.dumps(
+            {
+                "_class_name": "StableDiffusionXLPipeline",
+                "scheduler": ["diffusers", "EulerDiscreteScheduler"],
+                "tokenizer": ["transformers", "CLIPTokenizer"],
+                "tokenizer_2": ["transformers", "CLIPTokenizer"],
+                "text_encoder": ["transformers", "CLIPTextModel"],
+                "text_encoder_2": ["transformers", "CLIPTextModelWithProjection"],
+                "unet": ["diffusers", "UNet2DConditionModel"],
+                "vae": ["diffusers", "AutoencoderKL"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert manager.installed_path("hf_sdxl_internal") is None
+    assert manager.internal_asset_issue("hf_sdxl_internal") == "incomplete"
+    for component, filename in (
+        ("text_encoder", "model.safetensors"),
+        ("text_encoder_2", "model.safetensors"),
+        ("unet", "model.onnx"),
+        ("vae", "diffusion_pytorch_model.safetensors"),
+    ):
+        component_dir = model_dir / component
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / filename).write_text("weights", encoding="utf-8")
     assert manager.installed_path("hf_sdxl_internal") == model_dir
+    assert manager.internal_asset_issue("hf_sdxl_internal") is None
 
     controlnet_dir = manager._internal_models_dir("controlnet") / "hf_sdxl_controlnet_canny_internal"
     controlnet_dir.mkdir(parents=True, exist_ok=True)

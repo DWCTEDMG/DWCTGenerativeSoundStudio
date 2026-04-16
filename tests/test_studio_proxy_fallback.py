@@ -56,6 +56,33 @@ def test_internal_preflight_falls_back_to_proxy(tmp_path, monkeypatch):
     assert any("proxy" in w.lower() for w in preflight["warnings"])
 
 
+def test_internal_preflight_falls_back_to_proxy_for_incomplete_internal_model(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    monkeypatch.setattr(
+        studio_app.models,
+        "internal_asset_issue",
+        lambda model_id: "incomplete" if model_id == "hf_sd35_medium_internal" else None,
+    )
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {
+            "variant_index": 0,
+            "fps_render": 2,
+            "fps_output": 24,
+            "model_id": "hf_sd35_medium_internal",
+            "allow_proxy_fallback": True,
+        },
+    )
+
+    assert preflight["ok"] is True
+    assert preflight["mode"] == "proxy"
+    assert any("incomplete" in w.lower() for w in preflight["warnings"])
+
+
 def test_run_pipeline_auto_uses_proxy_when_comfy_and_models_missing(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
