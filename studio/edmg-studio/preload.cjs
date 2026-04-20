@@ -1,4 +1,36 @@
 const { contextBridge, ipcRenderer, shell } = require("electron");
+const fs = require("node:fs");
+const path = require("node:path");
+
+function readRuntimeDefaults() {
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, "runtime-defaults.json"));
+  }
+  candidates.push(path.join(__dirname, "electron-resources", "runtime-defaults.json"));
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        return parsed;
+      }
+    } catch {}
+  }
+
+  return {};
+}
+
+const runtimeDefaults = readRuntimeDefaults();
+const runtimeBackendDefaults =
+  runtimeDefaults.backend && typeof runtimeDefaults.backend === "object"
+    ? runtimeDefaults.backend
+    : {};
+const runtimeBackendHost =
+  typeof runtimeBackendDefaults.host === "string" ? runtimeBackendDefaults.host.trim() : "";
+const runtimeBackendPort =
+  runtimeBackendDefaults.port != null ? String(runtimeBackendDefaults.port).trim() : "";
 
 function getArgValue(prefix) {
   const found = process.argv.find((entry) => typeof entry === "string" && entry.startsWith(prefix));
@@ -8,11 +40,13 @@ function getArgValue(prefix) {
 const BACKEND_HOST =
   process.env.EDMG_STUDIO_BACKEND_HOST ||
   getArgValue("--edmg-backend-host=") ||
+  runtimeBackendHost ||
   "127.0.0.1";
 
 const BACKEND_PORT =
   process.env.EDMG_STUDIO_BACKEND_PORT ||
   getArgValue("--edmg-backend-port=") ||
+  runtimeBackendPort ||
   "7863";
 
 const TEST_MODE =
