@@ -5,6 +5,7 @@
   "description": "EDMG Studio desktop app",
   "author": "Dwct",
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "main": "main.mjs",
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
@@ -18,16 +19,16 @@
     "validate:electron-bridge": "node --check main.mjs && node --check preload.cjs && node --check main-process/backend-runtime.mjs && node --check main-process/window-runtime.mjs",
     "validate:desktop-integration": "node scripts/desktop-integration-harness.mjs --require-live-probe",
     "validate:desktop-integration:best-effort": "node scripts/desktop-integration-harness.mjs",
-    "validate:desktop-integration:strict": "npm run validate:desktop-integration",
+    "validate:desktop-integration:strict": "pnpm run validate:desktop-integration",
     "validate:packaged-desktop-smoke": "node scripts/packaged-desktop-smoke.mjs",
     "validate:packaged-customer-flow": "node scripts/packaged-customer-flow.mjs",
     "validate:packaged-upgrade-proof": "node scripts/packaged-upgrade-proof.mjs",
     "validate:packaged-zero-state-setup": "node scripts/packaged-zero-state-setup-proof.mjs",
-    "validate:desktop": "npm run typecheck && npm run test:ui && npm run build && npm run prepare:release-bundle && npm run release:stage-desktop && npm run validate:electron-bridge && npm run validate:desktop-integration && npm run validate:packaged-desktop-smoke",
-    "validate:release": "npm run validate:desktop && npm run dist:win && npm run validate:packaged-customer-flow && npm run validate:packaged-upgrade-proof && npm run validate:packaged-zero-state-setup",
-    "build:electron": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs --dir -c.directories.app=release/staged-app",
-    "dist:win": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app",
-    "dist:linux": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs -l AppImage --x64 -c.directories.app=release/staged-app"
+    "validate:desktop": "pnpm run typecheck && pnpm run test:ui && pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run validate:electron-bridge && pnpm run validate:desktop-integration && pnpm run validate:packaged-desktop-smoke",
+    "validate:release": "pnpm run validate:desktop && pnpm run dist:win && pnpm run validate:packaged-customer-flow && pnpm run validate:packaged-upgrade-proof && pnpm run validate:packaged-zero-state-setup",
+    "build:electron": "vite build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && node scripts/run-electron-builder.mjs --dir -c.directories.app=release/staged-app",
+    "dist:win": "vite build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app",
+    "dist:linux": "vite build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && node scripts/run-electron-builder.mjs -l AppImage --x64 -c.directories.app=release/staged-app"
   },
   "dependencies": {
     "@huggingface/hub": "^2.11.0",
@@ -105,5 +106,12 @@
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false
     }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-winstaller",
+      "esbuild"
+    ]
   }
 }

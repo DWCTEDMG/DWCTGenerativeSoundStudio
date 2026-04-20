@@ -521,8 +521,8 @@ Commands:
   supervisor status      Inspect the managed backend process and /health
   supervisor stop        Stop the managed backend process
   release status         Inspect bundled artifacts and packaged outputs
-  release build          Run the existing Windows release build (npm run dist:win)
-  release validate       Run the existing release proof (npm run validate:release)
+  release build          Run the existing Windows release build (pnpm run dist:win)
+  release validate       Run the existing release proof (pnpm run validate:release)
   release verify-manifest
                         Compare current packaged artifacts with a saved manifest
 

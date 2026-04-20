@@ -48,7 +48,7 @@ Primary artifact output:
 Run the full release validation from `studio/edmg-studio/`:
 
 ```powershell
-npm run validate:release
+pnpm run validate:release
 ```
 
 That proof covers:
@@ -90,7 +90,7 @@ Automated proof:
 
 ```powershell
 cd studio/edmg-studio
-npm run validate:packaged-upgrade-proof
+pnpm run validate:packaged-upgrade-proof
 ```
 
 Expected result:
@@ -109,7 +109,7 @@ Automated proof:
 
 ```powershell
 cd studio/edmg-studio
-npm run validate:packaged-zero-state-setup
+pnpm run validate:packaged-zero-state-setup
 ```
 
 Expected result:
@@ -131,7 +131,7 @@ PyInstaller may still report optional-import noise from libraries such as:
 Those warnings are acceptable only when all of the following are true:
 
 - the build uses Python `>=3.10,<3.14`
-- `npm run validate:release` passes
+- `pnpm run validate:release` passes
 - the packaged app reports healthy setup status
 - the packaged customer flow and upgrade proof both pass
 

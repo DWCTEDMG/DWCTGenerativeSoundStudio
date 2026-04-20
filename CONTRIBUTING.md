@@ -8,7 +8,7 @@
 ### Node/TS (studio/edmg-studio)
 - Format with Prettier
 - Lint with ESLint
-- Typecheck with `npm run typecheck`
+- Typecheck with `pnpm run typecheck` (`corepack enable` once first if `pnpm` is unavailable)
 
 ### Python (studio/edmg-studio/python_backend)
 - Format + lint with Ruff
@@ -16,9 +16,9 @@
 
 ## Commands (recommended)
 ### Node/TS
-- `npm run typecheck`
-- `npm run dev`
-- After adding scripts: `npm run lint`, `npm run format`, `npm test`
+- `pnpm run typecheck`
+- `pnpm run dev`
+- After adding scripts: `pnpm run lint`, `pnpm run format`, `pnpm test`
 
 ### Python (from python_backend dir)
 - `python -m ruff check .`

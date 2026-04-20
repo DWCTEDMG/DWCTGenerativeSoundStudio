@@ -8,8 +8,8 @@
 ## High-level components
 ### Desktop App (Node/TS)
 - Package root: `studio/edmg-studio/`
-- Typecheck: `npm run typecheck`
-- Dev: `npm run dev`
+- Typecheck: `pnpm run typecheck`
+- Dev: `pnpm run dev`
 
 ### Python Backend (FastAPI)
 - Run: `edmg-studio-backend serve --host 127.0.0.1 --port 7863`

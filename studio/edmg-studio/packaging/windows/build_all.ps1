@@ -1,7 +1,7 @@
 param(
   [string]$PythonExe = "python",
   [string]$NodeExe = "node",
-  [string]$NpmExe = "npm"
+  [string]$PnpmExe = "pnpm"
 )
 
 $ErrorActionPreference = "Stop"
@@ -158,8 +158,8 @@ function Doctor($RepoRoot, $StudioDir, $PyBackendDir, $BackendPkgDir, $BundledFf
   }
 
   try {
-    $npmv = & $NpmExe --version
-    Write-Host ("npm: " + $npmv.Trim())
+    $pnpmv = & $PnpmExe --version
+    Write-Host ("pnpm: " + $pnpmv.Trim())
   } catch {}
 
   $ff = $env:EDMG_FFMPEG_PATH
@@ -232,7 +232,7 @@ function Migrate-LegacyData($RepoRoot, $StudioDir, $PyBackendDir) {
 }
 
 Assert-Command $PythonExe
-Assert-Command $NpmExe
+Assert-Command $PnpmExe
 Assert-SupportedPythonVersion $PythonExe @() "Bootstrap Python" | Out-Null
 
 $StudioDir = Resolve-Path (Join-Path $PSScriptRoot "../..")
@@ -295,26 +295,26 @@ Copy-Item -Force $BackendExe (Join-Path $BackendDstDir "edmg-studio-backend.exe"
 
 Write-Host "[3/4] Installing UI dependencies..."
 Push-Location $StudioDir
-if (Test-Path "package-lock.json") {
+if (Test-Path "pnpm-lock.yaml") {
   try {
-    Invoke-Checked "npm ci" {
-      & $NpmExe ci
+    Invoke-Checked "pnpm install --frozen-lockfile" {
+      & $PnpmExe install --frozen-lockfile
     }
   } catch {
-    Write-Host ("[warn] npm ci failed; retrying with npm install. " + $_.Exception.Message) -ForegroundColor Yellow
-    Invoke-Checked "npm install fallback" {
-      & $NpmExe install
+    Write-Host ("[warn] pnpm install --frozen-lockfile failed; retrying with pnpm install. " + $_.Exception.Message) -ForegroundColor Yellow
+    Invoke-Checked "pnpm install fallback" {
+      & $PnpmExe install
     }
   }
 } else {
-  Invoke-Checked "npm install" {
-    & $NpmExe install
+  Invoke-Checked "pnpm install" {
+    & $PnpmExe install
   }
 }
 
 Write-Host "[4/4] Building installer (electron-builder)..."
-Invoke-Checked "npm run dist:win" {
-  & $NpmExe run dist:win
+Invoke-Checked "pnpm run dist:win" {
+  & $PnpmExe run dist:win
 }
 Pop-Location
 

@@ -88,8 +88,8 @@ It reads:
 
 It executes:
 
-- `npm run dist:win`
-- `npm run validate:release`
+- `pnpm run dist:win`
+- `pnpm run validate:release`
 
 It also inventories:
 
