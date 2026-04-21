@@ -55,7 +55,12 @@ Primary Studio docs:
 
 Key validation commands run from `studio/edmg-studio/`:
 
+- `pnpm run check:tooling`
 - `pnpm run validate:desktop`
 - `pnpm run dist:win`
 - `pnpm run validate:packaged-customer-flow`
 - `pnpm run validate:packaged-upgrade-proof`
+
+Canonical packaged desktop version source:
+
+- `studio/edmg-studio/package.json#version`

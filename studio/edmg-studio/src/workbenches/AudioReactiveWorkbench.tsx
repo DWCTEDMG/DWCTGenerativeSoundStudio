@@ -1,13 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  CheckCircle2,
   Copy,
   Download,
   Mic,
   MicOff,
   Pause,
   Play,
-  RefreshCcw,
   Save,
   Settings,
   Square,
@@ -1062,6 +1060,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
             </div>
             <div className="flex flex-wrap gap-3">
               <button onClick={exportBundle} disabled={!activeKeyframes.length} className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"><Download size={16} />Export JSON bundle</button>
+              <button onClick={exportHandoffManifest} disabled={!activeKeyframes.length} className="inline-flex items-center gap-2 rounded-xl border border-white/20 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"><Download size={16} />Export handoff JSON</button>
               <button
                 onClick={() => void syncToStudio()}
                 disabled={!activeKeyframes.length || !onSyncToStudio || !studioProjectId || studioSyncing}

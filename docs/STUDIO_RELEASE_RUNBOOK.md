@@ -144,12 +144,18 @@ Operators should run:
 
 ```powershell
 cd studio/edmg-studio
+pnpm run check:tooling
 pnpm run validate:release
 ```
 
 That includes:
 
+- pnpm/package-manager and lockfile guardrails
 - staged desktop validation
 - packaged customer-flow proof
 - packaged upgrade-proof migration test
 - packaged zero-state setup proof for Studio-managed Ollama and 7-Zip
+
+Canonical packaged desktop version source:
+
+- `studio/edmg-studio/package.json#version`

@@ -51,10 +51,19 @@ bash scripts/start_lightning_backend_nohup.sh
 ```bash
 corepack enable
 pnpm install
+pnpm run check:tooling
 pnpm run dev
 ```
 
-`corepack enable` is only needed once per machine if `pnpm` is not already on `PATH`.
+`corepack enable` is only needed once per machine if `pnpm` is not already on `PATH`. The package
+manager version is pinned via `packageManager` in `package.json`.
+
+## Versioning
+
+- Canonical shipped desktop version: `studio/edmg-studio/package.json#version`
+- Release staging copies that version into `studio/edmg-studio/release/staged-app/package.json`
+- Windows installer names include `${version}` via `package.json#build.win.artifactName`
+- Use `pnpm run check:release-metadata` after staging if you want a direct version-propagation check
 
 ## Setup Wizard (no command line)
 

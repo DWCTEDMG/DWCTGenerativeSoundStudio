@@ -40,7 +40,7 @@ used by the packaged app.
 
 - `studio/edmg-studio/`
   Electron shell, preload, main-process runtime, React/Vite frontend, packaging
-  scripts, and release validation.
+  scripts, release validation, and the only Node/pnpm package root in the repo.
 - `studio/edmg-studio/python_backend/`
   FastAPI backend plus the vendored `enhanced_deforum_music_generator` and
   `deforum_music` engine packages that power planning, analysis, schedules, and
@@ -64,6 +64,12 @@ The `Studio Home` contains:
 
 That keeps large downloads, render caches, and external tools off the app
 install path and allows migration to another drive such as `D:\`.
+
+## JS Tooling
+
+- Run all JS/Electron commands from `studio/edmg-studio/`.
+- The canonical package manager is `pnpm@10.33.0`, pinned in `studio/edmg-studio/package.json`.
+- The shipped desktop app version also comes from `studio/edmg-studio/package.json#version`.
 
 ## Release and operator docs
 

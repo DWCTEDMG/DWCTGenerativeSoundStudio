@@ -7,6 +7,7 @@ This is the Windows-first release checklist for the canonical Studio product in
 
 - Python `>=3.10,<3.14`
 - Node.js LTS
+- `pnpm@10.33.0` via `studio/edmg-studio/package.json#packageManager`
 - Windows build host for `dist:win`
 
 Packaged Studio ships its own Electron runtime. Python is only a build-time
@@ -15,6 +16,7 @@ requirement for source builds, backend bundling, and release packaging.
 ## Canonical repo hygiene
 
 - `studio/edmg-studio/` is the primary product surface.
+- `studio/edmg-studio/` is also the canonical JS/pnpm root. Do not add a competing root `package.json` or alternate JS lockfile elsewhere in the repo.
 - `DWCTGenerativeSoundStudio-main/` is treated as duplicate local noise and is
   ignored. Do not import it into the canonical repo.
 - Release branches should be clean before packaging:
@@ -24,6 +26,13 @@ git status --short
 ```
 
 ## Release build
+
+Canonical desktop version source:
+
+- `studio/edmg-studio/package.json#version`
+
+The staging/release flow copies that version into `release/staged-app/package.json`
+and electron-builder uses it for installer naming.
 
 From the repo root:
 
@@ -37,6 +46,7 @@ That script now:
 - rebuilds the packaged backend bundle
 - stages bundled FFmpeg
 - installs UI dependencies
+- validates pnpm/lockfile/release metadata expectations
 - runs the Windows installer build
 
 Primary artifact output:

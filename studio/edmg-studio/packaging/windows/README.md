@@ -7,6 +7,7 @@ This folder contains a **Windows-first** packaging pipeline that produces a DAW/
 - Windows 10/11 x64
 - Python 3.10+ (or 3.11) on PATH
 - Node.js 18+ on PATH
+- `pnpm@10.33.0` available via `corepack enable` or a direct pnpm install
 - Git (optional, for fetching ComfyUI)
 
 Recommended (for AI):
@@ -25,6 +26,10 @@ Outputs:
 
 - `studio/edmg-studio/dist/` (final electron-builder output: installer + unpacked app)
 - `studio/edmg-studio/release/staged-app/` (intermediate staged app passed to electron-builder)
+
+The packaged desktop version comes from `studio/edmg-studio/package.json#version`.
+`build_all.ps1` runs `pnpm run check:tooling` before `dist:win` so lockfile and
+version metadata drift is caught before packaging.
 
 ## What gets bundled
 
