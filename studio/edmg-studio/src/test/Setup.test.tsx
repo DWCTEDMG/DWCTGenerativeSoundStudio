@@ -1,5 +1,5 @@
 import React from "react";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import Setup from "../pages/Setup";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
@@ -64,5 +64,58 @@ describe("Setup page", () => {
     expect(await screen.findByText(/Linux and macOS use the manual setup path/)).toBeTruthy();
     expect(await screen.findByText(/Linux support expects a system-installed/i)).toBeTruthy();
     expect(await screen.findByText(/Linux support uses a manually installed ComfyUI instance.*optional workflows/i)).toBeTruthy();
+  });
+
+  it("shows a cancel button for active installer tasks", async () => {
+    installEdmgBridge();
+    let taskStatus = "running";
+    const fetchMock = installFetchMock({
+      "/v1/setup/status": () => ({
+        ollama: { ok: false, model_present: false },
+        comfyui: { ok: false },
+        ffmpeg: { ok: true },
+        backend_bundle: { ok: true },
+        sevenzip: { ok: false },
+        ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
+        tasks: [
+          {
+            id: "task1234",
+            name: "install_7zip",
+            status: taskStatus,
+            progress: taskStatus === "canceled" ? 0.42 : 0.42,
+            last_log: taskStatus === "canceled" ? "Cancel requested — stopping after current step." : "Downloading portable 7-Zip CLI",
+            cancel_requested: taskStatus === "canceled",
+          },
+        ],
+      }),
+      "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "POST /v1/setup/tasks/task1234/cancel": () => {
+        taskStatus = "canceled";
+        return {
+          ok: true,
+          task: {
+            id: "task1234",
+            name: "install_7zip",
+            status: "canceled",
+            progress: 0.42,
+            last_log: "Cancel requested — stopping after current step.",
+            cancel_requested: true,
+          },
+        };
+      },
+    });
+
+    renderWithStudio(<Setup />);
+
+    const cancelButton = await screen.findByRole("button", { name: "Cancel" });
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:7863/v1/setup/tasks/task1234/cancel",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(await screen.findByText(/canceled/i)).toBeTruthy();
   });
 });

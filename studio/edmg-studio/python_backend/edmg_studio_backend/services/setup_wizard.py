@@ -29,12 +29,30 @@ except Exception:  # pragma: no cover
 class SetupTask:
     id: str
     name: str
-    status: str = "queued"  # queued|running|done|failed
+    status: str = "queued"  # queued|running|done|failed|canceled
     progress: Optional[float] = None
     last_log: str = ""
     error: Optional[str] = None
     started_at: Optional[float] = None
     ended_at: Optional[float] = None
+    cancel_requested: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "status": self.status,
+            "progress": self.progress,
+            "last_log": self.last_log,
+            "error": self.error,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "cancel_requested": self.cancel_requested,
+        }
+
+
+class SetupTaskCanceled(Exception):
+    """Raised when a setup task is canceled and should stop promptly."""
 
 
 class SetupTaskManager:
@@ -55,20 +73,55 @@ class SetupTaskManager:
             self._tasks[task.id] = task
 
         def runner():
+            if task.cancel_requested:
+                task.status = "canceled"
+                task.started_at = time.time()
+                task.ended_at = task.started_at
+                if not task.last_log:
+                    task.last_log = "Canceled before start."
+                return
             task.status = "running"
             task.started_at = time.time()
             try:
+                self.check_canceled(task)
                 fn(task, *args, **kwargs)
+                self.check_canceled(task)
                 task.status = "done"
+            except SetupTaskCanceled as e:
+                task.status = "canceled"
+                if str(e):
+                    task.last_log = str(e)
             except Exception as e:
-                task.status = "failed"
-                task.error = str(e)
-                task.last_log = (task.last_log + "\n" if task.last_log else "") + f"ERROR: {e}"
+                if task.cancel_requested:
+                    task.status = "canceled"
+                    task.last_log = str(e) or "Canceled."
+                else:
+                    task.status = "failed"
+                    task.error = str(e)
+                    task.last_log = (task.last_log + "\n" if task.last_log else "") + f"ERROR: {e}"
             finally:
                 task.ended_at = time.time()
 
         threading.Thread(target=runner, daemon=True).start()
         return task
+
+    def cancel(self, task_id: str) -> SetupTask | None:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return None
+            if task.status in ("done", "failed", "canceled"):
+                return task
+            task.cancel_requested = True
+            if task.status == "queued":
+                task.status = "canceled"
+                task.last_log = task.last_log or "Canceled before start."
+                now = time.time()
+                task.started_at = task.started_at or now
+                task.ended_at = now
+            elif task.status == "running" and "Cancel requested" not in task.last_log:
+                task.last_log = "Cancel requested — stopping after current step."
+            return task
 
     @staticmethod
     def log(task: SetupTask, msg: str) -> None:
@@ -77,6 +130,54 @@ class SetupTaskManager:
     @staticmethod
     def set_progress(task: SetupTask, v: Optional[float]) -> None:
         task.progress = v
+
+    @staticmethod
+    def check_canceled(task: SetupTask, message: str = "Setup task canceled.") -> None:
+        if getattr(task, "cancel_requested", False):
+            raise SetupTaskCanceled(message)
+
+
+def _run_subprocess(
+    task: SetupTask,
+    args: list[str],
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    creationflags: int = 0,
+) -> None:
+    proc = subprocess.Popen(args, cwd=cwd, env=env, creationflags=creationflags)
+    try:
+        while True:
+            SetupTaskManager.check_canceled(task)
+            code = proc.poll()
+            if code is not None:
+                if code != 0:
+                    raise subprocess.CalledProcessError(code, args)
+                return
+            time.sleep(0.25)
+    except SetupTaskCanceled:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        raise
+
+
+def _extract_zip_with_cancel(task: SetupTask, archive_path: Path, dest_dir: Path) -> None:
+    with zipfile.ZipFile(archive_path) as archive:
+        members = archive.infolist()
+        total = max(1, len(members))
+        for index, member in enumerate(members, start=1):
+            SetupTaskManager.check_canceled(task)
+            archive.extract(member, dest_dir)
+            SetupTaskManager.set_progress(task, max(task.progress or 0.0, min(0.98, 0.8 + (index / total) * 0.18)))
 
 
 # ------------------------------ Ollama ------------------------------
@@ -262,13 +363,18 @@ class OllamaManagedProcess:
         self.url = base
         self.script_path = script_path
 
-        for _ in range(160):
-            if check_ollama(base, "").get("ok"):
-                SetupTaskManager.log(task, f"Ollama is running. Studio models path: {models_root}")
-                return
-            if self.proc.poll() is not None:
-                break
-            time.sleep(0.25)
+        try:
+            for _ in range(160):
+                SetupTaskManager.check_canceled(task, "Managed Ollama startup canceled.")
+                if check_ollama(base, "").get("ok"):
+                    SetupTaskManager.log(task, f"Ollama is running. Studio models path: {models_root}")
+                    return
+                if self.proc.poll() is not None:
+                    break
+                time.sleep(0.25)
+        except SetupTaskCanceled:
+            self.stop()
+            raise
 
         if check_ollama(base, "").get("ok"):
             SetupTaskManager.log(task, f"Ollama is running. Studio models path: {models_root}")
@@ -316,6 +422,7 @@ def download_and_install_ollama(
         "Accept": "application/vnd.github+json",
         "User-Agent": "EDMG-Studio",
     }
+    SetupTaskManager.check_canceled(task, "Managed Ollama install canceled.")
     SetupTaskManager.log(task, "Resolving official Ollama standalone archive…")
     release = requests.get(release_url, headers=headers, timeout=60)
     release.raise_for_status()
@@ -347,22 +454,30 @@ def download_and_install_ollama(
 
     archive_path = dest_dir / asset_name
     SetupTaskManager.log(task, f"Downloading {asset_name}…")
-    with requests.get(asset_url, headers=headers, stream=True, timeout=60) as response:
-        response.raise_for_status()
-        total = int(response.headers.get("content-length") or 0)
-        got = 0
-        with open(archive_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                got += len(chunk)
-                if total:
-                    SetupTaskManager.set_progress(task, min(0.8, got / total))
+    try:
+        with requests.get(asset_url, headers=headers, stream=True, timeout=60) as response:
+            response.raise_for_status()
+            total = int(response.headers.get("content-length") or 0)
+            got = 0
+            with open(archive_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    SetupTaskManager.check_canceled(task, "Managed Ollama install canceled.")
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    got += len(chunk)
+                    if total:
+                        SetupTaskManager.set_progress(task, min(0.8, got / total))
 
-    SetupTaskManager.log(task, f"Extracting {asset_name} into {install_dir}…")
-    with zipfile.ZipFile(archive_path) as archive:
-        archive.extractall(install_dir)
+        SetupTaskManager.check_canceled(task, "Managed Ollama install canceled.")
+        SetupTaskManager.log(task, f"Extracting {asset_name} into {install_dir}…")
+        _extract_zip_with_cancel(task, archive_path, install_dir)
+    except SetupTaskCanceled:
+        try:
+            archive_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
     SetupTaskManager.set_progress(task, 0.9)
 
     exe = _find_ollama_exe(external_dir)
@@ -400,6 +515,7 @@ def pull_ollama_model(task: SetupTask, ollama_url: str, model: str) -> None:
         r.raise_for_status()
         last = ""
         for line in r.iter_lines(decode_unicode=True):
+            SetupTaskManager.check_canceled(task, f"Model pull canceled for {model}.")
             if not line:
                 continue
             try:
@@ -562,7 +678,7 @@ def _extract_7z_cli(task: SetupTask, external_dir: Path, archive: Path, out_pare
     # `x` preserves folders; `-y` assumes Yes on all queries.
     cmd = [seven, "x", str(archive), f"-o{str(out_parent)}", "-y"]
     SetupTaskManager.log(task, "Extract command: " + " ".join(cmd))
-    subprocess.check_call(cmd)
+    _run_subprocess(task, cmd)
 
 
 def _yaml_quote(value: str) -> str:
@@ -615,40 +731,51 @@ def download_and_extract_portable(
     archive = tmp_dir / name
 
     SetupTaskManager.log(task, f"Downloading ComfyUI Portable ({flavor})…")
-    with requests.get(url, stream=True, timeout=60) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("content-length") or 0)
-        got = 0
-        with open(archive, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                got += len(chunk)
-                if total:
-                    SetupTaskManager.set_progress(task, min(0.7, (got / total) * 0.7))
-                    SetupTaskManager.log(task, f"Downloading… {int((got/total)*100)}%")
+    backup: Path | None = None
+    try:
+        with requests.get(url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length") or 0)
+            got = 0
+            with open(archive, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    SetupTaskManager.check_canceled(task, "ComfyUI Portable install canceled.")
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    got += len(chunk)
+                    if total:
+                        SetupTaskManager.set_progress(task, min(0.7, (got / total) * 0.7))
+                        SetupTaskManager.log(task, f"Downloading… {int((got/total)*100)}%")
 
-    # Extract
-    SetupTaskManager.log(task, "Extracting ComfyUI Portable…")
-    SetupTaskManager.set_progress(task, 0.75)
+        SetupTaskManager.check_canceled(task, "ComfyUI Portable install canceled.")
+        SetupTaskManager.log(task, "Extracting ComfyUI Portable…")
+        SetupTaskManager.set_progress(task, 0.75)
 
-    # Clear existing
-    if dest_root.exists():
-        # keep user models if they already have
-        # (best-effort; don't delete if there's a chance the user put models there)
-        backup = dest_root.parent / f"ComfyUI_windows_portable_backup_{int(time.time())}"
-        dest_root.rename(backup)
+        # Clear existing
+        if dest_root.exists():
+            # keep user models if they already have
+            # (best-effort; don't delete if there's a chance the user put models there)
+            backup = dest_root.parent / f"ComfyUI_windows_portable_backup_{int(time.time())}"
+            dest_root.rename(backup)
 
-    dest_root.parent.mkdir(parents=True, exist_ok=True)
+        dest_root.parent.mkdir(parents=True, exist_ok=True)
 
-    if str(archive).lower().endswith(".7z"):
-        _extract_7z_cli(task, external_dir, archive, dest_root.parent, data_dir)
-    else:
-        import zipfile
-
-        with zipfile.ZipFile(archive, "r") as z:
-            z.extractall(path=str(dest_root.parent))
+        if str(archive).lower().endswith(".7z"):
+            _extract_7z_cli(task, external_dir, archive, dest_root.parent, data_dir)
+        else:
+            _extract_zip_with_cancel(task, archive, dest_root.parent)
+    except SetupTaskCanceled:
+        try:
+            archive.unlink(missing_ok=True)
+        except Exception:
+            pass
+        if backup is not None and backup.exists() and not dest_root.exists():
+            try:
+                backup.rename(dest_root)
+            except Exception:
+                pass
+        raise
 
     # Some archives include a top-level folder; normalize to expected name.
     # Find a folder that contains python_embeded + ComfyUI.
@@ -740,15 +867,20 @@ class ComfyPortableProcess:
         self.root = root
 
         # Wait a bit for port to open
-        for _ in range(80):
-            try:
-                r = requests.get(f"http://{host}:{port}/system_stats", timeout=1.0)
-                if r.status_code == 200:
-                    SetupTaskManager.log(task, "ComfyUI is running.")
-                    return
-            except Exception:
-                pass
-            time.sleep(0.25)
+        try:
+            for _ in range(80):
+                SetupTaskManager.check_canceled(task, "ComfyUI startup canceled.")
+                try:
+                    r = requests.get(f"http://{host}:{port}/system_stats", timeout=1.0)
+                    if r.status_code == 200:
+                        SetupTaskManager.log(task, "ComfyUI is running.")
+                        return
+                except Exception:
+                    pass
+                time.sleep(0.25)
+        except SetupTaskCanceled:
+            self.stop()
+            raise
 
         SetupTaskManager.log(task, "ComfyUI started (still warming up). If it doesn't come online, try again or install GPU-compatible build.")
 
@@ -851,7 +983,8 @@ def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle") -> No
     SetupTaskManager.log(task, f"Installing backend runtime bundle `{bundle}`...")
     SetupTaskManager.set_progress(task, 0.1)
 
-    subprocess.check_call(
+    _run_subprocess(
+        task,
         [sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
         cwd=str(root),
     )
@@ -859,7 +992,8 @@ def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle") -> No
     SetupTaskManager.set_progress(task, 0.35)
     SetupTaskManager.log(task, f"Running pip install -e .[{bundle}]")
 
-    subprocess.check_call(
+    _run_subprocess(
+        task,
         [sys.executable, "-m", "pip", "install", "-e", f".[{bundle}]"],
         cwd=str(root),
     )
@@ -944,6 +1078,7 @@ def download_and_install_7zip(task: SetupTask, external_dir: Path, data_dir: Pat
     page_url = "https://7-zip.org/download.html"
     html: str | None = None
     try:
+        SetupTaskManager.check_canceled(task, "7-Zip download canceled.")
         SetupTaskManager.log(task, f"Fetching 7-Zip download page: {page_url}")
         r = requests.get(page_url, timeout=30)
         r.raise_for_status()
@@ -964,6 +1099,7 @@ def download_and_install_7zip(task: SetupTask, external_dir: Path, data_dir: Pat
                 got = 0
                 with open(archive, "wb") as f:
                     for chunk in rr.iter_content(chunk_size=1024 * 1024):
+                        SetupTaskManager.check_canceled(task, "7-Zip download canceled.")
                         if not chunk:
                             continue
                         f.write(chunk)
@@ -971,8 +1107,15 @@ def download_and_install_7zip(task: SetupTask, external_dir: Path, data_dir: Pat
                         if total > 0:
                             task.progress = min(0.95, got / total)
 
+            SetupTaskManager.check_canceled(task, "7-Zip download canceled.")
             shutil.copy2(archive, portable_exe)
             break
+        except SetupTaskCanceled:
+            try:
+                archive.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
         except Exception as exc:
             last_error = exc
             SetupTaskManager.log(task, f"Portable 7-Zip download failed from {url}: {exc}")
