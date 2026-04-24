@@ -282,7 +282,7 @@ async function killProcessTree(child) {
 
 async function main() {
   const appExe = resolvePackagedApp();
-  assert.ok(appExe, "Packaged app not found. Run npm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
+  assert.ok(appExe, "Packaged app not found. Run pnpm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
   const { audioFixture, generated: generatedAudioFixture } = await ensureAudioFixture();
   assert.ok(audioFixture, "Audio fixture not found and synthetic fallback generation failed.");
   const audioBytes = (await fsp.stat(audioFixture)).size;

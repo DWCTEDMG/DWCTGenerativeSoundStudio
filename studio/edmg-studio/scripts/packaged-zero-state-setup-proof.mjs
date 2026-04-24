@@ -170,7 +170,7 @@ async function waitForTask(baseUrl, taskId, timeoutMs = 90 * 60 * 1000) {
 
 async function main() {
   const appExe = resolvePackagedApp();
-  assert.ok(appExe, "Packaged app not found. Run npm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
+  assert.ok(appExe, "Packaged app not found. Run pnpm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
 
   await stopExistingPackagedProcesses();
 

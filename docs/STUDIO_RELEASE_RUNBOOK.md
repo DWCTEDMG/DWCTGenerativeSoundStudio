@@ -144,7 +144,7 @@ Operators should run:
 
 ```powershell
 cd studio/edmg-studio
-npm run validate:release
+pnpm run validate:release
 ```
 
 That includes:

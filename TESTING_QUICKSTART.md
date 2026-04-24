@@ -28,7 +28,7 @@ If Ollama/ComfyUI/FFmpeg aren’t installed yet, the app will still boot and sho
 From `studio/edmg-studio/`:
 
 ```powershell
-npm run validate:release
+pnpm run validate:release
 ```
 
 That runs the staged desktop checks, packaged customer-flow proof, and packaged
@@ -37,7 +37,7 @@ upgrade/migration proof.
 For the fresh-machine packaged setup path specifically:
 
 ```powershell
-npm run validate:packaged-zero-state-setup
+pnpm run validate:packaged-zero-state-setup
 ```
 
 That proof ignores global Ollama/7-Zip, installs Studio-managed copies under

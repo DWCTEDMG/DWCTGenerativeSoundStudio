@@ -49,9 +49,12 @@ bash scripts/start_lightning_backend_nohup.sh
 
 ### UI
 ```bash
-npm install
-npm run dev
+corepack enable
+pnpm install
+pnpm run dev
 ```
+
+`corepack enable` is only needed once per machine if `pnpm` is not already on `PATH`.
 
 ## Setup Wizard (no command line)
 

@@ -15,6 +15,57 @@ const IS_WINDOWS = process.platform === "win32";
 const BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json";
 const IGNORABLE_WRITE_ERROR_CODES = new Set(["EPIPE", "ERR_STREAM_DESTROYED"]);
 
+function readRuntimeDefaults() {
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, "runtime-defaults.json"));
+  }
+  candidates.push(path.join(__dirname, "electron-resources", "runtime-defaults.json"));
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("[runtime-defaults] failed to read", candidate, error);
+    }
+  }
+
+  return {};
+}
+
+const RUNTIME_DEFAULTS = readRuntimeDefaults();
+const BACKEND_RUNTIME_DEFAULTS =
+  RUNTIME_DEFAULTS.backend && typeof RUNTIME_DEFAULTS.backend === "object"
+    ? RUNTIME_DEFAULTS.backend
+    : {};
+
+if (
+  process.env.EDMG_STUDIO_BACKEND_HOST == null &&
+  typeof BACKEND_RUNTIME_DEFAULTS.host === "string" &&
+  BACKEND_RUNTIME_DEFAULTS.host.trim()
+) {
+  process.env.EDMG_STUDIO_BACKEND_HOST = BACKEND_RUNTIME_DEFAULTS.host.trim();
+}
+
+if (
+  process.env.EDMG_STUDIO_BACKEND_PORT == null &&
+  BACKEND_RUNTIME_DEFAULTS.port != null &&
+  String(BACKEND_RUNTIME_DEFAULTS.port).trim()
+) {
+  process.env.EDMG_STUDIO_BACKEND_PORT = String(BACKEND_RUNTIME_DEFAULTS.port).trim();
+}
+
+if (
+  process.env.EDMG_STUDIO_SPAWN_BACKEND == null &&
+  typeof BACKEND_RUNTIME_DEFAULTS.spawnBackend === "boolean"
+) {
+  process.env.EDMG_STUDIO_SPAWN_BACKEND = BACKEND_RUNTIME_DEFAULTS.spawnBackend ? "1" : "0";
+}
+
 const BACKEND_HOST = process.env.EDMG_STUDIO_BACKEND_HOST ?? "127.0.0.1";
 let BACKEND_PORT = Number(process.env.EDMG_STUDIO_BACKEND_PORT ?? "7863");
 const BACKEND_READY_TIMEOUT_MS = Number(

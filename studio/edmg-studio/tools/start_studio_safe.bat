@@ -1,5 +1,5 @@
 @echo off
 setlocal
 cd /d "%~dp0\.." || exit /b 1
-call npm run dev
+call pnpm run dev
 exit /b %ERRORLEVEL%

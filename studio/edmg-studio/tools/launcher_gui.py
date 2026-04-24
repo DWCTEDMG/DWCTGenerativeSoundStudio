@@ -16,6 +16,8 @@ ROOT = STUDIO_DIR.parents[1]
 BACKEND_DIR = STUDIO_DIR / "python_backend"
 BACKEND_VENV = BACKEND_DIR / "venv"
 BUNDLED_FFMPEG = STUDIO_DIR / "electron-resources" / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+PACKAGE_JSON_PATH = STUDIO_DIR / "package.json"
+DEFAULT_PACKAGE_MANAGER = "pnpm"
 DEFAULT_BACKEND_PORT = 7863
 DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_UI_PORT = 5173
@@ -155,6 +157,26 @@ def _write_json(path: Path, obj) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+
+
+def _studio_package_manager_name() -> str:
+    package_json = _read_json(PACKAGE_JSON_PATH, default={})
+    if isinstance(package_json, dict):
+        spec = str(package_json.get("packageManager", "")).strip()
+        if spec:
+            return spec.partition("@")[0] or DEFAULT_PACKAGE_MANAGER
+    return DEFAULT_PACKAGE_MANAGER
+
+
+def _resolve_package_manager_command(name: str) -> tuple[list[str], str] | None:
+    direct = shutil.which(name)
+    if direct:
+        return [direct], direct
+    if name == "pnpm":
+        corepack = shutil.which("corepack")
+        if corepack:
+            return [corepack, "pnpm"], f"{corepack} pnpm"
+    return None
 
 def _user_appdata_dir() -> Path:
     if sys.platform.startswith("win"):
@@ -1005,7 +1027,7 @@ class Launcher(tk.Tk):
         btn_row.pack(fill="x")
 
         ttk.Button(btn_row, text="Install/Update Backend (venv + deps)", command=self.install_backend).pack(side="left")
-        ttk.Button(btn_row, text="Install/Update Studio UI (npm install)", command=self.install_ui).pack(side="left", padx=8)
+        ttk.Button(btn_row, text=f"Install/Update Studio UI ({_studio_package_manager_name()} install)", command=self.install_ui).pack(side="left", padx=8)
         ttk.Button(btn_row, text="Start Backend", command=self.start_backend).pack(side="left", padx=8)
         ttk.Button(btn_row, text="Stop Backend", command=self.stop_backend).pack(side="left")
         ttk.Button(btn_row, text="Run Health Test", command=self.health_test).pack(side="left", padx=8)
@@ -1403,10 +1425,13 @@ class Launcher(tk.Tk):
             except Exception as e:
                 bootstrap_note = f" | bootstrap: NOT FOUND ({e})"
             node = self._which("node")
-            npm = self._which("npm")
+            package_manager_name = _studio_package_manager_name()
+            package_manager = _resolve_package_manager_command(package_manager_name)
 
             self.lbl_python.config(text=f"Python: {py}{bootstrap_note}")
-            self.lbl_node.config(text=f"Node: {node or 'NOT FOUND'} (npm: {npm or 'NOT FOUND'})")
+            self.lbl_node.config(
+                text=f"Node: {node or 'NOT FOUND'} ({package_manager_name}: {(package_manager[1] if package_manager else 'NOT FOUND')})"
+            )
 
             _, line_ollama = _port_doctor_line("Ollama", "127.0.0.1", 11434, health_url="http://127.0.0.1:11434/api/tags")
             self.lbl_ollama.config(text=line_ollama)
@@ -1469,14 +1494,15 @@ class Launcher(tk.Tk):
 
     def install_ui(self) -> None:
         def work():
-            npm = self._which("npm")
-            if not npm:
-                raise RuntimeError("npm not found. Install Node.js LTS, then retry.")
-            if not (STUDIO_DIR / "package.json").exists():
+            package_manager_name = _studio_package_manager_name()
+            package_manager = _resolve_package_manager_command(package_manager_name)
+            if not package_manager:
+                raise RuntimeError(f"{package_manager_name} not found. Install Node.js LTS, enable Corepack if needed, then retry.")
+            if not PACKAGE_JSON_PATH.exists():
                 raise RuntimeError(f"package.json not found at {STUDIO_DIR}")
-            rc = _run_cmd([npm, "install"], cwd=STUDIO_DIR, log_cb=self._log)
+            rc = _run_cmd([*package_manager[0], "install"], cwd=STUDIO_DIR, log_cb=self._log)
             if rc != 0:
-                raise RuntimeError("npm install failed")
+                raise RuntimeError(f"{package_manager_name} install failed")
 
         self._run_bg("Install Studio UI deps", work)
 
@@ -1607,10 +1633,11 @@ class Launcher(tk.Tk):
             messagebox.showerror("Open folder failed", str(e))
 
     def _start_studio_impl(self) -> None:
-        npm = self._which("npm")
-        if not npm:
-            raise RuntimeError("npm not found. Install Node.js LTS, then retry.")
-        self._log("Starting Studio (npm run dev)…")
+        package_manager_name = _studio_package_manager_name()
+        package_manager = _resolve_package_manager_command(package_manager_name)
+        if not package_manager:
+            raise RuntimeError(f"{package_manager_name} not found. Install Node.js LTS, enable Corepack if needed, then retry.")
+        self._log(f"Starting Studio ({package_manager_name} run dev)…")
 
         # Align backend first.
         self._auto_attach_backend_if_found()
@@ -1635,7 +1662,7 @@ class Launcher(tk.Tk):
         self._studio_log_fp.flush()
 
         self.studio_proc = subprocess.Popen(
-            [npm, "run", "dev"],
+            [*package_manager[0], "run", "dev"],
             cwd=str(STUDIO_DIR),
             env=env,
             stdout=self._studio_log_fp,

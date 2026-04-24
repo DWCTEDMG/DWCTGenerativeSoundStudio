@@ -311,7 +311,7 @@ func CollectToolStatus() []ToolStatus {
 	tools := []ToolStatus{
 		versionedTool("git", []commandCandidate{{Name: "git"}}),
 		versionedTool("node", []commandCandidate{{Name: "node"}}),
-		versionedTool("npm", []commandCandidate{{Name: npmCommandName()}}),
+		versionedTool("pnpm", packageManagerCandidates()),
 		pythonToolStatus(),
 		{
 			Name:    "go",
@@ -689,11 +689,11 @@ func ResolveStoragePaths(fallbackHome string, cfg BootstrapConfig) StoragePaths 
 }
 
 func RunReleaseBuild(repoRoot string) error {
-	return runNPMScript(repoRoot, "dist:win")
+	return runPackageManagerScript(repoRoot, "dist:win")
 }
 
 func RunReleaseValidate(repoRoot string) error {
-	return runNPMScript(repoRoot, "validate:release")
+	return runPackageManagerScript(repoRoot, "validate:release")
 }
 
 func StartManagedBackend(repoRoot, host string, port int, waitTimeout time.Duration) (SupervisorStatus, error) {
@@ -865,16 +865,18 @@ func StopManagedBackend() (SupervisorStatus, error) {
 	}, nil
 }
 
-func runNPMScript(repoRoot, script string) error {
+func runPackageManagerScript(repoRoot, script string) error {
 	repoRoot, err := FindRepoRoot(repoRoot)
 	if err != nil {
 		return err
 	}
-	npm := resolveCommand([]commandCandidate{{Name: npmCommandName()}})
-	if npm.Path == "" {
-		return errors.New("npm not found in PATH")
+	packageManager := resolveCommand(packageManagerCandidates())
+	if packageManager.Path == "" {
+		return errors.New("pnpm not found in PATH (or via corepack)")
 	}
-	cmd := exec.Command(npm.Path, "run", script)
+	args := append([]string{}, packageManager.Args...)
+	args = append(args, "run", script)
+	cmd := exec.Command(packageManager.Path, args...)
 	cmd.Dir = filepath.Join(repoRoot, StudioRelDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -954,25 +956,25 @@ func releaseProofPointers(repoRoot string) []ReleaseProofPointer {
 	return []ReleaseProofPointer{
 		{
 			Name:    "full-release-validation",
-			Command: "npm run validate:release",
+			Command: "pnpm run validate:release",
 			DocPath: doc,
 			Note:    "Runs desktop validation, packaged customer flow, and packaged upgrade proof.",
 		},
 		{
 			Name:    "packaged-customer-flow",
-			Command: "npm run validate:packaged-customer-flow",
+			Command: "pnpm run validate:packaged-customer-flow",
 			DocPath: doc,
 			Note:    "Verifies create, upload, analyze, plan, run, and output paths in the packaged app.",
 		},
 		{
 			Name:    "packaged-upgrade-proof",
-			Command: "npm run validate:packaged-upgrade-proof",
+			Command: "pnpm run validate:packaged-upgrade-proof",
 			DocPath: doc,
 			Note:    "Verifies migration from the older C:\\-style layout into Studio-managed roots.",
 		},
 		{
 			Name:    "packaged-zero-state-setup",
-			Command: "npm run validate:packaged-zero-state-setup",
+			Command: "pnpm run validate:packaged-zero-state-setup",
 			DocPath: doc,
 			Note:    "Verifies Studio-managed Ollama and portable 7-Zip setup on a fresh root.",
 		},
@@ -1125,7 +1127,7 @@ func versionedTool(name string, candidates []commandCandidate) ToolStatus {
 		args = append(args, "--version")
 	case "node":
 		args = append(args, "--version")
-	case "npm":
+	case "pnpm":
 		args = append(args, "--version")
 	default:
 		args = append(args, "--version")
@@ -1379,11 +1381,18 @@ func executableOrBlank() string {
 	return path
 }
 
-func npmCommandName() string {
-	if runtime.GOOS == "windows" {
-		return "npm.cmd"
+func packageManagerCandidates() []commandCandidate {
+	return []commandCandidate{
+		{Name: pnpmCommandName()},
+		{Name: "corepack", Args: []string{"pnpm"}},
 	}
-	return "npm"
+}
+
+func pnpmCommandName() string {
+	if runtime.GOOS == "windows" {
+		return "pnpm.cmd"
+	}
+	return "pnpm"
 }
 
 func packagedAppName() string {

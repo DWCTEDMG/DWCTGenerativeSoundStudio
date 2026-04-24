@@ -147,10 +147,10 @@ func TestReleaseProofPointersIncludeCoreProofs(t *testing.T) {
 	}
 	commands := strings.Join(joined, "\n")
 	for _, expected := range []string{
-		"npm run validate:release",
-		"npm run validate:packaged-customer-flow",
-		"npm run validate:packaged-upgrade-proof",
-		"npm run validate:packaged-zero-state-setup",
+		"pnpm run validate:release",
+		"pnpm run validate:packaged-customer-flow",
+		"pnpm run validate:packaged-upgrade-proof",
+		"pnpm run validate:packaged-zero-state-setup",
 	} {
 		if !strings.Contains(commands, expected) {
 			t.Fatalf("expected release proofs to contain %q", expected)

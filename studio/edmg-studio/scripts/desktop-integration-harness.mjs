@@ -108,7 +108,7 @@ function resolveElectronBinary() {
 }
 
 function canLaunchElectron() {
-  if (!resolveElectronBinary()) return { ok: false, reason: "Electron binary unavailable (likely npm install --ignore-scripts without postinstall download)." };
+  if (!resolveElectronBinary()) return { ok: false, reason: "Electron binary unavailable (likely pnpm install --ignore-scripts without postinstall download)." };
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     const xvfb = "/usr/bin/xvfb-run";
     if (!fs.existsSync(xvfb)) {
