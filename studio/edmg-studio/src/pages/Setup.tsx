@@ -119,11 +119,25 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     const t = setInterval(refresh, 2000);
     return () => clearInterval(t);
   }, []);
-async function run(action: string, path: string, body: any = {}) {
+
+  async function run(action: string, path: string, body: any = {}) {
     setBusy(action);
     setErr("");
     try {
       await apiPost(path, body);
+      await refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function cancelTask(taskId: string) {
+    setBusy(`cancel_${taskId}`);
+    setErr("");
+    try {
+      await apiPost(`/v1/setup/tasks/${taskId}/cancel`, {});
       await refresh();
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -639,13 +653,27 @@ async function run(action: string, path: string, body: any = {}) {
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
                 {status.tasks.slice(0, 5).map((t: any) => (
                   <div key={t.id} style={{ padding: 8, borderRadius: 10, background: "#121422", border: "1px solid #22263a" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
                       <div style={{ fontWeight: 700 }}>{t.name}</div>
-                      <div className="small">{t.status}{t.progress != null ? ` • ${Math.round(t.progress * 100)}%` : ""}</div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        <div className="small">{t.status}{t.progress != null ? ` • ${Math.round(t.progress * 100)}%` : ""}</div>
+                        {(t.status === "queued" || t.status === "running") ? (
+                          <button
+                            className="secondary"
+                            disabled={busy === `cancel_${t.id}` || !!t.cancel_requested}
+                            onClick={() => void cancelTask(t.id)}
+                          >
+                            {(busy === `cancel_${t.id}` || t.cancel_requested) ? "Canceling…" : "Cancel"}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                     {t.last_log && (
                       <div className="small" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{t.last_log}</div>
                     )}
+                    {t.error ? (
+                      <div className="small" style={{ marginTop: 6, color: "#ffb7b7", whiteSpace: "pre-wrap" }}>{t.error}</div>
+                    ) : null}
                   </div>
                 ))}
               </div>

@@ -95,7 +95,7 @@ function buildElectronBuilderConfig() {
   return pkg.build;
 }
 
-function renderElectronBuilderConfig() {
+export function renderElectronBuilderConfig() {
   return [
     '# Auto-generated from package.json build. Do not edit by hand.',
     JSON.stringify(buildElectronBuilderConfig(), null, 2),

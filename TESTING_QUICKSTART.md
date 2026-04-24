@@ -28,6 +28,7 @@ If Ollama/ComfyUI/FFmpeg aren’t installed yet, the app will still boot and sho
 From `studio/edmg-studio/`:
 
 ```powershell
+pnpm run check:tooling
 pnpm run validate:release
 ```
 

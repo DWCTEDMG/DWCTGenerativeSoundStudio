@@ -8,6 +8,7 @@
 ## High-level components
 ### Desktop App (Node/TS)
 - Package root: `studio/edmg-studio/`
+- Package manager: `pnpm@10.33.0` via `packageManager`
 - Typecheck: `pnpm run typecheck`
 - Dev: `pnpm run dev`
 

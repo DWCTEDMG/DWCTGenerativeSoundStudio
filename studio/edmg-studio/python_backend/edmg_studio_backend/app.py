@@ -2089,8 +2089,16 @@ def setup_status():
             "edmg": edmg,
             "sevenzip": seven,
             "hardware": hw,
-            "tasks": [t.__dict__ for t in setup_tasks.list()[:10]],
+            "tasks": [t.to_dict() for t in setup_tasks.list()[:10]],
         }
+
+
+@app.post("/v1/setup/tasks/{task_id}/cancel")
+def setup_task_cancel(task_id: str):
+    task = setup_tasks.cancel(task_id)
+    if task is None:
+        raise HTTPException(404, f"Setup task not found: {task_id}")
+    return {"ok": True, "task": task.to_dict()}
 
 
 @app.post("/v1/setup/ollama/install_managed")
@@ -2105,7 +2113,7 @@ def setup_ollama_install_managed():
         settings.models_dir,
         url,
     )
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 
 @app.post("/v1/setup/ollama/download_and_run")
@@ -2123,7 +2131,7 @@ def setup_ollama_start_managed():
         settings.models_dir,
         url,
     )
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 
 @app.post("/v1/setup/ollama/pull")
@@ -2133,19 +2141,19 @@ def setup_ollama_pull(payload: dict[str, Any]):
     model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     task = setup_tasks.start(f"pull_model:{model}", pull_ollama_model, url, model)
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 @app.post("/v1/setup/7zip/install")
 def setup_7zip_install():
     """Download the portable 7-Zip CLI (required for extracting some .7z archives)."""
     task = setup_tasks.start("install_7zip", download_and_install_7zip, settings.external_dir, settings.data_dir)
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 @app.post("/v1/setup/backend/install")
 def setup_backend_install(payload: dict[str, Any]):
     bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
     task = setup_tasks.start(f"install_backend_bundle:{bundle}", install_backend_bundle, bundle)
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 @app.post("/v1/setup/full/install")
 def setup_full_install(payload: dict[str, Any]):
@@ -2163,18 +2171,21 @@ def setup_full_install(payload: dict[str, Any]):
 
     def _run(task):
         # 1) Ensure backend runtime bundle is present for audio/ASR/internal render paths.
+        SetupTaskManager.check_canceled(task, "Full setup canceled.")
         if not check_backend_bundle(bundle).get("ok"):
             install_backend_bundle(task, bundle)
         else:
             SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` already installed.")
 
         # 2) Ensure 7-Zip for .7z extraction
+        SetupTaskManager.check_canceled(task, "Full setup canceled.")
         try:
             _find_7z_exe(settings.external_dir, settings.data_dir)
         except Exception:
             download_and_install_7zip(task, settings.external_dir, settings.data_dir)
 
         # 3) Ollama install/model only when the active AI path actually uses Ollama.
+        SetupTaskManager.check_canceled(task, "Full setup canceled.")
         if ai_config.get("ollama_required"):
             ollama_status = check_ollama(ollama_url, model)
             if not ollama_status.get("ok"):
@@ -2199,6 +2210,7 @@ def setup_full_install(payload: dict[str, Any]):
             )
 
         # 4) ComfyUI Portable install + start
+        SetupTaskManager.check_canceled(task, "Full setup canceled.")
         if not comfy_portable_installed(settings.external_dir, settings.data_dir):
             download_and_extract_portable(task, settings.external_dir, flavor, settings.data_dir, settings.models_dir)
         else:
@@ -2217,7 +2229,7 @@ def setup_full_install(payload: dict[str, Any]):
             comfy_portable.start(task, settings.external_dir, flavor, "127.0.0.1", port, settings.data_dir, settings.models_dir)
 
     task = setup_tasks.start(f"full_setup:{flavor}:{ai_config.get('provider')}", _run)
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 
 @app.post("/v1/setup/comfyui/portable/install")
@@ -2231,7 +2243,7 @@ def setup_comfyui_portable_install(payload: dict[str, Any]):
         settings.data_dir,
         settings.models_dir,
     )
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 
 @app.post("/v1/setup/comfyui/portable/start")
@@ -2248,7 +2260,7 @@ def setup_comfyui_portable_start(payload: dict[str, Any]):
         settings.data_dir,
         settings.models_dir,
     )
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 
 @app.post("/v1/setup/comfyui/portable/stop")
@@ -2262,7 +2274,7 @@ def setup_edmg_install(payload: dict[str, Any]):
     mode = str((payload or {}).get("mode") or "standard").strip().lower() or "standard"
     backend = str((payload or {}).get("backend") or "cpu").strip().lower() or "cpu"
     task = setup_tasks.start(f"install_edmg_core:{mode}:{backend}", edmg_install_core, settings.data_dir, mode=mode, backend=backend)
-    return {"ok": True, "task": task.__dict__}
+    return {"ok": True, "task": task.to_dict()}
 
 
 @app.get("/v1/ai/status")

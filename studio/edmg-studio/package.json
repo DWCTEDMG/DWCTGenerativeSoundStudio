@@ -6,14 +6,22 @@
   "author": "Dwct",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=10.33.0 <11"
+  },
   "main": "main.mjs",
   "scripts": {
+    "preinstall": "node scripts/enforce-package-manager.mjs",
     "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "build": "vite build",
+    "test": "pnpm run test:ui",
     "test:ui": "vitest run",
     "test:ui:watch": "vitest",
     "lint": "eslint src main.mjs preload.cjs main-process scripts --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:tooling": "node scripts/check-tooling.mjs",
+    "check:release-metadata": "node scripts/check-release-metadata.mjs",
     "prepare:release-bundle": "node scripts/prepare-release-bundle.mjs",
     "release:stage-desktop": "node scripts/release-stage-desktop.mjs",
     "validate:electron-bridge": "node --check main.mjs && node --check preload.cjs && node --check main-process/backend-runtime.mjs && node --check main-process/window-runtime.mjs",
@@ -24,11 +32,11 @@
     "validate:packaged-customer-flow": "node scripts/packaged-customer-flow.mjs",
     "validate:packaged-upgrade-proof": "node scripts/packaged-upgrade-proof.mjs",
     "validate:packaged-zero-state-setup": "node scripts/packaged-zero-state-setup-proof.mjs",
-    "validate:desktop": "pnpm run typecheck && pnpm run test:ui && pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run validate:electron-bridge && pnpm run validate:desktop-integration && pnpm run validate:packaged-desktop-smoke",
+    "validate:desktop": "pnpm run check:tooling && pnpm run typecheck && pnpm run test:ui && pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && pnpm run validate:electron-bridge && pnpm run validate:desktop-integration && pnpm run validate:packaged-desktop-smoke",
     "validate:release": "pnpm run validate:desktop && pnpm run dist:win && pnpm run validate:packaged-customer-flow && pnpm run validate:packaged-upgrade-proof && pnpm run validate:packaged-zero-state-setup",
-    "build:electron": "vite build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && node scripts/run-electron-builder.mjs --dir -c.directories.app=release/staged-app",
-    "dist:win": "vite build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app",
-    "dist:linux": "vite build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && node scripts/run-electron-builder.mjs -l AppImage --x64 -c.directories.app=release/staged-app"
+    "build:electron": "pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && node scripts/run-electron-builder.mjs --dir -c.directories.app=release/staged-app",
+    "dist:win": "pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app",
+    "dist:linux": "pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && node scripts/run-electron-builder.mjs -l AppImage --x64 -c.directories.app=release/staged-app"
   },
   "dependencies": {
     "@huggingface/hub": "^2.11.0",

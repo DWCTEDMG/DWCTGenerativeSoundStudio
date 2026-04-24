@@ -313,6 +313,9 @@ if (Test-Path "pnpm-lock.yaml") {
 }
 
 Write-Host "[4/4] Building installer (electron-builder)..."
+Invoke-Checked "pnpm run check:tooling" {
+  & $PnpmExe run check:tooling
+}
 Invoke-Checked "pnpm run dist:win" {
   & $PnpmExe run dist:win
 }
