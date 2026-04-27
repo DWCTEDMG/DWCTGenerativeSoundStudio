@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Sidebar, { Page } from "./components/Sidebar";
-import { apiGet } from "./components/api";
+import { apiGet, getBackendUrl, getBackendUrlAsync } from "./components/api";
 
 import Dashboard from "./pages/Dashboard";
 import Projects from "./pages/Projects";
@@ -47,16 +47,9 @@ function getForcedPage(): Page | null {
   return raw && isPage(raw) ? raw : null;
 }
 
-function getRequestedBackendUrl(): string | null {
-  if (typeof window === "undefined") return null;
-  const params = new URLSearchParams(window.location.search);
-  return params.get("backendUrl") || params.get("backend") || null;
-}
-
 export default function App() {
   const [page, setPage] = useState<Page>(getInitialPage);
   const [forcedPage] = useState<Page | null>(getForcedPage);
-  const [requestedBackendUrl] = useState<string | null>(getRequestedBackendUrl);
   const [backendUrl, setBackendUrl] = useState<string>("");
   const [config, setConfig] = useState<any>(null);
   const [setupChecked, setSetupChecked] = useState(false);
@@ -65,27 +58,16 @@ export default function App() {
     let alive = true;
     (async () => {
       try {
-        const url =
-          requestedBackendUrl ||
-          (window.edmg?.getBackendUrl
-            ? await window.edmg.getBackendUrl()
-            : (window.edmg?.backendUrl?.() ??
-              window.__EDMG_BACKEND_URL__ ??
-              "http://127.0.0.1:7863"));
+        const url = await getBackendUrlAsync();
         if (alive) setBackendUrl(url);
       } catch {
-        const url =
-          requestedBackendUrl ||
-          window.edmg?.backendUrl?.() ||
-          window.__EDMG_BACKEND_URL__ ||
-          "http://127.0.0.1:7863";
-        if (alive) setBackendUrl(url);
+        if (alive) setBackendUrl(getBackendUrl());
       }
     })();
     return () => {
       alive = false;
     };
-  }, [requestedBackendUrl]);
+  }, []);
 
   useEffect(() => {
     if (!backendUrl) return;
@@ -98,12 +80,14 @@ export default function App() {
     if (!backendUrl || setupChecked) return;
     apiGet("/v1/setup/status")
       .then((s) => {
-        const need = !(
-          s?.ollama?.ok &&
-          s?.ollama?.model_present &&
-          s?.comfyui?.ok &&
-          s?.ffmpeg?.ok
-        );
+        const aiConfig = s?.ai_config ?? {};
+        const ollamaRequired = !!aiConfig?.ollama_required;
+        const modelRequired = !!aiConfig?.model_required;
+        const backendBundleOk = !!s?.backend_bundle?.ok;
+        const ffmpegOk = !!s?.ffmpeg?.ok;
+        const ollamaOk = !!s?.ollama?.ok;
+        const modelOk = !modelRequired || !!s?.ollama?.model_present;
+        const need = !(backendBundleOk && ffmpegOk && (!ollamaRequired || (ollamaOk && modelOk)));
         if (need && !forcedPage) setPage("setup" as any);
         setSetupChecked(true);
       })
