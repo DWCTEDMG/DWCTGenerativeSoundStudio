@@ -77,6 +77,7 @@ install path and allows migration to another drive such as `D:\`.
 - [RELEASE.md](D:\DWCTGenerativeSoundStudio\RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_RELEASE_RUNBOOK.md)
 - [docs/STUDIO_REPO_MAP.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_REPO_MAP.md)
+- [docs/STARLIFT_VM_DEPLOY.md](D:\DWCTGenerativeSoundStudio\docs\STARLIFT_VM_DEPLOY.md)
 - [docs/AI_PROVIDERS.md](D:\DWCTGenerativeSoundStudio\docs\AI_PROVIDERS.md)
 - [docs/HF_VIDEO_MODELS.md](D:\DWCTGenerativeSoundStudio\docs\HF_VIDEO_MODELS.md)
 
