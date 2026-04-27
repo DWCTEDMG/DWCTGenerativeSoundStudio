@@ -1,12 +1,51 @@
-export function getBackendUrl(): string {
+function readQueryBackendUrl(): string {
+  if (typeof window === "undefined") return "";
   const params = new URLSearchParams(window.location.search);
+  return (params.get("backendUrl") || params.get("backend") || "").trim();
+}
+
+function readSameOriginBackendUrl(): string {
+  if (typeof window === "undefined") return "";
+  if (import.meta.env.DEV) return "";
+  const protocol = window.location.protocol;
+  if (protocol !== "http:" && protocol !== "https:") return "";
+  return window.location.origin;
+}
+
+export function getBackendUrl(): string {
   return (
-    params.get("backendUrl") ||
-    params.get("backend") ||
+    readQueryBackendUrl() ||
     window.edmg?.backendUrl?.() ||
     window.__EDMG_BACKEND_URL__ ||
+    readSameOriginBackendUrl() ||
     "http://127.0.0.1:7863"
   );
+}
+
+export async function getBackendUrlAsync(): Promise<string> {
+  const explicit = readQueryBackendUrl();
+  if (explicit) return explicit;
+  try {
+    const bridged = await window.edmg?.getBackendUrl?.();
+    if (typeof bridged === "string" && bridged.trim()) {
+      return bridged.trim();
+    }
+  } catch {
+    // Fall through to the sync fallback chain below.
+  }
+  return getBackendUrl();
+}
+
+export function ensureBrowserBridge(): void {
+  if (typeof window === "undefined" || window.edmg) return;
+  const backendUrl = getBackendUrl();
+  window.edmg = {
+    backendUrl: () => backendUrl,
+    getBackendUrl: async () => backendUrl,
+    openExternal: async (url: string) => {
+      window.open(String(url), "_blank", "noopener,noreferrer");
+    },
+  };
 }
 
 function formatBackendError(d: any, fallback: string): string {
