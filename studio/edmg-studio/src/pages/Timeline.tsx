@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, getBackendUrl } from "../components/api";
 import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
@@ -228,7 +228,7 @@ function fmtLabel(trackType: string, clip: Clip): string {
   return String(clip?.id || "clip");
 }
 
-export default function Timeline({}: PageProps) {
+export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
   const {
     projectId,
     setProjectId,
@@ -237,7 +237,7 @@ export default function Timeline({}: PageProps) {
     lastHandoff,
     clearHandoff,
   } = useStudioSession();
-  const backendUrl = useMemo(() => getBackendUrl(), []);
+  const backendUrl = backendUrlProp || getBackendUrl();
 
   const [projects, setProjects] = useState<any[]>([]);
   const [project, setProject] = useState<any>(null);

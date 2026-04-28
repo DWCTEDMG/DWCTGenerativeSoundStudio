@@ -28,51 +28,51 @@ lowest-risk place for Go is around operations and tooling:
 From `studio/edmg-studio/tools/edmgctl/`:
 
 ```powershell
-$env:GOCACHE='D:\Tools\GoCache'
-$env:GOMODCACHE='D:\Tools\GoPkg'
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl doctor
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl bootstrap show
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release status
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl artifact list --hashes
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl support export --out D:\Tools\edmg-support.zip
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor start --port 0 --wait --timeout 90s
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor status
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl supervisor stop
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release verify-manifest --manifest D:\Tools\edmg-artifacts.json
+$env:GOCACHE="$PWD\\.gocache"
+$env:GOMODCACHE="$PWD\\.gomodcache"
+go run ./cmd/edmgctl doctor
+go run ./cmd/edmgctl bootstrap show
+go run ./cmd/edmgctl release status
+go run ./cmd/edmgctl artifact list --hashes
+go run ./cmd/edmgctl support export --out .\edmg-support.zip
+go run ./cmd/edmgctl supervisor start --port 0 --wait --timeout 90s
+go run ./cmd/edmgctl supervisor status
+go run ./cmd/edmgctl supervisor stop
+go run ./cmd/edmgctl release verify-manifest --manifest .\edmg-artifacts.json
 ```
 
 Machine-readable output:
 
 ```powershell
-$env:GOCACHE='D:\Tools\GoCache'
-$env:GOMODCACHE='D:\Tools\GoPkg'
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl doctor --json
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl artifact manifest --out D:\Tools\edmg-artifacts.json
+$env:GOCACHE="$PWD\\.gocache"
+$env:GOMODCACHE="$PWD\\.gomodcache"
+go run ./cmd/edmgctl doctor --json
+go run ./cmd/edmgctl artifact manifest --out .\edmg-artifacts.json
 ```
 
 Release wrappers:
 
 ```powershell
-$env:GOCACHE='D:\Tools\GoCache'
-$env:GOMODCACHE='D:\Tools\GoPkg'
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release build
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release validate
-D:\Tools\Go\bin\go.exe run ./cmd/edmgctl release verify-manifest --manifest D:\Tools\edmg-artifacts.json
+$env:GOCACHE="$PWD\\.gocache"
+$env:GOMODCACHE="$PWD\\.gomodcache"
+go run ./cmd/edmgctl release build
+go run ./cmd/edmgctl release validate
+go run ./cmd/edmgctl release verify-manifest --manifest .\edmg-artifacts.json
 ```
 
 ## Build
 
 ```powershell
-cd D:\DWCTGenerativeSoundStudio\studio\edmg-studio\tools\edmgctl
-$env:GOCACHE='D:\Tools\GoCache'
-$env:GOMODCACHE='D:\Tools\GoPkg'
-D:\Tools\Go\bin\go.exe build -o D:\Tools\edmgctl.exe ./cmd/edmgctl
+cd studio/edmg-studio/tools/edmgctl
+$env:GOCACHE="$PWD\\.gocache"
+$env:GOMODCACHE="$PWD\\.gomodcache"
+go build -o .\dist\edmgctl.exe ./cmd/edmgctl
 ```
 
 Then run:
 
 ```powershell
-D:\Tools\edmgctl.exe doctor
+.\dist\edmgctl.exe doctor
 ```
 
 ## Integration points

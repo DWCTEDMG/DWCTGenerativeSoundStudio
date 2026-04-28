@@ -5,6 +5,7 @@ import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import { copyPathValue, desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
+import type { PageProps } from "../types/pageProps";
 
 type CatalogEntry = {
   id: string;
@@ -88,18 +89,22 @@ const UPSCALER_OPTIONS = [
   { value: "pixel_bicubic", label: "Pixel bicubic" },
 ];
 
-export default function Render({ onNavigate }: { onNavigate?: (page: any) => void }) {
+export default function Render({ onNavigate, backendUrl: backendUrlProp }: RenderProps) {
   const savedRenderDefaults = readRenderDefaults();
   const { mode: uiMode } = useUiMode();
-  const backendUrl = useMemo(() => getBackendUrl(), []);
+  const backendUrl = backendUrlProp || getBackendUrl();
 
   const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState<string>("");
   const [project, setProject] = useState<any>(null);
+  const [visualDna, setVisualDna] = useState<any>(null);
+  const [visualDnaHints, setVisualDnaHints] = useState<any>(null);
 
   const [plan, setPlan] = useState<any>(null);
   const [analysis, setAnalysis] = useState<any>(null);
   const [selectedVariant, setSelectedVariant] = useState<number>(0);
+  const [conductorPlan, setConductorPlan] = useState<any>(null);
+  const [conductorEnvironment, setConductorEnvironment] = useState<any>(null);
 
   const [renderPreset, setRenderPreset] = useState<"fast" | "balanced" | "quality" | "ultra">((savedRenderDefaults.renderPreset as any) || "balanced");
   const [checkpointName, setCheckpointName] = useState<string>("");
@@ -499,6 +504,8 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
     if (!id) return;
     const d = await apiGet(`/v1/projects/${id}`);
     setProject(d.project);
+    setVisualDna(d.visual_dna || null);
+    setVisualDnaHints(d.visual_dna_hints || null);
     setAnalysis(d.project?.meta?.analysis || null);
     setPlan(d.project?.meta?.last_plan || null);
     setTimeline(d.project?.meta?.timeline || { layers: [], camera: { keyframes: [] } });
@@ -522,6 +529,26 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
       setInternalPreflight(d);
     } catch (e: any) {
       setInternalPreflight({ ok: false, error: String(e) });
+    }
+  };
+
+  const refreshConductorPlan = async () => {
+    if (!projectId || !(plan?.variants?.length || 0)) {
+      setConductorPlan(null);
+      setConductorEnvironment(null);
+      return;
+    }
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/conductor/plan`, {
+        variant_index: selectedVariant,
+        preset: renderPreset,
+      });
+      setConductorPlan(d?.plan || null);
+      setConductorEnvironment(d?.environment || null);
+      if (d?.visual_dna_hints) setVisualDnaHints(d.visual_dna_hints);
+    } catch {
+      setConductorPlan(null);
+      setConductorEnvironment(null);
     }
   };
 
@@ -599,6 +626,10 @@ export default function Render({ onNavigate }: { onNavigate?: (page: any) => voi
   useEffect(() => {
     refreshValidate().catch(() => {});
   }, [projectId, selectedVariant, renderPreset]);
+
+  useEffect(() => {
+    refreshConductorPlan().catch(() => {});
+  }, [plan, projectId, renderPreset, selectedVariant]);
 
   useEffect(() => {
     if (selectedStillModelId || !stillModels.length) return;
@@ -1157,6 +1188,29 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               </div>
             </div>
           </div>
+
+          {conductorPlan ? (
+            <div className="card" style={{ marginTop: 12, padding: 12 }}>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Render Conductor</div>
+              <div className="small">{conductorPlan.summary || "Advisory multi-engine plan ready."}</div>
+              <div className="small" style={{ marginTop: 6 }}>
+                Route: {(Array.isArray(conductorPlan.sections) ? conductorPlan.sections : [])
+                  .slice(0, 4)
+                  .map((section: any) => `${section.scene_id}: ${section.engine}`)
+                  .join(" • ") || "No scene routes yet."}
+              </div>
+              {visualDnaHints?.core_themes?.length || visualDnaHints?.motifs?.length ? (
+                <div className="small" style={{ marginTop: 6 }}>
+                  Visual DNA: {[...(visualDnaHints?.core_themes || []), ...(visualDnaHints?.motifs || [])].slice(0, 4).join(" • ")}
+                </div>
+              ) : null}
+              {typeof visualDnaHints?.confidence === "number" ? (
+                <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                  Project memory confidence: {Math.round(Number(visualDnaHints.confidence) * 100)}%
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
             <button onClick={runPipeline} disabled={!variantCount}>Preset + Render (one click)</button>
@@ -2433,6 +2487,18 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Capabilities</div>
           {!caps && <div className="small">Loading…</div>}
           {caps && <pre>{JSON.stringify(caps, null, 2)}</pre>}
+          {conductorEnvironment ? (
+            <>
+              <div style={{ fontWeight: 800, margin: "14px 0 10px" }}>Conductor environment</div>
+              <pre>{JSON.stringify(conductorEnvironment, null, 2)}</pre>
+            </>
+          ) : null}
+          {visualDna ? (
+            <>
+              <div style={{ fontWeight: 800, margin: "14px 0 10px" }}>Visual DNA</div>
+              <pre>{JSON.stringify(visualDna, null, 2)}</pre>
+            </>
+          ) : null}
 
           <hr />
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Last action result</div>
@@ -2443,3 +2509,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
     </div>
   );
 }
+type RenderProps = {
+  backendUrl?: string;
+  onNavigate?: PageProps["onNavigate"];
+};

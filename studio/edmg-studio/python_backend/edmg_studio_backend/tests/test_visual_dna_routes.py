@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from edmg_studio_backend import app as backend_app
+from edmg_studio_backend.store.jobs import JobStore
+from edmg_studio_backend.store.projects import ProjectStore
+
+
+def _make_project(tmp_path: Path):
+    store = ProjectStore(tmp_path / "data")
+    jobs = JobStore(store.projects_dir)
+    proj = store.create("DNA Route Test")
+    proj.meta = {"timeline": {"layers": [], "camera": {"keyframes": []}}}
+    store.save(proj)
+    return store, jobs, proj
+
+
+def test_planner_import_persists_visual_dna_and_project_reads_expose_it(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(backend_app, "store", store)
+    monkeypatch.setattr(backend_app, "jobs", jobs)
+
+    payload = {
+        "analysis": {
+            "basicInfo": {"durationSeconds": 12, "tempo": 124},
+            "themes": [{"theme": "future nostalgia"}],
+            "visualImagery": [{"element": "neon skyline"}],
+        },
+        "plan": {
+            "scenes": [
+                {
+                    "id": 1,
+                    "approved": True,
+                    "status": "approved",
+                    "text": "neon skyline with reflective lead silhouette",
+                    "negativePrompt": "muddy lighting",
+                    "shotType": "tracking side profile",
+                    "transitionCue": "rise into chorus",
+                }
+            ],
+            "scenePlan": [{"id": 1, "startTime": "00:00", "endTime": "00:12"}],
+        },
+        "settings": {"promptStyle": "cinematic"},
+        "apply_timeline": False,
+        "overwrite_timeline": True,
+    }
+
+    with TestClient(backend_app.app) as client:
+        imported = client.post(f"/v1/projects/{proj.id}/planner_lab/import", json=payload)
+        imported.raise_for_status()
+        imported_payload = imported.json()
+        assert imported_payload["visual_dna"]["identity"]["core_themes"] == ["future nostalgia"]
+        assert "neon skyline" in imported_payload["visual_dna"]["identity"]["motifs"]
+
+        project = client.get(f"/v1/projects/{proj.id}")
+        project.raise_for_status()
+        project_payload = project.json()
+        assert project_payload["visual_dna"]["project_id"] == proj.id
+        assert "tracking side profile" in project_payload["visual_dna"]["identity"]["camera_language"]
+        assert project_payload["visual_dna_hints"]["style_bias"]["cinematic"] >= 0.8
+
+    assert (store.project_dir(proj.id) / "analysis" / "visual_dna.json").exists()
+
+
+def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    proj.meta["last_plan"] = {
+        "variants": [
+            {
+                "duration_s": 8.0,
+                "scenes": [
+                    {
+                        "id": "scene-1",
+                        "start_s": 0.0,
+                        "end_s": 4.0,
+                        "prompt": "keep the same lead on a neon rooftop",
+                        "continuity_note": "preserve the same lead silhouette",
+                        "approved": True,
+                    },
+                    {
+                        "id": "scene-2",
+                        "start_s": 4.0,
+                        "end_s": 8.0,
+                        "prompt": "hero burst transition with glitch impact",
+                    },
+                ],
+            }
+        ]
+    }
+    store.save(proj)
+
+    monkeypatch.setattr(backend_app, "store", store)
+    monkeypatch.setattr(backend_app, "jobs", jobs)
+    monkeypatch.setattr(
+        backend_app,
+        "_build_render_conductor_environment",
+        lambda: {
+            "engines": {
+                "internal": {"available": True, "quality_score": 0.9, "speed_score": 0.55},
+                "comfyui_still": {"available": True, "quality_score": 0.85, "speed_score": 0.45},
+                "comfyui_motion": {"available": True, "quality_score": 0.82, "speed_score": 0.6},
+                "hosted_video": {"available": False, "quality_score": 0.78, "speed_score": 0.8},
+                "proxy": {"available": True, "quality_score": 0.38, "speed_score": 0.95},
+                "deforum_export": {"available": False, "quality_score": 0.7, "speed_score": 0.45},
+            },
+            "diagnostics": ["stubbed-environment"],
+        },
+    )
+
+    reactive_payload = {
+        "metadata": {"renderMode": "performance-led"},
+        "keyframes": [],
+        "beat_markers": [],
+        "cue_events": [],
+        "sections": [{"label": "chorus", "approved": True}],
+        "repair_suggestions": [{"issue": "face drift", "action": "reuse anchor seed"}],
+        "schedules": {"zoom": "0:(1.0), 48:(1.2)", "rotation_y": "0:(0),48:(6)"},
+        "handoff_manifest": {"renderMode": "performance-led"},
+        "overwrite_motion_track": True,
+        "overwrite_camera": True,
+    }
+
+    with TestClient(backend_app.app) as client:
+        applied = client.post(f"/v1/projects/{proj.id}/reactive_lab/apply", json=reactive_payload)
+        applied.raise_for_status()
+        applied_payload = applied.json()
+        assert applied_payload["visual_dna"]["learning_state"]["sources"]["reactive_imports"] == 1
+        assert "push-in dynamics" in applied_payload["visual_dna"]["identity"]["camera_language"]
+
+        planned = client.post(
+            f"/v1/projects/{proj.id}/render/conductor/plan",
+            json={"variant_index": 0, "preset": "balanced"},
+        )
+        planned.raise_for_status()
+        planned_payload = planned.json()
+        assert planned_payload["plan"]["advisory_only"] is True
+        assert len(planned_payload["plan"]["sections"]) == 2
+        assert planned_payload["environment"]["diagnostics"] == ["stubbed-environment"]
+        assert "continuity-heavy" not in planned_payload["plan"]["summary"]  # summary stays generic
+        assert planned_payload["visual_dna_hints"]["confidence"] > 0.0

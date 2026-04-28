@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Sidebar, { Page } from "./components/Sidebar";
-import { apiGet } from "./components/api";
+import { apiGet, getBackendUrl, getBackendUrlAsync } from "./components/api";
 
 import Dashboard from "./pages/Dashboard";
 import Projects from "./pages/Projects";
@@ -47,63 +47,54 @@ function getForcedPage(): Page | null {
   return raw && isPage(raw) ? raw : null;
 }
 
-function getRequestedBackendUrl(): string | null {
-  if (typeof window === "undefined") return null;
-  const params = new URLSearchParams(window.location.search);
-  return params.get("backendUrl") || params.get("backend") || null;
-}
-
 export default function App() {
   const [page, setPage] = useState<Page>(getInitialPage);
   const [forcedPage] = useState<Page | null>(getForcedPage);
-  const [requestedBackendUrl] = useState<string | null>(getRequestedBackendUrl);
   const [backendUrl, setBackendUrl] = useState<string>("");
   const [config, setConfig] = useState<any>(null);
+  const [backendConfigError, setBackendConfigError] = useState<string>("");
   const [setupChecked, setSetupChecked] = useState(false);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const url =
-          requestedBackendUrl ||
-          (window.edmg?.getBackendUrl
-            ? await window.edmg.getBackendUrl()
-            : (window.edmg?.backendUrl?.() ??
-              window.__EDMG_BACKEND_URL__ ??
-              "http://127.0.0.1:7863"));
+        const url = await getBackendUrlAsync();
         if (alive) setBackendUrl(url);
       } catch {
-        const url =
-          requestedBackendUrl ||
-          window.edmg?.backendUrl?.() ||
-          window.__EDMG_BACKEND_URL__ ||
-          "http://127.0.0.1:7863";
-        if (alive) setBackendUrl(url);
+        if (alive) setBackendUrl(getBackendUrl());
       }
     })();
     return () => {
       alive = false;
     };
-  }, [requestedBackendUrl]);
+  }, []);
 
   useEffect(() => {
     if (!backendUrl) return;
     apiGet("/v1/config")
-      .then(setConfig)
-      .catch(() => {});
+      .then((nextConfig) => {
+        setConfig(nextConfig);
+        setBackendConfigError("");
+      })
+      .catch((error: any) => {
+        setConfig(null);
+        setBackendConfigError(String(error?.message ?? error));
+      });
   }, [backendUrl]);
 
   useEffect(() => {
     if (!backendUrl || setupChecked) return;
     apiGet("/v1/setup/status")
       .then((s) => {
-        const need = !(
-          s?.ollama?.ok &&
-          s?.ollama?.model_present &&
-          s?.comfyui?.ok &&
-          s?.ffmpeg?.ok
-        );
+        const aiConfig = s?.ai_config ?? {};
+        const ollamaRequired = !!aiConfig?.ollama_required;
+        const modelRequired = !!aiConfig?.model_required;
+        const backendBundleOk = !!s?.backend_bundle?.ok;
+        const ffmpegOk = !!s?.ffmpeg?.ok;
+        const ollamaOk = !!s?.ollama?.ok;
+        const modelOk = !modelRequired || !!s?.ollama?.model_present;
+        const need = !(backendBundleOk && ffmpegOk && (!ollamaRequired || (ollamaOk && modelOk)));
         if (need && !forcedPage) setPage("setup" as any);
         setSetupChecked(true);
       })
@@ -111,6 +102,20 @@ export default function App() {
   }, [backendUrl, forcedPage, setupChecked]);
 
   const commonProps = useMemo(() => ({ backendUrl, config }), [backendUrl, config]);
+
+  if (!backendUrl) {
+    return (
+      <div className="app-shell">
+        <Sidebar page={page} onNavigate={setPage} />
+        <div className="main">
+          <div className="card">
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Connecting to Studio backend</div>
+            <div className="small">Resolving the active backend target before loading workspace screens.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   let content: React.ReactNode = null;
   if (page === "dashboard") content = <Dashboard {...commonProps} />;
@@ -134,7 +139,20 @@ export default function App() {
   return (
     <div className="app-shell">
       <Sidebar page={page} onNavigate={setPage} />
-      <div className={mainClassName}>{content}</div>
+      <div className={mainClassName}>
+        {backendConfigError ? (
+          <div className="card" style={{ marginBottom: 14, borderColor: "var(--warning, #b58900)" }}>
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Backend connection needs attention</div>
+            <div className="small" style={{ marginBottom: 8 }}>
+              Studio resolved <b>{backendUrl}</b> but could not load `/v1/config` from it.
+            </div>
+            <div className="small" style={{ opacity: 0.84 }}>
+              If you intended to attach the desktop GUI to an external backend, open Settings and review Desktop Backend mode, host, and port. Error: {backendConfigError}
+            </div>
+          </div>
+        ) : null}
+        {content}
+      </div>
     </div>
   );
 }

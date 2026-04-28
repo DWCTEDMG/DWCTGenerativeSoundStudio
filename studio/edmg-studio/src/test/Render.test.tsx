@@ -109,6 +109,18 @@ const installRenderMocks = () => {
           assets: { overlays: [], masks: ["mask-a.png"] },
         },
       },
+      visual_dna: {
+        project_id: "p1",
+        identity: {
+          core_themes: ["future nostalgia"],
+          motifs: ["neon skyline", "lead silhouette"],
+        },
+      },
+      visual_dna_hints: {
+        core_themes: ["future nostalgia"],
+        motifs: ["neon skyline", "lead silhouette"],
+        confidence: 0.72,
+      },
     },
     "/v1/projects/p1/assets": {
       assets: {
@@ -116,6 +128,21 @@ const installRenderMocks = () => {
       },
     },
     "/v1/projects/p1/pipeline/validate*": { ok: true, valid: true },
+    "POST /v1/projects/p1/render/conductor/plan": {
+      ok: true,
+      plan: {
+        summary: "Recommended engine mix: internal x1.",
+        sections: [{ scene_id: "scene-1", engine: "internal" }],
+      },
+      environment: {
+        diagnostics: ["test-environment"],
+      },
+      visual_dna_hints: {
+        core_themes: ["future nostalgia"],
+        motifs: ["neon skyline", "lead silhouette"],
+        confidence: 0.72,
+      },
+    },
     "/v1/projects/p1/creative_direction*": {
       creative_direction: {
         preset: "cinematic",

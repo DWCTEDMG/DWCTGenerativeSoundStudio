@@ -63,7 +63,8 @@ The `Studio Home` contains:
 - `electron`
 
 That keeps large downloads, render caches, and external tools off the app
-install path and allows migration to another drive such as `D:\`.
+install path and allows migration to another drive or mount such as `D:\` on
+Windows or `/mnt/media/EDMG-Studio` on Linux.
 
 ## JS Tooling
 
@@ -73,12 +74,13 @@ install path and allows migration to another drive such as `D:\`.
 
 ## Release and operator docs
 
-- [studio/edmg-studio/README.md](D:\DWCTGenerativeSoundStudio\studio\edmg-studio\README.md)
-- [RELEASE.md](D:\DWCTGenerativeSoundStudio\RELEASE.md)
-- [docs/STUDIO_RELEASE_RUNBOOK.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_RELEASE_RUNBOOK.md)
-- [docs/STUDIO_REPO_MAP.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_REPO_MAP.md)
-- [docs/AI_PROVIDERS.md](D:\DWCTGenerativeSoundStudio\docs\AI_PROVIDERS.md)
-- [docs/HF_VIDEO_MODELS.md](D:\DWCTGenerativeSoundStudio\docs\HF_VIDEO_MODELS.md)
+- [studio/edmg-studio/README.md](./studio/edmg-studio/README.md)
+- [RELEASE.md](./RELEASE.md)
+- [docs/STUDIO_RELEASE_RUNBOOK.md](./docs/STUDIO_RELEASE_RUNBOOK.md)
+- [docs/STUDIO_REPO_MAP.md](./docs/STUDIO_REPO_MAP.md)
+- [docs/STARLIFT_VM_DEPLOY.md](./docs/STARLIFT_VM_DEPLOY.md)
+- [docs/AI_PROVIDERS.md](./docs/AI_PROVIDERS.md)
+- [docs/HF_VIDEO_MODELS.md](./docs/HF_VIDEO_MODELS.md)
 
 ## Recommended Local Stack
 

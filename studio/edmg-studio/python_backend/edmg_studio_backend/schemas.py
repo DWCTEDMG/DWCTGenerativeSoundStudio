@@ -237,3 +237,274 @@ class CloudAwsBundleRequest(BaseModel):
 
 class CloudLightningBundleRequest(BaseModel):
     output_dir: str = "lightning_bundle"
+
+
+TraitScope = Literal[
+    "theme",
+    "motif",
+    "palette",
+    "lighting",
+    "camera",
+    "texture",
+    "positive_prompt",
+    "negative_prompt",
+    "transition_rule",
+    "engine",
+    "failure",
+]
+TraitState = Literal["declared", "observed", "reinforced", "deprecated"]
+RenderAspectRatio = Literal["16:9", "9:16", "1:1", "21:9"]
+RenderOutputMode = Literal["full_video", "scene_batch", "preview"]
+RenderFallbackPolicy = Literal["auto", "strict", "manual"]
+EngineKind = Literal[
+    "internal",
+    "comfyui_still",
+    "comfyui_motion",
+    "hosted_video",
+    "proxy",
+    "deforum_export",
+]
+RenderStepKind = Literal[
+    "prepare_assets",
+    "build_prompt",
+    "render_still",
+    "render_motion",
+    "repair_continuity",
+    "interpolate",
+    "upscale",
+    "assemble",
+    "mux_audio",
+    "validate",
+]
+RenderOutcome = Literal["approved", "rejected", "needs_repair", "unknown"]
+
+
+class TraitObservation(BaseModel):
+    scope: TraitScope
+    value: str = Field(min_length=1, max_length=260)
+    state: TraitState = "observed"
+    weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence_count: int = Field(default=1, ge=1)
+    sources: list[str] = Field(default_factory=list)
+
+
+class VisualDNAPaletteProfile(BaseModel):
+    dominant: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+
+
+class VisualDNAIdentity(BaseModel):
+    core_themes: list[str] = Field(default_factory=list)
+    motifs: list[str] = Field(default_factory=list)
+    palette: VisualDNAPaletteProfile = Field(default_factory=VisualDNAPaletteProfile)
+    lighting_language: list[str] = Field(default_factory=list)
+    camera_language: list[str] = Field(default_factory=list)
+    texture_language: list[str] = Field(default_factory=list)
+
+
+class VisualDNASeedLineage(BaseModel):
+    preferred_seed_families: list[int] = Field(default_factory=list)
+    stable_subject_seed: int | None = None
+
+
+class VisualDNAContinuity(BaseModel):
+    subject_anchors: list[str] = Field(default_factory=list)
+    environment_anchors: list[str] = Field(default_factory=list)
+    transition_rules: list[str] = Field(default_factory=list)
+    seed_lineage: VisualDNASeedLineage = Field(default_factory=VisualDNASeedLineage)
+
+
+class VisualDNAPromptGuidance(BaseModel):
+    positive_fragments: list[str] = Field(default_factory=list)
+    negative_fragments: list[str] = Field(default_factory=list)
+    style_bias: dict[str, float] = Field(default_factory=dict)
+
+
+class EngineOutcomeMemory(BaseModel):
+    success_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    approved_count: int = Field(default=0, ge=0)
+    rejected_count: int = Field(default=0, ge=0)
+    repair_count: int = Field(default=0, ge=0)
+    best_for: list[str] = Field(default_factory=list)
+    avoid_for: list[str] = Field(default_factory=list)
+
+
+class QualityFailurePattern(BaseModel):
+    pattern: str = Field(min_length=1, max_length=260)
+    frequency: int = Field(default=1, ge=1)
+    mitigation: str | None = Field(default=None, max_length=400)
+
+
+class SuccessfulRenderCombination(BaseModel):
+    engine: str = Field(min_length=1, max_length=80)
+    model: str | None = Field(default=None, max_length=160)
+    context: str | None = Field(default=None, max_length=260)
+    score: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class VisualDNAQualityMemory(BaseModel):
+    common_failures: list[QualityFailurePattern] = Field(default_factory=list)
+    successful_combinations: list[SuccessfulRenderCombination] = Field(default_factory=list)
+
+
+class VisualDNAFingerprint(BaseModel):
+    render_id: str = Field(min_length=1, max_length=120)
+    palette_signature: list[str] = Field(default_factory=list)
+    motif_tags: list[str] = Field(default_factory=list)
+    motion_profile: str | None = Field(default=None, max_length=160)
+    continuity_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    user_outcome: RenderOutcome = "unknown"
+    engine: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=160)
+    created_at: str | None = None
+
+
+class VisualDNALearningState(BaseModel):
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    sources: dict[str, int] = Field(
+        default_factory=lambda: {
+            "planner_imports": 0,
+            "reactive_imports": 0,
+            "approved_renders": 0,
+            "rejected_renders": 0,
+            "repair_renders": 0,
+        }
+    )
+    locked_fields: list[str] = Field(default_factory=list)
+    soft_fields: list[str] = Field(
+        default_factory=lambda: [
+            "camera_language",
+            "lighting_language",
+            "texture_language",
+            "negative_fragments",
+            "style_bias",
+        ]
+    )
+
+
+class ProjectVisualDNA(BaseModel):
+    version: int = Field(default=1, ge=1)
+    project_id: str = Field(min_length=1, max_length=120)
+    project_name: str | None = Field(default=None, max_length=200)
+    updated_at: str = ""
+    identity: VisualDNAIdentity = Field(default_factory=VisualDNAIdentity)
+    continuity: VisualDNAContinuity = Field(default_factory=VisualDNAContinuity)
+    prompt_guidance: VisualDNAPromptGuidance = Field(default_factory=VisualDNAPromptGuidance)
+    engine_memory: dict[str, EngineOutcomeMemory] = Field(default_factory=dict)
+    quality_memory: VisualDNAQualityMemory = Field(default_factory=VisualDNAQualityMemory)
+    trait_memory: list[TraitObservation] = Field(default_factory=list)
+    fingerprints: list[VisualDNAFingerprint] = Field(default_factory=list)
+    learning_state: VisualDNALearningState = Field(default_factory=VisualDNALearningState)
+
+
+class ProjectSnapshot(BaseModel):
+    project_id: str = Field(min_length=1, max_length=120)
+    project_name: str | None = Field(default=None, max_length=200)
+    analysis: dict[str, Any] = Field(default_factory=dict)
+    plan: dict[str, Any] = Field(default_factory=dict)
+    timeline: dict[str, Any] = Field(default_factory=dict)
+    visual_dna: ProjectVisualDNA | None = None
+
+
+class RenderIntentSection(BaseModel):
+    scene_id: str = Field(min_length=1, max_length=120)
+    start_s: float = Field(default=0.0, ge=0.0)
+    end_s: float = Field(default=0.0, ge=0.0)
+    creative_goal: str | None = Field(default=None, max_length=260)
+    continuity_priority: float | None = Field(default=None, ge=0.0, le=1.0)
+    speed_priority: float | None = Field(default=None, ge=0.0, le=1.0)
+    notes: list[str] = Field(default_factory=list)
+
+
+class RenderIntent(BaseModel):
+    project_id: str = Field(min_length=1, max_length=120)
+    variant_index: int = Field(default=0, ge=0)
+    aspect_ratio: RenderAspectRatio = "16:9"
+    output_mode: RenderOutputMode = "full_video"
+    quality_tier: Literal["draft", "balanced", "quality", "ultra"] = "balanced"
+    continuity_priority: float = Field(default=0.75, ge=0.0, le=1.0)
+    speed_priority: float = Field(default=0.4, ge=0.0, le=1.0)
+    style_lock_strength: float = Field(default=0.8, ge=0.0, le=1.0)
+    allowed_engines: list[EngineKind] = Field(
+        default_factory=lambda: [
+            "internal",
+            "comfyui_still",
+            "comfyui_motion",
+            "hosted_video",
+            "proxy",
+            "deforum_export",
+        ]
+    )
+    fallback_policy: RenderFallbackPolicy = "auto"
+    sections: list[RenderIntentSection] = Field(default_factory=list)
+
+
+class RenderStep(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    kind: RenderStepKind
+    adapter: str = Field(min_length=1, max_length=80)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class RenderSectionPlan(BaseModel):
+    scene_id: str = Field(min_length=1, max_length=120)
+    engine: EngineKind
+    rationale: str = Field(min_length=1, max_length=1000)
+    estimated_cost: float = Field(default=0.0, ge=0.0)
+    estimated_seconds: float = Field(default=0.0, ge=0.0)
+    continuity_risk: float = Field(default=0.0, ge=0.0, le=1.0)
+    steps: list[RenderStep] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class AssemblyPlan(BaseModel):
+    mode: Literal["timeline_concat", "audio_mux", "scene_bundle"] = "audio_mux"
+    expected_output_path: str = Field(min_length=1, max_length=1024)
+
+
+class FallbackBranch(BaseModel):
+    trigger: str = Field(min_length=1, max_length=260)
+    reroute_to: EngineKind
+    notes: str = Field(min_length=1, max_length=400)
+
+
+class RenderPlan(BaseModel):
+    plan_id: str = Field(min_length=1, max_length=120)
+    project_id: str = Field(min_length=1, max_length=120)
+    variant_index: int = Field(default=0, ge=0)
+    created_at: str = ""
+    advisory_only: bool = True
+    summary: str = Field(min_length=1, max_length=1000)
+    sections: list[RenderSectionPlan] = Field(default_factory=list)
+    assembly: AssemblyPlan
+    fallback_branches: list[FallbackBranch] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+class VisualDNAFeedbackRequest(BaseModel):
+    feedback: dict[str, Any] = Field(default_factory=dict)
+
+
+class RenderConductorPlanRequest(BaseModel):
+    variant_index: int = Field(default=0, ge=0)
+    preset: Literal["fast", "balanced", "quality", "ultra"] = "balanced"
+    aspect_ratio: RenderAspectRatio = "16:9"
+    output_mode: RenderOutputMode = "full_video"
+    quality_tier: Literal["draft", "balanced", "quality", "ultra"] | None = None
+    continuity_priority: float | None = Field(default=None, ge=0.0, le=1.0)
+    speed_priority: float | None = Field(default=None, ge=0.0, le=1.0)
+    style_lock_strength: float | None = Field(default=None, ge=0.0, le=1.0)
+    allowed_engines: list[EngineKind] = Field(
+        default_factory=lambda: [
+            "internal",
+            "comfyui_still",
+            "comfyui_motion",
+            "hosted_video",
+            "proxy",
+            "deforum_export",
+        ]
+    )
+    fallback_policy: RenderFallbackPolicy = "auto"
+    sections: list[RenderIntentSection] = Field(default_factory=list)
