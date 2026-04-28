@@ -15,24 +15,31 @@ import Setup from "./pages/Setup";
 import Models from "./pages/Models";
 import AiPlannerLab from "./pages/AiPlannerLab";
 import ReactiveLab from "./pages/ReactiveLab";
+import StudioForge from "./pages/StudioForge";
+import { isStudioForgeEnabled } from "./features";
+
+const BASE_PAGES: Page[] = [
+  "dashboard",
+  "projects",
+  "workspace",
+  "timeline",
+  "render",
+  "queue",
+  "outputs",
+  "cloud",
+  "settings",
+  "setup",
+  "models",
+  "plannerLab",
+  "reactiveLab",
+];
+
+function getAllowedPages(): Page[] {
+  return isStudioForgeEnabled() ? [...BASE_PAGES, "studioForge"] : BASE_PAGES;
+}
 
 function isPage(value: string): value is Page {
-  const allowed: Page[] = [
-    "dashboard",
-    "projects",
-    "workspace",
-    "timeline",
-    "render",
-    "queue",
-    "outputs",
-    "cloud",
-    "settings",
-    "setup",
-    "models",
-    "plannerLab",
-    "reactiveLab",
-  ];
-  return allowed.includes(value as Page);
+  return getAllowedPages().includes(value as Page);
 }
 
 function getInitialPage(): Page {
@@ -133,6 +140,10 @@ export default function App() {
     content = <AiPlannerLab {...commonProps} onNavigate={setPage as any} />;
   if (page === "reactiveLab")
     content = <ReactiveLab {...commonProps} onNavigate={setPage as any} />;
+  if (page === "studioForge" && isStudioForgeEnabled())
+    content = <StudioForge {...commonProps} onNavigate={setPage as any} />;
+  if (page === "studioForge" && !isStudioForgeEnabled())
+    content = <Dashboard {...commonProps} />;
 
   const mainClassName = page === "timeline" ? "main main--timeline" : "main";
 

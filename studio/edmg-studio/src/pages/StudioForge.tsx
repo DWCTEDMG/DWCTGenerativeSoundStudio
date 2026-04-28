@@ -1,0 +1,383 @@
+import React, { useEffect, useState } from "react";
+import { apiGet } from "../components/api";
+import { STUDIO_FORGE_RECIPES } from "../studio-forge/recipes";
+import { STUDIO_FORGE_TEMPLATES } from "../studio-forge/templates";
+import type {
+  StudioForgeCapability,
+  StudioForgeRecipe,
+  StudioForgeTemplate,
+} from "../studio-forge/types";
+import type { PageProps } from "../types/pageProps";
+
+type RuntimeStatus = "available" | "missing" | "optional" | "required" | "unknown" | "error";
+type BadgeStatus = RuntimeStatus | "preview";
+
+type RuntimeCard = {
+  id: string;
+  label: string;
+  role: string;
+  status: RuntimeStatus;
+  detail: string;
+  impact: string;
+};
+
+const CAPABILITY_LABELS: Record<StudioForgeCapability, string> = {
+  backend: "Backend",
+  ollama: "Ollama",
+  openaiCompatible: "OpenAI-Compatible",
+  comfyui: "ComfyUI",
+  ffmpeg: "FFmpeg",
+  internalRenderer: "Internal Renderer",
+  edmgCore: "EDMG Core",
+};
+
+const VALIDATION_COMMANDS = [
+  "pnpm run typecheck",
+  "pnpm run lint",
+  "pnpm run test:ui",
+  "pnpm run build",
+  "pnpm run validate:desktop",
+  "pnpm run build:electron",
+  "pnpm run dist:win",
+  "pnpm run dist:linux",
+];
+
+function statusStyle(status: BadgeStatus): React.CSSProperties {
+  if (status === "preview") {
+    return { background: "#24163a", border: "1px solid #47305f", color: "#dcc2ff" };
+  }
+  if (status === "available") {
+    return { background: "#163a1f", border: "1px solid #245b32", color: "#b7ffcb" };
+  }
+  if (status === "missing" || status === "error") {
+    return { background: "#3a1616", border: "1px solid #5b2424", color: "#ffb7b7" };
+  }
+  if (status === "optional") {
+    return { background: "#16283a", border: "1px solid #24415b", color: "#b7dcff" };
+  }
+  if (status === "required") {
+    return { background: "#3a3116", border: "1px solid #5b4d24", color: "#ffe6a0" };
+  }
+  return { background: "#232530", border: "1px solid #363a4a", color: "#d2d7ea" };
+}
+
+function statusLabel(status: BadgeStatus): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function StatusBadge({ status }: { status: BadgeStatus }) {
+  return (
+    <span
+      style={{
+        ...statusStyle(status),
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 800,
+        letterSpacing: 0.3,
+        padding: "4px 10px",
+      }}
+    >
+      {statusLabel(status)}
+    </span>
+  );
+}
+
+function CapabilityList({
+  label,
+  capabilities,
+}: {
+  label: string;
+  capabilities: StudioForgeCapability[];
+}) {
+  return (
+    <div className="small" style={{ display: "grid", gap: 4 }}>
+      <div style={{ fontWeight: 800 }}>{label}</div>
+      <div>{capabilities.map((capability) => CAPABILITY_LABELS[capability]).join(", ")}</div>
+    </div>
+  );
+}
+
+function TemplateCard({ template }: { template: StudioForgeTemplate }) {
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <div>
+          <div className="timeline-kicker">Template Preview</div>
+          <div style={{ fontWeight: 900 }}>{template.name}</div>
+        </div>
+        <StatusBadge status={template.status} />
+      </div>
+      <div className="small" style={{ marginTop: 8 }}>
+        {template.description}
+      </div>
+      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+        <div className="small">Kind: <b>{template.kind}</b></div>
+        <CapabilityList label="Required capabilities" capabilities={template.requiredCapabilities} />
+        {template.optionalCapabilities?.length ? (
+          <CapabilityList label="Optional capabilities" capabilities={template.optionalCapabilities} />
+        ) : null}
+        <div className="small">Execution: read-only preview only</div>
+      </div>
+    </div>
+  );
+}
+
+function RecipeCard({ recipe }: { recipe: StudioForgeRecipe }) {
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <div>
+          <div className="timeline-kicker">Workflow Recipe</div>
+          <div style={{ fontWeight: 900 }}>{recipe.name}</div>
+        </div>
+        <StatusBadge status={recipe.status} />
+      </div>
+      <div className="small" style={{ marginTop: 8 }}>
+        {recipe.description}
+      </div>
+      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+        <div className="small">
+          Flow: <b>{recipe.stages.join(" -> ")}</b>
+        </div>
+        <CapabilityList label="Required capabilities" capabilities={recipe.requiredCapabilities} />
+        {recipe.optionalCapabilities?.length ? (
+          <CapabilityList label="Optional capabilities" capabilities={recipe.optionalCapabilities} />
+        ) : null}
+        <div className="small">Execution: preview only, no writes or runtime control</div>
+      </div>
+    </div>
+  );
+}
+
+export default function StudioForge({ backendUrl, config, onNavigate }: PageProps) {
+  const [health, setHealth] = useState<any>(null);
+  const [healthError, setHealthError] = useState<string>("");
+  const [setupStatus, setSetupStatus] = useState<any>(null);
+  const [setupError, setSetupError] = useState<string>("");
+  const [backendConfig, setBackendConfig] = useState<any>(null);
+  const [backendConfigError, setBackendConfigError] = useState<string>("");
+  const [comfyCapabilities, setComfyCapabilities] = useState<any>(null);
+  const [comfyError, setComfyError] = useState<string>("");
+
+  useEffect(() => {
+    if (!backendUrl) return;
+    let alive = true;
+
+    const load = async (
+      path: string,
+      onSuccess: (value: any) => void,
+      onError: (message: string) => void,
+    ) => {
+      try {
+        const value = await apiGet(path);
+        if (!alive) return;
+        onSuccess(value);
+        onError("");
+      } catch (error: any) {
+        if (!alive) return;
+        onError(String(error?.message ?? error));
+      }
+    };
+
+    void load("/health", setHealth, setHealthError);
+    void load("/v1/config", setBackendConfig, setBackendConfigError);
+    void load("/v1/setup/status", setSetupStatus, setSetupError);
+    void load("/v1/comfyui/capabilities", setComfyCapabilities, setComfyError);
+
+    return () => {
+      alive = false;
+    };
+  }, [backendUrl]);
+
+  const aiConfig = setupStatus?.ai_config ?? {};
+  const activeConfig = backendConfig ?? config ?? {};
+  const ollamaRequired = !!aiConfig?.ollama_required;
+  const modelRequired = !!aiConfig?.model_required;
+  const backendBundleOk = !!setupStatus?.backend_bundle?.ok;
+  const ffmpegOk = !!setupStatus?.ffmpeg?.ok;
+  const ollamaOk = !!setupStatus?.ollama?.ok;
+  const modelOk = !modelRequired || !!setupStatus?.ollama?.model_present;
+  const setupReady = backendBundleOk && ffmpegOk && (!ollamaRequired || (ollamaOk && modelOk));
+  const missingSetupParts = [
+    !backendBundleOk ? "backend bundle" : null,
+    !ffmpegOk ? "FFmpeg" : null,
+    ollamaRequired && !ollamaOk ? "Ollama" : null,
+    modelRequired && !modelOk ? "default model" : null,
+  ].filter(Boolean);
+
+  const ollamaUrl = String(setupStatus?.ollama?.url ?? "http://127.0.0.1:11434");
+  const ollamaModel = String(
+    setupStatus?.ollama?.model ??
+    activeConfig?.ai_model ??
+    activeConfig?.model ??
+    aiConfig?.model ??
+    "",
+  ).trim();
+  const comfyUrl = String(setupStatus?.comfyui?.url ?? "http://127.0.0.1:8188");
+  const comfyConfigured = !!setupStatus?.comfyui?.ok;
+  const comfyAvailable = !comfyError && !!comfyCapabilities;
+  const ffmpegPath = String(setupStatus?.ffmpeg?.path ?? "ffmpeg");
+  const edmgAvailable = !!setupStatus?.edmg?.available;
+
+  const runtimeCards: RuntimeCard[] = [
+    {
+      id: "backend",
+      label: "Backend",
+      role: "Required",
+      status: healthError ? "error" : health?.ok ? "available" : "unknown",
+      detail: healthError || backendUrl,
+      impact: "Local FastAPI services remain the source of truth for project, setup, and render operations.",
+    },
+    {
+      id: "setup",
+      label: "Setup Wizard",
+      role: "Required",
+      status: setupError ? "error" : setupStatus ? (setupReady ? "available" : "missing") : "unknown",
+      detail: setupError || (
+        setupReady
+          ? "Backend bundle, FFmpeg, and the active AI path are ready."
+          : `Still needs ${missingSetupParts.join(", ")}.`
+      ),
+      impact: "Studio Forge reads setup health only; the existing Setup page remains the only place for installs and repair.",
+    },
+    {
+      id: "ollama",
+      label: "Ollama",
+      role: ollamaRequired ? "Required" : "Optional",
+      status: setupError
+        ? "unknown"
+        : ollamaRequired
+          ? (ollamaOk && modelOk ? "available" : "missing")
+          : (ollamaOk ? "available" : "optional"),
+      detail: ollamaOk
+        ? `${ollamaUrl}${ollamaModel ? ` • model ${ollamaModel}` : ""}${modelRequired ? (modelOk ? " • default model present" : " • default model missing") : ""}`
+        : `${ollamaUrl} not detected${ollamaRequired ? " for the current AI mode." : "."}`,
+      impact: ollamaRequired
+        ? "The current AI mode expects a reachable local Ollama endpoint."
+        : "Studio can still run with an external AI path when Ollama is not required.",
+    },
+    {
+      id: "comfyui",
+      label: "ComfyUI",
+      role: "Optional",
+      status: comfyAvailable ? "available" : (comfyConfigured ? "unknown" : (comfyError ? "optional" : "optional")),
+      detail: comfyAvailable
+        ? `${comfyUrl} responded to capability discovery.`
+        : `${comfyUrl} is unavailable or not configured for this session.`,
+      impact: "Internal renderer remains the default path even when ComfyUI is missing.",
+    },
+    {
+      id: "ffmpeg",
+      label: "FFmpeg",
+      role: "Required",
+      status: setupError ? "unknown" : (ffmpegOk ? "available" : "missing"),
+      detail: ffmpegOk ? ffmpegPath : `${ffmpegPath} is not ready for assembly.`,
+      impact: "Assembly and export still rely on the existing FFmpeg integration and packaging flow.",
+    },
+    {
+      id: "models",
+      label: "Models",
+      role: modelRequired ? "Required" : "Optional",
+      status: setupError
+        ? "unknown"
+        : modelRequired
+          ? (modelOk ? "available" : "missing")
+          : (modelOk ? "available" : "optional"),
+      detail: ollamaModel
+        ? `${ollamaModel}${modelOk ? " is ready." : " is configured but not present yet."}`
+        : "Model configuration is available through the existing Models and Setup flows.",
+      impact: edmgAvailable
+        ? "Installed models can stay aligned with EDMG Core and the internal renderer."
+        : "Model management remains owned by the current Models page and setup flow.",
+    },
+  ];
+
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div className="card">
+        <div className="timeline-kicker">Experimental Workbench</div>
+        <h1>Studio Forge</h1>
+        <div className="small" style={{ marginTop: 8, maxWidth: 900 }}>
+          Experimental AI builder workbench. Read-only preview mode. This surface inspects current
+          runtime state and previews future builder templates without writing files, changing setup,
+          pulling models, launching renders, or mutating project data.
+        </div>
+        {onNavigate ? (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            <button className="secondary" onClick={() => onNavigate("setup")}>Open Setup</button>
+            <button className="secondary" onClick={() => onNavigate("models")}>Open Models</button>
+            <button className="secondary" onClick={() => onNavigate("render")}>Open Render</button>
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ display: "grid", gap: 14 }}>
+        <div>
+          <h2 style={{ marginBottom: 10 }}>Runtime Status</h2>
+          <div className="small" style={{ marginBottom: 10 }}>
+            Existing backend and setup endpoints only. Graceful read-only probes: <code>/health</code>,
+            <code> /v1/config</code>, <code> /v1/setup/status</code>, and <code> /v1/comfyui/capabilities</code>.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+            {runtimeCards.map((card) => (
+              <div key={card.id} className="card">
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                  <div>
+                    <div className="timeline-kicker">{card.role}</div>
+                    <div style={{ fontWeight: 900 }}>{card.label}</div>
+                  </div>
+                  <StatusBadge status={card.status} />
+                </div>
+                <div className="small" style={{ marginTop: 10 }}>{card.detail}</div>
+                <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>{card.impact}</div>
+              </div>
+            ))}
+          </div>
+          {backendConfigError ? (
+            <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>
+              Config read note: {backendConfigError}
+            </div>
+          ) : null}
+        </div>
+
+        <div>
+          <h2 style={{ marginBottom: 10 }}>Builder Templates</h2>
+          <div className="small" style={{ marginBottom: 10 }}>
+            Static preview registry for additive page, panel, workflow, and model-profile concepts.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+            {STUDIO_FORGE_TEMPLATES.map((template) => (
+              <TemplateCard key={template.id} template={template} />
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h2 style={{ marginBottom: 10 }}>Workflow Recipes</h2>
+          <div className="small" style={{ marginBottom: 10 }}>
+            Preview-only recipes that stay compatible with the current Workspace, Timeline, Render, Queue, and Outputs flow.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+            {STUDIO_FORGE_RECIPES.map((recipe) => (
+              <RecipeCard key={recipe.id} recipe={recipe} />
+            ))}
+          </div>
+        </div>
+
+        <div className="card">
+          <h2 style={{ marginBottom: 10 }}>Validation Checklist</h2>
+          <div className="small" style={{ marginBottom: 10 }}>
+            Developer validation commands only. Studio Forge v1 does not execute shell commands from the frontend.
+          </div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {VALIDATION_COMMANDS.map((command) => (
+              <div key={command} className="small">
+                <code>{command}</code>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

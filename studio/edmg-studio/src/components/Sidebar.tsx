@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { isStudioForgeEnabled } from "../features";
 
 export type Page =
   | "dashboard"
@@ -13,7 +14,8 @@ export type Page =
   | "setup"
   | "models"
   | "plannerLab"
-  | "reactiveLab";
+  | "reactiveLab"
+  | "studioForge";
 
 type NavGroupId = "flow" | "delivery" | "labs" | "system";
 
@@ -30,49 +32,56 @@ type NavGroup = {
   items: NavItem[];
 };
 
-const NAV_GROUPS: NavGroup[] = [
-  {
-    id: "flow",
-    label: "Core Flow",
-    hint: "Canonical studio path",
-    items: [
-      { page: "dashboard", label: "Dashboard", hint: "status + quick access" },
-      { page: "projects", label: "Projects", hint: "create and pick sessions" },
-      { page: "workspace", label: "Workspace", hint: "ingest, plan, reactive handoff" },
-      { page: "timeline", label: "Timeline", hint: "arrange full track and cues" },
-    ],
-  },
-  {
-    id: "delivery",
-    label: "Delivery",
-    hint: "Render and review",
-    items: [
-      { page: "render", label: "Render", hint: "launch outputs" },
-      { page: "queue", label: "Render Queue", hint: "logs, retries, progress" },
-      { page: "outputs", label: "Outputs", hint: "browse generated media" },
-    ],
-  },
-  {
-    id: "labs",
-    label: "Labs",
-    hint: "Standalone specialist tools",
-    items: [
-      { page: "plannerLab", label: "AI Planner Lab", hint: "deep prompt authoring" },
-      { page: "reactiveLab", label: "Reactive Lab", hint: "audio-reactive scheduling" },
-    ],
-  },
-  {
-    id: "system",
-    label: "System",
-    hint: "Models, setup, services",
-    items: [
-      { page: "cloud", label: "Cloud", hint: "remote integrations" },
-      { page: "models", label: "Models", hint: "packs and availability" },
-      { page: "settings", label: "Settings", hint: "paths and preferences" },
-      { page: "setup", label: "Setup", hint: "dependency health" },
-    ],
-  },
-];
+function getNavGroups(): NavGroup[] {
+  const labs: NavItem[] = [
+    { page: "plannerLab", label: "AI Planner Lab", hint: "deep prompt authoring" },
+    { page: "reactiveLab", label: "Reactive Lab", hint: "audio-reactive scheduling" },
+  ];
+  if (isStudioForgeEnabled()) {
+    labs.push({ page: "studioForge", label: "Studio Forge", hint: "AI builder preview" });
+  }
+
+  return [
+    {
+      id: "flow",
+      label: "Core Flow",
+      hint: "Canonical studio path",
+      items: [
+        { page: "dashboard", label: "Dashboard", hint: "status + quick access" },
+        { page: "projects", label: "Projects", hint: "create and pick sessions" },
+        { page: "workspace", label: "Workspace", hint: "ingest, plan, reactive handoff" },
+        { page: "timeline", label: "Timeline", hint: "arrange full track and cues" },
+      ],
+    },
+    {
+      id: "delivery",
+      label: "Delivery",
+      hint: "Render and review",
+      items: [
+        { page: "render", label: "Render", hint: "launch outputs" },
+        { page: "queue", label: "Render Queue", hint: "logs, retries, progress" },
+        { page: "outputs", label: "Outputs", hint: "browse generated media" },
+      ],
+    },
+    {
+      id: "labs",
+      label: "Labs",
+      hint: "Standalone specialist tools",
+      items: labs,
+    },
+    {
+      id: "system",
+      label: "System",
+      hint: "Models, setup, services",
+      items: [
+        { page: "cloud", label: "Cloud", hint: "remote integrations" },
+        { page: "models", label: "Models", hint: "packs and availability" },
+        { page: "settings", label: "Settings", hint: "paths and preferences" },
+        { page: "setup", label: "Setup", hint: "dependency health" },
+      ],
+    },
+  ];
+}
 
 const DEFAULT_GROUP_STATE: Record<NavGroupId, boolean> = {
   flow: true,
@@ -90,9 +99,10 @@ export default function Sidebar({
 }) {
   const [openGroups, setOpenGroups] =
     useState<Record<NavGroupId, boolean>>(DEFAULT_GROUP_STATE);
+  const navGroups = getNavGroups();
 
   const activeItem =
-    NAV_GROUPS.flatMap((group) => group.items).find((item) => item.page === page) || null;
+    navGroups.flatMap((group) => group.items).find((item) => item.page === page) || null;
 
   return (
     <div className="sidebar">
@@ -120,7 +130,7 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-nav">
-        {NAV_GROUPS.map((group) => {
+        {navGroups.map((group) => {
           const groupIsActive = group.items.some((item) => item.page === page);
           const isOpen = groupIsActive || openGroups[group.id];
 
