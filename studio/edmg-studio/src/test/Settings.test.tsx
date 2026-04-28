@@ -1,0 +1,108 @@
+import React from "react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import Settings from "../pages/Settings";
+import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
+
+describe("Settings page", () => {
+  it("persists desktop backend mode and target settings", async () => {
+    const setBackendSettings = vi.fn(async (settings: { mode: string; host: string; port: string }) => ({
+      ok: true,
+      restartRequired: true,
+      ...settings,
+      currentBackendUrl: `http://${settings.host}:${settings.port}`,
+    }));
+
+    installEdmgBridge({
+      getBackendSettings: async () => ({
+        ok: true,
+        mode: "managed",
+        host: "127.0.0.1",
+        port: "7863",
+        source: "bootstrap",
+        currentBackendUrl: "http://127.0.0.1:7863",
+      }),
+      setBackendSettings,
+    });
+
+    installFetchMock({
+      "/v1/config": {
+        ai_mode: "local",
+        ai_provider: "ollama",
+        ai_ollama_url: "http://127.0.0.1:11434",
+        ai_ollama_model: "qwen3:8b",
+      },
+      "/v1/ai/status": { ok: true, provider: "ollama" },
+      "/v1/edmg/deforum_template": { ok: true },
+      "/v1/settings/secrets/status": { store: "test", has_openai_compat_api_key: false },
+      "/v1/hardware": {
+        hardware: {
+          device_name: "Test GPU",
+          backend_family: "cuda",
+          recommended_tier: "balanced",
+        },
+      },
+      "/v1/settings/render_profiles": {
+        recommended_profile: "balanced_auto",
+        profiles: {
+          balanced_auto: {
+            label: "Balanced Auto",
+            description: "General desktop profile",
+            render_preset: "balanced",
+            internal_render_tier: "balanced",
+            resume_existing_frames: true,
+          },
+        },
+      },
+      "/v1/settings/render_providers": {
+        settings: {
+          stability: {
+            enabled: false,
+            allow_auto_fallback: false,
+            service: "sd3",
+            model: "sd3.5-large-turbo",
+            style_preset: "none",
+            output_format: "png",
+          },
+          directml: {
+            enabled: false,
+            allow_auto_selection: false,
+            preferred_model: "auto",
+          },
+        },
+        stability: { has_api_key: false, visible: false, note: "disabled" },
+        directml: { runtime_ready: false, available: false, active: false, device_name: "" },
+        stability_services: ["sd3"],
+        stability_models: ["sd3.5-large-turbo"],
+        style_presets: ["none"],
+      },
+      "/health": { ok: true },
+    });
+
+    renderWithStudio(<Settings backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByText("Desktop Backend")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Desktop backend mode"), {
+      target: { value: "external" },
+    });
+    fireEvent.change(screen.getByLabelText("Desktop backend host"), {
+      target: { value: "192.168.1.40" },
+    });
+    fireEvent.change(screen.getByLabelText("Desktop backend port"), {
+      target: { value: "9000" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save backend startup settings" }));
+
+    await waitFor(() => {
+      expect(setBackendSettings).toHaveBeenCalledWith({
+        mode: "external",
+        host: "192.168.1.40",
+        port: "9000",
+      });
+    });
+
+    expect(await screen.findByText(/Saved\. Restart Studio so it relaunches against the selected backend target\./)).toBeTruthy();
+  });
+});

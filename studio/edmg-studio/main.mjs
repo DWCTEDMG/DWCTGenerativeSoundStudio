@@ -42,32 +42,31 @@ const BACKEND_RUNTIME_DEFAULTS =
   RUNTIME_DEFAULTS.backend && typeof RUNTIME_DEFAULTS.backend === "object"
     ? RUNTIME_DEFAULTS.backend
     : {};
+const BACKEND_SETTINGS_DEFAULTS = Object.freeze({
+  mode:
+    typeof BACKEND_RUNTIME_DEFAULTS.spawnBackend === "boolean" && BACKEND_RUNTIME_DEFAULTS.spawnBackend === false
+      ? "external"
+      : "managed",
+  host:
+    typeof BACKEND_RUNTIME_DEFAULTS.host === "string" && BACKEND_RUNTIME_DEFAULTS.host.trim()
+      ? BACKEND_RUNTIME_DEFAULTS.host.trim()
+      : "127.0.0.1",
+  port:
+    BACKEND_RUNTIME_DEFAULTS.port != null && String(BACKEND_RUNTIME_DEFAULTS.port).trim()
+      ? String(BACKEND_RUNTIME_DEFAULTS.port).trim()
+      : "7863",
+});
 
-if (
-  process.env.EDMG_STUDIO_BACKEND_HOST == null &&
-  typeof BACKEND_RUNTIME_DEFAULTS.host === "string" &&
-  BACKEND_RUNTIME_DEFAULTS.host.trim()
-) {
-  process.env.EDMG_STUDIO_BACKEND_HOST = BACKEND_RUNTIME_DEFAULTS.host.trim();
-}
+const BACKEND_SETTINGS_ENV_KEYS = Object.freeze({
+  mode: "EDMG_STUDIO_BACKEND_MODE",
+  host: "EDMG_STUDIO_BACKEND_HOST",
+  port: "EDMG_STUDIO_BACKEND_PORT",
+  spawnBackend: "EDMG_STUDIO_SPAWN_BACKEND",
+});
 
-if (
-  process.env.EDMG_STUDIO_BACKEND_PORT == null &&
-  BACKEND_RUNTIME_DEFAULTS.port != null &&
-  String(BACKEND_RUNTIME_DEFAULTS.port).trim()
-) {
-  process.env.EDMG_STUDIO_BACKEND_PORT = String(BACKEND_RUNTIME_DEFAULTS.port).trim();
-}
-
-if (
-  process.env.EDMG_STUDIO_SPAWN_BACKEND == null &&
-  typeof BACKEND_RUNTIME_DEFAULTS.spawnBackend === "boolean"
-) {
-  process.env.EDMG_STUDIO_SPAWN_BACKEND = BACKEND_RUNTIME_DEFAULTS.spawnBackend ? "1" : "0";
-}
-
-const BACKEND_HOST = process.env.EDMG_STUDIO_BACKEND_HOST ?? "127.0.0.1";
-let BACKEND_PORT = Number(process.env.EDMG_STUDIO_BACKEND_PORT ?? "7863");
+const STARTUP_BACKEND_SETTINGS = syncBackendSettingsToProcessEnv(getConfiguredBackendSettings());
+const BACKEND_HOST = STARTUP_BACKEND_SETTINGS.host;
+let BACKEND_PORT = Number(STARTUP_BACKEND_SETTINGS.port || BACKEND_SETTINGS_DEFAULTS.port);
 const BACKEND_READY_TIMEOUT_MS = Number(
   process.env.EDMG_STUDIO_BACKEND_READY_TIMEOUT_MS ??
   (app.isPackaged && IS_WINDOWS ? "120000" : "15000"),
@@ -386,6 +385,19 @@ function getRawAiSettingsFromEnv(envLike) {
   };
 }
 
+function getRawBackendSettingsFromEnv(envLike) {
+  const env = envLike && typeof envLike === "object" ? envLike : {};
+  let mode = env[BACKEND_SETTINGS_ENV_KEYS.mode];
+  if (!mode && typeof env[BACKEND_SETTINGS_ENV_KEYS.spawnBackend] === "string") {
+    mode = String(env[BACKEND_SETTINGS_ENV_KEYS.spawnBackend]).trim() === "0" ? "external" : "managed";
+  }
+  return {
+    mode,
+    host: env[BACKEND_SETTINGS_ENV_KEYS.host],
+    port: env[BACKEND_SETTINGS_ENV_KEYS.port],
+  };
+}
+
 function readBootstrapAiSettingsRaw() {
   const bootstrapConfig = readBootstrapConfig();
   if (bootstrapConfig?.aiSettings && typeof bootstrapConfig.aiSettings === "object") {
@@ -394,7 +406,19 @@ function readBootstrapAiSettingsRaw() {
   return {};
 }
 
+function readBootstrapBackendSettingsRaw() {
+  const bootstrapConfig = readBootstrapConfig();
+  if (bootstrapConfig?.backendSettings && typeof bootstrapConfig.backendSettings === "object") {
+    return bootstrapConfig.backendSettings;
+  }
+  return {};
+}
+
 function hasAnyAiSetting(rawSettings) {
+  return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
+}
+
+function hasAnyBackendSetting(rawSettings) {
   return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
 }
 
@@ -403,9 +427,23 @@ function normalizeAiMode(rawValue) {
   return mode === "http" || mode === "remote" ? "http" : "local";
 }
 
+function normalizeBackendMode(rawValue) {
+  const mode = String(rawValue ?? "").trim().toLowerCase();
+  return mode === "external" || mode === "remote" || mode === "connect" ? "external" : "managed";
+}
+
 function normalizeAiProvider(rawValue) {
   const provider = String(rawValue ?? "").trim().toLowerCase();
   return AI_LOCAL_PROVIDER_ALIASES[provider] ?? AI_SETTINGS_DEFAULTS.provider;
+}
+
+function normalizeBackendPort(rawValue) {
+  const raw = String(rawValue ?? "").trim();
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 1 && value <= 65535) {
+    return String(value);
+  }
+  return BACKEND_SETTINGS_DEFAULTS.port;
 }
 
 function normalizeAiSettings(rawSettings = {}) {
@@ -427,6 +465,15 @@ function normalizeAiSettings(rawSettings = {}) {
   };
 }
 
+function normalizeBackendSettings(rawSettings = {}) {
+  const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  return {
+    mode: normalizeBackendMode(current.mode),
+    host: pickConfiguredString(current.host, BACKEND_SETTINGS_DEFAULTS.host),
+    port: normalizeBackendPort(current.port),
+  };
+}
+
 function getConfiguredAiSettings() {
   const launcherRaw = getRawAiSettingsFromEnv(readLauncherEnv());
   const bootstrapRaw = readBootstrapAiSettingsRaw();
@@ -445,6 +492,24 @@ function getConfiguredAiSettings() {
   return { ...configured, source };
 }
 
+function getConfiguredBackendSettings() {
+  const launcherRaw = getRawBackendSettingsFromEnv(readLauncherEnv());
+  const bootstrapRaw = readBootstrapBackendSettingsRaw();
+  const envRaw = getRawBackendSettingsFromEnv(process.env);
+  const configured = normalizeBackendSettings({
+    ...launcherRaw,
+    ...bootstrapRaw,
+    ...envRaw,
+  });
+
+  let source = "default";
+  if (hasAnyBackendSetting(launcherRaw)) source = "launcher";
+  if (hasAnyBackendSetting(bootstrapRaw)) source = "bootstrap";
+  if (hasAnyBackendSetting(envRaw)) source = "env";
+
+  return { ...configured, source };
+}
+
 function syncAiSettingsToProcessEnv(rawSettings) {
   const aiSettings = normalizeAiSettings(rawSettings);
   process.env.EDMG_AI_MODE = aiSettings.mode;
@@ -455,6 +520,15 @@ function syncAiSettingsToProcessEnv(rawSettings) {
   process.env.EDMG_AI_OPENAI_COMPAT_BASE_URL = aiSettings.openaiCompatBaseUrl;
   process.env.EDMG_AI_OPENAI_COMPAT_MODEL = aiSettings.openaiCompatModel;
   return aiSettings;
+}
+
+function syncBackendSettingsToProcessEnv(rawSettings) {
+  const backendSettings = normalizeBackendSettings(rawSettings);
+  process.env[BACKEND_SETTINGS_ENV_KEYS.mode] = backendSettings.mode;
+  process.env[BACKEND_SETTINGS_ENV_KEYS.host] = backendSettings.host;
+  process.env[BACKEND_SETTINGS_ENV_KEYS.port] = backendSettings.port;
+  process.env[BACKEND_SETTINGS_ENV_KEYS.spawnBackend] = backendSettings.mode === "external" ? "0" : "1";
+  return backendSettings;
 }
 
 syncAiSettingsToProcessEnv(getConfiguredAiSettings());
@@ -1008,6 +1082,11 @@ console.log(`EDMG_currentBackendUrl=${backendRuntime.getCurrentBackendUrl()}`);
 
 function registerIpcHandlers() {
   ipcMain.handle("edmg:getBackendUrl", async () => backendRuntime.getCurrentBackendUrl());
+  ipcMain.handle("edmg:getBackendSettings", async () => ({
+    ok: true,
+    ...getConfiguredBackendSettings(),
+    currentBackendUrl: backendRuntime.getCurrentBackendUrl(),
+  }));
   ipcMain.handle("edmg:getStudioPaths", async () => ({ ok: true, ...getStudioPaths() }));
   ipcMain.handle("edmg:getAiSettings", async () => ({ ok: true, ...getConfiguredAiSettings() }));
 
@@ -1093,6 +1172,30 @@ function registerIpcHandlers() {
       ok: true,
       restartRequired: true,
       ...aiSettings,
+    };
+  });
+
+  ipcMain.handle("edmg:setBackendSettings", async (_event, nextSettings = {}) => {
+    const backendSettings = syncBackendSettingsToProcessEnv(nextSettings);
+    const nextConfig = {
+      ...readBootstrapConfig(),
+      backendSettings,
+      updatedAt: new Date().toISOString(),
+    };
+    writeBootstrapConfig(nextConfig);
+    writeLauncherEnv({
+      ...readLauncherEnv(),
+      EDMG_STUDIO_BACKEND_MODE: backendSettings.mode,
+      EDMG_STUDIO_BACKEND_HOST: backendSettings.host,
+      EDMG_STUDIO_BACKEND_PORT: backendSettings.port,
+      EDMG_STUDIO_SPAWN_BACKEND: backendSettings.mode === "external" ? "0" : "1",
+    });
+
+    return {
+      ok: true,
+      restartRequired: true,
+      currentBackendUrl: backendRuntime.getCurrentBackendUrl(),
+      ...backendSettings,
     };
   });
 

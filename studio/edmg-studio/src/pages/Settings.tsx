@@ -17,6 +17,13 @@ type StudioAiSettings = {
   source?: string;
 };
 
+type StudioBackendSettings = {
+  mode: string;
+  host: string;
+  port: string;
+  source?: string;
+};
+
 const DEFAULT_AI_SETTINGS: StudioAiSettings = {
   mode: "local",
   provider: "ollama",
@@ -25,6 +32,13 @@ const DEFAULT_AI_SETTINGS: StudioAiSettings = {
   ollamaModel: "qwen3:8b",
   openaiCompatBaseUrl: "http://127.0.0.1:8000",
   openaiCompatModel: "qwen3-8b",
+  source: "default",
+};
+
+const DEFAULT_BACKEND_SETTINGS: StudioBackendSettings = {
+  mode: "managed",
+  host: "127.0.0.1",
+  port: "7863",
   source: "default",
 };
 
@@ -66,7 +80,50 @@ function aiSettingsFingerprint(settings: Partial<StudioAiSettings> | null | unde
   });
 }
 
-export default function Settings(_props: PageProps) {
+function normalizeBackendSettings(payload?: Partial<StudioBackendSettings> | null): StudioBackendSettings {
+  const current = payload ?? {};
+  const modeRaw = String(current.mode ?? DEFAULT_BACKEND_SETTINGS.mode).trim().toLowerCase();
+  const portRaw = String(current.port ?? DEFAULT_BACKEND_SETTINGS.port).trim();
+  const portNumber = Number(portRaw);
+
+  return {
+    mode: modeRaw === "external" || modeRaw === "remote" || modeRaw === "connect" ? "external" : "managed",
+    host: String(current.host ?? DEFAULT_BACKEND_SETTINGS.host).trim() || DEFAULT_BACKEND_SETTINGS.host,
+    port:
+      Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535
+        ? String(portNumber)
+        : DEFAULT_BACKEND_SETTINGS.port,
+    source: String(current.source ?? DEFAULT_BACKEND_SETTINGS.source),
+  };
+}
+
+function backendSettingsFingerprint(settings: Partial<StudioBackendSettings> | null | undefined): string {
+  const normalized = normalizeBackendSettings(settings);
+  return JSON.stringify({
+    mode: normalized.mode,
+    host: normalized.host,
+    port: normalized.port,
+  });
+}
+
+function buildBackendUrl(settings: Partial<StudioBackendSettings> | null | undefined): string {
+  const normalized = normalizeBackendSettings(settings);
+  return `http://${normalized.host}:${normalized.port}`;
+}
+
+function parseBackendUrl(rawUrl: string): Partial<StudioBackendSettings> {
+  try {
+    const parsed = new URL(String(rawUrl || "").trim());
+    return {
+      host: parsed.hostname || DEFAULT_BACKEND_SETTINGS.host,
+      port: parsed.port || DEFAULT_BACKEND_SETTINGS.port,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export default function Settings(props: PageProps) {
   const { mode, setMode } = useUiMode();
   const [cfg, setCfg] = useState<any>(null);
   const [aiStatus, setAiStatus] = useState<any>(null);
@@ -77,6 +134,9 @@ export default function Settings(_props: PageProps) {
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [renderProviderDraft, setRenderProviderDraft] = useState<any>(null);
   const [savedRenderDefaults, setSavedRenderDefaults] = useState<any>(() => readRenderDefaults());
+  const [studioBackendSettings, setStudioBackendSettings] = useState<StudioBackendSettings>(DEFAULT_BACKEND_SETTINGS);
+  const [backendDraft, setBackendDraft] = useState<StudioBackendSettings>(DEFAULT_BACKEND_SETTINGS);
+  const [backendSettingsLoaded, setBackendSettingsLoaded] = useState<boolean>(false);
   const [studioAiSettings, setStudioAiSettings] = useState<StudioAiSettings>(DEFAULT_AI_SETTINGS);
   const [aiDraft, setAiDraft] = useState<StudioAiSettings>(DEFAULT_AI_SETTINGS);
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState<boolean>(false);
@@ -85,10 +145,15 @@ export default function Settings(_props: PageProps) {
   const [openaiCompatApiKey, setOpenaiCompatApiKey] = useState<string>("");
   const [stabilityApiKey, setStabilityApiKey] = useState<string>("");
   const [saving, setSaving] = useState<boolean>(false);
+  const [savingBackend, setSavingBackend] = useState<boolean>(false);
   const [savingAi, setSavingAi] = useState<boolean>(false);
   const [savingProviders, setSavingProviders] = useState<boolean>(false);
+  const [backendRestartRequired, setBackendRestartRequired] = useState<boolean>(false);
+  const [backendNotice, setBackendNotice] = useState<string | null>(null);
   const [aiRestartRequired, setAiRestartRequired] = useState<boolean>(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
+  const [liveBackendUrl, setLiveBackendUrl] = useState<string>(props.backendUrl || "");
+  const [backendReachable, setBackendReachable] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -100,13 +165,20 @@ export default function Settings(_props: PageProps) {
     [aiDraft, studioAiSettings]
   );
 
+  const backendSettingsDirty = useMemo(
+    () => backendSettingsFingerprint(backendDraft) !== backendSettingsFingerprint(studioBackendSettings),
+    [backendDraft, studioBackendSettings]
+  );
+
   async function refreshPage() {
     try {
       const nextCfg = await apiGet("/v1/config");
       setCfg(nextCfg);
+      await refreshBackendStartupSettings();
       await refreshAiStartupSettings(nextCfg);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
+      await refreshBackendStartupSettings();
       await refreshAiStartupSettings(null);
     }
 
@@ -150,6 +222,59 @@ export default function Settings(_props: PageProps) {
     setStudioAiSettings(fallback);
     setAiDraft(fallback);
     setAiSettingsLoaded(true);
+  }
+
+  async function refreshBackendHealth(urlCandidate: string) {
+    const target = String(urlCandidate || "").trim();
+    if (!target) {
+      setBackendReachable(null);
+      return;
+    }
+
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller ? window.setTimeout(() => controller.abort(), 2500) : 0;
+    try {
+      const response = await fetch(`${target}/health`, {
+        method: "GET",
+        signal: controller?.signal,
+      });
+      setBackendReachable(!!response.ok);
+    } catch {
+      setBackendReachable(false);
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+    }
+  }
+
+  async function refreshBackendStartupSettings() {
+    try {
+      if (window.edmg?.getBackendSettings) {
+        const saved = await window.edmg.getBackendSettings();
+        if (saved?.ok) {
+          const normalized = normalizeBackendSettings(saved);
+          const nextLiveUrl = String(saved.currentBackendUrl || props.backendUrl || buildBackendUrl(normalized)).trim();
+          setStudioBackendSettings(normalized);
+          setBackendDraft(normalized);
+          setBackendSettingsLoaded(true);
+          setLiveBackendUrl(nextLiveUrl);
+          await refreshBackendHealth(nextLiveUrl);
+          return;
+        }
+      }
+    } catch {
+      // fall through to runtime URL snapshot
+    }
+
+    const fallback = normalizeBackendSettings({
+      ...parseBackendUrl(props.backendUrl),
+      source: props.backendUrl ? "runtime" : "default",
+    });
+    const nextLiveUrl = String(props.backendUrl || buildBackendUrl(fallback)).trim();
+    setStudioBackendSettings(fallback);
+    setBackendDraft(fallback);
+    setBackendSettingsLoaded(true);
+    setLiveBackendUrl(nextLiveUrl);
+    await refreshBackendHealth(nextLiveUrl);
   }
 
   async function refreshSecrets() {
@@ -216,9 +341,50 @@ export default function Settings(_props: PageProps) {
     setSavedRenderDefaults({});
   }
 
+  function updateBackendDraft(patch: Partial<StudioBackendSettings>) {
+    setBackendDraft((current) => normalizeBackendSettings({ ...current, ...patch, source: current.source }));
+    setBackendNotice(null);
+  }
+
   function updateAiDraft(patch: Partial<StudioAiSettings>) {
     setAiDraft((current) => normalizeAiSettings({ ...current, ...patch, source: current.source }));
     setAiNotice(null);
+  }
+
+  async function saveBackendSettings() {
+    setSavingBackend(true);
+    setErr(null);
+    setBackendNotice(null);
+    try {
+      if (!window.edmg?.setBackendSettings) {
+        throw new Error("This Studio build cannot persist desktop backend startup settings yet.");
+      }
+      const normalizedDraft = normalizeBackendSettings(backendDraft);
+      const response = await window.edmg.setBackendSettings({
+        mode: normalizedDraft.mode,
+        host: normalizedDraft.host,
+        port: normalizedDraft.port,
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "Failed to save desktop backend settings.");
+      }
+      const normalized = normalizeBackendSettings({ ...response, source: "bootstrap" });
+      const nextLiveUrl = buildBackendUrl(normalized);
+      setStudioBackendSettings(normalized);
+      setBackendDraft(normalized);
+      setBackendRestartRequired(!!response.restartRequired);
+      setLiveBackendUrl(nextLiveUrl);
+      setBackendNotice(
+        response.restartRequired
+          ? "Saved. Restart Studio so it relaunches against the selected backend target."
+          : "Saved."
+      );
+      await refreshBackendHealth(nextLiveUrl);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setSavingBackend(false);
+    }
   }
 
   async function saveAiSettings() {
@@ -327,6 +493,76 @@ export default function Settings(_props: PageProps) {
         ) : (
           <div className="small" style={{ opacity: 0.75 }}>Loading render profiles…</div>
         )}
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Desktop Backend</div>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Choose whether Studio should launch and own its local backend or just connect the GUI to an already running backend. This keeps Windows-first packaging intact while making Ubuntu and Linux desktop installs first-class.
+        </div>
+        <div className="small" style={{ marginBottom: 12, opacity: 0.85 }}>
+          Saved startup config: <b>{backendSettingsLoaded ? `${backendDraft.mode} (${backendDraft.host}:${backendDraft.port})` : "loading"}</b>
+          {studioBackendSettings.source ? <span> • source <b>{studioBackendSettings.source}</b></span> : null}
+        </div>
+        <div className="small" style={{ marginBottom: 12, opacity: 0.82 }}>
+          Live runtime target: <b>{liveBackendUrl || props.backendUrl || buildBackendUrl(backendDraft)}</b>
+          {" "}• health{" "}
+          <b>
+            {backendReachable == null ? "checking" : backendReachable ? "reachable" : "unreachable"}
+          </b>
+        </div>
+
+        <div style={{ display: "grid", gap: 12 }}>
+          <div>
+            <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Mode</div>
+            <select
+              aria-label="Desktop backend mode"
+              value={backendDraft.mode}
+              onChange={(e) => updateBackendDraft({ mode: e.target.value })}
+            >
+              <option value="managed">Managed local backend</option>
+              <option value="external">Connect to existing backend</option>
+            </select>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+            <div>
+              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Backend host</div>
+              <input
+                aria-label="Desktop backend host"
+                value={backendDraft.host}
+                onChange={(e) => updateBackendDraft({ host: e.target.value })}
+                placeholder="127.0.0.1"
+              />
+            </div>
+            <div>
+              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Backend port</div>
+              <input
+                aria-label="Desktop backend port"
+                inputMode="numeric"
+                value={backendDraft.port}
+                onChange={(e) => updateBackendDraft({ port: e.target.value })}
+                placeholder="7863"
+              />
+            </div>
+          </div>
+
+          <div className="small" style={{ opacity: 0.82 }}>
+            Ubuntu/Linux desktop note: managed mode keeps the full GUI and bundled startup flow, while external mode is for cases where you want the AppImage to attach to a separately launched backend, Ollama stack, or service wrapper.
+          </div>
+
+          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button disabled={savingBackend || !backendSettingsDirty || !window.edmg?.setBackendSettings} onClick={saveBackendSettings}>
+              {savingBackend ? "Saving…" : "Save backend startup settings"}
+            </button>
+            {backendRestartRequired && window.edmg?.relaunch ? (
+              <button className="secondary" disabled={savingBackend} onClick={() => { void window.edmg?.relaunch?.(); }}>
+                Restart now
+              </button>
+            ) : null}
+            {backendNotice ? <div className="small" style={{ opacity: 0.84 }}>{backendNotice}</div> : null}
+          </div>
+        </div>
       </div>
 
       <div className="card" style={{ marginTop: 14 }}>

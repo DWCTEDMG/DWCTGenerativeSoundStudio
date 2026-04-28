@@ -52,6 +52,7 @@ export default function App() {
   const [forcedPage] = useState<Page | null>(getForcedPage);
   const [backendUrl, setBackendUrl] = useState<string>("");
   const [config, setConfig] = useState<any>(null);
+  const [backendConfigError, setBackendConfigError] = useState<string>("");
   const [setupChecked, setSetupChecked] = useState(false);
 
   useEffect(() => {
@@ -72,8 +73,14 @@ export default function App() {
   useEffect(() => {
     if (!backendUrl) return;
     apiGet("/v1/config")
-      .then(setConfig)
-      .catch(() => {});
+      .then((nextConfig) => {
+        setConfig(nextConfig);
+        setBackendConfigError("");
+      })
+      .catch((error: any) => {
+        setConfig(null);
+        setBackendConfigError(String(error?.message ?? error));
+      });
   }, [backendUrl]);
 
   useEffect(() => {
@@ -132,7 +139,20 @@ export default function App() {
   return (
     <div className="app-shell">
       <Sidebar page={page} onNavigate={setPage} />
-      <div className={mainClassName}>{content}</div>
+      <div className={mainClassName}>
+        {backendConfigError ? (
+          <div className="card" style={{ marginBottom: 14, borderColor: "var(--warning, #b58900)" }}>
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Backend connection needs attention</div>
+            <div className="small" style={{ marginBottom: 8 }}>
+              Studio resolved <b>{backendUrl}</b> but could not load `/v1/config` from it.
+            </div>
+            <div className="small" style={{ opacity: 0.84 }}>
+              If you intended to attach the desktop GUI to an external backend, open Settings and review Desktop Backend mode, host, and port. Error: {backendConfigError}
+            </div>
+          </div>
+        ) : null}
+        {content}
+      </div>
     </div>
   );
 }

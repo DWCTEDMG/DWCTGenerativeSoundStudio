@@ -110,7 +110,7 @@ export default function Sidebar({
         </div>
       </div>
       <div className="small sidebar-tagline">
-        Desktop UI + local backend + internal renderer + optional ComfyUI + AI + EDMG Core
+        Desktop UI + managed or external backend + internal renderer + optional ComfyUI + AI + EDMG Core
       </div>
 
       <div className="sidebar-focusCard">
@@ -159,7 +159,7 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-footer">
-        <span className="badge">backend 7863</span>
+        <span className="badge">backend configurable</span>
         <span className="badge">Ollama 11434</span>
         <span className="badge">ComfyUI 8188</span>
       </div>

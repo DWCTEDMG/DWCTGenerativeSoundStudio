@@ -5,6 +5,14 @@ declare global {
     edmg?: {
       backendUrl: () => string;
       getBackendUrl?: () => Promise<string>;
+      getBackendSettings?: () => Promise<{
+        ok: boolean;
+        mode: string;
+        host: string;
+        port: string;
+        source: string;
+        currentBackendUrl?: string;
+      }>;
       openExternal?: (url: string) => Promise<void>;
       openPath?: (path: string) => Promise<{ ok: boolean; action?: string; path?: string; error?: string }>;
       showItemInFolder?: (path: string) => Promise<{ ok: boolean; action?: string; path?: string; error?: string }>;
@@ -98,6 +106,19 @@ declare global {
         ollamaModel?: string;
         openaiCompatBaseUrl?: string;
         openaiCompatModel?: string;
+      }>;
+      setBackendSettings?: (settings: {
+        mode: string;
+        host: string;
+        port: string;
+      }) => Promise<{
+        ok: boolean;
+        error?: string;
+        restartRequired?: boolean;
+        mode?: string;
+        host?: string;
+        port?: string;
+        currentBackendUrl?: string;
       }>;
       relaunch?: () => Promise<{ ok: boolean }>;
     };
