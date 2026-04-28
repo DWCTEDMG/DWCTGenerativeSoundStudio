@@ -1,22 +1,23 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import Sidebar, { Page } from "./components/Sidebar";
 import { apiGet, getBackendUrl, getBackendUrlAsync } from "./components/api";
 
 import Dashboard from "./pages/Dashboard";
 import Projects from "./pages/Projects";
-import Workspace from "./pages/Workspace";
-import Timeline from "./pages/Timeline";
-import Render from "./pages/Render";
-import RenderQueue from "./pages/RenderQueue";
-import Outputs from "./pages/Outputs";
-import Cloud from "./pages/Cloud";
-import Settings from "./pages/Settings";
 import Setup from "./pages/Setup";
-import Models from "./pages/Models";
-import AiPlannerLab from "./pages/AiPlannerLab";
-import ReactiveLab from "./pages/ReactiveLab";
-import StudioForge from "./pages/StudioForge";
 import { isStudioForgeEnabled } from "./features";
+
+const Workspace = lazy(() => import("./pages/Workspace"));
+const Timeline = lazy(() => import("./pages/Timeline"));
+const Render = lazy(() => import("./pages/Render"));
+const RenderQueue = lazy(() => import("./pages/RenderQueue"));
+const Outputs = lazy(() => import("./pages/Outputs"));
+const Cloud = lazy(() => import("./pages/Cloud"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Models = lazy(() => import("./pages/Models"));
+const AiPlannerLab = lazy(() => import("./pages/AiPlannerLab"));
+const ReactiveLab = lazy(() => import("./pages/ReactiveLab"));
+const StudioForge = lazy(() => import("./pages/StudioForge"));
 
 const BASE_PAGES: Page[] = [
   "dashboard",
@@ -52,6 +53,17 @@ function getForcedPage(): Page | null {
   if (typeof window === "undefined") return null;
   const raw = new URLSearchParams(window.location.search).get("page");
   return raw && isPage(raw) ? raw : null;
+}
+
+function PageLoadingFallback({ page }: { page: Page }) {
+  return (
+    <div className="card">
+      <div style={{ fontWeight: 800, marginBottom: 8 }}>Loading studio screen</div>
+      <div className="small">
+        Preparing <b>{page}</b> and its supporting workbench modules.
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -162,7 +174,9 @@ export default function App() {
             </div>
           </div>
         ) : null}
-        {content}
+        <Suspense fallback={<PageLoadingFallback page={page} />}>
+          {content}
+        </Suspense>
       </div>
     </div>
   );
