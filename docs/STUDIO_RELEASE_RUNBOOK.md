@@ -5,12 +5,23 @@ without terminal work.
 
 ## 1. First install
 
+Windows:
+
 1. Run the packaged Windows installer.
 2. Choose the app install directory if you do not want the default location.
 3. Launch EDMG Studio.
 4. Open `Setup`.
 5. Pick a `Studio Home` on the drive you want for heavy runtime storage, such as
    `D:\EDMG-Studio`.
+
+Linux:
+
+1. Build or download the packaged `AppImage`.
+2. Mark it executable if needed: `chmod +x EDMG-Studio*.AppImage`.
+3. Launch EDMG Studio from the AppImage.
+4. Open `Setup`.
+5. Pick a `Studio Home` on the volume you want for heavy runtime storage, such as
+   `/mnt/media/EDMG-Studio`.
 
 The packaged app install directory and `Studio Home` are intentionally separate:
 
@@ -30,17 +41,17 @@ Studio manages separate roots under `Studio Home` by default:
 If you keep the default managed layout, Studio will place these under:
 
 ```text
-<Studio Home>\data
-<Studio Home>\models
-<Studio Home>\cache
-<Studio Home>\logs
-<Studio Home>\external
+<Studio Home>/data
+<Studio Home>/models
+<Studio Home>/cache
+<Studio Home>/logs
+<Studio Home>/external
 ```
 
 Studio also manages:
 
-- Ollama models under `<Studio Home>\models\ollama`
-- Electron app/session data under `<Studio Home>\electron`
+- Ollama models under `<Studio Home>/models/ollama`
+- Electron app/session data under `<Studio Home>/electron`
 
 If you change roots from an older layout, Studio queues a migration and applies
 it on restart.
@@ -73,9 +84,10 @@ Provider notes:
 From `Setup`:
 
 - verify bundled FFmpeg
-- verify/install the managed 7-Zip portable tool
-- verify/install Ollama under the Studio-managed `external\ollama` root when Ollama is your chosen provider
-- verify/download ComfyUI Portable if you want the local ComfyUI path
+- verify/install the managed 7-Zip portable tool on Windows when you need the portable ComfyUI workflow
+- verify/install Ollama under the Studio-managed `external/ollama` root on Windows when Ollama is your chosen provider
+- on Linux, verify a system `ollama` install or set `EDMG_OLLAMA_PATH`
+- verify/download ComfyUI Portable on Windows, or point Linux Studio at an existing ComfyUI server
 
 From `Models`:
 
@@ -97,7 +109,7 @@ Use this path to confirm the install is healthy:
 
 ## 6. Upgrade and migration recovery
 
-If you are moving from an older `C:\`-based layout:
+If you are moving from an older `C:\`-based layout or from a smaller Linux home-directory location:
 
 1. Set the new `Studio Home`.
 2. Save and restart Studio.
@@ -123,8 +135,9 @@ Expected migrated categories:
 ### Ollama is selected but not available
 
 - use `Setup` to install or repair Ollama into the Studio-managed external tools root
-- confirm the managed models directory lives under `models\ollama`
-- confirm the managed executable lives under `external\ollama\ollama.exe`
+- on Windows, confirm the managed models directory lives under `models/ollama`
+- on Windows, confirm the managed executable lives under `external/ollama/ollama.exe`
+- on Linux, confirm `ollama` is on `PATH` or set `EDMG_OLLAMA_PATH`
 
 ### ComfyUI is reachable but unusable
 
@@ -148,13 +161,20 @@ pnpm run check:tooling
 pnpm run validate:release
 ```
 
+Linux operators should run:
+
+```bash
+cd studio/edmg-studio
+pnpm run check:tooling
+pnpm run validate:release:linux
+```
+
 That includes:
 
 - pnpm/package-manager and lockfile guardrails
 - staged desktop validation
-- packaged customer-flow proof
-- packaged upgrade-proof migration test
-- packaged zero-state setup proof for Studio-managed Ollama and 7-Zip
+- `validate:release` on Windows additionally runs packaged customer-flow proof, packaged upgrade-proof migration test, and the zero-state setup proof for Studio-managed Ollama and 7-Zip
+- `validate:release:linux` validates the desktop shell and produces the Linux AppImage without invoking the Windows-only installer proofs
 
 Canonical packaged desktop version source:
 

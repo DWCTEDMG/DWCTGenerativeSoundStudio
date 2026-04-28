@@ -16,6 +16,8 @@ This repository now presents one product surface: EDMG Studio.
   Shared dev launcher and Studio Home bootstrap flow.
 - `studio/edmg-studio/packaging/windows/`
   Windows-first packaged release automation.
+- `studio/edmg-studio/packaging/linux/`
+  Linux AppImage packaging notes and operator guidance.
 
 ## Canonical entrypoints
 
@@ -48,18 +50,20 @@ The Studio app now owns those workflows directly through:
 
 Primary Studio docs:
 
-- [README.md](D:\DWCTGenerativeSoundStudio\README.md)
-- [studio/edmg-studio/README.md](D:\DWCTGenerativeSoundStudio\studio\edmg-studio\README.md)
-- [RELEASE.md](D:\DWCTGenerativeSoundStudio\RELEASE.md)
-- [docs/STUDIO_RELEASE_RUNBOOK.md](D:\DWCTGenerativeSoundStudio\docs\STUDIO_RELEASE_RUNBOOK.md)
+- [README.md](../README.md)
+- [studio/edmg-studio/README.md](../studio/edmg-studio/README.md)
+- [RELEASE.md](../RELEASE.md)
+- [docs/STUDIO_RELEASE_RUNBOOK.md](./STUDIO_RELEASE_RUNBOOK.md)
 
 Key validation commands run from `studio/edmg-studio/`:
 
 - `pnpm run check:tooling`
 - `pnpm run validate:desktop`
 - `pnpm run dist:win`
+- `pnpm run dist:linux`
 - `pnpm run validate:packaged-customer-flow`
 - `pnpm run validate:packaged-upgrade-proof`
+- `pnpm run validate:release:linux`
 
 Canonical packaged desktop version source:
 

@@ -28,7 +28,10 @@ A desktop-style "studio" application:
 ```bash
 cd python_backend
 python -m venv venv
-venv\Scripts\activate
+# Windows PowerShell
+venv\Scripts\Activate.ps1
+# macOS/Linux
+source venv/bin/activate
 pip install -U pip
 pip install -e ".[studio_bundle]"
 edmg-studio-backend serve --host 127.0.0.1 --port 7863
@@ -63,6 +66,7 @@ manager version is pinned via `packageManager` in `package.json`.
 - Canonical shipped desktop version: `studio/edmg-studio/package.json#version`
 - Release staging copies that version into `studio/edmg-studio/release/staged-app/package.json`
 - Windows installer names include `${version}` via `package.json#build.win.artifactName`
+- Linux desktop artifacts are built as `AppImage` via `pnpm run dist:linux`
 - Use `pnpm run check:release-metadata` after staging if you want a direct version-propagation check
 
 ## Setup Wizard (no command line)
@@ -80,11 +84,14 @@ When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard
 
 This keeps the runtime UX like a DAW/game installer: click buttons, no terminal required.
 
+On Linux, use the packaged `AppImage` or `pnpm run dist:linux` on a Linux host. The same Setup Wizard still manages Studio Home paths, but Ollama and ComfyUI are expected to be installed manually or pointed at existing services instead of using the Windows-only managed installers.
+
 OpenClaw is not part of the required Studio install path. If you use it, treat it as an optional operator shell layered around Studio for automation or monitoring rather than as a dependency of the app itself.
 
 Release/operator runbook:
 - [Studio release runbook](../../docs/STUDIO_RELEASE_RUNBOOK.md)
 - [Release checklist](../../RELEASE.md)
+- [Linux packaging notes](./packaging/linux/README.md)
 
 Install/storage split:
 - **Install directory**: where the packaged app itself is installed

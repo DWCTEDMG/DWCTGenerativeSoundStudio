@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { apiGet, apiPost, getBackendUrl } from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import type { PageProps } from "../types/pageProps";
 
 export default function Outputs(props: PageProps) {
-  const backendUrl = useMemo(() => getBackendUrl(), []);
+  const backendUrl = props.backendUrl || getBackendUrl();
   const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState<string>("");
   const [outs, setOuts] = useState<any>(null);

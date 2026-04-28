@@ -23,11 +23,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi import Request
 
 try:
-    import multipart as _multipart  # type: ignore
+    import python_multipart as _multipart  # type: ignore
     HAS_MULTIPART = True
 except Exception:
-    _multipart = None
-    HAS_MULTIPART = False
+    try:
+        import multipart as _multipart  # type: ignore
+        HAS_MULTIPART = True
+    except Exception:
+        _multipart = None
+        HAS_MULTIPART = False
 
 try:
     from PIL import Image, ImageFilter, ImageOps  # type: ignore
@@ -43,6 +47,7 @@ from .schemas import (
     CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest,
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
+    ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
 )
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
@@ -86,6 +91,15 @@ from .services.workbench_bridge import (
     planner_lab_to_canonical_plan,
     planner_lab_to_project_analysis,
 )
+from .services.visual_dna import (
+    build_prompt_hints as build_visual_dna_prompt_hints,
+    ingest_planner_payload as ingest_visual_dna_planner_payload,
+    ingest_reactive_payload as ingest_visual_dna_reactive_payload,
+    load_visual_dna,
+    record_render_feedback as record_visual_dna_feedback,
+    save_visual_dna,
+)
+from .render_conductor.planner import build_advisory_render_plan
 from .services.setup_wizard import (
     SetupTaskManager,
     check_backend_bundle,
@@ -2348,14 +2362,42 @@ def list_projects():
 @app.post("/v1/projects")
 def create_project(req: ProjectCreateRequest):
     proj = store.create(req.name)
-    return {"project": proj.__dict__}
+    return _project_response_payload(proj)
 
 @app.get("/v1/projects/{project_id}")
 def get_project(project_id: str):
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
-    return {"project": proj.__dict__}
+    return _project_response_payload(proj)
+
+
+@app.get("/v1/projects/{project_id}/visual_dna")
+def get_project_visual_dna(project_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    dna = _load_project_visual_dna(proj)
+    return {
+        "ok": True,
+        "visual_dna": dna.model_dump(mode="json"),
+        "prompt_hints": build_visual_dna_prompt_hints(dna),
+    }
+
+
+@app.post("/v1/projects/{project_id}/visual_dna/feedback")
+def post_project_visual_dna_feedback(project_id: str, req: VisualDNAFeedbackRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    dna = _load_project_visual_dna(proj)
+    updated = record_visual_dna_feedback(dna, feedback=req.feedback)
+    saved = _save_project_visual_dna(proj, updated)
+    return {
+        "ok": True,
+        "visual_dna": saved.model_dump(mode="json"),
+        "prompt_hints": build_visual_dna_prompt_hints(saved),
+    }
 
 @app.get("/v1/projects/{project_id}/timeline")
 def get_timeline(project_id: str):
@@ -4570,6 +4612,184 @@ def _merge_imported_analysis(base: Any, imported: dict[str, Any]) -> dict[str, A
     return current
 
 
+def _load_project_visual_dna(proj: Any):
+    return load_visual_dna(
+        store.project_dir(proj.id),
+        project_id=str(proj.id),
+        project_name=str(getattr(proj, "name", "") or "") or None,
+    )
+
+
+def _save_project_visual_dna(proj: Any, dna):
+    return save_visual_dna(store.project_dir(proj.id), dna)
+
+
+def _project_response_payload(proj: Any) -> dict[str, Any]:
+    dna = _load_project_visual_dna(proj)
+    return {
+        "project": proj.__dict__,
+        "visual_dna": dna.model_dump(mode="json"),
+        "visual_dna_hints": build_visual_dna_prompt_hints(dna),
+    }
+
+
+def _render_quality_tier_from_preset(preset: str | None) -> str:
+    preset_l = str(preset or "balanced").strip().lower()
+    if preset_l == "fast":
+        return "draft"
+    if preset_l == "quality":
+        return "quality"
+    if preset_l == "ultra":
+        return "ultra"
+    return "balanced"
+
+
+def _default_speed_priority(quality_tier: str) -> float:
+    return {
+        "draft": 0.85,
+        "balanced": 0.55,
+        "quality": 0.35,
+        "ultra": 0.25,
+    }.get(str(quality_tier or "balanced"), 0.55)
+
+
+def _build_render_conductor_intent(project_id: str, proj: Any, req: RenderConductorPlanRequest) -> RenderIntent:
+    quality_tier = str(req.quality_tier or _render_quality_tier_from_preset(req.preset))
+    dna = _load_project_visual_dna(proj)
+    continuity_default = 0.8 if list(dna.continuity.subject_anchors or []) else 0.72
+    return RenderIntent.model_validate(
+        {
+            "project_id": project_id,
+            "variant_index": int(req.variant_index or 0),
+            "aspect_ratio": req.aspect_ratio,
+            "output_mode": req.output_mode,
+            "quality_tier": quality_tier,
+            "continuity_priority": continuity_default if req.continuity_priority is None else req.continuity_priority,
+            "speed_priority": _default_speed_priority(quality_tier) if req.speed_priority is None else req.speed_priority,
+            "style_lock_strength": 0.8 if req.style_lock_strength is None else req.style_lock_strength,
+            "allowed_engines": list(req.allowed_engines or []),
+            "fallback_policy": req.fallback_policy,
+            "sections": [section.model_dump(mode="json") for section in list(req.sections or [])],
+        }
+    )
+
+
+def _build_render_conductor_environment() -> dict[str, Any]:
+    hw = _hardware_profile()
+    provider_status = _render_provider_status(hw)
+    runtime = _internal_diffusion_runtime_status()
+    installed_internal = any(
+        bool(models.installed_path(model_id))
+        for model_id in ("hf_sd15_internal", "hf_sdxl_internal", "hf_sd35_medium_internal")
+    )
+    backend_family = str(hw.get("backend_family") or "cpu_only").lower()
+    if backend_family == "discrete_gpu":
+        internal_quality = 0.92
+        internal_speed = 0.74
+    elif backend_family == "integrated_gpu":
+        internal_quality = 0.8
+        internal_speed = 0.56
+    else:
+        internal_quality = 0.66
+        internal_speed = 0.32
+
+    ckpt, _fallback = _resolve_comfy_checkpoint_name(settings.comfyui_checkpoint, allow_auto_fallback=True)
+    try:
+        base_diag = comfy_pool.diagnose({"checkpoint": ckpt})
+    except Exception:
+        base_diag = {"compatible": [], "busy_compatible": []}
+    base_ok = bool(base_diag.get("compatible") or base_diag.get("busy_compatible"))
+    ad_ok = False
+    svd_ok = False
+    if base_ok:
+        try:
+            ad_diag = comfy_pool.diagnose(
+                {
+                    "checkpoint": ckpt,
+                    "node_classes": ["ADE_StandardStaticContextOptions", "ADE_AnimateDiffLoaderGen1"],
+                    "est_steps": 20,
+                    "est_frames": 24,
+                }
+            )
+            ad_ok = bool(ad_diag.get("compatible") or ad_diag.get("busy_compatible"))
+        except Exception:
+            ad_ok = False
+        try:
+            svd_diag = comfy_pool.diagnose(
+                {
+                    "checkpoint": ckpt,
+                    "node_classes": ["SVDSimpleImg2Vid"],
+                    "est_steps": 20,
+                    "est_frames": 14,
+                }
+            )
+            svd_ok = bool(svd_diag.get("compatible") or svd_diag.get("busy_compatible"))
+        except Exception:
+            svd_ok = False
+    try:
+        deforum_ok = bool(core_status().get("ok"))
+    except Exception:
+        deforum_ok = False
+
+    diagnostics = [
+        f"internal_runtime={'ready' if runtime.get('ok') else 'missing'}",
+        f"internal_models={'installed' if installed_internal else 'missing'}",
+        f"comfyui_still={'ready' if base_ok else 'unavailable'}",
+        f"comfyui_motion={'ready' if (ad_ok or svd_ok) else 'unavailable'}",
+        f"hosted_stability={'ready' if _hosted_stability_ready({'allow_hosted_fallback': True}) else 'unavailable'}",
+        f"deforum_export={'ready' if deforum_ok else 'unavailable'}",
+    ]
+    return {
+        "hardware": hw,
+        "providers": provider_status,
+        "diagnostics": diagnostics,
+        "engines": {
+            "internal": {
+                "available": bool(runtime.get("ok") and installed_internal),
+                "quality_score": internal_quality,
+                "speed_score": internal_speed,
+            },
+            "comfyui_still": {
+                "available": base_ok,
+                "quality_score": 0.84,
+                "speed_score": 0.58,
+            },
+            "comfyui_motion": {
+                "available": bool(ad_ok or svd_ok),
+                "quality_score": 0.8 if ad_ok else 0.74,
+                "speed_score": 0.62 if ad_ok else 0.57,
+            },
+            "hosted_video": {
+                "available": _hosted_stability_ready({"allow_hosted_fallback": True}),
+                "quality_score": 0.78,
+                "speed_score": 0.82,
+            },
+            "proxy": {
+                "available": True,
+                "quality_score": 0.38,
+                "speed_score": 0.95,
+            },
+            "deforum_export": {
+                "available": deforum_ok,
+                "quality_score": 0.7,
+                "speed_score": 0.45,
+            },
+        },
+    }
+
+
+def _build_project_snapshot(proj: Any, *, dna: Any | None = None) -> ProjectSnapshot:
+    visual_dna = dna or _load_project_visual_dna(proj)
+    return ProjectSnapshot(
+        project_id=str(proj.id),
+        project_name=str(getattr(proj, "name", "") or "") or None,
+        analysis=(proj.meta.get("analysis") or {}) if isinstance(proj.meta, dict) else {},
+        plan=(proj.meta.get("last_plan") or {}) if isinstance(proj.meta, dict) else {},
+        timeline=(proj.meta.get("timeline") or {}) if isinstance(proj.meta, dict) else {},
+        visual_dna=visual_dna,
+    )
+
+
 def _apply_plan_to_project_timeline(proj: Any, *, variant_index: int, overwrite: bool) -> dict[str, Any]:
     plan = proj.meta.get("last_plan")
     if not isinstance(plan, dict):
@@ -4863,6 +5083,14 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
         "settings": deepcopy(req.settings),
         "imported_at": time.time(),
     }
+    visual_dna = _load_project_visual_dna(proj)
+    visual_dna = ingest_visual_dna_planner_payload(
+        visual_dna,
+        analysis=deepcopy(req.analysis) if isinstance(req.analysis, dict) else {},
+        plan=deepcopy(req.plan) if isinstance(req.plan, dict) else {},
+        settings=deepcopy(req.settings) if isinstance(req.settings, dict) else {},
+    )
+    saved_dna = _save_project_visual_dna(proj, visual_dna)
 
     timeline = None
     if req.apply_timeline:
@@ -4873,7 +5101,13 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
         )
 
     store.save(proj)
-    return {"ok": True, "plan": normalized_plan, "timeline": timeline}
+    return {
+        "ok": True,
+        "plan": normalized_plan,
+        "timeline": timeline,
+        "visual_dna": saved_dna.model_dump(mode="json"),
+        "visual_dna_hints": build_visual_dna_prompt_hints(saved_dna),
+    }
 
 
 @app.post("/v1/projects/{project_id}/reactive_lab/apply")
@@ -4900,8 +5134,19 @@ def apply_reactive_lab(project_id: str, req: ReactiveLabApplyRequest):
     )
     proj.meta["timeline"] = timeline
     proj.meta["last_reactive_lab"] = {**payload, "applied_at": time.time()}
+    visual_dna = _load_project_visual_dna(proj)
+    visual_dna = ingest_visual_dna_reactive_payload(
+        visual_dna,
+        payload=payload,
+    )
+    saved_dna = _save_project_visual_dna(proj, visual_dna)
     store.save(proj)
-    return {"ok": True, "timeline": timeline}
+    return {
+        "ok": True,
+        "timeline": timeline,
+        "visual_dna": saved_dna.model_dump(mode="json"),
+        "visual_dna_hints": build_visual_dna_prompt_hints(saved_dna),
+    }
 
 
 @app.get("/v1/jobs")
@@ -7165,6 +7410,29 @@ def validate_pipeline(project_id: str, variant_index: int = 0, preset: str = "ba
     return {"ok": True, "recommended": rec, "hardware": _hardware_profile()}
 
 
+@app.post("/v1/projects/{project_id}/render/conductor/plan")
+def render_conductor_plan(project_id: str, req: RenderConductorPlanRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated")
+
+    visual_dna = _load_project_visual_dna(proj)
+    intent = _build_render_conductor_intent(project_id, proj, req)
+    snapshot = _build_project_snapshot(proj, dna=visual_dna)
+    environment = _build_render_conductor_environment()
+    advisory_plan = build_advisory_render_plan(intent, snapshot, environment=environment)
+    return {
+        "ok": True,
+        "intent": intent.model_dump(mode="json"),
+        "plan": advisory_plan.model_dump(mode="json"),
+        "environment": environment,
+        "visual_dna_hints": build_visual_dna_prompt_hints(visual_dna),
+    }
+
+
 @app.post("/v1/projects/{project_id}/pipeline/run")
 def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balanced", mode: str = "auto", engine: str = "auto"):
     """Enqueue an end-to-end pipeline: render (auto stills/motion) -> assemble final MP4.
@@ -7248,10 +7516,17 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
         )
         res = render_internal_video(project_id, internal_req)
         effective_mode = str(res.get("preflight", {}).get("mode") or rec["mode"])
+        selected = dict(rec)
+        if effective_mode == "diffusion":
+            selected["mode"] = "internal"
+            selected["engine"] = "diffusion"
+            selected["model_id"] = str(res.get("preflight", {}).get("model_id") or selected.get("model_id") or "auto")
+        elif effective_mode in {"proxy", "hosted"}:
+            selected["mode"] = effective_mode
         return {
             "ok": True,
             "preset": preset,
-            "selected": rec,
+            "selected": selected,
             "render_mode": effective_mode,
             "job": res.get("job"),
             "preflight": res.get("preflight"),

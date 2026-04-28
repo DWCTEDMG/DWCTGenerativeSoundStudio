@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { apiGet, apiPost, getBackendUrl } from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import type { PageProps } from "../types/pageProps";
 
-export default function RenderQueue(_props: PageProps) {
-  const backendUrl = useMemo(() => getBackendUrl(), []);
+export default function RenderQueue(props: PageProps) {
+  const backendUrl = props.backendUrl || getBackendUrl();
   const [jobs, setJobs] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState<string>("");

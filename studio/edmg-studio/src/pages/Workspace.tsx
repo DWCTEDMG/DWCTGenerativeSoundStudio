@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
 import { ProgressBar } from "../components/ProgressBar";
@@ -146,7 +146,7 @@ function OverviewSection(props: {
   );
 }
 
-export default function Workspace({ onNavigate }: PageProps) {
+export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: PageProps) {
   const { mode: uiMode } = useUiMode();
   const {
     projectId,
@@ -156,7 +156,7 @@ export default function Workspace({ onNavigate }: PageProps) {
     lastHandoff,
     noteHandoff,
   } = useStudioSession();
-  const backendUrl = useMemo(() => getBackendUrl(), []);
+  const backendUrl = backendUrlProp || getBackendUrl();
   const [projects, setProjects] = useState<any[]>([]);
   const [project, setProject] = useState<any>(null);
 
