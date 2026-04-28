@@ -1,21 +1,6 @@
 import React, { useState } from "react";
 import { isStudioForgeEnabled } from "../features";
-
-export type Page =
-  | "dashboard"
-  | "projects"
-  | "workspace"
-  | "timeline"
-  | "render"
-  | "queue"
-  | "outputs"
-  | "cloud"
-  | "settings"
-  | "setup"
-  | "models"
-  | "plannerLab"
-  | "reactiveLab"
-  | "studioForge";
+import { preloadNavigationIntent, type Page } from "../pageRouting";
 
 type NavGroupId = "flow" | "delivery" | "labs" | "system";
 
@@ -154,6 +139,8 @@ export default function Sidebar({
                   <button
                     key={item.page}
                     onClick={() => onNavigate(item.page)}
+                    onMouseEnter={() => preloadNavigationIntent(item.page)}
+                    onFocus={() => preloadNavigationIntent(item.page)}
                     className={`sidebar-navButton${page === item.page ? " is-active" : ""}`}
                   >
                     <span className="sidebar-navCopy">

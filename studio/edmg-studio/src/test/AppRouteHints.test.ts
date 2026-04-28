@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPageLoadingDetails, getPagesToPreload } from "../App";
+import { getPageLoadingDetails, getPagesToPreload } from "../pageRouting";
 
 describe("App route hints", () => {
   it("describes Studio Forge with page-specific loading copy", () => {
