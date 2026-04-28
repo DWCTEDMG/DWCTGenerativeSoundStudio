@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
 import { useStudioSession } from "../components/studioSession";
@@ -149,7 +150,7 @@ function OverviewSection(props: {
 export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: PageProps) {
   const { mode: uiMode } = useUiMode();
   const {
-    projectId,
+    projectId: sessionProjectId,
     setProjectId,
     selectedVariant,
     setSelectedVariant,
@@ -159,6 +160,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const backendUrl = backendUrlProp || getBackendUrl();
   const [projects, setProjects] = useState<any[]>([]);
   const [project, setProject] = useState<any>(null);
+  const [projectsReady, setProjectsReady] = useState(false);
 
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [refFile, setRefFile] = useState<File | null>(null);
@@ -178,12 +180,21 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewAutoFitKeyRef = useRef<string>("");
   const { progress, runOperation } = useOperationProgress();
+  const projectId = projectsReady && hasProjectId(projects, sessionProjectId) ? sessionProjectId : "";
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
-    const ps = d.projects || [];
+    const ps = Array.isArray(d?.projects) ? d.projects : [];
     setProjects(ps);
-    if (!projectId && ps.length) setProjectId(ps[0].id);
+    setProjectsReady(true);
+    const nextProjectId = resolveProjectId(ps, sessionProjectId);
+    if (nextProjectId !== sessionProjectId) setProjectId(nextProjectId);
+    if (!nextProjectId) {
+      setProject(null);
+      setAssets(null);
+      setAnalysis(null);
+      setPlan(null);
+    }
   };
 
   const refreshProject = async (id: string) => {
@@ -206,7 +217,16 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
 
   useEffect(() => { refreshProjects().catch(() => {}); }, []);
 
-  useEffect(() => { if (projectId) refreshProject(projectId).catch(() => {}); }, [projectId]);
+  useEffect(() => {
+    if (!projectsReady) return;
+    if (projectId) refreshProject(projectId).catch(() => {});
+    else {
+      setProject(null);
+      setAssets(null);
+      setAnalysis(null);
+      setPlan(null);
+    }
+  }, [projectId, projectsReady]);
   // Workspace stays focused on project + timeline. Rendering lives in the Render page.
 
   const uploadAudio = async () => {

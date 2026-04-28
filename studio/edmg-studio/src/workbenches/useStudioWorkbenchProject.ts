@@ -1,26 +1,23 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "../components/api";
+import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { useStudioSession } from "../components/studioSession";
 
 export function useStudioWorkbenchProject() {
   const [projects, setProjects] = useState<any[]>([]);
   const [project, setProject] = useState<any>(null);
+  const [projectsReady, setProjectsReady] = useState(false);
   const { projectId, setProjectId, selectedVariant, setSelectedVariant } = useStudioSession();
+  const activeProjectId = projectsReady && hasProjectId(projects, projectId) ? projectId : "";
 
   const refreshProjects = async () => {
     const data = await apiGet("/v1/projects");
     const nextProjects = Array.isArray(data?.projects) ? data.projects : [];
     setProjects(nextProjects);
-    if (!nextProjects.length) {
-      setProjectId("");
-      setProject(null);
-      return;
-    }
-
-    const hasCurrent = projectId && nextProjects.some((item) => String(item?.id || "") === projectId);
-    const nextProjectId = hasCurrent ? projectId : String(nextProjects[0]?.id || "");
-
+    setProjectsReady(true);
+    const nextProjectId = resolveProjectId(nextProjects, projectId);
     if (nextProjectId !== projectId) setProjectId(nextProjectId);
+    if (!nextProjectId) setProject(null);
   };
 
   const refreshProject = async (id: string) => {
@@ -37,13 +34,14 @@ export function useStudioWorkbenchProject() {
   }, []);
 
   useEffect(() => {
-    if (projectId) refreshProject(projectId).catch(() => {});
+    if (!projectsReady) return;
+    if (activeProjectId) refreshProject(activeProjectId).catch(() => {});
     else setProject(null);
-  }, [projectId]);
+  }, [activeProjectId, projectsReady]);
 
   return {
     projects,
-    projectId,
+    projectId: activeProjectId,
     setProjectId,
     selectedVariant,
     setSelectedVariant,

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, getBackendUrl } from "../components/api";
+import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
 import { useStudioSession } from "../components/studioSession";
@@ -230,7 +231,7 @@ function fmtLabel(trackType: string, clip: Clip): string {
 
 export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
   const {
-    projectId,
+    projectId: sessionProjectId,
     setProjectId,
     selectedVariant,
     setSelectedVariant,
@@ -241,6 +242,7 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
 
   const [projects, setProjects] = useState<any[]>([]);
   const [project, setProject] = useState<any>(null);
+  const [projectsReady, setProjectsReady] = useState(false);
 
   const [plan, setPlan] = useState<any>(null);
 
@@ -290,12 +292,22 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
 
   const [err, setErr] = useState<string | null>(null);
   const { progress, runOperation } = useOperationProgress();
+  const projectId = projectsReady && hasProjectId(projects, sessionProjectId) ? sessionProjectId : "";
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
-    setProjects(Array.isArray(d?.projects) ? d.projects : []);
-    if (!projectId && Array.isArray(d?.projects) && d.projects[0]?.id)
-      setProjectId(String(d.projects[0].id));
+    const nextProjects = Array.isArray(d?.projects) ? d.projects : [];
+    setProjects(nextProjects);
+    setProjectsReady(true);
+    const nextProjectId = resolveProjectId(nextProjects, sessionProjectId);
+    if (nextProjectId !== sessionProjectId) setProjectId(nextProjectId);
+    if (!nextProjectId) {
+      setProject(null);
+      setPlan(null);
+      setTimeline(ensureTimelineShape({}, null));
+      setTimelineDirty(false);
+      setAudioUrl("");
+    }
   };
 
   const refreshProject = async (pid: string) => {
@@ -327,8 +339,16 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
     refreshProjects().catch(() => {});
   }, []);
   useEffect(() => {
+    if (!projectsReady) return;
     if (projectId) refreshProject(projectId).catch(() => {});
-  }, [projectId, selectedVariant]);
+    else {
+      setProject(null);
+      setPlan(null);
+      setTimeline(ensureTimelineShape({}, null));
+      setTimelineDirty(false);
+      setAudioUrl("");
+    }
+  }, [projectId, projectsReady, selectedVariant]);
 
   useEffect(() => {
     if (!audioUrl) {

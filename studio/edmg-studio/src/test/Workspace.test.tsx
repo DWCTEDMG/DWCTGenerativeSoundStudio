@@ -6,6 +6,7 @@ import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUti
 
 describe("Workspace page", () => {
   it("integrates creative direction from the real project analysis and plan", async () => {
+    window.localStorage.clear();
     installEdmgBridge();
     installFetchMock({
       "/v1/projects": { projects: [{ id: "p1", name: "Demo Project" }] },
@@ -88,5 +89,53 @@ describe("Workspace page", () => {
 
     fireEvent.click(await screen.findByRole("tab", { name: /Reactive Lab/i }));
     expect(await screen.findByText("Reactive Lab + Renderer Handoff")).toBeTruthy();
+  });
+
+  it("reconciles a stale stored project id before loading project detail routes", async () => {
+    window.localStorage.clear();
+    window.localStorage.setItem("edmg_studio_session_v1", JSON.stringify({
+      projectId: "stale-project",
+      selectedVariant: 0,
+      lastHandoff: null,
+    }));
+    installEdmgBridge();
+    const fetchMock = installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Recovered Project" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Recovered Project",
+          meta: {
+            last_plan: {
+              variants: [{ name: "Variant 1", scenes: [] }],
+            },
+          },
+        },
+      },
+      "/v1/projects/p1/assets": { assets: { refs: [] } },
+      "/v1/projects/p1/creative_direction*": {
+        creative_direction: {
+          status: "Recovered selection.",
+          export_text: "",
+          scenes: [],
+          metrics: { energy: 0, bass: 0, mid: 0, treble: 0, duration_s: 0, source: "analysis" },
+          missing: [],
+          waveform: [],
+          motifs: [],
+          transcript_text: "",
+          transcript_summary: "",
+          preset: "cinematic",
+          sensitivity: 1,
+          provider_mode: "local",
+          scene_source: "plan",
+          ready: false,
+        },
+      },
+    });
+
+    renderWithStudio(<Workspace backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByText("Recovered Project")).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/v1/projects/stale-project"))).toBe(false);
   });
 });
