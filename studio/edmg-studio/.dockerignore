@@ -1,0 +1,13 @@
+node_modules
+dist
+dist-web
+release
+.git
+.github
+coverage
+*.log
+python_backend/.venv
+python_backend/build
+python_backend/dist
+python_backend/**/*.pyc
+python_backend/**/__pycache__
