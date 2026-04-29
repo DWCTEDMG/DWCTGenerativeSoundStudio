@@ -14,7 +14,7 @@ class AiDirector(Protocol):
     def plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         ...
 
-    def transcribe(self, audio_path: str, model_size: str = "small") -> dict[str, Any]:
+    def transcribe(self, audio_path: str, model_size: str = "turbo") -> dict[str, Any]:
         ...
 
     def audio_features(self, audio_path: str) -> dict[str, Any]:
@@ -37,7 +37,7 @@ class HttpAiDirectorClient:
         r.raise_for_status()
         return r.json()
 
-    def transcribe(self, audio_path: str, model_size: str = "small") -> dict[str, Any]:
+    def transcribe(self, audio_path: str, model_size: str = "turbo") -> dict[str, Any]:
         with open(audio_path, "rb") as f:
             files = {"file": f}
             r = requests.post(
@@ -113,7 +113,7 @@ class LocalAiDirectorClient:
         # Pydantic v2
         return resp.model_dump()
 
-    def transcribe(self, audio_path: str, model_size: str = "small") -> dict[str, Any]:
+    def transcribe(self, audio_path: str, model_size: str = "turbo") -> dict[str, Any]:
         try:
             self._ensure_import_path()
             from edmg_ai_service.asr import transcribe_detailed

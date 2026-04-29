@@ -52,7 +52,7 @@ def plan(req: PlanRequest) -> PlanResponse:
 
 
 @app.post("/v1/transcribe")
-async def transcribe_audio(file: UploadFile = File(...), model_size: str = "small") -> dict:
+async def transcribe_audio(file: UploadFile = File(...), model_size: str = "turbo") -> dict:
     try:
         from .asr import transcribe_detailed
     except Exception as e:

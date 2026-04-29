@@ -3,6 +3,10 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
+NO_SPEECH_AFTER_VAD_NOTE = "No speech detected after VAD."
+DEFAULT_MODEL_SIZE = "turbo"
+DEFAULT_MODEL_FALLBACK_CHAIN = ("turbo", "large-v3", "medium", "small")
+
 
 @lru_cache(maxsize=4)
 def _load_model(model_size: str):
@@ -20,8 +24,18 @@ def _coerce_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
-def transcribe_detailed(path: str, model_size: str = "small") -> dict[str, Any]:
-    """Transcribe audio with long-form metadata and timestamped segments."""
+def _fallback_model_candidates(model_size: str) -> list[str]:
+    preferred = str(model_size or DEFAULT_MODEL_SIZE).strip().lower() or DEFAULT_MODEL_SIZE
+    ordered: list[str] = []
+    if preferred and preferred not in ordered:
+        ordered.append(preferred)
+    for candidate in DEFAULT_MODEL_FALLBACK_CHAIN:
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
+
+
+def _transcribe_once(path: str, model_size: str, *, vad_filter: bool) -> dict[str, Any]:
     model = _load_model(str(model_size or "small"))
     segments_iter, info = model.transcribe(
         path,
@@ -30,23 +44,28 @@ def transcribe_detailed(path: str, model_size: str = "small") -> dict[str, Any]:
         temperature=0.0,
         condition_on_previous_text=False,
         without_timestamps=False,
-        vad_filter=True,
+        vad_filter=vad_filter,
         no_speech_threshold=0.7,
     )
     raw_segments = list(segments_iter)
-    duration_after_vad = _coerce_float(getattr(info, "duration_after_vad", 0.0) or 0.0)
-    if not raw_segments or duration_after_vad <= 0.0:
-        return {
-            "text": "",
-            "segments": [],
-            "language": str(getattr(info, "language", "") or ""),
-            "duration_s": _coerce_float(getattr(info, "duration", 0.0) or 0.0),
-            "duration_after_vad_s": duration_after_vad,
-            "segment_count": 0,
-            "word_count": 0,
-            "model_size": str(model_size or "small"),
-            "source": "faster_whisper",
-        }
+    duration_s = _coerce_float(getattr(info, "duration", 0.0) or 0.0)
+    duration_after_vad = _coerce_float(
+        getattr(info, "duration_after_vad", duration_s if not vad_filter else 0.0)
+        or (duration_s if not vad_filter else 0.0)
+    )
+    result = {
+        "text": "",
+        "segments": [],
+        "language": str(getattr(info, "language", "") or ""),
+        "duration_s": duration_s,
+        "duration_after_vad_s": duration_after_vad,
+        "segment_count": 0,
+        "word_count": 0,
+        "model_size": str(model_size or "small"),
+        "source": "faster_whisper",
+    }
+    if not raw_segments or (vad_filter and duration_after_vad <= 0.0):
+        return result
 
     lines: list[str] = []
     segments: list[dict[str, Any]] = []
@@ -72,20 +91,57 @@ def transcribe_detailed(path: str, model_size: str = "small") -> dict[str, Any]:
         )
 
     text = "\n".join(lines).strip()
-    return {
-        "text": text,
-        "segments": segments,
-        "language": str(getattr(info, "language", "") or ""),
-        "duration_s": _coerce_float(getattr(info, "duration", 0.0) or 0.0),
-        "duration_after_vad_s": duration_after_vad,
-        "segment_count": len(segments),
-        "word_count": len(text.split()),
-        "model_size": str(model_size or "small"),
+    result["text"] = text
+    result["segments"] = segments
+    result["segment_count"] = len(segments)
+    result["word_count"] = len(text.split())
+    return result
+
+
+def transcribe_detailed(path: str, model_size: str = DEFAULT_MODEL_SIZE) -> dict[str, Any]:
+    """Transcribe audio with long-form metadata and timestamped segments."""
+    candidates = _fallback_model_candidates(model_size)
+    last_error: Exception | None = None
+    last_result: dict[str, Any] | None = None
+    last_successful_model: str | None = None
+
+    for candidate in candidates:
+        try:
+            attempt = _transcribe_once(path, candidate, vad_filter=True)
+        except Exception as exc:
+            last_error = exc
+            continue
+        last_result = attempt
+        last_successful_model = candidate
+        if attempt.get("text") or attempt.get("segments"):
+            return attempt
+
+    if last_successful_model is None:
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("No Whisper models could be loaded for transcription.")
+
+    if _coerce_float((last_result or {}).get("duration_after_vad_s"), 0.0) <= 0.0:
+        without_vad = _transcribe_once(path, last_successful_model, vad_filter=False)
+        if without_vad.get("text") or without_vad.get("segments"):
+            return without_vad
+        without_vad["note"] = NO_SPEECH_AFTER_VAD_NOTE
+        return without_vad
+
+    return last_result or {
+        "text": "",
+        "segments": [],
+        "language": "",
+        "duration_s": 0.0,
+        "duration_after_vad_s": 0.0,
+        "segment_count": 0,
+        "word_count": 0,
+        "model_size": last_successful_model,
         "source": "faster_whisper",
     }
 
 
-def transcribe(path: str, model_size: str = "small") -> str:
+def transcribe(path: str, model_size: str = DEFAULT_MODEL_SIZE) -> str:
     """Transcribe audio to text using optional faster-whisper (CPU-friendly).
 
     Install:

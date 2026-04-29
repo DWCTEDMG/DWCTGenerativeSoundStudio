@@ -101,6 +101,9 @@ function prettyJson(value: any) {
 
 const TRANSCRIPT_FALLBACK_PREFIXES = [
   "no transcript cue available",
+  "no speech detected after vad",
+  "no transcript is available",
+  "transcription failed",
   "transcription unavailable",
   "audio-only analysis",
   "transcription not enabled",

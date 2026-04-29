@@ -71,6 +71,111 @@ def test_transcribe_returns_empty_string_when_vad_finds_no_speech(monkeypatch):
     assert asr_module.transcribe("instrumental.wav", model_size="small") == ""
 
 
+def test_transcribe_detailed_retries_with_larger_model_then_without_vad(monkeypatch):
+    calls = []
+
+    class EmptyInfo:
+        duration = 180.0
+        duration_after_vad = 0.0
+        language = "en"
+
+    class FinalInfo:
+        duration = 180.0
+        duration_after_vad = 180.0
+        language = "en"
+
+    class FakeSegment:
+        start = 12.0
+        end = 18.0
+        text = "Recovered lyric line."
+        no_speech_prob = 0.02
+        avg_logprob = -0.2
+
+    class FakeModel:
+        def __init__(self, model_size: str):
+            self.model_size = model_size
+
+        def transcribe(self, *args, **kwargs):
+            calls.append((self.model_size, bool(kwargs.get("vad_filter"))))
+            if self.model_size in {"turbo", "large-v3", "medium"}:
+                return iter(()), EmptyInfo()
+            if kwargs.get("vad_filter"):
+                return iter(()), EmptyInfo()
+            return iter((FakeSegment(),)), FinalInfo()
+
+    monkeypatch.setattr(asr_module, "_load_model", lambda model_size: FakeModel(model_size))
+
+    result = asr_module.transcribe_detailed("spoken-word.wav", model_size="turbo")
+
+    assert calls == [("turbo", True), ("large-v3", True), ("medium", True), ("small", True), ("small", False)]
+    assert result["model_size"] == "small"
+    assert result["text"] == "Recovered lyric line."
+    assert result["segment_count"] == 1
+
+
+def test_transcribe_detailed_returns_precise_note_when_vad_and_retry_find_no_speech(monkeypatch):
+    calls = []
+
+    class EmptyInfo:
+        duration = 240.0
+        duration_after_vad = 0.0
+        language = "en"
+
+    class FakeModel:
+        def __init__(self, model_size: str):
+            self.model_size = model_size
+
+        def transcribe(self, *args, **kwargs):
+            calls.append((self.model_size, bool(kwargs.get("vad_filter"))))
+            return iter(()), EmptyInfo()
+
+    monkeypatch.setattr(asr_module, "_load_model", lambda model_size: FakeModel(model_size))
+
+    result = asr_module.transcribe_detailed("instrumental.wav", model_size="turbo")
+
+    assert calls == [("turbo", True), ("large-v3", True), ("medium", True), ("small", True), ("small", False)]
+    assert result["text"] == ""
+    assert result["segment_count"] == 0
+    assert result["note"] == "No speech detected after VAD."
+
+
+def test_transcribe_detailed_falls_through_when_turbo_or_large_models_fail_to_load(monkeypatch):
+    calls = []
+
+    class MediumInfo:
+        duration = 90.0
+        duration_after_vad = 88.0
+        language = "en"
+
+    class FakeSegment:
+        start = 1.0
+        end = 4.0
+        text = "Fallback medium transcript."
+        no_speech_prob = 0.01
+        avg_logprob = -0.1
+
+    class FakeModel:
+        def __init__(self, model_size: str):
+            self.model_size = model_size
+
+        def transcribe(self, *args, **kwargs):
+            calls.append((self.model_size, bool(kwargs.get("vad_filter"))))
+            return iter((FakeSegment(),)), MediumInfo()
+
+    def fake_load_model(model_size: str):
+        if model_size in {"turbo", "large-v3"}:
+            raise RuntimeError(f"{model_size} unavailable")
+        return FakeModel(model_size)
+
+    monkeypatch.setattr(asr_module, "_load_model", fake_load_model)
+
+    result = asr_module.transcribe_detailed("spoken-word.wav", model_size="turbo")
+
+    assert calls == [("medium", True)]
+    assert result["model_size"] == "medium"
+    assert result["text"] == "Fallback medium transcript."
+
+
 def test_transcribe_filters_short_low_confidence_hallucinations(monkeypatch):
     class FakeInfo:
         duration_after_vad = 0.8

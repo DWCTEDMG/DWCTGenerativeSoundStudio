@@ -2761,7 +2761,7 @@ def analyze_audio(project_id: str):
 
     feats = _collect_audio_analysis_features(audio_path)
     try:
-        transcript_result = ai.transcribe(str(audio_path), model_size="small")
+        transcript_result = ai.transcribe(str(audio_path), model_size="turbo")
         trans = transcript_result if isinstance(transcript_result, dict) else {"text": str(transcript_result or "")}
     except Exception as e:
         trans = {"error": f"transcribe failed: {e}"}
@@ -2976,7 +2976,21 @@ def _analysis_theme_terms(text: str, limit: int = 8) -> list[str]:
     return merged
 
 
-def _analysis_summary_text(text: str, segments: list[dict[str, Any]]) -> str:
+_AUDIO_ONLY_SUMMARY_SUFFIX = (
+    "Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement."
+)
+
+
+def _analysis_audio_only_status(summary_prefix: str) -> str:
+    clean = str(summary_prefix or "").strip()
+    if not clean:
+        clean = "No transcript is available for this track yet."
+    elif clean[-1] not in ".!?":
+        clean = f"{clean}."
+    return f"{clean} {_AUDIO_ONLY_SUMMARY_SUFFIX}"
+
+
+def _analysis_summary_text(transcript: dict[str, Any], text: str, segments: list[dict[str, Any]]) -> str:
     candidates: list[str] = []
     if segments:
         picks = [segments[0], segments[len(segments) // 2], segments[-1]]
@@ -2991,7 +3005,13 @@ def _analysis_summary_text(text: str, segments: list[dict[str, Any]]) -> str:
             if len(candidates) >= 3:
                 break
     if not candidates:
-        return "Transcription unavailable. Using audio-only analysis from rhythm, energy, and spectral movement."
+        note = str((transcript or {}).get("note") or "").strip()
+        error = str((transcript or {}).get("error") or "").strip()
+        if note:
+            return _analysis_audio_only_status(note)
+        if error:
+            return _analysis_audio_only_status("Transcription failed.")
+        return _analysis_audio_only_status("No transcript is available for this track yet.")
     return " ".join(candidates[:3]).strip()
 
 
@@ -3097,7 +3117,7 @@ def _enrich_project_audio_analysis(title: str, analysis: dict[str, Any]) -> dict
     tags = _analysis_top_keywords(transcript_text, limit=12)
     themes = _analysis_theme_terms(transcript_text, limit=8)
     emotion_scores = _creative_emotion_scores(_creative_tokenize(transcript_text), limit=4)
-    normalized["summary"] = _analysis_summary_text(transcript_text, transcript_segments)
+    normalized["summary"] = _analysis_summary_text(normalized.get("transcript") or {}, transcript_text, transcript_segments)
     normalized["tags"] = list(dict.fromkeys([*themes, *tags]))[:12]
     normalized["themes"] = themes
     normalized["emotions"] = emotion_scores

@@ -37,12 +37,22 @@ function bytes(n: number) {
 }
 
 const ANALYSIS_FALLBACK_PREFIXES = [
+  "no speech detected after vad",
+  "no transcript is available",
+  "transcription failed",
   "transcription unavailable",
   "audio-only analysis",
   "transcription not enabled",
   "transcription not available",
   "transcribe failed",
 ];
+
+const NO_TRANSCRIPT_SUMMARY =
+  "No transcript is available for this track yet. Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement.";
+const NO_SPEECH_AFTER_VAD_SUMMARY =
+  "No speech detected after VAD. Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement.";
+const TRANSCRIPTION_FAILED_SUMMARY =
+  "Transcription failed. Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement.";
 
 function looksLikeFallbackTranscript(text: string) {
   const lowered = String(text || "").trim().toLowerCase();
@@ -65,13 +75,28 @@ function analysisTranscriptText(analysis: any) {
   return "";
 }
 
+function analysisNoTranscriptStatusText(analysis: any) {
+  const note = String(analysis?.transcript?.note || "").trim();
+  if (note) {
+    return note.toLowerCase().startsWith("no speech detected after vad")
+      ? NO_SPEECH_AFTER_VAD_SUMMARY
+      : `${note}${/[.!?]$/.test(note) ? "" : "."} Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement.`;
+  }
+  const durationAfterVad = Number(analysis?.transcript?.duration_after_vad_s || 0);
+  if (Number.isFinite(durationAfterVad) && durationAfterVad <= 0 && analysis?.transcript?.source === "faster_whisper") {
+    return NO_SPEECH_AFTER_VAD_SUMMARY;
+  }
+  if (analysis?.transcript?.error) return TRANSCRIPTION_FAILED_SUMMARY;
+  return NO_TRANSCRIPT_SUMMARY;
+}
+
 function analysisSummaryText(analysis: any) {
   const summary = String(analysis?.summary || "").trim();
-  if (summary) return summary;
   const transcript = analysisTranscriptText(analysis);
+  if (summary && transcript) return summary;
   if (transcript) return transcript.split(/(?<=[.!?])\s+/).find(Boolean) || transcript;
   if (analysis) {
-    return "Transcription unavailable. Studio is using audio-only analysis from rhythm, energy, and spectral movement.";
+    return analysisNoTranscriptStatusText(analysis);
   }
   return "Run analysis to generate transcript, audio sections, and the shared creative-direction base.";
 }
@@ -342,7 +367,14 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const planProgress = storyboardReady ? 100 : variantCount ? 70 : 0;
   const handoffProgress = reactiveAppliedAt ? 100 : plannerImportedAt ? 62 : 0;
   const analysisActionLabel = audioFile ? "Upload + Analyze" : "Analyze + Transcribe";
-  const transcriptStatusLabel = transcriptReady ? "Transcript ready" : analysisReady ? "Audio-only analysis" : "Waiting";
+  const transcriptStatusLabel = transcriptReady
+    ? "Transcript ready"
+    : analysisReady
+      ? String(analysis?.transcript?.note || "").trim().toLowerCase().startsWith("no speech detected after vad")
+        || (Number(analysis?.transcript?.duration_after_vad_s || 0) <= 0 && analysis?.transcript?.source === "faster_whisper")
+        ? "No speech after VAD"
+        : "Audio-only analysis"
+      : "Waiting";
 
   const toggleOverviewSection = (sectionId: OverviewSectionId, isOpen: boolean) => {
     setOverviewSections((current) => ({ ...current, [sectionId]: isOpen }));
@@ -911,7 +943,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
                 {transcriptReady ? (
                   <p>{transcriptText}</p>
                 ) : (
-                  <p>No transcript is available for this track yet. Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement.</p>
+                  <p>{analysisSummary}</p>
                 )}
               </div>
             </details>

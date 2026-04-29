@@ -138,4 +138,61 @@ describe("Workspace page", () => {
     expect(await screen.findByText("Recovered Project")).toBeTruthy();
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/v1/projects/stale-project"))).toBe(false);
   });
+
+  it("surfaces a precise no-speech-after-vad status when no transcript is available", async () => {
+    window.localStorage.clear();
+    installEdmgBridge();
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Instrumental Project" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Instrumental Project",
+          meta: {
+            analysis: {
+              summary: "Transcription unavailable. Using audio-only analysis from rhythm, energy, and spectral movement.",
+              transcript: {
+                text: "",
+                note: "No speech detected after VAD.",
+                duration_after_vad_s: 0,
+                source: "faster_whisper",
+              },
+              features: {
+                duration_s: 374.8,
+                bpm: 60,
+                energy: 0.41,
+              },
+            },
+            last_plan: {
+              variants: [{ name: "Variant 1", scenes: [] }],
+            },
+          },
+        },
+      },
+      "/v1/projects/p1/assets": { assets: { refs: [] } },
+      "/v1/projects/p1/creative_direction*": {
+        creative_direction: {
+          status: "Audio-only creative direction is ready.",
+          export_text: "",
+          scenes: [],
+          metrics: { energy: 0.41, bass: 0.28, mid: 0.35, treble: 0.22, duration_s: 374.8, source: "analysis" },
+          missing: [],
+          waveform: [],
+          motifs: [],
+          transcript_text: "",
+          transcript_summary: "No speech detected after VAD. Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement.",
+          preset: "cinematic",
+          sensitivity: 1,
+          provider_mode: "local",
+          scene_source: "analysis_fallback",
+          ready: true,
+        },
+      },
+    });
+
+    renderWithStudio(<Workspace backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect((await screen.findAllByText(/No speech detected after VAD/i)).length).toBeGreaterThan(0);
+    expect(await screen.findByText("No speech after VAD")).toBeTruthy();
+  });
 });

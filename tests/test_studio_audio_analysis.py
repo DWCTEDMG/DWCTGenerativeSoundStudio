@@ -83,3 +83,54 @@ def test_analyze_audio_builds_rich_longform_payload(tmp_path, monkeypatch):
     assert payload["sections"]
     assert payload["transcript_summary"] == analysis["summary"]
     assert payload["narrative_analysis"]["segment_count"] == 3
+
+
+def test_analyze_audio_surfaces_no_speech_after_vad_status(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    audio_path = store.project_dir(proj.id) / "assets" / "audio" / "instrumental.wav"
+    audio_path.write_bytes(b"fake-wav")
+    store.set_audio(proj.id, "instrumental.wav", audio_path.stat().st_size)
+
+    monkeypatch.setattr(
+        studio_app,
+        "_collect_audio_analysis_features",
+        lambda _path: {
+            "duration_s": 374.8,
+            "bpm": 60.0,
+            "tempo_bpm": 60.0,
+            "beats": [1.0, 2.0, 3.0],
+            "energy": [0.3, 0.5, 0.4, 0.6],
+            "onset_strength": [0.2, 0.4, 0.7],
+        },
+    )
+    monkeypatch.setattr(
+        studio_app.ai,
+        "transcribe",
+        lambda _audio_path, model_size="small": {
+            "text": "",
+            "language": "en",
+            "duration_s": 374.8,
+            "duration_after_vad_s": 0.0,
+            "segment_count": 0,
+            "word_count": 0,
+            "model_size": "medium",
+            "source": "faster_whisper",
+            "segments": [],
+            "note": "No speech detected after VAD.",
+        },
+    )
+
+    result = studio_app.analyze_audio(proj.id)
+
+    analysis = result["analysis"]
+    assert analysis["summary"].startswith("No speech detected after VAD.")
+    assert analysis["transcript"]["note"] == "No speech detected after VAD."
+    assert analysis["sections"]
+
+    saved_proj = store.get(proj.id)
+    assert saved_proj is not None
+    payload = studio_app._build_creative_direction_payload(saved_proj, 0, "cinematic", 1.0)
+    assert payload["transcript_summary"].startswith("No speech detected after VAD.")
