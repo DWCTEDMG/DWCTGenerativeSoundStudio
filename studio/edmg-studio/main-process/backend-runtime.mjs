@@ -30,15 +30,34 @@ export function createBackendRuntime({
     return currentBackendUrl;
   }
 
-  function getDevPythonPath() {
-    const explicit = process.env.EDMG_STUDIO_PYTHON;
-    if (explicit && explicit.trim()) return explicit.trim();
-
+  function getDevVenvPythonPath() {
     if (isWindows) {
       return path.join(rootDir, "python_backend", "venv", "Scripts", "python.exe");
     }
 
     return path.join(rootDir, "python_backend", "venv", "bin", "python");
+  }
+
+  function getDevPythonPath() {
+    const backendExplicit = String(process.env.EDMG_STUDIO_BACKEND_PYTHON ?? "").trim();
+    if (backendExplicit) return backendExplicit;
+
+    const venvPython = getDevVenvPythonPath();
+    if (pathExistsSync(venvPython)) {
+      const launcherPython = String(process.env.EDMG_STUDIO_PYTHON ?? "").trim();
+      if (launcherPython && launcherPython !== venvPython) {
+        console.log("[backend] using project venv for dev backend instead of EDMG_STUDIO_PYTHON", {
+          launcherPython,
+          venvPython,
+        });
+      }
+      return venvPython;
+    }
+
+    const launcherPython = String(process.env.EDMG_STUDIO_PYTHON ?? "").trim();
+    if (launcherPython) return launcherPython;
+
+    return venvPython;
   }
 
   function getPackagedBackendPath() {

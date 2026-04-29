@@ -13,7 +13,7 @@
   "main": "main.mjs",
   "scripts": {
     "preinstall": "node scripts/enforce-package-manager.mjs",
-    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "dev": "concurrently -k -s command-1 \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "build": "vite build",
     "test": "pnpm run test:ui",
     "test:ui": "vitest run",

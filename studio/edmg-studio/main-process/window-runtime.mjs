@@ -171,8 +171,13 @@ export function createWindowRuntime({
       console.error("[renderer] render-process-gone", details);
     });
 
-    win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-      console.log("[renderer console]", { level, message, line, sourceId });
+    win.webContents.on("console-message", (details) => {
+      console.log("[renderer console]", {
+        level: details.level,
+        message: details.message,
+        line: details.lineNumber,
+        sourceId: details.sourceId,
+      });
     });
   }
 

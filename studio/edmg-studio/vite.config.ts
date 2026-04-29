@@ -9,6 +9,21 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
+    watch: {
+      ignored: [
+        "**/.cache/**",
+        "**/cache/**",
+        "**/data/**",
+        "**/dist/**",
+        "**/external/**",
+        "**/logs/**",
+        "**/models/**",
+        "**/python_backend/build/**",
+        "**/python_backend/dist/**",
+        "**/python_backend/venv/**",
+        "**/release/**",
+      ],
+    },
   },
   preview: {
     host: "127.0.0.1",
