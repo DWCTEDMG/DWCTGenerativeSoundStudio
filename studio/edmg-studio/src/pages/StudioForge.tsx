@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 import { apiGet } from "../components/api";
+import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
+import { useStudioPageLayout } from "../components/studioLayout";
 import { STUDIO_FORGE_RECIPES } from "../studio-forge/recipes";
 import { STUDIO_FORGE_TEMPLATES } from "../studio-forge/templates";
 import type {
@@ -11,6 +13,7 @@ import type { PageProps } from "../types/pageProps";
 
 type RuntimeStatus = "available" | "missing" | "optional" | "required" | "unknown" | "error";
 type BadgeStatus = RuntimeStatus | "preview";
+type StudioForgeSectionId = "runtime" | "templates" | "recipes" | "validation";
 
 type RuntimeCard = {
   id: string;
@@ -292,6 +295,130 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
     },
   ];
 
+  const sectionDefinitions = useMemo(
+    () => [
+      {
+        id: "runtime" as const,
+        label: "Runtime Status",
+        description: "Read-only health for backend, setup, AI, ComfyUI, FFmpeg, and models.",
+      },
+      {
+        id: "templates" as const,
+        label: "Builder Templates",
+        description: "Static registry of preview-only panel, workflow, and model-profile concepts.",
+      },
+      {
+        id: "recipes" as const,
+        label: "Workflow Recipes",
+        description: "Canonical workflow previews that stay compatible with the existing Studio flow.",
+      },
+      {
+        id: "validation" as const,
+        label: "Validation Checklist",
+        description: "Developer validation commands surfaced as documentation, not executable actions.",
+      },
+    ],
+    [],
+  );
+  const {
+    layoutState,
+    visibleOrder,
+    movePanel,
+    updateHidden,
+    resetLayout,
+  } = useStudioPageLayout<StudioForgeSectionId>(
+    "studio_forge",
+    sectionDefinitions.map((section) => section.id),
+  );
+  const sectionDefinitionById = useMemo(
+    () =>
+      Object.fromEntries(
+        sectionDefinitions.map((definition) => [definition.id, definition]),
+      ) as Record<StudioForgeSectionId, (typeof sectionDefinitions)[number]>,
+    [sectionDefinitions],
+  );
+  const sectionControlItems = layoutState.order.map((sectionId, index) => ({
+    id: sectionId,
+    label: sectionDefinitionById[sectionId].label,
+    description: sectionDefinitionById[sectionId].description,
+    hidden: layoutState.hidden.includes(sectionId),
+    canMoveUp: index > 0,
+    canMoveDown: index < layoutState.order.length - 1,
+  }));
+
+  const sectionContent: Record<StudioForgeSectionId, React.ReactNode> = {
+    runtime: (
+      <div>
+        <h2 style={{ marginBottom: 10 }}>Runtime Status</h2>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Existing backend and setup endpoints only. Graceful read-only probes: <code>/health</code>,
+          <code> /v1/config</code>, <code> /v1/setup/status</code>, and <code> /v1/comfyui/capabilities</code>.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+          {runtimeCards.map((card) => (
+            <div key={card.id} className="card">
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                <div>
+                  <div className="timeline-kicker">{card.role}</div>
+                  <div style={{ fontWeight: 900 }}>{card.label}</div>
+                </div>
+                <StatusBadge status={card.status} />
+              </div>
+              <div className="small" style={{ marginTop: 10 }}>{card.detail}</div>
+              <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>{card.impact}</div>
+            </div>
+          ))}
+        </div>
+        {backendConfigError ? (
+          <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>
+            Config read note: {backendConfigError}
+          </div>
+        ) : null}
+      </div>
+    ),
+    templates: (
+      <div>
+        <h2 style={{ marginBottom: 10 }}>Builder Templates</h2>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Static preview registry for additive page, panel, workflow, and model-profile concepts.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+          {STUDIO_FORGE_TEMPLATES.map((template) => (
+            <TemplateCard key={template.id} template={template} />
+          ))}
+        </div>
+      </div>
+    ),
+    recipes: (
+      <div>
+        <h2 style={{ marginBottom: 10 }}>Workflow Recipes</h2>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Preview-only recipes that stay compatible with the current Workspace, Timeline, Render, Queue, and Outputs flow.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+          {STUDIO_FORGE_RECIPES.map((recipe) => (
+            <RecipeCard key={recipe.id} recipe={recipe} />
+          ))}
+        </div>
+      </div>
+    ),
+    validation: (
+      <div className="card">
+        <h2 style={{ marginBottom: 10 }}>Validation Checklist</h2>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Developer validation commands only. Studio Forge v1 does not execute shell commands from the frontend.
+        </div>
+        <div style={{ display: "grid", gap: 8 }}>
+          {VALIDATION_COMMANDS.map((command) => (
+            <div key={command} className="small">
+              <code>{command}</code>
+            </div>
+          ))}
+        </div>
+      </div>
+    ),
+  };
+
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div className="card">
@@ -312,71 +439,17 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
       </div>
 
       <div style={{ display: "grid", gap: 14 }}>
-        <div>
-          <h2 style={{ marginBottom: 10 }}>Runtime Status</h2>
-          <div className="small" style={{ marginBottom: 10 }}>
-            Existing backend and setup endpoints only. Graceful read-only probes: <code>/health</code>,
-            <code> /v1/config</code>, <code> /v1/setup/status</code>, and <code> /v1/comfyui/capabilities</code>.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
-            {runtimeCards.map((card) => (
-              <div key={card.id} className="card">
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                  <div>
-                    <div className="timeline-kicker">{card.role}</div>
-                    <div style={{ fontWeight: 900 }}>{card.label}</div>
-                  </div>
-                  <StatusBadge status={card.status} />
-                </div>
-                <div className="small" style={{ marginTop: 10 }}>{card.detail}</div>
-                <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>{card.impact}</div>
-              </div>
-            ))}
-          </div>
-          {backendConfigError ? (
-            <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>
-              Config read note: {backendConfigError}
-            </div>
-          ) : null}
-        </div>
-
-        <div>
-          <h2 style={{ marginBottom: 10 }}>Builder Templates</h2>
-          <div className="small" style={{ marginBottom: 10 }}>
-            Static preview registry for additive page, panel, workflow, and model-profile concepts.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
-            {STUDIO_FORGE_TEMPLATES.map((template) => (
-              <TemplateCard key={template.id} template={template} />
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <h2 style={{ marginBottom: 10 }}>Workflow Recipes</h2>
-          <div className="small" style={{ marginBottom: 10 }}>
-            Preview-only recipes that stay compatible with the current Workspace, Timeline, Render, Queue, and Outputs flow.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
-            {STUDIO_FORGE_RECIPES.map((recipe) => (
-              <RecipeCard key={recipe.id} recipe={recipe} />
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <h2 style={{ marginBottom: 10 }}>Validation Checklist</h2>
-          <div className="small" style={{ marginBottom: 10 }}>
-            Developer validation commands only. Studio Forge v1 does not execute shell commands from the frontend.
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            {VALIDATION_COMMANDS.map((command) => (
-              <div key={command} className="small">
-                <code>{command}</code>
-              </div>
-            ))}
-          </div>
-        </div>
+        <StudioLayoutCustomizer
+          title="Studio Forge layout"
+          description="Reorder or hide preview panels for your own working style. This only changes the local page layout."
+          items={sectionControlItems}
+          onMove={movePanel}
+          onToggleHidden={updateHidden}
+          onReset={resetLayout}
+        />
+        {visibleOrder.map((sectionId) => (
+          <React.Fragment key={sectionId}>{sectionContent[sectionId]}</React.Fragment>
+        ))}
       </div>
     </div>
   );

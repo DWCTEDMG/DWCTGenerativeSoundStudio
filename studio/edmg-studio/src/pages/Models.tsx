@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
+import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
+import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
 import type { PageProps } from "../types/pageProps";
 
@@ -45,6 +47,15 @@ type HubCollection = {
   note: string;
   url: string;
 };
+
+type ModelsPanelId =
+  | "packs"
+  | "internal"
+  | "runtime"
+  | "discovery"
+  | "imports"
+  | "defaults"
+  | "advanced";
 
 const HUB_COLLECTIONS: HubCollection[] = [
   {
@@ -395,20 +406,69 @@ export default function Models(props: PageProps) {
   const advancedModels = (merged.built ?? []).filter((m) => m.recommended !== "default" && m.installable !== false);
   const browserOnlyModels = (merged.built ?? []).filter((m) => m.installable === false);
 
-  return (
-    <div>
-      <h2>Model Manager</h2>
-      <div className="small" style={{ marginTop: 6 }}>
-        EDMG ships with a curated model catalog, but does <b>not</b> bundle large weights in the installer. Use this page to install Studio-ready defaults, add community models, or browse curated Stability model families.
-      </div>
+  const panelDefinitions = useMemo(
+    () => [
+      {
+        id: "packs" as const,
+        label: "First-run packs",
+        description: "Studio-supported starter packs and quick install actions.",
+      },
+      {
+        id: "internal" as const,
+        label: "Internal render readiness",
+        description: "Preferred internal diffusion models and readiness summary.",
+      },
+      {
+        id: "runtime" as const,
+        label: "Runtime bridges",
+        description: "Optional hosted Stability and DirectML-specific runtime surfaces.",
+      },
+      {
+        id: "discovery" as const,
+        label: "Discovery",
+        description: "Hub browsing and source collections for supported models.",
+      },
+      {
+        id: "imports" as const,
+        label: "Imports",
+        description: "Bring community and local models into the Studio-managed catalog.",
+      },
+      {
+        id: "defaults" as const,
+        label: "Recommended defaults",
+        description: "Studio-ready recommended models surfaced for day-to-day use.",
+      },
+      {
+        id: "advanced" as const,
+        label: "Advanced inventory",
+        description: "Optional models, user models, browser-only bundles, and install tasks.",
+      },
+    ],
+    [],
+  );
+  const { layoutState, visibleOrder, movePanel, updateHidden, resetLayout } =
+    useStudioPageLayout<ModelsPanelId>(
+      "models",
+      panelDefinitions.map((panel) => panel.id),
+    );
+  const panelDefinitionById = useMemo(
+    () =>
+      Object.fromEntries(
+        panelDefinitions.map((definition) => [definition.id, definition]),
+      ) as Record<ModelsPanelId, (typeof panelDefinitions)[number]>,
+    [panelDefinitions],
+  );
+  const panelControlItems = layoutState.order.map((panelId, index) => ({
+    id: panelId,
+    label: panelDefinitionById[panelId].label,
+    description: panelDefinitionById[panelId].description,
+    hidden: layoutState.hidden.includes(panelId),
+    canMoveUp: index > 0,
+    canMoveDown: index < layoutState.order.length - 1,
+  }));
 
-      {err && (
-        <div style={{ marginTop: 12, padding: 10, borderRadius: 10, background: "#2a1b1b", border: "1px solid #5b2424" }}>
-          <div style={{ fontWeight: 800 }}>Error</div>
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{err}</pre>
-        </div>
-      )}
-
+  const panelContent: Record<ModelsPanelId, React.ReactNode> = {
+    packs: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 900 }}>First-run packs</div>
         <div className="small" style={{ marginTop: 6 }}>
@@ -427,7 +487,8 @@ export default function Models(props: PageProps) {
           </div>
         ) : null}
       </div>
-
+    ),
+    internal: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 900 }}>Internal render readiness</div>
         <div className="small" style={{ marginTop: 6 }}>
@@ -452,225 +513,280 @@ export default function Models(props: PageProps) {
           <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
         </div>
       </div>
-
-      {renderProviders?.stability?.visible ? (
-        <div className="card" style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 900 }}>Hosted Stability fallback</div>
-          <div className="small" style={{ marginTop: 6 }}>
-            Hosted keyframe rendering is configured and will appear as an internal render option in Render. Studio keeps assembly, caching, history, retry, and resume local while using Stability&apos;s hosted image API for keyframes.
-          </div>
-          <div className="small" style={{ marginTop: 8 }}>
-            Service: <b>{renderProviders?.stability?.service}</b>
-            {renderProviders?.stability?.service === "sd3" ? <> • model <b>{renderProviders?.stability?.model}</b></> : null}
-            {" "}• style <b>{renderProviders?.stability?.style_preset || "none"}</b>
-          </div>
-          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
-            <button className="secondary" onClick={() => props.onNavigate?.("settings")}>Open Settings</button>
-          </div>
-        </div>
-      ) : null}
-
-      {renderProviders?.directml?.available ? (
-        <div className="card" style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 900 }}>AMD / DirectML runtime</div>
-          <div className="small" style={{ marginTop: 6 }}>
-            DirectML is available on <b>{renderProviders?.directml?.device_name || "this Windows GPU"}</b>. Studio&apos;s internal renderer can now use SDXL and SD 1.5 through ONNX Runtime on supported AMD / Windows machines.
-          </div>
-          <div className="small" style={{ marginTop: 8 }}>
-            Preferred DirectML model: <b>{renderProviders?.directml?.preferred_model || "auto"}</b> • active backend <b>{renderProviders?.directml?.active ? "yes" : "no"}</b>
-          </div>
-          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
-            <button className="secondary" onClick={() => props.onNavigate?.("settings")}>Tune runtime</button>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900 }}>Stability quick links</div>
-        <div className="small" style={{ marginTop: 6 }}>
-          These are the source collections and repos Studio now uses for curated model discovery.
-        </div>
-        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {STABILITY_LINKS.map((link) => (
-            <button key={link.url} className="secondary" onClick={() => window.edmg?.openExternal?.(link.url)}>
-              {link.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900 }}>Stability Hub browser</div>
-        <div className="small" style={{ marginTop: 6 }}>
-          Powered by Hugging Face Hub search for a richer in-app browse flow. Studio only enables one-click install when a result maps cleanly to a supported local runtime path.
-        </div>
-        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select value={hubCollectionId} onChange={(e) => setHubCollectionId(e.target.value)}>
-            {HUB_COLLECTIONS.map((item) => (
-              <option key={item.id} value={item.id}>{item.label}</option>
-            ))}
-          </select>
-          <input
-            style={{ minWidth: 320 }}
-            value={hubQuery}
-            onChange={(e) => setHubQuery(e.target.value)}
-            placeholder={hubCollection.search}
-          />
-          <button className="secondary" onClick={() => window.edmg?.openExternal?.(hubCollection.url)}>Open official collection</button>
-        </div>
-        <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>{hubCollection.note}</div>
-        {hubError ? <div className="small" style={{ marginTop: 8, color: "var(--danger)" }}>{hubError}</div> : null}
-        {hubLoading ? <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>Loading Hub results…</div> : null}
-        {!hubLoading && !hubResults.length && !hubError ? (
-          <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>No results yet.</div>
-        ) : null}
-        {hubResults.map((result) => {
-          const matchedCatalog = builtByRepoId.get(result.id) ?? null;
-          return (
-            <HubResultCard
-              key={result.id}
-              result={result}
-              matchedCatalog={matchedCatalog}
-              installed={matchedCatalog ? !!installedMap[matchedCatalog.id] : false}
-              accepted={matchedCatalog ? !!acceptedMap[matchedCatalog.id] : false}
-              onAccept={accept}
-              onInstall={install}
-              onOpen={(u) => window.edmg?.openExternal?.(u)}
-            />
-          );
-        })}
-      </div>
-
-      <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900 }}>Add community model (Civitai)</div>
-        <div className="small" style={{ marginTop: 6 }}>
-          Paste a Civitai model URL (optionally with <code>modelVersionId=…</code>) or a numeric model ID. You&apos;ll be prompted to review license/terms.
-        </div>
-        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <input
-            style={{ minWidth: 420 }}
-            value={civitaiUrl}
-            onChange={(e) => setCivitaiUrl(e.target.value)}
-            placeholder="https://civitai.com/models/12345/…?modelVersionId=67890"
-          />
-          <button disabled={!civitaiUrl || importing} onClick={importCivitai}>
-            {importing ? "Importing…" : "Import"}
-          </button>
-          <button className="secondary" onClick={() => window.edmg?.openExternal?.("https://civitai.com/")}>
-            Open Civitai
-          </button>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900 }}>Bring your own</div>
-        <div className="small" style={{ marginTop: 6 }}>
-          Add a local checkpoint, LoRA, or ControlNet. EDMG copies it into the Studio-managed ComfyUI models folder.
-        </div>
-        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <label className="small" style={{ fontWeight: 800 }}>Type:</label>
-          <select value={localFolder} onChange={(e) => setLocalFolder(e.target.value)}>
-            <option value="checkpoints">Checkpoint</option>
-            <option value="loras">LoRA</option>
-            <option value="embeddings">Embedding</option>
-            <option value="vae">VAE</option>
-            <option value="controlnet">ControlNet</option>
-          </select>
-          <button onClick={importLocal}>Pick file…</button>
-        </div>
-      </div>
-
-      <h3 style={{ marginTop: 18 }}>Recommended defaults</h3>
-      {defaultModels.map((m) => (
-        <ModelCard
-          key={m.id}
-          m={m}
-          installed={!!installedMap[m.id]}
-          accepted={!!acceptedMap[m.id]}
-          onAccept={() => accept(m)}
-          onInstall={() => install(m)}
-          onOpen={(u) => window.edmg?.openExternal?.(u)}
-        />
-      ))}
-
-      {mode === "advanced" ? (
-        <>
-          <h3 style={{ marginTop: 18 }}>Advanced / optional</h3>
-          {advancedModels.map((m) => (
-            <ModelCard
-              key={m.id}
-              m={m}
-              installed={!!installedMap[m.id]}
-              accepted={!!acceptedMap[m.id]}
-              onAccept={() => accept(m)}
-              onInstall={() => install(m)}
-              onOpen={(u) => window.edmg?.openExternal?.(u)}
-            />
-          ))}
-
-          {browserOnlyModels.length ? (
-            <>
-              <h3 style={{ marginTop: 18 }}>Discovery-only runtime bundles</h3>
-              <div className="small" style={{ opacity: 0.82 }}>
-                These are still browser-only packages. Studio&apos;s real AMD path now runs through internal DirectML, while these vendor bundles remain surfaced for discovery and future runtime work.
-              </div>
-              {browserOnlyModels.map((m) => (
-                <ModelCard
-                  key={m.id}
-                  m={m}
-                  installed={!!installedMap[m.id]}
-                  accepted={!!acceptedMap[m.id]}
-                  onAccept={() => accept(m)}
-                  onInstall={() => install(m)}
-                  onOpen={(u) => window.edmg?.openExternal?.(u)}
-                />
-              ))}
-            </>
-          ) : null}
-
-          <h3 style={{ marginTop: 18 }}>User models</h3>
-          {(merged.user ?? []).length ? (
-            (merged.user ?? []).map((m) => (
-              <div key={m.id}>
-                <ModelCard
-                  m={m}
-                  installed={!!installedMap[m.id]}
-                  accepted={!!acceptedMap[m.id]}
-                  onAccept={() => accept(m)}
-                  onInstall={() => install(m)}
-                  onOpen={(u) => window.edmg?.openExternal?.(u)}
-                />
-                <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
-                  <button className="secondary" onClick={() => apiPost("/v1/models/remove_user", { model_id: m.id }).then(refresh)}>
-                    Remove from list
-                  </button>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="small" style={{ opacity: 0.8 }}>No user models yet.</div>
-          )}
-
-          <h3 style={{ marginTop: 18 }}>Install tasks</h3>
-          {(tasks ?? []).length ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {(tasks ?? []).slice(0, 12).map((t: any) => (
-                <div key={t.id} style={{ padding: 10, borderRadius: 12, background: "#121422", border: "1px solid #22263a" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <div style={{ fontWeight: 800 }}>{t.name}</div>
-                    <div className="small">{t.status}{t.progress != null ? ` • ${Math.round(t.progress * 100)}%` : ""}</div>
-                  </div>
-                  {t.last_log ? <div className="small" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{t.last_log}</div> : null}
-                </div>
-              ))}
+    ),
+    runtime: (
+      <>
+        {renderProviders?.stability?.visible ? (
+          <div className="card" style={{ marginTop: 14 }}>
+            <div style={{ fontWeight: 900 }}>Hosted Stability fallback</div>
+            <div className="small" style={{ marginTop: 6 }}>
+              Hosted keyframe rendering is configured and will appear as an internal render option in Render. Studio keeps assembly, caching, history, retry, and resume local while using Stability&apos;s hosted image API for keyframes.
             </div>
-          ) : (
-            <div className="small" style={{ opacity: 0.8 }}>No active tasks.</div>
-          )}
-        </>
-      ) : null}
+            <div className="small" style={{ marginTop: 8 }}>
+              Service: <b>{renderProviders?.stability?.service}</b>
+              {renderProviders?.stability?.service === "sd3" ? <> • model <b>{renderProviders?.stability?.model}</b></> : null}
+              {" "}• style <b>{renderProviders?.stability?.style_preset || "none"}</b>
+            </div>
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
+              <button className="secondary" onClick={() => props.onNavigate?.("settings")}>Open Settings</button>
+            </div>
+          </div>
+        ) : null}
+
+        {renderProviders?.directml?.available ? (
+          <div className="card" style={{ marginTop: 14 }}>
+            <div style={{ fontWeight: 900 }}>AMD / DirectML runtime</div>
+            <div className="small" style={{ marginTop: 6 }}>
+              DirectML is available on <b>{renderProviders?.directml?.device_name || "this Windows GPU"}</b>. Studio&apos;s internal renderer can now use SDXL and SD 1.5 through ONNX Runtime on supported AMD / Windows machines.
+            </div>
+            <div className="small" style={{ marginTop: 8 }}>
+              Preferred DirectML model: <b>{renderProviders?.directml?.preferred_model || "auto"}</b> • active backend <b>{renderProviders?.directml?.active ? "yes" : "no"}</b>
+            </div>
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
+              <button className="secondary" onClick={() => props.onNavigate?.("settings")}>Tune runtime</button>
+            </div>
+          </div>
+        ) : null}
+
+        {!renderProviders?.stability?.visible && !renderProviders?.directml?.available ? (
+          <div className="card" style={{ marginTop: 14 }}>
+            <div style={{ fontWeight: 900 }}>Runtime bridges</div>
+            <div className="small" style={{ marginTop: 6 }}>
+              No optional hosted or hardware-specific runtime bridge is active yet. The default internal render path and model install flow remain unchanged.
+            </div>
+          </div>
+        ) : null}
+      </>
+    ),
+    discovery: (
+      <>
+        <div className="card" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 900 }}>Stability quick links</div>
+          <div className="small" style={{ marginTop: 6 }}>
+            These are the source collections and repos Studio now uses for curated model discovery.
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {STABILITY_LINKS.map((link) => (
+              <button key={link.url} className="secondary" onClick={() => window.edmg?.openExternal?.(link.url)}>
+                {link.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="card" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 900 }}>Stability Hub browser</div>
+          <div className="small" style={{ marginTop: 6 }}>
+            Powered by Hugging Face Hub search for a richer in-app browse flow. Studio only enables one-click install when a result maps cleanly to a supported local runtime path.
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <select value={hubCollectionId} onChange={(e) => setHubCollectionId(e.target.value)}>
+              {HUB_COLLECTIONS.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </select>
+            <input
+              style={{ minWidth: 320 }}
+              value={hubQuery}
+              onChange={(e) => setHubQuery(e.target.value)}
+              placeholder={hubCollection.search}
+            />
+            <button className="secondary" onClick={() => window.edmg?.openExternal?.(hubCollection.url)}>Open official collection</button>
+          </div>
+          <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>{hubCollection.note}</div>
+          {hubError ? <div className="small" style={{ marginTop: 8, color: "var(--danger)" }}>{hubError}</div> : null}
+          {hubLoading ? <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>Loading Hub results…</div> : null}
+          {!hubLoading && !hubResults.length && !hubError ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>No results yet.</div>
+          ) : null}
+          {hubResults.map((result) => {
+            const matchedCatalog = builtByRepoId.get(result.id) ?? null;
+            return (
+              <HubResultCard
+                key={result.id}
+                result={result}
+                matchedCatalog={matchedCatalog}
+                installed={matchedCatalog ? !!installedMap[matchedCatalog.id] : false}
+                accepted={matchedCatalog ? !!acceptedMap[matchedCatalog.id] : false}
+                onAccept={accept}
+                onInstall={install}
+                onOpen={(u) => window.edmg?.openExternal?.(u)}
+              />
+            );
+          })}
+        </div>
+      </>
+    ),
+    imports: (
+      <>
+        <div className="card" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 900 }}>Add community model (Civitai)</div>
+          <div className="small" style={{ marginTop: 6 }}>
+            Paste a Civitai model URL (optionally with <code>modelVersionId=…</code>) or a numeric model ID. You&apos;ll be prompted to review license/terms.
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input
+              style={{ minWidth: 420 }}
+              value={civitaiUrl}
+              onChange={(e) => setCivitaiUrl(e.target.value)}
+              placeholder="https://civitai.com/models/12345/…?modelVersionId=67890"
+            />
+            <button disabled={!civitaiUrl || importing} onClick={importCivitai}>
+              {importing ? "Importing…" : "Import"}
+            </button>
+            <button className="secondary" onClick={() => window.edmg?.openExternal?.("https://civitai.com/")}>
+              Open Civitai
+            </button>
+          </div>
+        </div>
+
+        <div className="card" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 900 }}>Bring your own</div>
+          <div className="small" style={{ marginTop: 6 }}>
+            Add a local checkpoint, LoRA, or ControlNet. EDMG copies it into the Studio-managed ComfyUI models folder.
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <label className="small" style={{ fontWeight: 800 }}>Type:</label>
+            <select value={localFolder} onChange={(e) => setLocalFolder(e.target.value)}>
+              <option value="checkpoints">Checkpoint</option>
+              <option value="loras">LoRA</option>
+              <option value="embeddings">Embedding</option>
+              <option value="vae">VAE</option>
+              <option value="controlnet">ControlNet</option>
+            </select>
+            <button onClick={importLocal}>Pick file…</button>
+          </div>
+        </div>
+      </>
+    ),
+    defaults: (
+      <>
+        <h3 style={{ marginTop: 18 }}>Recommended defaults</h3>
+        {defaultModels.map((m) => (
+          <ModelCard
+            key={m.id}
+            m={m}
+            installed={!!installedMap[m.id]}
+            accepted={!!acceptedMap[m.id]}
+            onAccept={() => accept(m)}
+            onInstall={() => install(m)}
+            onOpen={(u) => window.edmg?.openExternal?.(u)}
+          />
+        ))}
+      </>
+    ),
+    advanced: mode === "advanced" ? (
+      <>
+        <h3 style={{ marginTop: 18 }}>Advanced / optional</h3>
+        {advancedModels.map((m) => (
+          <ModelCard
+            key={m.id}
+            m={m}
+            installed={!!installedMap[m.id]}
+            accepted={!!acceptedMap[m.id]}
+            onAccept={() => accept(m)}
+            onInstall={() => install(m)}
+            onOpen={(u) => window.edmg?.openExternal?.(u)}
+          />
+        ))}
+
+        {browserOnlyModels.length ? (
+          <>
+            <h3 style={{ marginTop: 18 }}>Discovery-only runtime bundles</h3>
+            <div className="small" style={{ opacity: 0.82 }}>
+              These are still browser-only packages. Studio&apos;s real AMD path now runs through internal DirectML, while these vendor bundles remain surfaced for discovery and future runtime work.
+            </div>
+            {browserOnlyModels.map((m) => (
+              <ModelCard
+                key={m.id}
+                m={m}
+                installed={!!installedMap[m.id]}
+                accepted={!!acceptedMap[m.id]}
+                onAccept={() => accept(m)}
+                onInstall={() => install(m)}
+                onOpen={(u) => window.edmg?.openExternal?.(u)}
+              />
+            ))}
+          </>
+        ) : null}
+
+        <h3 style={{ marginTop: 18 }}>User models</h3>
+        {(merged.user ?? []).length ? (
+          (merged.user ?? []).map((m) => (
+            <div key={m.id}>
+              <ModelCard
+                m={m}
+                installed={!!installedMap[m.id]}
+                accepted={!!acceptedMap[m.id]}
+                onAccept={() => accept(m)}
+                onInstall={() => install(m)}
+                onOpen={(u) => window.edmg?.openExternal?.(u)}
+              />
+              <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
+                <button className="secondary" onClick={() => apiPost("/v1/models/remove_user", { model_id: m.id }).then(refresh)}>
+                  Remove from list
+                </button>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="small" style={{ opacity: 0.8 }}>No user models yet.</div>
+        )}
+
+        <h3 style={{ marginTop: 18 }}>Install tasks</h3>
+        {(tasks ?? []).length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {(tasks ?? []).slice(0, 12).map((t: any) => (
+              <div key={t.id} style={{ padding: 10, borderRadius: 12, background: "#121422", border: "1px solid #22263a" }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <div style={{ fontWeight: 800 }}>{t.name}</div>
+                  <div className="small">{t.status}{t.progress != null ? ` • ${Math.round(t.progress * 100)}%` : ""}</div>
+                </div>
+                {t.last_log ? <div className="small" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{t.last_log}</div> : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="small" style={{ opacity: 0.8 }}>No active tasks.</div>
+        )}
+      </>
+    ) : (
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 900 }}>Advanced inventory</div>
+        <div className="small" style={{ marginTop: 6 }}>
+          Switch Settings to <b>Advanced</b> UI mode when you want optional models, user-model management, and install task details.
+        </div>
+      </div>
+    ),
+  };
+
+  return (
+    <div>
+      <h2>Model Manager</h2>
+      <div className="small" style={{ marginTop: 6 }}>
+        EDMG ships with a curated model catalog, but does <b>not</b> bundle large weights in the installer. Use this page to install Studio-ready defaults, add community models, or browse curated Stability model families.
+      </div>
+
+      {err && (
+        <div style={{ marginTop: 12, padding: 10, borderRadius: 10, background: "#2a1b1b", border: "1px solid #5b2424" }}>
+          <div style={{ fontWeight: 800 }}>Error</div>
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{err}</pre>
+        </div>
+      )}
+      <StudioLayoutCustomizer
+        title="Model Manager layout"
+        description="Reorder or hide major model-management sections without changing install queues, runtime choices, or the catalog itself."
+        items={panelControlItems}
+        onMove={movePanel}
+        onToggleHidden={updateHidden}
+        onReset={resetLayout}
+      />
+
+      {visibleOrder.map((panelId) => (
+        <React.Fragment key={panelId}>{panelContent[panelId]}</React.Fragment>
+      ))}
     </div>
   );
 }

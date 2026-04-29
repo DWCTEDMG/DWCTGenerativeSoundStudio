@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
+import { STUDIO_THEME_OPTIONS, useStudioAppearance } from "../components/studioAppearance";
 import { useUiMode } from "../components/uiMode";
 import { clearRenderDefaults, readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import type { PageProps } from "../types/pageProps";
@@ -125,6 +126,7 @@ function parseBackendUrl(rawUrl: string): Partial<StudioBackendSettings> {
 
 export default function Settings(props: PageProps) {
   const { mode, setMode } = useUiMode();
+  const { theme, setTheme } = useStudioAppearance();
   const [cfg, setCfg] = useState<any>(null);
   const [aiStatus, setAiStatus] = useState<any>(null);
   const [edmgTemplate, setEdmgTemplate] = useState<any>(null);
@@ -460,6 +462,38 @@ export default function Settings(props: PageProps) {
           <button className={mode === "simple" ? "" : "secondary"} onClick={() => setMode("simple")}>Simple</button>
           <button className={mode === "advanced" ? "" : "secondary"} onClick={() => setMode("advanced")}>Advanced</button>
           <div className="small" style={{ opacity: 0.8 }}>current: <b>{mode}</b></div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Appearance</div>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Theme changes are frontend-only. They do not affect Setup Wizard, backend spawning, model installs, render settings, or package outputs.
+        </div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <div>
+            <div className="small" style={{ fontWeight: 800, marginBottom: 6 }}>Studio theme</div>
+            <select value={theme} onChange={(event) => setTheme(event.target.value as any)}>
+              {STUDIO_THEME_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <div className="studio-themeSwatches" aria-hidden="true">
+              {STUDIO_THEME_OPTIONS.map((option) => (
+                <div
+                  key={option.id}
+                  className="studio-themeSwatch"
+                  data-theme={option.id}
+                  title={`${option.label}: ${option.description}`}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="small" style={{ opacity: 0.86 }}>
+            Current phase: Studio Forge and Model Manager support modular section ordering and visibility. Runtime-critical Settings sections stay fixed for now so startup, AI, and render configuration remain easy to audit.
+          </div>
         </div>
       </div>
 

@@ -2,7 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+:root,
+:root[data-studio-theme="studio"] {
   --bg: #041417;
   --panel: rgba(7, 23, 25, 0.82);
   --panel2: rgba(6, 18, 20, 0.9);
@@ -10,9 +11,84 @@
   --text: #eef5f4;
   --muted: #aebaa8;
   --accent: #35d8df;
+  --accent-soft: #94b7d8;
   --danger: #ff7a66;
   --ok: #6ff0ba;
   --btn: rgba(10, 31, 34, 0.84);
+  --sidebar-bg-top: rgba(5, 17, 19, 0.95);
+  --sidebar-bg-bottom: rgba(8, 20, 23, 0.88);
+  --sidebar-card: rgba(10, 24, 30, 0.92);
+  --main-overlay-top: rgba(3, 8, 11, 0.74);
+  --main-overlay-mid: rgba(4, 20, 23, 0.88);
+  --main-overlay-bottom: rgba(4, 20, 23, 0.96);
+  --app-warm-glow: rgba(242, 118, 46, 0.12);
+  --app-cool-glow: rgba(63, 215, 223, 0.12);
+}
+
+:root[data-studio-theme="ember"] {
+  --bg: #140d0c;
+  --panel: rgba(31, 16, 14, 0.84);
+  --panel2: rgba(24, 12, 11, 0.92);
+  --border: rgba(236, 131, 94, 0.28);
+  --text: #f8ede8;
+  --muted: #d3bbb0;
+  --accent: #ff8b61;
+  --accent-soft: #ffbf9a;
+  --danger: #ff8676;
+  --ok: #ffd17a;
+  --btn: rgba(36, 18, 16, 0.88);
+  --sidebar-bg-top: rgba(22, 12, 11, 0.96);
+  --sidebar-bg-bottom: rgba(28, 15, 13, 0.9);
+  --sidebar-card: rgba(34, 18, 16, 0.92);
+  --main-overlay-top: rgba(15, 8, 7, 0.78);
+  --main-overlay-mid: rgba(22, 12, 11, 0.88);
+  --main-overlay-bottom: rgba(22, 12, 11, 0.96);
+  --app-warm-glow: rgba(255, 115, 74, 0.18);
+  --app-cool-glow: rgba(255, 177, 107, 0.08);
+}
+
+:root[data-studio-theme="aurora"] {
+  --bg: #07111b;
+  --panel: rgba(10, 22, 35, 0.84);
+  --panel2: rgba(8, 18, 29, 0.92);
+  --border: rgba(94, 184, 255, 0.26);
+  --text: #eef7ff;
+  --muted: #b4c7da;
+  --accent: #57c9ff;
+  --accent-soft: #8edcff;
+  --danger: #ff8d88;
+  --ok: #74f1d0;
+  --btn: rgba(12, 24, 38, 0.9);
+  --sidebar-bg-top: rgba(8, 18, 29, 0.96);
+  --sidebar-bg-bottom: rgba(11, 22, 35, 0.9);
+  --sidebar-card: rgba(14, 27, 42, 0.92);
+  --main-overlay-top: rgba(5, 10, 16, 0.78);
+  --main-overlay-mid: rgba(8, 19, 31, 0.88);
+  --main-overlay-bottom: rgba(8, 19, 31, 0.96);
+  --app-warm-glow: rgba(65, 124, 255, 0.08);
+  --app-cool-glow: rgba(87, 201, 255, 0.16);
+}
+
+:root[data-studio-theme="atlas"] {
+  --bg: #0a1410;
+  --panel: rgba(12, 24, 18, 0.84);
+  --panel2: rgba(10, 19, 15, 0.92);
+  --border: rgba(118, 195, 140, 0.24);
+  --text: #eff7f1;
+  --muted: #b7c9ba;
+  --accent: #7de0a1;
+  --accent-soft: #a9dfba;
+  --danger: #ff8c7d;
+  --ok: #b8f08d;
+  --btn: rgba(15, 28, 21, 0.9);
+  --sidebar-bg-top: rgba(10, 21, 16, 0.96);
+  --sidebar-bg-bottom: rgba(14, 27, 20, 0.9);
+  --sidebar-card: rgba(17, 31, 24, 0.92);
+  --main-overlay-top: rgba(6, 11, 9, 0.78);
+  --main-overlay-mid: rgba(10, 20, 16, 0.88);
+  --main-overlay-bottom: rgba(10, 20, 16, 0.96);
+  --app-warm-glow: rgba(143, 204, 101, 0.1);
+  --app-cool-glow: rgba(71, 169, 111, 0.12);
 }
 * {
   box-sizing: border-box;
@@ -124,6 +200,81 @@ select:focus {
   font-size: 12px;
   color: var(--muted);
   background: rgba(9, 25, 28, 0.74);
+}
+.studio-themeSwatches {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.studio-themeSwatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.studio-themeSwatch[data-theme="studio"] {
+  background: linear-gradient(135deg, #35d8df 0%, #1c3340 100%);
+}
+.studio-themeSwatch[data-theme="ember"] {
+  background: linear-gradient(135deg, #ff8b61 0%, #41211b 100%);
+}
+.studio-themeSwatch[data-theme="aurora"] {
+  background: linear-gradient(135deg, #57c9ff 0%, #1a3252 100%);
+}
+.studio-themeSwatch[data-theme="atlas"] {
+  background: linear-gradient(135deg, #7de0a1 0%, #1f3327 100%);
+}
+.studio-layoutTools {
+  background: linear-gradient(180deg, rgba(8, 18, 24, 0.94) 0%, rgba(7, 16, 21, 0.9) 100%);
+}
+.studio-layoutToolsSummary {
+  list-style: none;
+  cursor: pointer;
+}
+.studio-layoutToolsSummary::-webkit-details-marker {
+  display: none;
+}
+.studio-layoutToolsTitle {
+  font-size: 15px;
+  font-weight: 900;
+}
+.studio-layoutToolsBody {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+.studio-layoutToolsActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.studio-layoutToolsGrid {
+  display: grid;
+  gap: 10px;
+}
+.studio-layoutToolsItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.studio-layoutToolsItemCopy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.studio-layoutToolsItemActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .progressBar {
   display: grid;
@@ -327,7 +478,7 @@ select:focus {
   min-width: 0;
   height: 100vh;
   background:
-    radial-gradient(circle at top center, rgba(242, 118, 46, 0.12), transparent 34%),
+    radial-gradient(circle at top center, var(--app-warm-glow), transparent 34%),
     linear-gradient(
       180deg,
       rgba(3, 10, 13, 0.82) 0%,
@@ -338,7 +489,7 @@ select:focus {
 .sidebar {
   width: 244px;
   min-width: 244px;
-  background: linear-gradient(180deg, rgba(5, 17, 19, 0.95) 0%, rgba(8, 20, 23, 0.88) 100%);
+  background: linear-gradient(180deg, var(--sidebar-bg-top) 0%, var(--sidebar-bg-bottom) 100%);
   border-right: 1px solid var(--border);
   padding: 16px 14px 18px;
   height: 100vh;
@@ -385,7 +536,7 @@ select:focus {
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #94b7d8;
+  color: var(--accent-soft);
 }
 .sidebar-brand {
   font-size: 20px;
@@ -402,7 +553,7 @@ select:focus {
   border: 1px solid rgba(120, 186, 242, 0.18);
   border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(10, 24, 30, 0.92) 0%, rgba(8, 20, 24, 0.92) 100%),
+    linear-gradient(180deg, var(--sidebar-card) 0%, rgba(8, 20, 24, 0.92) 100%),
     radial-gradient(circle at top right, rgba(255, 145, 84, 0.12), transparent 42%);
   display: grid;
   gap: 4px;
@@ -412,7 +563,7 @@ select:focus {
   font-weight: 800;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: #94b7d8;
+  color: var(--accent-soft);
 }
 .sidebar-focusValue {
   font-size: 15px;
@@ -504,11 +655,11 @@ select:focus {
   background:
     linear-gradient(
       180deg,
-      rgba(3, 8, 11, 0.74) 0%,
-      rgba(4, 20, 23, 0.88) 35%,
-      rgba(4, 20, 23, 0.96) 100%
+      var(--main-overlay-top) 0%,
+      var(--main-overlay-mid) 35%,
+      var(--main-overlay-bottom) 100%
     ),
-    radial-gradient(circle at 50% 22%, rgba(63, 215, 223, 0.12), transparent 28%),
+    radial-gradient(circle at 50% 22%, var(--app-cool-glow), transparent 28%),
     url("/studio-background.jpg");
   background-repeat: no-repeat;
   background-position:
@@ -1261,7 +1412,7 @@ th {
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #94b7d8;
+  color: var(--accent-soft);
 }
 .timeline-titleRow {
   display: flex;
@@ -1775,6 +1926,13 @@ th {
   }
 }
 @media (max-width: 1220px) {
+  .studio-layoutToolsItem {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .studio-layoutToolsItemActions {
+    justify-content: flex-start;
+  }
   .studio-workbenchBridge {
     align-items: flex-start;
   }
