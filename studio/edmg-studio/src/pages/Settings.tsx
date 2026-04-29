@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
+import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { STUDIO_THEME_OPTIONS, useStudioAppearance } from "../components/studioAppearance";
+import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
 import { clearRenderDefaults, readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import type { PageProps } from "../types/pageProps";
@@ -24,6 +26,19 @@ type StudioBackendSettings = {
   port: string;
   source?: string;
 };
+
+type SettingsPanelId =
+  | "uiMode"
+  | "appearance"
+  | "renderDefaults"
+  | "desktopBackend"
+  | "aiProvider"
+  | "backendConfig"
+  | "liveAiStatus"
+  | "tokens"
+  | "renderRuntime"
+  | "comfyui"
+  | "deforum";
 
 const DEFAULT_AI_SETTINGS: StudioAiSettings = {
   mode: "local",
@@ -448,11 +463,94 @@ export default function Settings(props: PageProps) {
     }
   }
 
-  return (
-    <div>
-      <h1>Settings</h1>
-      {err && <div style={{ color: "var(--danger)" }}>{err}</div>}
+  const panelDefinitions = useMemo(
+    () => [
+      {
+        id: "uiMode" as const,
+        label: "UI Mode",
+        description: "Simple vs advanced interface density and control exposure.",
+      },
+      {
+        id: "appearance" as const,
+        label: "Appearance",
+        description: "Theme selection and future customization entrypoint.",
+      },
+      {
+        id: "renderDefaults" as const,
+        label: "Render defaults",
+        description: "Saved profiles that the Render page can pick up automatically.",
+      },
+      {
+        id: "desktopBackend" as const,
+        label: "Desktop backend",
+        description: "Startup mode and managed vs external backend target.",
+      },
+      {
+        id: "aiProvider" as const,
+        label: "AI Provider",
+        description: "Saved startup provider, routing, and credential-adjacent controls.",
+      },
+      {
+        id: "backendConfig" as const,
+        label: "Backend config snapshot",
+        description: "Raw `/v1/config` inspection card.",
+      },
+      {
+        id: "liveAiStatus" as const,
+        label: "Live Backend AI Status",
+        description: "Read-only runtime provider status from the active backend.",
+      },
+      {
+        id: "tokens" as const,
+        label: "Tokens",
+        description: "Saved gated-download and hosted-provider credentials status.",
+      },
+      {
+        id: "renderRuntime" as const,
+        label: "Hosted Render / AMD Runtime",
+        description: "Hosted Stability and DirectML runtime preferences.",
+      },
+      {
+        id: "comfyui" as const,
+        label: "ComfyUI workflow",
+        description: "Reference guidance for the optional ComfyUI routing path.",
+      },
+      {
+        id: "deforum" as const,
+        label: "Deforum template",
+        description: "EDMG Core-derived Deforum export reference.",
+      },
+    ],
+    [],
+  );
+  const {
+    layoutState,
+    visibleOrder,
+    movePanel,
+    updateHidden,
+    resetLayout,
+  } = useStudioPageLayout<SettingsPanelId>(
+    "settings",
+    panelDefinitions.map((panel) => panel.id),
+  );
+  const panelDefinitionById = useMemo(
+    () =>
+      Object.fromEntries(
+        panelDefinitions.map((definition) => [definition.id, definition]),
+      ) as Record<SettingsPanelId, (typeof panelDefinitions)[number]>,
+    [panelDefinitions],
+  );
+  const panelControlItems = layoutState.order.map((panelId, index) => ({
+    id: panelId,
+    label: panelDefinitionById[panelId].label,
+    description: panelDefinitionById[panelId].description,
+    hidden: layoutState.hidden.includes(panelId),
+    canMoveUp: index > 0,
+    canMoveDown: index < layoutState.order.length - 1,
+  }));
 
+  const panelContent: Record<SettingsPanelId, React.ReactNode> = {
+    uiMode: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>UI Mode</div>
         <div className="small" style={{ marginBottom: 10 }}>
@@ -464,7 +562,8 @@ export default function Settings(props: PageProps) {
           <div className="small" style={{ opacity: 0.8 }}>current: <b>{mode}</b></div>
         </div>
       </div>
-
+    ),
+    appearance: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Appearance</div>
         <div className="small" style={{ marginBottom: 10 }}>
@@ -492,11 +591,12 @@ export default function Settings(props: PageProps) {
             </div>
           </div>
           <div className="small" style={{ opacity: 0.86 }}>
-            Current phase: Studio Forge and Model Manager support modular section ordering and visibility. Runtime-critical Settings sections stay fixed for now so startup, AI, and render configuration remain easy to audit.
+            Current phase: Settings, Studio Forge, and Model Manager support modular section ordering and visibility. These controls only change local presentation, not runtime behavior.
           </div>
         </div>
       </div>
-
+    ),
+    renderDefaults: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Render defaults</div>
         <div className="small" style={{ marginBottom: 10 }}>
@@ -528,7 +628,8 @@ export default function Settings(props: PageProps) {
           <div className="small" style={{ opacity: 0.75 }}>Loading render profiles…</div>
         )}
       </div>
-
+    ),
+    desktopBackend: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Desktop Backend</div>
         <div className="small" style={{ marginBottom: 10 }}>
@@ -598,7 +699,8 @@ export default function Settings(props: PageProps) {
           </div>
         </div>
       </div>
-
+    ),
+    aiProvider: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>AI Provider</div>
         <div className="small" style={{ marginBottom: 10 }}>
@@ -703,19 +805,18 @@ export default function Settings(props: PageProps) {
           </div>
         </div>
       </div>
-
-      {cfg && <div className="card"><pre>{JSON.stringify(cfg, null, 2)}</pre></div>}
-
-      {aiStatus && (
-        <div className="card" style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Live Backend AI Status</div>
-          <div className="small" style={{ marginBottom: 10 }}>
-            This is the provider the backend is using right now. If it differs from the saved startup config above, restart Studio to apply your latest change.
-          </div>
-          <pre>{JSON.stringify(aiStatus, null, 2)}</pre>
+    ),
+    backendConfig: cfg ? <div className="card"><pre>{JSON.stringify(cfg, null, 2)}</pre></div> : null,
+    liveAiStatus: aiStatus ? (
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Live Backend AI Status</div>
+        <div className="small" style={{ marginBottom: 10 }}>
+          This is the provider the backend is using right now. If it differs from the saved startup config above, restart Studio to apply your latest change.
         </div>
-      )}
-
+        <pre>{JSON.stringify(aiStatus, null, 2)}</pre>
+      </div>
+    ) : null,
+    tokens: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Tokens</div>
         <div className="small" style={{ marginBottom: 10 }}>
@@ -768,7 +869,8 @@ export default function Settings(props: PageProps) {
           <button className="secondary" disabled={saving || !secrets?.has_stability_api_key} onClick={() => clearSecret("stability_api_key")}>Clear</button>
         </div>
       </div>
-
+    ),
+    renderRuntime: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Hosted Render / AMD Runtime</div>
         <div className="small" style={{ marginBottom: 10 }}>
@@ -935,7 +1037,8 @@ export default function Settings(props: PageProps) {
           </div>
         )}
       </div>
-
+    ),
+    comfyui: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>ComfyUI workflow</div>
         <div className="small">
@@ -951,14 +1054,31 @@ export default function Settings(props: PageProps) {
           <li>If Render is still acting like nothing changed, the usual cause is one of three things: ComfyUI is not running, the selected model is an `Internal` model rather than a `ComfyUI` model, or the needed workflow family or ControlNet model is not installed yet.</li>
         </ul>
       </div>
+    ),
+    deforum: edmgTemplate ? (
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Deforum template (from EDMG Core)</div>
+        <div className="small">This is an editing surface / reference for Deforum exports.</div>
+        <pre>{JSON.stringify(edmgTemplate, null, 2)}</pre>
+      </div>
+    ) : null,
+  };
 
-      {edmgTemplate && (
-        <div className="card" style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Deforum template (from EDMG Core)</div>
-          <div className="small">This is an editing surface / reference for Deforum exports.</div>
-          <pre>{JSON.stringify(edmgTemplate, null, 2)}</pre>
-        </div>
-      )}
+  return (
+    <div>
+      <h1>Settings</h1>
+      {err && <div style={{ color: "var(--danger)" }}>{err}</div>}
+      <StudioLayoutCustomizer
+        title="Settings layout"
+        description="Reorder or hide Settings panels for your own workflow. This does not change what any setting saves or how the desktop/backend behaves."
+        items={panelControlItems}
+        onMove={movePanel}
+        onToggleHidden={updateHidden}
+        onReset={resetLayout}
+      />
+      {visibleOrder.map((panelId) => (
+        <React.Fragment key={panelId}>{panelContent[panelId]}</React.Fragment>
+      ))}
     </div>
   );
 }
