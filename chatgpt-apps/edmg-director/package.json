@@ -1,9 +1,8 @@
 {
-  "name": "edmg-director-app",
-  "version": "0.1.0",
+  "name": "edmg-director",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "ChatGPT Apps SDK scaffold for EDMG Studio planning and timeline handoff.",
   "scripts": {
     "build": "vite build",
     "dev:widget": "vite",
@@ -11,23 +10,23 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/ext-apps": "^1.0.1",
-    "@modelcontextprotocol/sdk": "^1.20.2",
+    "@modelcontextprotocol/ext-apps": "^1.7.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "zod": "^3.25.76"
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
-    "@types/node": "^22.15.21",
-    "@types/react": "^18.3.28",
-    "@types/react-dom": "^18.3.7",
-    "@vitejs/plugin-react": "^5.0.0",
-    "tsx": "^4.20.4",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vite": "^8.0.0"
+    "vite": "^8.0.10"
   }
 }

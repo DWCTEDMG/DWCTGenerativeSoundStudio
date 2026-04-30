@@ -1,52 +1,71 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+type HostApi = {
+  theme?: string;
+  locale?: string;
+  displayMode?: string;
+  toolInput?: unknown;
+  toolOutput?: unknown;
+  toolResponseMetadata?: Record<string, unknown>;
+  widgetState?: unknown;
+  callTool?: (name: string, args?: Record<string, unknown>) => Promise<unknown>;
+  sendFollowUpMessage?: (message: string) => Promise<unknown> | void;
+  requestDisplayMode?: (args: { mode: "inline" | "pip" | "fullscreen" }) => Promise<unknown> | void;
+};
 
 type PlanScene = {
   index: number;
-  name: string;
-  startS: number;
-  endS: number;
-  promptSnippet?: string;
-  transition?: string;
+  title: string;
+  prompt: string;
+  startS: number | null;
+  endS: number | null;
+  durationS: number | null;
+  shotType: string | null;
+  rationale: string | null;
+  transitionCue: string | null;
+  continuityNote: string | null;
 };
 
 type PlanVariant = {
   index: number;
-  name: string;
-  sceneCount: number;
-  durationS: number;
-  scenes?: PlanScene[];
+  label: string;
+  summary: string | null;
+  durationS: number | null;
+  scenes: PlanScene[];
+};
+
+type AnalysisSummary = {
+  bpm: number | null;
+  durationS: number | null;
+  hookLine: string | null;
+  narrative: string | null;
 };
 
 type PlanPreviewOutput = {
-  kind: "planPreview";
+  type: "plan-preview";
   projectId: string;
-  projectName?: string;
-  planMode?: string;
-  generatedAt?: string;
-  variants?: PlanVariant[];
+  projectName: string;
+  mode: string;
+  planSource: string | null;
+  selectedVariantIndex: number;
+  analysisSummary: AnalysisSummary | null;
+  variants: PlanVariant[];
+};
+
+type TimelineSummary = {
+  rootKeys: string[];
+  trackCount: number;
 };
 
 type ActionResultOutput = {
-  kind: "actionResult";
-  title?: string;
-  message?: string;
-  projectId?: string;
-  projectName?: string;
-  variantIndex?: number;
-  overwrite?: boolean;
-};
-
-type GenericOutput = Record<string, unknown> | null;
-
-type HostApi = {
-  toolOutput?: GenericOutput;
-  theme?: string;
-  callTool?: (name: string, args: Record<string, unknown>) => Promise<any>;
-  sendFollowUpMessage?: (message: {
-    role: string;
-    content: Array<{ type: string; text: string }>;
-  }) => Promise<unknown>;
-  requestDisplayMode?: (args: { mode: string }) => Promise<unknown>;
+  type: "action-result";
+  projectId: string;
+  projectName: string;
+  variantIndex: number;
+  overwrite: boolean;
+  applied: boolean;
+  message: string;
+  timelineSummary: TimelineSummary | null;
 };
 
 declare global {
@@ -55,276 +74,376 @@ declare global {
   }
 }
 
-function host(): HostApi {
-  return window.openai ?? {};
+function host(): HostApi | undefined {
+  return window.openai;
 }
 
-function readToolOutput(event?: Event): GenericOutput {
-  const detail = (event as CustomEvent<{ globals?: { toolOutput?: GenericOutput } }> | undefined)?.detail;
-  return detail?.globals?.toolOutput ?? host().toolOutput ?? null;
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-function applyTheme() {
-  document.documentElement.dataset.theme = host().theme ?? "light";
+function readToolOutput(value: unknown): unknown {
+  const record = asRecord(value);
+  if ("structuredContent" in record) {
+    return record.structuredContent;
+  }
+  return value;
 }
 
-function formatSeconds(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "0:00";
-  const mins = Math.floor(value / 60);
-  const secs = Math.round(value % 60)
+function formatSeconds(value: number | null | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "TBD";
+  }
+  const total = Math.max(0, Math.round(value));
+  const minutes = Math.floor(total / 60)
     .toString()
     .padStart(2, "0");
-  return `${mins}:${secs}`;
+  const seconds = (total % 60).toString().padStart(2, "0");
+  return `${minutes}:${seconds}`;
 }
 
-function isPlanPreview(output: GenericOutput): output is PlanPreviewOutput {
-  return Boolean(output && output.kind === "planPreview");
+function applyTheme(theme?: string): void {
+  const normalized = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = normalized;
+  document.documentElement.style.colorScheme = normalized;
 }
 
-function isActionResult(output: GenericOutput): output is ActionResultOutput {
-  return Boolean(output && output.kind === "actionResult");
+function isPlanPreview(value: unknown): value is PlanPreviewOutput {
+  const record = asRecord(value);
+  return record.type === "plan-preview" && Array.isArray(record.variants);
 }
 
-function StatusBanner(props: { busy: string; error: string }) {
-  if (!props.busy && !props.error) return null;
-  return <div className={`status${props.error ? " error" : ""}`}>{props.error || props.busy}</div>;
+function isActionResult(value: unknown): value is ActionResultOutput {
+  return asRecord(value).type === "action-result";
 }
 
-function Hero(props: { title: string; summary: string; children?: React.ReactNode }) {
+function StatusBanner(props: {
+  tone: "success" | "error";
+  title: string;
+  detail: string;
+}) {
   return (
-    <section className="hero">
-      <div className="eyebrow">EDMG Director</div>
-      <h1 className="title">{props.title}</h1>
-      <p className="summary">{props.summary}</p>
-      {props.children}
+    <section className={`status-banner ${props.tone}`}>
+      <div className="status-title">{props.title}</div>
+      <p>{props.detail}</p>
     </section>
   );
 }
 
-function PlanPreviewView(props: {
-  output: PlanPreviewOutput;
-  onApply: (projectId: string, variantIndex: number, overwrite: boolean) => Promise<void>;
-  onAsk: (projectId: string, variantIndex: number) => Promise<void>;
-  onExpand: () => Promise<void>;
+function Hero(props: {
+  projectName: string;
+  mode: string;
+  source: string | null;
+  variantCount: number;
+  onFullscreen: () => Promise<void>;
+  onAskAssistant: () => Promise<void>;
 }) {
-  const variants = props.output.variants ?? [];
   return (
-    <>
-      <Hero
-        title={props.output.projectName || props.output.projectId || "Project review"}
-        summary="Review the generated EDMG storyboard variants below, then apply the best one to the timeline."
-      >
-        <div className="metaRow">
-          <span className="badge badgeAccent">Plan mode: {props.output.planMode || "auto"}</span>
-          <span className="badge">Generated: {props.output.generatedAt || ""}</span>
-          <span className="badge badgeGood">Variants: {variants.length}</span>
+    <header className="hero">
+      <div>
+        <div className="eyebrow">EDMG Director</div>
+        <h1>{props.projectName}</h1>
+        <p>
+          Interactive storyboard review for {props.variantCount} variant
+          {props.variantCount === 1 ? "" : "s"}.
+        </p>
+      </div>
+      <div className="hero-meta">
+        <div className="pill-row">
+          <span className="pill">mode: {props.mode}</span>
+          {props.source ? <span className="pill">source: {props.source}</span> : null}
         </div>
-        <div className="buttonRow">
-          <button className="button" onClick={() => void props.onExpand()}>
-            Open larger
+        <div className="hero-actions">
+          <button className="ghost-button" onClick={() => void props.onAskAssistant()}>
+            Ask ChatGPT
+          </button>
+          <button className="primary-button" onClick={() => void props.onFullscreen()}>
+            Fullscreen
           </button>
         </div>
-      </Hero>
-      <div className="grid">
-        {variants.length ? (
-          variants.map((variant) => (
-            <section className="variant" key={`${props.output.projectId}-${variant.index}`}>
-              <div className="variantHead">
+      </div>
+    </header>
+  );
+}
+
+function AnalysisPanel(props: { summary: AnalysisSummary | null }) {
+  if (!props.summary) {
+    return (
+      <section className="analysis-panel muted">
+        <h2>Analysis Snapshot</h2>
+        <p>No audio analysis summary was attached to this plan.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="analysis-panel">
+      <h2>Analysis Snapshot</h2>
+      <div className="metric-grid">
+        <div className="metric-card">
+          <span className="metric-label">Tempo</span>
+          <strong>{props.summary.bpm ?? "?"} BPM</strong>
+        </div>
+        <div className="metric-card">
+          <span className="metric-label">Duration</span>
+          <strong>{formatSeconds(props.summary.durationS)}</strong>
+        </div>
+        <div className="metric-card">
+          <span className="metric-label">Narrative</span>
+          <strong>{props.summary.narrative ?? "Unspecified"}</strong>
+        </div>
+      </div>
+      {props.summary.hookLine ? (
+        <div className="hook-line">
+          <span className="metric-label">Hook line</span>
+          <p>{props.summary.hookLine}</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function VariantCard(props: {
+  variant: PlanVariant;
+  busy: boolean;
+  onApply: () => Promise<void>;
+}) {
+  return (
+    <article className="variant-card">
+      <div className="variant-head">
+        <div>
+          <div className="variant-kicker">Variant {props.variant.index + 1}</div>
+          <h3>{props.variant.label}</h3>
+          {props.variant.summary ? <p>{props.variant.summary}</p> : null}
+        </div>
+        <div className="variant-side">
+          <span className="scene-count">
+            {props.variant.scenes.length} scene{props.variant.scenes.length === 1 ? "" : "s"}
+          </span>
+          <span className="scene-count">{formatSeconds(props.variant.durationS)}</span>
+        </div>
+      </div>
+
+      <button
+        className="primary-button apply-button"
+        disabled={props.busy}
+        onClick={() => void props.onApply()}
+      >
+        {props.busy ? "Applying..." : "Apply To Timeline"}
+      </button>
+
+      <div className="scene-list">
+        {props.variant.scenes.map((scene) => (
+          <section key={`${props.variant.index}-${scene.index}`} className="scene-card">
+            <div className="scene-head">
+              <div>
+                <span className="scene-chip">Scene {scene.index + 1}</span>
+                <h4>{scene.title}</h4>
+              </div>
+              <span className="scene-time">
+                {formatSeconds(scene.startS)} - {formatSeconds(scene.endS)}
+              </span>
+            </div>
+            {scene.shotType ? <div className="micro-note">shot: {scene.shotType}</div> : null}
+            <p className="scene-prompt">{scene.prompt || "No prompt provided."}</p>
+            <div className="scene-notes">
+              {scene.rationale ? (
                 <div>
-                  <h3 className="variantTitle">{variant.name}</h3>
-                  <div className="variantSub">
-                    {variant.sceneCount} scenes · approx {formatSeconds(variant.durationS)}
-                  </div>
+                  <span>Rationale</span>
+                  <p>{scene.rationale}</p>
                 </div>
-                <div className="variantActions">
-                  <button
-                    className="button buttonPrimary"
-                    onClick={() => void props.onApply(props.output.projectId, variant.index, false)}
-                  >
-                    Apply to timeline
-                  </button>
-                  <button className="button" onClick={() => void props.onApply(props.output.projectId, variant.index, true)}>
-                    Apply with overwrite
-                  </button>
-                  <button className="button buttonGhost" onClick={() => void props.onAsk(props.output.projectId, variant.index)}>
-                    Ask ChatGPT for notes
-                  </button>
+              ) : null}
+              {scene.transitionCue ? (
+                <div>
+                  <span>Transition</span>
+                  <p>{scene.transitionCue}</p>
                 </div>
-              </div>
-              <div className="sceneList">
-                {(variant.scenes ?? []).map((scene) => (
-                  <article className="scene" key={`${variant.index}-${scene.index}`}>
-                    <div className="sceneHead">
-                      <div>
-                        <h4 className="sceneName">{scene.name}</h4>
-                        <div className="sceneMeta">
-                          Scene {scene.index + 1} · {formatSeconds(scene.startS)} → {formatSeconds(scene.endS)}
-                        </div>
-                      </div>
-                    </div>
-                    <p className="scenePrompt">{scene.promptSnippet || "No prompt snippet available."}</p>
-                    {scene.transition ? (
-                      <div className="sceneTransition">
-                        <strong>Transition:</strong> {scene.transition}
-                      </div>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            </section>
-          ))
-        ) : (
-          <div className="status">No variants were returned by the EDMG backend.</div>
-        )}
+              ) : null}
+              {scene.continuityNote ? (
+                <div>
+                  <span>Continuity</span>
+                  <p>{scene.continuityNote}</p>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ))}
       </div>
-      <div className="finePrint">
-        This widget is intentionally thin. The EDMG backend remains the source of truth for analysis, plan storage, and timeline state.
-      </div>
-    </>
+    </article>
   );
 }
 
 function ActionResultView(props: {
-  output: ActionResultOutput;
-  onAskNext: (projectId: string, variantIndex: number) => Promise<void>;
-  onExpand: () => Promise<void>;
+  result: ActionResultOutput;
+  onAskAssistant: () => Promise<void>;
 }) {
-  const projectId = props.output.projectId || "";
-  const variantIndex = props.output.variantIndex ?? 0;
   return (
-    <Hero title={props.output.title || "Action complete"} summary={props.output.message || "The requested EDMG action completed."}>
-      <div className="metaRow">
-        <span className="badge badgeGood">Project: {props.output.projectName || projectId}</span>
-        <span className="badge">Variant: {variantIndex + 1}</span>
-        {props.output.overwrite ? <span className="badge badgeAccent">Overwrite applied</span> : null}
-      </div>
-      <div className="buttonRow">
-        <button className="button buttonPrimary" onClick={() => void props.onAskNext(projectId, variantIndex)}>
-          Ask ChatGPT for next EDMG step
-        </button>
-        <button className="button" onClick={() => void props.onExpand()}>
-          Open larger
+    <section className="result-card">
+      <div className="result-header">
+        <div>
+          <div className="eyebrow">Timeline Update</div>
+          <h2>{props.result.projectName}</h2>
+        </div>
+        <button className="ghost-button" onClick={() => void props.onAskAssistant()}>
+          Discuss Next Steps
         </button>
       </div>
-    </Hero>
+      <p>{props.result.message}</p>
+      <div className="pill-row">
+        <span className="pill">variant {props.result.variantIndex + 1}</span>
+        <span className="pill">{props.result.overwrite ? "overwrite" : "merge"}</span>
+        {props.result.timelineSummary ? (
+          <span className="pill">
+            {props.result.timelineSummary.trackCount} track
+            {props.result.timelineSummary.trackCount === 1 ? "" : "s"}
+          </span>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
-function FallbackView(props: { output: GenericOutput }) {
+function FallbackView(props: { raw: unknown }) {
   return (
-    <>
-      <Hero
-        title="Tool output"
-        summary="This view only has a custom layout for plan previews and apply confirmations."
-      />
-      <pre className="status">{JSON.stringify(props.output ?? {}, null, 2)}</pre>
-    </>
+    <section className="fallback-card">
+      <div className="eyebrow">Widget Output</div>
+      <h1>Awaiting plan preview</h1>
+      <p>
+        Run <code>generate_plan_preview</code> to load storyboard variants into the review
+        board.
+      </p>
+      {props.raw ? <pre>{JSON.stringify(props.raw, null, 2)}</pre> : null}
+    </section>
   );
 }
 
 export default function App() {
-  const [output, setOutput] = useState<GenericOutput>(() => readToolOutput());
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
+  const initialOutput = readToolOutput(host()?.toolOutput);
+  const [output, setOutput] = useState<unknown>(initialOutput);
+  const [lastPreview, setLastPreview] = useState<PlanPreviewOutput | null>(
+    isPlanPreview(initialOutput) ? initialOutput : null,
+  );
+  const [busyVariantIndex, setBusyVariantIndex] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    applyTheme();
-    const onGlobals = (event: Event) => {
-      applyTheme();
-      setOutput(readToolOutput(event));
+    applyTheme(host()?.theme);
+    const sync = () => {
+      applyTheme(host()?.theme);
+      const nextOutput = readToolOutput(host()?.toolOutput);
+      setOutput(nextOutput);
+      if (isPlanPreview(nextOutput)) {
+        setLastPreview(nextOutput);
+      }
     };
 
-    window.addEventListener("openai:set_globals", onGlobals as EventListener, { passive: true });
+    window.addEventListener("openai:set_globals", sync as EventListener);
     return () => {
-      window.removeEventListener("openai:set_globals", onGlobals as EventListener);
+      window.removeEventListener("openai:set_globals", sync as EventListener);
     };
   }, []);
 
   useEffect(() => {
-    applyTheme();
+    if (isPlanPreview(output)) {
+      setLastPreview(output);
+    }
   }, [output]);
 
-  const applyPlanVariant = async (projectId: string, variantIndex: number, overwrite: boolean) => {
-    setError("");
-    setBusy("Applying the selected EDMG variant to the timeline…");
-    try {
-      if (!host().callTool) {
-        throw new Error("This host does not expose window.openai.callTool.");
-      }
-      const result = await host().callTool("apply_plan_variant", {
-        projectId,
-        variantIndex,
-        overwrite,
-      });
-      if (result?.isError) {
-        throw new Error(
-          Array.isArray(result.content)
-            ? result.content
-                .map((item: { text?: string }) => item?.text || "")
-                .filter(Boolean)
-                .join(" ")
-            : "The EDMG apply tool reported an error."
-        );
-      }
-      setBusy("");
-      setError("");
-      setOutput(
-        result?.structuredContent ?? {
-          kind: "actionResult",
-          title: "Timeline updated",
-          message: "The EDMG timeline was updated.",
-          projectId,
-          variantIndex,
-          overwrite,
-        }
-      );
-    } catch (caught) {
-      setBusy("");
-      setError(caught instanceof Error ? caught.message : String(caught));
+  const preview = useMemo(
+    () => (isPlanPreview(output) ? output : lastPreview),
+    [lastPreview, output],
+  );
+  const actionResult = isActionResult(output) ? output : null;
+
+  async function handleApplyVariant(variantIndex: number): Promise<void> {
+    if (!preview) {
+      setError("No plan preview is loaded.");
+      return;
     }
-  };
+    if (!host()?.callTool) {
+      setError("The ChatGPT host bridge is unavailable.");
+      return;
+    }
 
-  const askForNotes = async (projectId: string, variantIndex: number) => {
-    if (!host().sendFollowUpMessage) return;
-    await host().sendFollowUpMessage({
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `Summarize the EDMG storyboard differences for project ${projectId} and focus on variant ${variantIndex + 1}.`,
-        },
-      ],
-    });
-  };
+    setBusyVariantIndex(variantIndex);
+    setError(null);
 
-  const askForNextStep = async (projectId: string, variantIndex: number) => {
-    if (!host().sendFollowUpMessage) return;
-    await host().sendFollowUpMessage({
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `The EDMG timeline now has variant ${variantIndex + 1} applied for project ${projectId}. Tell me the best next step inside Studio.`,
-        },
-      ],
-    });
-  };
+    try {
+      const result = await host()!.callTool!("apply_plan_variant", {
+        projectId: preview.projectId,
+        variantIndex,
+        overwrite: true,
+      });
+      setOutput(readToolOutput(result));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to apply the selected variant.");
+    } finally {
+      setBusyVariantIndex(null);
+    }
+  }
 
-  const expandWidget = async () => {
-    if (!host().requestDisplayMode) return;
-    await host().requestDisplayMode({ mode: "fullscreen" });
-  };
+  async function handleAskAssistant(): Promise<void> {
+    if (!host()?.sendFollowUpMessage) {
+      setError("Follow-up messaging is unavailable in this host.");
+      return;
+    }
+    setError(null);
+    try {
+      await host()!.sendFollowUpMessage!(
+        "Compare the current EDMG variants, recommend the strongest direction, and call out any continuity risks before I commit the timeline.",
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not send the follow-up prompt.");
+    }
+  }
+
+  async function handleFullscreen(): Promise<void> {
+    try {
+      await host()?.requestDisplayMode?.({ mode: "fullscreen" });
+    } catch {
+      // Layout requests are best-effort only.
+    }
+  }
+
+  if (!preview && !actionResult) {
+    return <FallbackView raw={output} />;
+  }
 
   return (
-    <div className="shell">
-      {isPlanPreview(output) ? (
-        <PlanPreviewView output={output} onApply={applyPlanVariant} onAsk={askForNotes} onExpand={expandWidget} />
-      ) : isActionResult(output) ? (
-        <ActionResultView output={output} onAskNext={askForNextStep} onExpand={expandWidget} />
-      ) : (
-        <FallbackView output={output} />
-      )}
-      <StatusBanner busy={busy} error={error} />
-    </div>
+    <main className="shell">
+      {actionResult ? (
+        <ActionResultView result={actionResult} onAskAssistant={handleAskAssistant} />
+      ) : null}
+      {error ? (
+        <StatusBanner
+          tone="error"
+          title="Action failed"
+          detail={error}
+        />
+      ) : null}
+      {preview ? (
+        <>
+          <Hero
+            projectName={preview.projectName}
+            mode={preview.mode}
+            source={preview.planSource}
+            variantCount={preview.variants.length}
+            onAskAssistant={handleAskAssistant}
+            onFullscreen={handleFullscreen}
+          />
+          <AnalysisPanel summary={preview.analysisSummary} />
+          <section className="variant-grid">
+            {preview.variants.map((variant) => (
+              <VariantCard
+                key={variant.index}
+                variant={variant}
+                busy={busyVariantIndex === variant.index}
+                onApply={() => handleApplyVariant(variant.index)}
+              />
+            ))}
+          </section>
+        </>
+      ) : null}
+    </main>
   );
 }

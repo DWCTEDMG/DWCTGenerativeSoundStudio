@@ -3,670 +3,425 @@ import {
   registerAppTool,
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import cors from "cors";
-import express from "express";
+import express, { type Request, type Response } from "express";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
-const SERVER_VERSION = "0.1.0";
-const DEFAULT_BACKEND_URL = "http://127.0.0.1:7863";
-const REVIEW_WIDGET_URI = "ui://edmg-director/review-board-v1.html";
-const PORT = Number.parseInt(process.env.PORT ?? "8788", 10);
+const APP_NAME = "edmg-director";
+const SERVER_VERSION = "0.2.0";
+const PORT = Number.parseInt(process.env.PORT ?? "3001", 10);
+const BIND_HOST = String(process.env.HOST ?? "127.0.0.1");
+const EDMG_BASE_URL = String(process.env.EDMG_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
+const REVIEW_WIDGET_URI = "ui://edmg-director/review-board.html";
+const REVIEW_WIDGET_DESCRIPTION =
+  "Interactive review board for EDMG storyboard variants. Inspect scenes, compare directions, and apply the chosen variant to the Studio timeline.";
 
-function backendBaseUrl(): string {
-  return (process.env.EDMG_BACKEND_URL ?? DEFAULT_BACKEND_URL).replace(/\/+$/, "");
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.resolve(__dirname, "..");
+const ASSETS_DIR = path.resolve(ROOT_DIR, "assets");
 
-function trimText(value: unknown, max = 220): string {
-  const text = String(value ?? "").trim();
-  if (!text) return "";
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-function asArray(value: unknown): any[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asObject(value: unknown): Record<string, any> {
-  return value && typeof value === "object" ? (value as Record<string, any>) : {};
-}
-
-function toNumber(value: unknown, fallback = 0): number {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
-function analysisSummary(analysis: unknown): {
-  summary: string;
-  durationS: number;
-  bpm: number;
+type AnyRecord = Record<string, unknown>;
+type ProjectSearchResult = {
+  id: string;
+  name: string;
+  createdAt: number | null;
+  updatedAt: number | null;
+};
+type ProjectFetchOutput = {
+  type: "project-detail";
+  projectId: string;
+  projectName: string;
+  analysisSummary: AnalysisSummary | null;
+  timelineSummary: TimelineSummary | null;
+  variantCount: number;
+};
+type AnalysisSummary = {
+  bpm: number | null;
+  durationS: number | null;
+  hookLine: string | null;
+  narrative: string | null;
+};
+type PlanScene = {
+  index: number;
+  title: string;
+  prompt: string;
+  startS: number | null;
+  endS: number | null;
+  durationS: number | null;
+  shotType: string | null;
+  rationale: string | null;
+  transitionCue: string | null;
+  continuityNote: string | null;
+};
+type PlanVariant = {
+  index: number;
+  label: string;
+  summary: string | null;
+  durationS: number | null;
+  scenes: PlanScene[];
+};
+type PlanPreviewOutput = {
+  type: "plan-preview";
+  projectId: string;
+  projectName: string;
+  mode: string;
+  planSource: string | null;
+  selectedVariantIndex: number;
+  analysisSummary: AnalysisSummary | null;
+  variants: PlanVariant[];
+};
+type TimelineSummary = {
+  rootKeys: string[];
+  trackCount: number;
+};
+type ActionResultOutput = {
+  type: "action-result";
+  projectId: string;
+  projectName: string;
+  variantIndex: number;
+  overwrite: boolean;
+  applied: boolean;
+  message: string;
+  timelineSummary: TimelineSummary | null;
+};
+type PlannerImportResultOutput = {
+  type: "planner-import-result";
+  projectId: string;
+  projectName: string;
+  variantCount: number;
+  appliedTimeline: boolean;
+  timelineSummary: TimelineSummary | null;
+  message: string;
+};
+type ReactiveApplyResultOutput = {
+  type: "reactive-apply-result";
+  projectId: string;
+  projectName: string;
+  cueEventCount: number;
+  keyframeCount: number;
   sectionCount: number;
-  transcriptReady: boolean;
-  tags: string[];
-} {
-  const source = asObject(analysis);
-  const features = asObject(source.features);
-  const transcript = source.transcript;
-  const transcriptText =
-    typeof transcript === "string"
-      ? transcript.trim()
-      : trimText(asObject(transcript).text, 400);
-  const summary =
-    trimText(source.summary, 260) ||
-    trimText(transcriptText, 260) ||
-    "No EDMG analysis summary available yet.";
-  return {
-    summary,
-    durationS: Math.max(0, toNumber(features.duration_s ?? features.duration, 0)),
-    bpm: Math.max(0, toNumber(features.bpm ?? features.tempo_bpm ?? features.tempo, 0)),
-    sectionCount: asArray(source.sections).length,
-    transcriptReady: Boolean(transcriptText),
-    tags: asArray(source.tags)
-      .map((tag) => String(tag ?? "").trim())
-      .filter(Boolean)
-      .slice(0, 10),
-  };
+  timelineSummary: TimelineSummary | null;
+  message: string;
+};
+
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+const jsonObjectArraySchema = z.array(jsonObjectSchema);
+
+function publicBaseUrl(): string {
+  return String(process.env.BASE_URL ?? `http://localhost:${PORT}`).replace(/\/+$/, "");
 }
 
-function summarizeProjectRecord(project: unknown) {
-  const source = asObject(project);
-  const meta = asObject(source.meta);
-  return {
-    id: String(source.id ?? ""),
-    name: trimText(source.name, 120) || "Untitled project",
-    hasAudio: Boolean(meta.audio),
-    hasAnalysis: Boolean(meta.analysis),
-    variantCount: asArray(asObject(meta.last_plan).variants).length,
-  };
+function allowedHosts(): string[] | undefined {
+  if (BIND_HOST === "127.0.0.1" || BIND_HOST === "localhost" || BIND_HOST === "::1") {
+    return undefined;
+  }
+
+  const hosts = new Set<string>(["localhost", "127.0.0.1", "[::1]"]);
+  try {
+    hosts.add(new URL(publicBaseUrl()).hostname);
+  } catch {
+    // Ignore invalid BASE_URL values here; startup will still expose them via GET /.
+  }
+  return [...hosts];
 }
 
-function summarizeProjectSnapshot(project: unknown) {
-  const source = asObject(project);
-  const meta = asObject(source.meta);
-  const audio = asObject(meta.audio);
-  const plan = asObject(meta.last_plan);
-  const timeline = asObject(meta.timeline);
-  const render = asObject(timeline.render);
-  const tracks = asArray(timeline.tracks);
-  const plannerLab = asObject(meta.last_planner_lab);
-  const reactiveLab = asObject(meta.last_reactive_lab);
-  const analysis = analysisSummary(meta.analysis);
-
-  return {
-    kind: "projectSnapshot",
-    project: {
-      id: String(source.id ?? ""),
-      name: trimText(source.name, 120) || "Untitled project",
-      audio: audio.filename
-        ? {
-            filename: String(audio.filename),
-            sizeBytes: toNumber(audio.size_bytes, 0),
-          }
-        : null,
-      analysis,
-      plan: {
-        variantCount: asArray(plan.variants).length,
-        title: trimText(plan.title, 160),
-        durationS: Math.max(0, toNumber(plan.duration_s, 0)),
-      },
-      timeline: {
-        trackCount: tracks.length,
-        fpsOutput: toNumber(render.fps_output ?? timeline.fps_output, 0),
-      },
-      handoff: {
-        plannerImportedAt: toNumber(plannerLab.imported_at, 0) || null,
-        reactiveAppliedAt: toNumber(reactiveLab.applied_at, 0) || null,
-      },
-    },
-  };
+function asRecord(value: unknown): AnyRecord {
+  return value && typeof value === "object" ? (value as AnyRecord) : {};
 }
 
-function summarizePlanVariants(plan: unknown) {
-  const source = asObject(plan);
-  const variants = asArray(source.variants);
-  return variants.map((variant, index) => {
-    const current = asObject(variant);
-    const scenes = asArray(current.scenes).map((scene, sceneIndex) => {
-      const item = asObject(scene);
-      return {
-        index: sceneIndex,
-        id: item.id ?? sceneIndex + 1,
-        name: trimText(item.name ?? item.title, 120) || `Scene ${sceneIndex + 1}`,
-        startS: Math.max(0, toNumber(item.start_s, sceneIndex * 5)),
-        endS: Math.max(0, toNumber(item.end_s, sceneIndex * 5 + 5)),
-        promptSnippet: trimText(item.prompt ?? item.text, 240),
-        transition: trimText(item.transition_cue ?? item.transition, 140),
-      };
-    });
-
-    return {
-      index,
-      name: trimText(current.name, 120) || `Variant ${index + 1}`,
-      sceneCount: scenes.length,
-      durationS: Math.max(
-        0,
-        toNumber(
-          current.duration_s,
-          scenes.length ? scenes[scenes.length - 1].endS : toNumber(source.duration_s, 0)
-        )
-      ),
-      scenes,
-    };
-  });
+function asArray<T = unknown>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (!headers.has("accept")) headers.set("accept", "application/json");
-  const response = await fetch(`${backendBaseUrl()}${path}`, {
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function readBuiltWidgetHtml(fileName: string): string {
+  const filePath = path.join(ASSETS_DIR, fileName);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(
+      `Widget asset "${fileName}" is missing. Run "pnpm run build" in ${ROOT_DIR} before starting the MCP server.`,
+    );
+  }
+  return fs.readFileSync(filePath, "utf-8");
+}
+
+function materializeWidgetHtml(fileName: string): string {
+  const assetOrigin = `${publicBaseUrl()}/assets/`;
+  return readBuiltWidgetHtml(fileName).replace(
+    /(src|href)=["']\.\/([^"']+)["']/g,
+    (_match, attr: string, file: string) => `${attr}="${assetOrigin}${file}"`,
+  );
+}
+
+function extractErrorMessage(payload: unknown, fallback: string): string {
+  const record = asRecord(payload);
+  const error = asRecord(record.error);
+  return (
+    asString(error.message) ||
+    asString(record.detail) ||
+    asString(record.message) ||
+    fallback
+  );
+}
+
+async function requestJson<T = unknown>(resourcePath: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers ?? {});
+  headers.set("Accept", "application/json");
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(`${EDMG_BASE_URL}${resourcePath}`, {
     ...init,
     headers,
   });
 
   const text = await response.text();
   let payload: unknown = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = null;
+
+  if (text.trim().length > 0) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
   }
 
   if (!response.ok) {
-    const detail =
-      trimText(asObject(payload).detail, 240) ||
-      trimText(asObject(payload).error?.message, 240) ||
-      trimText(text, 240) ||
-      `${response.status} ${response.statusText}`;
-    throw new Error(detail);
-  }
-
-  if (payload === null && text) {
-    throw new Error(`Expected JSON from EDMG backend at ${path}, but received non-JSON text.`);
+    throw new Error(
+      extractErrorMessage(payload, `${response.status} ${response.statusText}`),
+    );
   }
 
   return payload as T;
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  return requestJson<T>(path, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-}
+function summarizeAnalysis(analysisValue: unknown): AnalysisSummary | null {
+  const analysis = asRecord(analysisValue);
+  const features = asRecord(analysis.features);
+  const bpm =
+    coerceNumber(features.bpm) ??
+    coerceNumber(features.tempo_bpm) ??
+    coerceNumber(features.tempo);
+  const durationS =
+    coerceNumber(analysis.duration_s) ??
+    coerceNumber(features.duration_s) ??
+    coerceNumber(features.duration);
+  const hookLine =
+    asString(analysis.hook_line) ||
+    asString(analysis.hookLine) ||
+    null;
+  const narrative =
+    asString(analysis.narrative_structure) ||
+    asString(analysis.narrativeStructure) ||
+    null;
 
-async function fetchProjects(query: string | undefined, limit: number): Promise<any[]> {
-  const data = await requestJson<{ projects?: any[] }>("/v1/projects");
-  const all = asArray(data.projects);
-  const lowered = String(query ?? "").trim().toLowerCase();
-  const filtered = lowered
-    ? all.filter((project) => {
-        const item = asObject(project);
-        return String(item.name ?? "").toLowerCase().includes(lowered);
-      })
-    : all;
-  return filtered.slice(0, limit);
-}
-
-async function fetchProject(projectId: string): Promise<any> {
-  const data = await requestJson<{ project?: any }>(`/v1/projects/${encodeURIComponent(projectId)}`);
-  if (!data.project) {
-    throw new Error(`Project ${projectId} was not found by the EDMG backend.`);
+  if (bpm === null && durationS === null && !hookLine && !narrative) {
+    return null;
   }
-  return data.project;
+
+  return {
+    bpm,
+    durationS,
+    hookLine,
+    narrative,
+  };
 }
 
-function extractTextContent(content: unknown): string {
-  return asArray(content)
-    .map((item) => trimText(asObject(item).text, 260))
-    .filter(Boolean)
-    .join(" ");
+function summarizeTimeline(timelineValue: unknown): TimelineSummary | null {
+  const timeline = asRecord(timelineValue);
+  const rootKeys = Object.keys(timeline);
+  if (!rootKeys.length) {
+    return null;
+  }
+
+  const tracksValue = timeline.tracks;
+  let trackCount = 0;
+  if (Array.isArray(tracksValue)) {
+    trackCount = tracksValue.length;
+  } else if (tracksValue && typeof tracksValue === "object") {
+    trackCount = Object.keys(tracksValue as AnyRecord).length;
+  }
+
+  return {
+    rootKeys,
+    trackCount,
+  };
 }
 
-const REVIEW_WIDGET_HTML = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>EDMG Director</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #f6f0e7;
-        --panel: rgba(255, 255, 255, 0.88);
-        --panel-strong: rgba(255, 255, 255, 0.96);
-        --text: #1e1b18;
-        --muted: #645b54;
-        --line: rgba(40, 31, 22, 0.12);
-        --accent: #bf5a2a;
-        --accent-soft: rgba(191, 90, 42, 0.14);
-        --accent-strong: #8f3d16;
-        --good: #1f7a4f;
-        --warn: #9a4b1f;
-        --shadow: 0 18px 44px rgba(50, 29, 14, 0.12);
-        font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
-      }
+function normalizeScene(sceneValue: unknown, index: number): PlanScene {
+  const scene = asRecord(sceneValue);
+  const startS =
+    coerceNumber(scene.start_s) ??
+    coerceNumber(scene.start) ??
+    coerceNumber(scene.startSeconds);
+  const endS =
+    coerceNumber(scene.end_s) ??
+    coerceNumber(scene.end) ??
+    coerceNumber(scene.endSeconds);
+  const durationS =
+    coerceNumber(scene.duration_s) ??
+    (startS !== null && endS !== null ? Math.max(0, endS - startS) : null);
 
-      :root[data-theme="dark"] {
-        --bg: #16110d;
-        --panel: rgba(33, 24, 18, 0.92);
-        --panel-strong: rgba(28, 20, 15, 0.98);
-        --text: #f7efe5;
-        --muted: #c8b8a9;
-        --line: rgba(255, 244, 232, 0.12);
-        --accent: #ff8f57;
-        --accent-soft: rgba(255, 143, 87, 0.12);
-        --accent-strong: #ffb086;
-        --good: #74d39c;
-        --warn: #ffb278;
-        --shadow: 0 20px 52px rgba(0, 0, 0, 0.32);
-      }
+  return {
+    index,
+    title:
+      asString(scene.title) ||
+      asString(scene.label) ||
+      asString(scene.name) ||
+      `Scene ${index + 1}`,
+    prompt:
+      asString(scene.prompt) ||
+      asString(scene.visual_prompt) ||
+      asString(scene.text) ||
+      asString(scene.description),
+    startS,
+    endS,
+    durationS,
+    shotType:
+      asString(scene.shot_type) ||
+      asString(scene.shotType) ||
+      asString(scene.camera) ||
+      null,
+    rationale:
+      asString(scene.rationale) ||
+      asString(scene.reason) ||
+      asString(scene.intent) ||
+      null,
+    transitionCue:
+      asString(scene.transition_cue) ||
+      asString(scene.transitionCue) ||
+      asString(scene.transition) ||
+      null,
+    continuityNote:
+      asString(scene.continuity_note) ||
+      asString(scene.continuityNote) ||
+      asString(scene.continuity) ||
+      null,
+  };
+}
 
-      * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; min-height: 100%; background: radial-gradient(circle at top left, rgba(255,255,255,0.35), transparent 34%), var(--bg); color: var(--text); }
-      body { padding: 18px; }
-      button { font: inherit; }
-      a { color: inherit; }
-      .shell { display: grid; gap: 14px; }
-      .hero {
-        background: linear-gradient(145deg, var(--panel-strong), var(--panel));
-        border: 1px solid var(--line);
-        border-radius: 20px;
-        padding: 18px 18px 16px;
-        box-shadow: var(--shadow);
-      }
-      .eyebrow {
-        font-size: 11px;
-        letter-spacing: 0.18em;
-        text-transform: uppercase;
-        color: var(--muted);
-        margin-bottom: 8px;
-      }
-      .title { font-size: 28px; line-height: 1; margin: 0 0 8px; }
-      .summary { margin: 0; color: var(--muted); line-height: 1.45; }
-      .metaRow, .buttonRow, .variantActions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        align-items: center;
-      }
-      .metaRow { margin-top: 14px; }
-      .buttonRow { margin-top: 16px; }
-      .badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        border-radius: 999px;
-        border: 1px solid var(--line);
-        padding: 6px 10px;
-        font-size: 12px;
-        background: rgba(255,255,255,0.4);
-      }
-      .badgeAccent { background: var(--accent-soft); border-color: rgba(191, 90, 42, 0.2); color: var(--accent-strong); }
-      .badgeGood { background: rgba(31,122,79,0.12); border-color: rgba(31,122,79,0.2); color: var(--good); }
-      .button {
-        appearance: none;
-        border: 1px solid var(--line);
-        background: var(--panel);
-        color: var(--text);
-        border-radius: 999px;
-        padding: 10px 14px;
-        cursor: pointer;
-      }
-      .button:hover { border-color: rgba(0,0,0,0.24); }
-      .buttonPrimary {
-        background: var(--accent);
-        border-color: transparent;
-        color: #fff6ef;
-      }
-      .buttonGhost { background: transparent; }
-      .grid { display: grid; gap: 14px; }
-      .variant {
-        background: linear-gradient(165deg, var(--panel-strong), var(--panel));
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 16px;
-        box-shadow: var(--shadow);
-      }
-      .variantHead {
-        display: flex;
-        justify-content: space-between;
-        align-items: start;
-        gap: 12px;
-        margin-bottom: 12px;
-      }
-      .variantTitle {
-        margin: 0;
-        font-size: 21px;
-        line-height: 1.15;
-      }
-      .variantSub { font-size: 13px; color: var(--muted); margin-top: 4px; }
-      .sceneList { display: grid; gap: 10px; margin-top: 14px; }
-      .scene {
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 12px;
-        background: rgba(255,255,255,0.3);
-      }
-      .sceneHead {
-        display: flex;
-        justify-content: space-between;
-        gap: 10px;
-        align-items: center;
-        margin-bottom: 8px;
-      }
-      .sceneName { font-size: 15px; margin: 0; }
-      .sceneMeta { color: var(--muted); font-size: 12px; }
-      .scenePrompt { margin: 0; font-size: 13px; line-height: 1.45; color: var(--text); }
-      .sceneTransition { margin-top: 8px; color: var(--muted); font-size: 12px; }
-      .status {
-        border-radius: 16px;
-        border: 1px dashed var(--line);
-        padding: 12px 14px;
-        background: rgba(255,255,255,0.24);
-        color: var(--muted);
-      }
-      .error {
-        color: #7b1f1f;
-        border-color: rgba(123,31,31,0.2);
-        background: rgba(123,31,31,0.08);
-      }
-      .finePrint { font-size: 12px; color: var(--muted); }
-      @media (max-width: 720px) {
-        body { padding: 12px; }
-        .title { font-size: 24px; }
-        .variantTitle { font-size: 19px; }
-        .variantHead, .sceneHead { flex-direction: column; align-items: start; }
-      }
-    </style>
-  </head>
-  <body>
-    <div id="app" class="shell"></div>
-    <script>
-      const root = document.getElementById("app");
-      let lastOutput = null;
-      let busyMessage = "";
-      let errorMessage = "";
+function normalizeVariant(variantValue: unknown, index: number): PlanVariant {
+  const variant = asRecord(variantValue);
+  const scenes = asArray(variant.scenes).map((scene, sceneIndex) =>
+    normalizeScene(scene, sceneIndex),
+  );
 
-      function api() {
-        return window.openai || {};
-      }
+  return {
+    index,
+    label:
+      asString(variant.title) ||
+      asString(variant.label) ||
+      asString(variant.name) ||
+      `Variant ${index + 1}`,
+    summary:
+      asString(variant.summary) ||
+      asString(variant.description) ||
+      asString(variant.logline) ||
+      null,
+    durationS:
+      coerceNumber(variant.duration_s) ??
+      coerceNumber(variant.duration) ??
+      null,
+    scenes,
+  };
+}
 
-      function setTheme() {
-        document.documentElement.dataset.theme = api().theme || "light";
-      }
+function normalizePlanPreview(
+  projectId: string,
+  projectName: string,
+  mode: string,
+  analysisValue: unknown,
+  planValue: unknown,
+): PlanPreviewOutput {
+  const plan = asRecord(planValue);
+  const variants = asArray(plan.variants).map((variant, index) =>
+    normalizeVariant(variant, index),
+  );
 
-      function escapeHtml(value) {
-        const node = document.createElement("div");
-        node.textContent = String(value ?? "");
-        return node.innerHTML;
-      }
+  return {
+    type: "plan-preview",
+    projectId,
+    projectName,
+    mode,
+    planSource: asString(plan.source) || null,
+    selectedVariantIndex: 0,
+    analysisSummary: summarizeAnalysis(analysisValue),
+    variants,
+  };
+}
 
-      function fmtSeconds(value) {
-        const total = Number(value || 0);
-        if (!Number.isFinite(total) || total <= 0) return "0:00";
-        const mins = Math.floor(total / 60);
-        const secs = Math.round(total % 60).toString().padStart(2, "0");
-        return mins + ":" + secs;
-      }
+function describeSearchResults(results: ProjectSearchResult[]): string {
+  if (!results.length) {
+    return "No EDMG Studio projects matched the search.";
+  }
+  return results
+    .map((project) => `- ${project.name} (${project.id})`)
+    .join("\n");
+}
 
-      function extractText(content) {
-        return Array.isArray(content)
-          ? content.map(function (item) { return item && item.text ? String(item.text) : ""; }).filter(Boolean).join(" ")
-          : "";
-      }
-
-      function renderScene(scene) {
-        const transition = scene.transition
-          ? '<div class="sceneTransition"><strong>Transition:</strong> ' + escapeHtml(scene.transition) + '</div>'
-          : "";
-        return [
-          '<article class="scene">',
-          '  <div class="sceneHead">',
-          '    <div>',
-          '      <h4 class="sceneName">' + escapeHtml(scene.name) + '</h4>',
-          '      <div class="sceneMeta">Scene ' + escapeHtml(scene.index + 1) + ' · ' + escapeHtml(fmtSeconds(scene.startS)) + ' → ' + escapeHtml(fmtSeconds(scene.endS)) + '</div>',
-          '    </div>',
-          '  </div>',
-          '  <p class="scenePrompt">' + escapeHtml(scene.promptSnippet || 'No prompt snippet available.') + '</p>',
-          transition,
-          '</article>'
-        ].join("\n");
-      }
-
-      function renderVariant(projectId, variant) {
-        const scenes = Array.isArray(variant.scenes) ? variant.scenes.map(renderScene).join("\n") : "";
-        return [
-          '<section class="variant">',
-          '  <div class="variantHead">',
-          '    <div>',
-          '      <h3 class="variantTitle">' + escapeHtml(variant.name) + '</h3>',
-          '      <div class="variantSub">' + escapeHtml(String(variant.sceneCount || 0)) + ' scenes · approx ' + escapeHtml(fmtSeconds(variant.durationS)) + '</div>',
-          '    </div>',
-          '    <div class="variantActions">',
-          '      <button class="button buttonPrimary" data-action="apply" data-project-id="' + escapeHtml(projectId) + '" data-variant-index="' + escapeHtml(variant.index) + '" data-overwrite="false">Apply to timeline</button>',
-          '      <button class="button" data-action="apply" data-project-id="' + escapeHtml(projectId) + '" data-variant-index="' + escapeHtml(variant.index) + '" data-overwrite="true">Apply with overwrite</button>',
-          '      <button class="button buttonGhost" data-action="ask" data-project-id="' + escapeHtml(projectId) + '" data-variant-index="' + escapeHtml(variant.index) + '">Ask ChatGPT for notes</button>',
-          '    </div>',
-          '  </div>',
-          '  <div class="sceneList">' + scenes + '</div>',
-          '</section>'
-        ].join("\n");
-      }
-
-      function renderPlanPreview(output) {
-        const variants = Array.isArray(output.variants) ? output.variants : [];
-        const body = variants.length
-          ? variants.map(function (variant) { return renderVariant(output.projectId, variant); }).join("\n")
-          : '<div class="status">No variants were returned by the EDMG backend.</div>';
-        return [
-          '<section class="hero">',
-          '  <div class="eyebrow">EDMG Director</div>',
-          '  <h1 class="title">' + escapeHtml(output.projectName || output.projectId || 'Project review') + '</h1>',
-          '  <p class="summary">Review the generated EDMG storyboard variants below, then apply the best one to the timeline.</p>',
-          '  <div class="metaRow">',
-          '    <span class="badge badgeAccent">Plan mode: ' + escapeHtml(output.planMode || 'auto') + '</span>',
-          '    <span class="badge">Generated: ' + escapeHtml(String(output.generatedAt || '')) + '</span>',
-          '    <span class="badge badgeGood">Variants: ' + escapeHtml(String(variants.length)) + '</span>',
-          '  </div>',
-          '  <div class="buttonRow">',
-          '    <button class="button" data-action="expand">Open larger</button>',
-          '  </div>',
-          '</section>',
-          '<div class="grid">' + body + '</div>',
-          '<div class="finePrint">This widget is intentionally thin. The EDMG backend remains the source of truth for analysis, plan storage, and timeline state.</div>'
-        ].join("\n");
-      }
-
-      function renderActionResult(output) {
-        return [
-          '<section class="hero">',
-          '  <div class="eyebrow">EDMG Director</div>',
-          '  <h1 class="title">' + escapeHtml(output.title || 'Action complete') + '</h1>',
-          '  <p class="summary">' + escapeHtml(output.message || 'The requested EDMG action completed.') + '</p>',
-          '  <div class="metaRow">',
-          '    <span class="badge badgeGood">Project: ' + escapeHtml(output.projectName || output.projectId || '') + '</span>',
-          '    <span class="badge">Variant: ' + escapeHtml(String((output.variantIndex ?? 0) + 1)) + '</span>',
-          output.overwrite ? '    <span class="badge badgeAccent">Overwrite applied</span>' : '',
-          '  </div>',
-          '  <div class="buttonRow">',
-          '    <button class="button buttonPrimary" data-action="ask-next" data-project-id="' + escapeHtml(output.projectId || '') + '" data-variant-index="' + escapeHtml(output.variantIndex ?? 0) + '">Ask ChatGPT for next EDMG step</button>',
-          '    <button class="button" data-action="expand">Open larger</button>',
-          '  </div>',
-          '</section>'
-        ].join("\n");
-      }
-
-      function renderFallback(output) {
-        return [
-          '<section class="hero">',
-          '  <div class="eyebrow">EDMG Director</div>',
-          '  <h1 class="title">Tool output</h1>',
-          '  <p class="summary">This view only has a custom layout for plan previews and apply confirmations.</p>',
-          '</section>',
-          '<pre class="status">' + escapeHtml(JSON.stringify(output || {}, null, 2)) + '</pre>'
-        ].join("\n");
-      }
-
-      function render(output) {
-        setTheme();
-        lastOutput = output || {};
-        let markup;
-        if (lastOutput && lastOutput.kind === "planPreview") {
-          markup = renderPlanPreview(lastOutput);
-        } else if (lastOutput && lastOutput.kind === "actionResult") {
-          markup = renderActionResult(lastOutput);
-        } else {
-          markup = renderFallback(lastOutput);
-        }
-
-        const status = busyMessage
-          ? '<div class="status">' + escapeHtml(busyMessage) + '</div>'
-          : errorMessage
-            ? '<div class="status error">' + escapeHtml(errorMessage) + '</div>'
-            : '';
-
-        root.innerHTML = markup + status;
-      }
-
-      async function applyPlanVariant(projectId, variantIndex, overwrite) {
-        errorMessage = "";
-        busyMessage = "Applying the selected EDMG variant to the timeline…";
-        render(lastOutput);
-        try {
-          if (!api().callTool) throw new Error("This host does not expose window.openai.callTool.");
-          const result = await api().callTool("apply_plan_variant", {
-            projectId: projectId,
-            variantIndex: Number(variantIndex),
-            overwrite: Boolean(overwrite),
-          });
-          if (result && result.isError) {
-            throw new Error(extractText(result.content) || "The EDMG apply tool reported an error.");
-          }
-          busyMessage = "";
-          errorMessage = "";
-          render(result && result.structuredContent ? result.structuredContent : {
-            kind: "actionResult",
-            title: "Timeline updated",
-            message: extractText(result && result.content) || "The EDMG timeline was updated.",
-            projectId: projectId,
-            variantIndex: Number(variantIndex),
-            overwrite: Boolean(overwrite)
-          });
-        } catch (error) {
-          busyMessage = "";
-          errorMessage = error instanceof Error ? error.message : String(error);
-          render(lastOutput);
-        }
-      }
-
-      async function askForNotes(projectId, variantIndex) {
-        if (!api().sendFollowUpMessage) return;
-        await api().sendFollowUpMessage({
-          role: "user",
-          content: [{
-            type: "text",
-            text: "Summarize the EDMG storyboard differences for project " + projectId + " and focus on variant " + (Number(variantIndex) + 1) + "."
-          }]
-        });
-      }
-
-      async function askForNextStep(projectId, variantIndex) {
-        if (!api().sendFollowUpMessage) return;
-        await api().sendFollowUpMessage({
-          role: "user",
-          content: [{
-            type: "text",
-            text: "The EDMG timeline now has variant " + (Number(variantIndex) + 1) + " applied for project " + projectId + ". Tell me the best next step inside Studio."
-          }]
-        });
-      }
-
-      async function expandWidget() {
-        if (!api().requestDisplayMode) return;
-        await api().requestDisplayMode({ mode: "fullscreen" });
-      }
-
-      root.addEventListener("click", async function (event) {
-        const target = event.target instanceof Element ? event.target.closest("button[data-action]") : null;
-        if (!target) return;
-        const action = target.getAttribute("data-action");
-        if (action === "apply") {
-          await applyPlanVariant(
-            target.getAttribute("data-project-id") || "",
-            Number(target.getAttribute("data-variant-index") || "0"),
-            target.getAttribute("data-overwrite") === "true"
-          );
-          return;
-        }
-        if (action === "ask") {
-          await askForNotes(
-            target.getAttribute("data-project-id") || "",
-            Number(target.getAttribute("data-variant-index") || "0")
-          );
-          return;
-        }
-        if (action === "ask-next") {
-          await askForNextStep(
-            target.getAttribute("data-project-id") || "",
-            Number(target.getAttribute("data-variant-index") || "0")
-          );
-          return;
-        }
-        if (action === "expand") {
-          await expandWidget();
-        }
-      });
-
-      window.addEventListener(
-        "openai:set_globals",
-        function (event) {
-          render(event && event.detail && event.detail.globals ? event.detail.globals.toolOutput : api().toolOutput);
-        },
-        { passive: true }
-      );
-
-      render(api().toolOutput || {});
-    </script>
-  </body>
-</html>`;
+function textContent(text: string) {
+  return {
+    type: "text" as const,
+    text,
+  };
+}
 
 function createServer(): McpServer {
   const server = new McpServer({
-    name: "edmg-director",
+    name: APP_NAME,
     version: SERVER_VERSION,
   });
 
   registerAppResource(
     server,
-    "edmg-director-review-board",
+    "EDMG Director Review Board",
     REVIEW_WIDGET_URI,
     {
       mimeType: RESOURCE_MIME_TYPE,
-      description: "Review EDMG storyboard variants and apply one to the timeline.",
+      description: REVIEW_WIDGET_DESCRIPTION,
     },
     async () => ({
       contents: [
         {
           uri: REVIEW_WIDGET_URI,
           mimeType: RESOURCE_MIME_TYPE,
-          text: REVIEW_WIDGET_HTML,
+          text: materializeWidgetHtml("review-board.html"),
           _meta: {
             ui: {
               prefersBorder: true,
               csp: {
-                connectDomains: [],
-                resourceDomains: [],
+                connectDomains: [EDMG_BASE_URL],
+                resourceDomains: [publicBaseUrl()],
               },
             },
-            "openai/widgetDescription": "Review EDMG storyboard variants and apply one to the timeline.",
+            "openai/widgetDescription": REVIEW_WIDGET_DESCRIPTION,
+            "openai/widgetPrefersBorder": true,
           },
         },
       ],
-    })
+    }),
   );
 
   registerAppTool(
@@ -675,76 +430,103 @@ function createServer(): McpServer {
     {
       title: "Search EDMG projects",
       description:
-        "Use this when you need to find an EDMG Studio project by name before inspecting or changing it.",
+        "Use this when you need to find an EDMG Studio project by name or ID before inspecting or planning it.",
       inputSchema: {
-        query: z.string().optional().describe("Optional case-insensitive project name filter."),
-        limit: z.number().int().min(1).max(20).optional().describe("Maximum number of projects to return."),
+        query: z.string().optional(),
+        limit: z.number().int().min(1).max(20).optional(),
       },
       annotations: {
         readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
       },
       _meta: {
-        "openai/toolInvocation/invoking": "Searching EDMG projects…",
-        "openai/toolInvocation/invoked": "EDMG projects ready.",
+        "openai/toolInvocation/invoking": "Searching EDMG projects",
+        "openai/toolInvocation/invoked": "Project search ready",
       },
     },
-    async ({ query, limit }) => {
-      const projects = await fetchProjects(query, limit ?? 8);
-      const summarized = projects.map(summarizeProjectRecord);
+    async (input: AnyRecord) => {
+      const query = asString(input.query).trim().toLowerCase();
+      const limit = Math.min(
+        Math.max(Math.trunc(coerceNumber(input.limit) ?? 8), 1),
+        20,
+      );
+
+      const payload = asRecord(await requestJson("/v1/projects"));
+      const projects = asArray(payload.projects)
+        .map((entry) => asRecord(entry))
+        .map<ProjectSearchResult>((project) => ({
+          id: asString(project.id),
+          name: asString(project.name) || asString(project.id),
+          createdAt: coerceNumber(project.created_at) ?? coerceNumber(project.createdAt),
+          updatedAt: coerceNumber(project.updated_at) ?? coerceNumber(project.updatedAt),
+        }))
+        .filter((project) => {
+          if (!query) {
+            return true;
+          }
+          return (
+            project.id.toLowerCase().includes(query) ||
+            project.name.toLowerCase().includes(query)
+          );
+        })
+        .slice(0, limit);
+
       return {
+        content: [textContent(describeSearchResults(projects))],
         structuredContent: {
-          kind: "searchResults",
-          backendUrl: backendBaseUrl(),
-          query: String(query ?? ""),
-          projects: summarized,
+          type: "project-search-results",
+          query,
+          results: projects,
         },
-        content: [
-          {
-            type: "text",
-            text: summarized.length
-              ? `Found ${summarized.length} EDMG Studio projects${query ? ` matching “${query}”` : ""}.`
-              : `No EDMG Studio projects matched${query ? ` “${query}”` : " the current filter"}.`,
-          },
-        ],
       };
-    }
+    },
   );
 
   registerAppTool(
     server,
     "fetch",
     {
-      title: "Fetch EDMG project snapshot",
+      title: "Fetch EDMG project",
       description:
-        "Use this when you already know the project id and need its latest analysis, plan, and handoff status.",
+        "Use this when you already know the EDMG project ID and need its current analysis, plan, and timeline context.",
       inputSchema: {
-        projectId: z.string().min(1).describe("Exact EDMG Studio project id."),
+        projectId: z.string().min(1),
       },
       annotations: {
         readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
       },
       _meta: {
-        "openai/toolInvocation/invoking": "Fetching EDMG project…",
-        "openai/toolInvocation/invoked": "EDMG project snapshot ready.",
+        "openai/toolInvocation/invoking": "Loading EDMG project",
+        "openai/toolInvocation/invoked": "Project loaded",
       },
     },
-    async ({ projectId }) => {
-      const project = await fetchProject(projectId);
-      const snapshot = summarizeProjectSnapshot(project);
-      return {
-        structuredContent: snapshot,
-        content: [
-          {
-            type: "text",
-            text: `Fetched EDMG Studio snapshot for ${snapshot.project.name}.`,
-          },
-        ],
+    async (input: AnyRecord) => {
+      const projectId = asString(input.projectId).trim();
+      const payload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+      );
+      const project = asRecord(payload.project);
+      const meta = asRecord(project.meta);
+      const variants = asArray(asRecord(meta.last_plan).variants);
+
+      const structuredContent: ProjectFetchOutput = {
+        type: "project-detail",
+        projectId,
+        projectName: asString(project.name) || projectId,
+        analysisSummary: summarizeAnalysis(meta.analysis),
+        timelineSummary: summarizeTimeline(meta.timeline),
+        variantCount: variants.length,
       };
-    }
+
+      return {
+        content: [
+          textContent(
+            `${structuredContent.projectName} has ${structuredContent.variantCount} stored plan ` +
+              `variant${structuredContent.variantCount === 1 ? "" : "s"}.`,
+          ),
+        ],
+        structuredContent,
+      };
+    },
   );
 
   registerAppTool(
@@ -753,37 +535,40 @@ function createServer(): McpServer {
     {
       title: "Analyze EDMG project audio",
       description:
-        "Use this when a project has audio uploaded but no current analysis, or when the user wants fresh beat/transcript features before planning.",
+        "Use this when a project already has audio attached and you want the EDMG backend to extract fresh music-analysis context before planning.",
       inputSchema: {
-        projectId: z.string().min(1).describe("Exact EDMG Studio project id."),
-      },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        openWorldHint: false,
+        projectId: z.string().min(1),
       },
       _meta: {
-        "openai/toolInvocation/invoking": "Running EDMG audio analysis…",
-        "openai/toolInvocation/invoked": "EDMG audio analysis complete.",
+        "openai/toolInvocation/invoking": "Analyzing project audio",
+        "openai/toolInvocation/invoked": "Audio analysis ready",
       },
     },
-    async ({ projectId }) => {
-      const result = await postJson<any>(`/v1/projects/${encodeURIComponent(projectId)}/analyze_audio`, {});
-      const analysis = analysisSummary(result.analysis ?? asObject(result.project).meta?.analysis);
+    async (input: AnyRecord) => {
+      const projectId = asString(input.projectId).trim();
+      const payload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}/analyze_audio`, {
+          method: "POST",
+        }),
+      );
+      const analysisSummary = summarizeAnalysis(payload.analysis);
+
       return {
-        structuredContent: {
-          kind: "analysisResult",
-          projectId,
-          analysis,
-        },
         content: [
-          {
-            type: "text",
-            text: `EDMG audio analysis is ready. ${analysis.summary}`,
-          },
+          textContent(
+            analysisSummary
+              ? `Analysis ready for ${projectId}: ${analysisSummary.bpm ?? "?"} BPM, ` +
+                  `${analysisSummary.durationS ?? "?"} seconds.`
+              : `Analysis completed for ${projectId}.`,
+          ),
         ],
+        structuredContent: {
+          type: "audio-analysis",
+          projectId,
+          analysisSummary,
+        },
       };
-    }
+    },
   );
 
   registerAppTool(
@@ -792,64 +577,75 @@ function createServer(): McpServer {
     {
       title: "Generate EDMG plan preview",
       description:
-        "Use this when the user wants EDMG Studio to generate or refresh storyboard variants and review them in ChatGPT before applying one to the timeline.",
+        "Use this when you want EDMG Studio to generate storyboard variants and review them in an interactive board before writing anything into the timeline.",
       inputSchema: {
-        projectId: z.string().min(1).describe("Exact EDMG Studio project id."),
-        planMode: z
-          .enum(["auto", "ai", "local"])
-          .optional()
-          .describe("Planner mode forwarded to the EDMG backend."),
-        numVariants: z.number().int().min(1).max(6).optional().describe("How many plan variants EDMG should generate."),
-        maxScenes: z.number().int().min(1).max(16).optional().describe("Maximum scene count per generated variant."),
-        title: z.string().optional().describe("Optional plan title override."),
-        stylePrefs: z.string().optional().describe("Optional EDMG style preference string."),
-      },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        openWorldHint: false,
+        projectId: z.string().min(1),
+        mode: z.enum(["auto", "ai", "local", "edmg_core"]).optional(),
+        title: z.string().optional(),
+        userNotes: z.string().optional(),
+        stylePrefs: z.string().optional(),
+        numVariants: z.number().int().min(1).max(10).optional(),
+        maxScenes: z.number().int().min(1).max(64).optional(),
       },
       _meta: {
-        ui: { resourceUri: REVIEW_WIDGET_URI },
-        "openai/outputTemplate": REVIEW_WIDGET_URI,
-        "openai/toolInvocation/invoking": "Generating EDMG storyboard variants…",
-        "openai/toolInvocation/invoked": "EDMG storyboard variants ready.",
+        ui: {
+          resourceUri: REVIEW_WIDGET_URI,
+        },
+        "openai/toolInvocation/invoking": "Generating EDMG variants",
+        "openai/toolInvocation/invoked": "Review board ready",
       },
     },
-    async ({ projectId, planMode, numVariants, maxScenes, title, stylePrefs }) => {
-      const project = await fetchProject(projectId);
-      const requestBody = {
-        title: trimText(title, 200) || trimText(project.name, 200) || "Untitled",
-        style_prefs:
-          trimText(stylePrefs, 260) ||
-          "cinematic, coherent subject, high detail, consistent style",
-        num_variants: numVariants ?? 3,
-        max_scenes: maxScenes ?? 8,
-      };
-      const mode = planMode ?? "auto";
-      const plan = await postJson<any>(
-        `/v1/projects/${encodeURIComponent(projectId)}/plan?mode=${encodeURIComponent(mode)}`,
-        requestBody
+    async (input: AnyRecord) => {
+      const projectId = asString(input.projectId).trim();
+      const mode = asString(input.mode).trim() || "auto";
+
+      const projectPayload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
       );
-      const variants = summarizePlanVariants(plan);
-      const output = {
-        kind: "planPreview",
+      const project = asRecord(projectPayload.project);
+      const meta = asRecord(project.meta);
+
+      const requestBody = {
+        title: asString(input.title) || undefined,
+        user_notes: asString(input.userNotes) || undefined,
+        style_prefs: asString(input.stylePrefs) || undefined,
+        num_variants: Math.min(
+          Math.max(Math.trunc(coerceNumber(input.numVariants) ?? 3), 1),
+          10,
+        ),
+        max_scenes: Math.min(
+          Math.max(Math.trunc(coerceNumber(input.maxScenes) ?? 12), 1),
+          64,
+        ),
+      };
+
+      const plan = await requestJson(
+        `/v1/projects/${encodeURIComponent(projectId)}/plan?mode=${encodeURIComponent(mode)}`,
+        {
+          method: "POST",
+          body: JSON.stringify(requestBody),
+        },
+      );
+
+      const preview = normalizePlanPreview(
         projectId,
-        projectName: trimText(project.name, 120) || projectId,
-        planMode: mode,
-        generatedAt: new Date().toISOString(),
-        variants,
-      };
+        asString(project.name) || projectId,
+        mode,
+        meta.analysis,
+        plan,
+      );
+
       return {
-        structuredContent: output,
         content: [
-          {
-            type: "text",
-            text: `Prepared ${variants.length} EDMG storyboard variants for ${output.projectName}. Review them in the widget and apply the best one to the timeline when ready.`,
-          },
+          textContent(
+            `Prepared ${preview.variants.length} storyboard ` +
+              `variant${preview.variants.length === 1 ? "" : "s"} for ${preview.projectName}. ` +
+              "Review them in the board and apply the selected variant when ready.",
+          ),
         ],
+        structuredContent: preview,
       };
-    }
+    },
   );
 
   registerAppTool(
@@ -858,103 +654,291 @@ function createServer(): McpServer {
     {
       title: "Apply EDMG plan variant",
       description:
-        "Use this when the user has already reviewed plan variants and wants one applied to the EDMG Studio timeline.",
+        "Use this when a reviewer has chosen a storyboard variant and wants that variant written into the EDMG Studio timeline.",
       inputSchema: {
-        projectId: z.string().min(1).describe("Exact EDMG Studio project id."),
-        variantIndex: z.number().int().min(0).describe("Zero-based index of the EDMG plan variant to apply."),
-        overwrite: z.boolean().optional().describe("Whether to overwrite the current timeline instead of merging into it."),
-      },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        openWorldHint: false,
+        projectId: z.string().min(1),
+        variantIndex: z.number().int().min(0),
+        overwrite: z.boolean().optional(),
       },
       _meta: {
-        ui: { resourceUri: REVIEW_WIDGET_URI },
-        "openai/outputTemplate": REVIEW_WIDGET_URI,
-        "openai/toolInvocation/invoking": "Applying EDMG plan to timeline…",
-        "openai/toolInvocation/invoked": "EDMG timeline updated.",
+        ui: {
+          visibility: ["app"],
+        },
+        "openai/toolInvocation/invoking": "Applying storyboard variant",
+        "openai/toolInvocation/invoked": "Storyboard variant applied",
       },
     },
-    async ({ projectId, variantIndex, overwrite }) => {
-      await postJson<any>(`/v1/projects/${encodeURIComponent(projectId)}/timeline/apply_plan`, {
-        variant_index: variantIndex,
-        overwrite: overwrite ?? false,
-      });
-      const project = await fetchProject(projectId);
-      const variants = summarizePlanVariants(asObject(asObject(project).meta).last_plan);
-      const chosenVariant = variants[variantIndex];
-      const message = chosenVariant
-        ? `Applied ${chosenVariant.name} to the EDMG timeline${overwrite ? " with overwrite enabled" : ""}.`
-        : `Applied EDMG variant ${variantIndex + 1} to the timeline${overwrite ? " with overwrite enabled" : ""}.`;
-      return {
-        structuredContent: {
-          kind: "actionResult",
-          action: "applyPlanVariant",
-          title: "Timeline updated",
-          message,
-          projectId,
-          projectName: trimText(project.name, 120) || projectId,
-          variantIndex,
-          overwrite: overwrite ?? false,
-        },
-        content: [
-          {
-            type: "text",
-            text: message,
-          },
-        ],
+    async (input: AnyRecord) => {
+      const projectId = asString(input.projectId).trim();
+      const variantIndex = Math.max(Math.trunc(coerceNumber(input.variantIndex) ?? 0), 0);
+      const overwrite = input.overwrite === undefined ? true : Boolean(input.overwrite);
+
+      const projectPayload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+      );
+      const project = asRecord(projectPayload.project);
+
+      const payload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}/timeline/apply_plan`, {
+          method: "POST",
+          body: JSON.stringify({
+            variant_index: variantIndex,
+            overwrite,
+          }),
+        }),
+      );
+
+      const structuredContent: ActionResultOutput = {
+        type: "action-result",
+        projectId,
+        projectName: asString(project.name) || projectId,
+        variantIndex,
+        overwrite,
+        applied: payload.ok === true,
+        message:
+          payload.ok === true
+            ? `Applied variant ${variantIndex + 1} to ${asString(project.name) || projectId}.`
+            : `Variant ${variantIndex + 1} could not be applied.`,
+        timelineSummary: summarizeTimeline(payload.timeline),
       };
-    }
+
+      return {
+        content: [textContent(structuredContent.message)],
+        structuredContent,
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "import_planner_lab_payload",
+    {
+      title: "Import planner payload into EDMG",
+      description:
+        "Use this when you already have EDMG-style planner analysis, plan, and settings payloads and want to sync them into a Studio project.",
+      inputSchema: {
+        projectId: z.string().min(1),
+        analysis: jsonObjectSchema.optional(),
+        plan: jsonObjectSchema,
+        settings: jsonObjectSchema.optional(),
+        applyTimeline: z.boolean().optional(),
+        overwriteTimeline: z.boolean().optional(),
+      },
+      _meta: {
+        "openai/toolInvocation/invoking": "Importing planner payload",
+        "openai/toolInvocation/invoked": "Planner payload imported",
+      },
+    },
+    async (input: AnyRecord) => {
+      const projectId = asString(input.projectId).trim();
+      const applyTimeline = input.applyTimeline === undefined ? true : Boolean(input.applyTimeline);
+      const overwriteTimeline =
+        input.overwriteTimeline === undefined ? true : Boolean(input.overwriteTimeline);
+
+      const projectPayload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+      );
+      const project = asRecord(projectPayload.project);
+
+      const payload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}/planner_lab/import`, {
+          method: "POST",
+          body: JSON.stringify({
+            analysis: asRecord(input.analysis),
+            plan: asRecord(input.plan),
+            settings: asRecord(input.settings),
+            apply_timeline: applyTimeline,
+            overwrite_timeline: overwriteTimeline,
+          }),
+        }),
+      );
+
+      const variantCount = asArray(asRecord(payload.plan).variants).length;
+      const structuredContent: PlannerImportResultOutput = {
+        type: "planner-import-result",
+        projectId,
+        projectName: asString(project.name) || projectId,
+        variantCount,
+        appliedTimeline: payload.timeline !== null && payload.timeline !== undefined,
+        timelineSummary: summarizeTimeline(payload.timeline),
+        message:
+          `Imported planner payload into ${asString(project.name) || projectId}` +
+          (applyTimeline ? " and refreshed the Studio timeline." : "."),
+      };
+
+      return {
+        content: [textContent(structuredContent.message)],
+        structuredContent,
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "apply_reactive_handoff",
+    {
+      title: "Apply reactive handoff into EDMG",
+      description:
+        "Use this when you have reactive cue events, schedules, and handoff metadata that should be merged into an EDMG Studio timeline.",
+      inputSchema: {
+        projectId: z.string().min(1),
+        metadata: jsonObjectSchema.optional(),
+        keyframes: jsonObjectArraySchema.optional(),
+        beatMarkers: jsonObjectArraySchema.optional(),
+        cueEvents: jsonObjectArraySchema.optional(),
+        sections: jsonObjectArraySchema.optional(),
+        repairSuggestions: jsonObjectArraySchema.optional(),
+        schedules: jsonObjectSchema.optional(),
+        handoffManifest: jsonObjectSchema.optional(),
+        overwriteMotionTrack: z.boolean().optional(),
+        overwriteCamera: z.boolean().optional(),
+      },
+      _meta: {
+        "openai/toolInvocation/invoking": "Applying reactive handoff",
+        "openai/toolInvocation/invoked": "Reactive handoff applied",
+      },
+    },
+    async (input: AnyRecord) => {
+      const projectId = asString(input.projectId).trim();
+      const overwriteMotionTrack =
+        input.overwriteMotionTrack === undefined ? true : Boolean(input.overwriteMotionTrack);
+      const overwriteCamera =
+        input.overwriteCamera === undefined ? true : Boolean(input.overwriteCamera);
+
+      const projectPayload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+      );
+      const project = asRecord(projectPayload.project);
+
+      const keyframes = asArray(input.keyframes).map((item) => asRecord(item));
+      const cueEvents = asArray(input.cueEvents).map((item) => asRecord(item));
+      const sections = asArray(input.sections).map((item) => asRecord(item));
+
+      const payload = asRecord(
+        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}/reactive_lab/apply`, {
+          method: "POST",
+          body: JSON.stringify({
+            metadata: asRecord(input.metadata),
+            keyframes,
+            beat_markers: asArray(input.beatMarkers).map((item) => asRecord(item)),
+            cue_events: cueEvents,
+            sections,
+            repair_suggestions: asArray(input.repairSuggestions).map((item) => asRecord(item)),
+            schedules: asRecord(input.schedules),
+            handoff_manifest: asRecord(input.handoffManifest),
+            overwrite_motion_track: overwriteMotionTrack,
+            overwrite_camera: overwriteCamera,
+          }),
+        }),
+      );
+
+      const structuredContent: ReactiveApplyResultOutput = {
+        type: "reactive-apply-result",
+        projectId,
+        projectName: asString(project.name) || projectId,
+        cueEventCount: cueEvents.length,
+        keyframeCount: keyframes.length,
+        sectionCount: sections.length,
+        timelineSummary: summarizeTimeline(payload.timeline),
+        message:
+          `Applied reactive handoff into ${asString(project.name) || projectId} ` +
+          `with ${cueEvents.length} cue event${cueEvents.length === 1 ? "" : "s"}.`,
+      };
+
+      return {
+        content: [textContent(structuredContent.message)],
+        structuredContent,
+      };
+    },
   );
 
   return server;
 }
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: "1mb" }));
-
-app.get("/", (_req, res) => {
-  res.json({
-    ok: true,
-    name: "edmg-director",
-    version: SERVER_VERSION,
-    backendUrl: backendBaseUrl(),
-    mcpPath: "/mcp",
+async function startStreamableHttpServer(): Promise<void> {
+  const app = createMcpExpressApp({
+    host: BIND_HOST,
+    allowedHosts: allowedHosts(),
   });
-});
+  app.use(
+    cors({
+      origin: "*",
+      exposedHeaders: ["Mcp-Session-Id"],
+    }),
+  );
+  app.use("/assets", express.static(ASSETS_DIR));
 
-app.all("/mcp", async (req, res) => {
-  const server = createServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
+  app.get("/", (_req, res) => {
+    res.json({
+      ok: true,
+      name: APP_NAME,
+      version: SERVER_VERSION,
+      host: BIND_HOST,
+      mcpPath: "/mcp",
+      assetsPath: "/assets",
+      publicBaseUrl: publicBaseUrl(),
+      edmgBaseUrl: EDMG_BASE_URL,
+    });
   });
 
-  res.on("close", () => {
-    transport.close().catch(() => {});
-    server.close().catch(() => {});
-  });
+  app.all("/mcp", async (req: Request, res: Response) => {
+    const server = createServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
 
-  try {
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (error) {
-    console.error("EDMG Director MCP error:", error);
-    if (!res.headersSent) {
-      res.status(500).json({
-        jsonrpc: "2.0",
-        error: {
-          code: -32603,
-          message: error instanceof Error ? error.message : "Internal server error",
-        },
-        id: null,
-      });
+    res.on("close", () => {
+      transport.close().catch(() => {});
+      server.close().catch(() => {});
+    });
+
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error("MCP error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32603,
+            message: error instanceof Error ? error.message : "Internal server error",
+          },
+          id: null,
+        });
+      }
     }
-  }
-});
+  });
 
-app.listen(PORT, () => {
-  console.log(`EDMG Director listening on http://localhost:${PORT}/mcp`);
-  console.log(`Using EDMG backend ${backendBaseUrl()}`);
+  const httpServer = app.listen(PORT, BIND_HOST, (error?: Error) => {
+    if (error) {
+      console.error("Failed to start server:", error);
+      process.exit(1);
+    }
+    console.log(`EDMG Director listening on ${publicBaseUrl()}`);
+  });
+
+  const shutdown = () => {
+    httpServer.close(() => process.exit(0));
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+async function startStdioServer(): Promise<void> {
+  await createServer().connect(new StdioServerTransport());
+}
+
+async function main(): Promise<void> {
+  if (process.argv.includes("--stdio")) {
+    await startStdioServer();
+    return;
+  }
+  await startStreamableHttpServer();
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
 });
