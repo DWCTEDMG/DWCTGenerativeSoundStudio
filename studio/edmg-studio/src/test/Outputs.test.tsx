@@ -66,6 +66,7 @@ describe("Outputs page", () => {
     renderWithStudio(<Outputs backendUrl="http://127.0.0.1:7863" config={null} onNavigate={onNavigate} />);
 
     expect(await screen.findByRole("heading", { name: "Outputs" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Outputs layout profile" })).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Open Render Queue" }));
     expect(onNavigate).toHaveBeenCalledWith("queue");
     expect(await screen.findByText(/Generation metadata/)).toBeTruthy();
