@@ -446,7 +446,7 @@ export default function Models(props: PageProps) {
     ],
     [],
   );
-  const { layoutState, visibleOrder, movePanel, updateHidden, resetLayout } =
+  const { profileOptions, activeProfile, setActiveProfile, layoutState, visibleOrder, movePanel, updateHidden, resetLayout } =
     useStudioPageLayout<ModelsPanelId>(
       "models",
       panelDefinitions.map((panel) => panel.id),
@@ -779,6 +779,9 @@ export default function Models(props: PageProps) {
         title="Model Manager layout"
         description="Reorder or hide major model-management sections without changing install queues, runtime choices, or the catalog itself."
         items={panelControlItems}
+        profileOptions={profileOptions}
+        activeProfile={activeProfile}
+        onSelectProfile={setActiveProfile}
         onMove={movePanel}
         onToggleHidden={updateHidden}
         onReset={resetLayout}

@@ -30,6 +30,19 @@ This plan is additive only. It does not replace:
 5. Runtime integrations remain optional providers or bridges.
 6. Studio Forge should preview and advise before it executes.
 
+## Current Progress
+
+The current frontend implementation already includes:
+
+- a global Studio theme provider
+- local per-page layout persistence
+- shared layout customization controls
+- local layout profile slots (`Personal`, `Focus`, `Technical`, `Presentation`)
+- modular rollout on `Dashboard`, `Projects`, `Settings`, `Models`, and `Studio Forge`
+
+These changes are frontend-only. They do not alter backend contracts, Setup Wizard flow,
+model installs, render defaults, desktop backend spawning, or packaging behavior.
+
 ## Page Modularity Model
 
 Each customizable page should define a panel registry:

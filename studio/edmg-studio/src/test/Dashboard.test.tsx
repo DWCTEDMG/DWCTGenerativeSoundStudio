@@ -25,6 +25,8 @@ describe("Dashboard page", () => {
     const layoutDetails = screen.getByText("Dashboard layout").closest("details");
     expect(layoutDetails).toBeTruthy();
     layoutDetails?.setAttribute("open", "");
+    const profileSelect = screen.getByRole("combobox", { name: "Dashboard layout profile" });
+    expect(profileSelect).toBeTruthy();
 
     const workflowControl = screen
       .getByText("Current production flow from project creation through export.")
@@ -37,6 +39,10 @@ describe("Dashboard page", () => {
 
     expect(screen.queryByText("Create a project")).toBeNull();
     expect(localStorage.getItem("edmg_layout_dashboard_v1")).toContain("workflow");
+
+    fireEvent.change(profileSelect, { target: { value: "focus" } });
+    expect(localStorage.getItem("edmg_layout_dashboard_active_profile_v1")).toBe("focus");
+    expect(await screen.findByText("Create a project")).toBeTruthy();
 
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).includes("/health")),

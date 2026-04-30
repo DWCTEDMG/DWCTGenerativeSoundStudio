@@ -524,6 +524,9 @@ export default function Settings(props: PageProps) {
     [],
   );
   const {
+    profileOptions,
+    activeProfile,
+    setActiveProfile,
     layoutState,
     visibleOrder,
     movePanel,
@@ -1072,6 +1075,9 @@ export default function Settings(props: PageProps) {
         title="Settings layout"
         description="Reorder or hide Settings panels for your own workflow. This does not change what any setting saves or how the desktop/backend behaves."
         items={panelControlItems}
+        profileOptions={profileOptions}
+        activeProfile={activeProfile}
+        onSelectProfile={setActiveProfile}
         onMove={movePanel}
         onToggleHidden={updateHidden}
         onReset={resetLayout}

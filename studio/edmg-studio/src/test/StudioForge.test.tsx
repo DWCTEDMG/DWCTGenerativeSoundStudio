@@ -65,9 +65,49 @@ describe("Studio Forge", () => {
 
     expect(await screen.findByRole("heading", { name: /Studio Forge/i })).toBeTruthy();
     expect(screen.getByText(/Read-only preview mode/i)).toBeTruthy();
-    expect(screen.getByText(/Render Queue Dashboard/i)).toBeTruthy();
-    expect(screen.getByText(/Audio -> Analysis -> AI Plan -> Render -> Assemble/i)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Runtime Recommendations/i })).toBeTruthy();
+    expect((await screen.findAllByText(/Ready now/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Render Queue Dashboard/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Audio -> Analysis -> AI Plan -> Render -> Assemble/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/Developer validation commands only/i)).toBeTruthy();
+  });
+
+  it("surfaces setup-needed recommendations when runtime capabilities are missing", async () => {
+    installEdmgBridge();
+    installFetchMock({
+      ...FETCH_FIXTURES,
+      "/v1/setup/status": {
+        ...READY_STATUS,
+        ollama: {
+          ok: false,
+          model_present: false,
+          model: "",
+          url: "http://127.0.0.1:11434",
+        },
+        comfyui: {
+          ok: false,
+          url: "http://127.0.0.1:8188",
+        },
+        ffmpeg: {
+          ok: false,
+          path: "ffmpeg",
+        },
+        edmg: {
+          available: false,
+        },
+      },
+      "/v1/comfyui/capabilities": () => {
+        throw new Error("ComfyUI offline");
+      },
+    });
+
+    renderWithStudio(
+      <StudioForge backendUrl="http://127.0.0.1:7863" config={FETCH_FIXTURES["/v1/config"]} />,
+    );
+
+    expect((await screen.findAllByText(/Setup needed/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Missing required capabilities/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Optional boosts not detected/i)).length).toBeGreaterThan(0);
   });
 
   it("falls back to dashboard when direct page access is disabled", async () => {

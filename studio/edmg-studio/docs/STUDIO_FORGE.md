@@ -21,6 +21,7 @@ VITE_EDMG_ENABLE_STUDIO_FORGE=1
 
 Current features:
 - runtime status overview
+- runtime-aware recommendations
 - template preview
 - workflow recipe preview
 - validation checklist

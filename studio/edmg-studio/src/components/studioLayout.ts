@@ -5,6 +5,14 @@ export type StudioPageLayoutState<PanelId extends string> = {
   hidden: PanelId[];
 };
 
+export type StudioLayoutProfileId = "personal" | "focus" | "technical" | "presentation";
+
+export type StudioLayoutProfileOption<ProfileId extends string = StudioLayoutProfileId> = {
+  id: ProfileId;
+  label: string;
+  description: string;
+};
+
 export type StudioLayoutControlItem<PanelId extends string> = {
   id: PanelId;
   label: string;
@@ -14,8 +22,44 @@ export type StudioLayoutControlItem<PanelId extends string> = {
   canMoveDown: boolean;
 };
 
+export const STUDIO_LAYOUT_PROFILE_OPTIONS: StudioLayoutProfileOption[] = [
+  {
+    id: "personal",
+    label: "Personal",
+    description: "Your main saved layout. Existing page customizations stay here.",
+  },
+  {
+    id: "focus",
+    label: "Focus",
+    description: "A cleaner secondary view for reduced panel clutter.",
+  },
+  {
+    id: "technical",
+    label: "Technical",
+    description: "A separate slot for denser inspection and operational layouts.",
+  },
+  {
+    id: "presentation",
+    label: "Presentation",
+    description: "A simplified slot for showing work or reviewing status.",
+  },
+];
+
 function layoutStorageKey(pageKey: string) {
   return `edmg_layout_${pageKey}_v1`;
+}
+
+function layoutProfileStorageKey(pageKey: string, profileId: string) {
+  if (profileId === "personal") return layoutStorageKey(pageKey);
+  return `edmg_layout_${pageKey}_${profileId}_v1`;
+}
+
+function activeProfileStorageKey(pageKey: string) {
+  return `edmg_layout_${pageKey}_active_profile_v1`;
+}
+
+function layoutStorageKeyPrefix(pageKey: string) {
+  return `edmg_layout_${pageKey}_`;
 }
 
 function dedupe<PanelId extends string>(items: PanelId[]) {
@@ -45,9 +89,13 @@ function normalizeLayoutState<PanelId extends string>(
   return { order, hidden };
 }
 
-function readLayoutState<PanelId extends string>(pageKey: string, panelIds: PanelId[]) {
+function readLayoutState<PanelId extends string>(
+  pageKey: string,
+  panelIds: PanelId[],
+  profileId: string,
+) {
   try {
-    const raw = localStorage.getItem(layoutStorageKey(pageKey));
+    const raw = localStorage.getItem(layoutProfileStorageKey(pageKey, profileId));
     if (!raw) return normalizeLayoutState(panelIds, null);
     return normalizeLayoutState(panelIds, JSON.parse(raw));
   } catch {
@@ -55,8 +103,33 @@ function readLayoutState<PanelId extends string>(pageKey: string, panelIds: Pane
   }
 }
 
-function writeLayoutState<PanelId extends string>(pageKey: string, value: StudioPageLayoutState<PanelId>) {
-  localStorage.setItem(layoutStorageKey(pageKey), JSON.stringify(value));
+function writeLayoutState<PanelId extends string>(
+  pageKey: string,
+  profileId: string,
+  value: StudioPageLayoutState<PanelId>,
+) {
+  localStorage.setItem(layoutProfileStorageKey(pageKey, profileId), JSON.stringify(value));
+}
+
+function readActiveProfile<ProfileId extends string>(
+  pageKey: string,
+  profileOptions: StudioLayoutProfileOption<ProfileId>[],
+): ProfileId {
+  const fallback = profileOptions[0]?.id;
+  if (!fallback) {
+    throw new Error("Studio layout profiles require at least one profile option.");
+  }
+  try {
+    const raw = localStorage.getItem(activeProfileStorageKey(pageKey));
+    if (!raw) return fallback;
+    return profileOptions.some((option) => option.id === raw) ? (raw as ProfileId) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeActiveProfile(pageKey: string, profileId: string) {
+  localStorage.setItem(activeProfileStorageKey(pageKey), profileId);
 }
 
 function movePanelInOrder<PanelId extends string>(order: PanelId[], panelId: PanelId, offset: -1 | 1) {
@@ -68,14 +141,22 @@ function movePanelInOrder<PanelId extends string>(order: PanelId[], panelId: Pan
   return nextOrder;
 }
 
-export function resetStudioPageLayout(pageKey: string) {
-  localStorage.removeItem(layoutStorageKey(pageKey));
+export function resetStudioPageLayout(pageKey: string, profileId: string = "personal") {
+  localStorage.removeItem(layoutProfileStorageKey(pageKey, profileId));
 }
 
-export function useStudioPageLayout<PanelId extends string>(pageKey: string, panelIds: PanelId[]) {
+export function useStudioPageLayout<PanelId extends string, ProfileId extends string = StudioLayoutProfileId>(
+  pageKey: string,
+  panelIds: PanelId[],
+  profileOptions: StudioLayoutProfileOption<ProfileId>[] = STUDIO_LAYOUT_PROFILE_OPTIONS as StudioLayoutProfileOption<ProfileId>[],
+) {
   const panelIdKey = panelIds.join("|");
+  const profileIdKey = profileOptions.map((option) => option.id).join("|");
+  const [activeProfile, setActiveProfile] = useState<ProfileId>(() =>
+    readActiveProfile(pageKey, profileOptions),
+  );
   const [layoutState, setLayoutState] = useState<StudioPageLayoutState<PanelId>>(() =>
-    readLayoutState(pageKey, panelIds),
+    readLayoutState(pageKey, panelIds, readActiveProfile(pageKey, profileOptions)),
   );
 
   useEffect(() => {
@@ -83,18 +164,40 @@ export function useStudioPageLayout<PanelId extends string>(pageKey: string, pan
   }, [pageKey, panelIdKey]);
 
   useEffect(() => {
-    writeLayoutState(pageKey, layoutState);
-  }, [layoutState, pageKey]);
+    setActiveProfile((current) => {
+      if (profileOptions.some((option) => option.id === current)) return current;
+      return readActiveProfile(pageKey, profileOptions);
+    });
+  }, [pageKey, profileIdKey, profileOptions]);
+
+  useEffect(() => {
+    setLayoutState(readLayoutState(pageKey, panelIds, activeProfile));
+  }, [activeProfile, pageKey, panelIdKey]);
+
+  useEffect(() => {
+    writeLayoutState(pageKey, activeProfile, layoutState);
+  }, [activeProfile, layoutState, pageKey]);
+
+  useEffect(() => {
+    writeActiveProfile(pageKey, activeProfile);
+  }, [activeProfile, pageKey]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
-      if (event.key === layoutStorageKey(pageKey)) {
-        setLayoutState(readLayoutState(pageKey, panelIds));
+      if (!event.key) return;
+      if (
+        event.key === activeProfileStorageKey(pageKey) ||
+        event.key === layoutStorageKey(pageKey) ||
+        event.key.startsWith(layoutStorageKeyPrefix(pageKey))
+      ) {
+        const nextProfile = readActiveProfile(pageKey, profileOptions);
+        setActiveProfile(nextProfile);
+        setLayoutState(readLayoutState(pageKey, panelIds, nextProfile));
       }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [pageKey, panelIdKey]);
+  }, [pageKey, panelIdKey, profileIdKey, profileOptions]);
 
   const hiddenSet = useMemo(() => new Set(layoutState.hidden), [layoutState.hidden]);
   const visibleOrder = useMemo(
@@ -139,10 +242,13 @@ export function useStudioPageLayout<PanelId extends string>(pageKey: string, pan
   const resetLayout = () => {
     const nextState = normalizeLayoutState(panelIds, null);
     setLayoutState(nextState);
-    resetStudioPageLayout(pageKey);
+    resetStudioPageLayout(pageKey, activeProfile);
   };
 
   return {
+    profileOptions,
+    activeProfile,
+    setActiveProfile,
     layoutState,
     visibleOrder,
     hiddenSet,

@@ -251,6 +251,14 @@ select:focus {
   align-items: center;
   flex-wrap: wrap;
 }
+.studio-layoutToolsProfilePicker {
+  display: grid;
+  gap: 6px;
+  min-width: min(280px, 100%);
+}
+.studio-layoutToolsProfilePicker select {
+  min-width: 180px;
+}
 .studio-layoutToolsGrid {
   display: grid;
   gap: 10px;

@@ -41,7 +41,7 @@ export default function Dashboard({ backendUrl, config }: PageProps) {
     ],
     [],
   );
-  const { layoutState, visibleOrder, movePanel, updateHidden, resetLayout } =
+  const { profileOptions, activeProfile, setActiveProfile, layoutState, visibleOrder, movePanel, updateHidden, resetLayout } =
     useStudioPageLayout<DashboardPanelId>(
       "dashboard",
       panelDefinitions.map((panel) => panel.id),
@@ -114,6 +114,9 @@ export default function Dashboard({ backendUrl, config }: PageProps) {
         title="Dashboard layout"
         description="Reorder or hide overview panels without changing backend status, EDMG integration, or project data."
         items={panelControlItems}
+        profileOptions={profileOptions}
+        activeProfile={activeProfile}
+        onSelectProfile={setActiveProfile}
         onMove={movePanel}
         onToggleHidden={updateHidden}
         onReset={resetLayout}

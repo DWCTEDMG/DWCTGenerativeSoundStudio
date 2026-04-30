@@ -41,6 +41,9 @@ export default function Projects(_props: PageProps) {
     [],
   );
   const {
+    profileOptions,
+    activeProfile,
+    setActiveProfile,
     layoutState,
     visibleOrder,
     movePanel,
@@ -129,6 +132,9 @@ export default function Projects(_props: PageProps) {
         title="Project layout"
         description="Reorder or hide Project page panels without changing project storage, selection, or render behavior."
         items={panelControlItems}
+        profileOptions={profileOptions}
+        activeProfile={activeProfile}
+        onSelectProfile={setActiveProfile}
         onMove={movePanel}
         onToggleHidden={updateHidden}
         onReset={resetLayout}

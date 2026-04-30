@@ -2,6 +2,11 @@ import React, { useMemo, useEffect, useState } from "react";
 import { apiGet } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
+import {
+  buildStudioForgeRecommendations,
+  type StudioForgeRecommendation,
+  type StudioForgeRecommendationStatus,
+} from "../studio-forge/recommendations";
 import { STUDIO_FORGE_RECIPES } from "../studio-forge/recipes";
 import { STUDIO_FORGE_TEMPLATES } from "../studio-forge/templates";
 import type {
@@ -13,7 +18,7 @@ import type { PageProps } from "../types/pageProps";
 
 type RuntimeStatus = "available" | "missing" | "optional" | "required" | "unknown" | "error";
 type BadgeStatus = RuntimeStatus | "preview";
-type StudioForgeSectionId = "runtime" | "templates" | "recipes" | "validation";
+type StudioForgeSectionId = "runtime" | "recommendations" | "templates" | "recipes" | "validation";
 
 type RuntimeCard = {
   id: string;
@@ -68,7 +73,7 @@ function statusLabel(status: BadgeStatus): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-function StatusBadge({ status }: { status: BadgeStatus }) {
+function StatusBadge({ status, label }: { status: BadgeStatus; label?: string }) {
   return (
     <span
       style={{
@@ -80,7 +85,7 @@ function StatusBadge({ status }: { status: BadgeStatus }) {
         padding: "4px 10px",
       }}
     >
-      {statusLabel(status)}
+      {label ?? statusLabel(status)}
     </span>
   );
 }
@@ -147,6 +152,75 @@ function RecipeCard({ recipe }: { recipe: StudioForgeRecipe }) {
           <CapabilityList label="Optional capabilities" capabilities={recipe.optionalCapabilities} />
         ) : null}
         <div className="small">Execution: preview only, no writes or runtime control</div>
+      </div>
+    </div>
+  );
+}
+
+function recommendationBadgeStatus(
+  status: StudioForgeRecommendationStatus,
+): { badge: BadgeStatus; label: string } {
+  if (status === "ready") return { badge: "available", label: "Ready now" };
+  if (status === "optionalBoost") return { badge: "optional", label: "Optional boosts" };
+  return { badge: "missing", label: "Setup needed" };
+}
+
+function formatCapabilityList(
+  capabilities: StudioForgeCapability[],
+  capabilityLabels: Record<StudioForgeCapability, string>,
+): string {
+  return capabilities.map((capability) => capabilityLabels[capability]).join(", ");
+}
+
+function recommendationSummary(
+  recommendation: StudioForgeRecommendation,
+  capabilityLabels: Record<StudioForgeCapability, string>,
+): string {
+  if (recommendation.status === "ready") {
+    return "Ready with the currently detected runtime stack.";
+  }
+  if (recommendation.status === "optionalBoost") {
+    return `Ready now. Optional boosts not detected: ${formatCapabilityList(recommendation.missingOptional, capabilityLabels)}.`;
+  }
+  return `Needs before previewing a live path: ${formatCapabilityList(recommendation.missingRequired, capabilityLabels)}.`;
+}
+
+function RecommendationCard({
+  recommendation,
+}: {
+  recommendation: StudioForgeRecommendation;
+}) {
+  const badge = recommendationBadgeStatus(recommendation.status);
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <div>
+          <div className="timeline-kicker">{recommendation.kindLabel}</div>
+          <div style={{ fontWeight: 900 }}>{recommendation.name}</div>
+        </div>
+        <StatusBadge status={badge.badge} label={badge.label} />
+      </div>
+      <div className="small" style={{ marginTop: 8 }}>
+        {recommendation.description}
+      </div>
+      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+        <div className="small">{recommendationSummary(recommendation, CAPABILITY_LABELS)}</div>
+        {recommendation.missingRequired.length ? (
+          <CapabilityList
+            label="Missing required capabilities"
+            capabilities={recommendation.missingRequired}
+          />
+        ) : (
+          <div className="small">All required capabilities are currently detected.</div>
+        )}
+        {recommendation.missingOptional.length ? (
+          <CapabilityList
+            label="Optional boosts not detected"
+            capabilities={recommendation.missingOptional}
+          />
+        ) : (
+          <div className="small">No optional capability gaps for this preview.</div>
+        )}
       </div>
     </div>
   );
@@ -221,6 +295,47 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
   const comfyAvailable = !comfyError && !!comfyCapabilities;
   const ffmpegPath = String(setupStatus?.ffmpeg?.path ?? "ffmpeg");
   const edmgAvailable = !!setupStatus?.edmg?.available;
+  const activeAiProvider = String(
+    activeConfig?.ai_provider ??
+    activeConfig?.provider ??
+    aiConfig?.provider ??
+    "",
+  ).toLowerCase();
+  const activeAiMode = String(activeConfig?.ai_mode ?? activeConfig?.mode ?? "").toLowerCase();
+  const openaiCompatibleConfigured = activeAiProvider === "openai_compat" || activeAiMode === "openai_compat";
+
+  const availableCapabilities = useMemo<StudioForgeCapability[]>(() => {
+    const capabilities: StudioForgeCapability[] = [];
+    if (health?.ok && !healthError) capabilities.push("backend");
+    if (backendBundleOk && !setupError) capabilities.push("internalRenderer");
+    if (ffmpegOk && !setupError) capabilities.push("ffmpeg");
+    if (ollamaOk && !setupError && (!ollamaRequired || modelOk)) capabilities.push("ollama");
+    if (openaiCompatibleConfigured) capabilities.push("openaiCompatible");
+    if (comfyAvailable) capabilities.push("comfyui");
+    if (edmgAvailable) capabilities.push("edmgCore");
+    return capabilities;
+  }, [
+    backendBundleOk,
+    comfyAvailable,
+    edmgAvailable,
+    ffmpegOk,
+    health?.ok,
+    healthError,
+    modelOk,
+    ollamaOk,
+    ollamaRequired,
+    openaiCompatibleConfigured,
+    setupError,
+  ]);
+  const recommendations = useMemo(
+    () =>
+      buildStudioForgeRecommendations({
+        templates: STUDIO_FORGE_TEMPLATES,
+        recipes: STUDIO_FORGE_RECIPES,
+        availableCapabilities,
+      }),
+    [availableCapabilities],
+  );
 
   const runtimeCards: RuntimeCard[] = [
     {
@@ -303,6 +418,11 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
         description: "Read-only health for backend, setup, AI, ComfyUI, FFmpeg, and models.",
       },
       {
+        id: "recommendations" as const,
+        label: "Runtime Recommendations",
+        description: "Read-only guidance that ranks Forge previews against the capabilities detected right now.",
+      },
+      {
         id: "templates" as const,
         label: "Builder Templates",
         description: "Static registry of preview-only panel, workflow, and model-profile concepts.",
@@ -321,6 +441,9 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
     [],
   );
   const {
+    profileOptions,
+    activeProfile,
+    setActiveProfile,
     layoutState,
     visibleOrder,
     movePanel,
@@ -374,6 +497,20 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
             Config read note: {backendConfigError}
           </div>
         ) : null}
+      </div>
+    ),
+    recommendations: (
+      <div>
+        <h2 style={{ marginBottom: 10 }}>Runtime Recommendations</h2>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Read-only guidance that scores Forge templates and workflow recipes against the runtime
+          capabilities detected by the existing backend and setup probes.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+          {recommendations.map((recommendation) => (
+            <RecommendationCard key={recommendation.id} recommendation={recommendation} />
+          ))}
+        </div>
       </div>
     ),
     templates: (
@@ -443,6 +580,9 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
           title="Studio Forge layout"
           description="Reorder or hide preview panels for your own working style. This only changes the local page layout."
           items={sectionControlItems}
+          profileOptions={profileOptions}
+          activeProfile={activeProfile}
+          onSelectProfile={setActiveProfile}
           onMove={movePanel}
           onToggleHidden={updateHidden}
           onReset={resetLayout}
