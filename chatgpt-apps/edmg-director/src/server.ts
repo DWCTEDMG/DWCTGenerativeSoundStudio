@@ -165,7 +165,13 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  let payload: unknown = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+
   if (!response.ok) {
     const detail =
       trimText(asObject(payload).detail, 240) ||
@@ -174,6 +180,11 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
       `${response.status} ${response.statusText}`;
     throw new Error(detail);
   }
+
+  if (payload === null && text) {
+    throw new Error(`Expected JSON from EDMG backend at ${path}, but received non-JSON text.`);
+  }
+
   return payload as T;
 }
 
