@@ -15,6 +15,7 @@ describe("Render queue page", () => {
 
     renderWithStudio(<RenderQueue backendUrl="http://127.0.0.1:7863" config={null} />);
 
+    expect(await screen.findByRole("combobox", { name: "Render Queue layout profile" })).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: /Tick Worker/ }));
 
     await waitFor(() => {

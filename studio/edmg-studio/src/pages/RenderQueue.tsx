@@ -1,7 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, getBackendUrl } from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
+import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
+import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
+
+type RenderQueuePanelId = "controls" | "jobLog" | "jobsTable";
 
 export default function RenderQueue(props: PageProps) {
   const backendUrl = props.backendUrl || getBackendUrl();
@@ -134,11 +138,58 @@ export default function RenderQueue(props: PageProps) {
     }
   };
 
-  return (
-    <div>
-      <h1>Render Queue</h1>
+  const panelDefinitions = useMemo(
+    () => [
+      {
+        id: "controls" as const,
+        label: "Queue controls",
+        description: "Worker tick, refresh, project filter, live polling, and desktop action status.",
+      },
+      {
+        id: "jobLog" as const,
+        label: "Job log",
+        description: "Focused log viewer for the currently selected job.",
+      },
+      {
+        id: "jobsTable" as const,
+        label: "Jobs table",
+        description: "Queue state, progress, checkpoints, and retry or resume actions.",
+      },
+    ],
+    [],
+  );
+  const {
+    profileOptions,
+    activeProfile,
+    setActiveProfile,
+    layoutState,
+    visibleOrder,
+    movePanel,
+    updateHidden,
+    resetLayout,
+  } = useStudioPageLayout<RenderQueuePanelId>(
+    "render_queue",
+    panelDefinitions.map((panel) => panel.id),
+  );
+  const panelDefinitionById = useMemo(
+    () =>
+      Object.fromEntries(
+        panelDefinitions.map((definition) => [definition.id, definition]),
+      ) as Record<RenderQueuePanelId, (typeof panelDefinitions)[number]>,
+    [panelDefinitions],
+  );
+  const panelControlItems = layoutState.order.map((panelId, index) => ({
+    id: panelId,
+    label: panelDefinitionById[panelId].label,
+    description: panelDefinitionById[panelId].description,
+    hidden: layoutState.hidden.includes(panelId),
+    canMoveUp: index > 0,
+    canMoveDown: index < layoutState.order.length - 1,
+  }));
 
-      <div className="card">
+  const panelContent: Record<RenderQueuePanelId, React.ReactNode> = {
+    controls: (
+      <div className="card" style={{ marginTop: 14 }}>
         <div className="row">
           <button onClick={tick}>Tick Worker (process 1 job)</button>
           <button className="secondary" onClick={refresh}>Refresh</button>
@@ -165,20 +216,20 @@ export default function RenderQueue(props: PageProps) {
         {err && <div style={{ marginTop: 10, color: "var(--danger)" }}>{err}</div>}
         {!err && info ? <div className="small" style={{ marginTop: 10, opacity: 0.82 }}>Last desktop action: <b>{info.action || "ok"}</b>{info.path ? <> • {String(info.path)}</> : null}</div> : null}
       </div>
-
-      {selectedLog && (
-        <div className="card" style={{ marginTop: 14 }}>
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 800 }}>Job log</div>
-            <button className="secondary" onClick={() => setSelectedLog(null)}>Close</button>
-          </div>
-          <div className="small" style={{ marginTop: 6 }}>
-            {selectedLog.job.id} • {selectedLog.job.type} • {selectedLog.job.status}
-          </div>
-          <pre style={{ marginTop: 10, maxHeight: 300, overflow: "auto" }}>{selectedLog.log || "(no log yet)"}</pre>
+    ),
+    jobLog: selectedLog ? (
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontWeight: 800 }}>Job log</div>
+          <button className="secondary" onClick={() => setSelectedLog(null)}>Close</button>
         </div>
-      )}
-
+        <div className="small" style={{ marginTop: 6 }}>
+          {selectedLog.job.id} • {selectedLog.job.type} • {selectedLog.job.status}
+        </div>
+        <pre style={{ marginTop: 10, maxHeight: 300, overflow: "auto" }}>{selectedLog.log || "(no log yet)"}</pre>
+      </div>
+    ) : null,
+    jobsTable: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Jobs</div>
         {!filtered.length && <div className="small">No jobs yet.</div>}
@@ -246,6 +297,29 @@ export default function RenderQueue(props: PageProps) {
           </div>
         )}
       </div>
+    ),
+  };
+
+  return (
+    <div>
+      <h1>Render Queue</h1>
+      <div className="small" style={{ marginTop: 6 }}>
+        Reorder or hide queue sections for your own troubleshooting flow. This only changes the local page layout and does not affect the worker, retries, or backend queue state.
+      </div>
+      <StudioLayoutCustomizer
+        title="Render Queue layout"
+        description="Reorder or hide queue panels without changing worker execution, logs, checkpoints, or retry behavior."
+        items={panelControlItems}
+        profileOptions={profileOptions}
+        activeProfile={activeProfile}
+        onSelectProfile={setActiveProfile}
+        onMove={movePanel}
+        onToggleHidden={updateHidden}
+        onReset={resetLayout}
+      />
+      {visibleOrder.map((panelId) => (
+        <React.Fragment key={panelId}>{panelContent[panelId]}</React.Fragment>
+      ))}
     </div>
   );
 }
