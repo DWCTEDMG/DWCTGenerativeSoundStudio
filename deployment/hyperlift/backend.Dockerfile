@@ -25,8 +25,11 @@ WORKDIR /opt/edmg/python_backend
 # Hyperlift builds from the repo root, so copy only the backend subtree.
 COPY studio/edmg-studio/python_backend/ /opt/edmg/python_backend/
 
+# Keep the Hyperlift backend lean. Remote AI is configured with
+# EDMG_AI_MODE=http and EDMG_AI_BASE_URL, so this image should not pull
+# the local torch/diffusers bundle.
 RUN python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install -e ".[studio_bundle]"
+    && python -m pip install -e .
 
 RUN mkdir -p /studio/data /studio/models /studio/cache /studio/logs /studio/external
 
