@@ -111,6 +111,14 @@ type ReactiveApplyResultOutput = {
   timelineSummary: TimelineSummary | null;
   message: string;
 };
+type BackendStatusOutput = {
+  type: "backend-status";
+  available: boolean;
+  baseUrl: string;
+  version: string | null;
+  detail: string;
+  checkedAt: string;
+};
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const jsonObjectArraySchema = z.array(jsonObjectSchema);
@@ -192,10 +200,19 @@ async function requestJson<T = unknown>(resourcePath: string, init?: RequestInit
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${EDMG_BASE_URL}${resourcePath}`, {
-    ...init,
-    headers,
-  });
+  let response: globalThis.Response;
+  try {
+    response = await fetch(`${EDMG_BASE_URL}${resourcePath}`, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    const detail =
+      error instanceof Error && error.message
+        ? error.message
+        : "Unknown connection failure";
+    throw new Error(`Could not reach EDMG backend at ${EDMG_BASE_URL}. ${detail}`);
+  }
 
   const text = await response.text();
   let payload: unknown = null;
@@ -422,6 +439,62 @@ function createServer(): McpServer {
         },
       ],
     }),
+  );
+
+  registerAppTool(
+    server,
+    "backend_status",
+    {
+      title: "Check EDMG backend status",
+      description:
+        "Use this when you need to verify whether the EDMG Studio backend is reachable before running project tools.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+      },
+      _meta: {
+        "openai/toolInvocation/invoking": "Checking EDMG backend",
+        "openai/toolInvocation/invoked": "Backend status ready",
+      },
+    },
+    async () => {
+      try {
+        const payload = asRecord(await requestJson("/health"));
+        const structuredContent: BackendStatusOutput = {
+          type: "backend-status",
+          available: payload.ok === true,
+          baseUrl: EDMG_BASE_URL,
+          version: asString(payload.version) || null,
+          detail:
+            payload.ok === true
+              ? `Connected to EDMG backend at ${EDMG_BASE_URL}.`
+              : `EDMG backend at ${EDMG_BASE_URL} responded without an OK status.`,
+          checkedAt: new Date().toISOString(),
+        };
+
+        return {
+          content: [textContent(structuredContent.detail)],
+          structuredContent,
+        };
+      } catch (error) {
+        const structuredContent: BackendStatusOutput = {
+          type: "backend-status",
+          available: false,
+          baseUrl: EDMG_BASE_URL,
+          version: null,
+          detail:
+            error instanceof Error
+              ? error.message
+              : `Could not reach EDMG backend at ${EDMG_BASE_URL}.`,
+          checkedAt: new Date().toISOString(),
+        };
+
+        return {
+          content: [textContent(structuredContent.detail)],
+          structuredContent,
+        };
+      }
+    },
   );
 
   registerAppTool(
