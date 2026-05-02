@@ -9,7 +9,7 @@ It is shaped as an `interactive-decoupled` app:
 - `generate_plan_preview` opens a React review board widget.
 - `apply_plan_variant` is a widget-triggered mutation tool that writes the selected variant into the EDMG timeline.
 - `import_planner_lab_payload` and `apply_reactive_handoff` let structured planning and reactive payloads round-trip back into Studio.
-- The widget now includes a Studio handoff panel that can import the current preview as planner state and apply an editable starter reactive JSON draft.
+- The widget now includes a Studio handoff panel that can import the current preview as planner state, inspect motion curves, and apply an editable reactive JSON draft.
 
 ## Package layout
 
@@ -17,6 +17,8 @@ It is shaped as an `interactive-decoupled` app:
   MCP server, tool registration, streamable HTTP transport, and static asset serving.
 - `src/widget/`
   React review-board source.
+- `src/widget/reactiveScheduler.ts`
+  Shared reactive schedule generator and parser used by both the widget and focused tests.
 - `vite.config.ts`
   Bundles the widget into versioned assets under `assets/`.
 - `assets/`
@@ -75,6 +77,6 @@ pnpm run test
 pnpm run build
 ```
 
-`pnpm run test` starts a stub EDMG backend plus the local MCP server, then smoke-tests the registered tools through a real Streamable HTTP MCP client.
+`pnpm run test` starts a stub EDMG backend plus the local MCP server, smoke-tests the registered tools through a real Streamable HTTP MCP client, and verifies the reactive schedule generator directly.
 
 Runtime validation still requires a live EDMG backend plus ChatGPT Developer Mode or another MCP Apps-capable host.
