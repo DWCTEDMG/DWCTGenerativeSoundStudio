@@ -19,6 +19,7 @@ from typing import Optional, Sequence
 
 STUDIO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = STUDIO_ROOT / "python_backend"
+BACKEND_SETUPTOOLS_CONSTRAINT = "setuptools<82"
 
 
 def _is_windows() -> bool:
@@ -202,7 +203,7 @@ def install(
         resolved_venv = _resolve_path(venv)
         py = _ensure_venv(resolved_venv, env=managed_env)
 
-    if _pip(py, ["install", "-U", "pip", "setuptools", "wheel"], env=managed_env) != 0:
+    if _pip(py, ["install", "-U", "pip", BACKEND_SETUPTOOLS_CONSTRAINT, "wheel"], env=managed_env) != 0:
         return 1
 
     if not skip_torch:

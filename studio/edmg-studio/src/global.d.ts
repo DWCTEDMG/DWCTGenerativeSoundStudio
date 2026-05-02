@@ -10,6 +10,7 @@ declare global {
         mode: string;
         host: string;
         port: string;
+        url: string;
         source: string;
         currentBackendUrl?: string;
       }>;
@@ -111,6 +112,7 @@ declare global {
         mode: string;
         host: string;
         port: string;
+        url?: string;
       }) => Promise<{
         ok: boolean;
         error?: string;
@@ -118,6 +120,7 @@ declare global {
         mode?: string;
         host?: string;
         port?: string;
+        url?: string;
         currentBackendUrl?: string;
       }>;
       relaunch?: () => Promise<{ ok: boolean }>;

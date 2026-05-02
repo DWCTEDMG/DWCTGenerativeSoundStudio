@@ -25,7 +25,7 @@ WORKDIR /opt/edmg/python_backend
 
 COPY . /opt/edmg/python_backend
 
-RUN python -m pip install --upgrade pip setuptools wheel \
+RUN python -m pip install --upgrade pip "setuptools<82" wheel \
     && python -m pip install -e ".[studio_bundle]"
 
 RUN mkdir -p /studio/data /studio/models /studio/cache /studio/logs /studio/external

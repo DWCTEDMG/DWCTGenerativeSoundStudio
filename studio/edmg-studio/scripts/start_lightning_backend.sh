@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 STUDIO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 BACKEND_DIR="${STUDIO_ROOT}/python_backend"
+BACKEND_SETUPTOOLS_CONSTRAINT="setuptools<82"
 
 pick_python_bin() {
   if [[ -n "${EDMG_PYTHON_BIN:-}" ]]; then
@@ -63,7 +64,7 @@ fi
 
 if [[ "${EDMG_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
   echo "[setup] upgrading pip tooling"
-  python -m pip install -U pip setuptools wheel
+  python -m pip install -U pip "${BACKEND_SETUPTOOLS_CONSTRAINT}" wheel
   echo "[setup] installing backend bundle"
   python -m pip install -e ".[studio_bundle]"
 fi

@@ -31,6 +31,8 @@ const runtimeBackendHost =
   typeof runtimeBackendDefaults.host === "string" ? runtimeBackendDefaults.host.trim() : "";
 const runtimeBackendPort =
   runtimeBackendDefaults.port != null ? String(runtimeBackendDefaults.port).trim() : "";
+const runtimeBackendUrl =
+  typeof runtimeBackendDefaults.url === "string" ? runtimeBackendDefaults.url.trim() : "";
 
 function getArgValue(prefix) {
   const found = process.argv.find((entry) => typeof entry === "string" && entry.startsWith(prefix));
@@ -49,11 +51,17 @@ const BACKEND_PORT =
   runtimeBackendPort ||
   "7863";
 
+const BACKEND_URL =
+  process.env.EDMG_STUDIO_BACKEND_URL ||
+  getArgValue("--edmg-backend-url=") ||
+  runtimeBackendUrl ||
+  "";
+
 const TEST_MODE =
   (process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1" ||
   getArgValue("--edmg-test-mode=") === "1";
 
-const DEFAULT_BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+const DEFAULT_BACKEND_URL = BACKEND_URL || `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 
 contextBridge.exposeInMainWorld("edmg", {
   backendUrl: () => DEFAULT_BACKEND_URL,

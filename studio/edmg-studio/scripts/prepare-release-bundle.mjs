@@ -14,6 +14,8 @@ const bundledBackendPath = path.join(electronBackendDir, backendBinaryName);
 const bundleManifestPath = path.join(electronBackendDir, "backend-bundle-manifest.json");
 const SUPPORTED_PYTHON_MIN = [3, 10];
 const SUPPORTED_PYTHON_MAX_EXCLUSIVE = [3, 14];
+// Torch 2.11.x in the bundled backend currently requires setuptools < 82.
+const backendSetuptoolsConstraint = "setuptools<82";
 
 const ignoredDirNames = new Set([
   ".git",
@@ -233,7 +235,7 @@ function ensureBackendBuild() {
 
   assertSupportedPython(venvPython, [], "Backend venv Python", { cwd: pythonBackendDir });
 
-  runChecked("upgrade backend packaging tools", venvPython, ["-m", "pip", "install", "-U", "pip", "wheel", "setuptools"], {
+  runChecked("upgrade backend packaging tools", venvPython, ["-m", "pip", "install", "-U", "pip", "wheel", backendSetuptoolsConstraint], {
     cwd: pythonBackendDir,
   });
   const backendBundleExtra = process.platform === "win32" ? "studio_bundle_directml" : "studio_bundle";

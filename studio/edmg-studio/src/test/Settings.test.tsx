@@ -6,11 +6,11 @@ import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUti
 
 describe("Settings page", () => {
   it("persists desktop backend mode and target settings", async () => {
-    const setBackendSettings = vi.fn(async (settings: { mode: string; host: string; port: string }) => ({
+    const setBackendSettings = vi.fn(async (settings: { mode: string; host: string; port: string; url?: string }) => ({
       ok: true,
       restartRequired: true,
       ...settings,
-      currentBackendUrl: `http://${settings.host}:${settings.port}`,
+      currentBackendUrl: String(settings.url || `http://${settings.host}:${settings.port}`),
     }));
 
     installEdmgBridge({
@@ -19,6 +19,7 @@ describe("Settings page", () => {
         mode: "managed",
         host: "127.0.0.1",
         port: "7863",
+        url: "",
         source: "bootstrap",
         currentBackendUrl: "http://127.0.0.1:7863",
       }),
@@ -86,11 +87,8 @@ describe("Settings page", () => {
     fireEvent.change(screen.getByLabelText("Desktop backend mode"), {
       target: { value: "external" },
     });
-    fireEvent.change(screen.getByLabelText("Desktop backend host"), {
-      target: { value: "192.168.1.40" },
-    });
-    fireEvent.change(screen.getByLabelText("Desktop backend port"), {
-      target: { value: "9000" },
+    fireEvent.change(screen.getByLabelText("Desktop backend URL"), {
+      target: { value: "https://edmg-backend.example.com" },
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Save backend startup settings" }));
@@ -98,8 +96,9 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(setBackendSettings).toHaveBeenCalledWith({
         mode: "external",
-        host: "192.168.1.40",
-        port: "9000",
+        host: "edmg-backend.example.com",
+        port: "443",
+        url: "https://edmg-backend.example.com",
       });
     });
 

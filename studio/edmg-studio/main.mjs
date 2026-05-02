@@ -55,18 +55,24 @@ const BACKEND_SETTINGS_DEFAULTS = Object.freeze({
     BACKEND_RUNTIME_DEFAULTS.port != null && String(BACKEND_RUNTIME_DEFAULTS.port).trim()
       ? String(BACKEND_RUNTIME_DEFAULTS.port).trim()
       : "7863",
+  url:
+    typeof BACKEND_RUNTIME_DEFAULTS.url === "string" && BACKEND_RUNTIME_DEFAULTS.url.trim()
+      ? BACKEND_RUNTIME_DEFAULTS.url.trim()
+      : "",
 });
 
 const BACKEND_SETTINGS_ENV_KEYS = Object.freeze({
   mode: "EDMG_STUDIO_BACKEND_MODE",
   host: "EDMG_STUDIO_BACKEND_HOST",
   port: "EDMG_STUDIO_BACKEND_PORT",
+  url: "EDMG_STUDIO_BACKEND_URL",
   spawnBackend: "EDMG_STUDIO_SPAWN_BACKEND",
 });
 
 const STARTUP_BACKEND_SETTINGS = syncBackendSettingsToProcessEnv(getConfiguredBackendSettings());
 const BACKEND_HOST = STARTUP_BACKEND_SETTINGS.host;
 let BACKEND_PORT = Number(STARTUP_BACKEND_SETTINGS.port || BACKEND_SETTINGS_DEFAULTS.port);
+const BACKEND_URL = STARTUP_BACKEND_SETTINGS.url || `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 const BACKEND_READY_TIMEOUT_MS = Number(
   process.env.EDMG_STUDIO_BACKEND_READY_TIMEOUT_MS ??
   (app.isPackaged && IS_WINDOWS ? "120000" : "15000"),
@@ -395,6 +401,7 @@ function getRawBackendSettingsFromEnv(envLike) {
     mode,
     host: env[BACKEND_SETTINGS_ENV_KEYS.host],
     port: env[BACKEND_SETTINGS_ENV_KEYS.port],
+    url: env[BACKEND_SETTINGS_ENV_KEYS.url],
   };
 }
 
@@ -446,6 +453,42 @@ function normalizeBackendPort(rawValue) {
   return BACKEND_SETTINGS_DEFAULTS.port;
 }
 
+function buildManagedBackendUrl(host, port) {
+  return `http://${host}:${port}`;
+}
+
+function normalizeBackendUrl(rawValue, fallbackUrl = "") {
+  const candidate = pickConfiguredString(rawValue, fallbackUrl);
+  if (!candidate) return "";
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    const normalizedPath =
+      parsed.pathname && parsed.pathname !== "/"
+        ? parsed.pathname.replace(/\/+$/, "")
+        : "";
+    return `${parsed.origin}${normalizedPath}`;
+  } catch {
+    return "";
+  }
+}
+
+function deriveBackendConnectionFromUrl(url) {
+  const normalizedUrl = normalizeBackendUrl(url);
+  if (!normalizedUrl) return {};
+  try {
+    const parsed = new URL(normalizedUrl);
+    return {
+      host: parsed.hostname || BACKEND_SETTINGS_DEFAULTS.host,
+      port: parsed.port || (parsed.protocol === "https:" ? "443" : "80"),
+    };
+  } catch {
+    return {};
+  }
+}
+
 function normalizeAiSettings(rawSettings = {}) {
   const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
   return {
@@ -467,10 +510,18 @@ function normalizeAiSettings(rawSettings = {}) {
 
 function normalizeBackendSettings(rawSettings = {}) {
   const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  const mode = normalizeBackendMode(current.mode);
+  const host = pickConfiguredString(current.host, BACKEND_SETTINGS_DEFAULTS.host);
+  const port = normalizeBackendPort(current.port);
+  const fallbackUrl = buildManagedBackendUrl(host, port);
+  const url = mode === "external" ? normalizeBackendUrl(current.url, fallbackUrl) : "";
+  const derived = mode === "external" ? deriveBackendConnectionFromUrl(url) : {};
+
   return {
-    mode: normalizeBackendMode(current.mode),
-    host: pickConfiguredString(current.host, BACKEND_SETTINGS_DEFAULTS.host),
-    port: normalizeBackendPort(current.port),
+    mode,
+    host: pickConfiguredString(derived.host, host),
+    port: normalizeBackendPort(derived.port || port),
+    url,
   };
 }
 
@@ -527,6 +578,7 @@ function syncBackendSettingsToProcessEnv(rawSettings) {
   process.env[BACKEND_SETTINGS_ENV_KEYS.mode] = backendSettings.mode;
   process.env[BACKEND_SETTINGS_ENV_KEYS.host] = backendSettings.host;
   process.env[BACKEND_SETTINGS_ENV_KEYS.port] = backendSettings.port;
+  process.env[BACKEND_SETTINGS_ENV_KEYS.url] = backendSettings.url;
   process.env[BACKEND_SETTINGS_ENV_KEYS.spawnBackend] = backendSettings.mode === "external" ? "0" : "1";
   return backendSettings;
 }
@@ -1048,6 +1100,7 @@ const backendRuntime = createBackendRuntime({
   isWindows: IS_WINDOWS,
   backendHost: BACKEND_HOST,
   backendPort: BACKEND_PORT,
+  backendUrl: BACKEND_URL,
   backendReadyTimeoutMs: BACKEND_READY_TIMEOUT_MS,
   testMode: TEST_MODE,
   pathExistsSync,
@@ -1067,6 +1120,7 @@ const windowRuntime = createWindowRuntime({
   devServerUrl: DEV_SERVER_URL,
   backendHost: BACKEND_HOST,
   backendPort: BACKEND_PORT,
+  backendUrl: BACKEND_URL,
   testMode: TEST_MODE,
   testPage: TEST_PAGE,
   testReportPath: TEST_REPORT_PATH,
@@ -1188,6 +1242,7 @@ function registerIpcHandlers() {
       EDMG_STUDIO_BACKEND_MODE: backendSettings.mode,
       EDMG_STUDIO_BACKEND_HOST: backendSettings.host,
       EDMG_STUDIO_BACKEND_PORT: backendSettings.port,
+      EDMG_STUDIO_BACKEND_URL: backendSettings.url,
       EDMG_STUDIO_SPAWN_BACKEND: backendSettings.mode === "external" ? "0" : "1",
     });
 

@@ -11,6 +11,7 @@ export function createWindowRuntime({
   devServerUrl,
   backendHost,
   backendPort,
+  backendUrl,
   testMode,
   testPage,
   testReportPath,
@@ -201,6 +202,7 @@ export function createWindowRuntime({
         additionalArguments: [
           `--edmg-backend-host=${backendHost}`,
           `--edmg-backend-port=${String(backendPort)}`,
+          ...(backendUrl ? [`--edmg-backend-url=${backendUrl}`] : []),
           `--edmg-test-mode=${testMode ? "1" : "0"}`,
         ],
       },

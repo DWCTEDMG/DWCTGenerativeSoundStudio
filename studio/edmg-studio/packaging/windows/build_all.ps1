@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 $SupportedPythonMin = [Version]"3.10"
 $SupportedPythonMaxExclusive = [Version]"3.14"
+$BackendSetuptoolsConstraint = "setuptools<82"
 
 function Assert-Command($name) {
   if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
@@ -266,7 +267,7 @@ if (-not (Test-Path $VenvPython)) {
 Assert-SupportedPythonVersion $VenvPython @() "Backend venv Python" | Out-Null
 
 Invoke-Checked "upgrade backend packaging tools" {
-  & $VenvPython -m pip install -U pip wheel setuptools
+  & $VenvPython -m pip install -U pip wheel $BackendSetuptoolsConstraint
 }
 Invoke-Checked "install backend bundle" {
   & $VenvPython -m pip install -e ".[studio_bundle]"

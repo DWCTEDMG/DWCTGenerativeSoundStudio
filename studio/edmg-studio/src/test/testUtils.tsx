@@ -40,6 +40,7 @@ export function installEdmgBridge(overrides: Partial<NonNullable<Window["edmg"]>
       mode: "managed",
       host: "127.0.0.1",
       port: "7863",
+      url: "",
       source: "test",
       currentBackendUrl: "http://127.0.0.1:7863",
     }),
@@ -49,7 +50,10 @@ export function installEdmgBridge(overrides: Partial<NonNullable<Window["edmg"]>
       mode: String(settings?.mode || "managed"),
       host: String(settings?.host || "127.0.0.1"),
       port: String(settings?.port || "7863"),
-      currentBackendUrl: `http://${String(settings?.host || "127.0.0.1")}:${String(settings?.port || "7863")}`,
+      url: String(settings?.url || ""),
+      currentBackendUrl:
+        String(settings?.url || "").trim() ||
+        `http://${String(settings?.host || "127.0.0.1")}:${String(settings?.port || "7863")}`,
     }),
     getAiSettings: async () => ({
       ok: true,

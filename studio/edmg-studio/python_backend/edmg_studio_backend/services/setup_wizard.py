@@ -24,6 +24,8 @@ try:
 except Exception:  # pragma: no cover
     py7zr = None
 
+BACKEND_SETUPTOOLS_CONSTRAINT = "setuptools<82"
+
 
 @dataclass
 class SetupTask:
@@ -985,7 +987,7 @@ def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle") -> No
 
     _run_subprocess(
         task,
-        [sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+        [sys.executable, "-m", "pip", "install", "--upgrade", "pip", BACKEND_SETUPTOOLS_CONSTRAINT, "wheel"],
         cwd=str(root),
     )
 

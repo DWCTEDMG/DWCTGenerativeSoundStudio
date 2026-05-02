@@ -10,6 +10,7 @@ export function createBackendRuntime({
   isWindows,
   backendHost,
   backendPort,
+  backendUrl,
   backendReadyTimeoutMs,
   testMode,
   pathExistsSync,
@@ -19,7 +20,7 @@ export function createBackendRuntime({
   buildManagedStudioEnv,
   buildManagedAiEnv,
 }) {
-  let currentBackendUrl = `http://${backendHost}:${backendPort}`;
+  let currentBackendUrl = backendUrl || `http://${backendHost}:${backendPort}`;
   let backendProc = null;
 
   function logBackendUrlMarker() {

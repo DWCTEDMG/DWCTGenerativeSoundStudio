@@ -24,6 +24,7 @@ type StudioBackendSettings = {
   mode: string;
   host: string;
   port: string;
+  url: string;
   source?: string;
 };
 
@@ -55,6 +56,7 @@ const DEFAULT_BACKEND_SETTINGS: StudioBackendSettings = {
   mode: "managed",
   host: "127.0.0.1",
   port: "7863",
+  url: "",
   source: "default",
 };
 
@@ -99,16 +101,23 @@ function aiSettingsFingerprint(settings: Partial<StudioAiSettings> | null | unde
 function normalizeBackendSettings(payload?: Partial<StudioBackendSettings> | null): StudioBackendSettings {
   const current = payload ?? {};
   const modeRaw = String(current.mode ?? DEFAULT_BACKEND_SETTINGS.mode).trim().toLowerCase();
+  const mode = modeRaw === "external" || modeRaw === "remote" || modeRaw === "connect" ? "external" : "managed";
+  const host = String(current.host ?? DEFAULT_BACKEND_SETTINGS.host).trim() || DEFAULT_BACKEND_SETTINGS.host;
   const portRaw = String(current.port ?? DEFAULT_BACKEND_SETTINGS.port).trim();
   const portNumber = Number(portRaw);
+  const port =
+    Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535
+      ? String(portNumber)
+      : DEFAULT_BACKEND_SETTINGS.port;
+  const rawUrl = String(current.url ?? "").trim();
+  const parsedUrl = parseBackendUrl(rawUrl);
+  const normalizedUrl = sanitizeBackendUrl(rawUrl);
 
   return {
-    mode: modeRaw === "external" || modeRaw === "remote" || modeRaw === "connect" ? "external" : "managed",
-    host: String(current.host ?? DEFAULT_BACKEND_SETTINGS.host).trim() || DEFAULT_BACKEND_SETTINGS.host,
-    port:
-      Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535
-        ? String(portNumber)
-        : DEFAULT_BACKEND_SETTINGS.port,
+    mode,
+    host: String(parsedUrl.host ?? host).trim() || host,
+    port: String(parsedUrl.port ?? port).trim() || port,
+    url: mode === "external" ? (rawUrl ? normalizedUrl || rawUrl : "") : "",
     source: String(current.source ?? DEFAULT_BACKEND_SETTINGS.source),
   };
 }
@@ -119,20 +128,49 @@ function backendSettingsFingerprint(settings: Partial<StudioBackendSettings> | n
     mode: normalized.mode,
     host: normalized.host,
     port: normalized.port,
+    url: normalized.mode === "external" ? normalized.url : "",
   });
 }
 
 function buildBackendUrl(settings: Partial<StudioBackendSettings> | null | undefined): string {
   const normalized = normalizeBackendSettings(settings);
-  return `http://${normalized.host}:${normalized.port}`;
+  if (normalized.mode === "external") {
+    return sanitizeBackendUrl(normalized.url) || normalized.url || buildManagedBackendUrl(normalized.host, normalized.port);
+  }
+  return buildManagedBackendUrl(normalized.host, normalized.port);
+}
+
+function buildManagedBackendUrl(host: string, port: string): string {
+  return `http://${host}:${port}`;
+}
+
+function sanitizeBackendUrl(rawUrl: string): string {
+  const candidate = String(rawUrl || "").trim();
+  if (!candidate) return "";
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    const normalizedPath =
+      parsed.pathname && parsed.pathname !== "/"
+        ? parsed.pathname.replace(/\/+$/, "")
+        : "";
+    return `${parsed.origin}${normalizedPath}`;
+  } catch {
+    return "";
+  }
 }
 
 function parseBackendUrl(rawUrl: string): Partial<StudioBackendSettings> {
+  const sanitized = sanitizeBackendUrl(rawUrl);
+  if (!sanitized) return {};
   try {
-    const parsed = new URL(String(rawUrl || "").trim());
+    const parsed = new URL(sanitized);
     return {
       host: parsed.hostname || DEFAULT_BACKEND_SETTINGS.host,
-      port: parsed.port || DEFAULT_BACKEND_SETTINGS.port,
+      port: parsed.port || (parsed.protocol === "https:" ? "443" : "80"),
+      url: sanitized,
     };
   } catch {
     return {};
@@ -359,7 +397,14 @@ export default function Settings(props: PageProps) {
   }
 
   function updateBackendDraft(patch: Partial<StudioBackendSettings>) {
-    setBackendDraft((current) => normalizeBackendSettings({ ...current, ...patch, source: current.source }));
+    setBackendDraft((current) => {
+      const merged = { ...current, ...patch, source: current.source };
+      const nextMode = normalizeBackendSettings({ mode: merged.mode }).mode;
+      if (nextMode === "external" && !String(merged.url ?? "").trim()) {
+        merged.url = buildManagedBackendUrl(current.host, current.port);
+      }
+      return normalizeBackendSettings(merged);
+    });
     setBackendNotice(null);
   }
 
@@ -377,16 +422,25 @@ export default function Settings(props: PageProps) {
         throw new Error("This Studio build cannot persist desktop backend startup settings yet.");
       }
       const normalizedDraft = normalizeBackendSettings(backendDraft);
+      const backendUrl =
+        normalizedDraft.mode === "external"
+          ? sanitizeBackendUrl(normalizedDraft.url)
+          : "";
+      if (normalizedDraft.mode === "external" && !backendUrl) {
+        throw new Error("Enter a valid backend URL starting with http:// or https://.");
+      }
+      const derived = backendUrl ? parseBackendUrl(backendUrl) : {};
       const response = await window.edmg.setBackendSettings({
         mode: normalizedDraft.mode,
-        host: normalizedDraft.host,
-        port: normalizedDraft.port,
+        host: String(derived.host ?? normalizedDraft.host),
+        port: String(derived.port ?? normalizedDraft.port),
+        url: backendUrl,
       });
       if (!response?.ok) {
         throw new Error(response?.error || "Failed to save desktop backend settings.");
       }
       const normalized = normalizeBackendSettings({ ...response, source: "bootstrap" });
-      const nextLiveUrl = buildBackendUrl(normalized);
+      const nextLiveUrl = String(response.currentBackendUrl || buildBackendUrl(normalized)).trim();
       setStudioBackendSettings(normalized);
       setBackendDraft(normalized);
       setBackendRestartRequired(!!response.restartRequired);
@@ -639,7 +693,7 @@ export default function Settings(props: PageProps) {
           Choose whether Studio should launch and own its local backend or just connect the GUI to an already running backend. This keeps Windows-first packaging intact while making Ubuntu and Linux desktop installs first-class.
         </div>
         <div className="small" style={{ marginBottom: 12, opacity: 0.85 }}>
-          Saved startup config: <b>{backendSettingsLoaded ? `${backendDraft.mode} (${backendDraft.host}:${backendDraft.port})` : "loading"}</b>
+          Saved startup config: <b>{backendSettingsLoaded ? `${studioBackendSettings.mode} (${buildBackendUrl(studioBackendSettings)})` : "loading"}</b>
           {studioBackendSettings.source ? <span> • source <b>{studioBackendSettings.source}</b></span> : null}
         </div>
         <div className="small" style={{ marginBottom: 12, opacity: 0.82 }}>
@@ -663,30 +717,42 @@ export default function Settings(props: PageProps) {
             </select>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+          {backendDraft.mode === "external" ? (
             <div>
-              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Backend host</div>
+              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Desktop backend URL</div>
               <input
-                aria-label="Desktop backend host"
-                value={backendDraft.host}
-                onChange={(e) => updateBackendDraft({ host: e.target.value })}
-                placeholder="127.0.0.1"
+                aria-label="Desktop backend URL"
+                value={backendDraft.url}
+                onChange={(e) => updateBackendDraft({ url: e.target.value })}
+                placeholder="https://edmg-backend.example.com"
               />
             </div>
-            <div>
-              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Backend port</div>
-              <input
-                aria-label="Desktop backend port"
-                inputMode="numeric"
-                value={backendDraft.port}
-                onChange={(e) => updateBackendDraft({ port: e.target.value })}
-                placeholder="7863"
-              />
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+              <div>
+                <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Backend host</div>
+                <input
+                  aria-label="Desktop backend host"
+                  value={backendDraft.host}
+                  onChange={(e) => updateBackendDraft({ host: e.target.value })}
+                  placeholder="127.0.0.1"
+                />
+              </div>
+              <div>
+                <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Backend port</div>
+                <input
+                  aria-label="Desktop backend port"
+                  inputMode="numeric"
+                  value={backendDraft.port}
+                  onChange={(e) => updateBackendDraft({ port: e.target.value })}
+                  placeholder="7863"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="small" style={{ opacity: 0.82 }}>
-            Ubuntu/Linux desktop note: managed mode keeps the full GUI and bundled startup flow, while external mode is for cases where you want the AppImage to attach to a separately launched backend, Ollama stack, or service wrapper.
+            Ubuntu/Linux desktop note: managed mode keeps the full GUI and bundled startup flow, while external mode is for cases where you want the desktop app to attach to a separately launched backend over `http://` or `https://`.
           </div>
 
           <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
