@@ -777,8 +777,23 @@ function buildReactiveDraft(preview: PlanPreviewOutput, selectedVariantIndex: nu
   };
 }
 
+function readErrorDetail(reason: unknown, fallback: string): string {
+  if (reason instanceof Error && reason.message) {
+    return reason.message;
+  }
+
+  const record = asRecord(reason);
+  const nestedError = asRecord(record.error);
+  return (
+    asString(record.message) ||
+    asString(record.detail) ||
+    asString(nestedError.message) ||
+    fallback
+  );
+}
+
 function buildFriendlyError(reason: unknown, fallback: string): ErrorState {
-  const detail = reason instanceof Error ? reason.message : fallback;
+  const detail = readErrorDetail(reason, fallback);
   const lower = detail.toLowerCase();
 
   if (lower.includes("could not reach edmg backend") || lower.includes("actively refused")) {
@@ -788,10 +803,36 @@ function buildFriendlyError(reason: unknown, fallback: string): ErrorState {
     };
   }
 
+  if (lower.includes("timed out") || lower.includes("timeout")) {
+    return {
+      title: "Backend timed out",
+      detail: `${detail} The EDMG backend accepted the request but did not finish in time.`,
+    };
+  }
+
+  if (lower.includes("not found") || (lower.includes("404") && lower.includes("project"))) {
+    return {
+      title: "Project unavailable",
+      detail: `${detail} Refresh project search results and confirm the selected project still exists.`,
+    };
+  }
+
   if (lower.includes("unexpected token") || lower.includes("json")) {
     return {
       title: "Invalid JSON payload",
       detail: "The JSON payload could not be parsed. Fix the editor contents and retry.",
+    };
+  }
+
+  if (
+    lower.includes("validation") ||
+    lower.includes("schema") ||
+    lower.includes("unprocessable") ||
+    lower.includes("required field")
+  ) {
+    return {
+      title: "Backend rejected payload",
+      detail: `${detail} Adjust the payload fields and retry.`,
     };
   }
 

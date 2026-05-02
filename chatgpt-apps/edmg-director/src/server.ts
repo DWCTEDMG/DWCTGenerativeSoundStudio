@@ -11,7 +11,7 @@ import cors from "cors";
 import express, { type Request, type Response } from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 
 const APP_NAME = "edmg-director";
@@ -27,6 +27,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, "..");
 const ASSETS_DIR = path.resolve(ROOT_DIR, "assets");
+
+export type ServerConfig = {
+  port: number;
+  bindHost: string;
+  edmgBaseUrl: string;
+  publicBaseUrl: string;
+  assetsDir: string;
+};
 
 type AnyRecord = Record<string, unknown>;
 type ProjectSearchResult = {
@@ -123,18 +131,33 @@ type BackendStatusOutput = {
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const jsonObjectArraySchema = z.array(jsonObjectSchema);
 
-function publicBaseUrl(): string {
-  return String(process.env.BASE_URL ?? `http://localhost:${PORT}`).replace(/\/+$/, "");
+export function resolveServerConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: Partial<ServerConfig> = {},
+): ServerConfig {
+  const port = Number.parseInt(env.PORT ?? "3001", 10);
+  return {
+    port,
+    bindHost: String(env.HOST ?? "127.0.0.1"),
+    edmgBaseUrl: String(env.EDMG_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, ""),
+    publicBaseUrl: String(env.BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, ""),
+    assetsDir: ASSETS_DIR,
+    ...overrides,
+  };
 }
 
-function allowedHosts(): string[] | undefined {
-  if (BIND_HOST === "127.0.0.1" || BIND_HOST === "localhost" || BIND_HOST === "::1") {
+function allowedHosts(config: ServerConfig): string[] | undefined {
+  if (
+    config.bindHost === "127.0.0.1" ||
+    config.bindHost === "localhost" ||
+    config.bindHost === "::1"
+  ) {
     return undefined;
   }
 
   const hosts = new Set<string>(["localhost", "127.0.0.1", "[::1]"]);
   try {
-    hosts.add(new URL(publicBaseUrl()).hostname);
+    hosts.add(new URL(config.publicBaseUrl).hostname);
   } catch {
     // Ignore invalid BASE_URL values here; startup will still expose them via GET /.
   }
@@ -164,8 +187,8 @@ function coerceNumber(value: unknown): number | null {
   return null;
 }
 
-function readBuiltWidgetHtml(fileName: string): string {
-  const filePath = path.join(ASSETS_DIR, fileName);
+function readBuiltWidgetHtml(fileName: string, assetsDir: string): string {
+  const filePath = path.join(assetsDir, fileName);
   if (!fs.existsSync(filePath)) {
     throw new Error(
       `Widget asset "${fileName}" is missing. Run "pnpm run build" in ${ROOT_DIR} before starting the MCP server.`,
@@ -174,9 +197,9 @@ function readBuiltWidgetHtml(fileName: string): string {
   return fs.readFileSync(filePath, "utf-8");
 }
 
-function materializeWidgetHtml(fileName: string): string {
-  const assetOrigin = `${publicBaseUrl()}/assets/`;
-  return readBuiltWidgetHtml(fileName).replace(
+function materializeWidgetHtml(fileName: string, config: ServerConfig): string {
+  const assetOrigin = `${config.publicBaseUrl}/assets/`;
+  return readBuiltWidgetHtml(fileName, config.assetsDir).replace(
     /(src|href)=["']\.\/([^"']+)["']/g,
     (_match, attr: string, file: string) => `${attr}="${assetOrigin}${file}"`,
   );
@@ -193,7 +216,11 @@ function extractErrorMessage(payload: unknown, fallback: string): string {
   );
 }
 
-async function requestJson<T = unknown>(resourcePath: string, init?: RequestInit): Promise<T> {
+async function requestJson<T = unknown>(
+  resourcePath: string,
+  edmgBaseUrl: string,
+  init?: RequestInit,
+): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
   headers.set("Accept", "application/json");
   if (init?.body && !headers.has("Content-Type")) {
@@ -202,7 +229,7 @@ async function requestJson<T = unknown>(resourcePath: string, init?: RequestInit
 
   let response: globalThis.Response;
   try {
-    response = await fetch(`${EDMG_BASE_URL}${resourcePath}`, {
+    response = await fetch(`${edmgBaseUrl}${resourcePath}`, {
       ...init,
       headers,
     });
@@ -211,7 +238,7 @@ async function requestJson<T = unknown>(resourcePath: string, init?: RequestInit
       error instanceof Error && error.message
         ? error.message
         : "Unknown connection failure";
-    throw new Error(`Could not reach EDMG backend at ${EDMG_BASE_URL}. ${detail}`);
+    throw new Error(`Could not reach EDMG backend at ${edmgBaseUrl}. ${detail}`);
   }
 
   const text = await response.text();
@@ -405,11 +432,13 @@ function textContent(text: string) {
   };
 }
 
-function createServer(): McpServer {
+export function createServer(config: ServerConfig = resolveServerConfig()): McpServer {
   const server = new McpServer({
     name: APP_NAME,
     version: SERVER_VERSION,
   });
+  const requestJsonForBackend = <T = unknown>(resourcePath: string, init?: RequestInit) =>
+    requestJson<T>(resourcePath, config.edmgBaseUrl, init);
 
   registerAppResource(
     server,
@@ -424,13 +453,13 @@ function createServer(): McpServer {
         {
           uri: REVIEW_WIDGET_URI,
           mimeType: RESOURCE_MIME_TYPE,
-          text: materializeWidgetHtml("review-board.html"),
+          text: materializeWidgetHtml("review-board.html", config),
           _meta: {
             ui: {
               prefersBorder: true,
               csp: {
-                connectDomains: [EDMG_BASE_URL],
-                resourceDomains: [publicBaseUrl()],
+                connectDomains: [config.edmgBaseUrl],
+                resourceDomains: [config.publicBaseUrl],
               },
             },
             "openai/widgetDescription": REVIEW_WIDGET_DESCRIPTION,
@@ -459,16 +488,16 @@ function createServer(): McpServer {
     },
     async () => {
       try {
-        const payload = asRecord(await requestJson("/health"));
+        const payload = asRecord(await requestJsonForBackend("/health"));
         const structuredContent: BackendStatusOutput = {
           type: "backend-status",
           available: payload.ok === true,
-          baseUrl: EDMG_BASE_URL,
+          baseUrl: config.edmgBaseUrl,
           version: asString(payload.version) || null,
           detail:
             payload.ok === true
-              ? `Connected to EDMG backend at ${EDMG_BASE_URL}.`
-              : `EDMG backend at ${EDMG_BASE_URL} responded without an OK status.`,
+              ? `Connected to EDMG backend at ${config.edmgBaseUrl}.`
+              : `EDMG backend at ${config.edmgBaseUrl} responded without an OK status.`,
           checkedAt: new Date().toISOString(),
         };
 
@@ -480,12 +509,12 @@ function createServer(): McpServer {
         const structuredContent: BackendStatusOutput = {
           type: "backend-status",
           available: false,
-          baseUrl: EDMG_BASE_URL,
+          baseUrl: config.edmgBaseUrl,
           version: null,
           detail:
             error instanceof Error
               ? error.message
-              : `Could not reach EDMG backend at ${EDMG_BASE_URL}.`,
+              : `Could not reach EDMG backend at ${config.edmgBaseUrl}.`,
           checkedAt: new Date().toISOString(),
         };
 
@@ -523,7 +552,7 @@ function createServer(): McpServer {
         20,
       );
 
-      const payload = asRecord(await requestJson("/v1/projects"));
+      const payload = asRecord(await requestJsonForBackend("/v1/projects"));
       const projects = asArray(payload.projects)
         .map((entry) => asRecord(entry))
         .map<ProjectSearchResult>((project) => ({
@@ -575,7 +604,7 @@ function createServer(): McpServer {
     async (input: AnyRecord) => {
       const projectId = asString(input.projectId).trim();
       const payload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}`),
       );
       const project = asRecord(payload.project);
       const meta = asRecord(project.meta);
@@ -620,7 +649,7 @@ function createServer(): McpServer {
     async (input: AnyRecord) => {
       const projectId = asString(input.projectId).trim();
       const payload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}/analyze_audio`, {
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}/analyze_audio`, {
           method: "POST",
         }),
       );
@@ -673,7 +702,7 @@ function createServer(): McpServer {
       const mode = asString(input.mode).trim() || "auto";
 
       const projectPayload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}`),
       );
       const project = asRecord(projectPayload.project);
       const meta = asRecord(project.meta);
@@ -692,7 +721,7 @@ function createServer(): McpServer {
         ),
       };
 
-      const plan = await requestJson(
+      const plan = await requestJsonForBackend(
         `/v1/projects/${encodeURIComponent(projectId)}/plan?mode=${encodeURIComponent(mode)}`,
         {
           method: "POST",
@@ -747,12 +776,12 @@ function createServer(): McpServer {
       const overwrite = input.overwrite === undefined ? true : Boolean(input.overwrite);
 
       const projectPayload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}`),
       );
       const project = asRecord(projectPayload.project);
 
       const payload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}/timeline/apply_plan`, {
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}/timeline/apply_plan`, {
           method: "POST",
           body: JSON.stringify({
             variant_index: variantIndex,
@@ -809,12 +838,12 @@ function createServer(): McpServer {
         input.overwriteTimeline === undefined ? true : Boolean(input.overwriteTimeline);
 
       const projectPayload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}`),
       );
       const project = asRecord(projectPayload.project);
 
       const payload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}/planner_lab/import`, {
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}/planner_lab/import`, {
           method: "POST",
           body: JSON.stringify({
             analysis: asRecord(input.analysis),
@@ -879,7 +908,7 @@ function createServer(): McpServer {
         input.overwriteCamera === undefined ? true : Boolean(input.overwriteCamera);
 
       const projectPayload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}`),
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}`),
       );
       const project = asRecord(projectPayload.project);
 
@@ -888,7 +917,7 @@ function createServer(): McpServer {
       const sections = asArray(input.sections).map((item) => asRecord(item));
 
       const payload = asRecord(
-        await requestJson(`/v1/projects/${encodeURIComponent(projectId)}/reactive_lab/apply`, {
+        await requestJsonForBackend(`/v1/projects/${encodeURIComponent(projectId)}/reactive_lab/apply`, {
           method: "POST",
           body: JSON.stringify({
             metadata: asRecord(input.metadata),
@@ -928,10 +957,10 @@ function createServer(): McpServer {
   return server;
 }
 
-async function startStreamableHttpServer(): Promise<void> {
+export function createStreamableHttpApp(config: ServerConfig = resolveServerConfig()) {
   const app = createMcpExpressApp({
-    host: BIND_HOST,
-    allowedHosts: allowedHosts(),
+    host: config.bindHost,
+    allowedHosts: allowedHosts(config),
   });
   app.use(
     cors({
@@ -939,23 +968,23 @@ async function startStreamableHttpServer(): Promise<void> {
       exposedHeaders: ["Mcp-Session-Id"],
     }),
   );
-  app.use("/assets", express.static(ASSETS_DIR));
+  app.use("/assets", express.static(config.assetsDir));
 
   app.get("/", (_req, res) => {
     res.json({
       ok: true,
       name: APP_NAME,
       version: SERVER_VERSION,
-      host: BIND_HOST,
+      host: config.bindHost,
       mcpPath: "/mcp",
       assetsPath: "/assets",
-      publicBaseUrl: publicBaseUrl(),
-      edmgBaseUrl: EDMG_BASE_URL,
+      publicBaseUrl: config.publicBaseUrl,
+      edmgBaseUrl: config.edmgBaseUrl,
     });
   });
 
   app.all("/mcp", async (req: Request, res: Response) => {
-    const server = createServer();
+    const server = createServer(config);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
@@ -982,13 +1011,17 @@ async function startStreamableHttpServer(): Promise<void> {
       }
     }
   });
+  return app;
+}
 
-  const httpServer = app.listen(PORT, BIND_HOST, (error?: Error) => {
+async function startStreamableHttpServer(config: ServerConfig = resolveServerConfig()): Promise<void> {
+  const app = createStreamableHttpApp(config);
+  const httpServer = app.listen(config.port, config.bindHost, (error?: Error) => {
     if (error) {
       console.error("Failed to start server:", error);
       process.exit(1);
     }
-    console.log(`EDMG Director listening on ${publicBaseUrl()}`);
+    console.log(`EDMG Director listening on ${config.publicBaseUrl}`);
   });
 
   const shutdown = () => {
@@ -999,19 +1032,32 @@ async function startStreamableHttpServer(): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
-async function startStdioServer(): Promise<void> {
-  await createServer().connect(new StdioServerTransport());
+async function startStdioServer(config: ServerConfig = resolveServerConfig()): Promise<void> {
+  await createServer(config).connect(new StdioServerTransport());
 }
 
-async function main(): Promise<void> {
-  if (process.argv.includes("--stdio")) {
-    await startStdioServer();
+export async function main(
+  argv: string[] = process.argv.slice(2),
+  config: ServerConfig = resolveServerConfig(),
+): Promise<void> {
+  if (argv.includes("--stdio")) {
+    await startStdioServer(config);
     return;
   }
-  await startStreamableHttpServer();
+  await startStreamableHttpServer(config);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+function isDirectExecution(): boolean {
+  const entrypoint = process.argv[1];
+  if (!entrypoint) {
+    return false;
+  }
+  return import.meta.url === pathToFileURL(entrypoint).href;
+}
+
+if (isDirectExecution()) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

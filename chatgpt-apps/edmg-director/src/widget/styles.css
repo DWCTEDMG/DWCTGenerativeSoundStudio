@@ -408,6 +408,10 @@ code {
   font: 0.9rem/1.55 "IBM Plex Mono", Consolas, monospace;
 }
 
+.json-editor.compact {
+  min-height: 220px;
+}
+
 .json-editor:focus {
   outline: 2px solid color-mix(in srgb, var(--accent) 34%, transparent);
   outline-offset: 2px;
@@ -434,9 +438,155 @@ code {
   border-color: color-mix(in srgb, var(--danger) 42%, transparent);
 }
 
+.status-banner.warning {
+  border-color: color-mix(in srgb, var(--warm) 44%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--warm) 12%);
+}
+
 .status-title {
   margin-bottom: 4px;
   font-weight: 700;
+}
+
+.inspector-panel {
+  margin: 0 0 18px;
+  padding: 6px 0 0;
+}
+
+.inspector-panel summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 14px;
+}
+
+.inspector-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.inspector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.inspector-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+  box-shadow: var(--shadow);
+}
+
+.inspector-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.inspector-card-head h3 {
+  margin: 0;
+  letter-spacing: -0.03em;
+}
+
+.inspector-card-head p {
+  margin: 6px 0 0;
+  color: var(--ink-muted);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  border: 1px solid var(--line);
+  background: var(--bg-panel-strong);
+}
+
+.status-pill.good {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 75%, var(--bg-panel-strong) 25%);
+}
+
+.status-pill.bad {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-panel-strong) 92%);
+}
+
+.status-pill.warn {
+  color: var(--warm);
+  border-color: color-mix(in srgb, var(--warm) 28%, transparent);
+  background: color-mix(in srgb, var(--warm) 10%, var(--bg-panel-strong) 90%);
+}
+
+.status-pill.neutral {
+  color: var(--ink-muted);
+}
+
+.backend-card {
+  border-radius: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-panel-strong);
+  display: grid;
+  gap: 8px;
+}
+
+.backend-card strong {
+  letter-spacing: -0.02em;
+}
+
+.backend-card p {
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+.backend-card.good {
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.backend-card.bad {
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+}
+
+.backend-card.warn {
+  border-color: color-mix(in srgb, var(--warm) 34%, transparent);
+}
+
+.inspector-select {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.inspector-select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  outline-offset: 2px;
+}
+
+.inspector-output {
+  margin: 0;
+  min-height: 180px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  padding: 14px 16px;
+  font: 0.85rem/1.55 "IBM Plex Mono", Consolas, monospace;
 }
 
 .fallback-card pre {
@@ -466,6 +616,7 @@ code {
 
   .variant-head,
   .handoff-card-head,
+  .inspector-card-head,
   .scene-head,
   .result-header {
     flex-direction: column;

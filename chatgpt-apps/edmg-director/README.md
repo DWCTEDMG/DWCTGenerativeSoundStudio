@@ -71,7 +71,10 @@ Low-cost validation for this package:
 
 ```bash
 pnpm run typecheck
+pnpm run test
 pnpm run build
 ```
+
+`pnpm run test` starts a stub EDMG backend plus the local MCP server, then smoke-tests the registered tools through a real Streamable HTTP MCP client.
 
 Runtime validation still requires a live EDMG backend plus ChatGPT Developer Mode or another MCP Apps-capable host.
