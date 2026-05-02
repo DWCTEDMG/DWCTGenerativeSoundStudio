@@ -64,6 +64,7 @@ code {
 
 .hero,
 .analysis-panel,
+.handoff-panel,
 .variant-card,
 .result-card,
 .fallback-card,
@@ -77,6 +78,7 @@ code {
 
 .hero,
 .analysis-panel,
+.handoff-panel,
 .result-card,
 .fallback-card,
 .status-banner {
@@ -193,6 +195,10 @@ code {
   margin-bottom: 18px;
 }
 
+.handoff-panel {
+  margin-bottom: 18px;
+}
+
 .analysis-panel.muted {
   color: var(--ink-muted);
 }
@@ -251,6 +257,13 @@ code {
   gap: 16px;
 }
 
+.selected-card {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow:
+    var(--shadow),
+    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent) inset;
+}
+
 .variant-head {
   display: flex;
   justify-content: space-between;
@@ -266,6 +279,13 @@ code {
 
 .apply-button {
   width: fit-content;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
 }
 
 .scene-list {
@@ -316,6 +336,83 @@ code {
   margin-bottom: 18px;
 }
 
+.handoff-header {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.handoff-header h2,
+.handoff-card h3 {
+  margin: 0;
+  letter-spacing: -0.03em;
+}
+
+.handoff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.handoff-card {
+  background: var(--bg-panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.handoff-card p {
+  color: var(--ink-muted);
+}
+
+.handoff-card-head {
+  display: grid;
+  gap: 12px;
+}
+
+.option-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.toggle-row input {
+  accent-color: var(--accent);
+}
+
+.editor-label {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+
+.json-editor {
+  min-height: 280px;
+  width: 100%;
+  resize: vertical;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  padding: 14px 16px;
+  font: 0.9rem/1.55 "IBM Plex Mono", Consolas, monospace;
+}
+
+.json-editor:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  outline-offset: 2px;
+}
+
 .result-header {
   display: flex;
   justify-content: space-between;
@@ -359,6 +456,7 @@ code {
 
   .hero,
   .analysis-panel,
+  .handoff-panel,
   .variant-card,
   .result-card,
   .fallback-card,
@@ -367,6 +465,7 @@ code {
   }
 
   .variant-head,
+  .handoff-card-head,
   .scene-head,
   .result-header {
     flex-direction: column;

@@ -9,6 +9,7 @@ It is shaped as an `interactive-decoupled` app:
 - `generate_plan_preview` opens a React review board widget.
 - `apply_plan_variant` is a widget-triggered mutation tool that writes the selected variant into the EDMG timeline.
 - `import_planner_lab_payload` and `apply_reactive_handoff` let structured planning and reactive payloads round-trip back into Studio.
+- The widget now includes a Studio handoff panel that can import the current preview as planner state and apply an editable starter reactive JSON draft.
 
 ## Package layout
 
