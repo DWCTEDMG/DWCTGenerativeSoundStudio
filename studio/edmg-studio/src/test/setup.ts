@@ -2,6 +2,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 
 beforeEach(() => {
+  vi.stubEnv("VITE_EDMG_BACKEND_URL", "");
   vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("fetch mock not installed"))));
   vi.stubGlobal(
     "confirm",
@@ -26,6 +27,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   delete window.edmg;

@@ -21,8 +21,12 @@ It is shaped as an `interactive-decoupled` app:
   Shared reactive schedule generator and parser used by both the widget and focused tests.
 - `vite.config.ts`
   Bundles the widget into versioned assets under `assets/`.
+- `tsconfig.server.json`
+  Emits the MCP server into `dist-server/` so Studio can launch it as a managed sidecar in packaged builds.
 - `assets/`
   Generated at build time. The server reads `review-board.html` from here and rewrites local asset paths to the configured public base URL.
+- `dist-server/`
+  Generated at build time. Contains the runnable Node entrypoint used by both local `pnpm start` and the Studio-managed runtime.
 
 ## Tools
 
@@ -59,7 +63,7 @@ pnpm install
 pnpm start
 ```
 
-`pnpm start` builds the React widget bundle first, then starts the MCP server on `http://localhost:3001/mcp`.
+`pnpm start` builds the widget plus the runnable server output, then starts the MCP server on `http://localhost:3001/mcp`.
 
 For widget-only iteration:
 
@@ -80,3 +84,14 @@ pnpm run build
 `pnpm run test` starts a stub EDMG backend plus the local MCP server, smoke-tests the registered tools through a real Streamable HTTP MCP client, and verifies the reactive schedule generator directly.
 
 Runtime validation still requires a live EDMG backend plus ChatGPT Developer Mode or another MCP Apps-capable host.
+
+## Studio-managed runtime
+
+`studio/edmg-studio` can bundle and launch this package as a managed sidecar. The Studio release prep step copies:
+
+- `assets/`
+- `dist-server/`
+- `node_modules/`
+- `package.json`
+
+into `studio/edmg-studio/electron-resources/director/`, then the Electron main process launches `dist-server/server.js` with the packaged Electron runtime in Node mode.

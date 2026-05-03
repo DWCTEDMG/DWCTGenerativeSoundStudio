@@ -21,6 +21,7 @@ const Outputs = lazy(() => import("./pages/Outputs"));
 const Cloud = lazy(() => import("./pages/Cloud"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Models = lazy(() => import("./pages/Models"));
+const EdmgDirector = lazy(() => import("./pages/EdmgDirector"));
 const AiPlannerLab = lazy(() => import("./pages/AiPlannerLab"));
 const ReactiveLab = lazy(() => import("./pages/ReactiveLab"));
 const StudioForge = lazy(() => import("./pages/StudioForge"));
@@ -159,6 +160,8 @@ export default function App() {
   if (page === "settings") content = <Settings {...commonProps} />;
   if (page === "setup") content = <Setup onNavigate={setPage as any} />;
   if (page === "models") content = <Models {...commonProps} />;
+  if (page === "directorLab")
+    content = <EdmgDirector {...commonProps} onNavigate={setPage as any} />;
   if (page === "plannerLab")
     content = <AiPlannerLab {...commonProps} onNavigate={setPage as any} />;
   if (page === "reactiveLab")

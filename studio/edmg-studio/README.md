@@ -4,6 +4,7 @@ A desktop-style "studio" application:
 
 - **Electron** shell + **React** UI
 - Local **FastAPI** backend for projects, assets, planning, rendering, and outputs
+- Bundled **EDMG Director** MCP sidecar for ChatGPT connector workflows and Studio-native directing handoff
 - Integrates with:
   - **Studio internal renderer** as the default built-in render path
   - **ComfyUI** as an optional still/motion render sidecar (local or remote)
@@ -99,8 +100,22 @@ Install/storage split:
 
 ## Ports
 - Studio backend: **7863**
+- Managed EDMG Director MCP app: **3001**
 - External AI service (optional): **7862**
 - ComfyUI: **8188**
+
+## EDMG Director with Studio
+
+Studio now has a native **Labs → EDMG Director** page that combines planner and reactive workbenches for the selected project. In addition, the desktop app can launch the ChatGPT-oriented `edmg-director` MCP server as a managed sidecar on `127.0.0.1:3001`.
+
+Useful env vars:
+
+- `EDMG_DIRECTOR_HOST` (default: `127.0.0.1`)
+- `EDMG_DIRECTOR_PORT` (default: `3001`)
+- `EDMG_DIRECTOR_BASE_URL` (optional public/tunneled URL advertised to ChatGPT for widget asset loading)
+- `EDMG_DIRECTOR_SPAWN` (`0` disables the managed sidecar)
+
+For local Studio use, the native Director page does not require ChatGPT. If you want the ChatGPT app flow too, expose the managed sidecar over HTTPS and point ChatGPT at `/mcp`.
 
 ## Environment variables (Backend)
 - `EDMG_STUDIO_HOME` (optional; preferred root for Studio storage)

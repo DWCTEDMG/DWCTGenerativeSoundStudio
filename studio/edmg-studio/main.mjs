@@ -4,6 +4,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBackendRuntime } from "./main-process/backend-runtime.mjs";
+import { createDirectorRuntime } from "./main-process/director-runtime.mjs";
 import { createWindowRuntime } from "./main-process/window-runtime.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -77,6 +78,30 @@ const BACKEND_READY_TIMEOUT_MS = Number(
   process.env.EDMG_STUDIO_BACKEND_READY_TIMEOUT_MS ??
   (app.isPackaged && IS_WINDOWS ? "120000" : "15000"),
 );
+
+const DIRECTOR_RUNTIME_DEFAULTS =
+  RUNTIME_DEFAULTS.director && typeof RUNTIME_DEFAULTS.director === "object"
+    ? RUNTIME_DEFAULTS.director
+    : {};
+const DIRECTOR_HOST =
+  String(process.env.EDMG_DIRECTOR_HOST ?? DIRECTOR_RUNTIME_DEFAULTS.host ?? "127.0.0.1").trim() ||
+  "127.0.0.1";
+const DIRECTOR_PORT_RAW = Number.parseInt(
+  String(process.env.EDMG_DIRECTOR_PORT ?? DIRECTOR_RUNTIME_DEFAULTS.port ?? "3001"),
+  10,
+);
+const DIRECTOR_PORT = Number.isFinite(DIRECTOR_PORT_RAW) && DIRECTOR_PORT_RAW > 0 ? DIRECTOR_PORT_RAW : 3001;
+const DIRECTOR_PUBLIC_BASE_URL =
+  String(process.env.EDMG_DIRECTOR_BASE_URL ?? DIRECTOR_RUNTIME_DEFAULTS.baseUrl ?? "").trim() ||
+  `http://${DIRECTOR_HOST}:${DIRECTOR_PORT}`;
+const DIRECTOR_READY_TIMEOUT_MS = Number(
+  process.env.EDMG_DIRECTOR_READY_TIMEOUT_MS ??
+  (app.isPackaged && IS_WINDOWS ? "45000" : "30000"),
+);
+const DIRECTOR_SPAWN =
+  String(process.env.EDMG_DIRECTOR_SPAWN ?? "").trim() ||
+  (DIRECTOR_RUNTIME_DEFAULTS.spawnDirector === false ? "0" : "1");
+const SHOULD_SPAWN_DIRECTOR = DIRECTOR_SPAWN !== "0";
 
 const TEST_MODE = (process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1";
 const TEST_SKIP_MIGRATION = (process.env.EDMG_STUDIO_TEST_SKIP_MIGRATION ?? "0") === "1";
@@ -1111,6 +1136,22 @@ const backendRuntime = createBackendRuntime({
   buildManagedAiEnv,
 });
 
+const directorRuntime = createDirectorRuntime({
+  app,
+  rootDir: __dirname,
+  isWindows: IS_WINDOWS,
+  directorHost: DIRECTOR_HOST,
+  directorPort: DIRECTOR_PORT,
+  directorPublicBaseUrl: DIRECTOR_PUBLIC_BASE_URL,
+  directorReadyTimeoutMs: DIRECTOR_READY_TIMEOUT_MS,
+  spawnDirector: SHOULD_SPAWN_DIRECTOR,
+  pathExistsSync,
+  ensureDirSync,
+  safeStreamWrite,
+  getStudioPaths,
+  getBackendUrl: () => backendRuntime.getCurrentBackendUrl(),
+});
+
 const windowRuntime = createWindowRuntime({
   app,
   BrowserWindow,
@@ -1141,6 +1182,7 @@ function registerIpcHandlers() {
     ...getConfiguredBackendSettings(),
     currentBackendUrl: backendRuntime.getCurrentBackendUrl(),
   }));
+  ipcMain.handle("edmg:getDirectorStatus", async () => directorRuntime.getDirectorStatus());
   ipcMain.handle("edmg:getStudioPaths", async () => ({ ok: true, ...getStudioPaths() }));
   ipcMain.handle("edmg:getAiSettings", async () => ({ ok: true, ...getConfiguredAiSettings() }));
 
@@ -1349,6 +1391,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  directorRuntime.stopDirector();
   backendRuntime.stopBackend();
 });
 
@@ -1370,6 +1413,8 @@ app.whenReady().then(async () => {
   appendTestTrace("app.whenReady:afterRegisterIpc");
   await backendRuntime.startBackendIfNeeded();
   appendTestTrace("app.whenReady:afterStartBackend");
+  await directorRuntime.startDirectorIfNeeded();
+  appendTestTrace("app.whenReady:afterStartDirector");
   await windowRuntime.createMainWindow();
   appendTestTrace("app.whenReady:afterCreateMainWindow");
 }).catch((error) => {

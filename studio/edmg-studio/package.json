@@ -24,7 +24,7 @@
     "check:release-metadata": "node scripts/check-release-metadata.mjs",
     "prepare:release-bundle": "node scripts/prepare-release-bundle.mjs",
     "release:stage-desktop": "node scripts/release-stage-desktop.mjs",
-    "validate:electron-bridge": "node --check main.mjs && node --check preload.cjs && node --check main-process/backend-runtime.mjs && node --check main-process/window-runtime.mjs",
+    "validate:electron-bridge": "node --check main.mjs && node --check preload.cjs && node --check main-process/backend-runtime.mjs && node --check main-process/director-runtime.mjs && node --check main-process/window-runtime.mjs",
     "validate:desktop-integration": "node scripts/desktop-integration-harness.mjs --require-live-probe",
     "validate:desktop-integration:best-effort": "node scripts/desktop-integration-harness.mjs",
     "validate:desktop-integration:strict": "pnpm run validate:desktop-integration",

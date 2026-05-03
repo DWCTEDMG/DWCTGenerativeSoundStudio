@@ -13,6 +13,7 @@ describe("App route hints", () => {
     expect(getPagesToPreload("workspace")).toEqual([
       "timeline",
       "render",
+      "directorLab",
       "plannerLab",
       "reactiveLab",
     ]);

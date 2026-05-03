@@ -12,6 +12,7 @@ export type Page =
   | "settings"
   | "setup"
   | "models"
+  | "directorLab"
   | "plannerLab"
   | "reactiveLab"
   | "studioForge";
@@ -28,6 +29,7 @@ const PAGE_LABELS: Record<Page, string> = {
   settings: "Settings",
   setup: "Setup Wizard",
   models: "Models",
+  directorLab: "EDMG Director",
   plannerLab: "AI Planner Lab",
   reactiveLab: "Reactive Lab",
   studioForge: "Studio Forge",
@@ -45,6 +47,7 @@ const PAGE_LOADING_DETAILS: Record<Page, string> = {
   settings: "Loading desktop backend, storage, and preference controls.",
   setup: "Loading runtime health, installers, and dependency checks.",
   models: "Loading model packs, availability, and install actions.",
+  directorLab: "Preparing combined planning, reactive, and optional ChatGPT handoff controls.",
   plannerLab: "Preparing AI planning tools and Studio handoff controls.",
   reactiveLab: "Preparing audio-reactive scheduling and handoff controls.",
   studioForge: "Preparing runtime preview cards and builder recipe registries.",
@@ -59,6 +62,7 @@ const PAGE_LOADERS: Partial<Record<Page, () => Promise<unknown>>> = {
   cloud: () => import("./pages/Cloud"),
   settings: () => import("./pages/Settings"),
   models: () => import("./pages/Models"),
+  directorLab: () => import("./pages/EdmgDirector"),
   plannerLab: () => import("./pages/AiPlannerLab"),
   reactiveLab: () => import("./pages/ReactiveLab"),
   studioForge: () => import("./pages/StudioForge"),
@@ -67,7 +71,7 @@ const PAGE_LOADERS: Partial<Record<Page, () => Promise<unknown>>> = {
 const PRELOAD_BY_PAGE: Record<Page, Page[]> = {
   dashboard: ["projects", "workspace", "setup"],
   projects: ["workspace", "dashboard"],
-  workspace: ["timeline", "render", "plannerLab", "reactiveLab"],
+  workspace: ["timeline", "render", "directorLab", "plannerLab", "reactiveLab"],
   timeline: ["render", "outputs", "workspace"],
   render: ["queue", "outputs", "timeline"],
   queue: ["outputs", "render"],
@@ -76,6 +80,7 @@ const PRELOAD_BY_PAGE: Record<Page, Page[]> = {
   settings: ["setup", "cloud", "models"],
   setup: ["workspace", "models", "settings"],
   models: ["render", "setup", "workspace"],
+  directorLab: ["workspace", "timeline", "render"],
   plannerLab: ["workspace", "timeline", "render"],
   reactiveLab: ["workspace", "timeline", "outputs"],
   studioForge: ["setup", "models", "render"],
@@ -93,6 +98,7 @@ const BASE_PAGES: Page[] = [
   "settings",
   "setup",
   "models",
+  "directorLab",
   "plannerLab",
   "reactiveLab",
 ];

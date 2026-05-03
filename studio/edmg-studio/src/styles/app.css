@@ -448,14 +448,30 @@ select:focus {
   gap: 6px;
   min-width: 240px;
 }
+.studio-workbenchField--wide {
+  flex: 1 1 420px;
+}
 .studio-workbenchField span {
   font-size: 12px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
-.studio-workbenchField select {
+.studio-workbenchField select,
+.studio-workbenchField input {
   min-height: 42px;
+}
+.studio-workbenchLaunch {
+  display: grid;
+  gap: 14px;
+}
+.studio-workbenchMetaGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.studio-workbenchStatus {
+  opacity: 0.82;
 }
 .studio-workbenchMeta {
   min-width: 220px;

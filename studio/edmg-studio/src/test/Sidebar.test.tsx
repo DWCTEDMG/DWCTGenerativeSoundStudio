@@ -23,6 +23,7 @@ describe("Sidebar", () => {
     const logo = screen.getByAltText("EDMG Studio logo");
     expect(logo.getAttribute("src")).toBe("studio-logo.png");
     expect(screen.getByText("Labs")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /EDMG Director/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /AI Planner Lab/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Reactive Lab/i })).toBeTruthy();
   });

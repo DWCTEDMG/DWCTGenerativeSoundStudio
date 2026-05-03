@@ -1120,6 +1120,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
               <button className="secondary" onClick={() => setWorkspaceView("overview")}>
                 Back to overview
               </button>
+              <button className="secondary" onClick={() => onNavigate?.("directorLab")} disabled={!projectId}>
+                Open EDMG Director
+              </button>
               <button className="secondary" onClick={() => onNavigate?.("plannerLab")} disabled={!projectId}>
                 Open standalone
               </button>
@@ -1151,6 +1154,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             <div className="workspace-panelActions">
               <button className="secondary" onClick={() => setWorkspaceView("overview")}>
                 Back to overview
+              </button>
+              <button className="secondary" onClick={() => onNavigate?.("directorLab")} disabled={!projectId}>
+                Open EDMG Director
               </button>
               <button className="secondary" onClick={() => onNavigate?.("reactiveLab")} disabled={!projectId}>
                 Open standalone

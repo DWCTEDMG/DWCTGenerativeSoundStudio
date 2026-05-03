@@ -14,6 +14,19 @@ declare global {
         source: string;
         currentBackendUrl?: string;
       }>;
+      getDirectorStatus?: () => Promise<{
+        ok: boolean;
+        available: boolean;
+        managed: boolean;
+        serviceUrl: string;
+        mcpUrl: string;
+        advertisedBaseUrl: string;
+        backendUrl: string;
+        pid: number | null;
+        lastError: string;
+        startedAt: string | null;
+        packaged: boolean;
+      }>;
       openExternal?: (url: string) => Promise<void>;
       openPath?: (path: string) => Promise<{ ok: boolean; action?: string; path?: string; error?: string }>;
       showItemInFolder?: (path: string) => Promise<{ ok: boolean; action?: string; path?: string; error?: string }>;

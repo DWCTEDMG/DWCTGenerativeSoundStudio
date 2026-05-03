@@ -4,6 +4,10 @@ function readQueryBackendUrl(): string {
   return (params.get("backendUrl") || params.get("backend") || "").trim();
 }
 
+function readEnvBackendUrl(): string {
+  return String(import.meta.env.VITE_EDMG_BACKEND_URL || "").trim();
+}
+
 function readSameOriginBackendUrl(): string {
   if (typeof window === "undefined") return "";
   if (import.meta.env.DEV) return "";
@@ -23,6 +27,7 @@ function rememberBackendUrl(value: string): string {
 export function getBackendUrl(): string {
   return rememberBackendUrl(
     readQueryBackendUrl() ||
+    readEnvBackendUrl() ||
     window.edmg?.backendUrl?.() ||
     window.__EDMG_BACKEND_URL__ ||
     readSameOriginBackendUrl() ||
@@ -33,6 +38,8 @@ export function getBackendUrl(): string {
 export async function getBackendUrlAsync(): Promise<string> {
   const explicit = readQueryBackendUrl();
   if (explicit) return rememberBackendUrl(explicit);
+  const envBackendUrl = readEnvBackendUrl();
+  if (envBackendUrl) return rememberBackendUrl(envBackendUrl);
   try {
     const bridged = await window.edmg?.getBackendUrl?.();
     if (typeof bridged === "string" && bridged.trim()) {

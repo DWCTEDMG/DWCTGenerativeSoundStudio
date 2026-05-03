@@ -19,6 +19,7 @@ type NavGroup = {
 
 function getNavGroups(): NavGroup[] {
   const labs: NavItem[] = [
+    { page: "directorLab", label: "EDMG Director", hint: "combined planning + reactive" },
     { page: "plannerLab", label: "AI Planner Lab", hint: "deep prompt authoring" },
     { page: "reactiveLab", label: "Reactive Lab", hint: "audio-reactive scheduling" },
   ];
