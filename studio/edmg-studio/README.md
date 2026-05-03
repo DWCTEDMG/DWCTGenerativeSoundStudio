@@ -62,6 +62,14 @@ pnpm run dev
 `corepack enable` is only needed once per machine if `pnpm` is not already on `PATH`. The package
 manager version is pinned via `packageManager` in `package.json`.
 
+To repoint the desktop/dev frontend at a different backend target without hand-editing the bootstrap
+files, run one of these from `studio/edmg-studio/`:
+
+```bash
+pnpm backend:use managed 7863
+pnpm backend:use external http://HOST:PORT
+```
+
 ## Versioning
 
 - Canonical shipped desktop version: `studio/edmg-studio/package.json#version`
