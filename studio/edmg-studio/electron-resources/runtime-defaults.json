@@ -1,7 +1,8 @@
 {
   "backend": {
-    "host": "127.0.0.1",
-    "port": 7863,
+    "host": "93.91.156.102",
+    "port": 49513,
+    "url": "http://93.91.156.102:49513",
     "spawnBackend": false
   }
 }
