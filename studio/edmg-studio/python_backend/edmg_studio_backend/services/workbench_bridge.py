@@ -445,3 +445,336 @@ def merge_reactive_lab_into_timeline(
         "handoff_manifest": deepcopy(handoff_manifest),
     }
     return timeline
+
+
+def _slugify(value: Any, default: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return text or default
+
+
+def _dict_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _scene_bounds(scene: dict[str, Any], *, index: int, total: int, duration_s: float) -> tuple[float, float]:
+    start_s = max(0.0, _coerce_float(scene.get("start_s")))
+    end_s = max(0.0, _coerce_float(scene.get("end_s")))
+    if end_s <= start_s:
+        return _fallback_scene_timing(index, total, duration_s)
+    return start_s, end_s
+
+
+def _timeline_fps(timeline: dict[str, Any]) -> int:
+    render = timeline.get("render") if isinstance(timeline.get("render"), dict) else {}
+    return max(1, _coerce_int(render.get("fps_output") or timeline.get("fps_output"), 24))
+
+
+def _scene_approved(scene: dict[str, Any], index: int, approved_section_ids: set[str]) -> bool:
+    candidates = {
+        str(scene.get("id") or "").strip(),
+        str(scene.get("scene_id") or "").strip(),
+        str(index + 1),
+        str(_coerce_int(scene.get("id"), index + 1)),
+    }
+    candidates.discard("")
+    if approved_section_ids.intersection(candidates):
+        return True
+    return bool(scene.get("approved"))
+
+
+def _repair_actions_for_scene(
+    scene: dict[str, Any],
+    *,
+    index: int,
+    repair_suggestions: list[dict[str, Any]],
+) -> list[str]:
+    actions: list[str] = []
+    scene_keys = {
+        str(scene.get("id") or "").strip(),
+        str(scene.get("scene_id") or "").strip(),
+        str(index + 1),
+        str(_coerce_int(scene.get("id"), index + 1)),
+    }
+    scene_keys.discard("")
+    for suggestion in repair_suggestions:
+        text = str(suggestion.get("action") or suggestion.get("issue") or "").strip()
+        if not text:
+            continue
+        suggestion_keys = {
+            str(suggestion.get("sectionId") or "").strip(),
+            str(suggestion.get("section_id") or "").strip(),
+            str(suggestion.get("sceneId") or "").strip(),
+            str(suggestion.get("scene_id") or "").strip(),
+        }
+        suggestion_keys.discard("")
+        if not suggestion_keys or scene_keys.intersection(suggestion_keys):
+            if text not in actions:
+                actions.append(text)
+    return actions
+
+
+def _engine_hint_for_scene(scene: dict[str, Any], *, approved: bool, render_mode: str, has_reactive_timeline: bool) -> str:
+    render_mode_l = str(render_mode or "").strip().lower()
+    if "performance" in render_mode_l or "motion" in render_mode_l:
+        return "comfyui_motion"
+    if approved:
+        return "internal"
+    if has_reactive_timeline:
+        return "deforum_export"
+    return "internal"
+
+
+def build_unreal_bridge_preview(
+    project_id: str,
+    project_name: str | None,
+    analysis: dict[str, Any] | None,
+    plan: dict[str, Any] | None,
+    timeline: dict[str, Any] | None,
+    *,
+    variant_index: int = 0,
+) -> dict[str, Any]:
+    source_analysis = analysis if isinstance(analysis, dict) else {}
+    source_plan = plan if isinstance(plan, dict) else {}
+    source_timeline = timeline if isinstance(timeline, dict) else {}
+    variants = source_plan.get("variants") if isinstance(source_plan.get("variants"), list) else []
+    diagnostics: list[str] = []
+    vi = int(variant_index or 0)
+    if vi < 0 or vi >= len(variants):
+        diagnostics.append("variant_index_out_of_range")
+        vi = 0
+    variant = variants[vi] if variants and isinstance(variants[vi], dict) else {}
+    scenes = _dict_items(variant.get("scenes"))
+    if not scenes:
+        diagnostics.append("no_variant_scenes")
+
+    features = source_analysis.get("features") if isinstance(source_analysis.get("features"), dict) else {}
+    basic = source_analysis.get("basicInfo") if isinstance(source_analysis.get("basicInfo"), dict) else {}
+    fps = _timeline_fps(source_timeline)
+    duration_s = max(
+        0.0,
+        _coerce_float(
+            variant.get("duration_s")
+            or source_plan.get("duration_s")
+            or features.get("duration_s")
+            or features.get("duration")
+            or basic.get("durationSeconds")
+            or basic.get("duration")
+        ),
+    )
+    audio_path = str(
+        source_analysis.get("audio_path")
+        or source_analysis.get("audioPath")
+        or source_analysis.get("source_path")
+        or source_analysis.get("path")
+        or ""
+    ).strip() or None
+    bpm = max(
+        0.0,
+        _coerce_float(
+            features.get("bpm")
+            or features.get("tempo_bpm")
+            or features.get("tempo")
+            or basic.get("tempo")
+        ),
+    )
+    beat_times_raw = features.get("beat_times") or features.get("beats") or source_analysis.get("beat_times") or []
+    beat_times = sorted(
+        max(0.0, _coerce_float(value))
+        for value in list(beat_times_raw)
+        if isinstance(value, (int, float, str))
+    )
+    if len(beat_times) > 64:
+        diagnostics.append("beat_times_truncated")
+        beat_times = beat_times[:64]
+
+    reactive = source_timeline.get("reactive_lab") if isinstance(source_timeline.get("reactive_lab"), dict) else {}
+    reactive_sections = _dict_items(reactive.get("sections"))
+    cue_events = _dict_items(reactive.get("cue_events"))
+    repair_suggestions = _dict_items(reactive.get("repair_suggestions"))
+    handoff_manifest = reactive.get("handoff_manifest") if isinstance(reactive.get("handoff_manifest"), dict) else {}
+    reactive_metadata = reactive.get("metadata") if isinstance(reactive.get("metadata"), dict) else {}
+    approved_section_ids = {
+        str(value).strip()
+        for value in list(handoff_manifest.get("approvedSectionIds") or [])
+        if str(value).strip()
+    }
+    render_mode = str(reactive_metadata.get("renderMode") or handoff_manifest.get("renderMode") or "").strip()
+    schedule_stride = max(
+        1,
+        _coerce_int(reactive_metadata.get("scheduleStride") or handoff_manifest.get("scheduleStride"), 1),
+    )
+
+    sequence_name = f"{_slugify(project_name or project_id, 'edmg')}_MainSequence"
+    shots: list[dict[str, Any]] = []
+    markers: list[dict[str, Any]] = []
+    handoff_sections: list[dict[str, Any]] = []
+    default_total = max(1, len(scenes))
+    for index, scene in enumerate(scenes):
+        scene_id = str(scene.get("id") or scene.get("scene_id") or f"scene-{index + 1}").strip()
+        title = str(scene.get("name") or scene.get("title") or f"Scene {index + 1}").strip() or f"Scene {index + 1}"
+        start_s, end_s = _scene_bounds(scene, index=index, total=default_total, duration_s=duration_s or float(default_total))
+        start_frame = max(0, int(round(start_s * fps)))
+        end_frame = max(start_frame, int(round(end_s * fps)))
+        shot_id = f"shot_{index + 1:03d}_{_slugify(scene_id or title, f'scene_{index + 1}')}"
+        continuity_note = str(scene.get("continuity_note") or scene.get("continuityNote") or "").strip()
+        transition_cue = str(scene.get("transition_cue") or scene.get("transitionCue") or "").strip()
+        shot_type = str(scene.get("shot_type") or scene.get("shotType") or "").strip()
+        approved = _scene_approved(scene, index, approved_section_ids)
+
+        shots.append(
+            {
+                "shot_id": shot_id,
+                "scene_id": scene_id,
+                "title": title,
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "prompt": str(scene.get("prompt") or "").strip() or None,
+                "continuity_tags": [
+                    tag
+                    for tag in [continuity_note, transition_cue, "approved" if approved else "draft"]
+                    if tag
+                ],
+                "camera_tags": [tag for tag in [shot_type] if tag],
+                "approved": approved,
+            }
+        )
+        markers.append({"label": title, "frame": start_frame, "time_seconds": round(start_s, 4)})
+        handoff_sections.append(
+            {
+                "shot_id": shot_id,
+                "scene_id": scene_id,
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "prompt": str(scene.get("prompt") or "").strip() or None,
+                "negative_prompt": str(scene.get("negative_prompt") or "").strip() or None,
+                "continuity_note": continuity_note or None,
+                "approved": approved,
+                "engine_hint": _engine_hint_for_scene(
+                    scene,
+                    approved=approved,
+                    render_mode=render_mode,
+                    has_reactive_timeline=bool(reactive),
+                ),
+                "repair_actions": _repair_actions_for_scene(scene, index=index, repair_suggestions=repair_suggestions),
+            }
+        )
+
+    for cue_index, cue_event in enumerate(cue_events):
+        cue_time = max(0.0, _coerce_float(cue_event.get("time")))
+        cue_frame = max(0, _coerce_int(cue_event.get("frame"), int(round(cue_time * fps))))
+        cue_label = str(cue_event.get("cueType") or cue_event.get("label") or f"cue-{cue_index + 1}").strip()
+        markers.append({"label": cue_label, "frame": cue_frame, "time_seconds": round(cue_time, 4)})
+    markers.sort(key=lambda marker: (marker["frame"], marker["label"]))
+
+    section_events: list[dict[str, Any]] = []
+    if reactive_sections:
+        for index, section in enumerate(reactive_sections):
+            section_id = str(
+                section.get("id")
+                or section.get("sectionId")
+                or section.get("sceneId")
+                or section.get("label")
+                or f"section-{index + 1}"
+            ).strip()
+            label = str(section.get("label") or section.get("name") or section_id).strip() or section_id
+            time_seconds = max(0.0, _coerce_float(section.get("startTime") or section.get("start_s")))
+            has_energy = section.get("avgEnergy") is not None or section.get("energy") is not None
+            section_events.append(
+                {
+                    "section_id": section_id,
+                    "label": label,
+                    "time_seconds": time_seconds,
+                    "energy": _clamp_unit(section.get("avgEnergy") or section.get("energy")) if has_energy else None,
+                    "continuity_priority": 1.0 if bool(section.get("approved")) else 0.65,
+                }
+            )
+    else:
+        for index, scene in enumerate(scenes):
+            scene_id = str(scene.get("id") or scene.get("scene_id") or f"scene-{index + 1}").strip()
+            title = str(scene.get("name") or scene.get("title") or scene_id).strip() or scene_id
+            start_s, _end_s = _scene_bounds(scene, index=index, total=default_total, duration_s=duration_s or float(default_total))
+            section_events.append(
+                {
+                    "section_id": scene_id,
+                    "label": title,
+                    "time_seconds": start_s,
+                    "energy": None,
+                    "continuity_priority": 1.0 if bool(scene.get("approved")) else 0.65,
+                }
+            )
+
+    preview_cue_events = [
+        {
+            "cue_id": str(cue.get("id") or f"cue-{index + 1}"),
+            "frame": max(0, _coerce_int(cue.get("frame"), 0)),
+            "time_seconds": max(0.0, _coerce_float(cue.get("time"))),
+            "cue_type": str(cue.get("cueType") or cue.get("type") or "cue").strip() or "cue",
+            "instruction": str(cue.get("instruction") or cue.get("action") or "").strip() or None,
+        }
+        for index, cue in enumerate(cue_events)
+    ]
+
+    camera = source_timeline.get("camera") if isinstance(source_timeline.get("camera"), dict) else {}
+    camera_keyframes = [deepcopy(frame) for frame in list(camera.get("keyframes") or []) if isinstance(frame, dict)]
+    if len(camera_keyframes) > 12:
+        diagnostics.append("camera_keyframes_truncated")
+        camera_keyframes = camera_keyframes[:12]
+
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "variant_index": vi,
+        "source": "studio_project",
+        "diagnostics": diagnostics,
+        "shot_metadata_export": {
+            "engine": "unreal",
+            "handoff_kind": "shot_metadata_export",
+            "sequence_name": sequence_name,
+            "fps": fps,
+            "duration_seconds": duration_s,
+            "audio_path": audio_path,
+            "project_fields": ["project_id", "project_name", "fps", "audio_path"],
+            "shot_fields": [
+                "shot_id",
+                "scene_id",
+                "start_frame",
+                "end_frame",
+                "prompt",
+                "continuity_tags",
+            ],
+            "marker_fields": ["label", "frame", "time_seconds"],
+            "shots": shots,
+            "markers": markers,
+        },
+        "render_handoff": {
+            "engine": "unreal",
+            "handoff_kind": "render_handoff",
+            "execution_owner": "external_runtime",
+            "return_owner": "studio",
+            "render_mode": render_mode,
+            "schedule_stride": schedule_stride,
+            "approved_section_ids": sorted(approved_section_ids),
+            "expected_inputs": ["shot_manifest.json", "audio_markers.json", "style_packet.json"],
+            "expected_outputs": ["shot_render.mov", "alpha_pass.mov", "metadata.json"],
+            "assembly_mode": "ffmpeg_back_in_studio",
+            "sections": handoff_sections,
+        },
+        "live_control_bridge": {
+            "engine": "unreal",
+            "handoff_kind": "live_control_bridge",
+            "cadence_hz": 30,
+            "bpm": bpm,
+            "transports": {
+                "osc": ["/edmg/section", "/edmg/beat", "/edmg/camera"],
+                "websocket": ["section_change", "beat_pulse", "lighting_envelope"],
+                "remote_control": ["sequence.PlayRate", "camera.FocalLength", "lights.Intensity"],
+            },
+            "section_payload_fields": ["section_id", "energy", "continuity_priority"],
+            "section_events": section_events,
+            "cue_events": preview_cue_events,
+            "beat_times": beat_times,
+            "camera_keyframes": camera_keyframes,
+        },
+    }

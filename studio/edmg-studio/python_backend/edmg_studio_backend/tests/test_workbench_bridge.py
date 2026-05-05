@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from edmg_studio_backend.services.workbench_bridge import (
+    build_unreal_bridge_preview,
     merge_reactive_lab_into_timeline,
     planner_lab_to_canonical_plan,
     planner_lab_to_project_analysis,
@@ -117,3 +118,83 @@ def test_reactive_lab_merge_upserts_motion_track_and_camera_keyframes():
     assert merged["camera"]["keyframes"][0]["zoom"] == 1.0
     assert merged["camera"]["keyframes"][-1]["rotation_deg"] == 5.0
     assert merged["reactive_lab"]["handoff_manifest"]["approvedSectionIds"] == [1]
+
+
+def test_unreal_bridge_preview_builds_export_handoff_and_live_control_shapes():
+    analysis = {
+        "features": {
+            "duration_s": 8.0,
+            "bpm": 124,
+            "beat_times": [0.0, 0.5, 1.0, 1.5],
+        },
+        "audio_path": "projects/demo/assets/audio/source.wav",
+    }
+    plan = {
+        "variants": [
+            {
+                "duration_s": 8.0,
+                "scenes": [
+                    {
+                        "id": "scene-1",
+                        "name": "Intro push",
+                        "start_s": 0.0,
+                        "end_s": 4.0,
+                        "prompt": "Lead silhouette pushing through a neon haze.",
+                        "negative_prompt": "muddy lighting",
+                        "continuity_note": "keep the same lead silhouette",
+                        "shot_type": "tracking push-in",
+                        "approved": True,
+                    },
+                    {
+                        "id": "scene-2",
+                        "name": "Chorus hit",
+                        "start_s": 4.0,
+                        "end_s": 8.0,
+                        "prompt": "Color burst as the chorus lands.",
+                    },
+                ],
+            }
+        ]
+    }
+    timeline = {
+        "render": {"fps_output": 24},
+        "camera": {
+            "keyframes": [
+                {"t": 0.0, "zoom": 1.0},
+                {"t": 4.0, "zoom": 1.2},
+            ]
+        },
+        "reactive_lab": {
+            "metadata": {"renderMode": "performance-led", "scheduleStride": 2},
+            "sections": [
+                {"id": "scene-1", "label": "Intro", "startTime": 0.0, "avgEnergy": 0.35, "approved": True},
+                {"id": "scene-2", "label": "Chorus", "startTime": 4.0, "avgEnergy": 0.8, "approved": False},
+            ],
+            "cue_events": [
+                {"id": "cue-1", "frame": 48, "time": 2.0, "cueType": "impact", "instruction": "accent the downbeat"}
+            ],
+            "repair_suggestions": [
+                {"sectionId": "scene-2", "issue": "face drift", "action": "reuse anchor seed"}
+            ],
+            "handoff_manifest": {"approvedSectionIds": ["scene-1"], "renderMode": "performance-led", "scheduleStride": 2},
+        },
+    }
+
+    preview = build_unreal_bridge_preview(
+        project_id="demo-project",
+        project_name="Demo Project",
+        analysis=analysis,
+        plan=plan,
+        timeline=timeline,
+        variant_index=0,
+    )
+
+    assert preview["shot_metadata_export"]["sequence_name"] == "demo_project_MainSequence"
+    assert preview["shot_metadata_export"]["shots"][0]["start_frame"] == 0
+    assert preview["shot_metadata_export"]["shots"][1]["end_frame"] == 192
+    assert preview["render_handoff"]["render_mode"] == "performance-led"
+    assert preview["render_handoff"]["sections"][0]["engine_hint"] == "comfyui_motion"
+    assert preview["render_handoff"]["sections"][1]["repair_actions"] == ["reuse anchor seed"]
+    assert preview["live_control_bridge"]["transports"]["osc"] == ["/edmg/section", "/edmg/beat", "/edmg/camera"]
+    assert preview["live_control_bridge"]["cue_events"][0]["cue_type"] == "impact"
+    assert preview["live_control_bridge"]["camera_keyframes"][-1]["zoom"] == 1.2

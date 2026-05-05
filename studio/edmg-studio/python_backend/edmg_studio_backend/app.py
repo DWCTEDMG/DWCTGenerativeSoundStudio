@@ -48,6 +48,7 @@ from .schemas import (
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
+    UnrealBridgePreviewResponse,
 )
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
@@ -87,6 +88,7 @@ from .services.render_settings import (
     STABILITY_STYLE_PRESETS,
 )
 from .services.workbench_bridge import (
+    build_unreal_bridge_preview,
     merge_reactive_lab_into_timeline,
     planner_lab_to_canonical_plan,
     planner_lab_to_project_analysis,
@@ -7451,6 +7453,32 @@ def render_conductor_plan(project_id: str, req: RenderConductorPlanRequest):
         "environment": environment,
         "visual_dna_hints": build_visual_dna_prompt_hints(visual_dna),
     }
+
+
+@app.get("/v1/projects/{project_id}/unreal/preview")
+def get_unreal_bridge_preview(project_id: str, variant_index: int = 0):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    variants = plan.get("variants") if isinstance(plan, dict) and isinstance(plan.get("variants"), list) else []
+    if not variants:
+        raise HTTPException(400, "No plan generated")
+    vi = int(variant_index or 0)
+    if vi < 0 or vi >= len(variants):
+        raise HTTPException(400, "Invalid variant_index")
+
+    preview = UnrealBridgePreviewResponse.model_validate(
+        build_unreal_bridge_preview(
+            project_id=str(proj.id),
+            project_name=str(getattr(proj, "name", "") or "") or None,
+            analysis=(proj.meta.get("analysis") or {}) if isinstance(proj.meta, dict) else {},
+            plan=plan if isinstance(plan, dict) else {},
+            timeline=(proj.meta.get("timeline") or {}) if isinstance(proj.meta, dict) else {},
+            variant_index=vi,
+        )
+    )
+    return {"ok": True, "preview": preview.model_dump(mode="json")}
 
 
 @app.post("/v1/projects/{project_id}/pipeline/run")

@@ -508,3 +508,127 @@ class RenderConductorPlanRequest(BaseModel):
     )
     fallback_policy: RenderFallbackPolicy = "auto"
     sections: list[RenderIntentSection] = Field(default_factory=list)
+
+
+class UnrealBridgeMarker(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+    frame: int = Field(default=0, ge=0)
+    time_seconds: float = Field(default=0.0, ge=0.0)
+
+
+class UnrealBridgeShotPreview(BaseModel):
+    shot_id: str = Field(min_length=1, max_length=120)
+    scene_id: str = Field(min_length=1, max_length=120)
+    title: str | None = Field(default=None, max_length=200)
+    start_frame: int = Field(default=0, ge=0)
+    end_frame: int = Field(default=0, ge=0)
+    prompt: str | None = Field(default=None, max_length=4000)
+    continuity_tags: list[str] = Field(default_factory=list)
+    camera_tags: list[str] = Field(default_factory=list)
+    approved: bool = False
+
+
+class UnrealShotMetadataExportPreview(BaseModel):
+    engine: Literal["unreal"] = "unreal"
+    handoff_kind: Literal["shot_metadata_export"] = "shot_metadata_export"
+    sequence_name: str = Field(min_length=1, max_length=240)
+    fps: int = Field(default=24, ge=1, le=240)
+    duration_seconds: float = Field(default=0.0, ge=0.0)
+    audio_path: str | None = Field(default=None, max_length=1024)
+    project_fields: list[str] = Field(
+        default_factory=lambda: ["project_id", "project_name", "fps", "audio_path"]
+    )
+    shot_fields: list[str] = Field(
+        default_factory=lambda: [
+            "shot_id",
+            "scene_id",
+            "start_frame",
+            "end_frame",
+            "prompt",
+            "continuity_tags",
+        ]
+    )
+    marker_fields: list[str] = Field(
+        default_factory=lambda: ["label", "frame", "time_seconds"]
+    )
+    shots: list[UnrealBridgeShotPreview] = Field(default_factory=list)
+    markers: list[UnrealBridgeMarker] = Field(default_factory=list)
+
+
+class UnrealRenderHandoffSectionPreview(BaseModel):
+    shot_id: str = Field(min_length=1, max_length=120)
+    scene_id: str = Field(min_length=1, max_length=120)
+    start_frame: int = Field(default=0, ge=0)
+    end_frame: int = Field(default=0, ge=0)
+    prompt: str | None = Field(default=None, max_length=4000)
+    negative_prompt: str | None = Field(default=None, max_length=4000)
+    continuity_note: str | None = Field(default=None, max_length=1000)
+    approved: bool = False
+    engine_hint: str = Field(default="internal", min_length=1, max_length=80)
+    repair_actions: list[str] = Field(default_factory=list)
+
+
+class UnrealRenderHandoffPreview(BaseModel):
+    engine: Literal["unreal"] = "unreal"
+    handoff_kind: Literal["render_handoff"] = "render_handoff"
+    execution_owner: Literal["external_runtime"] = "external_runtime"
+    return_owner: Literal["studio"] = "studio"
+    render_mode: str = Field(default="", max_length=160)
+    schedule_stride: int = Field(default=1, ge=1)
+    approved_section_ids: list[str] = Field(default_factory=list)
+    expected_inputs: list[str] = Field(
+        default_factory=lambda: ["shot_manifest.json", "audio_markers.json", "style_packet.json"]
+    )
+    expected_outputs: list[str] = Field(
+        default_factory=lambda: ["shot_render.mov", "alpha_pass.mov", "metadata.json"]
+    )
+    assembly_mode: Literal["ffmpeg_back_in_studio"] = "ffmpeg_back_in_studio"
+    sections: list[UnrealRenderHandoffSectionPreview] = Field(default_factory=list)
+
+
+class UnrealBridgeSectionEvent(BaseModel):
+    section_id: str = Field(min_length=1, max_length=120)
+    label: str = Field(min_length=1, max_length=200)
+    time_seconds: float = Field(default=0.0, ge=0.0)
+    energy: float | None = Field(default=None, ge=0.0, le=1.0)
+    continuity_priority: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class UnrealBridgeCueEvent(BaseModel):
+    cue_id: str = Field(min_length=1, max_length=120)
+    frame: int = Field(default=0, ge=0)
+    time_seconds: float = Field(default=0.0, ge=0.0)
+    cue_type: str = Field(default="cue", min_length=1, max_length=120)
+    instruction: str | None = Field(default=None, max_length=400)
+
+
+class UnrealLiveControlBridgePreview(BaseModel):
+    engine: Literal["unreal"] = "unreal"
+    handoff_kind: Literal["live_control_bridge"] = "live_control_bridge"
+    transports: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "osc": ["/edmg/section", "/edmg/beat", "/edmg/camera"],
+            "websocket": ["section_change", "beat_pulse", "lighting_envelope"],
+            "remote_control": ["sequence.PlayRate", "camera.FocalLength", "lights.Intensity"],
+        }
+    )
+    cadence_hz: int = Field(default=30, ge=1, le=240)
+    bpm: float = Field(default=0.0, ge=0.0)
+    section_payload_fields: list[str] = Field(
+        default_factory=lambda: ["section_id", "energy", "continuity_priority"]
+    )
+    section_events: list[UnrealBridgeSectionEvent] = Field(default_factory=list)
+    cue_events: list[UnrealBridgeCueEvent] = Field(default_factory=list)
+    beat_times: list[float] = Field(default_factory=list)
+    camera_keyframes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class UnrealBridgePreviewResponse(BaseModel):
+    project_id: str = Field(min_length=1, max_length=120)
+    project_name: str | None = Field(default=None, max_length=200)
+    variant_index: int = Field(default=0, ge=0)
+    source: Literal["studio_project"] = "studio_project"
+    diagnostics: list[str] = Field(default_factory=list)
+    shot_metadata_export: UnrealShotMetadataExportPreview
+    render_handoff: UnrealRenderHandoffPreview
+    live_control_bridge: UnrealLiveControlBridgePreview

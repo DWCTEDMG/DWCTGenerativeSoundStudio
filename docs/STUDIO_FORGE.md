@@ -25,6 +25,7 @@ Current features:
 - template preview
 - workflow recipe preview
 - Unreal bridge preview cards
+- backend Unreal bridge contract preview via `/v1/projects/{project_id}/unreal/preview`
 - validation checklist
 
 Studio Forge v1 does not generate code, run workflows, write files, install runtimes, or mutate project data.

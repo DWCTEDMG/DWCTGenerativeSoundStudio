@@ -141,3 +141,12 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
         assert planned_payload["environment"]["diagnostics"] == ["stubbed-environment"]
         assert "continuity-heavy" not in planned_payload["plan"]["summary"]  # summary stays generic
         assert planned_payload["visual_dna_hints"]["confidence"] > 0.0
+
+        unreal_preview = client.get(f"/v1/projects/{proj.id}/unreal/preview")
+        unreal_preview.raise_for_status()
+        unreal_payload = unreal_preview.json()
+        assert unreal_payload["ok"] is True
+        assert unreal_payload["preview"]["project_id"] == proj.id
+        assert unreal_payload["preview"]["render_handoff"]["render_mode"] == "performance-led"
+        assert len(unreal_payload["preview"]["render_handoff"]["sections"]) == 2
+        assert unreal_payload["preview"]["live_control_bridge"]["section_events"][0]["label"] == "chorus"
