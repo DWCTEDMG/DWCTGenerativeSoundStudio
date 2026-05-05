@@ -26,6 +26,7 @@ Current features:
 - workflow recipe preview
 - Unreal bridge preview cards
 - backend Unreal bridge contract preview via `/v1/projects/{project_id}/unreal/preview`
+- backend Unreal bridge export bundle via `POST /v1/projects/{project_id}/export/unreal`
 - validation checklist
 
 Studio Forge v1 does not generate code, run workflows, install runtimes, pull models, mutate project data, or execute shell commands from the frontend.

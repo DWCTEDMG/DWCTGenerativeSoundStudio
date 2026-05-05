@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from edmg_studio_backend.services.workbench_bridge import (
+    build_unreal_bridge_export_payloads,
     build_unreal_bridge_preview,
     merge_reactive_lab_into_timeline,
     planner_lab_to_canonical_plan,
@@ -198,3 +199,76 @@ def test_unreal_bridge_preview_builds_export_handoff_and_live_control_shapes():
     assert preview["live_control_bridge"]["transports"]["osc"] == ["/edmg/section", "/edmg/beat", "/edmg/camera"]
     assert preview["live_control_bridge"]["cue_events"][0]["cue_type"] == "impact"
     assert preview["live_control_bridge"]["camera_keyframes"][-1]["zoom"] == 1.2
+
+
+def test_unreal_bridge_export_payloads_build_expected_bundle_files():
+    preview = build_unreal_bridge_preview(
+        project_id="demo-project",
+        project_name="Demo Project",
+        analysis={
+            "features": {
+                "duration_s": 8.0,
+                "bpm": 124,
+                "beat_times": [0.0, 0.5, 1.0],
+                "energy_curve": [0.1, 0.4, 0.8],
+                "musical_key": "F minor",
+            },
+            "transcript": {"text": "Neon skyline rising into the chorus."},
+            "tags": ["future nostalgia", "neon skyline"],
+        },
+        plan={
+            "variants": [
+                {
+                    "duration_s": 8.0,
+                    "scenes": [
+                        {"id": "scene-1", "name": "Intro", "start_s": 0.0, "end_s": 4.0, "prompt": "Intro prompt", "approved": True},
+                        {"id": "scene-2", "name": "Chorus", "start_s": 4.0, "end_s": 8.0, "prompt": "Chorus prompt"},
+                    ],
+                }
+            ]
+        },
+        timeline={
+            "render": {"fps_output": 24},
+            "reactive_lab": {
+                "metadata": {"renderMode": "performance-led"},
+                "cue_events": [{"id": "cue-1", "frame": 24, "time": 1.0, "cueType": "impact"}],
+            },
+        },
+        variant_index=0,
+    )
+
+    payloads = build_unreal_bridge_export_payloads(
+        project_id="demo-project",
+        project_name="Demo Project",
+        variant_index=0,
+        preview=preview,
+        analysis={
+            "features": {
+                "bpm": 124,
+                "musical_key": "F minor",
+                "energy_curve": [0.1, 0.4, 0.8],
+            },
+            "transcript": {"text": "Neon skyline rising into the chorus."},
+            "tags": ["future nostalgia", "neon skyline"],
+        },
+        visual_dna={
+            "identity": {"core_themes": ["future nostalgia"]},
+            "continuity": {"subject_anchors": ["lead silhouette"]},
+            "prompt_guidance": {"positive_fragments": ["cinematic neon haze"]},
+        },
+        created_at="2026-05-05 13:30:00",
+    )
+
+    assert sorted(payloads.keys()) == [
+        "audio_markers.json",
+        "bundle_manifest.json",
+        "live_control_bridge.json",
+        "render_handoff.json",
+        "return_contract.json",
+        "shot_manifest.json",
+        "style_packet.json",
+    ]
+    assert payloads["audio_markers.json"]["sequence_name"] == "demo_project_MainSequence"
+    assert payloads["style_packet.json"]["visual_dna"]["identity"]["core_themes"] == ["future nostalgia"]
+    assert payloads["return_contract.json"]["assembly_mode"] == "ffmpeg_back_in_studio"
+    assert payloads["bundle_manifest.json"]["files"][0]["path"] == "shot_manifest.json"

@@ -150,3 +150,21 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
         assert unreal_payload["preview"]["render_handoff"]["render_mode"] == "performance-led"
         assert len(unreal_payload["preview"]["render_handoff"]["sections"]) == 2
         assert unreal_payload["preview"]["live_control_bridge"]["section_events"][0]["label"] == "chorus"
+
+        exported = client.post(
+            f"/v1/projects/{proj.id}/export/unreal",
+            json={"variant_index": 0, "bundle_name": "route-demo", "include_zip": True},
+        )
+        exported.raise_for_status()
+        export_payload = exported.json()
+        assert export_payload["ok"] is True
+        assert export_payload["bundle"]["bundle_dir"].startswith("outputs/unreal/route_demo")
+        assert export_payload["bundle"]["manifest_path"].endswith("bundle_manifest.json")
+        assert export_payload["bundle"]["zip_path"].endswith(".zip")
+
+        outputs = client.get(f"/v1/projects/{proj.id}/outputs")
+        outputs.raise_for_status()
+        outputs_payload = outputs.json()
+        assert len(outputs_payload["unreal_exports"]) == 1
+        assert outputs_payload["unreal_exports"][0]["sequence_name"].endswith("_MainSequence")
+        assert outputs_payload["unreal_exports"][0]["manifest"]["export_family"] == "unreal_bridge_bundle"

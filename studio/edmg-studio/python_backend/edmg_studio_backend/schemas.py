@@ -228,6 +228,12 @@ class ExportDeforumRequest(BaseModel):
     preset: CreativePreset = "cinematic"
     sensitivity: float = Field(default=1.0, ge=0.1, le=3.0)
 
+
+class ExportUnrealBridgeRequest(BaseModel):
+    variant_index: int = Field(default=0, ge=0)
+    bundle_name: str | None = Field(default=None, max_length=120)
+    include_zip: bool = True
+
 class CloudAwsTestRequest(BaseModel):
     bucket: str | None = None
 

@@ -44,7 +44,7 @@ from .config import Settings
 from .schemas import (
     HealthResponse, ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
     RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest,
-    CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest,
+    CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest, ExportUnrealBridgeRequest,
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
@@ -88,6 +88,7 @@ from .services.render_settings import (
     STABILITY_STYLE_PRESETS,
 )
 from .services.workbench_bridge import (
+    build_unreal_bridge_export_payloads,
     build_unreal_bridge_preview,
     merge_reactive_lab_into_timeline,
     planner_lab_to_canonical_plan,
@@ -8088,6 +8089,11 @@ def _scene_schedule_to_prompts(variant: dict[str, Any], fps: int) -> dict[str, s
         prompts["0"] = "cinematic"
     return prompts
 
+
+def _safe_export_bundle_stem(value: str, fallback: str) -> str:
+    stem = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return stem[:80] or fallback
+
 @app.post("/v1/projects/{project_id}/export/deforum")
 def export_deforum(project_id: str, req: ExportDeforumRequest):
     proj = store.get(project_id)
@@ -8172,6 +8178,90 @@ def export_deforum(project_id: str, req: ExportDeforumRequest):
 
     return {"ok": True, "path": rel}
 
+
+@app.post("/v1/projects/{project_id}/export/unreal")
+def export_unreal_bridge_bundle(project_id: str, req: ExportUnrealBridgeRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated")
+    variants = plan["variants"]
+    if req.variant_index < 0 or req.variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    preview = UnrealBridgePreviewResponse.model_validate(
+        build_unreal_bridge_preview(
+            project_id=str(proj.id),
+            project_name=str(getattr(proj, "name", "") or "") or None,
+            analysis=(proj.meta.get("analysis") or {}) if isinstance(proj.meta, dict) else {},
+            plan=plan if isinstance(plan, dict) else {},
+            timeline=(proj.meta.get("timeline") or {}) if isinstance(proj.meta, dict) else {},
+            variant_index=int(req.variant_index or 0),
+        )
+    )
+    visual_dna = _load_project_visual_dna(proj)
+    created_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    base_stem = _safe_export_bundle_stem(
+        str(req.bundle_name or f"variant_{int(req.variant_index or 0):02d}_unreal_{stamp}"),
+        f"unreal_bundle_{stamp}",
+    )
+
+    pdir = store.project_dir(project_id)
+    out_root = pdir / "outputs" / "unreal"
+    out_root.mkdir(parents=True, exist_ok=True)
+    bundle_dir = out_root / base_stem
+    suffix = 2
+    while bundle_dir.exists():
+        bundle_dir = out_root / f"{base_stem}_{suffix}"
+        suffix += 1
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    payloads = build_unreal_bridge_export_payloads(
+        project_id=str(proj.id),
+        project_name=str(getattr(proj, "name", "") or "") or None,
+        variant_index=int(req.variant_index or 0),
+        preview=preview.model_dump(mode="json"),
+        analysis=(proj.meta.get("analysis") or {}) if isinstance(proj.meta, dict) else {},
+        visual_dna=visual_dna.model_dump(mode="json"),
+        created_at=created_at,
+    )
+    for relative_name, payload in payloads.items():
+        target = bundle_dir / relative_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    zip_rel: str | None = None
+    zip_path: Path | None = None
+    if req.include_zip:
+        zip_path = out_root / f"{bundle_dir.name}.zip"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for file_path in sorted(bundle_dir.rglob("*")):
+                if file_path.is_file():
+                    archive.write(file_path, arcname=str(file_path.relative_to(bundle_dir)))
+        zip_rel = zip_path.relative_to(pdir).as_posix()
+
+    manifest_rel = (bundle_dir / "bundle_manifest.json").relative_to(pdir).as_posix()
+    bundle_rel = bundle_dir.relative_to(pdir).as_posix()
+    export_entry = {
+        "bundle_dir": bundle_rel,
+        "manifest_path": manifest_rel,
+        "zip_path": zip_rel,
+        "created_at": created_at,
+        "variant_index": int(req.variant_index or 0),
+        "sequence_name": str(preview.shot_metadata_export.sequence_name),
+        "files": sorted(payloads.keys()),
+    }
+    proj.meta.setdefault("exports", {}).setdefault("unreal", []).append(export_entry)
+    store.save(proj)
+
+    return {
+        "ok": True,
+        "bundle": export_entry,
+    }
+
 @app.get("/v1/projects/{project_id}/outputs")
 def list_outputs(project_id: str):
     proj = store.get(project_id)
@@ -8202,6 +8292,7 @@ def list_outputs(project_id: str):
     imgs = []
     vids = []
     defs = []
+    unreal_exports = []
     for p in sorted((pdir / "outputs" / "images").glob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
         if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
             imgs.append(_file_entry(p))
@@ -8219,6 +8310,40 @@ def list_outputs(project_id: str):
         vids.append(entry)
     for p in sorted((pdir / "outputs" / "deforum").glob("*.json"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
         defs.append(_file_entry(p))
+    raw_unreal_exports = []
+    if isinstance(proj.meta, dict):
+        raw_exports = proj.meta.get("exports") if isinstance(proj.meta.get("exports"), dict) else {}
+        raw_unreal_exports = raw_exports.get("unreal") if isinstance(raw_exports.get("unreal"), list) else []
+    for raw in reversed(raw_unreal_exports):
+        if not isinstance(raw, dict):
+            continue
+        entry = {
+            "bundle_dir": str(raw.get("bundle_dir") or ""),
+            "manifest_path": str(raw.get("manifest_path") or ""),
+            "zip_path": str(raw.get("zip_path") or "") or None,
+            "created_at": str(raw.get("created_at") or ""),
+            "variant_index": int(raw.get("variant_index") or 0),
+            "sequence_name": str(raw.get("sequence_name") or ""),
+            "files": list(raw.get("files") or []),
+        }
+        manifest_rel = entry["manifest_path"]
+        if manifest_rel:
+            try:
+                manifest_path = safe_join(pdir, manifest_rel)
+                if manifest_path.exists() and manifest_path.is_file():
+                    entry["manifest_file"] = _file_entry(manifest_path)
+                    entry["manifest"] = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        zip_rel = entry["zip_path"]
+        if zip_rel:
+            try:
+                zip_file = safe_join(pdir, zip_rel)
+                if zip_file.exists() and zip_file.is_file():
+                    entry["zip_file"] = _file_entry(zip_file)
+            except Exception:
+                pass
+        unreal_exports.append(entry)
 
     latest_internal = proj.meta.get("last_internal_render") or None
     history = proj.meta.get("internal_render_history") or []
@@ -8232,6 +8357,7 @@ def list_outputs(project_id: str):
         "images": imgs,
         "videos": vids,
         "deforum_exports": defs,
+        "unreal_exports": unreal_exports,
         "project_id": project_id,
         "latest_internal_render": latest_internal,
         "internal_render_history": history[-20:] if isinstance(history, list) else [],

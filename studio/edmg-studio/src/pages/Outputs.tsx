@@ -437,6 +437,50 @@ export default function Outputs(props: PageProps) {
               ))}
             </>
           ) : null}
+
+          {outs.unreal_exports?.length ? (
+            <>
+              <hr />
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>Unreal bridge exports</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {outs.unreal_exports.map((bundle: any) => (
+                  <div key={bundle.manifest_path || bundle.bundle_dir} style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 10 }}>
+                    <div className="small">
+                      <b>{bundle.sequence_name || "Unreal bundle"}</b>
+                      {Number.isFinite(bundle.variant_index) ? <> â€¢ variant {Number(bundle.variant_index) + 1}</> : null}
+                      {bundle.created_at ? <> â€¢ {bundle.created_at}</> : null}
+                    </div>
+                    {bundle.bundle_dir ? (
+                      <div className="small" style={{ marginTop: 4, opacity: 0.82 }}>{bundle.bundle_dir}</div>
+                    ) : null}
+                    {bundle.manifest?.files?.length ? (
+                      <div className="small" style={{ marginTop: 6, opacity: 0.84 }}>
+                        Files <b>{bundle.manifest.files.map((item: any) => String(item?.path || item)).join(", ")}</b>
+                      </div>
+                    ) : null}
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                      {bundle.manifest_path ? (
+                        <a className="secondary" href={fileUrl(projectId, bundle.manifest_path)} target="_blank" rel="noreferrer">Open manifest</a>
+                      ) : null}
+                      {bundle.zip_path ? (
+                        <a className="secondary" href={fileUrl(projectId, bundle.zip_path)} target="_blank" rel="noreferrer">Download zip</a>
+                      ) : null}
+                      {bundle.bundle_dir ? (
+                        <button className="secondary" onClick={() => handleArtifactPathAction("unreal bundle", bundle.bundle_dir, "reveal")}>
+                          {desktopActionLabel("reveal", "unreal bundle")}
+                        </button>
+                      ) : null}
+                      {bundle.zip_path ? (
+                        <button className="secondary" onClick={() => handleArtifactPathAction("unreal zip", bundle.zip_path, "reveal")}>
+                          {desktopActionLabel("reveal", "unreal zip")}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
     ) : null,

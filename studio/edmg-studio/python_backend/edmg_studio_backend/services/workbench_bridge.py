@@ -778,3 +778,121 @@ def build_unreal_bridge_preview(
             "camera_keyframes": camera_keyframes,
         },
     }
+
+
+def build_unreal_bridge_export_payloads(
+    *,
+    project_id: str,
+    project_name: str | None,
+    variant_index: int,
+    preview: dict[str, Any] | None,
+    analysis: dict[str, Any] | None,
+    visual_dna: dict[str, Any] | None,
+    created_at: str,
+) -> dict[str, dict[str, Any]]:
+    source_preview = preview if isinstance(preview, dict) else {}
+    shot_metadata = deepcopy(source_preview.get("shot_metadata_export") or {})
+    render_handoff = deepcopy(source_preview.get("render_handoff") or {})
+    live_control = deepcopy(source_preview.get("live_control_bridge") or {})
+    source_analysis = analysis if isinstance(analysis, dict) else {}
+    source_visual_dna = visual_dna if isinstance(visual_dna, dict) else {}
+
+    features = source_analysis.get("features") if isinstance(source_analysis.get("features"), dict) else {}
+    transcript = source_analysis.get("transcript") if isinstance(source_analysis.get("transcript"), dict) else {}
+    tags = [
+        str(tag).strip()
+        for tag in list(source_analysis.get("tags") or [])
+        if str(tag).strip()
+    ]
+    energy_curve = [
+        _clamp_unit(value)
+        for value in list(features.get("energy_curve") or [])
+        if isinstance(value, (int, float))
+    ][:128]
+    beat_times = [
+        max(0.0, _coerce_float(value))
+        for value in list(live_control.get("beat_times") or [])
+        if isinstance(value, (int, float, str))
+    ]
+
+    audio_markers = {
+        "project_id": project_id,
+        "project_name": project_name,
+        "variant_index": int(variant_index or 0),
+        "sequence_name": str(shot_metadata.get("sequence_name") or ""),
+        "audio_path": str(shot_metadata.get("audio_path") or "") or None,
+        "fps": _coerce_int(shot_metadata.get("fps"), 24),
+        "bpm": _coerce_float(live_control.get("bpm")),
+        "markers": deepcopy(shot_metadata.get("markers") or []),
+        "beat_times": beat_times,
+        "cue_events": deepcopy(live_control.get("cue_events") or []),
+        "section_events": deepcopy(live_control.get("section_events") or []),
+    }
+
+    style_packet = {
+        "project_id": project_id,
+        "project_name": project_name,
+        "variant_index": int(variant_index or 0),
+        "sequence_name": str(shot_metadata.get("sequence_name") or ""),
+        "analysis_context": {
+            "tags": tags[:24],
+            "transcript": str(transcript.get("text") or "").strip(),
+            "tempo_bpm": _coerce_float(
+                features.get("bpm") or features.get("tempo_bpm") or features.get("tempo")
+            ),
+            "musical_key": str(features.get("musical_key") or ""),
+            "energy_curve": energy_curve,
+        },
+        "visual_dna": {
+            "identity": deepcopy(source_visual_dna.get("identity") or {}),
+            "continuity": deepcopy(source_visual_dna.get("continuity") or {}),
+            "prompt_guidance": deepcopy(source_visual_dna.get("prompt_guidance") or {}),
+        },
+        "render_hints": {
+            "render_mode": str(render_handoff.get("render_mode") or ""),
+            "approved_section_ids": deepcopy(render_handoff.get("approved_section_ids") or []),
+            "assembly_mode": str(render_handoff.get("assembly_mode") or ""),
+        },
+    }
+
+    return_contract = {
+        "project_id": project_id,
+        "project_name": project_name,
+        "variant_index": int(variant_index or 0),
+        "return_owner": str(render_handoff.get("return_owner") or "studio"),
+        "assembly_mode": str(render_handoff.get("assembly_mode") or "ffmpeg_back_in_studio"),
+        "expected_outputs": deepcopy(render_handoff.get("expected_outputs") or []),
+        "delivery_notes": [
+            "Studio remains the assembly owner for the final mux and output bundle.",
+            "Rendered files should preserve scene and shot ordering from shot_manifest.json.",
+        ],
+    }
+
+    files = [
+        {"path": "shot_manifest.json", "kind": "shot_metadata_export"},
+        {"path": "audio_markers.json", "kind": "audio_markers"},
+        {"path": "style_packet.json", "kind": "style_packet"},
+        {"path": "render_handoff.json", "kind": "render_handoff"},
+        {"path": "live_control_bridge.json", "kind": "live_control_bridge"},
+        {"path": "return_contract.json", "kind": "return_contract"},
+    ]
+    bundle_manifest = {
+        "schema_version": 1,
+        "export_family": "unreal_bridge_bundle",
+        "created_at": created_at,
+        "project_id": project_id,
+        "project_name": project_name,
+        "variant_index": int(variant_index or 0),
+        "sequence_name": str(shot_metadata.get("sequence_name") or ""),
+        "files": files,
+    }
+
+    return {
+        "bundle_manifest.json": bundle_manifest,
+        "shot_manifest.json": shot_metadata,
+        "audio_markers.json": audio_markers,
+        "style_packet.json": style_packet,
+        "render_handoff.json": render_handoff,
+        "live_control_bridge.json": live_control,
+        "return_contract.json": return_contract,
+    }
