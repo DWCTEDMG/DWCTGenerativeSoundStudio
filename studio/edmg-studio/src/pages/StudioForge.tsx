@@ -2,6 +2,7 @@ import React, { useMemo, useEffect, useState } from "react";
 import { apiGet } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
+import { useStudioWorkbenchProject } from "../workbenches/useStudioWorkbenchProject";
 import { STUDIO_FORGE_BRIDGES } from "../studio-forge/bridges";
 import {
   buildStudioForgeRecommendations,
@@ -168,7 +169,14 @@ function RecipeCard({ recipe }: { recipe: StudioForgeRecipe }) {
   );
 }
 
-function BridgeCard({ bridge }: { bridge: StudioForgeBridge }) {
+function BridgeCard({
+  bridge,
+  previewPayload,
+}: {
+  bridge: StudioForgeBridge;
+  previewPayload?: Record<string, unknown> | null;
+}) {
+  const payload = previewPayload ?? bridge.previewPayload;
   return (
     <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
@@ -205,7 +213,7 @@ function BridgeCard({ bridge }: { bridge: StudioForgeBridge }) {
               whiteSpace: "pre-wrap",
             }}
           >
-            {JSON.stringify(bridge.previewPayload, null, 2)}
+            {JSON.stringify(payload, null, 2)}
           </pre>
         </div>
         <div className="small">{bridge.limitations}</div>
@@ -284,6 +292,7 @@ function RecommendationCard({
 }
 
 export default function StudioForge({ backendUrl, config, onNavigate }: PageProps) {
+  const { projectId, selectedVariant } = useStudioWorkbenchProject();
   const [health, setHealth] = useState<any>(null);
   const [healthError, setHealthError] = useState<string>("");
   const [setupStatus, setSetupStatus] = useState<any>(null);
@@ -292,6 +301,8 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
   const [backendConfigError, setBackendConfigError] = useState<string>("");
   const [comfyCapabilities, setComfyCapabilities] = useState<any>(null);
   const [comfyError, setComfyError] = useState<string>("");
+  const [unrealPreview, setUnrealPreview] = useState<any>(null);
+  const [unrealPreviewError, setUnrealPreviewError] = useState<string>("");
 
   useEffect(() => {
     if (!backendUrl) return;
@@ -322,6 +333,29 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
       alive = false;
     };
   }, [backendUrl]);
+
+  useEffect(() => {
+    if (!backendUrl || !projectId) {
+      setUnrealPreview(null);
+      setUnrealPreviewError("");
+      return;
+    }
+    let alive = true;
+    apiGet(`/v1/projects/${projectId}/unreal/preview?variant_index=${selectedVariant}`)
+      .then((value) => {
+        if (!alive) return;
+        setUnrealPreview(value?.preview ?? null);
+        setUnrealPreviewError("");
+      })
+      .catch((error: any) => {
+        if (!alive) return;
+        setUnrealPreview(null);
+        setUnrealPreviewError(String(error?.message ?? error));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [backendUrl, projectId, selectedVariant]);
 
   const aiConfig = setupStatus?.ai_config ?? {};
   const activeConfig = backendConfig ?? config ?? {};
@@ -393,6 +427,17 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
         availableCapabilities,
       }),
     [availableCapabilities],
+  );
+  const liveBridgePreviewById = useMemo<Record<string, Record<string, unknown>>>(
+    () =>
+      unrealPreview
+        ? {
+            "unreal-shot-metadata-export": unrealPreview.shot_metadata_export as Record<string, unknown>,
+            "unreal-render-handoff": unrealPreview.render_handoff as Record<string, unknown>,
+            "unreal-live-control-bridge": unrealPreview.live_control_bridge as Record<string, unknown>,
+          }
+        : {},
+    [unrealPreview],
   );
 
   const runtimeCards: RuntimeCard[] = [
@@ -609,9 +654,24 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
           Optional bridge concepts only. These previews describe export, handoff, and control shapes for Unreal without
           adding an Unreal dependency to Setup, packaging, or the default internal renderer flow.
         </div>
+        {projectId && unrealPreview ? (
+          <div className="small" style={{ marginBottom: 10 }}>
+            Live preview payloads are coming from the active Studio project <b>{projectId}</b> on variant{" "}
+            <b>{selectedVariant}</b>. Static contract cards remain as the fallback shape when no project preview is available.
+          </div>
+        ) : null}
+        {projectId && unrealPreviewError ? (
+          <div className="small" style={{ marginBottom: 10, opacity: 0.84 }}>
+            Live preview unavailable for <b>{projectId}</b>: {unrealPreviewError}
+          </div>
+        ) : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
           {STUDIO_FORGE_BRIDGES.map((bridge) => (
-            <BridgeCard key={bridge.id} bridge={bridge} />
+            <BridgeCard
+              key={bridge.id}
+              bridge={bridge}
+              previewPayload={liveBridgePreviewById[bridge.id]}
+            />
           ))}
         </div>
       </div>

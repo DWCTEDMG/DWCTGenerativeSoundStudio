@@ -37,6 +37,64 @@ const READY_STATUS = {
 
 const FETCH_FIXTURES = {
   "/health": { ok: true },
+  "/v1/projects": {
+    projects: [{ id: "p1", name: "Forge Demo" }],
+  },
+  "/v1/projects/p1": {
+    project: { id: "p1", name: "Forge Demo" },
+  },
+  "/v1/projects/p1/unreal/preview?variant_index=0": {
+    ok: true,
+    preview: {
+      project_id: "p1",
+      project_name: "Forge Demo",
+      variant_index: 0,
+      source: "studio_project",
+      diagnostics: [],
+      shot_metadata_export: {
+        engine: "unreal",
+        handoff_kind: "shot_metadata_export",
+        sequence_name: "forge_demo_MainSequence",
+        fps: 24,
+        duration_seconds: 8,
+        audio_path: "projects/forge-demo/assets/audio/source.wav",
+        project_fields: ["project_id", "project_name", "fps", "audio_path"],
+        shot_fields: ["shot_id", "scene_id", "start_frame", "end_frame", "prompt", "continuity_tags"],
+        marker_fields: ["label", "frame", "time_seconds"],
+        shots: [{ shot_id: "shot_001_scene_1", scene_id: "scene-1", start_frame: 0, end_frame: 96, approved: true }],
+        markers: [{ label: "Intro", frame: 0, time_seconds: 0 }],
+      },
+      render_handoff: {
+        engine: "unreal",
+        handoff_kind: "render_handoff",
+        execution_owner: "external_runtime",
+        return_owner: "studio",
+        render_mode: "performance-led",
+        schedule_stride: 2,
+        approved_section_ids: ["scene-1"],
+        expected_inputs: ["shot_manifest.json", "audio_markers.json", "style_packet.json"],
+        expected_outputs: ["shot_render.mov", "alpha_pass.mov", "metadata.json"],
+        assembly_mode: "ffmpeg_back_in_studio",
+        sections: [{ shot_id: "shot_001_scene_1", scene_id: "scene-1", start_frame: 0, end_frame: 96, approved: true, engine_hint: "comfyui_motion" }],
+      },
+      live_control_bridge: {
+        engine: "unreal",
+        handoff_kind: "live_control_bridge",
+        transports: {
+          osc: ["/edmg/section", "/edmg/beat", "/edmg/camera"],
+          websocket: ["section_change", "beat_pulse", "lighting_envelope"],
+          remote_control: ["sequence.PlayRate", "camera.FocalLength", "lights.Intensity"],
+        },
+        cadence_hz: 30,
+        bpm: 124,
+        section_payload_fields: ["section_id", "energy", "continuity_priority"],
+        section_events: [{ section_id: "scene-1", label: "Intro", time_seconds: 0, energy: 0.35, continuity_priority: 1 }],
+        cue_events: [],
+        beat_times: [0, 0.5, 1, 1.5],
+        camera_keyframes: [{ t: 0, zoom: 1 }],
+      },
+    },
+  },
   "/v1/config": {
     ai_mode: "local",
     ai_provider: "ollama",
@@ -71,6 +129,8 @@ describe("Studio Forge", () => {
     expect((await screen.findAllByText(/Render Queue Dashboard/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Unreal Shot Metadata Export/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Preview payload/i)).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/forge_demo_MainSequence/i)).toBeTruthy();
+    expect(await screen.findByText(/Live preview payloads are coming from the active Studio project/i)).toBeTruthy();
     expect((await screen.findAllByText(/Audio -> Analysis -> AI Plan -> Render -> Assemble/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/Developer validation commands only/i)).toBeTruthy();
   });
