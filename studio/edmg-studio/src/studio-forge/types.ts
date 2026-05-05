@@ -55,6 +55,7 @@ export type StudioForgeBridge = {
   description: string;
   transports: StudioForgeBridgeTransport[];
   outputs: string[];
+  previewPayload: Record<string, unknown>;
   limitations: string;
   requiredCapabilities: StudioForgeCapability[];
   optionalCapabilities?: StudioForgeCapability[];

@@ -192,6 +192,22 @@ function BridgeCard({ bridge }: { bridge: StudioForgeBridge }) {
         {bridge.optionalCapabilities?.length ? (
           <CapabilityList label="Optional capabilities" capabilities={bridge.optionalCapabilities} />
         ) : null}
+        <div className="small">
+          Preview payload:
+          <pre
+            style={{
+              marginTop: 8,
+              padding: 10,
+              borderRadius: 10,
+              overflowX: "auto",
+              background: "rgba(0, 0, 0, 0.28)",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {JSON.stringify(bridge.previewPayload, null, 2)}
+          </pre>
+        </div>
         <div className="small">{bridge.limitations}</div>
       </div>
     </div>

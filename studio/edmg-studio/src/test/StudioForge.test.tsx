@@ -70,6 +70,7 @@ describe("Studio Forge", () => {
     expect((await screen.findAllByText(/Ready now/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Render Queue Dashboard/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Unreal Shot Metadata Export/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Preview payload/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Audio -> Analysis -> AI Plan -> Render -> Assemble/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/Developer validation commands only/i)).toBeTruthy();
   });
