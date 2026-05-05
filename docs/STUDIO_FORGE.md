@@ -21,8 +21,10 @@ Enable in development with:
 Current features:
 
 - runtime status overview
+- runtime-aware recommendations
 - template preview
 - workflow recipe preview
+- Unreal bridge preview cards
 - validation checklist
 
 Studio Forge v1 does not generate code, run workflows, write files, install runtimes, or mutate project data.

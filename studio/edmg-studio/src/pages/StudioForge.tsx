@@ -2,6 +2,7 @@ import React, { useMemo, useEffect, useState } from "react";
 import { apiGet } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
+import { STUDIO_FORGE_BRIDGES } from "../studio-forge/bridges";
 import {
   buildStudioForgeRecommendations,
   type StudioForgeRecommendation,
@@ -10,6 +11,8 @@ import {
 import { STUDIO_FORGE_RECIPES } from "../studio-forge/recipes";
 import { STUDIO_FORGE_TEMPLATES } from "../studio-forge/templates";
 import type {
+  StudioForgeBridge,
+  StudioForgeBridgeTransport,
   StudioForgeCapability,
   StudioForgeRecipe,
   StudioForgeTemplate,
@@ -18,7 +21,7 @@ import type { PageProps } from "../types/pageProps";
 
 type RuntimeStatus = "available" | "missing" | "optional" | "required" | "unknown" | "error";
 type BadgeStatus = RuntimeStatus | "preview";
-type StudioForgeSectionId = "runtime" | "recommendations" | "templates" | "recipes" | "validation";
+type StudioForgeSectionId = "runtime" | "recommendations" | "templates" | "recipes" | "bridges" | "validation";
 
 type RuntimeCard = {
   id: string;
@@ -49,6 +52,14 @@ const VALIDATION_COMMANDS = [
   "pnpm run dist:win",
   "pnpm run dist:linux",
 ];
+
+const BRIDGE_TRANSPORT_LABELS: Record<StudioForgeBridgeTransport, string> = {
+  fileExport: "File export",
+  http: "HTTP",
+  websocket: "WebSocket",
+  osc: "OSC",
+  remoteControl: "Remote Control",
+};
 
 function statusStyle(status: BadgeStatus): React.CSSProperties {
   if (status === "preview") {
@@ -152,6 +163,36 @@ function RecipeCard({ recipe }: { recipe: StudioForgeRecipe }) {
           <CapabilityList label="Optional capabilities" capabilities={recipe.optionalCapabilities} />
         ) : null}
         <div className="small">Execution: preview only, no writes or runtime control</div>
+      </div>
+    </div>
+  );
+}
+
+function BridgeCard({ bridge }: { bridge: StudioForgeBridge }) {
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <div>
+          <div className="timeline-kicker">Unreal Bridge Preview</div>
+          <div style={{ fontWeight: 900 }}>{bridge.name}</div>
+        </div>
+        <StatusBadge status={bridge.status} />
+      </div>
+      <div className="small" style={{ marginTop: 8 }}>
+        {bridge.description}
+      </div>
+      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+        <div className="small">
+          Transport: <b>{bridge.transports.map((transport) => BRIDGE_TRANSPORT_LABELS[transport]).join(" -> ")}</b>
+        </div>
+        <div className="small">
+          Outputs: <b>{bridge.outputs.join(", ")}</b>
+        </div>
+        <CapabilityList label="Required capabilities" capabilities={bridge.requiredCapabilities} />
+        {bridge.optionalCapabilities?.length ? (
+          <CapabilityList label="Optional capabilities" capabilities={bridge.optionalCapabilities} />
+        ) : null}
+        <div className="small">{bridge.limitations}</div>
       </div>
     </div>
   );
@@ -330,6 +371,7 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
   const recommendations = useMemo(
     () =>
       buildStudioForgeRecommendations({
+        bridges: STUDIO_FORGE_BRIDGES,
         templates: STUDIO_FORGE_TEMPLATES,
         recipes: STUDIO_FORGE_RECIPES,
         availableCapabilities,
@@ -437,6 +479,11 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
         label: "Validation Checklist",
         description: "Developer validation commands surfaced as documentation, not executable actions.",
       },
+      {
+        id: "bridges" as const,
+        label: "Unreal Bridge Previews",
+        description: "Preview-only Unreal export, handoff, and live-control targets that keep Unreal optional.",
+      },
     ],
     [],
   );
@@ -535,6 +582,20 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
           {STUDIO_FORGE_RECIPES.map((recipe) => (
             <RecipeCard key={recipe.id} recipe={recipe} />
+          ))}
+        </div>
+      </div>
+    ),
+    bridges: (
+      <div>
+        <h2 style={{ marginBottom: 10 }}>Unreal Bridge Previews</h2>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Optional bridge concepts only. These previews describe export, handoff, and control shapes for Unreal without
+          adding an Unreal dependency to Setup, packaging, or the default internal renderer flow.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+          {STUDIO_FORGE_BRIDGES.map((bridge) => (
+            <BridgeCard key={bridge.id} bridge={bridge} />
           ))}
         </div>
       </div>

@@ -66,8 +66,10 @@ describe("Studio Forge", () => {
     expect(await screen.findByRole("heading", { name: /Studio Forge/i })).toBeTruthy();
     expect(screen.getByText(/Read-only preview mode/i)).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Runtime Recommendations/i })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Unreal Bridge Previews/i })).toBeTruthy();
     expect((await screen.findAllByText(/Ready now/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Render Queue Dashboard/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Unreal Shot Metadata Export/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Audio -> Analysis -> AI Plan -> Render -> Assemble/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/Developer validation commands only/i)).toBeTruthy();
   });

@@ -24,6 +24,7 @@ Current features:
 - runtime-aware recommendations
 - template preview
 - workflow recipe preview
+- Unreal bridge preview cards
 - validation checklist
 
 Studio Forge v1 does not generate code, run workflows, install runtimes, pull models, mutate project data, or execute shell commands from the frontend.

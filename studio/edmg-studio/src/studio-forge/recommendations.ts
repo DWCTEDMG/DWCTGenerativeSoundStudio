@@ -1,4 +1,6 @@
 import type {
+  StudioForgeBridge,
+  StudioForgeBridgeKind,
   StudioForgeCapability,
   StudioForgeRecipe,
   StudioForgeTemplate,
@@ -11,7 +13,7 @@ export type StudioForgeRecommendation = {
   id: string;
   name: string;
   description: string;
-  source: "template" | "recipe";
+  source: "template" | "recipe" | "bridge";
   kindLabel: string;
   status: StudioForgeRecommendationStatus;
   missingRequired: StudioForgeCapability[];
@@ -22,7 +24,7 @@ type StudioForgeRecommendationTarget = {
   id: string;
   name: string;
   description: string;
-  source: "template" | "recipe";
+  source: "template" | "recipe" | "bridge";
   kindLabel: string;
   requiredCapabilities: StudioForgeCapability[];
   optionalCapabilities: StudioForgeCapability[];
@@ -35,6 +37,14 @@ function templateKindLabel(kind: StudioForgeTemplateKind): string {
     workflow: "Workflow template",
     renderPreset: "Render preset",
     modelProfile: "Model profile",
+  }[kind];
+}
+
+function bridgeKindLabel(kind: StudioForgeBridgeKind): string {
+  return {
+    metadataExport: "Bridge metadata export",
+    renderHandoff: "Bridge render handoff",
+    controlBridge: "Bridge control path",
   }[kind];
 }
 
@@ -76,10 +86,12 @@ function statusRank(status: StudioForgeRecommendationStatus): number {
 }
 
 export function buildStudioForgeRecommendations({
+  bridges,
   templates,
   recipes,
   availableCapabilities,
 }: {
+  bridges: StudioForgeBridge[];
   templates: StudioForgeTemplate[];
   recipes: StudioForgeRecipe[];
   availableCapabilities: StudioForgeCapability[];
@@ -103,6 +115,15 @@ export function buildStudioForgeRecommendations({
       kindLabel: "Workflow recipe",
       requiredCapabilities: recipe.requiredCapabilities,
       optionalCapabilities: recipe.optionalCapabilities ?? [],
+    })),
+    ...bridges.map((bridge) => ({
+      id: bridge.id,
+      name: bridge.name,
+      description: bridge.description,
+      source: "bridge" as const,
+      kindLabel: bridgeKindLabel(bridge.kind),
+      requiredCapabilities: bridge.requiredCapabilities,
+      optionalCapabilities: bridge.optionalCapabilities ?? [],
     })),
   ];
 
