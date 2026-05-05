@@ -1,0 +1,244 @@
+--- dwct_orig/DWCTGenerativeSoundStudio-codex-Unified/studio/edmg-studio/main.mjs	2026-05-03 01:30:38.000000000 +0000
++++ dwct_work/DWCTGenerativeSoundStudio-codex-Unified/studio/edmg-studio/main.mjs	2026-05-03 15:33:05.687419041 +0000
+@@ -43,19 +43,28 @@
+   RUNTIME_DEFAULTS.backend && typeof RUNTIME_DEFAULTS.backend === "object"
+     ? RUNTIME_DEFAULTS.backend
+     : {};
++const DEFAULT_LOCAL_BACKEND_HOST = "127.0.0.1";
++const DEFAULT_LOCAL_BACKEND_PORT = "7863";
++const BACKEND_DEFAULT_MODE =
++  typeof BACKEND_RUNTIME_DEFAULTS.spawnBackend === "boolean" && BACKEND_RUNTIME_DEFAULTS.spawnBackend === false
++    ? "external"
++    : "managed";
+ const BACKEND_SETTINGS_DEFAULTS = Object.freeze({
+-  mode:
+-    typeof BACKEND_RUNTIME_DEFAULTS.spawnBackend === "boolean" && BACKEND_RUNTIME_DEFAULTS.spawnBackend === false
+-      ? "external"
+-      : "managed",
++  mode: BACKEND_DEFAULT_MODE,
++  // host/port are the local bind target for a managed backend. They must never be
++  // derived from an external/public connect URL such as a Vast mapped port.
+   host:
+-    typeof BACKEND_RUNTIME_DEFAULTS.host === "string" && BACKEND_RUNTIME_DEFAULTS.host.trim()
++    BACKEND_DEFAULT_MODE !== "external" &&
++    typeof BACKEND_RUNTIME_DEFAULTS.host === "string" &&
++    BACKEND_RUNTIME_DEFAULTS.host.trim()
+       ? BACKEND_RUNTIME_DEFAULTS.host.trim()
+-      : "127.0.0.1",
++      : DEFAULT_LOCAL_BACKEND_HOST,
+   port:
+-    BACKEND_RUNTIME_DEFAULTS.port != null && String(BACKEND_RUNTIME_DEFAULTS.port).trim()
++    BACKEND_DEFAULT_MODE !== "external" &&
++    BACKEND_RUNTIME_DEFAULTS.port != null &&
++    String(BACKEND_RUNTIME_DEFAULTS.port).trim()
+       ? String(BACKEND_RUNTIME_DEFAULTS.port).trim()
+-      : "7863",
++      : DEFAULT_LOCAL_BACKEND_PORT,
+   url:
+     typeof BACKEND_RUNTIME_DEFAULTS.url === "string" && BACKEND_RUNTIME_DEFAULTS.url.trim()
+       ? BACKEND_RUNTIME_DEFAULTS.url.trim()
+@@ -500,20 +509,6 @@
+   }
+ }
+ 
+-function deriveBackendConnectionFromUrl(url) {
+-  const normalizedUrl = normalizeBackendUrl(url);
+-  if (!normalizedUrl) return {};
+-  try {
+-    const parsed = new URL(normalizedUrl);
+-    return {
+-      host: parsed.hostname || BACKEND_SETTINGS_DEFAULTS.host,
+-      port: parsed.port || (parsed.protocol === "https:" ? "443" : "80"),
+-    };
+-  } catch {
+-    return {};
+-  }
+-}
+-
+ function normalizeAiSettings(rawSettings = {}) {
+   const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+   return {
+@@ -540,12 +535,13 @@
+   const port = normalizeBackendPort(current.port);
+   const fallbackUrl = buildManagedBackendUrl(host, port);
+   const url = mode === "external" ? normalizeBackendUrl(current.url, fallbackUrl) : "";
+-  const derived = mode === "external" ? deriveBackendConnectionFromUrl(url) : {};
+ 
+   return {
+     mode,
+-    host: pickConfiguredString(derived.host, host),
+-    port: normalizeBackendPort(derived.port || port),
++    // host/port stay as local bind settings, even in external mode.
++    // The external URL is only the connection target used by the UI/bridge.
++    host,
++    port,
+     url,
+   };
+ }
+--- dwct_orig/DWCTGenerativeSoundStudio-codex-Unified/studio/edmg-studio/package.json	2026-05-03 01:30:38.000000000 +0000
++++ dwct_work/DWCTGenerativeSoundStudio-codex-Unified/studio/edmg-studio/package.json	2026-05-03 15:33:41.499488603 +0000
+@@ -14,6 +14,7 @@
+   "scripts": {
+     "preinstall": "node scripts/enforce-package-manager.mjs",
+     "dev": "concurrently -k -s command-1 \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
++    "backend:use": "node scripts/use-backend.mjs",
+     "build": "vite build",
+     "test": "pnpm run test:ui",
+     "test:ui": "vitest run",
+--- dwct_orig/DWCTGenerativeSoundStudio-codex-Unified/studio/edmg-studio/scripts/use-backend.mjs	1970-01-01 00:00:00.000000000 +0000
++++ dwct_work/DWCTGenerativeSoundStudio-codex-Unified/studio/edmg-studio/scripts/use-backend.mjs	2026-05-03 15:33:22.706583433 +0000
+@@ -0,0 +1,154 @@
++#!/usr/bin/env node
++import fs from "node:fs";
++import path from "node:path";
++import { fileURLToPath } from "node:url";
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++const rootDir = path.resolve(__dirname, "..");
++
++function usage(exitCode = 0) {
++  const out = exitCode === 0 ? console.log : console.error;
++  out(`Usage:
++  pnpm backend:use external <url>
++  pnpm backend:use local [port]
++
++Examples:
++  pnpm backend:use external http://51.83.197.242:43049
++  pnpm backend:use local 7863
++`);
++  process.exit(exitCode);
++}
++
++function normalizeUrl(rawUrl) {
++  const value = String(rawUrl || "").trim();
++  if (!value) return "";
++  try {
++    const parsed = new URL(value);
++    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
++    const normalizedPath = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname.replace(/\/+$/, "") : "";
++    return `${parsed.origin}${normalizedPath}`;
++  } catch {
++    return "";
++  }
++}
++
++function normalizePort(rawPort) {
++  const value = Number(String(rawPort || "7863").trim());
++  if (!Number.isInteger(value) || value < 1 || value > 65535) {
++    throw new Error(`Invalid port: ${rawPort}`);
++  }
++  return String(value);
++}
++
++function readJson(filePath) {
++  try {
++    return JSON.parse(fs.readFileSync(filePath, "utf8"));
++  } catch {
++    return {};
++  }
++}
++
++function writeJson(filePath, value) {
++  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
++}
++
++function readEnvFile(filePath) {
++  try {
++    return fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
++  } catch {
++    return "";
++  }
++}
++
++function writeEnvValues(filePath, updates) {
++  const existing = readEnvFile(filePath)
++    .split(/\r?\n/)
++    .filter((line) => line.trim());
++  const updateKeys = new Set(Object.keys(updates));
++  const kept = existing.filter((line) => {
++    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
++    return !match || !updateKeys.has(match[1]);
++  });
++  for (const [key, value] of Object.entries(updates)) {
++    kept.push(`${key}=${value}`);
++  }
++  fs.writeFileSync(filePath, `${kept.join("\n")}\n`, "utf8");
++}
++
++const mode = String(process.argv[2] || "").trim().toLowerCase();
++if (!mode || mode === "help" || mode === "--help" || mode === "-h") usage(0);
++
++const launcherEnvPath = path.join(rootDir, "launcher_env.json");
++const runtimeDefaultsPath = path.join(rootDir, "electron-resources", "runtime-defaults.json");
++const envLocalPath = path.join(rootDir, ".env.local");
++
++const launcherEnv = readJson(launcherEnvPath);
++const runtimeDefaults = readJson(runtimeDefaultsPath);
++
++let next;
++if (mode === "external" || mode === "remote" || mode === "vast") {
++  const url = normalizeUrl(process.argv[3]);
++  if (!url) {
++    console.error("External mode requires an http(s) backend URL.");
++    usage(1);
++  }
++  next = {
++    mode: "external",
++    host: "127.0.0.1",
++    port: "7863",
++    url,
++    spawnBackend: "0",
++  };
++} else if (mode === "local" || mode === "managed") {
++  const port = normalizePort(process.argv[3] || "7863");
++  next = {
++    mode: "managed",
++    host: "127.0.0.1",
++    port,
++    url: "",
++    spawnBackend: "1",
++  };
++} else {
++  console.error(`Unknown backend mode: ${mode}`);
++  usage(1);
++}
++
++writeJson(launcherEnvPath, {
++  ...launcherEnv,
++  EDMG_STUDIO_BACKEND_MODE: next.mode,
++  EDMG_STUDIO_BACKEND_HOST: next.host,
++  EDMG_STUDIO_BACKEND_PORT: next.port,
++  EDMG_STUDIO_BACKEND_URL: next.url,
++  EDMG_BACKEND_URL: next.url || `http://${next.host}:${next.port}`,
++  EDMG_STUDIO_SPAWN_BACKEND: next.spawnBackend,
++  EDMG_DIRECTOR_SPAWN: next.mode === "external" ? "0" : (launcherEnv.EDMG_DIRECTOR_SPAWN ?? "0"),
++});
++
++writeJson(runtimeDefaultsPath, {
++  ...runtimeDefaults,
++  backend: {
++    ...(runtimeDefaults.backend && typeof runtimeDefaults.backend === "object" ? runtimeDefaults.backend : {}),
++    host: next.host,
++    port: Number(next.port),
++    url: next.url,
++    spawnBackend: next.spawnBackend !== "0",
++  },
++});
++
++writeEnvValues(envLocalPath, {
++  VITE_EDMG_BACKEND_URL: next.url || `http://${next.host}:${next.port}`,
++  EDMG_STUDIO_BACKEND_MODE: next.mode,
++  EDMG_STUDIO_BACKEND_HOST: next.host,
++  EDMG_STUDIO_BACKEND_PORT: next.port,
++  EDMG_STUDIO_BACKEND_URL: next.url,
++  EDMG_BACKEND_URL: next.url || `http://${next.host}:${next.port}`,
++  EDMG_STUDIO_SPAWN_BACKEND: next.spawnBackend,
++  EDMG_DIRECTOR_SPAWN: next.mode === "external" ? "0" : "0",
++});
++
++console.log(`Configured EDMG Studio backend profile: ${next.mode}`);
++console.log(`Connect URL: ${next.url || `http://${next.host}:${next.port}`}`);
++console.log(`Local bind: ${next.host}:${next.port}`);
++console.log(`Spawn backend: ${next.spawnBackend === "0" ? "no" : "yes"}`);
++console.log(`Updated:\n  ${launcherEnvPath}\n  ${runtimeDefaultsPath}\n  ${envLocalPath}`);

@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "D:\Program Files\Python\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "D:\Program Files\Python\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "D:\Program Files\Python\Scripts\edmg-studio-backend.exe\__main__.py", line 2, in <module>
+ModuleNotFoundError: No module named 'edmg_studio_backend'
+Traceback (most recent call last):
+  File "D:\Program Files\Python\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "D:\Program Files\Python\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "D:\Program Files\Python\Scripts\edmg-studio-backend.exe\__main__.py", line 2, in <module>
+ModuleNotFoundError: No module named 'edmg_studio_backend'
