@@ -7,6 +7,8 @@ __pycache__/
 *.so
 .pytest_cache/
 *.log
+*.bak
+nohup.out
 
 # ----------------------------
 # Python packaging / build

@@ -12,9 +12,18 @@ from typing import Any, Optional
 SERVICE_NAME = "dwct-edmg-studio"
 
 
+def _restrict_permissions(path: Path, mode: int) -> None:
+    try:
+        if os.name != "nt":
+            os.chmod(path, mode)
+    except Exception:
+        pass
+
+
 def _config_dir(data_dir: Path) -> Path:
     p = (data_dir / "config").resolve()
     p.mkdir(parents=True, exist_ok=True)
+    _restrict_permissions(p, 0o700)
     return p
 
 
@@ -29,9 +38,12 @@ def _read_json(path: Path, default: Any) -> Any:
 
 def _write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    _restrict_permissions(path.parent, 0o700)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
+    _restrict_permissions(tmp, 0o600)
     tmp.replace(path)
+    _restrict_permissions(path, 0o600)
 
 
 def _b64e(s: str) -> str:

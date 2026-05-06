@@ -38,5 +38,7 @@
 - Avoid printing secrets/tokens/API keys
 
 ## Testing
-- Python: `python -m pytest enhanced_deforum_music_generator/tests` after `pip install -e ".[studio_bundle,test]"`
+- Repo-level Python: `python -m pytest` from the repo root
+- Backend package Python: `python -m pytest` from `studio/edmg-studio/python_backend` after `pip install -e ".[studio_bundle,test]"`
+- Combined Python scope: `python scripts/run_pytest_scopes.py` from the repo root
 - Node/TS: Vitest + jsdom smoke tests under `studio/edmg-studio/src/test`

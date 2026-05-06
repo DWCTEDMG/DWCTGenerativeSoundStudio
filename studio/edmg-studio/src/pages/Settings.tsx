@@ -648,7 +648,7 @@ export default function Settings(props: PageProps) {
             </div>
           </div>
           <div className="small" style={{ opacity: 0.86 }}>
-            Current phase: Settings, Studio Forge, and Model Manager support modular section ordering and visibility. These controls only change local presentation, not runtime behavior.
+            Current phase: Dashboard, Projects, Settings, Models, Studio Forge, and the advanced workbench pages support modular section ordering and visibility. These controls only change local presentation, not runtime behavior.
           </div>
         </div>
       </div>

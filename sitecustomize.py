@@ -20,6 +20,10 @@ Python automatically imports `sitecustomize` on interpreter startup (if found on
 
 These shims do *not* override real installations. They only fill missing symbols
 or provide a fallback when the import fails.
+
+This file is a repo-root compatibility shim for source-tree development and
+tests. Packaged/backend install flows should rely on explicit dependencies
+instead of depending on `sitecustomize` side effects.
 """
 
 from __future__ import annotations

@@ -42,8 +42,26 @@ Install the same backend bundle Studio uses, plus the test extra:
 
 ```bash
 pip install -e ".[studio_bundle,test]"
-python -m pytest enhanced_deforum_music_generator/tests
+python -m pytest
 ```
+
+Run that command from `studio/edmg-studio/python_backend/`. The backend-local
+pytest scope covers both:
+
+- `enhanced_deforum_music_generator/tests`
+- `edmg_studio_backend/tests`
+
+From the repo root:
+
+- `python -m pytest` runs repo-level tests only
+- `python scripts/run_pytest_scopes.py` runs repo-level tests, then backend-local tests
+
+## Compatibility shims
+
+The repo-root `sitecustomize.py` and repo-root `librosa/` package are
+source-tree compatibility shims for development and tests. The packaged Studio
+backend relies on the declared dependencies in this `pyproject.toml` and does
+not package those repo-root shims.
 
 ## AI (Ollama by default)
 

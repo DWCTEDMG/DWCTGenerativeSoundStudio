@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-def generate_lightning_bundle(output_dir: str, host: str = "0.0.0.0", port: int = 7860) -> dict[str, Any]:
+def generate_lightning_bundle(output_dir: str, host: str = "0.0.0.0", port: int = 7863) -> dict[str, Any]:
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 

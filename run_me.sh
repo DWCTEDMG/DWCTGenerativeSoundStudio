@@ -7,4 +7,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
 # Run the target script
-bash "$SCRIPT_DIR/studio/edmg-studio/RUN_ME.sh"
+bash "$SCRIPT_DIR/studio/edmg-studio/run_me.sh"

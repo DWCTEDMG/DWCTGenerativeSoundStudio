@@ -38,7 +38,8 @@ The current frontend implementation already includes:
 - local per-page layout persistence
 - shared layout customization controls
 - local layout profile slots (`Personal`, `Focus`, `Technical`, `Presentation`)
-- modular rollout on `Dashboard`, `Projects`, `Settings`, `Models`, and `Studio Forge`
+- modular rollout on `Dashboard`, `Projects`, `Settings`, `Models`, `Studio Forge`, `Outputs`, `Render Queue`, `Cloud`, `AI Planner Lab`, `Reactive Lab`, and `EDMG Director`
+- phase-2 progress already landed for named layout profiles and Studio Forge layout/preview surfaces
 
 These changes are frontend-only. They do not alter backend contracts, Setup Wizard flow,
 model installs, render defaults, desktop backend spawning, or packaging behavior.
@@ -118,7 +119,16 @@ Not recommended:
 - making Unreal the default render path
 - changing Setup or packaging to require Unreal
 
+Current status:
+
+- the repo now has a non-destructive Unreal bridge MVP for preview, export bundles, import-plan generation, and return-import back into Studio outputs
+- Unreal remains optional, preview-oriented, and non-authoritative
+- there is still no required Unreal runtime dependency, packaged plugin, or live control execution path
+
 ## Phase Plan
+
+Some phase-2 UI pieces are already in the repo, and a limited Unreal bundle MVP
+exists, but the roadmap below remains the intended direction.
 
 ### Phase 1
 
@@ -126,7 +136,7 @@ Not recommended:
 - per-page layout state hook
 - layout customizer UI
 - apply layout customization to safe, non-critical pages first
-- document the Unreal bridge strategy without implementing it
+- document the Unreal bridge strategy and keep any bridge work non-destructive
 
 ### Phase 2
 
@@ -153,3 +163,5 @@ The first implementation pass should stay away from:
 - packaging scripts
 
 Only UI presentation, ordering, visibility, and appearance should change.
+The current Unreal bridge MVP and Outputs import/export surfaces are the main
+exception, and they remain additive rather than execution-authoritative.

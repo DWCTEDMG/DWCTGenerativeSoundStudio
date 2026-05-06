@@ -17,6 +17,21 @@ This folder contains the first Unreal-side consumer for EDMG Studio Unreal bridg
 
 This is intentionally the first practical bridge, not a full plugin. It gives Unreal a real consumer for the exported Studio contract without making Unreal a required Studio runtime.
 
+## Current status
+
+Finished now:
+
+- Studio can preview, export, build an Unreal import plan, and import returned renders back into project outputs.
+- This importer can consume the exported bundle and create a first-pass Level Sequence asset.
+
+Not finished:
+
+- No verified in-editor Unreal smoke test on this machine.
+- No packaged Unreal plugin or module.
+- No live OSC, WebSocket, or Remote Control execution path.
+- No one-click Unreal render job launcher from Studio.
+- No deeper Sequencer build beyond cameras, cuts, markers, and plan metadata.
+
 ## Bundle inputs
 
 The importer expects these files inside the selected bundle directory:

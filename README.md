@@ -72,15 +72,26 @@ Windows or `/mnt/media/EDMG-Studio` on Linux.
 - The canonical package manager is `pnpm@10.33.0`, pinned in `studio/edmg-studio/package.json`.
 - The shipped desktop app version also comes from `studio/edmg-studio/package.json#version`.
 
-## Release and operator docs
+## Release, strategy, and operator docs
 
 - [studio/edmg-studio/README.md](./studio/edmg-studio/README.md)
 - [RELEASE.md](./RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](./docs/STUDIO_RELEASE_RUNBOOK.md)
 - [docs/STUDIO_REPO_MAP.md](./docs/STUDIO_REPO_MAP.md)
+- [studio/edmg-studio/docs/STUDIO_MODULARITY.md](./studio/edmg-studio/docs/STUDIO_MODULARITY.md)
+- [docs/STUDIO_FORGE.md](./docs/STUDIO_FORGE.md)
+- [docs/UNIFIED_INTERNAL_RENDERER_PLAN.md](./docs/UNIFIED_INTERNAL_RENDERER_PLAN.md)
+- [docs/VISUAL_DNA_AND_RENDER_CONDUCTOR_SPEC.md](./docs/VISUAL_DNA_AND_RENDER_CONDUCTOR_SPEC.md)
 - [docs/STARLIFT_VM_DEPLOY.md](./docs/STARLIFT_VM_DEPLOY.md)
 - [docs/AI_PROVIDERS.md](./docs/AI_PROVIDERS.md)
 - [docs/HF_VIDEO_MODELS.md](./docs/HF_VIDEO_MODELS.md)
+
+## Test strategy
+
+- Repo-level tests live under `tests/` and run from the repo root with `python -m pytest`.
+- Backend package tests live under `studio/edmg-studio/python_backend/` and run from that directory with `python -m pytest`.
+- To run both scopes in sequence from the repo root, use `python scripts/run_pytest_scopes.py`.
+- The root `pytest.ini` intentionally excludes the backend-local pytest scope so `python -m pytest` from the repo root stays a repo-level command.
 
 ## Recommended Local Stack
 
@@ -98,6 +109,16 @@ Windows or `/mnt/media/EDMG-Studio` on Linux.
 - Low-spec: `qwen3:4b` + SDXL Base 1.0
 - Mid-range: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
 - High-end: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
+
+## Compatibility shims
+
+- Repo-root `sitecustomize.py` and the repo-root `librosa/` package are source-tree compatibility shims for development and tests.
+- Packaged/backend install flows rely on the declared Python dependencies and do not package those repo-root shims.
+
+## Unreal bridge status
+
+- Studio-side bridge: usable. The repo can preview, export, build an Unreal import plan, and import returned renders back into canonical project outputs.
+- Unreal-side runtime integration: partial. There is no verified in-editor smoke test on this machine, no packaged Unreal plugin/module, no live OSC/WebSocket/Remote Control execution path, no one-click Unreal render job launcher, and no deeper Sequencer build beyond the first importer pass.
 
 ## Compatibility note
 

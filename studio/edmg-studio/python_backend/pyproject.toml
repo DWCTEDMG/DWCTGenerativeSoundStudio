@@ -135,11 +135,8 @@ include = [
   "edmg_studio_backend*",
   "enhanced_deforum_music_generator*",
   "deforum_music*",
-  "edmg*",
-  "core*",
-  "config*",
-  "integrations*",
   "edmg_ai_service*",
+  "edmg*",
 ]
 
 
@@ -166,7 +163,10 @@ indent-style = "space"
 
 [tool.pytest.ini_options]
 addopts = "-ra"
-testpaths = ["enhanced_deforum_music_generator/tests"]
+testpaths = [
+  "enhanced_deforum_music_generator/tests",
+  "edmg_studio_backend/tests",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]

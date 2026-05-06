@@ -44,3 +44,26 @@ pnpm run validate:packaged-zero-state-setup
 That proof ignores global Ollama/7-Zip, installs Studio-managed copies under
 the selected `Studio Home`, and verifies the packaged app can bootstrap its own
 external tools from scratch.
+
+## Pytest scopes
+
+From the repo root:
+
+```powershell
+python -m pytest
+python scripts/run_pytest_scopes.py
+```
+
+- `python -m pytest` runs the repo-level test scope defined by `pytest.ini`.
+- `python scripts/run_pytest_scopes.py` runs the repo-level tests first, then the backend-local pytest scope.
+
+From `studio/edmg-studio/python_backend/`:
+
+```powershell
+python -m pytest
+```
+
+That backend-local command follows `pyproject.toml` and covers both:
+
+- `enhanced_deforum_music_generator/tests`
+- `edmg_studio_backend/tests`
