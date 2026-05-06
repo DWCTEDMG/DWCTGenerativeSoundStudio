@@ -45,6 +45,7 @@ from .schemas import (
     HealthResponse, ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
     RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest,
     CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest, ExportUnrealBridgeRequest,
+    ImportUnrealBridgeReturnRequest,
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
@@ -8094,6 +8095,78 @@ def _safe_export_bundle_stem(value: str, fallback: str) -> str:
     stem = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
     return stem[:80] or fallback
 
+
+UNREAL_RETURN_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
+UNREAL_RETURN_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _unique_output_artifact_path(target_dir: Path, base_stem: str, suffix: str) -> Path:
+    candidate = target_dir / f"{base_stem}{suffix}"
+    if not candidate.exists():
+        return candidate
+    counter = 2
+    while True:
+        candidate = target_dir / f"{base_stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _build_unreal_return_metadata(
+    *,
+    project_id: str,
+    output_path: Path,
+    bundle_dir: str,
+    source_path: str,
+    media_kind: str,
+    variant_index: int,
+    sequence_name: str,
+    manifest_path: str | None,
+    source_manifest: dict[str, Any] | None,
+    return_contract: dict[str, Any] | None,
+    render_handoff: dict[str, Any] | None,
+) -> dict[str, Any]:
+    rel_output = _project_relative_path(project_id, output_path)
+    source_bundle = source_manifest if isinstance(source_manifest, dict) else {}
+    contract = return_contract if isinstance(return_contract, dict) else {}
+    handoff = render_handoff if isinstance(render_handoff, dict) else {}
+    return {
+        "kind": "unreal_bridge_return",
+        "project_id": project_id,
+        "variant_index": int(variant_index or 0),
+        "sequence_name": sequence_name,
+        "bundle_dir": bundle_dir,
+        "source_path": source_path,
+        "manifest_path": manifest_path,
+        "media_kind": media_kind,
+        "output": {media_kind: rel_output},
+        "source_bundle": {
+            "export_family": str(source_bundle.get("export_family") or "unreal_bridge_bundle"),
+            "created_at": source_bundle.get("created_at"),
+        },
+        "return_contract": {
+            "return_owner": str(contract.get("return_owner") or "studio"),
+            "assembly_mode": str(contract.get("assembly_mode") or "ffmpeg_back_in_studio"),
+            "expected_outputs": list(contract.get("expected_outputs") or []),
+        },
+        "render_handoff": {
+            "render_mode": str(handoff.get("render_mode") or ""),
+            "return_owner": str(handoff.get("return_owner") or "studio"),
+            "approved_section_ids": list(handoff.get("approved_section_ids") or []),
+        },
+        "captured_at": time.time(),
+    }
+
 @app.post("/v1/projects/{project_id}/export/deforum")
 def export_deforum(project_id: str, req: ExportDeforumRequest):
     proj = store.get(project_id)
@@ -8262,6 +8335,111 @@ def export_unreal_bridge_bundle(project_id: str, req: ExportUnrealBridgeRequest)
         "bundle": export_entry,
     }
 
+
+@app.post("/v1/projects/{project_id}/import/unreal")
+def import_unreal_bridge_return(project_id: str, req: ImportUnrealBridgeReturnRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    pdir = store.project_dir(project_id)
+    try:
+        bundle_dir = safe_join(pdir, req.bundle_dir)
+    except Exception:
+        raise HTTPException(400, "Invalid bundle_dir")
+    if not bundle_dir.exists() or not bundle_dir.is_dir():
+        raise HTTPException(404, "Unreal bundle not found")
+
+    bundle_rel = bundle_dir.relative_to(pdir).as_posix()
+    source_rel = str(req.source_dir or f"{bundle_rel}/returned").replace("\\", "/").strip()
+    try:
+        source_dir = safe_join(pdir, source_rel)
+    except Exception:
+        raise HTTPException(400, "Invalid source_dir")
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise HTTPException(400, "Returned media folder not found")
+
+    bundle_manifest_path = bundle_dir / "bundle_manifest.json"
+    return_contract_path = bundle_dir / "return_contract.json"
+    render_handoff_path = bundle_dir / "render_handoff.json"
+    source_manifest = _read_json_dict(bundle_manifest_path)
+    return_contract = _read_json_dict(return_contract_path)
+    render_handoff = _read_json_dict(render_handoff_path)
+    try:
+        variant_index = int(source_manifest.get("variant_index") or 0)
+    except Exception:
+        variant_index = 0
+    sequence_name = str(source_manifest.get("sequence_name") or bundle_dir.name)
+    created_at = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    imported_media: list[dict[str, Any]] = []
+    for source_path in sorted(source_dir.rglob("*")):
+        if not source_path.is_file():
+            continue
+        suffix = source_path.suffix.lower()
+        media_kind = ""
+        if suffix in UNREAL_RETURN_VIDEO_EXTENSIONS:
+            media_kind = "video"
+        elif suffix in UNREAL_RETURN_IMAGE_EXTENSIONS:
+            media_kind = "image"
+        if not media_kind:
+            continue
+
+        target_root = pdir / "outputs" / ("videos" if media_kind == "video" else "images")
+        target_root.mkdir(parents=True, exist_ok=True)
+        base_stem = _safe_export_bundle_stem(
+            f"{bundle_dir.name}_{source_path.stem}",
+            f"unreal_return_{media_kind}",
+        )
+        target_path = _unique_output_artifact_path(target_root, base_stem, suffix)
+        shutil.copy2(source_path, target_path)
+
+        source_rel_path = source_path.relative_to(pdir).as_posix()
+        manifest_rel = bundle_manifest_path.relative_to(pdir).as_posix() if bundle_manifest_path.exists() else None
+        metadata = _build_unreal_return_metadata(
+            project_id=project_id,
+            output_path=target_path,
+            bundle_dir=bundle_rel,
+            source_path=source_rel_path,
+            media_kind=media_kind,
+            variant_index=variant_index,
+            sequence_name=sequence_name,
+            manifest_path=manifest_rel,
+            source_manifest=source_manifest,
+            return_contract=return_contract,
+            render_handoff=render_handoff,
+        )
+        metadata_path = _write_generation_metadata(target_path, metadata)
+        imported_media.append(
+            {
+                "kind": media_kind,
+                "path": target_path.relative_to(pdir).as_posix(),
+                "source_path": source_rel_path,
+                "metadata_path": metadata_path.relative_to(pdir).as_posix(),
+            }
+        )
+
+    if not imported_media:
+        raise HTTPException(400, "No importable media found in returned folder")
+
+    return_entry = {
+        "bundle_dir": bundle_rel,
+        "source_dir": source_rel,
+        "manifest_path": bundle_manifest_path.relative_to(pdir).as_posix() if bundle_manifest_path.exists() else None,
+        "return_contract_path": return_contract_path.relative_to(pdir).as_posix() if return_contract_path.exists() else None,
+        "created_at": created_at,
+        "variant_index": variant_index,
+        "sequence_name": sequence_name,
+        "media": imported_media,
+    }
+    proj.meta.setdefault("exports", {}).setdefault("unreal_returns", []).append(return_entry)
+    store.save(proj)
+
+    return {
+        "ok": True,
+        "imported": return_entry,
+    }
+
 @app.get("/v1/projects/{project_id}/outputs")
 def list_outputs(project_id: str):
     proj = store.get(project_id)
@@ -8296,10 +8474,15 @@ def list_outputs(project_id: str):
     for p in sorted((pdir / "outputs" / "images").glob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
         if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
             imgs.append(_file_entry(p))
-    for p in sorted((pdir / "outputs" / "videos").glob("*.mp4"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
+    for p in sorted((pdir / "outputs" / "videos").glob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
+        if p.suffix.lower() not in UNREAL_RETURN_VIDEO_EXTENSIONS:
+            continue
         entry = _file_entry(p)
         name = p.name
-        if name.endswith("_raw.mp4"):
+        metadata_kind = str((entry.get("metadata") or {}).get("kind") or "")
+        if metadata_kind == "unreal_bridge_return":
+            entry["kind"] = "unreal_bridge_return"
+        elif name.endswith("_raw.mp4"):
             entry["kind"] = "internal_raw"
         elif name.endswith("_interp.mp4"):
             entry["kind"] = "internal_interp"
@@ -8311,9 +8494,11 @@ def list_outputs(project_id: str):
     for p in sorted((pdir / "outputs" / "deforum").glob("*.json"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
         defs.append(_file_entry(p))
     raw_unreal_exports = []
+    raw_unreal_returns = []
     if isinstance(proj.meta, dict):
         raw_exports = proj.meta.get("exports") if isinstance(proj.meta.get("exports"), dict) else {}
         raw_unreal_exports = raw_exports.get("unreal") if isinstance(raw_exports.get("unreal"), list) else []
+        raw_unreal_returns = raw_exports.get("unreal_returns") if isinstance(raw_exports.get("unreal_returns"), list) else []
     for raw in reversed(raw_unreal_exports):
         if not isinstance(raw, dict):
             continue
@@ -8344,6 +8529,40 @@ def list_outputs(project_id: str):
             except Exception:
                 pass
         unreal_exports.append(entry)
+    unreal_returns = []
+    for raw in reversed(raw_unreal_returns):
+        if not isinstance(raw, dict):
+            continue
+        entry = {
+            "bundle_dir": str(raw.get("bundle_dir") or ""),
+            "source_dir": str(raw.get("source_dir") or ""),
+            "manifest_path": str(raw.get("manifest_path") or "") or None,
+            "return_contract_path": str(raw.get("return_contract_path") or "") or None,
+            "created_at": str(raw.get("created_at") or ""),
+            "variant_index": int(raw.get("variant_index") or 0),
+            "sequence_name": str(raw.get("sequence_name") or ""),
+            "media": [],
+        }
+        for raw_media in list(raw.get("media") or []):
+            if not isinstance(raw_media, dict):
+                continue
+            media_path = str(raw_media.get("path") or "")
+            if not media_path:
+                continue
+            media_entry: dict[str, Any]
+            try:
+                media_entry = _file_entry(safe_join(pdir, media_path))
+            except Exception:
+                media_entry = {"path": media_path, "name": Path(media_path).name}
+            media_entry["kind"] = str(raw_media.get("kind") or media_entry.get("kind") or "")
+            source_path = str(raw_media.get("source_path") or "")
+            if source_path:
+                media_entry["source_path"] = source_path
+            metadata_path = str(raw_media.get("metadata_path") or "")
+            if metadata_path:
+                media_entry["metadata_path"] = metadata_path
+            entry["media"].append(media_entry)
+        unreal_returns.append(entry)
 
     latest_internal = proj.meta.get("last_internal_render") or None
     history = proj.meta.get("internal_render_history") or []
@@ -8358,6 +8577,7 @@ def list_outputs(project_id: str):
         "videos": vids,
         "deforum_exports": defs,
         "unreal_exports": unreal_exports,
+        "unreal_returns": unreal_returns,
         "project_id": project_id,
         "latest_internal_render": latest_internal,
         "internal_render_history": history[-20:] if isinstance(history, list) else [],

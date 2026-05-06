@@ -24,6 +24,11 @@ export default function Outputs(props: PageProps) {
   const [err, setErr] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [lastRefreshAt, setLastRefreshAt] = useState<number>(0);
+  const [unrealVariantNumber, setUnrealVariantNumber] = useState<number>(1);
+  const [unrealBundleName, setUnrealBundleName] = useState<string>("");
+  const [unrealIncludeZip, setUnrealIncludeZip] = useState<boolean>(true);
+  const [unrealExportBusy, setUnrealExportBusy] = useState<boolean>(false);
+  const [unrealImportBusyBundle, setUnrealImportBusyBundle] = useState<string>("");
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
@@ -173,6 +178,53 @@ export default function Outputs(props: PageProps) {
     }
   };
 
+  const exportUnrealBundle = async () => {
+    if (!projectId || unrealExportBusy) return;
+    try {
+      setErr(null);
+      setUnrealExportBusy(true);
+      const result = await apiPost(`/v1/projects/${projectId}/export/unreal`, {
+        variant_index: Math.max(0, (Number(unrealVariantNumber) || 1) - 1),
+        bundle_name: unrealBundleName.trim() || null,
+        include_zip: unrealIncludeZip,
+      });
+      await refreshOutputs(projectId);
+      const bundle = result?.bundle || {};
+      setInfo({
+        action: "export_unreal_bundle",
+        path: String(bundle.zip_path || bundle.bundle_dir || bundle.manifest_path || ""),
+        label: "unreal bundle",
+      });
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setUnrealExportBusy(false);
+    }
+  };
+
+  const importUnrealReturn = async (bundleDir: string) => {
+    if (!projectId || !bundleDir || unrealImportBusyBundle) return;
+    try {
+      setErr(null);
+      setUnrealImportBusyBundle(bundleDir);
+      const result = await apiPost(`/v1/projects/${projectId}/import/unreal`, {
+        bundle_dir: bundleDir,
+        source_dir: null,
+      });
+      await refreshOutputs(projectId);
+      const imported = result?.imported || {};
+      setInfo({
+        action: "import_unreal_return",
+        path: String(imported.source_dir || imported.bundle_dir || bundleDir),
+        label: "unreal return",
+      });
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setUnrealImportBusyBundle("");
+    }
+  };
+
   const panelDefinitions = useMemo(
     () => [
       {
@@ -264,6 +316,46 @@ export default function Outputs(props: PageProps) {
           </label>
           <div className="small" style={{ opacity: 0.8 }}>
             Active/resumable internal jobs <b>{activeInternalJobs.length}</b>{lastRefreshAt ? <> • updated {new Date(lastRefreshAt).toLocaleTimeString()}</> : null}
+          </div>
+        </div>
+        <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12, display: "grid", gap: 10 }}>
+          <div style={{ fontWeight: 800 }}>Unreal bridge bundle</div>
+          <div className="small" style={{ opacity: 0.84 }}>
+            Export the selected plan variant into the Unreal handoff bundle and refresh Outputs when the bundle is ready.
+          </div>
+          <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+            <label style={{ minWidth: 110 }}>
+              <div className="small">Variant</div>
+              <input
+                aria-label="Unreal export variant"
+                type="number"
+                min={1}
+                step={1}
+                value={unrealVariantNumber}
+                onChange={(e) => setUnrealVariantNumber(Math.max(1, Number(e.target.value) || 1))}
+              />
+            </label>
+            <label style={{ flex: 1, minWidth: 220 }}>
+              <div className="small">Bundle name (optional)</div>
+              <input
+                aria-label="Unreal bundle name"
+                type="text"
+                value={unrealBundleName}
+                onChange={(e) => setUnrealBundleName(e.target.value)}
+                placeholder="leave blank for timestamped default"
+              />
+            </label>
+            <label className="row small" style={{ gap: 6, alignItems: "center", marginBottom: 6 }}>
+              <input
+                type="checkbox"
+                checked={unrealIncludeZip}
+                onChange={(e) => setUnrealIncludeZip(e.target.checked)}
+              />
+              Include zip
+            </label>
+            <button onClick={exportUnrealBundle} disabled={!projectId || unrealExportBusy}>
+              {unrealExportBusy ? "Exporting Unreal Bundle..." : "Export Unreal Bundle"}
+            </button>
           </div>
         </div>
         {err && <div style={{ marginTop: 10, color: "var(--danger)" }}>{err}</div>}
@@ -475,6 +567,64 @@ export default function Outputs(props: PageProps) {
                           {desktopActionLabel("reveal", "unreal zip")}
                         </button>
                       ) : null}
+                      {bundle.bundle_dir ? (
+                        <button
+                          className="secondary"
+                          onClick={() => importUnrealReturn(String(bundle.bundle_dir))}
+                          disabled={Boolean(unrealImportBusyBundle)}
+                        >
+                          {unrealImportBusyBundle === String(bundle.bundle_dir) ? "Importing return..." : "Import returned media"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          {outs.unreal_returns?.length ? (
+            <>
+              <hr />
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>Unreal bridge returns</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {outs.unreal_returns.map((returned: any, idx: number) => (
+                  <div key={`${returned.bundle_dir || "return"}-${idx}`} style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 10 }}>
+                    <div className="small">
+                      <b>{returned.sequence_name || "Returned Unreal media"}</b>
+                      {Number.isFinite(returned.variant_index) ? <> Х variant {Number(returned.variant_index) + 1}</> : null}
+                      {returned.created_at ? <> Х {returned.created_at}</> : null}
+                    </div>
+                    {returned.source_dir ? (
+                      <div className="small" style={{ marginTop: 4, opacity: 0.82 }}>{returned.source_dir}</div>
+                    ) : null}
+                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                      {(returned.media || []).map((media: any) => (
+                        <div key={media.path} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 8 }}>
+                          <div className="small">
+                            <b>{media.kind || "artifact"}</b> Х {media.path}
+                          </div>
+                          {media.source_path ? (
+                            <div className="small" style={{ marginTop: 4, opacity: 0.82 }}>Source {media.source_path}</div>
+                          ) : null}
+                          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                            <button
+                              className="secondary"
+                              onClick={() => setSelected({ type: media.kind === "image" ? "image" : "video", path: media.path })}
+                            >
+                              Preview
+                            </button>
+                            <button className="secondary" onClick={() => handleArtifactPathAction("unreal return", media.path, "reveal")}>
+                              {desktopActionLabel("reveal", "unreal return")}
+                            </button>
+                            {media.metadata_path ? (
+                              <button className="secondary" onClick={() => handleArtifactPathAction("metadata sidecar", media.metadata_path, "reveal")}>
+                                {desktopActionLabel("reveal", "metadata")}
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}

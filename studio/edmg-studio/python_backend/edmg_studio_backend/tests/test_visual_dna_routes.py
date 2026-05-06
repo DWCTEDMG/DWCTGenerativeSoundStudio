@@ -162,9 +162,28 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
         assert export_payload["bundle"]["manifest_path"].endswith("bundle_manifest.json")
         assert export_payload["bundle"]["zip_path"].endswith(".zip")
 
+        returned_dir = store.project_dir(proj.id) / export_payload["bundle"]["bundle_dir"] / "returned"
+        returned_dir.mkdir(parents=True, exist_ok=True)
+        (returned_dir / "shot_render.mp4").write_bytes(b"fake-mp4")
+        (returned_dir / "hero_frame.png").write_bytes(b"fake-png")
+
+        imported = client.post(
+            f"/v1/projects/{proj.id}/import/unreal",
+            json={"bundle_dir": export_payload["bundle"]["bundle_dir"]},
+        )
+        imported.raise_for_status()
+        imported_payload = imported.json()
+        assert imported_payload["ok"] is True
+        assert imported_payload["imported"]["source_dir"].endswith("/returned")
+        assert len(imported_payload["imported"]["media"]) == 2
+
         outputs = client.get(f"/v1/projects/{proj.id}/outputs")
         outputs.raise_for_status()
         outputs_payload = outputs.json()
         assert len(outputs_payload["unreal_exports"]) == 1
         assert outputs_payload["unreal_exports"][0]["sequence_name"].endswith("_MainSequence")
         assert outputs_payload["unreal_exports"][0]["manifest"]["export_family"] == "unreal_bridge_bundle"
+        assert len(outputs_payload["unreal_returns"]) == 1
+        assert outputs_payload["unreal_returns"][0]["source_dir"].endswith("/returned")
+        assert len(outputs_payload["unreal_returns"][0]["media"]) == 2
+        assert any(item["kind"] == "unreal_bridge_return" for item in outputs_payload["videos"])

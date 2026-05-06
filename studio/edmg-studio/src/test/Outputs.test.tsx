@@ -5,13 +5,30 @@ import Outputs from "../pages/Outputs";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
 describe("Outputs page", () => {
-  it("renders active internal jobs and navigates to the render queue", async () => {
+  it("renders active internal jobs, round-trips Unreal bundle actions, and navigates to the render queue", async () => {
     const onNavigate = vi.fn();
+    let unrealExported = false;
+    let unrealReturned = false;
+    let exportRequest: any = null;
+    let importRequest: any = null;
     installEdmgBridge();
     installFetchMock({
       "/v1/projects": { projects: [{ id: "p1", name: "Demo Project" }] },
-      "/v1/projects/p1/outputs": {
-        videos: [],
+      "/v1/projects/p1/outputs": () => ({
+        videos: unrealReturned
+          ? [
+              {
+                path: "outputs/videos/demo_bundle_shot_render.mp4",
+                metadata_path: "outputs/videos/demo_bundle_shot_render.mp4.json",
+                metadata: {
+                  kind: "unreal_bridge_return",
+                  sequence_name: "demo_sequence_MainSequence",
+                  bundle_dir: "outputs/unreal/demo_bundle",
+                  output: { video: "outputs/videos/demo_bundle_shot_render.mp4" },
+                },
+              },
+            ]
+          : [],
         images: [
           {
             path: "outputs/images/frame.png",
@@ -60,6 +77,66 @@ describe("Outputs page", () => {
             },
           },
         ],
+        unreal_exports: unrealExported
+          ? [
+              {
+                bundle_dir: "outputs/unreal/demo_bundle",
+                manifest_path: "outputs/unreal/demo_bundle/bundle_manifest.json",
+                zip_path: "outputs/unreal/demo_bundle.zip",
+                created_at: "2026-05-05 15:00:00",
+                variant_index: 0,
+                sequence_name: "demo_sequence_MainSequence",
+                manifest: {
+                  files: [
+                    { path: "shot_manifest.json" },
+                    { path: "audio_markers.json" },
+                  ],
+                },
+              },
+            ]
+          : [],
+        unreal_returns: unrealReturned
+          ? [
+              {
+                bundle_dir: "outputs/unreal/demo_bundle",
+                source_dir: "outputs/unreal/demo_bundle/returned",
+                created_at: "2026-05-05 15:02:00",
+                variant_index: 0,
+                sequence_name: "demo_sequence_MainSequence",
+                media: [
+                  {
+                    path: "outputs/videos/demo_bundle_shot_render.mp4",
+                    kind: "video",
+                    source_path: "outputs/unreal/demo_bundle/returned/shot_render.mp4",
+                    metadata_path: "outputs/videos/demo_bundle_shot_render.mp4.json",
+                  },
+                ],
+              },
+            ]
+          : [],
+      }),
+      "POST /v1/projects/p1/export/unreal": (_path, init) => {
+        exportRequest = init?.body ? JSON.parse(String(init.body)) : null;
+        unrealExported = true;
+        return {
+          ok: true,
+          bundle: {
+            bundle_dir: "outputs/unreal/demo_bundle",
+            manifest_path: "outputs/unreal/demo_bundle/bundle_manifest.json",
+            zip_path: "outputs/unreal/demo_bundle.zip",
+          },
+        };
+      },
+      "POST /v1/projects/p1/import/unreal": (_path, init) => {
+        importRequest = init?.body ? JSON.parse(String(init.body)) : null;
+        unrealReturned = true;
+        return {
+          ok: true,
+          imported: {
+            bundle_dir: "outputs/unreal/demo_bundle",
+            source_dir: "outputs/unreal/demo_bundle/returned",
+          },
+        };
       },
     });
 
@@ -69,7 +146,22 @@ describe("Outputs page", () => {
     expect(screen.getByRole("combobox", { name: "Outputs layout profile" })).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Open Render Queue" }));
     expect(onNavigate).toHaveBeenCalledWith("queue");
-    expect(await screen.findByText(/Generation metadata/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Export Unreal Bundle" }));
+    expect(await screen.findByText(/Unreal bridge exports/i)).toBeTruthy();
+    expect((await screen.findAllByText(/demo_sequence_MainSequence/i)).length).toBeGreaterThan(0);
+    expect(exportRequest).toEqual({
+      variant_index: 0,
+      bundle_name: null,
+      include_zip: true,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Import returned media" }));
+    expect(await screen.findByText(/Unreal bridge returns/i)).toBeTruthy();
+    expect((await screen.findAllByText(/outputs\/videos\/demo_bundle_shot_render\.mp4/i)).length).toBeGreaterThan(0);
+    expect(importRequest).toEqual({
+      bundle_dir: "outputs/unreal/demo_bundle",
+      source_dir: null,
+    });
+    expect((await screen.findAllByText(/Generation metadata/)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/A luminous skyline with added edge detail/)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Outpaint margins/i)).toBeTruthy();
   }, 15000);
