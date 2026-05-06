@@ -18,7 +18,7 @@ const APP_NAME = "edmg-director";
 const SERVER_VERSION = "0.2.0";
 const PORT = Number.parseInt(process.env.PORT ?? "3001", 10);
 const BIND_HOST = String(process.env.HOST ?? "127.0.0.1");
-const EDMG_BASE_URL = String(process.env.EDMG_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
+const EDMG_BASE_URL = String(process.env.EDMG_BASE_URL ?? "http://127.0.0.1:7863").replace(/\/+$/, "");
 const REVIEW_WIDGET_URI = "ui://edmg-director/review-board.html";
 const REVIEW_WIDGET_DESCRIPTION =
   "Interactive review board for EDMG storyboard variants. Inspect scenes, compare directions, and apply the chosen variant to the Studio timeline.";
@@ -139,7 +139,7 @@ export function resolveServerConfig(
   return {
     port,
     bindHost: String(env.HOST ?? "127.0.0.1"),
-    edmgBaseUrl: String(env.EDMG_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, ""),
+    edmgBaseUrl: String(env.EDMG_BASE_URL ?? "http://127.0.0.1:7863").replace(/\/+$/, ""),
     publicBaseUrl: String(env.BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, ""),
     assetsDir: ASSETS_DIR,
     ...overrides,

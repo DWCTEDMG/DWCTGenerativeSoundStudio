@@ -21,18 +21,6 @@ type ManagedDirectorStatus = {
   packaged: boolean;
 };
 
-const EXTERNAL_DIRECTOR_URL_KEY = "edmg_director_external_url_v1";
-
-function readStoredDirectorUrl(): string {
-  if (typeof window === "undefined") return "";
-  return String(window.localStorage.getItem(EXTERNAL_DIRECTOR_URL_KEY) || "").trim();
-}
-
-function writeStoredDirectorUrl(value: string): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(EXTERNAL_DIRECTOR_URL_KEY, String(value || "").trim());
-}
-
 function normalizeUrl(value: string): string {
   const trimmed = String(value || "").trim();
   if (!trimmed) return "";
@@ -57,7 +45,10 @@ async function copyText(text: string): Promise<void> {
 export default function EdmgDirector({ onNavigate }: PageProps) {
   const { projects, projectId, setProjectId, selectedVariant, project, refreshProject } =
     useStudioWorkbenchProject();
-  const [directorUrl, setDirectorUrl] = React.useState(() => readStoredDirectorUrl());
+  const [directorUrl, setDirectorUrl] = React.useState("");
+  const [directorUrlLoaded, setDirectorUrlLoaded] = React.useState(false);
+  const [directorUrlDirty, setDirectorUrlDirty] = React.useState(false);
+  const [savingDirectorUrl, setSavingDirectorUrl] = React.useState(false);
   const [launchMessage, setLaunchMessage] = React.useState("");
   const [managedDirector, setManagedDirector] = React.useState<ManagedDirectorStatus | null>(null);
   const [directorStatusLoading, setDirectorStatusLoading] = React.useState(false);
@@ -88,13 +79,21 @@ export default function EdmgDirector({ onNavigate }: PageProps) {
           startedAt: typeof status.startedAt === "string" ? status.startedAt : null,
           packaged: Boolean(status.packaged),
         });
+        if (!directorUrlLoaded) {
+          if (!directorUrlDirty) {
+            setDirectorUrl(String(status.advertisedBaseUrl || ""));
+          }
+          setDirectorUrlLoaded(true);
+        } else if (!directorUrlDirty) {
+          setDirectorUrl(String(status.advertisedBaseUrl || ""));
+        }
       }
     } catch (error: any) {
       setLaunchMessage(String(error?.message ?? error ?? "Failed to read managed Director status."));
     } finally {
       setDirectorStatusLoading(false);
     }
-  }, []);
+  }, [directorUrlDirty, directorUrlLoaded]);
 
   React.useEffect(() => {
     void refreshManagedDirectorStatus();
@@ -118,13 +117,58 @@ export default function EdmgDirector({ onNavigate }: PageProps) {
 
   const updateDirectorUrl = (value: string) => {
     setDirectorUrl(value);
-    writeStoredDirectorUrl(value);
+    setDirectorUrlDirty(true);
     setLaunchMessage("");
+  };
+
+  const saveDirectorUrl = async () => {
+    setSavingDirectorUrl(true);
+    setLaunchMessage("");
+    try {
+      if (!window.edmg?.setDirectorSettings) {
+        throw new Error("This Studio build cannot update the managed Director public URL yet.");
+      }
+      const fallbackBaseUrl = managedDirector?.serviceUrl || "http://127.0.0.1:3001";
+      const requestedBaseUrl = directorUrl.trim() ? normalizeUrl(directorUrl) : fallbackBaseUrl;
+      if (!requestedBaseUrl) {
+        throw new Error("Enter a valid Director public URL first.");
+      }
+      const status = await window.edmg.setDirectorSettings({
+        baseUrl: requestedBaseUrl,
+      });
+      if (!status?.ok) {
+        throw new Error(status?.error || "Failed to save the Director public URL.");
+      }
+      setManagedDirector({
+        available: Boolean(status.available),
+        managed: Boolean(status.managed),
+        serviceUrl: String(status.serviceUrl || ""),
+        mcpUrl: String(status.mcpUrl || ""),
+        advertisedBaseUrl: String(status.advertisedBaseUrl || requestedBaseUrl),
+        backendUrl: String(status.backendUrl || ""),
+        pid: typeof status.pid === "number" ? status.pid : null,
+        lastError: String(status.lastError || ""),
+        startedAt: typeof status.startedAt === "string" ? status.startedAt : null,
+        packaged: Boolean(status.packaged),
+      });
+      setDirectorUrl(String(status.advertisedBaseUrl || requestedBaseUrl));
+      setDirectorUrlLoaded(true);
+      setDirectorUrlDirty(false);
+      setLaunchMessage(
+        status.available
+          ? "Saved and restarted the managed Director service. Refresh the ChatGPT app/connector so it reloads the new widget metadata."
+          : "Saved the public URL. The managed Director service is still starting; refresh again in a moment, then refresh the ChatGPT app/connector."
+      );
+    } catch (error: any) {
+      setLaunchMessage(String(error?.message ?? error ?? "Failed to save the Director public URL."));
+    } finally {
+      setSavingDirectorUrl(false);
+    }
   };
 
   const openDirectorUrl = async () => {
     if (!normalizedDirectorUrl) {
-      setLaunchMessage("Enter the public EDMG Director URL or a ChatGPT thread URL first.");
+      setLaunchMessage("Enter the managed Director public URL first.");
       return;
     }
     try {
@@ -302,8 +346,9 @@ export default function EdmgDirector({ onNavigate }: PageProps) {
           <h2>Managed and external EDMG Director access</h2>
           <div className="small studio-workbenchCopy">
             Studio can now run the EDMG Director MCP app alongside the desktop app. Use the managed
-            service details below for local connector setup, or keep a public URL here when you want
-            to hand off into an externally exposed ChatGPT app flow.
+            service details below for local connector setup, then set a real public URL here when you
+            want ChatGPT to load the widget through an HTTPS tunnel or hosted origin instead of
+            localhost.
           </div>
         </div>
         <div className="studio-workbenchMetaGrid">
@@ -364,12 +409,12 @@ export default function EdmgDirector({ onNavigate }: PageProps) {
         </div>
         <div className="studio-workbenchProjectRow">
           <label className="studio-workbenchField studio-workbenchField--wide">
-            <span>External public URL</span>
+            <span>Managed public URL</span>
             <input
               type="text"
               value={directorUrl}
               onChange={(event) => updateDirectorUrl(event.target.value)}
-              placeholder="https://your-public-director-host-or-chatgpt-thread"
+              placeholder="https://your-public-tunnel-or-director-host"
             />
           </label>
           <div className="studio-workbenchMeta">
@@ -378,14 +423,22 @@ export default function EdmgDirector({ onNavigate }: PageProps) {
           </div>
         </div>
         <div className="row studio-workbenchActions">
-          <button onClick={() => void openDirectorUrl()}>Open external EDMG Director</button>
+          <button
+            onClick={() => void saveDirectorUrl()}
+            disabled={!window.edmg?.setDirectorSettings || savingDirectorUrl || (!directorUrlDirty && !!managedDirector)}
+          >
+            {savingDirectorUrl ? "Saving..." : "Save public URL"}
+          </button>
+          <button className="secondary" onClick={() => void openDirectorUrl()} disabled={!normalizedDirectorUrl}>
+            Open public EDMG Director
+          </button>
           <button className="secondary" onClick={() => void copyMcpEndpoint()}>
             Copy external MCP endpoint
           </button>
         </div>
         <div className="small studio-workbenchStatus">
           {launchMessage ||
-            "Studio-native controls below do not depend on ChatGPT. The external URL is only needed when you want a tunneled/public ChatGPT connector flow."}
+            "Use an HTTPS tunnel or hosted origin here, save it, then refresh the ChatGPT app/connector so it reloads the managed Director metadata and widget assets from that public URL."}
         </div>
       </div>
     ),

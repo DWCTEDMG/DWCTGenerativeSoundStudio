@@ -20,6 +20,7 @@ export function createDirectorRuntime({
 }) {
   const serviceUrl = `http://${directorHost}:${directorPort}`;
   let currentDirectorUrl = serviceUrl;
+  let currentDirectorPublicBaseUrl = String(directorPublicBaseUrl || serviceUrl).trim() || serviceUrl;
   let directorProc = null;
   let lastError = "";
   let lastStartedAt = "";
@@ -80,13 +81,16 @@ export function createDirectorRuntime({
     return isWindows ? "pnpm.cmd" : "pnpm";
   }
 
+  function getAdvertisedBaseUrl() {
+    return String(currentDirectorPublicBaseUrl || serviceUrl).trim() || serviceUrl;
+  }
+
   function buildDirectorChildEnv() {
-    const publicBaseUrl = String(directorPublicBaseUrl || serviceUrl).trim() || serviceUrl;
     const env = {
       ...process.env,
       HOST: directorHost,
       PORT: String(directorPort),
-      BASE_URL: publicBaseUrl,
+      BASE_URL: getAdvertisedBaseUrl(),
       EDMG_BASE_URL: getBackendUrl(),
     };
 
@@ -253,7 +257,7 @@ export function createDirectorRuntime({
         `EDMG Director did not become ready at ${serviceUrl} within ${directorReadyTimeoutMs} ms.`;
       console.warn("[director] startup timeout", {
         serviceUrl,
-        publicBaseUrl: directorPublicBaseUrl || serviceUrl,
+        publicBaseUrl: getAdvertisedBaseUrl(),
       });
     } else {
       lastError = "";
@@ -267,6 +271,15 @@ export function createDirectorRuntime({
     directorProc = null;
   }
 
+  async function restartDirector({ directorPublicBaseUrl: nextPublicBaseUrl } = {}) {
+    currentDirectorPublicBaseUrl = String(nextPublicBaseUrl || serviceUrl).trim() || serviceUrl;
+    stopDirector();
+    currentDirectorUrl = serviceUrl;
+    lastError = "";
+    await delay(400);
+    return startDirectorIfNeeded();
+  }
+
   async function getDirectorStatus() {
     const reachable = await probeDirector(serviceUrl);
     return {
@@ -275,7 +288,7 @@ export function createDirectorRuntime({
       managed: spawnDirector,
       serviceUrl,
       mcpUrl: `${serviceUrl.replace(/\/+$/, "")}/mcp`,
-      advertisedBaseUrl: String(directorPublicBaseUrl || serviceUrl).trim() || serviceUrl,
+      advertisedBaseUrl: getAdvertisedBaseUrl(),
       backendUrl: getBackendUrl(),
       pid: directorProc?.pid ?? null,
       lastError,
@@ -289,6 +302,7 @@ export function createDirectorRuntime({
     getCurrentDirectorMcpUrl: () => `${currentDirectorUrl.replace(/\/+$/, "")}/mcp`,
     startDirectorIfNeeded,
     stopDirector,
+    restartDirector,
     getDirectorStatus,
   };
 }

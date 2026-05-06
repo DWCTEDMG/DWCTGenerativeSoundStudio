@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld("edmg", {
   getBackendSettings: () => ipcRenderer.invoke("edmg:getBackendSettings"),
   getDirectorStatus: () => ipcRenderer.invoke("edmg:getDirectorStatus"),
   setBackendSettings: (settings) => ipcRenderer.invoke("edmg:setBackendSettings", settings),
+  setDirectorSettings: (settings) => ipcRenderer.invoke("edmg:setDirectorSettings", settings),
 
   openExternal: (url) => shell.openExternal(String(url)),
   openPath: (targetPath) => ipcRenderer.invoke("edmg:openPath", targetPath),

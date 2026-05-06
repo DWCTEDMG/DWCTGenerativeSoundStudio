@@ -48,7 +48,7 @@ It is shaped as an `interactive-decoupled` app:
 ## Environment
 
 - `EDMG_BASE_URL`
-  Base URL for the EDMG Studio backend. Defaults to `http://127.0.0.1:8000`.
+  Base URL for the EDMG Studio backend. Defaults to `http://127.0.0.1:7863`.
 - `PORT`
   Local port for this MCP app server. Defaults to `3001`.
 - `HOST`
@@ -84,6 +84,8 @@ pnpm run build
 `pnpm run test` starts a stub EDMG backend plus the local MCP server, smoke-tests the registered tools through a real Streamable HTTP MCP client, and verifies the reactive schedule generator directly.
 
 Runtime validation still requires a live EDMG backend plus ChatGPT Developer Mode or another MCP Apps-capable host.
+
+If you change `BASE_URL`, restart the Director server and refresh the ChatGPT app/connector so it reloads the updated widget metadata and asset URLs.
 
 ## Studio-managed runtime
 

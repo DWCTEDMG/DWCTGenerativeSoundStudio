@@ -91,9 +91,16 @@ const DIRECTOR_PORT_RAW = Number.parseInt(
   10,
 );
 const DIRECTOR_PORT = Number.isFinite(DIRECTOR_PORT_RAW) && DIRECTOR_PORT_RAW > 0 ? DIRECTOR_PORT_RAW : 3001;
-const DIRECTOR_PUBLIC_BASE_URL =
-  String(process.env.EDMG_DIRECTOR_BASE_URL ?? DIRECTOR_RUNTIME_DEFAULTS.baseUrl ?? "").trim() ||
-  `http://${DIRECTOR_HOST}:${DIRECTOR_PORT}`;
+const DIRECTOR_SETTINGS_ENV_KEYS = Object.freeze({
+  baseUrl: "EDMG_DIRECTOR_BASE_URL",
+});
+const DIRECTOR_SETTINGS_DEFAULTS = Object.freeze({
+  baseUrl:
+    normalizeBackendUrl(DIRECTOR_RUNTIME_DEFAULTS.baseUrl, "") ||
+    `http://${DIRECTOR_HOST}:${DIRECTOR_PORT}`,
+});
+const STARTUP_DIRECTOR_SETTINGS = syncDirectorSettingsToProcessEnv(getConfiguredDirectorSettings());
+const DIRECTOR_PUBLIC_BASE_URL = STARTUP_DIRECTOR_SETTINGS.baseUrl;
 const DIRECTOR_READY_TIMEOUT_MS = Number(
   process.env.EDMG_DIRECTOR_READY_TIMEOUT_MS ??
   (app.isPackaged && IS_WINDOWS ? "45000" : "30000"),
@@ -446,11 +453,23 @@ function readBootstrapBackendSettingsRaw() {
   return {};
 }
 
+function readBootstrapDirectorSettingsRaw() {
+  const bootstrapConfig = readBootstrapConfig();
+  if (bootstrapConfig?.directorSettings && typeof bootstrapConfig.directorSettings === "object") {
+    return bootstrapConfig.directorSettings;
+  }
+  return {};
+}
+
 function hasAnyAiSetting(rawSettings) {
   return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
 }
 
 function hasAnyBackendSetting(rawSettings) {
+  return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
+}
+
+function hasAnyDirectorSetting(rawSettings) {
   return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
 }
 
@@ -550,6 +569,22 @@ function normalizeBackendSettings(rawSettings = {}) {
   };
 }
 
+function getRawDirectorSettingsFromEnv(envLike) {
+  const env = envLike && typeof envLike === "object" ? envLike : {};
+  return {
+    baseUrl: env[DIRECTOR_SETTINGS_ENV_KEYS.baseUrl],
+  };
+}
+
+function normalizeDirectorSettings(rawSettings = {}) {
+  const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  return {
+    baseUrl:
+      normalizeBackendUrl(current.baseUrl, DIRECTOR_SETTINGS_DEFAULTS.baseUrl) ||
+      DIRECTOR_SETTINGS_DEFAULTS.baseUrl,
+  };
+}
+
 function getConfiguredAiSettings() {
   const launcherRaw = getRawAiSettingsFromEnv(readLauncherEnv());
   const bootstrapRaw = readBootstrapAiSettingsRaw();
@@ -586,6 +621,24 @@ function getConfiguredBackendSettings() {
   return { ...configured, source };
 }
 
+function getConfiguredDirectorSettings() {
+  const launcherRaw = getRawDirectorSettingsFromEnv(readLauncherEnv());
+  const bootstrapRaw = readBootstrapDirectorSettingsRaw();
+  const envRaw = getRawDirectorSettingsFromEnv(process.env);
+  const configured = normalizeDirectorSettings({
+    ...launcherRaw,
+    ...bootstrapRaw,
+    ...envRaw,
+  });
+
+  let source = "default";
+  if (hasAnyDirectorSetting(launcherRaw)) source = "launcher";
+  if (hasAnyDirectorSetting(bootstrapRaw)) source = "bootstrap";
+  if (hasAnyDirectorSetting(envRaw)) source = "env";
+
+  return { ...configured, source };
+}
+
 function syncAiSettingsToProcessEnv(rawSettings) {
   const aiSettings = normalizeAiSettings(rawSettings);
   process.env.EDMG_AI_MODE = aiSettings.mode;
@@ -606,6 +659,12 @@ function syncBackendSettingsToProcessEnv(rawSettings) {
   process.env[BACKEND_SETTINGS_ENV_KEYS.url] = backendSettings.url;
   process.env[BACKEND_SETTINGS_ENV_KEYS.spawnBackend] = backendSettings.mode === "external" ? "0" : "1";
   return backendSettings;
+}
+
+function syncDirectorSettingsToProcessEnv(rawSettings) {
+  const directorSettings = normalizeDirectorSettings(rawSettings);
+  process.env[DIRECTOR_SETTINGS_ENV_KEYS.baseUrl] = directorSettings.baseUrl;
+  return directorSettings;
 }
 
 syncAiSettingsToProcessEnv(getConfiguredAiSettings());
@@ -1293,6 +1352,28 @@ function registerIpcHandlers() {
       restartRequired: true,
       currentBackendUrl: backendRuntime.getCurrentBackendUrl(),
       ...backendSettings,
+    };
+  });
+
+  ipcMain.handle("edmg:setDirectorSettings", async (_event, nextSettings = {}) => {
+    const directorSettings = syncDirectorSettingsToProcessEnv(nextSettings);
+    const nextConfig = {
+      ...readBootstrapConfig(),
+      directorSettings,
+      updatedAt: new Date().toISOString(),
+    };
+    writeBootstrapConfig(nextConfig);
+    writeLauncherEnv({
+      ...readLauncherEnv(),
+      EDMG_DIRECTOR_BASE_URL: directorSettings.baseUrl,
+    });
+    await directorRuntime.restartDirector({
+      directorPublicBaseUrl: directorSettings.baseUrl,
+    });
+    const status = await directorRuntime.getDirectorStatus();
+    return {
+      ...status,
+      restartRequired: false,
     };
   });
 
