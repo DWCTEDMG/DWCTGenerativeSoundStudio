@@ -83,6 +83,7 @@ Windows or `/mnt/media/EDMG-Studio` on Linux.
 - [docs/UNIFIED_INTERNAL_RENDERER_PLAN.md](./docs/UNIFIED_INTERNAL_RENDERER_PLAN.md)
 - [docs/VISUAL_DNA_AND_RENDER_CONDUCTOR_SPEC.md](./docs/VISUAL_DNA_AND_RENDER_CONDUCTOR_SPEC.md)
 - [docs/STARLIFT_VM_DEPLOY.md](./docs/STARLIFT_VM_DEPLOY.md)
+- [docs/GCP_GPU_VM_DEPLOY.md](./docs/GCP_GPU_VM_DEPLOY.md)
 - [docs/AI_PROVIDERS.md](./docs/AI_PROVIDERS.md)
 - [docs/HF_VIDEO_MODELS.md](./docs/HF_VIDEO_MODELS.md)
 

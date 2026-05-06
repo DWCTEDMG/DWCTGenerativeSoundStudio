@@ -110,13 +110,12 @@ function normalizeBackendSettings(payload?: Partial<StudioBackendSettings> | nul
       ? String(portNumber)
       : DEFAULT_BACKEND_SETTINGS.port;
   const rawUrl = String(current.url ?? "").trim();
-  const parsedUrl = parseBackendUrl(rawUrl);
   const normalizedUrl = sanitizeBackendUrl(rawUrl);
 
   return {
     mode,
-    host: String(parsedUrl.host ?? host).trim() || host,
-    port: String(parsedUrl.port ?? port).trim() || port,
+    host,
+    port,
     url: mode === "external" ? (rawUrl ? normalizedUrl || rawUrl : "") : "",
     source: String(current.source ?? DEFAULT_BACKEND_SETTINGS.source),
   };
@@ -429,11 +428,10 @@ export default function Settings(props: PageProps) {
       if (normalizedDraft.mode === "external" && !backendUrl) {
         throw new Error("Enter a valid backend URL starting with http:// or https://.");
       }
-      const derived = backendUrl ? parseBackendUrl(backendUrl) : {};
       const response = await window.edmg.setBackendSettings({
         mode: normalizedDraft.mode,
-        host: String(derived.host ?? normalizedDraft.host),
-        port: String(derived.port ?? normalizedDraft.port),
+        host: normalizedDraft.host,
+        port: normalizedDraft.port,
         url: backendUrl,
       });
       if (!response?.ok) {

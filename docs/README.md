@@ -18,3 +18,4 @@ license: openrail
 - [Unified internal renderer plan](UNIFIED_INTERNAL_RENDERER_PLAN.md)
 - [Visual DNA and Render Conductor spec](VISUAL_DNA_AND_RENDER_CONDUCTOR_SPEC.md)
 - [Starlift VM deploy](STARLIFT_VM_DEPLOY.md)
+- [GCP GPU VM deploy](GCP_GPU_VM_DEPLOY.md)

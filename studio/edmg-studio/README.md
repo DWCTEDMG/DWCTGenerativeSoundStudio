@@ -101,6 +101,7 @@ Release/operator runbook:
 - [Studio release runbook](../../docs/STUDIO_RELEASE_RUNBOOK.md)
 - [Release checklist](../../RELEASE.md)
 - [Linux packaging notes](./packaging/linux/README.md)
+- [GCP GPU VM deploy](../../docs/GCP_GPU_VM_DEPLOY.md)
 
 Install/storage split:
 - **Install directory**: where the packaged app itself is installed

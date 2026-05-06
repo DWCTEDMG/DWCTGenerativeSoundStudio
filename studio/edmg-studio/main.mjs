@@ -43,19 +43,24 @@ const BACKEND_RUNTIME_DEFAULTS =
   RUNTIME_DEFAULTS.backend && typeof RUNTIME_DEFAULTS.backend === "object"
     ? RUNTIME_DEFAULTS.backend
     : {};
+const DEFAULT_LOCAL_BACKEND_HOST = "127.0.0.1";
+const DEFAULT_LOCAL_BACKEND_PORT = "7863";
+const BACKEND_DEFAULT_MODE =
+  typeof BACKEND_RUNTIME_DEFAULTS.spawnBackend === "boolean" && BACKEND_RUNTIME_DEFAULTS.spawnBackend === false
+    ? "external"
+    : "managed";
 const BACKEND_SETTINGS_DEFAULTS = Object.freeze({
-  mode:
-    typeof BACKEND_RUNTIME_DEFAULTS.spawnBackend === "boolean" && BACKEND_RUNTIME_DEFAULTS.spawnBackend === false
-      ? "external"
-      : "managed",
+  mode: BACKEND_DEFAULT_MODE,
   host:
+    BACKEND_DEFAULT_MODE !== "external" &&
     typeof BACKEND_RUNTIME_DEFAULTS.host === "string" && BACKEND_RUNTIME_DEFAULTS.host.trim()
       ? BACKEND_RUNTIME_DEFAULTS.host.trim()
-      : "127.0.0.1",
+      : DEFAULT_LOCAL_BACKEND_HOST,
   port:
+    BACKEND_DEFAULT_MODE !== "external" &&
     BACKEND_RUNTIME_DEFAULTS.port != null && String(BACKEND_RUNTIME_DEFAULTS.port).trim()
       ? String(BACKEND_RUNTIME_DEFAULTS.port).trim()
-      : "7863",
+      : DEFAULT_LOCAL_BACKEND_PORT,
   url:
     typeof BACKEND_RUNTIME_DEFAULTS.url === "string" && BACKEND_RUNTIME_DEFAULTS.url.trim()
       ? BACKEND_RUNTIME_DEFAULTS.url.trim()
@@ -519,20 +524,6 @@ function normalizeBackendUrl(rawValue, fallbackUrl = "") {
   }
 }
 
-function deriveBackendConnectionFromUrl(url) {
-  const normalizedUrl = normalizeBackendUrl(url);
-  if (!normalizedUrl) return {};
-  try {
-    const parsed = new URL(normalizedUrl);
-    return {
-      host: parsed.hostname || BACKEND_SETTINGS_DEFAULTS.host,
-      port: parsed.port || (parsed.protocol === "https:" ? "443" : "80"),
-    };
-  } catch {
-    return {};
-  }
-}
-
 function normalizeAiSettings(rawSettings = {}) {
   const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
   return {
@@ -559,12 +550,11 @@ function normalizeBackendSettings(rawSettings = {}) {
   const port = normalizeBackendPort(current.port);
   const fallbackUrl = buildManagedBackendUrl(host, port);
   const url = mode === "external" ? normalizeBackendUrl(current.url, fallbackUrl) : "";
-  const derived = mode === "external" ? deriveBackendConnectionFromUrl(url) : {};
 
   return {
     mode,
-    host: pickConfiguredString(derived.host, host),
-    port: normalizeBackendPort(derived.port || port),
+    host,
+    port,
     url,
   };
 }

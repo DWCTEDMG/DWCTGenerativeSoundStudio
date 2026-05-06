@@ -96,8 +96,8 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(setBackendSettings).toHaveBeenCalledWith({
         mode: "external",
-        host: "edmg-backend.example.com",
-        port: "443",
+        host: "127.0.0.1",
+        port: "7863",
         url: "https://edmg-backend.example.com",
       });
     });

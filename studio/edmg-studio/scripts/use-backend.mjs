@@ -68,18 +68,6 @@ function normalizeUrl(rawUrl) {
   }
 }
 
-function deriveHostPortFromUrl(url) {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname || DEFAULT_LOCAL_HOST,
-    port: parsed.port
-      ? Number(parsed.port)
-      : parsed.protocol === "https:"
-        ? 443
-        : 80,
-  };
-}
-
 function updateLauncherEnvJson(json, config) {
   return {
     ...json,
@@ -106,7 +94,7 @@ function updateRuntimeDefaultsJson(json, config) {
       ...(json.backend && typeof json.backend === "object" ? json.backend : {}),
       host: config.host,
       port: config.port,
-      url: config.activeUrl,
+      url: config.url,
       spawnBackend: config.spawnBackend,
     },
   };
@@ -138,12 +126,11 @@ if (modeArg === "external") {
   if (!normalizedUrl) {
     fail("Usage: pnpm backend:use external http://IP:PORT");
   }
-  const connection = deriveHostPortFromUrl(normalizedUrl);
 
   config = {
     mode: "external",
-    host: connection.host,
-    port: connection.port,
+    host: DEFAULT_LOCAL_HOST,
+    port: DEFAULT_LOCAL_PORT,
     url: normalizedUrl,
     activeUrl: normalizedUrl,
     spawnBackend: false,
