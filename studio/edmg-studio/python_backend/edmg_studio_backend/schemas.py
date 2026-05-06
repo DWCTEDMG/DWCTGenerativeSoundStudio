@@ -239,6 +239,12 @@ class ImportUnrealBridgeReturnRequest(BaseModel):
     bundle_dir: str = Field(min_length=1, max_length=260)
     source_dir: str | None = Field(default=None, max_length=260)
 
+
+class BuildUnrealImportPlanRequest(BaseModel):
+    bundle_dir: str = Field(min_length=1, max_length=260)
+    content_path: str | None = Field(default=None, max_length=260)
+    asset_name: str | None = Field(default=None, max_length=120)
+
 class CloudAwsTestRequest(BaseModel):
     bucket: str | None = None
 

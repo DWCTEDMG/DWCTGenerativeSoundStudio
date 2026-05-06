@@ -162,6 +162,20 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
         assert export_payload["bundle"]["manifest_path"].endswith("bundle_manifest.json")
         assert export_payload["bundle"]["zip_path"].endswith(".zip")
 
+        import_plan = client.post(
+            f"/v1/projects/{proj.id}/unreal/import-plan",
+            json={
+                "bundle_dir": export_payload["bundle"]["bundle_dir"],
+                "content_path": "/Game/Cinematics/EDMG",
+                "asset_name": "DemoSequence",
+            },
+        )
+        import_plan.raise_for_status()
+        import_plan_payload = import_plan.json()
+        assert import_plan_payload["ok"] is True
+        assert import_plan_payload["plan_path"].endswith("unreal_import_plan.json")
+        assert import_plan_payload["plan"]["asset_path"] == "/Game/Cinematics/EDMG/DemoSequence"
+
         returned_dir = store.project_dir(proj.id) / export_payload["bundle"]["bundle_dir"] / "returned"
         returned_dir.mkdir(parents=True, exist_ok=True)
         (returned_dir / "shot_render.mp4").write_bytes(b"fake-mp4")
@@ -183,6 +197,7 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
         assert len(outputs_payload["unreal_exports"]) == 1
         assert outputs_payload["unreal_exports"][0]["sequence_name"].endswith("_MainSequence")
         assert outputs_payload["unreal_exports"][0]["manifest"]["export_family"] == "unreal_bridge_bundle"
+        assert outputs_payload["unreal_exports"][0]["import_plan"]["asset_path"] == "/Game/Cinematics/EDMG/DemoSequence"
         assert len(outputs_payload["unreal_returns"]) == 1
         assert outputs_payload["unreal_returns"][0]["source_dir"].endswith("/returned")
         assert len(outputs_payload["unreal_returns"][0]["media"]) == 2

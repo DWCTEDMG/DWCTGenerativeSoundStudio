@@ -8,8 +8,10 @@ describe("Outputs page", () => {
   it("renders active internal jobs, round-trips Unreal bundle actions, and navigates to the render queue", async () => {
     const onNavigate = vi.fn();
     let unrealExported = false;
+    let unrealPlanBuilt = false;
     let unrealReturned = false;
     let exportRequest: any = null;
+    let planRequest: any = null;
     let importRequest: any = null;
     installEdmgBridge();
     installFetchMock({
@@ -86,6 +88,14 @@ describe("Outputs page", () => {
                 created_at: "2026-05-05 15:00:00",
                 variant_index: 0,
                 sequence_name: "demo_sequence_MainSequence",
+                import_plan_path: unrealPlanBuilt ? "outputs/unreal/demo_bundle/unreal_import_plan.json" : null,
+                import_plan: unrealPlanBuilt
+                  ? {
+                      asset_path: "/Game/EDMG/Sequences/demo_sequence_MainSequence",
+                      content_path: "/Game/EDMG/Sequences",
+                      expected_return_dir: "outputs/unreal/demo_bundle/returned",
+                    }
+                  : null,
                 manifest: {
                   files: [
                     { path: "shot_manifest.json" },
@@ -127,6 +137,19 @@ describe("Outputs page", () => {
           },
         };
       },
+      "POST /v1/projects/p1/unreal/import-plan": (_path, init) => {
+        planRequest = init?.body ? JSON.parse(String(init.body)) : null;
+        unrealPlanBuilt = true;
+        return {
+          ok: true,
+          plan_path: "outputs/unreal/demo_bundle/unreal_import_plan.json",
+          plan: {
+            asset_path: "/Game/EDMG/Sequences/demo_sequence_MainSequence",
+            content_path: "/Game/EDMG/Sequences",
+            expected_return_dir: "outputs/unreal/demo_bundle/returned",
+          },
+        };
+      },
       "POST /v1/projects/p1/import/unreal": (_path, init) => {
         importRequest = init?.body ? JSON.parse(String(init.body)) : null;
         unrealReturned = true;
@@ -153,6 +176,13 @@ describe("Outputs page", () => {
       variant_index: 0,
       bundle_name: null,
       include_zip: true,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Build import plan" }));
+    expect((await screen.findAllByText(/\/Game\/EDMG\/Sequences\/demo_sequence_MainSequence/i)).length).toBeGreaterThan(0);
+    expect(planRequest).toEqual({
+      bundle_dir: "outputs/unreal/demo_bundle",
+      content_path: null,
+      asset_name: null,
     });
     fireEvent.click(await screen.findByRole("button", { name: "Import returned media" }));
     expect(await screen.findByText(/Unreal bridge returns/i)).toBeTruthy();

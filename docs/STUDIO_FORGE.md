@@ -27,8 +27,10 @@ Current features:
 - Unreal bridge preview cards
 - backend Unreal bridge contract preview via `/v1/projects/{project_id}/unreal/preview`
 - backend Unreal bridge export bundle via `POST /v1/projects/{project_id}/export/unreal`
+- backend Unreal bridge import-plan generation via `POST /v1/projects/{project_id}/unreal/import-plan`
 - backend Unreal bridge return import via `POST /v1/projects/{project_id}/import/unreal`
-- one-click Unreal bundle export/import actions in Outputs, with returned media registered back into canonical project outputs
+- one-click Unreal bundle export/import-plan/import actions in Outputs, with returned media registered back into canonical project outputs
+- Unreal-side importer script at `tools/unreal/import_unreal_bridge_bundle.py` for creating a Level Sequence from the exported bundle inside Unreal Editor
 - validation checklist
 
 Studio Forge v1 does not generate code, run workflows, write files, install runtimes, or mutate project data.

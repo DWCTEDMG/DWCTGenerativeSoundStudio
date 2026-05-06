@@ -46,6 +46,7 @@ from .schemas import (
     RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest,
     CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest, ExportUnrealBridgeRequest,
     ImportUnrealBridgeReturnRequest,
+    BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
@@ -94,6 +95,10 @@ from .services.workbench_bridge import (
     merge_reactive_lab_into_timeline,
     planner_lab_to_canonical_plan,
     planner_lab_to_project_analysis,
+)
+from .services.unreal_bridge_consumer import (
+    build_unreal_sequence_import_plan,
+    write_unreal_sequence_import_plan,
 )
 from .services.visual_dna import (
     build_prompt_hints as build_visual_dna_prompt_hints,
@@ -8440,6 +8445,40 @@ def import_unreal_bridge_return(project_id: str, req: ImportUnrealBridgeReturnRe
         "imported": return_entry,
     }
 
+
+@app.post("/v1/projects/{project_id}/unreal/import-plan")
+def build_unreal_bridge_import_plan(project_id: str, req: BuildUnrealImportPlanRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    pdir = store.project_dir(project_id)
+    try:
+        bundle_dir = safe_join(pdir, req.bundle_dir)
+    except Exception:
+        raise HTTPException(400, "Invalid bundle_dir")
+    if not bundle_dir.exists() or not bundle_dir.is_dir():
+        raise HTTPException(404, "Unreal bundle not found")
+
+    try:
+        plan = build_unreal_sequence_import_plan(
+            bundle_dir,
+            content_path=req.content_path,
+            asset_name=req.asset_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    plan_path = bundle_dir / "unreal_import_plan.json"
+    write_unreal_sequence_import_plan(plan, plan_path)
+    plan_rel = plan_path.relative_to(pdir).as_posix()
+
+    return {
+        "ok": True,
+        "plan_path": plan_rel,
+        "plan": plan.to_dict(),
+    }
+
 @app.get("/v1/projects/{project_id}/outputs")
 def list_outputs(project_id: str):
     proj = store.get(project_id)
@@ -8526,6 +8565,17 @@ def list_outputs(project_id: str):
                 zip_file = safe_join(pdir, zip_rel)
                 if zip_file.exists() and zip_file.is_file():
                     entry["zip_file"] = _file_entry(zip_file)
+            except Exception:
+                pass
+        bundle_rel = entry["bundle_dir"]
+        if bundle_rel:
+            try:
+                bundle_path = safe_join(pdir, bundle_rel)
+                import_plan_path = bundle_path / "unreal_import_plan.json"
+                if import_plan_path.exists() and import_plan_path.is_file():
+                    entry["import_plan_path"] = import_plan_path.relative_to(pdir).as_posix()
+                    entry["import_plan_file"] = _file_entry(import_plan_path)
+                    entry["import_plan"] = json.loads(import_plan_path.read_text(encoding="utf-8"))
             except Exception:
                 pass
         unreal_exports.append(entry)

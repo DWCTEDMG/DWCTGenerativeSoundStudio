@@ -862,6 +862,11 @@ def build_unreal_bridge_export_payloads(
         "return_owner": str(render_handoff.get("return_owner") or "studio"),
         "assembly_mode": str(render_handoff.get("assembly_mode") or "ffmpeg_back_in_studio"),
         "expected_outputs": deepcopy(render_handoff.get("expected_outputs") or []),
+        "unreal_consumer": {
+            "repo_relative_script": "studio/edmg-studio/tools/unreal/import_unreal_bridge_bundle.py",
+            "default_content_path": "/Game/EDMG/Sequences",
+            "default_return_dir": "returned",
+        },
         "delivery_notes": [
             "Studio remains the assembly owner for the final mux and output bundle.",
             "Rendered files should preserve scene and shot ordering from shot_manifest.json.",

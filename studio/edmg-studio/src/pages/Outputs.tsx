@@ -28,6 +28,7 @@ export default function Outputs(props: PageProps) {
   const [unrealBundleName, setUnrealBundleName] = useState<string>("");
   const [unrealIncludeZip, setUnrealIncludeZip] = useState<boolean>(true);
   const [unrealExportBusy, setUnrealExportBusy] = useState<boolean>(false);
+  const [unrealPlanBusyBundle, setUnrealPlanBusyBundle] = useState<string>("");
   const [unrealImportBusyBundle, setUnrealImportBusyBundle] = useState<string>("");
 
   const refreshProjects = async () => {
@@ -199,6 +200,30 @@ export default function Outputs(props: PageProps) {
       setErr(String(e));
     } finally {
       setUnrealExportBusy(false);
+    }
+  };
+
+  const buildUnrealImportPlan = async (bundleDir: string) => {
+    if (!projectId || !bundleDir || unrealPlanBusyBundle) return;
+    try {
+      setErr(null);
+      setUnrealPlanBusyBundle(bundleDir);
+      const result = await apiPost(`/v1/projects/${projectId}/unreal/import-plan`, {
+        bundle_dir: bundleDir,
+        content_path: null,
+        asset_name: null,
+      });
+      await refreshOutputs(projectId);
+      const plan = result?.plan || {};
+      setInfo({
+        action: "build_unreal_import_plan",
+        path: String(result?.plan_path || plan.asset_path || bundleDir),
+        label: "unreal import plan",
+      });
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setUnrealPlanBusyBundle("");
     }
   };
 
@@ -550,9 +575,17 @@ export default function Outputs(props: PageProps) {
                         Files <b>{bundle.manifest.files.map((item: any) => String(item?.path || item)).join(", ")}</b>
                       </div>
                     ) : null}
+                    {bundle.import_plan?.asset_path ? (
+                      <div className="small" style={{ marginTop: 6, opacity: 0.84 }}>
+                        Unreal asset <b>{String(bundle.import_plan.asset_path)}</b>
+                      </div>
+                    ) : null}
                     <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
                       {bundle.manifest_path ? (
                         <a className="secondary" href={fileUrl(projectId, bundle.manifest_path)} target="_blank" rel="noreferrer">Open manifest</a>
+                      ) : null}
+                      {bundle.import_plan_path ? (
+                        <a className="secondary" href={fileUrl(projectId, bundle.import_plan_path)} target="_blank" rel="noreferrer">Open import plan</a>
                       ) : null}
                       {bundle.zip_path ? (
                         <a className="secondary" href={fileUrl(projectId, bundle.zip_path)} target="_blank" rel="noreferrer">Download zip</a>
@@ -565,6 +598,20 @@ export default function Outputs(props: PageProps) {
                       {bundle.zip_path ? (
                         <button className="secondary" onClick={() => handleArtifactPathAction("unreal zip", bundle.zip_path, "reveal")}>
                           {desktopActionLabel("reveal", "unreal zip")}
+                        </button>
+                      ) : null}
+                      {bundle.import_plan_path ? (
+                        <button className="secondary" onClick={() => handleArtifactPathAction("unreal import plan", bundle.import_plan_path, "reveal")}>
+                          {desktopActionLabel("reveal", "import plan")}
+                        </button>
+                      ) : null}
+                      {bundle.bundle_dir ? (
+                        <button
+                          className="secondary"
+                          onClick={() => buildUnrealImportPlan(String(bundle.bundle_dir))}
+                          disabled={Boolean(unrealPlanBusyBundle)}
+                        >
+                          {unrealPlanBusyBundle === String(bundle.bundle_dir) ? "Building import plan..." : "Build import plan"}
                         </button>
                       ) : null}
                       {bundle.bundle_dir ? (

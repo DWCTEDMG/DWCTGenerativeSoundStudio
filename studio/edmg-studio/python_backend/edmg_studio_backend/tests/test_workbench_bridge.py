@@ -271,4 +271,7 @@ def test_unreal_bridge_export_payloads_build_expected_bundle_files():
     assert payloads["audio_markers.json"]["sequence_name"] == "demo_project_MainSequence"
     assert payloads["style_packet.json"]["visual_dna"]["identity"]["core_themes"] == ["future nostalgia"]
     assert payloads["return_contract.json"]["assembly_mode"] == "ffmpeg_back_in_studio"
+    assert payloads["return_contract.json"]["unreal_consumer"]["repo_relative_script"].endswith(
+        "tools/unreal/import_unreal_bridge_bundle.py"
+    )
     assert payloads["bundle_manifest.json"]["files"][0]["path"] == "shot_manifest.json"
