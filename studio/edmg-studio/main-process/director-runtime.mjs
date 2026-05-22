@@ -17,6 +17,7 @@ export function createDirectorRuntime({
   safeStreamWrite,
   getStudioPaths,
   getBackendUrl,
+  spawnProcess = spawn,
 }) {
   const serviceUrl = `http://${directorHost}:${directorPort}`;
   let currentDirectorUrl = serviceUrl;
@@ -130,6 +131,16 @@ export function createDirectorRuntime({
       };
     }
 
+    if (isWindows) {
+      return {
+        command: process.env.ComSpec || "cmd.exe",
+        args: ["/d", "/s", "/c", `${getPnpmCommand()} start`],
+        cwd,
+        env: {},
+        label: "dev-director",
+      };
+    }
+
     return {
       command: getPnpmCommand(),
       args: ["start"],
@@ -216,10 +227,10 @@ export function createDirectorRuntime({
       ...spec.env,
     };
     const logPaths = resolveDirectorLogPaths();
-    const child = spawn(spec.command, spec.args, {
+    const child = spawnProcess(spec.command, spec.args, {
       cwd: spec.cwd,
       env: childEnv,
-      shell: false,
+      shell: spec.shell === true,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

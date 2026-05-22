@@ -23,6 +23,11 @@ from .model_catalog import built_in_catalog, built_in_packs
 from ..services.setup_wizard import comfy_portable_installed, comfy_portable_root
 from .secrets import SecretStore
 
+try:
+    from ..integrations.azure import AzureModelCache
+except Exception:  # pragma: no cover - optional integration
+    AzureModelCache = None  # type: ignore
+
 
 # ------------------------------ persistence ------------------------------
 
@@ -252,12 +257,21 @@ class ModelManager:
         self.ollama_url = _ollama_base(ollama_url)
         self.secrets = secrets
         self.tasks = ModelTaskManager()
+        self.model_cache = self._build_model_cache()
 
         cfg = _config_dir(self.data_dir)
         self._user_models_path = cfg / "models_user.json"
         self._accept_path = cfg / "licenses_accepted.json"
 
         self._lock = threading.Lock()
+
+    def _build_model_cache(self):
+        if AzureModelCache is None:
+            return None
+        try:
+            return AzureModelCache.from_env()
+        except Exception:
+            return None
 
     def _all_entries(self) -> list[dict[str, Any]]:
         cat = self.catalog()
@@ -805,6 +819,35 @@ class ModelManager:
         ModelTaskManager.set_progress(task, 1.0)
         ModelTaskManager.log(task, f"Saved: {dest.name}")
 
+    def _append_task_log(self, task: ModelTask, msg: str) -> None:
+        current = str(task.last_log or "").strip()
+        ModelTaskManager.log(task, f"{current}\n{msg}" if current else msg)
+
+    def _restore_from_model_cache(self, task: ModelTask, entry: dict[str, Any], dest: Path) -> bool:
+        cache = getattr(self, "model_cache", None)
+        if cache is None:
+            return False
+        try:
+            if not cache.download_model(entry, dest):
+                return False
+        except Exception as exc:
+            self._append_task_log(task, f"Azure model cache restore skipped: {exc}")
+            return False
+        ModelTaskManager.set_progress(task, 1.0)
+        ModelTaskManager.log(task, f"Restored from Azure model cache: {dest.name}")
+        return True
+
+    def _upload_to_model_cache(self, task: ModelTask, entry: dict[str, Any], path: Path) -> None:
+        cache = getattr(self, "model_cache", None)
+        if cache is None:
+            return
+        try:
+            blob_name = cache.upload_model(entry, path)
+        except Exception as exc:
+            self._append_task_log(task, f"Azure model cache upload skipped: {exc}")
+            return
+        self._append_task_log(task, f"Azure model cache: {blob_name}")
+
     def _install_file_model(self, task: ModelTask, entry: dict[str, Any]) -> None:
         src = (entry.get("source") or "").lower()
         kind = (entry.get("kind") or "").lower()
@@ -816,6 +859,8 @@ class ModelManager:
             fname = "model.safetensors"
 
         mode, dest = self._models_dest(entry)
+        if mode == "file" and self._restore_from_model_cache(task, entry, dest):
+            return
 
         headers: dict[str, str] = {}
         # optional HF token support (prefer SecretStore; fall back to env vars)
@@ -857,6 +902,7 @@ class ModelManager:
             if not url:
                 raise RuntimeError("Missing hf_url")
             self._download_stream(task, url, dest, headers=headers)
+            self._upload_to_model_cache(task, entry, dest)
             return
 
         if src == "civitai":
@@ -866,6 +912,7 @@ class ModelManager:
             if civitai_key:
                 headers["Authorization"] = f"Bearer {civitai_key}"
             self._download_stream(task, dl, dest, headers=headers)
+            self._upload_to_model_cache(task, entry, dest)
             return
 
         if src == "local":
@@ -880,6 +927,7 @@ class ModelManager:
             dest.write_bytes(srcp.read_bytes())
             ModelTaskManager.log(task, f"Copied: {srcp.name}")
             ModelTaskManager.set_progress(task, 1.0)
+            self._upload_to_model_cache(task, entry, dest)
             return
 
         raise RuntimeError(f"Unsupported source: {src}")

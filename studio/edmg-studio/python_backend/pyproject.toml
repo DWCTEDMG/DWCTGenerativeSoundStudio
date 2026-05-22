@@ -22,6 +22,10 @@ dependencies = [
 
 [project.optional-dependencies]
 aws = ["boto3>=1.34.0"]
+azure = [
+  "azure-storage-blob>=12.20.0",
+  "azure-identity>=1.16.0",
+]
 audio = [
   "librosa>=0.10.2",
   "soundfile>=0.12.0",

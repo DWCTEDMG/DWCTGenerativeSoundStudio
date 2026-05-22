@@ -4,11 +4,13 @@ import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
 
-type CloudPanelId = "aws" | "lightning" | "result";
+type CloudPanelId = "aws" | "azure" | "lightning" | "result";
 
 export default function Cloud(_props: PageProps) {
   const [bucket, setBucket] = useState("");
   const [bundleKey, setBundleKey] = useState("edmg_project_bundle.zip");
+  const [azureContainer, setAzureContainer] = useState("edmg-model-cache");
+  const [azurePrefix, setAzurePrefix] = useState("models");
   const [lightningOut, setLightningOut] = useState("lightning_bundle");
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -25,6 +27,12 @@ export default function Cloud(_props: PageProps) {
     catch (e: any) { setErr(String(e)); }
   };
 
+  const azureTest = async () => {
+    setErr(null); setResult(null);
+    try { setResult(await apiPost("/v1/cloud/azure/test", { container: azureContainer || null, prefix: azurePrefix || null })); }
+    catch (e: any) { setErr(String(e)); }
+  };
+
   const lightningBundle = async () => {
     setErr(null); setResult(null);
     try { setResult(await apiPost("/v1/cloud/lightning/bundle", { output_dir: lightningOut })); }
@@ -37,6 +45,11 @@ export default function Cloud(_props: PageProps) {
         id: "aws" as const,
         label: "AWS bundle tools",
         description: "S3 credential test and optional project bundle upload flow.",
+      },
+      {
+        id: "azure" as const,
+        label: "Azure model cache",
+        description: "Blob Storage credential test for on-demand model weight caching.",
       },
       {
         id: "lightning" as const,
@@ -96,6 +109,23 @@ export default function Cloud(_props: PageProps) {
         <div className="row" style={{ marginTop: 10 }}>
           <button onClick={awsTest}>Test credentials</button>
           <button className="secondary" onClick={awsBundle}>Bundle + (optional) upload</button>
+        </div>
+      </div>
+    ),
+    azure: (
+      <div className="card">
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Azure</div>
+        <div className="small">Optional dependency. Install backend with: pip install -e ".[azure]"</div>
+        <div style={{ marginTop: 10 }}>
+          <div className="small">Blob container</div>
+          <input value={azureContainer} onChange={(e) => setAzureContainer(e.target.value)} placeholder="edmg-model-cache" />
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <div className="small">Model prefix</div>
+          <input value={azurePrefix} onChange={(e) => setAzurePrefix(e.target.value)} placeholder="models" />
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button onClick={azureTest}>Test Azure</button>
         </div>
       </div>
     ),

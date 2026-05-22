@@ -29,4 +29,27 @@ describe("Cloud page", () => {
       ).toBe(true);
     });
   });
+
+  it("posts Azure model cache credential tests with the selected container", async () => {
+    installEdmgBridge();
+    const fetchMock = installFetchMock({
+      "POST /v1/cloud/azure/test": { ok: true, provider: "azure", container: "edmg-model-cache" },
+    });
+
+    renderWithStudio(<Cloud backendUrl="http://127.0.0.1:7863" config={null} />);
+
+    fireEvent.change(await screen.findByPlaceholderText("edmg-model-cache"), {
+      target: { value: "team-model-cache" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Test Azure" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) =>
+          String(url).includes("/v1/cloud/azure/test")
+          && String(init?.method || "GET").toUpperCase() === "POST"
+          && String(init?.body || "").includes("team-model-cache")),
+      ).toBe(true);
+    });
+  });
 });

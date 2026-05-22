@@ -252,6 +252,10 @@ class CloudAwsBundleRequest(BaseModel):
     bucket: str | None = None
     key: str | None = None
 
+class CloudAzureTestRequest(BaseModel):
+    container: str | None = None
+    prefix: str | None = None
+
 class CloudLightningBundleRequest(BaseModel):
     output_dir: str = "lightning_bundle"
 

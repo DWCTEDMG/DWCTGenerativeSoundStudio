@@ -16,6 +16,7 @@ Environment variables are still supported as a fallback.
 
 - `CIVITAI_API_KEY` – optional; required for some gated downloads on Civitai.
 - `HF_TOKEN` (or `HUGGINGFACE_TOKEN`) – optional; required for gated Hugging Face downloads.
+- `EDMG_AZURE_MODEL_CACHE=1` plus `EDMG_AZURE_MODEL_CONTAINER` – optional Azure Blob cache for single-file model weights. See `docs/AZURE_MODEL_CACHE.md`.
 
 ## ComfyUI Model Locations
 

@@ -48,7 +48,7 @@ from .schemas import (
     ImportUnrealBridgeReturnRequest,
     BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
-    CloudAwsTestRequest, CloudAwsBundleRequest, CloudLightningBundleRequest,
+    CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
     UnrealBridgePreviewResponse,
 )
@@ -78,6 +78,7 @@ from .services.internal_video import (
 )
 from .services.compositor import apply_timeline_layers
 from .integrations import aws as aws_integration
+from .integrations import azure as azure_integration
 from .integrations import lightning as lightning_integration
 from .utils.path import safe_join
 from .errors import UserFacingError, hint_from_exception
@@ -8673,6 +8674,13 @@ def cloud_aws_bundle(req: CloudAwsBundleRequest):
         except Exception as e:
             result["upload_error"] = str(e)
     return result
+
+@app.post("/v1/cloud/azure/test")
+def cloud_azure_test(req: CloudAzureTestRequest):
+    try:
+        return azure_integration.test_credentials(container=req.container, prefix=req.prefix)
+    except Exception as e:
+        raise HTTPException(status_code=501, detail=str(e))
 
 @app.post("/v1/cloud/lightning/bundle")
 def cloud_lightning_bundle(req: CloudLightningBundleRequest):
