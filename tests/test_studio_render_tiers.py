@@ -31,6 +31,14 @@ def _make_project(tmp_path: Path):
     return store, jobs, proj
 
 
+def _fake_internal_model(tmp_path: Path, model_id: str, class_name: str | None = None) -> Path:
+    path = tmp_path / "models" / "internal" / "diffusers" / model_id
+    path.mkdir(parents=True, exist_ok=True)
+    if class_name:
+        (path / "model_index.json").write_text(f'{{"_class_name":"{class_name}"}}', encoding="utf-8")
+    return path
+
+
 def test_internal_render_plan_prefers_quality_on_strong_cuda():
     hw = {"backend": "cuda", "vram_gb": 12.0, "ram_gb": 32.0, "cpu_threads": 16}
     plan = studio_app._build_internal_render_plan(hw, requested_tier="auto")
@@ -40,6 +48,144 @@ def test_internal_render_plan_prefers_quality_on_strong_cuda():
     assert plan["device_preference"] == "cuda"
     assert plan["preferred_internal_model"] == "hf_sdxl_internal"
     assert plan["defaults"]["width"] == 1024
+
+
+def test_auto_model_skips_sd35_on_midrange_cuda(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 6.0,
+        "ram_gb": 15.64,
+        "cpu_threads": 12,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sdxl_internal",
+        "recommended_tier": "balanced",
+        "max_supported_tier": "balanced",
+    })
+    installed = {
+        "hf_sd35_medium_internal": _fake_internal_model(tmp_path, "hf_sd35_medium_internal", "StableDiffusion3Pipeline"),
+        "hf_sd15_internal": _fake_internal_model(tmp_path, "hf_sd15_internal"),
+    }
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": False},
+    )
+
+    assert preflight["mode"] == "diffusion"
+    assert preflight["model_id"] == "hf_sd15_internal"
+    assert preflight["hardware"]["backend"] == "cuda"
+
+
+def test_internal_preflight_defaults_to_keyframes_on_midrange_cuda(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 6.0,
+        "ram_gb": 15.64,
+        "cpu_threads": 12,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sdxl_internal",
+        "recommended_tier": "balanced",
+        "max_supported_tier": "balanced",
+    })
+    installed = {
+        "hf_sdxl_internal": _fake_internal_model(tmp_path, "hf_sdxl_internal", "StableDiffusionXLPipeline"),
+    }
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": False},
+    )
+
+    assert preflight["mode"] == "diffusion"
+    assert preflight["model_id"] == "hf_sdxl_internal"
+    assert preflight["settings"]["temporal_mode"] == "keyframes"
+    assert preflight["tier_plan"]["defaults"]["temporal_mode"] == "keyframes"
+
+
+def test_auto_model_reports_sd35_vram_guard_when_no_lighter_model_installed(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 6.0,
+        "ram_gb": 15.64,
+        "cpu_threads": 12,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sdxl_internal",
+        "recommended_tier": "balanced",
+        "max_supported_tier": "balanced",
+    })
+    installed = {
+        "hf_sd35_medium_internal": _fake_internal_model(tmp_path, "hf_sd35_medium_internal", "StableDiffusion3Pipeline"),
+    }
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": True},
+    )
+
+    assert preflight["mode"] == "proxy"
+    assert preflight["requested_model_id"] == "auto"
+    assert any("14 GB" in warning for warning in preflight["warnings"])
+
+
+def test_explicit_sd35_on_midrange_cuda_uses_proxy_fallback(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 6.0,
+        "ram_gb": 15.64,
+        "cpu_threads": 12,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sdxl_internal",
+        "recommended_tier": "balanced",
+        "max_supported_tier": "balanced",
+    })
+    installed = {
+        "hf_sd35_medium_internal": _fake_internal_model(tmp_path, "hf_sd35_medium_internal", "StableDiffusion3Pipeline"),
+    }
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {
+            "variant_index": 0,
+            "fps_render": 2,
+            "fps_output": 24,
+            "model_id": "hf_sd35_medium_internal",
+            "allow_proxy_fallback": True,
+        },
+    )
+
+    assert preflight["mode"] == "proxy"
+    assert preflight["requested_model_id"] == "hf_sd35_medium_internal"
+    assert any("14 GB" in warning for warning in preflight["warnings"])
 
 
 def test_internal_preflight_includes_tier_plan_for_cpu_proxy(tmp_path, monkeypatch):

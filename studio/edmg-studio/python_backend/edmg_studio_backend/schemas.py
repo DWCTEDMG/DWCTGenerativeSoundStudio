@@ -174,7 +174,7 @@ class InternalVideoRenderRequest(BaseModel):
     vae: str | None = None
     refiner: RefinerSettings | None = None
 
-    temporal_mode: Literal["off","keyframes","frame_img2img"] = "frame_img2img"
+    temporal_mode: Literal["off","keyframes","frame_img2img"] = "keyframes"
     temporal_strength: float = Field(default=0.35, ge=0.01, le=0.99)
     temporal_steps: int | None = Field(default=None, ge=1, le=80)
     refine_every_n_frames: int = Field(default=1, ge=1, le=30)

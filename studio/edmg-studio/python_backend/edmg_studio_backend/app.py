@@ -6721,6 +6721,11 @@ def render_internal_video(project_id: str, req: InternalVideoRenderRequest):
 
 
 def _internal_model_family(model_path: Path) -> str:
+    path_hint = str(model_path.name or "").lower()
+    if "sd35" in path_hint or "sd3" in path_hint or "stable-diffusion-3" in path_hint:
+        return "sd3"
+    if "sdxl" in path_hint:
+        return "sdxl"
     mi = model_path / "model_index.json"
     if mi.exists():
         try:
@@ -6733,6 +6738,49 @@ def _internal_model_family(model_path: Path) -> str:
         except Exception:
             pass
     return "sd15"
+
+
+SD35_INTERNAL_MIN_CUDA_VRAM_GB = 14.0
+
+
+def _internal_model_family_for_request(model_id: str, model_path: Path) -> str:
+    model_id_l = str(model_id or "").lower()
+    if "sd35" in model_id_l or "stable-diffusion-3" in model_id_l:
+        return "sd3"
+    if "sdxl" in model_id_l:
+        return "sdxl"
+    return _internal_model_family(model_path)
+
+
+def _internal_model_hardware_issue(
+    model_id: str,
+    model_family: str,
+    hw: dict[str, Any],
+    requested_device: str,
+) -> dict[str, str] | None:
+    family = str(model_family or "").lower()
+    model_id_l = str(model_id or "").lower()
+    if family not in {"sd3", "sd35"} and "sd35" not in model_id_l:
+        return None
+
+    requested = str(requested_device or "auto").strip().lower()
+    backend = requested if requested in {"cuda", "cpu", "mps", "directml"} else str(hw.get("backend") or "cpu").lower()
+    if backend != "cuda":
+        return None
+
+    vram_gb = float(hw.get("vram_gb") or 0.0)
+    if vram_gb >= SD35_INTERNAL_MIN_CUDA_VRAM_GB:
+        return None
+
+    return {
+        "code": "MODEL_UNSUPPORTED_FOR_HARDWARE",
+        "message": (
+            f"Stable Diffusion 3.5 internal rendering needs at least "
+            f"{SD35_INTERNAL_MIN_CUDA_VRAM_GB:.0f} GB of CUDA VRAM for this Studio video path; "
+            f"this GPU reports {vram_gb:.1f} GB."
+        ),
+        "hint": "Use SDXL or SD 1.5 for local CUDA rendering on this GPU, or use hosted Stability for SD3.5 keyframes.",
+    }
 
 
 def _internal_settings_from_payload(
@@ -6776,7 +6824,7 @@ def _internal_settings_from_payload(
         refiner=refiner,
         render_tier=render_tier,
         device_preference=device_preference,
-        temporal_mode=temporal_mode if temporal_mode is not None else str(payload.get("temporal_mode", "frame_img2img")),
+        temporal_mode=temporal_mode if temporal_mode is not None else str(payload.get("temporal_mode", "keyframes")),
         temporal_strength=float(payload.get("temporal_strength", 0.35)),
         temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
         refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
@@ -6824,7 +6872,10 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
     if requested_device == "auto" and str(hw.get("backend") or "").lower() == "directml" and not bool(directml_cfg.get("allow_auto_selection", True)):
         requested_device = "cpu"
 
+    auto_model_hardware_issue: dict[str, str] | None = None
+
     def _pick_auto_model() -> str | None:
+        nonlocal auto_model_hardware_issue
         preferred = str(tier_plan.get("preferred_internal_model") or hw.get("preferred_internal_model") or "hf_sd15_internal")
         if requested_device == "directml":
             preferred = str(directml_cfg.get("preferred_model") or preferred or "auto").strip().lower()
@@ -6833,15 +6884,33 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             fallbacks = [preferred, "hf_sdxl_internal", "hf_sd15_internal"]
         else:
             fallbacks = [preferred, "hf_sd35_medium_internal", "hf_sdxl_internal", "hf_sd15_internal"]
+        seen: set[str] = set()
         for mid in fallbacks:
-            if models.installed_path(mid):
-                return mid
+            if mid in seen:
+                continue
+            seen.add(mid)
+            installed = models.installed_path(mid)
+            if not installed:
+                continue
+            family = _internal_model_family_for_request(mid, installed)
+            hardware_issue = _internal_model_hardware_issue(mid, family, hw, requested_device)
+            if hardware_issue:
+                auto_model_hardware_issue = hardware_issue
+                continue
+            return mid
         return None
 
     model_id = req_model_id
     if req_model_id.lower() in ("auto", "auto_internal"):
         picked = _pick_auto_model()
         if not picked:
+            if auto_model_hardware_issue:
+                raise UserFacingError(
+                    str(auto_model_hardware_issue["message"]),
+                    hint=str(auto_model_hardware_issue["hint"]),
+                    code=str(auto_model_hardware_issue["code"]),
+                    status_code=400,
+                )
             raise UserFacingError(
                 "No internal diffusion model installed",
                 hint="Open Models and install an internal Diffusers model such as SD 1.5, SDXL, or SD3.5 Medium, then retry.",
@@ -6867,7 +6936,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             status_code=400,
         )
 
-    model_family = _internal_model_family(model_path)
+    model_family = _internal_model_family_for_request(model_id, model_path)
     effective_device_preference = requested_device
     if requested_device == "directml" and model_family not in {"sd15", "sdxl"}:
         raise UserFacingError(
@@ -6878,6 +6947,14 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
         )
     if requested_device == "auto" and str(hw.get("backend") or "").lower() == "directml" and model_family not in {"sd15", "sdxl"}:
         effective_device_preference = "cpu"
+    hardware_issue = _internal_model_hardware_issue(model_id, model_family, hw, requested_device)
+    if hardware_issue:
+        raise UserFacingError(
+            str(hardware_issue["message"]),
+            hint=str(hardware_issue["hint"]),
+            code=str(hardware_issue["code"]),
+            status_code=400,
+        )
 
     settings_obj = _internal_settings_from_payload(
         payload,
@@ -6933,8 +7010,13 @@ def _proxy_render_preflight_data(
         settings=settings_obj,
         total_frames=total_frames,
     )
+    fallback_reason = (
+        "the requested internal diffusion model is unavailable for this render."
+        if reason
+        else "no internal diffusion model is installed."
+    )
     warnings = [
-        "Using proxy draft render because no internal diffusion model is installed.",
+        f"Using proxy draft render because {fallback_reason}",
         "Proxy mode renders pacing, prompts, and timeline overlays locally without ComfyUI or Diffusers.",
     ]
     if reason:
@@ -7106,10 +7188,10 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     try:
         proj, variant, model_id, model_path, settings_obj = _resolve_internal_render_request(project_id, payload)
     except UserFacingError as e:
-        if e.code in {"MODEL_NOT_INSTALLED", "DIRECTML_MODEL_UNSUPPORTED"} and _hosted_stability_ready(payload):
+        if e.code in {"MODEL_NOT_INSTALLED", "DIRECTML_MODEL_UNSUPPORTED", "MODEL_UNSUPPORTED_FOR_HARDWARE"} and _hosted_stability_ready(payload):
             return _hosted_render_preflight_data(project_id, payload, reason=e.message)
         allow_proxy = bool(payload.get("allow_proxy_fallback", True))
-        if allow_proxy and e.code == "MODEL_NOT_INSTALLED":
+        if allow_proxy and e.code in {"MODEL_NOT_INSTALLED", "MODEL_UNSUPPORTED_FOR_HARDWARE"}:
             return _proxy_render_preflight_data(project_id, payload, reason=e.message, requested_model_id=str(payload.get("model_id") or "auto"))
         raise
 

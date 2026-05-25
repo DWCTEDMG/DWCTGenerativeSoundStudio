@@ -216,6 +216,14 @@ describe("Render page", () => {
     expect(await screen.findByRole("button", { name: "Duplicate" })).toBeTruthy();
   }, 10000);
 
+  it("defaults internal video temporal mode to keyframes", async () => {
+    installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    expect(await screen.findByDisplayValue("Keyframes (style-locked)")).toBeTruthy();
+  }, 10000);
+
   it("disables controlnet workflows for internal sd3.5 still models", async () => {
     installRenderMocks();
 

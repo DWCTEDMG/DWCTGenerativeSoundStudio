@@ -158,7 +158,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
 
-  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img">("frame_img2img");
+  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img">("keyframes");
   const [internalTemporalStrength, setInternalTemporalStrength] = useState<number>(0.35);
   const [internalTemporalSteps, setInternalTemporalSteps] = useState<number>(12);
   const [internalRefineEvery, setInternalRefineEvery] = useState<number>(1);
@@ -1511,7 +1511,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                        <select value={internalTemporalMode} onChange={(e) => setInternalTemporalMode(e.target.value as any)}>
                          <option value="off">Off (keyframes only)</option>
                          <option value="keyframes">Keyframes (style-locked)</option>
-                         <option value="frame_img2img">Frame img2img (best)</option>
+                         <option value="frame_img2img">Frame img2img (heavy)</option>
                        </select>
                      </div>
                      <div style={{ minWidth: 160 }}>
