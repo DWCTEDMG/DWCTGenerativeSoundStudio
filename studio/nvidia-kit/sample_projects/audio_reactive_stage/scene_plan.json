@@ -1,0 +1,37 @@
+{
+  "project_id": "sample-audio-reactive-stage",
+  "title": "Audio Reactive Stage",
+  "duration_s": 60,
+  "bpm": 128,
+  "provider": "nvidia-profile-placeholder",
+  "scenes": [
+    {
+      "id": "intro",
+      "start_s": 0,
+      "end_s": 15,
+      "prompt": "wide RTX stage, cool rim light, slow camera push through volumetric haze",
+      "camera": "slow push",
+      "motion": "low-frequency pulse on floor emissive strips",
+      "usd_variant": "intro_cool"
+    },
+    {
+      "id": "drop",
+      "start_s": 15,
+      "end_s": 45,
+      "prompt": "high-energy neon performance world with reactive panels and sharp silhouette",
+      "camera": "orbit with beat-locked cuts",
+      "motion": "kick-driven light bursts and bass-driven scale modulation",
+      "usd_variant": "drop_neon"
+    },
+    {
+      "id": "outro",
+      "start_s": 45,
+      "end_s": 60,
+      "prompt": "resolved final shot, warm practical lights, particles settling in the air",
+      "camera": "pull back",
+      "motion": "decaying shimmer tied to high-frequency energy",
+      "usd_variant": "outro_warm"
+    }
+  ]
+}
+

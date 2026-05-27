@@ -1,0 +1,91 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    startTimeCode = 0
+    endTimeCode = 1440
+    timeCodesPerSecond = 24
+    metersPerUnit = 1
+    upAxis = "Y"
+    customLayerData = {
+        string edmg:projectKind = "audio_reactive_music_video"
+        string edmg:schemaVersion = "0.1"
+    }
+)
+
+def Xform "World" (
+    customData = {
+        dictionary edmg = {
+            dictionary audio = {
+                string path = "./audio/input.wav"
+                double duration_s = 60
+                double bpm = 128
+            }
+            dictionary timeline = {
+                string sections = "intro:0-15,drop:15-45,outro:45-60"
+            }
+            string scenePlan = "./scene_plan.json"
+        }
+    }
+)
+{
+    def Xform "PerformanceRig"
+    {
+        def Xform "BeatPulseControl" (
+            customData = {
+                dictionary edmg = {
+                    string source = "audio_features.beat_strength"
+                    string target = "Looks/NeonPulseMaterial.inputs:emissiveIntensity"
+                    double smoothing_ms = 80
+                }
+            }
+        )
+        {
+        }
+
+        def Xform "EnergyControl" (
+            customData = {
+                dictionary edmg = {
+                    string source = "audio_features.energy"
+                    string target = "StagePanels.scale"
+                    double smoothing_ms = 180
+                }
+            }
+        )
+        {
+        }
+    }
+
+    def Xform "StagePanels"
+    {
+        double3 xformOp:translate = (0, 0, 0)
+        double3 xformOp:scale = (1, 1, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Xform "Looks"
+    {
+        def Material "NeonPulseMaterial"
+        {
+            color3f inputs:diffuseColor = (0.05, 0.9, 1)
+            float inputs:emissiveIntensity = 1
+        }
+    }
+
+    def Camera "MainCamera"
+    {
+        double3 xformOp:translate = (0, 2.2, 8)
+        double3 xformOp:rotateXYZ = (-8, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float focalLength = 35
+        float horizontalAperture = 20.955
+    }
+
+    def DistantLight "KeyLight"
+    {
+        double3 xformOp:rotateXYZ = (-45, 25, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        float intensity = 900
+        color3f color = (0.8, 0.9, 1)
+    }
+}
+

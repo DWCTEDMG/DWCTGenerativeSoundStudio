@@ -15,6 +15,7 @@ describe("Setup page", () => {
         backend_bundle: { ok: true },
         sevenzip: { ok: true },
         ai_config: { label: "Local llama.cpp server", ollama_required: false, model_required: false },
+        nvidia_profile: { enabled: true, profile: "omniverse" },
       },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
     });
@@ -23,6 +24,9 @@ describe("Setup page", () => {
 
     expect(await screen.findByText("Setup Wizard")).toBeTruthy();
     expect(await screen.findByText(/Active AI path:/)).toBeTruthy();
+    const activeAiPath = await screen.findByTestId("setup-active-ai-path");
+    expect(activeAiPath.textContent).toContain("NVIDIA");
+    expect(activeAiPath.textContent).toContain("enabled");
     expect(await screen.findByDisplayValue("D:\\EDMG-Studio")).toBeTruthy();
   });
 

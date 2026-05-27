@@ -45,6 +45,26 @@ Some gateways mirror Ollama tags instead of OpenAI-style aliases. If your server
 Studio stores the OpenAI-compatible API key through its secret-storage path so
 you do not have to keep it in plain-text environment variables.
 
+### NVIDIA NIM / Omniverse profile
+
+The NVIDIA-first branch uses the same OpenAI-compatible planner path for NIM
+LLM endpoints, then exposes extra status through `/v1/nvidia/status`.
+
+```bash
+EDMG_NVIDIA_MODE=1
+EDMG_NVIDIA_PROFILE=omniverse
+EDMG_AI_PROVIDER=openai_compat
+EDMG_AI_OPENAI_COMPAT_BASE_URL=http://127.0.0.1:8000/v1
+EDMG_AI_OPENAI_COMPAT_MODEL=your-nim-model
+NGC_API_KEY=...  # load from shell or ignored local env file, never commit it
+```
+
+For the Compose-based starter, see `deployment/nvidia/`. The Windows desktop
+package remains a client/workstation shell; NIM, Riva, NeMo, and related GPU
+services should run as local or remote service endpoints. If the inference
+endpoint itself requires bearer auth, set `EDMG_AI_OPENAI_COMPAT_API_KEY` too;
+do not assume it is always the same value as `NGC_API_KEY`.
+
 ## External AI service (advanced)
 
 If you deploy the optional EDMG AI service as a separate FastAPI process, set:

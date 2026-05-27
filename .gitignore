@@ -11,6 +11,16 @@ __pycache__/
 nohup.out
 
 # ----------------------------
+# Local secrets
+# ----------------------------
+.env
+.env.local
+.env.*.local
+*nvidia*key*.txt
+*nvidoia*key*.txt
+studio/nvidia-kit/sample_projects/**/generated_*.usd*
+
+# ----------------------------
 # Python packaging / build
 # ----------------------------
 .Python

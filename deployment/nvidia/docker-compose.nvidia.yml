@@ -1,0 +1,60 @@
+# Compose override for the NVIDIA-first EDMG Studio lane.
+#
+# Usage from the repository root:
+#   docker compose -f docker-compose.starlift.yml -f deployment/nvidia/docker-compose.nvidia.yml up --build
+#
+# Optional NVIDIA service containers are intentionally profile-gated and
+# image-configurable. Official NIM/Riva/NeMo images depend on NGC access,
+# license acceptance, target GPU, and model family.
+
+services:
+  backend:
+    environment:
+      EDMG_NVIDIA_MODE: ${EDMG_NVIDIA_MODE:-1}
+      EDMG_NVIDIA_PROFILE: ${EDMG_NVIDIA_PROFILE:-omniverse}
+      EDMG_AI_PROVIDER: ${EDMG_AI_PROVIDER:-openai_compat}
+      EDMG_AI_OPENAI_COMPAT_BASE_URL: ${EDMG_AI_OPENAI_COMPAT_BASE_URL:-http://host.docker.internal:8000/v1}
+      EDMG_AI_OPENAI_COMPAT_MODEL: ${EDMG_AI_OPENAI_COMPAT_MODEL:-nvidia-nim-model}
+      EDMG_RIVA_URL: ${EDMG_RIVA_URL:-http://host.docker.internal:50051}
+      EDMG_NVIDIA_NIM_URL: ${EDMG_NVIDIA_NIM_URL:-http://host.docker.internal:8000}
+      EDMG_NVIDIA_OMNIVERSE_URL: ${EDMG_NVIDIA_OMNIVERSE_URL:-http://host.docker.internal:8011}
+    volumes:
+      - ./starlift-data/nvidia:/studio/nvidia
+
+  nvidia-nim-llm:
+    profiles: ["nvidia-local", "nim"]
+    image: ${EDMG_NIM_LLM_IMAGE:-nvcr.io/nvidia/nim/set-edmg-nim-llm-image}
+    restart: unless-stopped
+    ports:
+      - "${EDMG_NIM_LLM_PORT:-8000}:8000"
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:-}
+    volumes:
+      - ./starlift-data/nvidia/nim-cache:/opt/nim/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${EDMG_NVIDIA_GPU_COUNT:-1}
+              capabilities: [gpu]
+
+  nvidia-riva:
+    profiles: ["nvidia-local", "riva"]
+    image: ${EDMG_RIVA_IMAGE:-nvcr.io/nvidia/riva/set-edmg-riva-image}
+    restart: unless-stopped
+    ports:
+      - "${EDMG_RIVA_GRPC_PORT:-50051}:50051"
+      - "${EDMG_RIVA_HTTP_PORT:-9000}:9000"
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:-}
+    volumes:
+      - ./starlift-data/nvidia/riva-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${EDMG_NVIDIA_GPU_COUNT:-1}
+              capabilities: [gpu]
+

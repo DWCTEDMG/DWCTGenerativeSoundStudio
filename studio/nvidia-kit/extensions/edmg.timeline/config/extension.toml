@@ -1,0 +1,13 @@
+[package]
+title = "EDMG Timeline"
+description = "Audio timeline and beat/section map panel for EDMG NVIDIA Studio."
+version = "0.1.0"
+category = "EDMG"
+
+[dependencies]
+"omni.ui" = {}
+"omni.usd" = {}
+
+[[python.module]]
+name = "edmg.timeline"
+

@@ -1,0 +1,13 @@
+[package]
+title = "EDMG Render Queue"
+description = "Render job panel and backend bridge for EDMG NVIDIA Studio."
+version = "0.1.0"
+category = "EDMG"
+
+[dependencies]
+"omni.ui" = {}
+"omni.usd" = {}
+
+[[python.module]]
+name = "edmg.render_queue"
+

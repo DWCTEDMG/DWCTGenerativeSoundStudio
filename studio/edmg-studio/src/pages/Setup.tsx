@@ -155,6 +155,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   const edmgOk = !!status?.edmg?.available;
   const sevenOk = !!status?.sevenzip?.ok;
   const aiConfig = status?.ai_config ?? null;
+  const nvidiaProfile = status?.nvidia_profile ?? aiConfig?.nvidia_profile ?? null;
   const directmlAvailable = !!status?.hardware?.supports_directml;
   const aiLabel = String(aiConfig?.label ?? "Local Ollama");
   const ollamaRequired = !!aiConfig?.ollama_required;
@@ -432,11 +433,12 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
         : `Linux and macOS use the manual setup path: install the backend runtime here and add ComfyUI only if you want the optional ComfyUI workflows. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
     )}
   </div>
-  <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+  <div data-testid="setup-active-ai-path" className="small" style={{ marginTop: 8, opacity: 0.9 }}>
     Active AI path: <b>{aiLabel}</b>
     {aiConfig?.base_url ? <> • endpoint <code>{aiConfig.base_url}</code></> : null}
     {aiConfig?.model ? <> • model <code>{aiConfig.model}</code></> : null}
     {aiConfig?.provider === "openai_compat" ? <> • API key <b>{aiConfig?.openai_compat_api_key_configured ? "saved" : "not saved"}</b></> : null}
+    {nvidiaProfile ? <> • NVIDIA <b>{nvidiaProfile.enabled ? "enabled" : "disabled"}</b></> : null}
   </div>
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
     {isWindows ? (

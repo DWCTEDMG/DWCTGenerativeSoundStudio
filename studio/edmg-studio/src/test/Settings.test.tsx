@@ -34,6 +34,19 @@ describe("Settings page", () => {
         ai_ollama_model: "qwen3:8b",
       },
       "/v1/ai/status": { ok: true, provider: "ollama" },
+      "/v1/nvidia/status": {
+        ok: true,
+        nvidia: {
+          enabled: true,
+          profile: "omniverse",
+          credentials: { ngc_api_key_configured: true },
+          services: {
+            nim: { configured: true, base_url: "http://127.0.0.1:8000/v1", model: "nvidia/model" },
+            riva: { configured: true, base_url: "http://127.0.0.1:50051" },
+            omniverse: { configured: false, base_url: "" },
+          },
+        },
+      },
       "/v1/edmg/deforum_template": { ok: true },
       "/v1/settings/secrets/status": { store: "test", has_openai_compat_api_key: false },
       "/v1/hardware": {
@@ -103,5 +116,6 @@ describe("Settings page", () => {
     });
 
     expect(await screen.findByText(/Saved\. Restart Studio so it relaunches against the selected backend target\./)).toBeTruthy();
+    expect(await screen.findByText("NVIDIA service profile")).toBeTruthy();
   });
 });

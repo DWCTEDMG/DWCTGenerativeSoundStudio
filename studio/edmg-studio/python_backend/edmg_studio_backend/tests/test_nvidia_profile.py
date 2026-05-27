@@ -1,0 +1,155 @@
+from __future__ import annotations
+
+import pytest
+from fastapi import HTTPException
+
+from edmg_studio_backend import app as backend_app
+from edmg_studio_backend.services.nvidia_profile import nvidia_profile_status
+from edmg_studio_backend.services.nvidia_scene_plan import scene_plan_usda_text
+
+
+def test_nvidia_profile_status_masks_ngc_key(monkeypatch):
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "1")
+    monkeypatch.setenv("EDMG_NVIDIA_PROFILE", "omniverse")
+    monkeypatch.setenv("NGC_API_KEY", "secret-ngc-token")
+    monkeypatch.setenv("EDMG_NVIDIA_NIM_URL", "http://nim.local:8000")
+    monkeypatch.setenv("EDMG_AI_OPENAI_COMPAT_MODEL", "nvidia/model")
+    monkeypatch.setenv("EDMG_RIVA_URL", "http://riva.local:50051")
+
+    status = nvidia_profile_status()
+
+    assert status["enabled"] is True
+    assert status["profile"] == "omniverse"
+    assert status["credentials"]["ngc_api_key_configured"] is True
+    assert status["services"]["nim"]["base_url"] == "http://nim.local:8000"
+    assert status["services"]["nim"]["model"] == "nvidia/model"
+    assert "secret-ngc-token" not in repr(status)
+
+
+def test_nvidia_profile_status_uses_openai_compat_url_as_nim_fallback(monkeypatch):
+    monkeypatch.delenv("EDMG_NVIDIA_NIM_URL", raising=False)
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "0")
+    monkeypatch.setenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://compat.local/v1")
+    monkeypatch.delenv("NGC_API_KEY", raising=False)
+
+    status = nvidia_profile_status()
+
+    assert status["enabled"] is False
+    assert status["credentials"]["ngc_api_key_configured"] is False
+    assert status["services"]["nim"]["base_url"] == "http://compat.local/v1"
+    assert status["services"]["nim"]["configured"] is True
+
+
+def test_nvidia_status_route_does_not_return_secret(monkeypatch):
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "1")
+    monkeypatch.setenv("NGC_API_KEY", "route-secret-token")
+    monkeypatch.setenv("EDMG_NVIDIA_NIM_URL", "http://nim.local:8000")
+
+    assert any(getattr(route, "path", None) == "/v1/nvidia/status" for route in backend_app.app.routes)
+    payload = backend_app.nvidia_status()
+
+    assert payload["ok"] is True
+    assert payload["nvidia"]["enabled"] is True
+    assert payload["nvidia"]["credentials"]["ngc_api_key_configured"] is True
+    assert "route-secret-token" not in repr(payload)
+
+
+def test_config_includes_nvidia_profile_without_secret(monkeypatch):
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "1")
+    monkeypatch.setenv("EDMG_NVIDIA_PROFILE", "omniverse")
+    monkeypatch.setenv("NGC_API_KEY", "config-secret-token")
+
+    payload = backend_app.get_config()
+
+    assert payload["nvidia_mode"] is True
+    assert payload["nvidia_profile_name"] == "omniverse"
+    assert payload["nvidia_profile"]["credentials"]["ngc_api_key_configured"] is True
+    assert "config-secret-token" not in repr(payload)
+
+
+def test_setup_ai_config_labels_nvidia_openai_compat(monkeypatch):
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "1")
+    monkeypatch.setenv("EDMG_AI_PROVIDER", "openai_compat")
+    monkeypatch.setenv("EDMG_AI_OPENAI_COMPAT_MODEL", "nvidia/model")
+
+    payload = backend_app._setup_ai_config()
+
+    assert payload["label"] == "NVIDIA NIM / OpenAI-compatible provider"
+    assert payload["model"] == "nvidia/model"
+    assert payload["nvidia_profile"]["enabled"] is True
+
+
+def test_nvidia_usd_scene_plan_route_returns_normalized_metadata(monkeypatch):
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "1")
+    payload = {
+        "project_id": " sample ",
+        "title": " Sample Stage ",
+        "duration_s": "60",
+        "bpm": "128",
+        "provider": "nvidia-nim",
+        "scenes": [
+            {
+                "id": "intro",
+                "start_s": 0,
+                "end_s": 16,
+                "prompt": "neon stage opens",
+                "camera": "push",
+                "look": "cyan lasers",
+                "motion": "beat pulse",
+                "usd_variant": "intro_neon",
+            }
+        ],
+    }
+
+    response = backend_app.nvidia_usd_scene_plan(payload)
+
+    assert response["ok"] is True
+    assert response["scene_plan"]["project_id"] == "sample"
+    assert response["scene_plan"]["duration_s"] == 60.0
+    assert response["scene_plan"]["bpm"] == 128.0
+    assert response["usd_metadata"]["edmg:projectId"] == "sample"
+    assert response["usd_metadata"]["edmg:sceneCount"] == 1
+    assert response["usd_stage"]["format"] == "usda"
+    assert 'def Xform "intro"' in response["usd_stage"]["text"]
+    assert 'custom string edmg:variant = "intro_neon"' in response["usd_stage"]["text"]
+    assert response["nvidia"]["enabled"] is True
+
+
+def test_nvidia_usd_scene_plan_route_rejects_overlaps():
+    payload = {
+        "project_id": "sample",
+        "title": "Sample",
+        "duration_s": 30,
+        "scenes": [
+            {"id": "a", "start_s": 0, "end_s": 20, "prompt": "a"},
+            {"id": "b", "start_s": 10, "end_s": 30, "prompt": "b"},
+        ],
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        backend_app.nvidia_usd_scene_plan(payload)
+
+    assert exc_info.value.status_code == 400
+    assert "overlaps the previous scene" in repr(exc_info.value.detail)
+
+
+def test_scene_plan_usda_text_escapes_strings_and_sanitizes_prim_names():
+    payload = {
+        "project_id": "quoted-project",
+        "title": 'A "quoted" title',
+        "duration_s": 4,
+        "scenes": [
+            {
+                "id": "1 drop.scene",
+                "start_s": 0,
+                "end_s": 4,
+                "prompt": 'laser "wall"\nwith haze',
+            }
+        ],
+    }
+
+    text = scene_plan_usda_text(payload)
+
+    assert 'custom string edmg:title = "A \\"quoted\\" title"' in text
+    assert 'def Xform "_1_drop_scene"' in text
+    assert 'custom string edmg:prompt = "laser \\"wall\\"\\nwith haze"' in text

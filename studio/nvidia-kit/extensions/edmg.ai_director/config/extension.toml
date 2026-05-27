@@ -1,0 +1,14 @@
+[package]
+title = "EDMG AI Director"
+description = "Backend/NIM planning bridge for EDMG NVIDIA Studio."
+version = "0.1.0"
+category = "EDMG"
+
+[dependencies]
+"omni.ui" = {}
+"omni.usd" = {}
+"edmg.usd_schema" = {}
+
+[[python.module]]
+name = "edmg.ai_director"
+

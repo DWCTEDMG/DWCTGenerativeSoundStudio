@@ -18,6 +18,11 @@ This repository now presents one product surface: EDMG Studio.
   Windows-first packaged release automation.
 - `studio/edmg-studio/packaging/linux/`
   Linux AppImage packaging notes and operator guidance.
+- `studio/nvidia-kit/`
+  Omniverse Kit app proof-of-concept source skeleton, extension placeholders,
+  OpenUSD sample project, and dependency-light validators.
+- `deployment/nvidia/`
+  NVIDIA service-profile starter for NIM/Riva/NeMo-style GPU services.
 
 ## Canonical entrypoints
 
@@ -54,6 +59,7 @@ Primary Studio docs:
 - [studio/edmg-studio/README.md](../studio/edmg-studio/README.md)
 - [RELEASE.md](../RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](./STUDIO_RELEASE_RUNBOOK.md)
+- [docs/NVIDIA_OMNIVERSE_STUDIO.md](./NVIDIA_OMNIVERSE_STUDIO.md)
 
 Key validation commands run from `studio/edmg-studio/`:
 

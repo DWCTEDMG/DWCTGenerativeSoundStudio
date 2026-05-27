@@ -90,6 +90,13 @@ from .services.render_settings import (
     STABILITY_SERVICES,
     STABILITY_STYLE_PRESETS,
 )
+from .services.nvidia_profile import nvidia_profile_status
+from .services.nvidia_scene_plan import (
+    normalize_scene_plan,
+    scene_plan_usd_metadata,
+    scene_plan_usda_text,
+    validate_scene_plan,
+)
 from .services.workbench_bridge import (
     build_unreal_bridge_export_payloads,
     build_unreal_bridge_preview,
@@ -1864,6 +1871,7 @@ def set_render_providers(payload: dict[str, Any]):
 @app.get("/v1/config")
 def get_config():
     provider_status = _render_provider_status()
+    nvidia_profile = nvidia_profile_status()
     return {
         "studio_home": str(settings.studio_home),
         "data_dir": str(settings.data_dir),
@@ -1895,6 +1903,9 @@ def get_config():
         "secrets_store": secrets.status().store,
         "render_provider_settings": provider_status.get("settings"),
         "render_provider_status": provider_status,
+        "nvidia_profile": nvidia_profile,
+        "nvidia_mode": nvidia_profile.get("enabled"),
+        "nvidia_profile_name": nvidia_profile.get("profile"),
     }
 
 
@@ -1944,6 +1955,7 @@ def secrets_clear(payload: dict[str, Any]):
 def _setup_ai_config() -> dict[str, Any]:
     ai_mode = (settings.ai_mode or "local").strip().lower() or "local"
     ai_provider = (os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama")
+    nvidia_profile = nvidia_profile_status()
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     openai_compat_base_url = os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000")
@@ -1964,16 +1976,22 @@ def _setup_ai_config() -> dict[str, Any]:
         }
 
     if ai_provider in ("openai_compat", "openai-compatible", "openai"):
+        label = "NVIDIA NIM / OpenAI-compatible provider" if nvidia_profile.get("enabled") else "Local OpenAI-compatible provider"
         return {
             "mode": "local",
             "provider": "openai_compat",
-            "label": "Local OpenAI-compatible provider",
+            "label": label,
             "ollama_required": False,
             "model_required": False,
             "base_url": openai_compat_base_url,
             "model": openai_compat_model,
             "openai_compat_api_key_configured": openai_compat_api_key_configured,
-            "hint": "Studio planning is configured for an OpenAI-compatible endpoint instead of Ollama.",
+            "nvidia_profile": nvidia_profile,
+            "hint": (
+                "Studio planning is configured for a NVIDIA/NIM-style OpenAI-compatible endpoint."
+                if nvidia_profile.get("enabled")
+                else "Studio planning is configured for an OpenAI-compatible endpoint instead of Ollama."
+            ),
         }
 
     if ai_provider == "rule_based":
@@ -2105,6 +2123,7 @@ def setup_status():
     return {
             "ok": True,
             "ai_config": ai_config,
+            "nvidia_profile": nvidia_profile_status(),
             "backend_bundle": backend_bundle,
             "backend_bundle_directml": backend_bundle_directml,
             "ollama": ollama,
@@ -2304,6 +2323,28 @@ def setup_edmg_install(payload: dict[str, Any]):
 @app.get("/v1/ai/status")
 def ai_status():
     return {"ok": True, "ai": ai.status()}
+
+@app.get("/v1/nvidia/status")
+def nvidia_status():
+    return {"ok": True, "nvidia": nvidia_profile_status()}
+
+@app.post("/v1/usd/scene-plan")
+def nvidia_usd_scene_plan(payload: dict[str, Any]):
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "scene plan root must be an object")
+    errors = validate_scene_plan(payload)
+    if errors:
+        raise HTTPException(400, {"message": "Invalid NVIDIA scene plan", "errors": errors})
+    return {
+        "ok": True,
+        "scene_plan": normalize_scene_plan(payload),
+        "usd_metadata": scene_plan_usd_metadata(payload),
+        "usd_stage": {
+            "format": "usda",
+            "text": scene_plan_usda_text(payload),
+        },
+        "nvidia": nvidia_profile_status(),
+    }
 
 @app.get("/v1/worker/status")
 def worker_status():

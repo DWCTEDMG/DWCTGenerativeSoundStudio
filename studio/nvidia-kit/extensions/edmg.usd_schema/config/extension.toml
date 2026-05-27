@@ -1,0 +1,12 @@
+[package]
+title = "EDMG USD Schema"
+description = "OpenUSD metadata helpers and schema boundary for EDMG NVIDIA Studio."
+version = "0.1.0"
+category = "EDMG"
+
+[dependencies]
+"omni.usd" = {}
+
+[[python.module]]
+name = "edmg.usd_schema"
+
