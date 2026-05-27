@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import zipfile
 from pathlib import Path
 from typing import Iterable
 
@@ -74,9 +76,23 @@ def _nltk_resource_present(resource: str) -> bool:
         try:
             nltk.data.find(location)
             return True
-        except LookupError:
+        except (LookupError, OSError, zipfile.BadZipFile):
             continue
     return False
+
+
+def _remove_staged_nltk_resource(target_path: Path, resource: str) -> None:
+    for location in NLTK_RESOURCE_LOCATIONS[resource]:
+        candidate = target_path / location
+        candidates = [candidate]
+        if candidate.suffix != ".zip":
+            candidates.append(candidate.with_suffix(candidate.suffix + ".zip"))
+
+        for path in candidates:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.exists():
+                path.unlink()
 
 
 def ensure_nltk_resources(target_dir: Path | str, resources: Iterable[str] | None = None) -> list[str]:
@@ -94,7 +110,8 @@ def ensure_nltk_resources(target_dir: Path | str, resources: Iterable[str] | Non
             raise KeyError(f"Unknown NLTK resource: {resource}")
         if _nltk_resource_present(resource):
             continue
-        ok = bool(nltk.download(resource, download_dir=target_str, quiet=True))
+        _remove_staged_nltk_resource(target_path, resource)
+        ok = bool(nltk.download(resource, download_dir=target_str, quiet=True, force=True))
         if not ok or not _nltk_resource_present(resource):
             raise RuntimeError(f"Failed to stage NLTK resource: {resource}")
     return list(requested)

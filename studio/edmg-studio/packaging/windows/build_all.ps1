@@ -17,7 +17,7 @@ function Assert-Command($name) {
 }
 
 function Get-PythonVersion($PythonCommand, [string[]]$ExtraArgs = @()) {
-  $versionOutput = & $PythonCommand @ExtraArgs -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"
+  $versionOutput = & $PythonCommand @ExtraArgs -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>$null
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to query Python version using: $PythonCommand"
   }
@@ -253,6 +253,14 @@ function Move-ExistingFolder($SourceDir, $DestRoot, $Label) {
   Write-Host ("[info] Moved " + $SourceDir + " -> " + $backup) -ForegroundColor Yellow
 }
 
+function Test-ReparsePoint($Path) {
+  if (-not (Test-Path $Path)) {
+    return $false
+  }
+  $item = Get-Item -Force $Path
+  return (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
 function Migrate-LegacyData($RepoRoot, $StudioDir, $PyBackendDir) {
   $DestData = Join-Path $StudioDir "data"
   $MigrationsDir = Join-Path $StudioDir "_legacy_migrations"
@@ -268,6 +276,10 @@ function Migrate-LegacyData($RepoRoot, $StudioDir, $PyBackendDir) {
 
   $LegacyRootData = Join-Path $RepoRoot "data"
   if (Test-Path $LegacyRootData) {
+    if (Test-ReparsePoint $LegacyRootData) {
+      Write-Host "[info] Repo-root data/ is already a link; leaving it in place." -ForegroundColor Cyan
+      return
+    }
     Write-Host "[info] Found legacy repo-root data/. Migrating into studio/data." -ForegroundColor Yellow
     Copy-Item -Recurse -Force (Join-Path $LegacyRootData "*") $DestData -ErrorAction SilentlyContinue
     Move-ExistingFolder $LegacyRootData $MigrationsDir "repo_root_data"

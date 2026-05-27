@@ -36,6 +36,18 @@ def test_ensure_pycparser_compat_modules_creates_legacy_tables(tmp_path):
     assert "_lr_action = {}" in (package_dir / "yacctab.py").read_text(encoding="utf-8")
 
 
+def test_remove_staged_nltk_resource_removes_zip_fallback(tmp_path):
+    pyinstaller_support = _load_pyinstaller_support()
+    tokenizers_dir = tmp_path / "tokenizers"
+    tokenizers_dir.mkdir()
+    stale_zip = tokenizers_dir / "punkt.zip"
+    stale_zip.write_text("not a zip", encoding="utf-8")
+
+    pyinstaller_support._remove_staged_nltk_resource(tmp_path, "punkt")
+
+    assert not stale_zip.exists()
+
+
 def test_local_scipy_hook_avoids_missing_cdflib_false_positive():
     repo_root = Path(__file__).resolve().parents[1]
     hook_path = (
