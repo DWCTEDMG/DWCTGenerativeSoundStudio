@@ -1,5 +1,6 @@
 param(
   [string]$PythonExe = "python",
+  [string[]]$PythonArgs = @(),
   [string]$NodeExe = "node",
   [string]$PnpmExe = "pnpm"
 )
@@ -34,6 +35,53 @@ function Assert-SupportedPythonVersion($PythonCommand, [string[]]$ExtraArgs = @(
   }
   Write-Host ("[info] " + $Label + " version OK: " + $version) -ForegroundColor Cyan
   return $version
+}
+
+function Test-SupportedPythonVersion($PythonCommand, [string[]]$ExtraArgs = @()) {
+  try {
+    $version = Get-PythonVersion $PythonCommand $ExtraArgs
+    return ($version -ge $SupportedPythonMin -and $version -lt $SupportedPythonMaxExclusive)
+  } catch {
+    return $false
+  }
+}
+
+function Format-PythonCommand($PythonCommand, [string[]]$ExtraArgs = @()) {
+  $parts = @($PythonCommand) + $ExtraArgs
+  return ($parts -join " ")
+}
+
+function Resolve-PythonBootstrapCommand() {
+  $candidates = @()
+
+  if ($env:EDMG_STUDIO_PYTHON) {
+    $candidates += [pscustomobject]@{ Command = $env:EDMG_STUDIO_PYTHON; Args = @(); Label = "EDMG_STUDIO_PYTHON" }
+  }
+
+  if ($PSBoundParameters.ContainsKey("PythonExe") -or $PSBoundParameters.ContainsKey("PythonArgs")) {
+    $candidates += [pscustomobject]@{ Command = $PythonExe; Args = $PythonArgs; Label = "PythonExe" }
+  } else {
+    $candidates += [pscustomobject]@{ Command = "python"; Args = @(); Label = "python" }
+    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+      foreach ($minor in @("3.13", "3.12", "3.11", "3.10")) {
+        $candidates += [pscustomobject]@{ Command = "py"; Args = @("-$minor"); Label = "py -$minor" }
+      }
+      $candidates += [pscustomobject]@{ Command = "py"; Args = @("-3"); Label = "py -3" }
+    }
+  }
+
+  foreach ($candidate in $candidates) {
+    if (-not (Get-Command $candidate.Command -ErrorAction SilentlyContinue)) {
+      continue
+    }
+    if (Test-SupportedPythonVersion $candidate.Command $candidate.Args) {
+      $version = Get-PythonVersion $candidate.Command $candidate.Args
+      Write-Host ("[info] Selected bootstrap Python: " + (Format-PythonCommand $candidate.Command $candidate.Args) + " (" + $version + ")") -ForegroundColor Cyan
+      return $candidate
+    }
+  }
+
+  throw ("Could not find a supported Python command. Set EDMG_STUDIO_PYTHON or install Python >= " + $SupportedPythonMin + " and < " + $SupportedPythonMaxExclusive + ".")
 }
 
 function Invoke-Checked($label, [scriptblock]$action) {
@@ -140,14 +188,14 @@ function Doctor($RepoRoot, $StudioDir, $PyBackendDir, $BackendPkgDir, $BundledFf
   }
 
   try {
-    $pyv = & $PythonExe -c "import sys; print(sys.version)"
+    $pyv = & $PythonExe @PythonArgs -c "import sys; print(sys.version)"
     Write-Host ("Python: " + $pyv.Trim())
   } catch {
     Write-Host "[fail] Python not runnable." -ForegroundColor Red
   }
 
   try {
-    $pipv = & $PythonExe -m pip --version
+    $pipv = & $PythonExe @PythonArgs -m pip --version
     Write-Host ("pip: " + $pipv.Trim())
   } catch {}
 
@@ -232,9 +280,12 @@ function Migrate-LegacyData($RepoRoot, $StudioDir, $PyBackendDir) {
   }
 }
 
-Assert-Command $PythonExe
 Assert-Command $PnpmExe
-Assert-SupportedPythonVersion $PythonExe @() "Bootstrap Python" | Out-Null
+$PythonBootstrap = Resolve-PythonBootstrapCommand
+$PythonExe = $PythonBootstrap.Command
+$PythonArgs = $PythonBootstrap.Args
+Assert-Command $PythonExe
+Assert-SupportedPythonVersion $PythonExe $PythonArgs "Bootstrap Python" | Out-Null
 
 $StudioDir = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $RepoRoot = Resolve-Path (Join-Path $StudioDir "../..")
@@ -257,10 +308,20 @@ Write-Host "[1/4] Building Python backend (PyInstaller)..."
 Push-Location $PyBackendDir
 
 if (-not (Test-Path "venv")) {
-  & $PythonExe -m venv venv
+  & $PythonExe @PythonArgs -m venv venv
 }
 
 $VenvPython = Join-Path $PyBackendDir "venv\Scripts\python.exe"
+if (Test-Path $VenvPython) {
+  if (-not (Test-SupportedPythonVersion $VenvPython @())) {
+    Write-Host "[warn] Existing backend venv uses an unsupported Python; recreating it." -ForegroundColor Yellow
+    Pop-Location
+    Remove-Item -Recurse -Force (Join-Path $PyBackendDir "venv")
+    Push-Location $PyBackendDir
+    & $PythonExe @PythonArgs -m venv venv
+  }
+}
+
 if (-not (Test-Path $VenvPython)) {
   throw "Virtual environment python not found: $VenvPython"
 }

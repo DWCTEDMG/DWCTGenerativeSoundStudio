@@ -5,7 +5,9 @@ This folder contains a **Windows-first** packaging pipeline that produces a DAW/
 ## Prereqs
 
 - Windows 10/11 x64
-- Python 3.10+ (or 3.11) on PATH
+- Python `>=3.10,<3.14` installed. If `python` points at an unsupported newer
+  runtime, `build_all.ps1` will try the Windows `py` launcher selectors
+  (`py -3.13`, `py -3.12`, `py -3.11`, `py -3.10`) before failing.
 - Node.js 18+ on PATH
 - `pnpm@10.33.0` available via `corepack enable` or a direct pnpm install
 - Git (optional, for fetching ComfyUI)
