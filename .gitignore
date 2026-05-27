@@ -70,6 +70,7 @@ external/*
 # ----------------------------
 node_modules/
 studio/edmg-studio/dist/
+studio/edmg-studio/dist-inno/
 studio/edmg-studio/dist-web/
 studio/edmg-studio/dist-audit/
 studio/edmg-studio/dist-sim/

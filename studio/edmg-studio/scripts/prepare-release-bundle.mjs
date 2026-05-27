@@ -192,7 +192,12 @@ async function computeBackendSourceFingerprint() {
 
 async function sha256File(filePath) {
   const hash = crypto.createHash("sha256");
-  hash.update(await fsp.readFile(filePath));
+  await new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
   return hash.digest("hex");
 }
 

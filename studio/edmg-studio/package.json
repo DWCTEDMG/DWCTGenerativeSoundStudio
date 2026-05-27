@@ -37,6 +37,7 @@
     "validate:release:linux": "pnpm run validate:desktop && pnpm run dist:linux",
     "build:electron": "pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && node scripts/run-electron-builder.mjs --dir -c.directories.app=release/staged-app",
     "dist:win": "pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app",
+    "dist:win:inno": "powershell -NoProfile -ExecutionPolicy Bypass -File packaging/windows/build_inno_external.ps1",
     "dist:linux": "pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && node scripts/run-electron-builder.mjs -l AppImage --x64 -c.directories.app=release/staged-app",
     "backend:use": "node scripts/use-backend.mjs"
   },

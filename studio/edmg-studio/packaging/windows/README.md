@@ -24,6 +24,34 @@ Open PowerShell in repo root and run:
 ./studio/edmg-studio/packaging/windows/build_all.ps1
 ```
 
+If the backend bundle is too large for NSIS, build the Inno Setup
+external-payload installer instead:
+
+```powershell
+./studio/edmg-studio/packaging/windows/build_inno_external.ps1
+```
+
+From the repo-root launcher, the same path is available as:
+
+```bat
+RUN_ME.bat build-inno
+```
+
+Or open `RUN_ME.bat` normally and use **Build Inno Installer (large payload)**
+in the Packaging row.
+
+This produces:
+
+- `studio/edmg-studio/dist-inno/EDMG-Studio-Setup-<version>.exe`
+- `studio/edmg-studio/dist-inno/payload/win-unpacked.7z`
+- `studio/edmg-studio/dist-inno/payload/tools/7zip/`
+
+Ship the setup EXE and `payload/` directory together. The setup EXE is small
+because Inno copies the large packaged app archive from the sibling payload
+folder at install time instead of embedding it. The installer uses the bundled
+7-Zip CLI from `payload/tools/7zip/` to extract the app, which avoids NSIS
+archive mmap limits and direct long-path recursion through `node_modules`.
+
 Outputs:
 
 - `studio/edmg-studio/dist/` (final electron-builder output: installer + unpacked app)

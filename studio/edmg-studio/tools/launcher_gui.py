@@ -1039,8 +1039,10 @@ class Launcher(tk.Tk):
         pkg_row = ttk.Frame(actions)
         pkg_row.pack(fill="x", pady=(8, 0))
         ttk.Button(pkg_row, text="Get FFmpeg (bundle for Studio renderer)", command=self.get_ffmpeg).pack(side="left")
-        ttk.Button(pkg_row, text="Build Installer (Windows)", command=self.build_installer).pack(side="left", padx=8)
+        ttk.Button(pkg_row, text="Build Installer (NSIS)", command=self.build_installer).pack(side="left", padx=8)
+        ttk.Button(pkg_row, text="Build Inno Installer (large payload)", command=self.build_inno_installer).pack(side="left")
         ttk.Button(pkg_row, text="Open Release Folder", command=self.open_release_folder).pack(side="left")
+        ttk.Button(pkg_row, text="Open Inno Folder", command=self.open_inno_folder).pack(side="left", padx=8)
 
         # Log
         logbox = ttk.LabelFrame(frm, text="Logs", padding=10)
@@ -1590,12 +1592,14 @@ class Launcher(tk.Tk):
 
         self._run_bg("Health test", work)
 
-    def _run_powershell(self, ps1: Path) -> None:
+    def _run_powershell(self, ps1: Path, extra_args: list[str] | None = None) -> None:
         if not sys.platform.startswith("win"):
             raise RuntimeError("Windows-only action.")
         if not ps1.exists():
             raise RuntimeError(f"Script not found: {ps1}")
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)]
+        if extra_args:
+            cmd.extend(extra_args)
         rc = _run_cmd(cmd, cwd=STUDIO_DIR, log_cb=self._log)
         if rc != 0:
             raise RuntimeError(f"PowerShell script failed (exit {rc}): {ps1.name}")
@@ -1617,20 +1621,44 @@ class Launcher(tk.Tk):
 
         self._run_bg("Build installer", work)
 
+    def build_inno_installer(self) -> None:
+        def work():
+            ps1 = STUDIO_DIR / "packaging" / "windows" / "build_inno_external.ps1"
+            self._log("Building Inno external-payload installer (setup EXE + payload archive)…")
+            self._run_powershell(ps1)
+            self._log("Inno build finished. Use 'Open Inno Folder' and ship the setup EXE with the payload folder.")
+
+        self._run_bg("Build Inno installer", work)
+
+    def _open_folder(self, folder: Path, missing_title: str, missing_message: str) -> None:
+        if not folder.exists():
+            messagebox.showinfo(missing_title, missing_message)
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception as e:
+            messagebox.showerror("Open folder failed", str(e))
+
     def open_release_folder(self) -> None:
         rel = STUDIO_DIR / "release"
         if not rel.exists():
             rel = STUDIO_DIR / "dist"
-        if not rel.exists():
-            messagebox.showinfo("Release folder", f"Release output folder not found yet.\nExpected at:\n{STUDIO_DIR / 'release'}")
-            return
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(str(rel))  # type: ignore[attr-defined]
-            else:
-                subprocess.Popen(["xdg-open", str(rel)])
-        except Exception as e:
-            messagebox.showerror("Open folder failed", str(e))
+        self._open_folder(
+            rel,
+            "Release folder",
+            f"Release output folder not found yet.\nExpected at:\n{STUDIO_DIR / 'release'}",
+        )
+
+    def open_inno_folder(self) -> None:
+        folder = STUDIO_DIR / "dist-inno"
+        self._open_folder(
+            folder,
+            "Inno release folder",
+            f"Inno release folder not found yet.\nExpected at:\n{folder}",
+        )
 
     def _start_studio_impl(self) -> None:
         package_manager_name = _studio_package_manager_name()
