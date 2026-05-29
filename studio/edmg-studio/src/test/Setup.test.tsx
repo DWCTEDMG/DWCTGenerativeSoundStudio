@@ -17,6 +17,23 @@ describe("Setup page", () => {
         ai_config: { label: "Local llama.cpp server", ollama_required: false, model_required: false },
         nvidia_profile: { enabled: true, profile: "omniverse" },
       },
+      "/v1/nvidia/diagnostics": {
+        ok: true,
+        nvidia: {
+          profile: { enabled: true, profile: "omniverse", credentials: { ngc_api_key_configured: true } },
+          host: {
+            gpu: { ok: true, gpus: [{ name: "Test RTX" }] },
+            docker: { ok: true, nvidia_runtime: true },
+          },
+          services: { nim: { model: "nvidia/model", probe: { reachable: true, models_url: "http://127.0.0.1:8000/v1/models" } } },
+          readiness: {
+            level: "ready",
+            summary: "NVIDIA profile, local GPU runtime, NGC access, and NIM planner endpoint are ready.",
+            checks: [{ id: "gpu_visible", label: "NVIDIA GPU visible to host", ok: true, detail: "Test RTX" }],
+            next_actions: [],
+          },
+        },
+      },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
     });
 
@@ -27,6 +44,8 @@ describe("Setup page", () => {
     const activeAiPath = await screen.findByTestId("setup-active-ai-path");
     expect(activeAiPath.textContent).toContain("NVIDIA");
     expect(activeAiPath.textContent).toContain("enabled");
+    expect(await screen.findByText("NVIDIA Runtime Readiness")).toBeTruthy();
+    expect((await screen.findAllByText(/Test RTX/)).length).toBeGreaterThan(0);
     expect(await screen.findByDisplayValue("D:\\EDMG-Studio")).toBeTruthy();
   });
 
@@ -57,6 +76,15 @@ describe("Setup page", () => {
         sevenzip: { ok: true, hint: "optional on linux" },
         hardware: { supports_directml: false },
         ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
+      },
+      "/v1/nvidia/diagnostics": {
+        ok: true,
+        nvidia: {
+          profile: { enabled: false, credentials: { ngc_api_key_configured: false } },
+          host: { gpu: { ok: false, gpus: [] }, docker: { ok: false, nvidia_runtime: false } },
+          services: { nim: { probe: { reachable: false } } },
+          readiness: { level: "disabled", summary: "NVIDIA profile is disabled.", checks: [], next_actions: [] },
+        },
       },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
     });
@@ -92,6 +120,15 @@ describe("Setup page", () => {
           },
         ],
       }),
+      "/v1/nvidia/diagnostics": {
+        ok: true,
+        nvidia: {
+          profile: { enabled: false, credentials: { ngc_api_key_configured: false } },
+          host: { gpu: { ok: false, gpus: [] }, docker: { ok: false, nvidia_runtime: false } },
+          services: { nim: { probe: { reachable: false } } },
+          readiness: { level: "disabled", summary: "NVIDIA profile is disabled.", checks: [], next_actions: [] },
+        },
+      },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
       "POST /v1/setup/tasks/task1234/cancel": () => {
         taskStatus = "canceled";

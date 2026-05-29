@@ -91,6 +91,7 @@ from .services.render_settings import (
     STABILITY_STYLE_PRESETS,
 )
 from .services.nvidia_profile import nvidia_profile_status
+from .services.nvidia_diagnostics import nvidia_diagnostics
 from .services.nvidia_scene_plan import (
     normalize_scene_plan,
     scene_plan_usd_metadata,
@@ -2327,6 +2328,10 @@ def ai_status():
 @app.get("/v1/nvidia/status")
 def nvidia_status():
     return {"ok": True, "nvidia": nvidia_profile_status()}
+
+@app.get("/v1/nvidia/diagnostics")
+def nvidia_diagnostics_route():
+    return {"ok": True, "nvidia": nvidia_diagnostics()}
 
 @app.post("/v1/usd/scene-plan")
 def nvidia_usd_scene_plan(payload: dict[str, Any]):

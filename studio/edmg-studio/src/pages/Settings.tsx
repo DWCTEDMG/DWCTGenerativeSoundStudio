@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
+import NvidiaReadinessCard from "../components/NvidiaReadinessCard";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { STUDIO_THEME_OPTIONS, useStudioAppearance } from "../components/studioAppearance";
 import { useStudioPageLayout } from "../components/studioLayout";
@@ -182,6 +183,7 @@ export default function Settings(props: PageProps) {
   const [cfg, setCfg] = useState<any>(null);
   const [aiStatus, setAiStatus] = useState<any>(null);
   const [nvidiaStatus, setNvidiaStatus] = useState<any>(null);
+  const [nvidiaDiagnostics, setNvidiaDiagnostics] = useState<any>(null);
   const [edmgTemplate, setEdmgTemplate] = useState<any>(null);
   const [secrets, setSecrets] = useState<any>(null);
   const [hardware, setHardware] = useState<any>(null);
@@ -239,6 +241,7 @@ export default function Settings(props: PageProps) {
 
     apiGet("/v1/ai/status").then(setAiStatus).catch(() => {});
     apiGet("/v1/nvidia/status").then(setNvidiaStatus).catch(() => {});
+    apiGet("/v1/nvidia/diagnostics").then(setNvidiaDiagnostics).catch(() => {});
     apiGet("/v1/edmg/deforum_template").then(setEdmgTemplate).catch(() => {});
     apiGet("/v1/settings/secrets/status").then(setSecrets).catch(() => {});
     apiGet("/v1/hardware").then(setHardware).catch(() => {});
@@ -360,6 +363,13 @@ export default function Settings(props: PageProps) {
     try {
       const nextNvidiaStatus = await apiGet("/v1/nvidia/status");
       setNvidiaStatus(nextNvidiaStatus);
+    } catch {
+      // ignore
+    }
+
+    try {
+      const nextNvidiaDiagnostics = await apiGet("/v1/nvidia/diagnostics");
+      setNvidiaDiagnostics(nextNvidiaDiagnostics);
     } catch {
       // ignore
     }
@@ -883,12 +893,22 @@ export default function Settings(props: PageProps) {
       </div>
     ),
     backendConfig: cfg ? <div className="card"><pre>{JSON.stringify(cfg, null, 2)}</pre></div> : null,
-    liveAiStatus: aiStatus || nvidiaStatus ? (
+    liveAiStatus: aiStatus || nvidiaStatus || nvidiaDiagnostics ? (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Live AI / NVIDIA Status</div>
         <div className="small" style={{ marginBottom: 10 }}>
           This is the provider the backend is using right now. If it differs from the saved startup config above, restart Studio to apply your latest change.
         </div>
+        {nvidiaDiagnostics?.nvidia?.readiness ? (
+          <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+            <NvidiaReadinessCard
+              asCard={false}
+              diagnostics={nvidiaDiagnostics}
+              status={nvidiaStatus}
+              onRefresh={() => { void refreshBackendAiStatus(); }}
+            />
+          </div>
+        ) : null}
         {nvidiaStatus?.nvidia ? (
           <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12, marginBottom: 12 }}>
             <div style={{ fontWeight: 800 }}>NVIDIA service profile</div>
@@ -903,9 +923,23 @@ export default function Settings(props: PageProps) {
               {" "}• Riva: <b>{nvidiaStatus.nvidia.services?.riva?.configured ? "configured" : "not configured"}</b>
               {" "}• Omniverse: <b>{nvidiaStatus.nvidia.services?.omniverse?.configured ? "configured" : "not configured"}</b>
             </div>
+            {nvidiaDiagnostics?.nvidia ? (
+              <>
+                <div style={{ fontWeight: 800, marginTop: 10 }}>NVIDIA runtime diagnostics</div>
+                <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
+                  GPU: <b>{nvidiaDiagnostics.nvidia.host?.gpu?.ok ? "ready" : "not ready"}</b>
+                  {nvidiaDiagnostics.nvidia.host?.gpu?.gpus?.[0]?.name ? <> • {nvidiaDiagnostics.nvidia.host.gpu.gpus[0].name}</> : null}
+                  {" "}• Docker NVIDIA runtime: <b>{nvidiaDiagnostics.nvidia.host?.docker?.nvidia_runtime ? "ready" : "not ready"}</b>
+                </div>
+                <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
+                  NIM endpoint: <b>{nvidiaDiagnostics.nvidia.services?.nim?.probe?.reachable ? "reachable" : "not reachable"}</b>
+                  {nvidiaDiagnostics.nvidia.services?.nim?.probe?.models_url ? <> • <code>{nvidiaDiagnostics.nvidia.services.nim.probe.models_url}</code></> : null}
+                </div>
+              </>
+            ) : null}
           </div>
         ) : null}
-        <pre>{JSON.stringify({ ai: aiStatus, nvidia: nvidiaStatus }, null, 2)}</pre>
+        <pre>{JSON.stringify({ ai: aiStatus, nvidia: nvidiaStatus, diagnostics: nvidiaDiagnostics }, null, 2)}</pre>
       </div>
     ) : null,
     tokens: (

@@ -149,7 +149,7 @@ export default function App() {
   }
 
   let content: React.ReactNode = null;
-  if (page === "dashboard") content = <Dashboard {...commonProps} />;
+  if (page === "dashboard") content = <Dashboard {...commonProps} onNavigate={setPage as any} />;
   if (page === "projects") content = <Projects {...commonProps} />;
   if (page === "workspace") content = <Workspace {...commonProps} onNavigate={setPage as any} />;
   if (page === "timeline") content = <Timeline {...commonProps} onNavigate={setPage as any} />;
@@ -169,7 +169,7 @@ export default function App() {
   if (page === "studioForge" && isStudioForgeEnabled())
     content = <StudioForge {...commonProps} onNavigate={setPage as any} />;
   if (page === "studioForge" && !isStudioForgeEnabled())
-    content = <Dashboard {...commonProps} />;
+    content = <Dashboard {...commonProps} onNavigate={setPage as any} />;
 
   const mainClassName = page === "timeline" ? "main main--timeline" : "main";
 

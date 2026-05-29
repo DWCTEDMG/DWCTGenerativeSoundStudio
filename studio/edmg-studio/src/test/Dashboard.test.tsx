@@ -10,6 +10,27 @@ describe("Dashboard page", () => {
     const fetchMock = installFetchMock({
       "/health": { ok: true, version: "test" },
       "/v1/edmg/status": { ok: true, core: "ready" },
+      "/v1/nvidia/status": {
+        ok: true,
+        nvidia: { enabled: true, profile: "omniverse", credentials: { ngc_api_key_configured: true }, services: {} },
+      },
+      "/v1/nvidia/diagnostics": {
+        ok: true,
+        nvidia: {
+          profile: { enabled: true, profile: "omniverse", credentials: { ngc_api_key_configured: true } },
+          host: {
+            gpu: { ok: true, gpus: [{ name: "Test RTX" }] },
+            docker: { ok: true, nvidia_runtime: true },
+          },
+          services: { nim: { model: "nvidia/model", probe: { reachable: true, models_url: "http://127.0.0.1:8000/v1/models" } } },
+          readiness: {
+            level: "ready",
+            summary: "NVIDIA profile, local GPU runtime, NGC access, and NIM planner endpoint are ready.",
+            checks: [],
+            next_actions: [],
+          },
+        },
+      },
     });
 
     renderWithStudio(
@@ -21,6 +42,7 @@ describe("Dashboard page", () => {
 
     expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeTruthy();
     expect(await screen.findByText("Create a project")).toBeTruthy();
+    expect(await screen.findByText("NVIDIA Runtime Readiness")).toBeTruthy();
 
     const layoutDetails = screen.getByText("Dashboard layout").closest("details");
     expect(layoutDetails).toBeTruthy();
@@ -49,6 +71,9 @@ describe("Dashboard page", () => {
     ).toBe(true);
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).includes("/v1/edmg/status")),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/v1/nvidia/diagnostics")),
     ).toBe(true);
   });
 });

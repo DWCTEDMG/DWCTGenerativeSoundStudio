@@ -125,6 +125,10 @@ NVIDIA-specific orchestration around them.
 Starter branch status:
 
 - `/v1/nvidia/status` reports the masked NVIDIA service profile.
+- `/v1/nvidia/diagnostics` reports host GPU, Docker NVIDIA runtime, and NIM
+  endpoint reachability without exposing credentials. It also returns a
+  normalized readiness block with required checks and next actions for the
+  official local NVIDIA service stack.
 - `/v1/usd/scene-plan` validates a scene plan and returns normalized USD-style
   metadata keys plus a generated USDA text preview.
 - `studio/nvidia-kit/apps/edmg-nvidia-studio.kit` declares the first Kit app

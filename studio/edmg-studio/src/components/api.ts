@@ -8,12 +8,41 @@ function readEnvBackendUrl(): string {
   return String(import.meta.env.VITE_EDMG_BACKEND_URL || "").trim();
 }
 
+const LOCAL_DEV_BACKEND_CANDIDATES = [
+  "http://127.0.0.1:8000",
+  "http://127.0.0.1:7863",
+];
+const DESKTOP_DEFAULT_BACKEND_URL = "http://127.0.0.1:7863";
+const BROWSER_DEV_DEFAULT_BACKEND_URL = LOCAL_DEV_BACKEND_CANDIDATES[0];
+let localDevBackendDetection: Promise<string> | null = null;
+let browserBridgeInstalled = false;
+
 function readSameOriginBackendUrl(): string {
   if (typeof window === "undefined") return "";
   if (import.meta.env.DEV) return "";
   const protocol = window.location.protocol;
   if (protocol !== "http:" && protocol !== "https:") return "";
   return window.location.origin;
+}
+
+function shouldProbeLocalDevBackend(): boolean {
+  if (typeof window === "undefined") return false;
+  if (!import.meta.env.DEV) return false;
+  if (window.edmg && !browserBridgeInstalled) return false;
+  return ["localhost", "127.0.0.1"].includes(window.location.hostname);
+}
+
+function readBridgeBackendUrl(): string {
+  if (typeof window === "undefined") return "";
+  if (browserBridgeInstalled) return "";
+  return String(window.edmg?.backendUrl?.() || "").trim();
+}
+
+async function readBridgeBackendUrlAsync(): Promise<string> {
+  if (typeof window === "undefined") return "";
+  if (browserBridgeInstalled) return "";
+  const bridged = await window.edmg?.getBackendUrl?.();
+  return String(bridged || "").trim();
 }
 
 function rememberBackendUrl(value: string): string {
@@ -24,15 +53,46 @@ function rememberBackendUrl(value: string): string {
   return resolved;
 }
 
+async function probeBackendHealth(baseUrl: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 800);
+  try {
+    const response = await fetch(`${baseUrl}/health`, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function detectLocalDevBackendUrl(): Promise<string> {
+  localDevBackendDetection ??= (async () => {
+    for (const candidate of LOCAL_DEV_BACKEND_CANDIDATES) {
+      if (await probeBackendHealth(candidate)) return candidate;
+    }
+    return "";
+  })();
+  return localDevBackendDetection;
+}
+
+function getFallbackBackendUrl(): string {
+  if (shouldProbeLocalDevBackend()) return BROWSER_DEV_DEFAULT_BACKEND_URL;
+  return readSameOriginBackendUrl() || DESKTOP_DEFAULT_BACKEND_URL;
+}
+
 export function getBackendUrl(): string {
-  return rememberBackendUrl(
+  const configured =
     readQueryBackendUrl() ||
     readEnvBackendUrl() ||
-    window.edmg?.backendUrl?.() ||
-    window.__EDMG_BACKEND_URL__ ||
-    readSameOriginBackendUrl() ||
-    "http://127.0.0.1:7863"
-  );
+    readBridgeBackendUrl() ||
+    window.__EDMG_BACKEND_URL__;
+
+  if (configured) return rememberBackendUrl(configured);
+  return getFallbackBackendUrl();
 }
 
 export async function getBackendUrlAsync(): Promise<string> {
@@ -41,22 +101,32 @@ export async function getBackendUrlAsync(): Promise<string> {
   const envBackendUrl = readEnvBackendUrl();
   if (envBackendUrl) return rememberBackendUrl(envBackendUrl);
   try {
-    const bridged = await window.edmg?.getBackendUrl?.();
-    if (typeof bridged === "string" && bridged.trim()) {
+    const bridged = await readBridgeBackendUrlAsync();
+    if (bridged) {
       return rememberBackendUrl(bridged);
     }
   } catch {
     // Fall through to the sync fallback chain below.
   }
+
+  if (shouldProbeLocalDevBackend()) {
+    const detected = await detectLocalDevBackendUrl();
+    if (detected) return rememberBackendUrl(detected);
+  }
+
+  if (typeof window !== "undefined" && window.__EDMG_BACKEND_URL__) {
+    return rememberBackendUrl(window.__EDMG_BACKEND_URL__);
+  }
+
   return rememberBackendUrl(getBackendUrl());
 }
 
 export function ensureBrowserBridge(): void {
   if (typeof window === "undefined" || window.edmg) return;
-  const backendUrl = rememberBackendUrl(getBackendUrl());
+  browserBridgeInstalled = true;
   window.edmg = {
-    backendUrl: () => backendUrl,
-    getBackendUrl: async () => backendUrl,
+    backendUrl: () => getBackendUrl(),
+    getBackendUrl: async () => getBackendUrlAsync(),
     openExternal: async (url: string) => {
       window.open(String(url), "_blank", "noopener,noreferrer");
     },

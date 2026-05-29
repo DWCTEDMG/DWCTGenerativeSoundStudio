@@ -54,7 +54,8 @@ LLM endpoints, then exposes extra status through `/v1/nvidia/status`.
 EDMG_NVIDIA_MODE=1
 EDMG_NVIDIA_PROFILE=omniverse
 EDMG_AI_PROVIDER=openai_compat
-EDMG_AI_OPENAI_COMPAT_BASE_URL=http://127.0.0.1:8000/v1
+EDMG_NVIDIA_NIM_URL=http://127.0.0.1:8001
+EDMG_AI_OPENAI_COMPAT_BASE_URL=http://127.0.0.1:8001/v1
 EDMG_AI_OPENAI_COMPAT_MODEL=your-nim-model
 NGC_API_KEY=...  # load from shell or ignored local env file, never commit it
 ```

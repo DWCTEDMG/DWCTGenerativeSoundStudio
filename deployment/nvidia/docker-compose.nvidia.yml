@@ -13,11 +13,18 @@ services:
       EDMG_NVIDIA_MODE: ${EDMG_NVIDIA_MODE:-1}
       EDMG_NVIDIA_PROFILE: ${EDMG_NVIDIA_PROFILE:-omniverse}
       EDMG_AI_PROVIDER: ${EDMG_AI_PROVIDER:-openai_compat}
-      EDMG_AI_OPENAI_COMPAT_BASE_URL: ${EDMG_AI_OPENAI_COMPAT_BASE_URL:-http://host.docker.internal:8000/v1}
+      EDMG_AI_OPENAI_COMPAT_BASE_URL: ${EDMG_AI_OPENAI_COMPAT_BASE_URL:-http://host.docker.internal:8001/v1}
       EDMG_AI_OPENAI_COMPAT_MODEL: ${EDMG_AI_OPENAI_COMPAT_MODEL:-nvidia-nim-model}
       EDMG_RIVA_URL: ${EDMG_RIVA_URL:-http://host.docker.internal:50051}
-      EDMG_NVIDIA_NIM_URL: ${EDMG_NVIDIA_NIM_URL:-http://host.docker.internal:8000}
+      EDMG_NVIDIA_NIM_URL: ${EDMG_NVIDIA_NIM_URL:-http://host.docker.internal:8001}
       EDMG_NVIDIA_OMNIVERSE_URL: ${EDMG_NVIDIA_OMNIVERSE_URL:-http://host.docker.internal:8011}
+      EDMG_NVIDIA_NEMO_URL: ${EDMG_NVIDIA_NEMO_URL:-}
+      EDMG_NVIDIA_TRITON_URL: ${EDMG_NVIDIA_TRITON_URL:-}
+      EDMG_NVIDIA_TRITON_MODEL: ${EDMG_NVIDIA_TRITON_MODEL:-}
+      EDMG_NVIDIA_AUDIO2FACE_URL: ${EDMG_NVIDIA_AUDIO2FACE_URL:-}
+      EDMG_NVIDIA_ACE_URL: ${EDMG_NVIDIA_ACE_URL:-}
+      EDMG_NVIDIA_COSMOS_URL: ${EDMG_NVIDIA_COSMOS_URL:-}
+      EDMG_NVIDIA_COSMOS_MODEL: ${EDMG_NVIDIA_COSMOS_MODEL:-}
     volumes:
       - ./starlift-data/nvidia:/studio/nvidia
 
@@ -26,7 +33,7 @@ services:
     image: ${EDMG_NIM_LLM_IMAGE:-nvcr.io/nvidia/nim/set-edmg-nim-llm-image}
     restart: unless-stopped
     ports:
-      - "${EDMG_NIM_LLM_PORT:-8000}:8000"
+      - "${EDMG_NIM_LLM_PORT:-8001}:8000"
     environment:
       NGC_API_KEY: ${NGC_API_KEY:-}
     volumes:
@@ -58,3 +65,76 @@ services:
               count: ${EDMG_NVIDIA_GPU_COUNT:-1}
               capabilities: [gpu]
 
+  nvidia-nemo:
+    profiles: ["nvidia-local", "nemo"]
+    image: ${EDMG_NEMO_IMAGE:-nvcr.io/nvidia/nemo:26.04.00}
+    restart: unless-stopped
+    command: ["bash", "-lc", "sleep infinity"]
+    working_dir: /workspace
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:-}
+    volumes:
+      - ./starlift-data/nvidia/nemo:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${EDMG_NVIDIA_GPU_COUNT:-1}
+              capabilities: [gpu]
+
+  nvidia-triton:
+    profiles: ["nvidia-local", "triton"]
+    image: ${EDMG_TRITON_IMAGE:-nvcr.io/nvidia/tritonserver/set-edmg-triton-image}
+    restart: unless-stopped
+    ports:
+      - "${EDMG_TRITON_HTTP_PORT:-8002}:8000"
+      - "${EDMG_TRITON_GRPC_PORT:-8003}:8001"
+      - "${EDMG_TRITON_METRICS_PORT:-8004}:8002"
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:-}
+    volumes:
+      - ./starlift-data/nvidia/triton-model-repository:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${EDMG_NVIDIA_GPU_COUNT:-1}
+              capabilities: [gpu]
+
+  nvidia-audio2face:
+    profiles: ["nvidia-local", "audio2face", "ace"]
+    image: ${EDMG_AUDIO2FACE_IMAGE:-nvcr.io/nvidia/omniverse/set-edmg-audio2face-image}
+    restart: unless-stopped
+    ports:
+      - "${EDMG_AUDIO2FACE_HTTP_PORT:-8011}:8011"
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:-}
+    volumes:
+      - ./starlift-data/nvidia/audio2face:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${EDMG_NVIDIA_GPU_COUNT:-1}
+              capabilities: [gpu]
+
+  nvidia-cosmos:
+    profiles: ["nvidia-local", "cosmos"]
+    image: ${EDMG_COSMOS_IMAGE:-nvcr.io/nvidia/cosmos/set-edmg-cosmos-image}
+    restart: unless-stopped
+    ports:
+      - "${EDMG_COSMOS_HTTP_PORT:-8012}:8000"
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:-}
+    volumes:
+      - ./starlift-data/nvidia/cosmos:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${EDMG_NVIDIA_GPU_COUNT:-1}
+              capabilities: [gpu]

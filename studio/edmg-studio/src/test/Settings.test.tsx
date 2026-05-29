@@ -47,6 +47,23 @@ describe("Settings page", () => {
           },
         },
       },
+      "/v1/nvidia/diagnostics": {
+        ok: true,
+        nvidia: {
+          host: {
+            gpu: { ok: true, gpus: [{ name: "Test RTX" }] },
+            docker: { ok: true, nvidia_runtime: true },
+          },
+          services: {
+            nim: {
+              probe: {
+                reachable: true,
+                models_url: "http://127.0.0.1:8000/v1/models",
+              },
+            },
+          },
+        },
+      },
       "/v1/edmg/deforum_template": { ok: true },
       "/v1/settings/secrets/status": { store: "test", has_openai_compat_api_key: false },
       "/v1/hardware": {
@@ -117,5 +134,7 @@ describe("Settings page", () => {
 
     expect(await screen.findByText(/Saved\. Restart Studio so it relaunches against the selected backend target\./)).toBeTruthy();
     expect(await screen.findByText("NVIDIA service profile")).toBeTruthy();
+    expect(await screen.findByText("NVIDIA runtime diagnostics")).toBeTruthy();
+    expect((await screen.findAllByText(/Test RTX/)).length).toBeGreaterThan(0);
   });
 });

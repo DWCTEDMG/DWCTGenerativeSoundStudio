@@ -69,6 +69,9 @@ try {
   $hasNvidiaRuntime = $dockerRuntimes -match '"nvidia"'
   $runtimeStatus = if ($hasNvidiaRuntime) { "yes" } else { "no" }
   Write-Step "Docker NVIDIA runtime: $runtimeStatus"
+  if (-not $hasNvidiaRuntime) {
+    Write-Step "Fix: enable Docker Desktop WSL2 integration and NVIDIA Container Toolkit, then run deployment/nvidia/test_docker_gpu.ps1"
+  }
 } catch {
   Write-Step "Docker NVIDIA runtime: unable to inspect ($($_.Exception.Message))"
 }
@@ -86,6 +89,9 @@ $fileNgc = Read-EnvFileValue -Path $EnvFile -Name "NGC_API_KEY"
 $hasNgc = -not [string]::IsNullOrWhiteSpace($shellNgc) -or -not [string]::IsNullOrWhiteSpace($fileNgc)
 $ngcStatus = if ($hasNgc) { "yes" } else { "no" }
 Write-Step "NGC_API_KEY configured: $ngcStatus"
+if (-not $hasNgc) {
+  Write-Step "Fix: create an NGC API key, save it in deployment/nvidia/.env.local, then run deployment/nvidia/login_ngc.ps1"
+}
 
 Write-Step "Rendering base Compose config with $composeEnvFile"
 docker compose --env-file $composeEnvFile -f docker-compose.starlift.yml -f deployment/nvidia/docker-compose.nvidia.yml config | Out-Null

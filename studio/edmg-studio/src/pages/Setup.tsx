@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
 import { getDesktopPlatformKind, type DesktopPlatformKind } from "../components/desktopArtifacts";
+import NvidiaReadinessCard from "../components/NvidiaReadinessCard";
 
 type StorageDraft = {
   studioHome: string;
@@ -82,6 +83,8 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   const [status, setStatus] = useState<any>(null);
   const [modelsCatalog, setModelsCatalog] = useState<any>(null);
   const [edmgVerifyResult, setEdmgVerifyResult] = useState<any>(null);
+  const [nvidiaDiagnostics, setNvidiaDiagnostics] = useState<any>(null);
+  const [nvidiaBusy, setNvidiaBusy] = useState(false);
   const [studioPaths, setStudioPaths] = useState<any>(null);
   const [storageDraft, setStorageDraft] = useState<StorageDraft>(EMPTY_STORAGE_DRAFT);
   const [packAccept, setPackAccept] = useState<Record<string, boolean>>({});
@@ -114,8 +117,21 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     }
   }
 
+  async function refreshNvidiaDiagnostics(manual = false) {
+    if (manual) setNvidiaBusy(true);
+    try {
+      const diagnostics = await apiGet("/v1/nvidia/diagnostics");
+      setNvidiaDiagnostics(diagnostics);
+    } catch {
+      setNvidiaDiagnostics(null);
+    } finally {
+      if (manual) setNvidiaBusy(false);
+    }
+  }
+
   useEffect(() => {
     refresh();
+    refreshNvidiaDiagnostics();
     const t = setInterval(refresh, 2000);
     return () => clearInterval(t);
   }, []);
@@ -479,6 +495,14 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     ) : null}
   </div>
 </div>
+
+        <NvidiaReadinessCard
+          diagnostics={nvidiaDiagnostics}
+          status={{ nvidia: nvidiaProfile }}
+          busy={nvidiaBusy}
+          onRefresh={() => void refreshNvidiaDiagnostics(true)}
+          onOpenSettings={onNavigate ? () => onNavigate("settings") : undefined}
+        />
 
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

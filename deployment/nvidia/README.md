@@ -53,6 +53,11 @@ By default this only reconfigures the existing backend for an OpenAI-compatible
 NIM-style endpoint and NVIDIA mode metadata. Optional placeholder services live
 behind Compose profiles because official NIM/Riva/NeMo images and model choices
 depend on NVIDIA account access, EULAs, and target hardware.
+The starter also reserves optional profile slots for Triton, Audio2Face/ACE, and
+Cosmos so the repo can grow into the full NVIDIA lane without pretending those
+private image names and model choices are universal.
+The NeMo profile uses the official `nvcr.io/nvidia/nemo:26.04.00` framework
+container as a workspace/job container; it is not an HTTP planner endpoint.
 
 ## Required host assumptions
 
@@ -75,7 +80,9 @@ env-file presence, masked NGC credential presence, and Compose syntax for both
 the base override and optional `nvidia-local` profile. It never prints the key
 value.
 
-After the backend is running, smoke the NVIDIA API surface:
+After the backend is running, smoke the NVIDIA API surface. This checks the
+masked profile, host GPU, Docker NVIDIA runtime, NIM endpoint reachability, and
+scene-plan-to-USDA contract:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/smoke_nvidia_backend.ps1
@@ -85,7 +92,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/smoke_nvid
 
 ```powershell
 $env:EDMG_AI_PROVIDER="openai_compat"
-$env:EDMG_AI_OPENAI_COMPAT_BASE_URL="http://host.docker.internal:8000/v1"
+$env:EDMG_NVIDIA_NIM_URL="http://host.docker.internal:8001"
+$env:EDMG_AI_OPENAI_COMPAT_BASE_URL="http://host.docker.internal:8001/v1"
 $env:EDMG_AI_OPENAI_COMPAT_MODEL="your-nim-model"
 $env:EDMG_NVIDIA_MODE="1"
 $env:EDMG_NVIDIA_PROFILE="omniverse"
@@ -101,6 +109,22 @@ Credential split:
   endpoint requires bearer authentication.
 - Both values must stay in the shell, OS secret store, or an ignored
   `.env.local` file.
+
+## Local helper scripts
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/login_ngc.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/test_docker_gpu.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/start_nvidia_backend_local.ps1
+```
+
+- `login_ngc.ps1` logs Docker into `nvcr.io` with `$oauthtoken` and a masked
+  `NGC_API_KEY`.
+- `test_docker_gpu.ps1` runs a configurable CUDA container probe with
+  `--gpus all`.
+- `start_nvidia_backend_local.ps1` starts the local dev backend on port `8000`
+  with the NVIDIA env file loaded, while leaving NIM free to use host port
+  `8001`.
 
 ## First validation target
 

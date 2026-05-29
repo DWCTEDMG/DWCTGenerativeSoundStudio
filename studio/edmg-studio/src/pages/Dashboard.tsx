@@ -1,19 +1,41 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet } from "../components/api";
+import NvidiaReadinessCard from "../components/NvidiaReadinessCard";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
 
-type DashboardPanelId = "backend" | "config" | "edmg" | "workflow";
+type DashboardPanelId = "backend" | "nvidia" | "config" | "edmg" | "workflow";
 
-export default function Dashboard({ backendUrl, config }: PageProps) {
+export default function Dashboard({ backendUrl, config, onNavigate }: PageProps) {
   const [health, setHealth] = useState<any>(null);
   const [edmg, setEdmg] = useState<any>(null);
+  const [nvidiaStatus, setNvidiaStatus] = useState<any>(null);
+  const [nvidiaDiagnostics, setNvidiaDiagnostics] = useState<any>(null);
+  const [nvidiaBusy, setNvidiaBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  async function refreshNvidiaDiagnostics(manual = false) {
+    if (manual) setNvidiaBusy(true);
+    try {
+      const [status, diagnostics] = await Promise.all([
+        apiGet("/v1/nvidia/status"),
+        apiGet("/v1/nvidia/diagnostics"),
+      ]);
+      setNvidiaStatus(status);
+      setNvidiaDiagnostics(diagnostics);
+    } catch {
+      setNvidiaStatus(null);
+      setNvidiaDiagnostics(null);
+    } finally {
+      if (manual) setNvidiaBusy(false);
+    }
+  }
 
   useEffect(() => {
     apiGet("/health").then(setHealth).catch((e) => setErr(String(e)));
     apiGet("/v1/edmg/status").then(setEdmg).catch(() => {});
+    refreshNvidiaDiagnostics();
   }, [backendUrl]);
 
   const panelDefinitions = useMemo(
@@ -22,6 +44,11 @@ export default function Dashboard({ backendUrl, config }: PageProps) {
         id: "backend" as const,
         label: "Backend",
         description: "Current backend endpoint and raw health payload.",
+      },
+      {
+        id: "nvidia" as const,
+        label: "NVIDIA",
+        description: "NVIDIA Omniverse/NIM readiness and next actions.",
       },
       {
         id: "config" as const,
@@ -70,6 +97,15 @@ export default function Dashboard({ backendUrl, config }: PageProps) {
         <hr />
         {health && <pre>{JSON.stringify(health, null, 2)}</pre>}
       </div>
+    ),
+    nvidia: (
+      <NvidiaReadinessCard
+        diagnostics={nvidiaDiagnostics}
+        status={nvidiaStatus}
+        busy={nvidiaBusy}
+        onRefresh={() => void refreshNvidiaDiagnostics(true)}
+        onOpenSettings={onNavigate ? () => onNavigate("settings") : undefined}
+      />
     ),
     config: (
       <div className="card">

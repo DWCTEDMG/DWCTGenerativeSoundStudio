@@ -16,6 +16,17 @@ def _configured(value: str) -> bool:
     return bool(str(value or "").strip())
 
 
+def _service(base_url_env: str, *, model_env: str = "") -> dict[str, Any]:
+    base_url = _env(base_url_env)
+    service: dict[str, Any] = {
+        "base_url": base_url,
+        "configured": _configured(base_url),
+    }
+    if model_env:
+        service["model"] = _env(model_env)
+    return service
+
+
 def nvidia_profile_status() -> dict[str, Any]:
     """Return NVIDIA service-profile configuration without exposing secrets."""
 
@@ -44,6 +55,10 @@ def nvidia_profile_status() -> dict[str, Any]:
                 "base_url": omniverse_url,
                 "configured": _configured(omniverse_url),
             },
+            "nemo": _service("EDMG_NVIDIA_NEMO_URL"),
+            "triton": _service("EDMG_NVIDIA_TRITON_URL", model_env="EDMG_NVIDIA_TRITON_MODEL"),
+            "audio2face": _service("EDMG_NVIDIA_AUDIO2FACE_URL"),
+            "ace": _service("EDMG_NVIDIA_ACE_URL"),
+            "cosmos": _service("EDMG_NVIDIA_COSMOS_URL", model_env="EDMG_NVIDIA_COSMOS_MODEL"),
         },
     }
-

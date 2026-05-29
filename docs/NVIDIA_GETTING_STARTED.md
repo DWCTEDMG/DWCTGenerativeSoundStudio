@@ -41,7 +41,8 @@ Important variables:
 EDMG_NVIDIA_MODE=1
 EDMG_NVIDIA_PROFILE=omniverse
 EDMG_AI_PROVIDER=openai_compat
-EDMG_AI_OPENAI_COMPAT_BASE_URL=http://host.docker.internal:8000/v1
+EDMG_NVIDIA_NIM_URL=http://host.docker.internal:8001
+EDMG_AI_OPENAI_COMPAT_BASE_URL=http://host.docker.internal:8001/v1
 EDMG_AI_OPENAI_COMPAT_MODEL=nvidia-nim-model
 NGC_API_KEY=
 EDMG_AI_OPENAI_COMPAT_API_KEY=
@@ -50,6 +51,21 @@ EDMG_AI_OPENAI_COMPAT_API_KEY=
 `NGC_API_KEY` is for NVIDIA/NGC image and gated asset access. The planner API key
 is separate and belongs in `EDMG_AI_OPENAI_COMPAT_API_KEY` only when the target
 endpoint requires bearer authentication.
+
+For local development, keep the EDMG backend on `127.0.0.1:8000` and map a local
+NIM container to host port `8001`. That keeps the app backend and the NIM
+OpenAI-compatible endpoint from fighting over the same port.
+
+Optional helpers:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/login_ngc.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/test_docker_gpu.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/start_nvidia_backend_local.ps1
+```
+
+The NGC login helper reads `NGC_API_KEY` from the shell or ignored `.env.local`
+file and never prints the key value.
 
 ## 4. Start the NVIDIA-aware stack
 
@@ -77,6 +93,13 @@ docker compose `
 The optional profile needs real official NVIDIA image names in `.env.local`.
 Placeholders are intentionally invalid so the repo does not pretend to know
 which gated image, model family, or license channel your account can use.
+You can narrow the stack with specific profiles such as `nim`, `riva`, `nemo`,
+`triton`, `audio2face`, `ace`, or `cosmos` once the image and model choices are
+known for your NGC account.
+
+The NeMo profile is different from NIM: it is a framework/workspace container
+for training, customization, and batch jobs. It does not replace the
+OpenAI-compatible NIM endpoint used by the Studio planner.
 
 ## 5. Confirm the app sees the profile
 
@@ -84,6 +107,7 @@ From the backend:
 
 ```powershell
 curl http://127.0.0.1:8000/v1/nvidia/status
+curl http://127.0.0.1:8000/v1/nvidia/diagnostics
 curl http://127.0.0.1:8000/v1/config
 ```
 
@@ -92,7 +116,11 @@ From the desktop app:
 - Setup page: active AI path includes NVIDIA enabled/disabled when profile data
   is available.
 - Settings page: Live AI / NVIDIA Status shows NGC, NIM, Riva, and Omniverse
-  configuration state without printing key values.
+  configuration state plus host GPU, Docker NVIDIA runtime, and NIM endpoint
+  reachability without printing key values.
+- Dashboard and Setup page: NVIDIA Runtime Readiness shows a single ready,
+  partial, blocked, or disabled state plus the next actions needed for the
+  official local stack.
 
 ## 6. Validate the starter USD project
 

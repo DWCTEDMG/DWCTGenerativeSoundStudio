@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from edmg_studio_backend import app as backend_app
+from edmg_studio_backend.services import nvidia_diagnostics as diagnostics_module
 from edmg_studio_backend.services.nvidia_profile import nvidia_profile_status
 from edmg_studio_backend.services.nvidia_scene_plan import scene_plan_usda_text
 
@@ -15,6 +16,8 @@ def test_nvidia_profile_status_masks_ngc_key(monkeypatch):
     monkeypatch.setenv("EDMG_NVIDIA_NIM_URL", "http://nim.local:8000")
     monkeypatch.setenv("EDMG_AI_OPENAI_COMPAT_MODEL", "nvidia/model")
     monkeypatch.setenv("EDMG_RIVA_URL", "http://riva.local:50051")
+    monkeypatch.setenv("EDMG_NVIDIA_TRITON_URL", "http://triton.local:8000")
+    monkeypatch.setenv("EDMG_NVIDIA_TRITON_MODEL", "edmg_plan_ensemble")
 
     status = nvidia_profile_status()
 
@@ -23,6 +26,8 @@ def test_nvidia_profile_status_masks_ngc_key(monkeypatch):
     assert status["credentials"]["ngc_api_key_configured"] is True
     assert status["services"]["nim"]["base_url"] == "http://nim.local:8000"
     assert status["services"]["nim"]["model"] == "nvidia/model"
+    assert status["services"]["triton"]["configured"] is True
+    assert status["services"]["triton"]["model"] == "edmg_plan_ensemble"
     assert "secret-ngc-token" not in repr(status)
 
 
@@ -52,6 +57,71 @@ def test_nvidia_status_route_does_not_return_secret(monkeypatch):
     assert payload["nvidia"]["enabled"] is True
     assert payload["nvidia"]["credentials"]["ngc_api_key_configured"] is True
     assert "route-secret-token" not in repr(payload)
+
+
+def test_nvidia_diagnostics_route_masks_secret_and_reports_reachability(monkeypatch):
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "1")
+    monkeypatch.setenv("NGC_API_KEY", "diag-secret-token")
+    monkeypatch.setenv("EDMG_NVIDIA_NIM_URL", "http://nim.local:8000")
+    monkeypatch.setenv("EDMG_AI_OPENAI_COMPAT_MODEL", "nvidia/model")
+
+    def fake_gpu_status():
+        return {"available": True, "ok": True, "gpus": [{"name": "Test RTX"}], "error": ""}
+
+    def fake_docker_status():
+        return {"available": True, "ok": True, "version": "Docker test", "nvidia_runtime": True, "error": ""}
+
+    def fake_http_probe(url: str, **_kwargs):
+        return {"configured": True, "reachable": True, "status_code": 200, "models_url_seen": url}
+
+    monkeypatch.setattr(diagnostics_module, "_gpu_status", fake_gpu_status)
+    monkeypatch.setattr(diagnostics_module, "_docker_status", fake_docker_status)
+    monkeypatch.setattr(diagnostics_module, "_http_probe", fake_http_probe)
+
+    assert any(getattr(route, "path", None) == "/v1/nvidia/diagnostics" for route in backend_app.app.routes)
+    payload = backend_app.nvidia_diagnostics_route()
+
+    assert payload["ok"] is True
+    assert payload["nvidia"]["host"]["gpu"]["gpus"][0]["name"] == "Test RTX"
+    assert payload["nvidia"]["host"]["docker"]["nvidia_runtime"] is True
+    assert payload["nvidia"]["services"]["nim"]["probe"]["reachable"] is True
+    assert payload["nvidia"]["services"]["nim"]["probe"]["models_url_seen"] == "http://nim.local:8000/v1/models"
+    assert payload["nvidia"]["readiness"]["level"] == "ready"
+    assert payload["nvidia"]["readiness"]["planner_ready"] is True
+    assert payload["nvidia"]["readiness"]["official_local_ready"] is True
+    assert "diag-secret-token" not in repr(payload)
+
+
+def test_nvidia_diagnostics_readiness_flags_placeholder_nim(monkeypatch):
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "1")
+    monkeypatch.delenv("NGC_API_KEY", raising=False)
+    monkeypatch.setenv("EDMG_NVIDIA_NIM_URL", "https://your-nim-endpoint/v1")
+    monkeypatch.setenv("EDMG_AI_OPENAI_COMPAT_MODEL", "your-nim-model")
+
+    monkeypatch.setattr(
+        diagnostics_module,
+        "_gpu_status",
+        lambda: {"available": True, "ok": True, "gpus": [{"name": "Test RTX"}], "error": ""},
+    )
+    monkeypatch.setattr(
+        diagnostics_module,
+        "_docker_status",
+        lambda: {"available": True, "ok": True, "version": "Docker test", "nvidia_runtime": False, "error": ""},
+    )
+    monkeypatch.setattr(
+        diagnostics_module,
+        "_http_probe",
+        lambda *_args, **_kwargs: {"configured": True, "reachable": False, "error": "placeholder"},
+    )
+
+    readiness = diagnostics_module.nvidia_diagnostics()["readiness"]
+
+    assert readiness["level"] == "blocked"
+    assert readiness["planner_ready"] is False
+    assert readiness["official_local_ready"] is False
+    failed_ids = {action["id"] for action in readiness["next_actions"]}
+    assert "nim_endpoint_configured" in failed_ids
+    assert "docker_nvidia_runtime" in failed_ids
 
 
 def test_config_includes_nvidia_profile_without_secret(monkeypatch):
