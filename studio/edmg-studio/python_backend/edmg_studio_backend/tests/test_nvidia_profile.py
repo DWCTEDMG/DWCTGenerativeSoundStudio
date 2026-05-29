@@ -203,6 +203,65 @@ def test_nvidia_usd_scene_plan_route_rejects_overlaps():
     assert "overlaps the previous scene" in repr(exc_info.value.detail)
 
 
+def test_nvidia_generate_scene_plan_route_calls_planner_and_returns_usda(monkeypatch):
+    monkeypatch.setenv("EDMG_NVIDIA_MODE", "1")
+    monkeypatch.setenv("NGC_API_KEY", "planner-secret-token")
+
+    class FakeAi:
+        def plan(self, payload):
+            assert payload["title"] == "Generated Stage"
+            assert payload["duration_s"] == 24
+            return {
+                "provider": "openai_compat",
+                "model": "nvidia/test-nim",
+                "variants": [
+                    {
+                        "name": "RTX Pass",
+                        "mood": "high contrast",
+                        "color_palette": ["cyan", "black"],
+                        "scenes": [
+                            {
+                                "start_s": 0,
+                                "end_s": 12,
+                                "prompt": "wide neon opening",
+                                "camera": "push in",
+                                "motion": "beat pulse",
+                            },
+                            {
+                                "start_s": 12,
+                                "end_s": 24,
+                                "prompt": "drop section",
+                                "camera": "orbit",
+                                "motion": "strobe hits",
+                            },
+                        ],
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(backend_app, "ai", FakeAi())
+
+    payload = backend_app.nvidia_generate_scene_plan(
+        {
+            "project_id": "generated-stage",
+            "title": "Generated Stage",
+            "duration_s": 24,
+            "bpm": 140,
+            "style_prefs": "RTX stage",
+            "max_scenes": 2,
+        }
+    )
+
+    assert payload["ok"] is True
+    assert payload["planner"]["provider"] == "openai_compat"
+    assert payload["planner"]["model"] == "nvidia/test-nim"
+    assert payload["scene_plan"]["project_id"] == "generated-stage"
+    assert payload["scene_plan"]["provider"] == "nvidia-profile:openai_compat:nvidia/test-nim"
+    assert payload["usd_metadata"]["edmg:sceneCount"] == 2
+    assert 'def Xform "scene_1"' in payload["usd_stage"]["text"]
+    assert "planner-secret-token" not in repr(payload)
+
+
 def test_scene_plan_usda_text_escapes_strings_and_sanitizes_prim_names():
     payload = {
         "project_id": "quoted-project",

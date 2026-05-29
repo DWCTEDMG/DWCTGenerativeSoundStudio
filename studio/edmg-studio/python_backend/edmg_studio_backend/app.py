@@ -94,6 +94,7 @@ from .services.nvidia_profile import nvidia_profile_status
 from .services.nvidia_diagnostics import nvidia_diagnostics
 from .services.nvidia_scene_plan import (
     normalize_scene_plan,
+    plan_response_to_scene_plan,
     scene_plan_usd_metadata,
     scene_plan_usda_text,
     validate_scene_plan,
@@ -2332,6 +2333,84 @@ def nvidia_status():
 @app.get("/v1/nvidia/diagnostics")
 def nvidia_diagnostics_route():
     return {"ok": True, "nvidia": nvidia_diagnostics()}
+
+@app.post("/v1/nvidia/scene-plan")
+def nvidia_generate_scene_plan(payload: dict[str, Any]):
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "NVIDIA scene-plan request root must be an object")
+
+    try:
+        variant_index = int(payload.get("variant_index") or 0)
+        num_variants = max(1, min(10, int(payload.get("num_variants") or 1)))
+        max_scenes = max(1, min(64, int(payload.get("max_scenes") or 6)))
+    except Exception as exc:
+        raise HTTPException(400, "variant_index, num_variants, and max_scenes must be integers") from exc
+
+    planner_payload = {
+        "title": payload.get("title") or "EDMG NVIDIA Scene Plan",
+        "user_notes": payload.get("user_notes") or payload.get("notes") or "",
+        "duration_s": payload.get("duration_s") or 60,
+        "bpm": payload.get("bpm"),
+        "lyrics": payload.get("lyrics") or "",
+        "tags": payload.get("tags") if isinstance(payload.get("tags"), list) else [],
+        "style_prefs": payload.get("style_prefs") or "",
+        "num_variants": num_variants,
+        "max_scenes": max_scenes,
+    }
+
+    try:
+        planner_response = ai.plan(planner_payload)
+    except Exception as exc:
+        raise HTTPException(
+            502,
+            {
+                "message": "The configured NVIDIA/NIM-compatible planner is not available.",
+                "error": str(exc),
+                "nvidia": nvidia_profile_status(),
+            },
+        ) from exc
+
+    if not isinstance(planner_response, dict):
+        raise HTTPException(502, "NVIDIA planner returned a non-object response")
+
+    try:
+        scene_plan = plan_response_to_scene_plan(
+            planner_response,
+            payload,
+            variant_index=variant_index,
+            project_id=str(payload.get("project_id") or "").strip() or None,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            502,
+            {
+                "message": "The NVIDIA planner response could not be converted into a USD scene plan.",
+                "error": str(exc),
+                "planner": {
+                    "provider": planner_response.get("provider"),
+                    "model": planner_response.get("model"),
+                    "variant_index": variant_index,
+                },
+            },
+        ) from exc
+
+    return {
+        "ok": True,
+        "request": planner_payload,
+        "planner": {
+            "provider": planner_response.get("provider"),
+            "model": planner_response.get("model"),
+            "variant_index": variant_index,
+            "variant_count": len(planner_response.get("variants") or []),
+        },
+        "scene_plan": normalize_scene_plan(scene_plan),
+        "usd_metadata": scene_plan_usd_metadata(scene_plan),
+        "usd_stage": {
+            "format": "usda",
+            "text": scene_plan_usda_text(scene_plan),
+        },
+        "nvidia": nvidia_profile_status(),
+    }
 
 @app.post("/v1/usd/scene-plan")
 def nvidia_usd_scene_plan(payload: dict[str, Any]):

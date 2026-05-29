@@ -22,6 +22,13 @@ def main() -> int:
         default=KIT_ROOT / "sample_projects" / "audio_reactive_stage" / "scene_plan.json",
     )
     parser.add_argument("--output-usda", type=Path)
+    parser.add_argument("--generate", action="store_true", help="Call /v1/nvidia/scene-plan before exporting USDA.")
+    parser.add_argument("--title", default="EDMG NVIDIA Kit Smoke")
+    parser.add_argument("--duration-s", type=float, default=60.0)
+    parser.add_argument("--bpm", type=float, default=128.0)
+    parser.add_argument("--style-prefs", default="RTX stage lighting, OpenUSD-ready camera moves, audio-reactive motion")
+    parser.add_argument("--user-notes", default="Build a short NVIDIA Studio scene plan that can be previewed in Kit.")
+    parser.add_argument("--max-scenes", type=int, default=4)
     args = parser.parse_args()
 
     client = EdmgBackendClient(base_url=args.backend_url)
@@ -31,8 +38,29 @@ def main() -> int:
     print(f"[kit-ai-director] NVIDIA mode: {nvidia.get('enabled')}")
     print(f"[kit-ai-director] NVIDIA profile: {nvidia.get('profile')}")
 
-    scene_plan = load_scene_plan(args.scene_plan)
-    usda_text = client.scene_plan_usda(scene_plan)
+    if args.generate:
+        request_payload = {
+            "project_id": "kit-smoke-generated",
+            "title": args.title,
+            "duration_s": args.duration_s,
+            "bpm": args.bpm,
+            "style_prefs": args.style_prefs,
+            "user_notes": args.user_notes,
+            "num_variants": 1,
+            "max_scenes": args.max_scenes,
+        }
+        response = client.generate_scene_plan(request_payload)
+        planner = response.get("planner") if isinstance(response.get("planner"), dict) else {}
+        print(f"[kit-ai-director] Planner: {planner.get('provider')} {planner.get('model') or ''}".rstrip())
+        stage = response.get("usd_stage") if isinstance(response.get("usd_stage"), dict) else {}
+        usda_text = str(stage.get("text") or "")
+    else:
+        scene_plan = load_scene_plan(args.scene_plan)
+        usda_text = client.scene_plan_usda(scene_plan)
+
+    if not usda_text.strip():
+        raise RuntimeError("backend returned an empty USDA preview")
+
     print(f"[kit-ai-director] USDA preview bytes: {len(usda_text.encode('utf-8'))}")
 
     if args.output_usda:

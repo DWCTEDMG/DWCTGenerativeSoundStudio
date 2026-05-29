@@ -56,7 +56,8 @@ class OpenAICompatPlanner(PlanProvider):
         system = (
             "You are EDMG Director. Return STRICT JSON only. "
             "Schema: {variants: [{name, logline, mood, visual_motifs:[...], color_palette:[...], "
-            "scenes:[{start_s,end_s,prompt,negative_prompt,camera,motion,notes}]}]}"
+            "scenes:[{start_s,end_s,prompt,negative_prompt,camera,motion,notes}]}]}. "
+            "color_palette must be an array of plain strings, never objects."
         )
 
         ctx = {

@@ -15,6 +15,8 @@ services:
       EDMG_AI_PROVIDER: ${EDMG_AI_PROVIDER:-openai_compat}
       EDMG_AI_OPENAI_COMPAT_BASE_URL: ${EDMG_AI_OPENAI_COMPAT_BASE_URL:-http://host.docker.internal:8001/v1}
       EDMG_AI_OPENAI_COMPAT_MODEL: ${EDMG_AI_OPENAI_COMPAT_MODEL:-nvidia-nim-model}
+      EDMG_AI_OPENAI_COMPAT_API_KEY: ${EDMG_AI_OPENAI_COMPAT_API_KEY:-}
+      NGC_API_KEY: ${NGC_API_KEY:-}
       EDMG_RIVA_URL: ${EDMG_RIVA_URL:-http://host.docker.internal:50051}
       EDMG_NVIDIA_NIM_URL: ${EDMG_NVIDIA_NIM_URL:-http://host.docker.internal:8001}
       EDMG_NVIDIA_OMNIVERSE_URL: ${EDMG_NVIDIA_OMNIVERSE_URL:-http://host.docker.internal:8011}

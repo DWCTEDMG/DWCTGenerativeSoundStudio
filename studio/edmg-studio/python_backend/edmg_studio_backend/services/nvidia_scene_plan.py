@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
 REQUIRED_SCENE_FIELDS = ("id", "start_s", "end_s", "prompt")
+_SLUG_RE = re.compile(r"[^a-zA-Z0-9]+")
 
 
 def _as_number(value: Any, field: str) -> float:
@@ -43,6 +45,117 @@ def _usd_number(value: float | int | None) -> str:
     if number.is_integer():
         return str(int(number))
     return f"{number:.6f}".rstrip("0").rstrip(".")
+
+
+def _slug(value: Any, fallback: str) -> str:
+    raw = str(value or "").strip().lower()
+    slug = _SLUG_RE.sub("-", raw).strip("-")
+    return slug or fallback
+
+
+def _as_optional_number(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    return _as_number(value, "value")
+
+
+def _variant_at(plan: dict[str, Any], variant_index: int) -> dict[str, Any]:
+    variants = plan.get("variants")
+    if not isinstance(variants, list) or not variants:
+        return {}
+    index = max(0, min(int(variant_index or 0), len(variants) - 1))
+    variant = variants[index]
+    return variant if isinstance(variant, dict) else {}
+
+
+def _scene_window(raw_scene: dict[str, Any], index: int, total: int, duration_s: float) -> tuple[float, float]:
+    start = _as_optional_number(raw_scene.get("start_s"))
+    end = _as_optional_number(raw_scene.get("end_s"))
+    if start is not None and end is not None and end > start:
+        return start, end
+
+    total = max(1, total)
+    scene_len = duration_s / float(total)
+    return round(index * scene_len, 3), round(duration_s if index == total - 1 else (index + 1) * scene_len, 3)
+
+
+def plan_response_to_scene_plan(
+    plan: dict[str, Any],
+    request_payload: dict[str, Any],
+    *,
+    variant_index: int = 0,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Convert the Studio/AI planner response into the NVIDIA USD scene-plan contract."""
+
+    if not isinstance(plan, dict):
+        plan = {}
+    if not isinstance(request_payload, dict):
+        request_payload = {}
+
+    variant = _variant_at(plan, variant_index)
+    title = str(request_payload.get("title") or plan.get("title") or variant.get("name") or "EDMG NVIDIA Scene Plan").strip()
+    duration_s = (
+        _as_optional_number(request_payload.get("duration_s"))
+        or _as_optional_number(plan.get("duration_s"))
+        or _as_optional_number(variant.get("duration_s"))
+        or 60.0
+    )
+    bpm = _as_optional_number(request_payload.get("bpm"))
+    provider = str(plan.get("provider") or "configured-ai").strip()
+    model = str(plan.get("model") or "").strip()
+    plan_provider = f"{provider}:{model}" if model else provider
+
+    raw_scenes = variant.get("scenes")
+    if not isinstance(raw_scenes, list) or not raw_scenes:
+        raw_scenes = [
+            {
+                "start_s": 0,
+                "end_s": duration_s,
+                "prompt": str(request_payload.get("user_notes") or request_payload.get("style_prefs") or title).strip(),
+                "camera": "wide establishing move",
+                "motion": "audio-reactive light pulse",
+            }
+        ]
+
+    palette = variant.get("color_palette") if isinstance(variant.get("color_palette"), list) else []
+    mood = str(variant.get("mood") or "").strip()
+    variant_slug = _slug(variant.get("name") or f"variant-{variant_index + 1}", f"variant-{variant_index + 1}")
+
+    scenes: list[dict[str, Any]] = []
+    for index, raw_scene in enumerate(raw_scenes):
+        if not isinstance(raw_scene, dict):
+            continue
+        start_s, end_s = _scene_window(raw_scene, index, len(raw_scenes), duration_s)
+        prompt = str(raw_scene.get("prompt") or raw_scene.get("notes") or title).strip()
+        scene_slug = _slug(raw_scene.get("id") or raw_scene.get("name") or f"scene-{index + 1}", f"scene-{index + 1}")
+        look_parts = [mood, ", ".join(str(item) for item in palette[:4] if str(item).strip())]
+        scenes.append(
+            {
+                "id": scene_slug,
+                "start_s": start_s,
+                "end_s": end_s,
+                "prompt": prompt,
+                "camera": str(raw_scene.get("camera") or "").strip(),
+                "look": " | ".join(part for part in look_parts if part),
+                "motion": str(raw_scene.get("motion") or raw_scene.get("notes") or "").strip(),
+                "usd_variant": _slug(raw_scene.get("usd_variant") or f"{variant_slug}-{scene_slug}", f"{variant_slug}-{index + 1}"),
+            }
+        )
+
+    scene_plan = {
+        "project_id": project_id or _slug(request_payload.get("project_id") or title, "nvidia-scene-plan"),
+        "title": title,
+        "duration_s": duration_s,
+        "bpm": bpm,
+        "provider": f"nvidia-profile:{plan_provider}",
+        "scenes": scenes,
+    }
+
+    errors = validate_scene_plan(scene_plan)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return scene_plan
 
 
 def validate_scene_plan(payload: dict[str, Any]) -> list[str]:

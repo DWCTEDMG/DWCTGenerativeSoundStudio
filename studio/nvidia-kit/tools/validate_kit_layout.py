@@ -22,7 +22,7 @@ def _load_toml(path: Path) -> dict[str, Any]:
 
 def validate_kit_layout(root: Path) -> list[str]:
     errors: list[str] = []
-    app_path = root / "apps" / "edmg-nvidia-studio.kit"
+    app_path = root / "apps" / "edmg.nvidia.studio.kit"
     if not app_path.exists():
         errors.append(f"missing {app_path.relative_to(root)}")
         return errors

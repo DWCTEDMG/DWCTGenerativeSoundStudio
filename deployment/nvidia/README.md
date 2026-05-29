@@ -88,6 +88,18 @@ scene-plan-to-USDA contract:
 powershell -NoProfile -ExecutionPolicy Bypass -File deployment/nvidia/smoke_nvidia_backend.ps1
 ```
 
+To prove the Kit-facing generated-planner path, run the AI Director smoke with
+`--generate`. With a reachable NIM-compatible endpoint it uses that provider;
+otherwise the backend reports or falls back according to the configured AI
+provider:
+
+```powershell
+python studio/nvidia-kit/tools/smoke_ai_director_backend.py `
+  --backend-url http://127.0.0.1:8000 `
+  --generate `
+  --output-usda studio/nvidia-kit/sample_projects/audio_reactive_stage/generated_from_nim.usda
+```
+
 ## Environment knobs
 
 ```powershell

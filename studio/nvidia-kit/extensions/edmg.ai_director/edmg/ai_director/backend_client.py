@@ -52,8 +52,24 @@ class EdmgBackendClient:
     def nvidia_status(self) -> dict[str, Any]:
         return self._json_request("GET", "/v1/nvidia/status")
 
+    def nvidia_diagnostics(self) -> dict[str, Any]:
+        return self._json_request("GET", "/v1/nvidia/diagnostics")
+
+    def generate_scene_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._json_request("POST", "/v1/nvidia/scene-plan", payload)
+
     def scene_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._json_request("POST", "/v1/usd/scene-plan", payload)
+
+    def generated_scene_plan_usda(self, payload: dict[str, Any]) -> str:
+        response = self.generate_scene_plan(payload)
+        stage = response.get("usd_stage")
+        if not isinstance(stage, dict) or stage.get("format") != "usda":
+            raise BackendClientError("generated scene-plan response did not include a USDA stage")
+        text = stage.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise BackendClientError("generated scene-plan response included an empty USDA stage")
+        return text
 
     def scene_plan_usda(self, payload: dict[str, Any]) -> str:
         response = self.scene_plan(payload)
@@ -71,4 +87,3 @@ def load_scene_plan(path: str | Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise BackendClientError("scene plan root must be an object")
     return payload
-

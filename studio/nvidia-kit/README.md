@@ -16,7 +16,7 @@ Current starter layout:
 
 ```text
 studio/nvidia-kit/
-|- apps/edmg-nvidia-studio.kit
+|- apps/edmg.nvidia.studio.kit
 |- extensions/
 |  |- edmg.timeline/
 |  |- edmg.ai_director/
@@ -53,6 +53,23 @@ Validate the Kit app/extension skeleton with:
 python studio/nvidia-kit/tools/validate_kit_layout.py
 ```
 
+Launch against a local Kit SDK by passing the SDK root that contains `kit.exe`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File studio/nvidia-kit/tools/launch_edmg_kit.ps1 `
+  -KitSdkRoot "C:\path\to\kit-sdk-public"
+```
+
+To check extension resolution without opening the UI:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File studio/nvidia-kit/tools/launch_edmg_kit.ps1 `
+  -KitSdkRoot "C:\path\to\kit-sdk-public" `
+  -ListExtensions
+```
+
 Export the starter scene plan into a generated USDA file with:
 
 ```powershell
@@ -73,4 +90,17 @@ Smoke those contracts from the Kit workspace with:
 python studio/nvidia-kit/tools/smoke_ai_director_backend.py `
   --backend-url http://127.0.0.1:8000 `
   --output-usda studio/nvidia-kit/sample_projects/audio_reactive_stage/generated_from_backend.usda
+```
+
+To exercise the generated NVIDIA planner path instead of a static
+`scene_plan.json`, add `--generate`:
+
+```powershell
+python studio/nvidia-kit/tools/smoke_ai_director_backend.py `
+  --backend-url http://127.0.0.1:8000 `
+  --generate `
+  --title "EDMG NVIDIA Kit Smoke" `
+  --duration-s 60 `
+  --bpm 128 `
+  --output-usda studio/nvidia-kit/sample_projects/audio_reactive_stage/generated_from_nim.usda
 ```

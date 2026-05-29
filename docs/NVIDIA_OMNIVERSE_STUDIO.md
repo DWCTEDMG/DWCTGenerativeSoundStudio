@@ -129,9 +129,12 @@ Starter branch status:
   endpoint reachability without exposing credentials. It also returns a
   normalized readiness block with required checks and next actions for the
   official local NVIDIA service stack.
+- `/v1/nvidia/scene-plan` asks the configured NVIDIA/NIM-compatible planner for
+  a plan, converts the selected variant into the normalized NVIDIA scene-plan
+  contract, and returns a generated USDA preview.
 - `/v1/usd/scene-plan` validates a scene plan and returns normalized USD-style
   metadata keys plus a generated USDA text preview.
-- `studio/nvidia-kit/apps/edmg-nvidia-studio.kit` declares the first Kit app
+- `studio/nvidia-kit/apps/edmg.nvidia.studio.kit` declares the first Kit app
   shell and four EDMG extension skeletons.
 - `edmg.ai_director.backend_client` can call the NVIDIA status and USD scene
   plan contracts from a Kit extension without third-party Python packages.
@@ -161,7 +164,7 @@ deployment/nvidia/
 
 studio/nvidia-kit/
 |- README.md
-|- apps/edmg-nvidia-studio.kit
+|- apps/edmg.nvidia.studio.kit
 |- extensions/
 |  |- edmg.timeline/
 |  |- edmg.ai_director/

@@ -53,15 +53,32 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:
-        if self.path != "/v1/usd/scene-plan":
+        if self.path not in {"/v1/usd/scene-plan", "/v1/nvidia/scene-plan"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length") or "0")
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        if self.path == "/v1/nvidia/scene-plan":
+            payload = {
+                "project_id": payload.get("project_id") or "generated",
+                "title": payload.get("title") or "Generated",
+                "duration_s": payload.get("duration_s") or 30,
+                "bpm": payload.get("bpm"),
+                "provider": "nvidia-profile:openai_compat:test-model",
+                "scenes": [
+                    {
+                        "id": "generated",
+                        "start_s": 0,
+                        "end_s": payload.get("duration_s") or 30,
+                        "prompt": "generated NVIDIA scene",
+                    }
+                ],
+            }
         self._send_json(
             {
                 "ok": True,
                 "scene_plan": payload,
+                "planner": {"provider": "openai_compat", "model": "test-model", "variant_index": 0},
                 "usd_stage": {
                     "format": "usda",
                     "text": '#usda 1.0\ncustom string edmg:projectId = "sample"\n',
@@ -83,6 +100,26 @@ def test_kit_backend_client_reads_status_and_scene_plan():
         usda = client.scene_plan_usda({"project_id": "sample", "scenes": []})
 
         assert status["nvidia"]["enabled"] is True
+        assert usda.startswith("#usda 1.0")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_kit_backend_client_generates_scene_plan_usda():
+    module = _load_client_module()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        client = module.EdmgBackendClient(base_url=base_url)
+
+        response = client.generate_scene_plan({"title": "Generated", "duration_s": 12})
+        usda = client.generated_scene_plan_usda({"title": "Generated", "duration_s": 12})
+
+        assert response["planner"]["provider"] == "openai_compat"
+        assert response["scene_plan"]["provider"] == "nvidia-profile:openai_compat:test-model"
         assert usda.startswith("#usda 1.0")
     finally:
         server.shutdown()
@@ -113,6 +150,41 @@ def test_kit_backend_smoke_script_writes_optional_usda(tmp_path):
         )
 
         assert result.returncode == 0, result.stderr + result.stdout
+        assert "Smoke complete" in result.stdout
+        assert out_path.read_text(encoding="utf-8").startswith("#usda 1.0")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_kit_backend_smoke_script_can_generate_usda(tmp_path):
+    out_path = tmp_path / "generated_from_backend.usda"
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SMOKE_SCRIPT),
+                "--backend-url",
+                f"http://127.0.0.1:{server.server_port}",
+                "--generate",
+                "--title",
+                "Generated Smoke",
+                "--duration-s",
+                "12",
+                "--output-usda",
+                str(out_path),
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert "Planner: openai_compat test-model" in result.stdout
         assert "Smoke complete" in result.stdout
         assert out_path.read_text(encoding="utf-8").startswith("#usda 1.0")
     finally:
