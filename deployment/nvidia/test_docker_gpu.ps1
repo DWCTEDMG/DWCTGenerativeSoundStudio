@@ -1,5 +1,6 @@
 param(
-  [string]$Image = "nvidia/cuda:12.4.1-base-ubuntu22.04"
+  [string]$Image = "nvcr.io/nvidia/k8s/cuda-sample:nbody",
+  [string[]]$Command = @("nbody", "-gpu", "-benchmark")
 )
 
 Set-StrictMode -Version Latest
@@ -17,5 +18,5 @@ Write-Host "[nvidia-docker] Runtime map:"
 docker info --format "{{json .Runtimes}}"
 
 Write-Host "[nvidia-docker] Running GPU container probe with $Image"
-docker run --rm --gpus all $Image nvidia-smi
+docker run --rm --gpus all $Image @Command
 Write-Host "[nvidia-docker] GPU container probe complete"

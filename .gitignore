@@ -45,6 +45,7 @@ venv/
 .venv/
 **/venv/
 **/.venv/
+**/venv.broken-*/
 
 # ----------------------------
 # EDMG generated / runtime artifacts
@@ -52,6 +53,7 @@ venv/
 support_bundles/
 install_profiles/
 models_store/
+starlift-data/
 /models/
 outputs/
 cache/

@@ -43,7 +43,8 @@ EDMG_NVIDIA_PROFILE=omniverse
 EDMG_AI_PROVIDER=openai_compat
 EDMG_NVIDIA_NIM_URL=http://host.docker.internal:8001
 EDMG_AI_OPENAI_COMPAT_BASE_URL=http://host.docker.internal:8001/v1
-EDMG_AI_OPENAI_COMPAT_MODEL=nvidia-nim-model
+EDMG_AI_OPENAI_COMPAT_MODEL=meta/llama-3.2-1b-instruct
+EDMG_NVIDIA_OMNIVERSE_URL=
 NGC_API_KEY=
 EDMG_AI_OPENAI_COMPAT_API_KEY=
 ```
@@ -90,9 +91,19 @@ docker compose `
   up
 ```
 
-The optional profile needs real official NVIDIA image names in `.env.local`.
-Placeholders are intentionally invalid so the repo does not pretend to know
-which gated image, model family, or license channel your account can use.
+The example profile uses explicit NGC image tags for a first local workstation
+pass:
+
+```dotenv
+EDMG_NIM_LLM_IMAGE=nvcr.io/nim/meta/llama-3.2-1b-instruct:latest
+EDMG_NIM_MAX_MODEL_LEN=8192
+EDMG_RIVA_IMAGE=nvcr.io/nvidia/riva/riva-speech:2.19.0
+EDMG_NEMO_IMAGE=nvcr.io/nvidia/nemo:26.04.01
+EDMG_TRITON_IMAGE=nvcr.io/nvidia/tritonserver:26.04-py3-min
+EDMG_AUDIO2FACE_IMAGE=nvcr.io/nim/nvidia/audio2face-3d:2.0
+EDMG_COSMOS_IMAGE=nvcr.io/nim/nvidia/cosmos-reason2-2b:latest
+```
+
 You can narrow the stack with specific profiles such as `nim`, `riva`, `nemo`,
 `triton`, `audio2face`, `ace`, or `cosmos` once the image and model choices are
 known for your NGC account.
@@ -160,6 +171,22 @@ The Kit workspace has an equivalent AI Director smoke:
 ```powershell
 python studio/nvidia-kit/tools/smoke_ai_director_backend.py --backend-url http://127.0.0.1:8000
 ```
+
+## 7. Launch the Kit app against a local Kit SDK
+
+Download the Windows Kit SDK resource from NGC, extract the zip, and point the
+launcher at the extracted folder containing `kit.exe`:
+
+```powershell
+$env:OMNI_KIT_SDK_ROOT="D:\NVIDIA\Omniverse\kit-sdk-110.1.1"
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File studio/nvidia-kit/tools/launch_edmg_kit.ps1 `
+  -KitSdkRoot $env:OMNI_KIT_SDK_ROOT `
+  -ListExtensions
+```
+
+`-ListExtensions` is the fast non-UI smoke test. Remove it to open the Kit UI
+and the starter stage.
 
 ## Next implementation target
 

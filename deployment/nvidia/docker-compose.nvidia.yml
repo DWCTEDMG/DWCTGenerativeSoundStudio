@@ -38,6 +38,7 @@ services:
       - "${EDMG_NIM_LLM_PORT:-8001}:8000"
     environment:
       NGC_API_KEY: ${NGC_API_KEY:-}
+      NIM_MAX_MODEL_LEN: ${EDMG_NIM_MAX_MODEL_LEN:-8192}
     volumes:
       - ./starlift-data/nvidia/nim-cache:/opt/nim/.cache
     deploy:

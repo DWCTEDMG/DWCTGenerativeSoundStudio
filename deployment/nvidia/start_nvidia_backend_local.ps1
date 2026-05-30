@@ -33,6 +33,29 @@ function Import-EnvFile {
   }
 }
 
+function Use-HostLoopbackForLocalBackend {
+  $names = @(
+    "EDMG_AI_OPENAI_COMPAT_BASE_URL",
+    "EDMG_NVIDIA_NIM_URL",
+    "EDMG_RIVA_URL",
+    "EDMG_NVIDIA_OMNIVERSE_URL",
+    "EDMG_NVIDIA_TRITON_URL",
+    "EDMG_NVIDIA_AUDIO2FACE_URL",
+    "EDMG_NVIDIA_ACE_URL",
+    "EDMG_NVIDIA_COSMOS_URL"
+  )
+  foreach ($name in $names) {
+    $value = [Environment]::GetEnvironmentVariable($name, "Process")
+    if ([string]::IsNullOrWhiteSpace($value)) {
+      continue
+    }
+    $normalized = $value.Replace("host.docker.internal", "127.0.0.1")
+    if ($normalized -ne $value) {
+      [Environment]::SetEnvironmentVariable($name, $normalized, "Process")
+    }
+  }
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $repoRoot
 
@@ -58,6 +81,7 @@ if ($null -ne $existing) {
 }
 
 Import-EnvFile -Path $EnvFile
+Use-HostLoopbackForLocalBackend
 $mode = if ([string]::IsNullOrWhiteSpace($env:EDMG_NVIDIA_MODE)) { "1" } else { $env:EDMG_NVIDIA_MODE }
 $profile = if ([string]::IsNullOrWhiteSpace($env:EDMG_NVIDIA_PROFILE)) { "omniverse" } else { $env:EDMG_NVIDIA_PROFILE }
 [Environment]::SetEnvironmentVariable("EDMG_NVIDIA_MODE", $mode, "Process")
