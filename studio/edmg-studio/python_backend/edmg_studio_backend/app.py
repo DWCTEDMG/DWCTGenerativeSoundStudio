@@ -369,6 +369,23 @@ def _resolve_comfy_checkpoint_name(
     return requested, None
 
 
+def _catalog_comfy_asset_filename(
+    entry: dict[str, Any] | None,
+    *,
+    folder: str,
+    allowed_kinds: set[str] | None = None,
+) -> str:
+    if not isinstance(entry, dict) or not entry.get("id"):
+        return ""
+    target = entry.get("target") if isinstance(entry.get("target"), dict) else {}
+    engine = str(target.get("engine") or entry.get("engine") or "comfyui").strip().lower()
+    target_folder = str(target.get("folder") or "checkpoints").strip().lower()
+    if engine != "comfyui" or target_folder != str(folder or "").strip().lower():
+        return ""
+    asset = models.resolve_comfy_asset(str(entry.get("id") or ""), folder=folder, allowed_kinds=allowed_kinds)
+    return str(asset.get("filename") or entry.get("filename") or "").strip()
+
+
 def _resolve_comfy_still_selection(
     *,
     model_id: str | None,
@@ -385,6 +402,14 @@ def _resolve_comfy_still_selection(
 
     explicit_checkpoint = str(checkpoint or "").strip()
     catalog_checkpoint = str(render.get("checkpoint_name") or entry_data.get("filename") or "").strip()
+    if not explicit_checkpoint:
+        materialized_checkpoint = _catalog_comfy_asset_filename(
+            entry_data,
+            folder="checkpoints",
+            allowed_kinds={"checkpoint"},
+        )
+        if materialized_checkpoint:
+            catalog_checkpoint = materialized_checkpoint
     chosen_checkpoint, fallback_checkpoint = _resolve_comfy_checkpoint_name(
         explicit_checkpoint or catalog_checkpoint or settings.comfyui_checkpoint,
         allow_auto_fallback=not explicit_checkpoint and not catalog_checkpoint,
@@ -403,6 +428,14 @@ def _resolve_comfy_still_selection(
         or render.get("controlnet_name")
         or ""
     ).strip()
+    if control_entry_data:
+        materialized_controlnet = _catalog_comfy_asset_filename(
+            control_entry_data,
+            folder="controlnet",
+            allowed_kinds={"controlnet"},
+        )
+        if materialized_controlnet:
+            controlnet_name = materialized_controlnet
     has_controlnet_units = any(
         isinstance(unit, dict) and str(unit.get("model") or unit.get("controlnet_name") or "").strip()
         for unit in (controlnet_units or [])
@@ -459,6 +492,14 @@ def _resolve_comfy_motion_selection(
     render = _catalog_render_metadata(entry)
     explicit_checkpoint = str(checkpoint or "").strip()
     catalog_checkpoint = str(render.get("checkpoint_name") or entry_data.get("filename") or "").strip()
+    if not explicit_checkpoint:
+        materialized_checkpoint = _catalog_comfy_asset_filename(
+            entry_data,
+            folder="checkpoints",
+            allowed_kinds={"checkpoint"},
+        )
+        if materialized_checkpoint:
+            catalog_checkpoint = materialized_checkpoint
     base_checkpoint, fallback_checkpoint = _resolve_comfy_checkpoint_name(
         explicit_checkpoint or catalog_checkpoint or settings.comfyui_checkpoint,
         allow_auto_fallback=not explicit_checkpoint and not catalog_checkpoint,
@@ -467,12 +508,21 @@ def _resolve_comfy_motion_selection(
     svd_entry = _catalog_entry(svd_model_id)
     svd_entry_data = svd_entry if isinstance(svd_entry, dict) else {}
     svd_render = _catalog_render_metadata(svd_entry)
+    explicit_svd_checkpoint = str(svd_checkpoint or "").strip()
     resolved_svd = str(
-        svd_checkpoint
+        explicit_svd_checkpoint
         or svd_render.get("svd_checkpoint")
         or svd_entry_data.get("filename")
         or "svd_xt.safetensors"
-    )
+    ).strip()
+    if not explicit_svd_checkpoint:
+        materialized_svd = _catalog_comfy_asset_filename(
+            svd_entry_data,
+            folder="checkpoints",
+            allowed_kinds={"checkpoint", "motion_module"},
+        )
+        if materialized_svd:
+            resolved_svd = materialized_svd
     return {
         "entry": entry,
         "svd_entry": svd_entry,
@@ -538,7 +588,7 @@ def _resolve_still_scene_selection(
         )
 
     if engine == "internal":
-        model_path = models.installed_path(str(entry.get("id") or ""))
+        model_path = models.resolve_installed_path(str(entry.get("id") or ""), materialize_remote=True)
         if model_path is None:
             raise UserFacingError(
                 "Internal still model is not installed",
@@ -2611,10 +2661,10 @@ def preview_diffusion_segment(
     if mid == "auto":
         preferred = _hardware_profile().get("preferred_internal_model") or "hf_sd15_internal"
         mid = preferred
-        if models.installed_path(mid) is None:
+        if models.resolve_installed_path(mid, materialize_remote=True) is None:
             # fallback
             mid = "hf_sd15_internal" if preferred != "hf_sd15_internal" else "hf_sdxl_internal"
-    model_dir = models.installed_path(mid)
+    model_dir = models.resolve_installed_path(mid, materialize_remote=True)
     if not model_dir or not model_dir.exists():
         raise UserFacingError(
             "Internal model is not installed.",
@@ -5462,7 +5512,7 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
     raw_model_path = str(payload.get("model_path") or "").strip()
     model_path = Path(raw_model_path) if raw_model_path else None
     if model_path is None or not model_path.exists():
-        installed = models.installed_path(model_id)
+        installed = models.resolve_installed_path(model_id, materialize_remote=True)
         if installed is None:
             raise UserFacingError(
                 "Internal still model is not installed",
@@ -6889,7 +6939,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             if mid in seen:
                 continue
             seen.add(mid)
-            installed = models.installed_path(mid)
+            installed = models.resolve_installed_path(mid, materialize_remote=True)
             if not installed:
                 continue
             family = _internal_model_family_for_request(mid, installed)
@@ -6919,7 +6969,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             )
         model_id = picked
 
-    model_path = models.installed_path(model_id)
+    model_path = models.resolve_installed_path(model_id, materialize_remote=True)
     if not model_path:
         issue = getattr(models, "internal_asset_issue", lambda _model_id: None)(model_id)
         if issue == "incomplete":
@@ -8734,7 +8784,7 @@ def get_file(project_id: str, path: str):
 @app.post("/v1/cloud/aws/test")
 def cloud_aws_test(req: CloudAwsTestRequest):
     try:
-        res = aws_integration.test_credentials(bucket=req.bucket)
+        res = aws_integration.test_credentials(bucket=req.bucket, prefix=req.prefix)
         return {"ok": res.ok, "account": res.account, "region": res.region}
     except Exception as e:
         raise HTTPException(status_code=501, detail=str(e))
@@ -8794,6 +8844,12 @@ def models_accept(req: dict[str, Any]):
 def models_install(req: dict[str, Any]):
     model_id = str(req.get("model_id") or "")
     task = models.install(model_id)
+    return {"task": task.__dict__}
+
+@app.post("/v1/models/restore_local")
+def models_restore_local(req: dict[str, Any]):
+    model_id = str(req.get("model_id") or "")
+    task = models.restore_local(model_id)
     return {"task": task.__dict__}
 
 @app.post("/v1/models/install_pack")

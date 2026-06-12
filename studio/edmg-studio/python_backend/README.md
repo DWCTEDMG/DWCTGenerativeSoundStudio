@@ -56,6 +56,23 @@ From the repo root:
 - `python -m pytest` runs repo-level tests only
 - `python scripts/run_pytest_scopes.py` runs repo-level tests, then backend-local tests
 
+## S3-backed model hosting
+
+Install the Studio backend bundle or the `aws` extra so `boto3` is available, then enable the cache with normal AWS credentials:
+
+```bash
+EDMG_AWS_MODEL_CACHE=1
+EDMG_AWS_MODEL_CACHE_BUCKET=your-model-bucket
+EDMG_AWS_MODEL_CACHE_PREFIX=models
+EDMG_MODEL_STORAGE_MODE=local_cache
+```
+
+`local_cache` keeps local model files and mirrors supported installs into S3. `cloud_only` stores supported single-file ComfyUI assets and internal Diffusers snapshots in S3 without keeping a local copy, then restores them on demand through `resolve_installed_path(...)` or `/v1/models/restore_local`.
+
+Catalog entries can use `source: "s3"` with `s3_uri: "s3://bucket/key"` or `s3_key: "prefix/model.safetensors"` plus the configured bucket. Single-file ComfyUI assets restore directly into the Studio models directory. Internal renderer entries (`target.engine: "internal"`) must point at a `.zip`, `.tar`, `.tar.gz`, or `.tgz` archive containing the Diffusers snapshot contents, with `model_index.json` either at the archive root or inside one top-level directory.
+
+For S3-compatible storage, set `EDMG_S3_ENDPOINT_URL`.
+
 ## Compatibility shims
 
 The repo-root `sitecustomize.py` and repo-root `librosa/` package are
@@ -117,5 +134,6 @@ If your OpenAI-compatible gateway exposes a different model alias, override
 ## Integrations
 - ComfyUI renders are queued locally.
 - Planning/transcription run in-process by default through the selected provider; an external AI service on `7862` is optional.
+- S3-backed model hosting can cache or source supported ComfyUI model files and internal Diffusers snapshot archives.
 - EDMG Core is bundled into the Studio backend install/build target; Studio Setup can repair or reinstall it if needed.
 - FFmpeg defaults to the Studio-bundled binary when available; `EDMG_FFMPEG_PATH` remains an override.
