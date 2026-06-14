@@ -45,10 +45,38 @@ From `studio/edmg-studio/`:
 bash scripts/start_lightning_backend.sh
 ```
 
+On managed Linux environments where virtualenv creation is unavailable, use the
+active Python/conda environment:
+
+```bash
+EDMG_BACKEND_ENV_MODE=active bash scripts/start_lightning_backend.sh
+```
+
+For current Blackwell CUDA machines, set an explicit PyTorch wheel index:
+
+```bash
+EDMG_BACKEND_ENV_MODE=active \
+EDMG_BACKEND_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
+bash scripts/start_lightning_backend.sh
+```
+
 Detached variant with PID and log files under `EDMG_STUDIO_HOME/logs/lightning-backend`:
 
 ```bash
 bash scripts/start_lightning_backend_nohup.sh
+```
+
+Linux/Lightning Ollama sidecar helper:
+
+```bash
+OLLAMA_SIGNIN=1 bash scripts/setup_linux_ollama.sh
+EDMG_AI_OLLAMA_MODEL=nemotron-3-ultra:cloud bash scripts/setup_linux_ollama.sh
+```
+
+Linux/Lightning S3 model-cache helper:
+
+```bash
+EDMG_AWS_MODEL_CACHE_BUCKET=your-edmg-model-bucket bash scripts/setup_linux_s3_model_cache.sh
 ```
 
 ### UI
@@ -94,6 +122,9 @@ When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard
 This keeps the runtime UX like a DAW/game installer: click buttons, no terminal required.
 
 On Linux, use the packaged `AppImage` or `pnpm run dist:linux` on a Linux host. The same Setup Wizard still manages Studio Home paths, but Ollama and ComfyUI are expected to be installed manually or pointed at existing services instead of using the Windows-only managed installers.
+
+Linux/Lightning setup details, including active-env backend startup and ComfyUI
+motion sidecar setup, live in [packaging/linux/README.md](./packaging/linux/README.md).
 
 OpenClaw is not part of the required Studio install path. If you use it, treat it as an optional operator shell layered around Studio for automation or monitoring rather than as a dependency of the app itself.
 

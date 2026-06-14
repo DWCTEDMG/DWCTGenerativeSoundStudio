@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 STUDIO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 BACKEND_DIR="${STUDIO_ROOT}/python_backend"
 BACKEND_SETUPTOOLS_CONSTRAINT="setuptools<82"
+BACKEND_NUMPY_CONSTRAINT="${EDMG_BACKEND_NUMPY_CONSTRAINT:-numpy>=1.26,<2}"
+BACKEND_ENV_MODE="${EDMG_BACKEND_ENV_MODE:-auto}" # auto|venv|active
+BACKEND_TORCH_INDEX_URL="${EDMG_BACKEND_TORCH_INDEX_URL:-${PIP_TORCH_INDEX_URL:-}}"
 
 pick_python_bin() {
   if [[ -n "${EDMG_PYTHON_BIN:-}" ]]; then
@@ -13,7 +16,7 @@ pick_python_bin() {
   fi
 
   local candidate
-  for candidate in python3.11 python3 python; do
+  for candidate in python3.12 python3.11 python3 python; do
     if command -v "${candidate}" >/dev/null 2>&1; then
       printf '%s\n' "${candidate}"
       return 0
@@ -33,6 +36,7 @@ warn_if_unset() {
 }
 
 PYTHON_BIN="$(pick_python_bin)"
+PYTHON_CMD="python"
 
 export EDMG_STUDIO_HOME="${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}"
 export EDMG_STUDIO_BACKEND_HOST="${EDMG_STUDIO_BACKEND_HOST:-0.0.0.0}"
@@ -48,31 +52,52 @@ mkdir -p \
 
 cd "${BACKEND_DIR}"
 
-if [[ -d "${BACKEND_DIR}/venv" ]]; then
+if [[ "${BACKEND_ENV_MODE}" == "active" ]]; then
+  echo "[setup] using active python environment"
+  PYTHON_CMD="${EDMG_ACTIVE_PYTHON_BIN:-python}"
+elif [[ -d "${BACKEND_DIR}/venv" ]]; then
   # shellcheck source=/dev/null
   source "${BACKEND_DIR}/venv/bin/activate"
+  PYTHON_CMD="python"
 elif [[ -n "${VIRTUAL_ENV:-}" ]]; then
   echo "[setup] using active virtualenv at ${VIRTUAL_ENV}"
+  PYTHON_CMD="python"
 elif [[ -n "${CONDA_PREFIX:-}" ]]; then
   echo "[setup] using active conda environment at ${CONDA_PREFIX}"
+  PYTHON_CMD="python"
 else
+  if [[ "${BACKEND_ENV_MODE}" != "auto" && "${BACKEND_ENV_MODE}" != "venv" ]]; then
+    echo "Unsupported EDMG_BACKEND_ENV_MODE=${BACKEND_ENV_MODE}. Use auto, venv, or active." >&2
+    exit 1
+  fi
   echo "[setup] creating virtualenv with ${PYTHON_BIN}"
   "${PYTHON_BIN}" -m venv venv
   # shellcheck source=/dev/null
   source "${BACKEND_DIR}/venv/bin/activate"
+  PYTHON_CMD="python"
 fi
 
 if [[ "${EDMG_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
   echo "[setup] upgrading pip tooling"
-  python -m pip install -U pip "${BACKEND_SETUPTOOLS_CONSTRAINT}" wheel
+  "${PYTHON_CMD}" -m pip install -U pip "${BACKEND_SETUPTOOLS_CONSTRAINT}" wheel
+  if [[ -n "${BACKEND_TORCH_INDEX_URL}" ]]; then
+    echo "[setup] installing CUDA PyTorch stack from ${BACKEND_TORCH_INDEX_URL}"
+    "${PYTHON_CMD}" -m pip install --upgrade torch torchvision torchaudio --index-url "${BACKEND_TORCH_INDEX_URL}"
+  fi
   echo "[setup] installing backend bundle"
-  python -m pip install -e ".[studio_bundle]"
+  "${PYTHON_CMD}" -m pip install -e ".[studio_bundle]" "${BACKEND_NUMPY_CONSTRAINT}"
 fi
 
 echo "[edmg] studio root: ${STUDIO_ROOT}"
 echo "[edmg] backend dir: ${BACKEND_DIR}"
 echo "[edmg] studio home: ${EDMG_STUDIO_HOME}"
 echo "[edmg] backend url: http://${EDMG_STUDIO_BACKEND_HOST}:${EDMG_STUDIO_BACKEND_PORT}"
+echo "[edmg] python env mode: ${BACKEND_ENV_MODE}"
+echo "[edmg] python cmd: ${PYTHON_CMD}"
+echo "[edmg] numpy constraint: ${BACKEND_NUMPY_CONSTRAINT}"
+if [[ -n "${BACKEND_TORCH_INDEX_URL}" ]]; then
+  echo "[edmg] torch index: ${BACKEND_TORCH_INDEX_URL}"
+fi
 echo "[edmg] ai provider: ${EDMG_AI_PROVIDER:-ollama}"
 echo "[edmg] comfyui url: ${EDMG_COMFYUI_URL:-http://127.0.0.1:8188}"
 
@@ -84,6 +109,6 @@ else
   warn_if_unset "EDMG_AI_OLLAMA_MODEL" "qwen3:8b"
 fi
 
-exec python -m edmg_studio_backend serve \
+exec "${PYTHON_CMD}" -m edmg_studio_backend serve \
   --host "${EDMG_STUDIO_BACKEND_HOST}" \
   --port "${EDMG_STUDIO_BACKEND_PORT}"

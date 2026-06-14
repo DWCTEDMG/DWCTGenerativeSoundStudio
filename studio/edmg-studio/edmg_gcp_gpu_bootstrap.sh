@@ -20,7 +20,8 @@ INSTALL_OLLAMA="${INSTALL_OLLAMA:-0}"
 START_UI="${START_UI:-1}"
 ENABLE_BACKEND_SERVICE="${ENABLE_BACKEND_SERVICE:-1}"
 QUEUE_DEFAULT_MODELS="${QUEUE_DEFAULT_MODELS:-0}"
-PIP_TORCH_INDEX_URL="${PIP_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
+PIP_TORCH_INDEX_URL="${PIP_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}"
+BACKEND_NUMPY_CONSTRAINT="${BACKEND_NUMPY_CONSTRAINT:-numpy>=1.26,<2}"
 HF_TOKEN_VALUE="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 
 BOOTSTRAP_USER="${SUDO_USER:-$USER}"
@@ -112,6 +113,7 @@ export EDMG_AI_MODE=${AI_MODE}
 export EDMG_AI_PROVIDER=${AI_PROVIDER}
 export EDMG_AI_OLLAMA_URL=${AI_OLLAMA_URL}
 export EDMG_AI_OLLAMA_MODEL=${AI_OLLAMA_MODEL}
+export EDMG_COMFYUI_URL=http://127.0.0.1:8188
 export PATH=${BIN_DIR}:\$PATH
 EOF
   append_once "${USER_HOME}/.bashrc" "source ${EDMG_ENV_FILE}"
@@ -185,7 +187,7 @@ install_backend() {
   source .venv/bin/activate
   python -m pip install --upgrade pip setuptools wheel
   python -m pip install torch torchvision torchaudio --index-url "${PIP_TORCH_INDEX_URL}"
-  python -m pip install -e ".[studio_bundle]"
+  python -m pip install -e ".[studio_bundle]" "${BACKEND_NUMPY_CONSTRAINT}"
 
   step "Validating CUDA visibility from PyTorch"
   python - <<'PY'
