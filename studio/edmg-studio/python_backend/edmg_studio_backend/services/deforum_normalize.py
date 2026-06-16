@@ -161,6 +161,23 @@ def _motion_track_bundle(timeline: dict[str, Any] | None, fps: int) -> DeforumMo
                     "translation_y",
                     data.get("pan_y_schedule", schedule_map.get("translation_y", schedule_map.get("pan_y_schedule", data.get("pan_y")))),
                 ),
+                "translation_z": data.get(
+                    "translation_z",
+                    data.get("pan_z_schedule", schedule_map.get("translation_z", schedule_map.get("pan_z_schedule", data.get("pan_z")))),
+                ),
+                "rotation_3d_x": data.get(
+                    "rotation_3d_x",
+                    data.get("rotation_x_schedule", schedule_map.get("rotation_3d_x", schedule_map.get("rotation_x_schedule", data.get("pitch")))),
+                ),
+                "rotation_3d_y": data.get(
+                    "rotation_3d_y",
+                    data.get("rotation_y_schedule", schedule_map.get("rotation_3d_y", schedule_map.get("rotation_y_schedule", data.get("yaw")))),
+                ),
+                "rotation_3d_z": data.get(
+                    "rotation_3d_z",
+                    data.get("rotation_3d_z_schedule", schedule_map.get("rotation_3d_z", schedule_map.get("rotation_3d_z_schedule", data.get("roll")))),
+                ),
+                "fov": data.get("fov", schedule_map.get("fov", schedule_map.get("fov_schedule", data.get("field_of_view")))),
                 "strength_schedule": data.get("strength_schedule", schedule_map.get("strength_schedule", data.get("strength"))),
                 "cfg_scale_schedule": data.get("cfg_scale_schedule", schedule_map.get("cfg_scale_schedule", data.get("cfg"))),
                 "steps_schedule": data.get("steps_schedule", schedule_map.get("steps_schedule", data.get("steps"))),
@@ -172,6 +189,10 @@ def _motion_track_bundle(timeline: dict[str, Any] | None, fps: int) -> DeforumMo
                 angle=_pairs_from_start_end(start_frame, end_frame, data.get("rotation_start", 0.0), data.get("rotation_end", data.get("rotation_start", 0.0))),
                 translation_x=_pairs_from_start_end(start_frame, end_frame, data.get("pan_x_start", 0.0), data.get("pan_x_end", data.get("pan_x_start", 0.0))),
                 translation_y=_pairs_from_start_end(start_frame, end_frame, data.get("pan_y_start", 0.0), data.get("pan_y_end", data.get("pan_y_start", 0.0))),
+                translation_z=_pairs_from_start_end(start_frame, end_frame, data.get("pan_z_start", 0.0), data.get("pan_z_end", data.get("pan_z_start", 0.0))) if (data.get("pan_z_start") is not None or data.get("pan_z_end") is not None) else (),
+                rotation_3d_x=_pairs_from_start_end(start_frame, end_frame, data.get("pitch_start", 0.0), data.get("pitch_end", data.get("pitch_start", 0.0))) if (data.get("pitch_start") is not None or data.get("pitch_end") is not None) else (),
+                rotation_3d_y=_pairs_from_start_end(start_frame, end_frame, data.get("yaw_start", 0.0), data.get("yaw_end", data.get("yaw_start", 0.0))) if (data.get("yaw_start") is not None or data.get("yaw_end") is not None) else (),
+                rotation_3d_z=_pairs_from_start_end(start_frame, end_frame, data.get("roll_start", 0.0), data.get("roll_end", data.get("roll_start", 0.0))) if (data.get("roll_start") is not None or data.get("roll_end") is not None) else (),
                 strength_schedule=_pairs_from_constant(start_frame, end_frame, data.get("strength")) if data.get("strength") is not None else (),
                 cfg_scale_schedule=_pairs_from_constant(start_frame, end_frame, data.get("cfg")) if data.get("cfg") is not None else (),
                 steps_schedule=_pairs_from_constant(start_frame, end_frame, data.get("steps")) if data.get("steps") is not None else (),
@@ -199,6 +220,11 @@ def _request_override_motion(overrides: dict[str, Any] | None) -> DeforumMotionS
         "angle": overrides.get("deforum_angle"),
         "translation_x": overrides.get("deforum_translation_x"),
         "translation_y": overrides.get("deforum_translation_y"),
+        "translation_z": overrides.get("deforum_translation_z"),
+        "rotation_3d_x": overrides.get("deforum_rotation_3d_x"),
+        "rotation_3d_y": overrides.get("deforum_rotation_3d_y"),
+        "rotation_3d_z": overrides.get("deforum_rotation_3d_z"),
+        "fov": overrides.get("deforum_fov"),
         "strength_schedule": overrides.get("deforum_strength_schedule"),
     }
     return motion_bundle_from_mapping({key: value for key, value in mapped.items() if value is not None})
