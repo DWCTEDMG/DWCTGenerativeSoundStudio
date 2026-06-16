@@ -532,6 +532,24 @@ def _resolve_comfy_motion_selection(
     }
 
 
+def _resolve_installed_model_path(model_id: str, *, materialize_remote: bool = True) -> Path | None:
+    """Resolve an installed model path with backward-compatible fallbacks."""
+    resolver = getattr(models, "resolve_installed_path", None)
+    if callable(resolver):
+        try:
+            resolved = resolver(model_id, materialize_remote=materialize_remote)
+        except TypeError:
+            resolved = resolver(model_id)
+        if resolved:
+            return Path(resolved)
+    installed_path = getattr(models, "installed_path", None)
+    if callable(installed_path):
+        fallback = installed_path(model_id)
+        if fallback:
+            return Path(fallback)
+    return None
+
+
 def _resolve_still_scene_selection(
     *,
     model_id: str | None,
@@ -588,7 +606,7 @@ def _resolve_still_scene_selection(
         )
 
     if engine == "internal":
-        model_path = models.resolve_installed_path(str(entry.get("id") or ""), materialize_remote=True)
+        model_path = _resolve_installed_model_path(str(entry.get("id") or ""), materialize_remote=True)
         if model_path is None:
             raise UserFacingError(
                 "Internal still model is not installed",
@@ -2661,10 +2679,10 @@ def preview_diffusion_segment(
     if mid == "auto":
         preferred = _hardware_profile().get("preferred_internal_model") or "hf_sd15_internal"
         mid = preferred
-        if models.resolve_installed_path(mid, materialize_remote=True) is None:
+        if _resolve_installed_model_path(mid, materialize_remote=True) is None:
             # fallback
             mid = "hf_sd15_internal" if preferred != "hf_sd15_internal" else "hf_sdxl_internal"
-    model_dir = models.resolve_installed_path(mid, materialize_remote=True)
+    model_dir = _resolve_installed_model_path(mid, materialize_remote=True)
     if not model_dir or not model_dir.exists():
         raise UserFacingError(
             "Internal model is not installed.",
@@ -5512,7 +5530,7 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
     raw_model_path = str(payload.get("model_path") or "").strip()
     model_path = Path(raw_model_path) if raw_model_path else None
     if model_path is None or not model_path.exists():
-        installed = models.resolve_installed_path(model_id, materialize_remote=True)
+        installed = _resolve_installed_model_path(model_id, materialize_remote=True)
         if installed is None:
             raise UserFacingError(
                 "Internal still model is not installed",
@@ -6939,7 +6957,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             if mid in seen:
                 continue
             seen.add(mid)
-            installed = models.resolve_installed_path(mid, materialize_remote=True)
+            installed = _resolve_installed_model_path(mid, materialize_remote=True)
             if not installed:
                 continue
             family = _internal_model_family_for_request(mid, installed)
@@ -6969,7 +6987,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             )
         model_id = picked
 
-    model_path = models.resolve_installed_path(model_id, materialize_remote=True)
+    model_path = _resolve_installed_model_path(model_id, materialize_remote=True)
     if not model_path:
         issue = getattr(models, "internal_asset_issue", lambda _model_id: None)(model_id)
         if issue == "incomplete":
