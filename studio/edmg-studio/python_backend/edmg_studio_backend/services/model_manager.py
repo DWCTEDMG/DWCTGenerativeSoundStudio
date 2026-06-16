@@ -287,7 +287,12 @@ class ModelManager:
     def _model_cache_label(self) -> str:
         cache = getattr(self, "model_cache", None)
         label = getattr(cache, "label", "")
-        return str(label or "model cache")
+        if label:
+            return str(label)
+        cache_name = cache.__class__.__name__.lower() if cache is not None else ""
+        if "s3" in cache_name:
+            return "S3 model cache"
+        return "Azure model cache"
 
     def _model_storage_mode(self) -> str:
         raw = (
