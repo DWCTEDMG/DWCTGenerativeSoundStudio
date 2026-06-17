@@ -94,9 +94,16 @@ class AnimationPreset:
     motion: str  # key into MOTION_PROFILES
     temporal_mode: str  # off | keyframes | frame_img2img
     engine_hint: str = "auto"  # auto | internal | comfyui
-    comfyui_engine: str = "animatediff"  # animatediff | svd
+    comfyui_engine: str = "animatediff"  # animatediff | svd | regional
     uses_source_image: bool = False
     source_strength: float = 0.55
+    # camera = move the whole image; layered modes animate individual objects.
+    animation_mode: str = "camera"  # camera | parallax | masked | segment | background
+    requires_masks: bool = False
+
+    @property
+    def is_layered(self) -> bool:
+        return self.animation_mode in {"parallax", "masked", "segment", "background"}
 
     def to_public(self) -> dict[str, Any]:
         profile = MOTION_PROFILES.get(self.motion, MOTION_PROFILES["none"])
@@ -112,6 +119,9 @@ class AnimationPreset:
             "engine_hint": self.engine_hint,
             "comfyui_engine": self.comfyui_engine,
             "uses_source_image": self.uses_source_image,
+            "animation_mode": self.animation_mode,
+            "animates_objects": self.is_layered,
+            "requires_masks": self.requires_masks,
         }
 
 
@@ -187,6 +197,61 @@ ANIMATION_PRESETS: list[AnimationPreset] = [
         engine_hint="comfyui",
         comfyui_engine="svd",
         uses_source_image=True,
+    ),
+    # --- Object / layer animation (animate individual objects within an image) ---
+    AnimationPreset(
+        id="parallax_animation",
+        label="Parallax (2.5D) animation",
+        description="Split an image into depth layers so near and far regions move by different amounts.",
+        quality="balanced",
+        motion="full_3d",
+        temporal_mode="frame_img2img",
+        uses_source_image=True,
+        animation_mode="parallax",
+    ),
+    AnimationPreset(
+        id="animate_subject",
+        label="Animate the subject",
+        description="Auto-detect the main subject and animate it over a near-static background.",
+        quality="balanced",
+        motion="full_3d",
+        temporal_mode="frame_img2img",
+        uses_source_image=True,
+        animation_mode="segment",
+    ),
+    AnimationPreset(
+        id="parallax_background",
+        label="Parallax background",
+        description="Auto-detect the subject and parallax the background behind it.",
+        quality="balanced",
+        motion="full_3d",
+        temporal_mode="frame_img2img",
+        uses_source_image=True,
+        animation_mode="background",
+    ),
+    AnimationPreset(
+        id="masked_object_motion",
+        label="Animate masked objects",
+        description="Animate one or more masked objects independently over a held background.",
+        quality="balanced",
+        motion="full_3d",
+        temporal_mode="frame_img2img",
+        uses_source_image=True,
+        animation_mode="masked",
+        requires_masks=True,
+    ),
+    AnimationPreset(
+        id="comfyui_regional_motion",
+        label="ComfyUI regional motion (per-object prompts)",
+        description="Drive per-object motion on ComfyUI with masked regional prompts (AnimateDiff).",
+        quality="balanced",
+        motion="moderate",
+        temporal_mode="frame_img2img",
+        engine_hint="comfyui",
+        comfyui_engine="regional",
+        uses_source_image=True,
+        animation_mode="masked",
+        requires_masks=True,
     ),
 ]
 
@@ -270,6 +335,8 @@ class AutoConfig:
     internal_request: dict[str, Any]
     comfyui_request: dict[str, Any] | None
     uses_source_image: bool
+    animation_mode: str = "camera"
+    layered_request: dict[str, Any] | None = None
     notes: list[str] = field(default_factory=list)
 
     def to_public(self) -> dict[str, Any]:
@@ -282,6 +349,8 @@ class AutoConfig:
             "internal_request": self.internal_request,
             "comfyui_request": self.comfyui_request,
             "uses_source_image": self.uses_source_image,
+            "animation_mode": self.animation_mode,
+            "layered_request": self.layered_request,
             "notes": self.notes,
         }
 
@@ -380,6 +449,20 @@ def build_autoconfig(
         if use_source:
             comfyui_request["source_asset"] = str(source_asset)
 
+    layered_request: dict[str, Any] | None = None
+    if preset.is_layered:
+        layered_request = {
+            "source_asset": str(source_asset) if source_asset else None,
+            "mode": preset.animation_mode,
+            "motion": preset.motion,
+            "fps": fps_output,
+            "duration_s": float(duration_s),
+            "width": int(td.get("width", 768)),
+            "height": int(td.get("height", 432)),
+        }
+        if preset.requires_masks:
+            notes.append("This preset animates masked objects; provide one or more masks.")
+
     return AutoConfig(
         preset_id=preset.id,
         engine=resolved_engine,
@@ -389,5 +472,7 @@ def build_autoconfig(
         internal_request=internal_request,
         comfyui_request=comfyui_request,
         uses_source_image=use_source,
+        animation_mode=preset.animation_mode,
+        layered_request=layered_request,
         notes=notes,
     )

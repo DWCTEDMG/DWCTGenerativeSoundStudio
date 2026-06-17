@@ -841,6 +841,159 @@ def animatediff_workflow(
     }
     return workflow
 
+def regional_motion_workflow(
+    checkpoint: str,
+    base_prompt: str,
+    negative_prompt: str,
+    seed: int,
+    width: int,
+    height: int,
+    steps: int,
+    cfg: float,
+    sampler: str,
+    frames: int,
+    motion_model_name: str,
+    regions: list[dict[str, Any]] | None = None,
+    context_length: int = 16,
+    context_overlap: int = 4,
+    beta_schedule: str = "autoselect",
+    filename_prefix: str = "edmg_studio_regional",
+    loras: list[dict[str, Any]] | None = None,
+    vae_name: str | None = None,
+) -> dict[str, Any]:
+    """AnimateDiff workflow with per-region (object) prompts via masks.
+
+    Each entry in ``regions`` is ``{"prompt": str, "mask_filename": str,
+    "strength": float}`` where ``mask_filename`` is an image already uploaded to
+    ComfyUI (white = region). Region prompts are masked with
+    ``ConditioningSetMask`` and merged with the base prompt via
+    ``ConditioningCombine`` so individual objects in the frame animate with their
+    own prompt while the rest follows the base prompt.
+
+    Requires ComfyUI-AnimateDiff-Evolved nodes plus the stock
+    ``ConditioningSetMask`` / ``ConditioningCombine`` / ``ImageToMask`` nodes.
+    """
+    frames = max(1, int(frames))
+    regions = list(regions or [])
+
+    workflow: dict[str, Any] = {
+        "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": checkpoint}},
+    }
+    model_ref, clip_ref = _append_lora_chain(workflow, model_ref=("3", 0), clip_ref=("3", 1), loras=loras)
+    vae_ref = _append_vae_loader(workflow, checkpoint_node="3", vae_name=vae_name)
+
+    context_node = _next_node_id(workflow)
+    workflow[context_node] = {
+        "class_type": "ADE_StandardStaticContextOptions",
+        "inputs": {
+            "context_length": max(1, int(context_length)),
+            "context_overlap": max(0, int(context_overlap)),
+            "fuse_method": "pyramid",
+            "use_on_equal_length": True,
+            "start_percent": 0.0,
+            "guarantee_steps": 0,
+        },
+    }
+    motion_node = _next_node_id(workflow)
+    workflow[motion_node] = {
+        "class_type": "ADE_AnimateDiffLoaderGen1",
+        "inputs": {
+            "model": _ref(*model_ref),
+            "model_name": motion_model_name,
+            "beta_schedule": beta_schedule,
+            "context_options": _ref(context_node, 0),
+        },
+    }
+    latent_node = _next_node_id(workflow)
+    workflow[latent_node] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": width, "height": height, "batch_size": frames},
+    }
+
+    base_pos = _next_node_id(workflow)
+    workflow[base_pos] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": base_prompt, "clip": _ref(*clip_ref)},
+    }
+    neg_node = _next_node_id(workflow)
+    workflow[neg_node] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": negative_prompt, "clip": _ref(*clip_ref)},
+    }
+
+    # Build per-region masked conditioning and combine with the base prompt.
+    combined_pos = base_pos
+    for region in regions:
+        mask_filename = str(region.get("mask_filename") or "").strip()
+        region_prompt = str(region.get("prompt") or "").strip()
+        if not mask_filename or not region_prompt:
+            continue
+        strength = float(region.get("strength", 1.0))
+
+        load_node = _next_node_id(workflow)
+        workflow[load_node] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": mask_filename},
+        }
+        mask_node = _next_node_id(workflow)
+        workflow[mask_node] = {
+            "class_type": "ImageToMask",
+            "inputs": {"image": _ref(load_node, 0), "channel": "red"},
+        }
+        enc_node = _next_node_id(workflow)
+        workflow[enc_node] = {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": region_prompt, "clip": _ref(*clip_ref)},
+        }
+        setmask_node = _next_node_id(workflow)
+        workflow[setmask_node] = {
+            "class_type": "ConditioningSetMask",
+            "inputs": {
+                "conditioning": _ref(enc_node, 0),
+                "mask": _ref(mask_node, 0),
+                "strength": strength,
+                "set_cond_area": "default",
+            },
+        }
+        combine_node = _next_node_id(workflow)
+        workflow[combine_node] = {
+            "class_type": "ConditioningCombine",
+            "inputs": {
+                "conditioning_1": _ref(combined_pos, 0),
+                "conditioning_2": _ref(setmask_node, 0),
+            },
+        }
+        combined_pos = combine_node
+
+    sample_node = _next_node_id(workflow)
+    workflow[sample_node] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": seed,
+            "steps": steps,
+            "cfg": cfg,
+            "sampler_name": sampler,
+            "scheduler": "normal",
+            "denoise": 1,
+            "model": _ref(motion_node, 0),
+            "positive": _ref(combined_pos, 0),
+            "negative": _ref(neg_node, 0),
+            "latent_image": _ref(latent_node, 0),
+        },
+    }
+    decode_node = _next_node_id(workflow)
+    workflow[decode_node] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": _ref(sample_node, 0), "vae": _ref(*vae_ref)},
+    }
+    save_node = _next_node_id(workflow)
+    workflow[save_node] = {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": filename_prefix, "images": _ref(decode_node, 0)},
+    }
+    return workflow
+
+
 def svd_workflow(
     checkpoint: str,
     prompt: str,
