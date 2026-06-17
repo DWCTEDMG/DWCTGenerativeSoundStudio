@@ -52,8 +52,10 @@ from .schemas import (
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
+    LayeredAnimateRequest,
 )
 from .services import animation_autoconfig as autoconfig
+from .services import layer_animation as layeranim
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
 from .services.ai_client import build_ai_client
@@ -5379,6 +5381,10 @@ def _execute_job(job):
             else:
                 job.result = res
                 job.status = "succeeded"
+        elif job.type == "layered_animation":
+            res = _run_layered_animation(job.project_id, job.id, job.payload)
+            job.result = res
+            job.status = "succeeded"
         else:
             job.status = "failed"
             job.error = f"Unknown job type: {job.type}"
@@ -7867,6 +7873,41 @@ def render_auto(project_id: str, req: AutoAnimateRequest):
     if not req.run:
         return result
 
+    # Object/layer animation presets (parallax / segment / background) run on the
+    # model-free layered renderer. Masked / ComfyUI-regional presets need masks,
+    # so they return the config and point at /render/animate_layers.
+    if preset.is_layered:
+        if preset.requires_masks or cfg.engine == "comfyui":
+            result["notes"] = list(result["config"].get("notes") or []) + [
+                "This preset animates masked objects; call POST /render/animate_layers with masks."
+            ]
+            return result
+        if not req.source_asset:
+            result["notes"] = list(result["config"].get("notes") or []) + [
+                "Object animation needs a source image; pass source_asset."
+            ]
+            return result
+        lr = cfg.layered_request or {}
+        layered_req = LayeredAnimateRequest(
+            source_asset=req.source_asset,
+            mode=cfg.animation_mode,
+            motion=cfg.motion_profile,
+            fps=int(lr.get("fps", req.fps or 24)),
+            duration_s=float(lr.get("duration_s", 5.0)),
+            width=int(lr.get("width", 768)),
+            height=int(lr.get("height", 432)),
+        )
+        res = render_animate_layers(project_id, layered_req)
+        result.update(
+            {
+                "launched": True,
+                "engine": "internal",
+                "animation_mode": cfg.animation_mode,
+                "job": res.get("job"),
+            }
+        )
+        return result
+
     if cfg.engine == "comfyui" and cfg.comfyui_request is not None:
         motion_payload = {
             k: v for k, v in cfg.comfyui_request.items() if k in RenderMotionRequest.model_fields
@@ -7898,6 +7939,173 @@ def render_auto(project_id: str, req: AutoAnimateRequest):
         }
     )
     return result
+
+
+def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Worker: render an object/layer animation (parallax / masked / segment)."""
+    proj = store.get(project_id)
+    if not proj:
+        raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
+    pdir = store.project_dir(project_id)
+
+    source_path = _resolve_project_reference_path(project_id, payload.get("source_asset"))
+    if source_path is None:
+        raise UserFacingError(
+            "Source image not found",
+            hint="Upload an image under Render → References, then pass its path as source_asset.",
+            code="ASSET_MISSING",
+            status_code=400,
+        )
+
+    mode = str(payload.get("mode") or "parallax")
+    mask_specs: list[dict[str, Any]] = []
+    for entry in payload.get("masks") or []:
+        name = str(entry.get("mask_asset") or "").strip()
+        if not name:
+            continue
+        mask_path = pdir / "assets" / "masks" / Path(name).name
+        if not mask_path.exists():
+            raise UserFacingError(
+                f"Mask not found: {name}",
+                hint="Upload the mask under Render → Masks, then retry.",
+                code="ASSET_MISSING",
+                status_code=400,
+            )
+        from PIL import Image as _PILImage
+
+        mask_specs.append(
+            {
+                "mask": _PILImage.open(mask_path).convert("L"),
+                "depth": float(entry.get("depth", 1.0)),
+                "motion_scale": float(entry.get("motion_scale", 1.0)),
+                "name": Path(name).stem,
+            }
+        )
+
+    if mode == "masked" and not mask_specs:
+        raise UserFacingError(
+            "Masked mode requires at least one mask",
+            hint="Add a mask asset, or use the parallax/segment modes which need no masks.",
+            code="MASK_REQUIRED",
+            status_code=400,
+        )
+
+    audio_path: Path | None = None
+    if bool(payload.get("include_audio")):
+        audio_meta = (proj.meta.get("audio") or {}) if isinstance(proj.meta, dict) else {}
+        fname = str(audio_meta.get("filename") or "").strip()
+        if fname:
+            cand = pdir / "assets" / "audio" / Path(fname).name
+            if cand.exists():
+                audio_path = cand
+
+    def _log(message: str) -> None:
+        jobs.append_log(project_id, job_id, message)
+
+    def _check_canceled() -> None:
+        latest = jobs.get(project_id, job_id)
+        if latest and latest.status == "canceled":
+            raise JobCanceled("Job canceled")
+
+    def _progress(stage: str, current: int, total: int, message: str | None = None) -> None:
+        _check_canceled()
+        jobs.update_progress(project_id, job_id, stage=stage, current=current, total=total, message=message)
+
+    out_dir = pdir / "outputs" / "videos" / f"layered_{job_id}"
+    res = layeranim.render_layered_animation(
+        ffmpeg_path=settings.ffmpeg_path,
+        source_image_path=source_path,
+        out_dir=out_dir,
+        mode=mode,
+        motion_schedule=payload.get("motion_schedule") or {},
+        fps=int(payload.get("fps", 24)),
+        duration_s=float(payload.get("duration_s", 5.0)),
+        width=int(payload.get("width", 768)),
+        height=int(payload.get("height", 432)),
+        bands=int(payload.get("bands", 3)),
+        mask_specs=mask_specs,
+        subject_motion=float(payload.get("subject_motion", 1.0)),
+        background_motion=float(payload.get("background_motion", 0.12)),
+        audio_path=audio_path,
+        log_fn=_log,
+        progress_fn=_progress,
+        cancel_check_fn=_check_canceled,
+    )
+
+    try:
+        video_rel = str(Path(res["video"]).relative_to(pdir))
+    except Exception:
+        video_rel = str(res.get("video"))
+    if isinstance(proj.meta, dict):
+        outputs = proj.meta.setdefault("outputs", {})
+        videos = outputs.setdefault("videos", [])
+        videos.append({"kind": "layered_animation", "path": video_rel, "mode": mode})
+        proj.meta["last_layered_animation"] = {**res, "video": video_rel}
+        store.save(proj)
+
+    jobs.update_progress(
+        project_id, job_id, stage="complete", current=1, total=1,
+        message=f"Layered animation complete ({res.get('segmentation')})",
+    )
+    return {**res, "video": video_rel}
+
+
+@app.post("/v1/projects/{project_id}/render/animate_layers")
+def render_animate_layers(project_id: str, req: LayeredAnimateRequest):
+    """Animate individual objects/regions within an image (parallax / masked / segment).
+
+    Model-free compositing path; runs without a diffusion model or GPU.
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    source_path = _resolve_project_reference_path(project_id, req.source_asset)
+    if source_path is None:
+        raise UserFacingError(
+            "Source image not found",
+            hint="Upload an image under Render → References, then pass its path as source_asset.",
+            code="ASSET_MISSING",
+            status_code=400,
+        )
+    if req.mode == "masked" and not req.masks:
+        raise UserFacingError(
+            "Masked mode requires at least one mask",
+            hint="Add a mask asset, or use parallax/segment modes.",
+            code="MASK_REQUIRED",
+            status_code=400,
+        )
+
+    profile = str(req.motion or "full_3d")
+    schedule = autoconfig.build_motion_schedule(profile, duration_s=req.duration_s, fps=req.fps)
+    payload = {
+        "source_asset": req.source_asset,
+        "mode": req.mode,
+        "motion_profile": profile,
+        "motion_schedule": schedule,
+        "bands": int(req.bands),
+        "masks": [m.model_dump() for m in req.masks],
+        "subject_motion": float(req.subject_motion),
+        "background_motion": float(req.background_motion),
+        "fps": int(req.fps),
+        "duration_s": float(req.duration_s),
+        "width": int(req.width),
+        "height": int(req.height),
+        "include_audio": bool(req.include_audio),
+    }
+    job = jobs.create(project_id, "layered_animation", payload)
+    job.progress = {
+        "stage": "queued",
+        "current": 0,
+        "total": max(1, int(req.duration_s * req.fps) + 1),
+        "percent": 0.0,
+        "message": f"Queued {req.mode} object animation",
+    }
+    jobs.save(job)
+    if isinstance(proj.meta, dict):
+        proj.meta.setdefault("jobs", []).append(job.__dict__)
+        store.save(proj)
+    return {"ok": True, "job": job.__dict__, "animation_mode": req.mode, "motion_schedule": schedule}
 
 
 @app.get("/v1/projects/{project_id}/assets")

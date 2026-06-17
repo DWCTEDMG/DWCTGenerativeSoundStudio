@@ -677,7 +677,8 @@ def _ken_burns_frame(
     w, h = img.size
 
     if abs(rotation_deg) > 0.01:
-        img = img.rotate(float(rotation_deg), resample=Image.BICUBIC, expand=True)
+        _fill = (0, 0, 0, 0) if img.mode == "RGBA" else None
+        img = img.rotate(float(rotation_deg), resample=Image.BICUBIC, expand=True, fillcolor=_fill)
         w, h = img.size
 
     zw, zh = int(round(w * zoom)), int(round(h * zoom))
@@ -823,7 +824,10 @@ def _apply_camera_3d(
     src = [(0.0, 0.0), (float(w), 0.0), (float(w), float(h)), (0.0, float(h))]
     try:
         coeffs = _perspective_coeffs(dst, src)
-        warped = img.transform((w, h), Image.PERSPECTIVE, coeffs, resample=Image.BICUBIC)
+        _fill = (0, 0, 0, 0) if img.mode == "RGBA" else None
+        warped = img.transform(
+            (w, h), Image.PERSPECTIVE, coeffs, resample=Image.BICUBIC, fillcolor=_fill
+        )
     except Exception:
         warped = img
     return _ken_burns_frame(

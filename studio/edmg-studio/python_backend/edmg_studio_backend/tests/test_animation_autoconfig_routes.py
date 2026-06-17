@@ -135,6 +135,87 @@ def test_auto_unknown_preset_is_400(tmp_path, monkeypatch):
         assert resp.status_code == 400
 
 
+def _upload_ref_image(store, proj, name="painting.png", size=(256, 144)):
+    from PIL import Image
+
+    refs = store.project_dir(proj.id) / "assets" / "refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", size, (40, 60, 90)).save(refs / name)
+    return f"assets/refs/{name}"
+
+
+def test_animate_layers_parallax_launches_job(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    ref = _upload_ref_image(store, proj)
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/animate_layers",
+            json={"source_asset": ref, "mode": "parallax", "fps": 12, "duration_s": 1.0, "width": 256, "height": 256},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["job"]["type"] == "layered_animation"
+        assert data["job"]["payload"]["mode"] == "parallax"
+        assert data["job"]["payload"]["motion_schedule"]  # AI-built motion schedule
+
+
+def test_animate_layers_masked_requires_mask(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    ref = _upload_ref_image(store, proj)
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/animate_layers",
+            json={"source_asset": ref, "mode": "masked", "masks": []},
+        )
+        assert resp.status_code == 400
+
+
+def test_animate_layers_missing_source_is_400(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/animate_layers",
+            json={"source_asset": "assets/refs/missing.png", "mode": "parallax"},
+        )
+        assert resp.status_code == 400
+
+
+def test_auto_routes_parallax_preset_to_layered_job(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    ref = _upload_ref_image(store, proj)
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/auto",
+            json={"preset": "parallax_animation", "run": True, "source_asset": ref},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        assert data["launched"] is True
+        assert data["animation_mode"] == "parallax"
+        assert data["job"]["type"] == "layered_animation"
+
+
+def test_auto_masked_preset_defers_to_animate_layers(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    ref = _upload_ref_image(store, proj)
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/auto",
+            json={"preset": "masked_object_motion", "run": True, "source_asset": ref},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        # masked needs explicit masks -> not auto-launched
+        assert data["launched"] is False
+        assert any("mask" in n.lower() for n in data.get("notes", []))
+
+
 def test_auto_requires_plan(tmp_path, monkeypatch):
     store = ProjectStore(tmp_path / "data")
     jobs = JobStore(store.projects_dir)

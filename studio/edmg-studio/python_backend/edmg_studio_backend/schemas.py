@@ -213,6 +213,38 @@ class AutoAnimateRequest(BaseModel):
     fps: int | None = Field(default=None, ge=1, le=60)
 
 
+class LayerMaskSpec(BaseModel):
+    mask_asset: str
+    prompt: str | None = None
+    depth: float = Field(default=1.0, ge=0.0, le=1.0)
+    motion_scale: float = Field(default=1.0, ge=0.0, le=4.0)
+    strength: float = Field(default=1.0, ge=0.0, le=2.0)
+
+
+class LayeredAnimateRequest(BaseModel):
+    """Animate individual objects/regions within a single image.
+
+    Modes:
+      - parallax: split into depth bands (2.5D parallax)
+      - masked: animate provided mask regions over a held background
+      - segment: auto-extract the subject and animate it vs. the background
+      - background: parallax the background behind a near-static subject
+    """
+
+    source_asset: str
+    mode: Literal["parallax", "masked", "segment", "background"] = "parallax"
+    motion: str | None = None  # motion profile id (defaults to full_3d)
+    bands: int = Field(default=3, ge=1, le=8)
+    masks: list[LayerMaskSpec] = Field(default_factory=list)
+    subject_motion: float = Field(default=1.0, ge=0.0, le=4.0)
+    background_motion: float = Field(default=0.12, ge=0.0, le=4.0)
+    fps: int = Field(default=24, ge=1, le=60)
+    duration_s: float = Field(default=5.0, ge=0.5, le=120.0)
+    width: int = Field(default=768, ge=256, le=1920)
+    height: int = Field(default=432, ge=256, le=1080)
+    include_audio: bool = False
+
+
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
 
