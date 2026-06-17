@@ -732,6 +732,12 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
             >
               {busy === "start_comfy" ? "Starting…" : (isWindows ? "Start ComfyUI (CPU)" : "Windows-only Portable Start")}
             </button>
+            <button
+              disabled={!isWindows || busy === "start_comfy_n"}
+              onClick={() => run("start_comfy_n", "/v1/setup/comfyui/portable/start", { flavor: "nvidia" })}
+            >
+              {busy === "start_comfy_n" ? "Starting…" : (isWindows ? "Start ComfyUI (NVIDIA)" : "Windows-only Portable Start")}
+            </button>
           </div>
 
           {!comfyOk && status?.comfyui?.hint && (

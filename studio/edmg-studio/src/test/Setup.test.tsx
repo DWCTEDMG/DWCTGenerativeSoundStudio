@@ -66,6 +66,26 @@ describe("Setup page", () => {
     expect(await screen.findByText(/Linux support uses a manually installed ComfyUI instance.*optional workflows/i)).toBeTruthy();
   });
 
+  it("shows Start ComfyUI NVIDIA button on Windows", async () => {
+    installEdmgBridge({ platform: "win32" });
+    installFetchMock({
+      "/v1/setup/status": {
+        ollama: { ok: true, model_present: true },
+        comfyui: { ok: false, portable_installed: true },
+        ffmpeg: { ok: true },
+        backend_bundle: { ok: true },
+        sevenzip: { ok: true },
+        ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
+      },
+      "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+    });
+
+    renderWithStudio(<Setup />);
+
+    expect(await screen.findByRole("button", { name: "Start ComfyUI (NVIDIA)" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Start ComfyUI (CPU)" })).toBeTruthy();
+  });
+
   it("shows a cancel button for active installer tasks", async () => {
     installEdmgBridge();
     let taskStatus = "running";
