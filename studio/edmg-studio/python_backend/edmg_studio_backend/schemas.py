@@ -244,6 +244,17 @@ class LayeredAnimateRequest(BaseModel):
     height: int = Field(default=432, ge=256, le=1080)
     include_audio: bool = False
 
+    # Optional diffusion-refinement pass (img2img per frame) using an internal model.
+    diffusion_refine: bool = False
+    model_id: str = "auto"
+    device_preference: Literal["auto", "cpu", "cuda", "mps", "directml"] = "auto"
+    refine_prompt: str | None = None
+    refine_negative: str = "blurry, low quality, watermark, text, logo"
+    refine_denoise: float = Field(default=0.3, ge=0.05, le=0.95)
+    refine_steps: int = Field(default=20, ge=1, le=80)
+    refine_cfg: float = Field(default=7.0, ge=1.0, le=20.0)
+    seed: int | None = None
+
 
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)

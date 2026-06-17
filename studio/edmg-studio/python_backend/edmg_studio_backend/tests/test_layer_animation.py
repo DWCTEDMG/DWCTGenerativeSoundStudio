@@ -125,6 +125,76 @@ def test_render_layered_animation_parallax(tmp_path):
     assert Path(res["video"]).stat().st_size > 0
 
 
+def test_diffusion_refine_invokes_img2img(tmp_path, monkeypatch):
+    """Refine path runs img2img over each composited frame (model monkeypatched)."""
+    src = tmp_path / "src.png"
+    _img(256, 144).save(src)
+
+    calls = {"n": 0}
+
+    def fake_load_pipelines(model_dir, device="cpu", **kw):
+        return object()  # sentinel pipes
+
+    def fake_encode_prompt(pipes, prompt):
+        return f"enc:{prompt}"
+
+    def fake_img2img(pipes, *, init_image, prompt_embeds, negative_embeds, width, height, steps, cfg, seed, strength):
+        calls["n"] += 1
+        # return a recognizable solid-red frame to prove refinement replaced the composite
+        return iv.Image.new("RGB", (width, height), (255, 0, 0))
+
+    monkeypatch.setattr(iv, "_try_load_pipelines", fake_load_pipelines)
+    monkeypatch.setattr(iv, "_encode_prompt", fake_encode_prompt)
+    monkeypatch.setattr(iv, "_generate_img2img", fake_img2img)
+
+    model_dir = tmp_path / "fake_model"
+    model_dir.mkdir()
+    res = la.render_layered_animation(
+        ffmpeg_path="ffmpeg",
+        source_image_path=src,
+        out_dir=tmp_path / "out_refine",
+        mode="parallax",
+        motion_schedule={"translation_x": "0:(0), 12:(30)"},
+        fps=6,
+        duration_s=1.0,
+        width=256,
+        height=144,
+        diffusion_refine=True,
+        refine_model_dir=model_dir,
+        refine_device="cpu",
+        refine_prompt="oil painting, vivid",
+        refine_denoise=0.3,
+        refine_steps=8,
+    )
+    assert res["diffusion_refined"] is True
+    assert res["refined_frames"] == 6
+    assert calls["n"] == 6
+    # the saved frames should be the refined (solid red) output
+    frame0 = iv.Image.open(tmp_path / "out_refine" / "frames" / "frame_000000.png").convert("RGB")
+    assert frame0.getpixel((10, 10)) == (255, 0, 0)
+
+
+def test_diffusion_refine_without_model_falls_back(tmp_path):
+    src = tmp_path / "src.png"
+    _img(256, 144).save(src)
+    res = la.render_layered_animation(
+        ffmpeg_path="ffmpeg",
+        source_image_path=src,
+        out_dir=tmp_path / "out_norefine",
+        mode="parallax",
+        motion_schedule={"translation_x": "0:(0), 12:(30)"},
+        fps=6,
+        duration_s=1.0,
+        width=256,
+        height=144,
+        diffusion_refine=True,
+        refine_model_dir=None,  # no model -> graceful compositing-only
+    )
+    assert res["ok"] is True
+    assert res["diffusion_refined"] is False
+    assert res["refined_frames"] == 0
+
+
 def test_render_layered_animation_segment(tmp_path):
     src = tmp_path / "src.png"
     _img(256, 144).save(src)

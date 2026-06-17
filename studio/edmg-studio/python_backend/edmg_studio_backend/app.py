@@ -8011,6 +8011,27 @@ def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]
         _check_canceled()
         jobs.update_progress(project_id, job_id, stage=stage, current=current, total=total, message=message)
 
+    # Optional diffusion-refinement: resolve an installed internal model (auto-pick
+    # by hardware tier) and run img2img over each composited frame on the available
+    # device (CUDA when the backend host has a GPU, else CPU). Degrades gracefully.
+    refine = bool(payload.get("diffusion_refine"))
+    refine_model_dir: Path | None = None
+    refine_device = "auto"
+    if refine:
+        hw = _hardware_profile()
+        device_pref = str(payload.get("device_preference") or "auto")
+        refine_device = device_pref if device_pref != "auto" else str(hw.get("device_preference") or "auto")
+        model_id = str(payload.get("model_id") or "auto")
+        if model_id in ("auto", "auto_internal"):
+            tier_plan = _build_internal_render_plan(hw)
+            model_id = str(tier_plan.get("preferred_internal_model") or "hf_sd15_internal")
+        try:
+            refine_model_dir = models.resolve_installed_path(model_id, materialize_remote=True)
+        except Exception:
+            refine_model_dir = None
+        if refine_model_dir is None:
+            _log(f"Diffusion refine requested but model '{model_id}' is not installed; compositing only.")
+
     out_dir = pdir / "outputs" / "videos" / f"layered_{job_id}"
     res = layeranim.render_layered_animation(
         ffmpeg_path=settings.ffmpeg_path,
@@ -8030,6 +8051,15 @@ def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]
         log_fn=_log,
         progress_fn=_progress,
         cancel_check_fn=_check_canceled,
+        diffusion_refine=refine,
+        refine_model_dir=refine_model_dir,
+        refine_device=refine_device,
+        refine_prompt=str(payload.get("refine_prompt") or ""),
+        refine_negative=str(payload.get("refine_negative") or "blurry, low quality, watermark, text, logo"),
+        refine_denoise=float(payload.get("refine_denoise", 0.3)),
+        refine_steps=int(payload.get("refine_steps", 20)),
+        refine_cfg=float(payload.get("refine_cfg", 7.0)),
+        refine_seed=int(payload.get("seed") or 0),
     )
 
     try:
@@ -8092,6 +8122,15 @@ def render_animate_layers(project_id: str, req: LayeredAnimateRequest):
         "width": int(req.width),
         "height": int(req.height),
         "include_audio": bool(req.include_audio),
+        "diffusion_refine": bool(req.diffusion_refine),
+        "model_id": str(req.model_id or "auto"),
+        "device_preference": str(req.device_preference or "auto"),
+        "refine_prompt": req.refine_prompt,
+        "refine_negative": req.refine_negative,
+        "refine_denoise": float(req.refine_denoise),
+        "refine_steps": int(req.refine_steps),
+        "refine_cfg": float(req.refine_cfg),
+        "seed": req.seed,
     }
     job = jobs.create(project_id, "layered_animation", payload)
     job.progress = {

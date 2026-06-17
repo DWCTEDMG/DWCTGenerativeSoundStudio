@@ -304,8 +304,24 @@ def render_layered_animation(
     log_fn=None,
     progress_fn=None,
     cancel_check_fn=None,
+    diffusion_refine: bool = False,
+    refine_model_dir: Path | None = None,
+    refine_device: str = "auto",
+    refine_prompt: str = "",
+    refine_negative: str = "blurry, low quality, watermark, text, logo",
+    refine_denoise: float = 0.3,
+    refine_steps: int = 20,
+    refine_cfg: float = 7.0,
+    refine_seed: int = 0,
 ) -> dict[str, Any]:
-    """Render an object/layer animation to MP4 (no diffusion model required)."""
+    """Render an object/layer animation to MP4.
+
+    Base compositing needs no model. When ``diffusion_refine`` is set and a
+    ``refine_model_dir`` resolves to an installed diffusers model, each composited
+    frame is passed through img2img at ``refine_denoise`` to clean seams, fill
+    disocclusion gaps generatively, and let ``refine_prompt`` restyle the moving
+    objects. If the model can't load, it degrades gracefully to compositing-only.
+    """
     _require_pillow()
     src = Image.open(source_image_path).convert("RGB")
     layers, method = build_layers(
@@ -320,17 +336,58 @@ def render_layered_animation(
     )
     bundle = motion_bundle_from_mapping(motion_schedule or {})
 
+    # Optional diffusion refinement (reuses the internal engine's pipelines).
+    pipes = None
+    refine_active = False
+    if diffusion_refine and refine_model_dir is not None:
+        try:
+            device = iv._device_auto(refine_device)
+            pipes = iv._try_load_pipelines(Path(refine_model_dir), device=device)
+            refine_active = True
+            if log_fn:
+                log_fn(f"Diffusion refine enabled (model={Path(refine_model_dir).name}, device={device})")
+        except Exception as exc:  # pragma: no cover - depends on runtime model
+            if log_fn:
+                log_fn(f"Diffusion refine unavailable ({exc}); compositing only")
+    elif diffusion_refine and refine_model_dir is None and log_fn:
+        log_fn("Diffusion refine requested but no model installed; compositing only")
+
     frames_dir = out_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
     total = max(1, int(round(float(duration_s) * int(fps))))
+    refined_frames = 0
+    pe = ne = None
+    if refine_active:
+        pe = iv._encode_prompt(pipes, refine_prompt or "cinematic")
+        ne = iv._encode_prompt(pipes, refine_negative or "")
+
     for fi in range(total):
         if cancel_check_fn:
             cancel_check_fn()
         t = fi / float(max(1, fps))
         frame = compose_layered_frame(layers, width, height, t=t, fps=fps, motion_bundle=bundle)
+        if refine_active:
+            try:
+                fseed = iv._stable_seed_int("layer_refine", refine_seed, fi)
+                frame = iv._generate_img2img(
+                    pipes,
+                    init_image=frame.convert("RGB"),
+                    prompt_embeds=pe,
+                    negative_embeds=ne,
+                    width=width,
+                    height=height,
+                    steps=int(refine_steps),
+                    cfg=float(refine_cfg),
+                    seed=fseed,
+                    strength=max(0.05, min(0.95, float(refine_denoise))),
+                ).convert("RGB")
+                refined_frames += 1
+            except Exception as exc:  # pragma: no cover - depends on runtime model
+                if log_fn:
+                    log_fn(f"Refine failed on frame {fi} ({exc}); using composite")
         frame.save(frames_dir / f"frame_{fi:06d}.png")
         if progress_fn and (fi % max(1, total // 20 or 1) == 0):
-            progress_fn("frames", fi + 1, total, f"Composited frame {fi + 1}/{total}")
+            progress_fn("frames", fi + 1, total, f"{'Refined' if refine_active else 'Composited'} frame {fi + 1}/{total}")
         if log_fn and fi % max(1, fps * 2) == 0:
             log_fn(f"Layer-animation frame {fi + 1}/{total} ({method})")
 
@@ -350,4 +407,6 @@ def render_layered_animation(
         "layers": [lyr.name for lyr in layers],
         "segmentation": method,
         "mode": mode,
+        "diffusion_refined": refine_active,
+        "refined_frames": refined_frames,
     }
