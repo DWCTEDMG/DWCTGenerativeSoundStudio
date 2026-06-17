@@ -686,6 +686,146 @@ def _ken_burns_frame(
     return imz.crop((x0, y0, x0 + out_w, y0 + out_h))
 
 
+def _perspective_coeffs(
+    dst_pts: list[tuple[float, float]],
+    src_pts: list[tuple[float, float]],
+) -> tuple[float, ...]:
+    """Solve the 8 perspective coefficients for ``Image.transform(PERSPECTIVE)``.
+
+    ``dst_pts`` are output-image corner positions, ``src_pts`` the matching
+    source-image corners. PIL maps each output point back into the source using
+    the returned coefficients.
+    """
+    import numpy as np  # type: ignore
+
+    matrix = []
+    for (dx, dy), (sx, sy) in zip(dst_pts, src_pts, strict=False):
+        matrix.append([dx, dy, 1.0, 0.0, 0.0, 0.0, -sx * dx, -sx * dy])
+        matrix.append([0.0, 0.0, 0.0, dx, dy, 1.0, -sy * dx, -sy * dy])
+    a = np.array(matrix, dtype=np.float64)
+    b = np.array([coord for point in src_pts for coord in point], dtype=np.float64)
+    solution = np.linalg.solve(a, b)
+    return tuple(float(v) for v in solution)
+
+
+def _project_image_corners(
+    w: int,
+    h: int,
+    *,
+    rot_x_deg: float,
+    rot_y_deg: float,
+    rot_z_deg: float,
+    translation_x: float,
+    translation_y: float,
+    translation_z: float,
+    fov_deg: float,
+) -> list[tuple[float, float]]:
+    """Project the image-plane corners through a simple pinhole camera.
+
+    Returns the four destination corner positions (top-left, top-right,
+    bottom-right, bottom-left) after applying 3D rotations (pitch/yaw/roll),
+    translation, and a dolly along Z. With neutral parameters the corners map
+    back to the original rectangle, so the transform reduces to identity.
+    """
+    fov = max(10.0, min(179.0, float(fov_deg or 70.0)))
+    focal = (0.5 * float(w)) / math.tan(math.radians(fov) / 2.0)
+    half_w, half_h = float(w) / 2.0, float(h) / 2.0
+    corners = [
+        (-half_w, -half_h, 0.0),
+        (half_w, -half_h, 0.0),
+        (half_w, half_h, 0.0),
+        (-half_w, half_h, 0.0),
+    ]
+
+    rx, ry, rz = (math.radians(rot_x_deg), math.radians(rot_y_deg), math.radians(rot_z_deg))
+    cos_x, sin_x = math.cos(rx), math.sin(rx)
+    cos_y, sin_y = math.cos(ry), math.sin(ry)
+    cos_z, sin_z = math.cos(rz), math.sin(rz)
+
+    def _rotate(x: float, y: float, z: float) -> tuple[float, float, float]:
+        # pitch (X axis)
+        y1 = y * cos_x - z * sin_x
+        z1 = y * sin_x + z * cos_x
+        x1 = x
+        # yaw (Y axis)
+        x2 = x1 * cos_y + z1 * sin_y
+        z2 = -x1 * sin_y + z1 * cos_y
+        y2 = y1
+        # roll (Z axis)
+        x3 = x2 * cos_z - y2 * sin_z
+        y3 = x2 * sin_z + y2 * cos_z
+        return x3, y3, z2
+
+    distance = focal
+    min_depth = 0.1 * focal
+    out: list[tuple[float, float]] = []
+    for cx, cy, cz in corners:
+        rxp, ryp, rzp = _rotate(cx, cy, cz)
+        xc = rxp + float(translation_x)
+        yc = ryp + float(translation_y)
+        zc = distance - float(translation_z) + rzp
+        if zc < min_depth:
+            zc = min_depth
+        u = focal * xc / zc + half_w
+        v = focal * yc / zc + half_h
+        out.append((u, v))
+    return out
+
+
+def _apply_camera_3d(
+    img: "Image.Image",
+    out_w: int,
+    out_h: int,
+    *,
+    zoom: float = 1.0,
+    pan_x: float = 0.0,
+    pan_y: float = 0.0,
+    rotation_deg: float = 0.0,
+    translation_z: float = 0.0,
+    rotation_3d_x: float = 0.0,
+    rotation_3d_y: float = 0.0,
+    fov_deg: float = 70.0,
+) -> "Image.Image":
+    """Apply full (2D + 3D) camera motion to a frame.
+
+    3D pitch/yaw/dolly are applied first as a perspective warp, then the
+    existing 2D zoom/pan/roll crop runs on top. When no 3D component is active
+    this is bit-identical to :func:`_ken_burns_frame`, preserving the legacy
+    2D-only behavior.
+    """
+    has_3d = (
+        abs(float(translation_z)) > 1e-4
+        or abs(float(rotation_3d_x)) > 1e-4
+        or abs(float(rotation_3d_y)) > 1e-4
+    )
+    if not has_3d:
+        return _ken_burns_frame(
+            img, out_w, out_h, zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rotation_deg
+        )
+
+    w, h = img.size
+    dst = _project_image_corners(
+        w,
+        h,
+        rot_x_deg=float(rotation_3d_x),
+        rot_y_deg=float(rotation_3d_y),
+        rot_z_deg=0.0,
+        translation_x=0.0,
+        translation_y=0.0,
+        translation_z=float(translation_z),
+        fov_deg=float(fov_deg),
+    )
+    src = [(0.0, 0.0), (float(w), 0.0), (float(w), float(h)), (0.0, float(h))]
+    try:
+        coeffs = _perspective_coeffs(dst, src)
+        warped = img.transform((w, h), Image.PERSPECTIVE, coeffs, resample=Image.BICUBIC)
+    except Exception:
+        warped = img
+    return _ken_burns_frame(
+        warped, out_w, out_h, zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rotation_deg
+    )
+
+
 
 def _generate_txt2img(
     pipes: _Pipes,
@@ -1477,6 +1617,38 @@ def _motion_params_at_time(
     return out
 
 
+_CAMERA_KEYFRAME_FIELDS: tuple[tuple[str, float], ...] = (
+    ("zoom", 1.0),
+    ("pan_x", 0.0),
+    ("pan_y", 0.0),
+    ("rotation_deg", 0.0),
+    ("translation_z", 0.0),
+    ("rotation_3d_x", 0.0),
+    ("rotation_3d_y", 0.0),
+    ("rotation_3d_z", 0.0),
+    ("fov", 70.0),
+)
+
+
+@dataclass(frozen=True)
+class _CameraComponents:
+    """Full camera pose at a point in time (2D Ken-Burns + 3D Deforum motion)."""
+
+    zoom: float = 1.0
+    pan_x: float = 0.0
+    pan_y: float = 0.0
+    rotation_deg: float = 0.0
+    translation_z: float = 0.0
+    rotation_3d_x: float = 0.0
+    rotation_3d_y: float = 0.0
+    rotation_3d_z: float = 0.0
+    fov: float = 70.0
+
+    @property
+    def roll_deg(self) -> float:
+        return float(self.rotation_deg) + float(self.rotation_3d_z)
+
+
 def _camera_keyframes_are_actionable(points: list[dict[str, Any]]) -> bool:
     if len(points) >= 2:
         return True
@@ -1485,28 +1657,47 @@ def _camera_keyframes_are_actionable(points: list[dict[str, Any]]) -> bool:
     point = points[0]
     return any(
         abs(float(point.get(key, default)) - float(default)) > 1e-4
-        for key, default in (
-            ("zoom", 1.0),
-            ("pan_x", 0.0),
-            ("pan_y", 0.0),
-            ("rotation_deg", 0.0),
-        )
+        for key, default in _CAMERA_KEYFRAME_FIELDS
     )
 
-def _camera_at_time(
+
+def _camera_keyframe_components(point: dict[str, Any]) -> _CameraComponents:
+    values = {key: float(point.get(key, default)) for key, default in _CAMERA_KEYFRAME_FIELDS}
+    return _CameraComponents(**values)
+
+
+def _lerp_camera_components(a: _CameraComponents, b: _CameraComponents, w: float) -> _CameraComponents:
+    iw = 1.0 - w
+    return _CameraComponents(
+        zoom=a.zoom * iw + b.zoom * w,
+        pan_x=a.pan_x * iw + b.pan_x * w,
+        pan_y=a.pan_y * iw + b.pan_y * w,
+        rotation_deg=a.rotation_deg * iw + b.rotation_deg * w,
+        translation_z=a.translation_z * iw + b.translation_z * w,
+        rotation_3d_x=a.rotation_3d_x * iw + b.rotation_3d_x * w,
+        rotation_3d_y=a.rotation_3d_y * iw + b.rotation_3d_y * w,
+        rotation_3d_z=a.rotation_3d_z * iw + b.rotation_3d_z * w,
+        fov=a.fov * iw + b.fov * w,
+    )
+
+
+def _camera_components_at_time(
     t: float,
     *,
     timeline: dict[str, Any] | None,
     fallback_interval_s: float,
     deforum_motion: DeforumMotionScheduleBundle | None = None,
     fps: int = 24,
-) -> tuple[float, float, float, float]:
-    """Camera track evaluator.
+) -> _CameraComponents:
+    """Full camera evaluator (2D + 3D).
 
     Timeline format (optional):
-      timeline["camera"]["keyframes"] = [{"t":0,"zoom":1.0,"pan_x":0,"pan_y":0,"rotation_deg":0}, ...]
+      timeline["camera"]["keyframes"] = [{"t":0,"zoom":1.0,"pan_x":0,"pan_y":0,
+        "rotation_deg":0,"translation_z":0,"rotation_3d_x":0,"rotation_3d_y":0,
+        "rotation_3d_z":0,"fov":70}, ...]
 
-    If missing, uses a deterministic fallback motion.
+    Resolution order: timeline camera keyframes -> Deforum motion schedules
+    (variant/timeline/overrides) -> deterministic 2D fallback.
     """
     if timeline and isinstance(timeline, dict):
         cam = timeline.get("camera")
@@ -1517,11 +1708,9 @@ def _camera_at_time(
                 pts.sort(key=lambda d: float(d.get("t", 0.0)))
                 if _camera_keyframes_are_actionable(pts):
                     if t <= float(pts[0]["t"]):
-                        p = pts[0]
-                        return float(p.get("zoom", 1.0)), float(p.get("pan_x", 0.0)), float(p.get("pan_y", 0.0)), float(p.get("rotation_deg", 0.0))
+                        return _camera_keyframe_components(pts[0])
                     if t >= float(pts[-1]["t"]):
-                        p = pts[-1]
-                        return float(p.get("zoom", 1.0)), float(p.get("pan_x", 0.0)), float(p.get("pan_y", 0.0)), float(p.get("rotation_deg", 0.0))
+                        return _camera_keyframe_components(pts[-1])
 
                     a, b = pts[0], pts[-1]
                     for i in range(len(pts) - 1):
@@ -1532,24 +1721,93 @@ def _camera_at_time(
                     ta, tb = float(a["t"]), float(b["t"])
                     u = (t - ta) / max(1e-9, (tb - ta))
                     w = _ease01(u)
-                    zoom = float(a.get("zoom", 1.0)) * (1.0 - w) + float(b.get("zoom", 1.0)) * w
-                    pan_x = float(a.get("pan_x", 0.0)) * (1.0 - w) + float(b.get("pan_x", 0.0)) * w
-                    pan_y = float(a.get("pan_y", 0.0)) * (1.0 - w) + float(b.get("pan_y", 0.0)) * w
-                    rot = float(a.get("rotation_deg", 0.0)) * (1.0 - w) + float(b.get("rotation_deg", 0.0)) * w
-                    return zoom, pan_x, pan_y, rot
-
+                    return _lerp_camera_components(
+                        _camera_keyframe_components(a), _camera_keyframe_components(b), w
+                    )
 
     # If camera keyframes are missing, fall back to motion track clips (DAW).
     mp = _motion_params_at_time(t, timeline, deforum_motion=deforum_motion, fps=fps)
     if mp:
-        return float(mp.get("zoom", 1.0)), float(mp.get("pan_x", 0.0)), float(mp.get("pan_y", 0.0)), float(mp.get("rotation_deg", 0.0))
+        return _CameraComponents(
+            zoom=float(mp.get("zoom", 1.0)),
+            pan_x=float(mp.get("pan_x", 0.0)),
+            pan_y=float(mp.get("pan_y", 0.0)),
+            rotation_deg=float(mp.get("rotation_deg", 0.0)),
+            translation_z=float(mp.get("translation_z", 0.0)),
+            rotation_3d_x=float(mp.get("rotation_3d_x", 0.0)),
+            rotation_3d_y=float(mp.get("rotation_3d_y", 0.0)),
+            rotation_3d_z=float(mp.get("rotation_3d_z", 0.0)),
+            fov=float(mp.get("fov", 70.0)),
+        )
 
-    # fallback deterministic motion
+    # fallback deterministic motion (2D Ken-Burns drift)
     phase = (t / max(0.001, fallback_interval_s))
     zoom = 1.0 + 0.06 * _ease01((t % fallback_interval_s) / max(0.001, fallback_interval_s))
     pan_x = 8.0 * math.sin(2.0 * math.pi * phase)
     pan_y = 5.0 * math.sin(2.0 * math.pi * phase + 1.2)
-    return zoom, pan_x, pan_y, 0.0
+    return _CameraComponents(zoom=zoom, pan_x=pan_x, pan_y=pan_y)
+
+
+def _camera_at_time(
+    t: float,
+    *,
+    timeline: dict[str, Any] | None,
+    fallback_interval_s: float,
+    deforum_motion: DeforumMotionScheduleBundle | None = None,
+    fps: int = 24,
+) -> tuple[float, float, float, float]:
+    """Backward-compatible 2D camera evaluator (zoom, pan_x, pan_y, rotation_deg)."""
+    c = _camera_components_at_time(
+        t,
+        timeline=timeline,
+        fallback_interval_s=fallback_interval_s,
+        deforum_motion=deforum_motion,
+        fps=fps,
+    )
+    return c.zoom, c.pan_x, c.pan_y, c.rotation_deg
+
+
+def _apply_camera_components_absolute(
+    img: "Image.Image", out_w: int, out_h: int, comp: _CameraComponents
+) -> "Image.Image":
+    """Apply an absolute camera pose to a (static) source frame."""
+    return _apply_camera_3d(
+        img,
+        out_w,
+        out_h,
+        zoom=comp.zoom,
+        pan_x=comp.pan_x,
+        pan_y=comp.pan_y,
+        rotation_deg=comp.roll_deg,
+        translation_z=comp.translation_z,
+        rotation_3d_x=comp.rotation_3d_x,
+        rotation_3d_y=comp.rotation_3d_y,
+        fov_deg=comp.fov,
+    )
+
+
+def _apply_camera_components_delta(
+    prev_frame: "Image.Image",
+    out_w: int,
+    out_h: int,
+    comp: _CameraComponents,
+    prev: _CameraComponents,
+) -> "Image.Image":
+    """Warp the previous frame by the per-frame camera delta (img2img path)."""
+    rz = comp.zoom / max(1e-6, prev.zoom)
+    return _apply_camera_3d(
+        prev_frame,
+        out_w,
+        out_h,
+        zoom=rz,
+        pan_x=comp.pan_x - prev.pan_x,
+        pan_y=comp.pan_y - prev.pan_y,
+        rotation_deg=comp.roll_deg - prev.roll_deg,
+        translation_z=comp.translation_z - prev.translation_z,
+        rotation_3d_x=comp.rotation_3d_x - prev.rotation_3d_x,
+        rotation_3d_y=comp.rotation_3d_y - prev.rotation_3d_y,
+        fov_deg=comp.fov,
+    )
 
 
 def _write_runtime_checkpoint(checkpoint_json: Path, state: dict[str, Any]) -> None:
@@ -1870,14 +2128,14 @@ def render_internal_video_variant(
             src = key_imgs[a].convert("RGB")
             if a != b:
                 src = Image.blend(src, key_imgs[b].convert("RGB"), float(w))
-            zoom, pan_x, pan_y, rot = _camera_at_time(
+            comp = _camera_components_at_time(
                 t,
                 timeline=timeline,
                 fallback_interval_s=settings.keyframe_interval_s,
                 deforum_motion=deforum_context.motion,
                 fps=fps_schedule,
             )
-            fr = _ken_burns_frame(src, out_w, out_h, zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rot)
+            fr = _apply_camera_components_absolute(src, out_w, out_h, comp)
             frame_paths.append(_save_frame(fr, fi, t))
             if progress_fn:
                 progress_fn("frames", len(key_times) + fi + 1, total_units, f"Rendered frame {fi+1}/{total_frames}")
@@ -1886,7 +2144,7 @@ def render_internal_video_variant(
                 log_fn(f"Rendered frame {fi+1}/{total_frames}")
     else:
         prev_frame = key_imgs[key_times[0]].resize((out_w, out_h), resample=Image.LANCZOS)
-        prev_zoom, prev_px, prev_py, prev_rot = _camera_at_time(
+        prev_comp = _camera_components_at_time(
             0.0,
             timeline=timeline,
             fallback_interval_s=settings.keyframe_interval_s,
@@ -1905,7 +2163,7 @@ def render_internal_video_variant(
             schedule_frame = int(round(float(t) * float(fps_schedule)))
 
             a_t, b_t, w = _key_times_bracket(key_times, t)
-            zoom, pan_x, pan_y, rot = _camera_at_time(
+            comp = _camera_components_at_time(
                 t,
                 timeline=timeline,
                 fallback_interval_s=settings.keyframe_interval_s,
@@ -1916,7 +2174,7 @@ def render_internal_video_variant(
             if settings.resume_existing_frames and existing.exists():
                 try:
                     prev_frame = Image.open(existing).convert("RGB").resize((out_w, out_h), resample=Image.LANCZOS)
-                    prev_zoom, prev_px, prev_py, prev_rot = zoom, pan_x, pan_y, rot
+                    prev_comp = comp
                     frame_paths.append(existing)
                     if progress_fn:
                         progress_fn("frames", len(key_times) + fi + 1, total_units, f"Reusing frame {fi+1}/{total_frames}")
@@ -1955,11 +2213,7 @@ def render_internal_video_variant(
                 else _encode_prompt(pipes, negative_prompt)
             )
 
-            rz = zoom / max(1e-6, prev_zoom)
-            dpx = pan_x - prev_px
-            dpy = pan_y - prev_py
-
-            init = _ken_burns_frame(prev_frame, out_w, out_h, zoom=rz, pan_x=dpx, pan_y=dpy, rotation_deg=(rot - prev_rot))
+            init = _apply_camera_components_delta(prev_frame, out_w, out_h, comp, prev_comp)
 
             # Blend in keyframe anchors to prevent drift.
             anchor = key_imgs[a_t]
@@ -1988,7 +2242,7 @@ def render_internal_video_variant(
             else:
                 prev_frame = init.resize((out_w, out_h), resample=Image.LANCZOS)
 
-            prev_zoom, prev_px, prev_py, prev_rot = zoom, pan_x, pan_y, rot
+            prev_comp = comp
             frame_paths.append(_save_frame(prev_frame, fi, t))
             if progress_fn:
                 progress_fn("frames", len(key_times) + fi + 1, total_units, f"Rendered frame {fi+1}/{total_frames}")
@@ -2300,14 +2554,14 @@ def render_stability_hosted_video_variant(
 
         a, _b, _w = _key_times_bracket(key_times, t)
         src = key_imgs[a]
-        zoom, pan_x, pan_y, rot = _camera_at_time(
+        comp = _camera_components_at_time(
             t,
             timeline=timeline,
             fallback_interval_s=settings.keyframe_interval_s,
             deforum_motion=deforum_context.motion,
             fps=fps_schedule,
         )
-        fr = _ken_burns_frame(src, out_w, out_h, zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rot)
+        fr = _apply_camera_components_absolute(src, out_w, out_h, comp)
         _save_frame(fr, fi, t)
         if progress_fn:
             progress_fn("frames", len(key_times) + fi + 1, total_units, f"Rendered hosted frame {fi+1}/{total_frames}")
@@ -2806,7 +3060,7 @@ def render_internal_diffusion_preview_segment(
         neg = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
 
         # camera motion (camera keyframes -> motion track -> fallback)
-        zoom, pan_x, pan_y, rot = _camera_at_time(
+        comp = _camera_components_at_time(
             t,
             timeline=timeline,
             fallback_interval_s=settings.keyframe_interval_s,
@@ -2850,7 +3104,7 @@ def render_internal_diffusion_preview_segment(
 
         # Apply camera transform and overlays at absolute time t
         try:
-            fr = _ken_burns_frame(img, int(settings.width), int(settings.height), zoom=zoom, pan_x=pan_x, pan_y=pan_y, rotation_deg=rot)
+            fr = _apply_camera_components_absolute(img, int(settings.width), int(settings.height), comp)
         except Exception:
             fr = img
 

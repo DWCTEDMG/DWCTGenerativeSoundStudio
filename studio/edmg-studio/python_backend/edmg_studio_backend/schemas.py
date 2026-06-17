@@ -187,6 +187,11 @@ class InternalVideoRenderRequest(BaseModel):
     deforum_angle: str | dict[str, float] | None = None
     deforum_translation_x: str | dict[str, float] | None = None
     deforum_translation_y: str | dict[str, float] | None = None
+    deforum_translation_z: str | dict[str, float] | None = None
+    deforum_rotation_3d_x: str | dict[str, float] | None = None
+    deforum_rotation_3d_y: str | dict[str, float] | None = None
+    deforum_rotation_3d_z: str | dict[str, float] | None = None
+    deforum_fov: str | dict[str, float] | None = None
     deforum_strength_schedule: str | dict[str, float] | None = None
 
 class TimelineUpdateRequest(BaseModel):

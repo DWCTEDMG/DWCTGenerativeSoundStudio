@@ -6867,6 +6867,11 @@ def _internal_settings_from_payload(
         "deforum_angle",
         "deforum_translation_x",
         "deforum_translation_y",
+        "deforum_translation_z",
+        "deforum_rotation_3d_x",
+        "deforum_rotation_3d_y",
+        "deforum_rotation_3d_z",
+        "deforum_fov",
         "deforum_strength_schedule",
     )
     deforum_overrides = {
