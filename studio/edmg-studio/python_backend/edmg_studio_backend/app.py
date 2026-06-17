@@ -51,7 +51,9 @@ from .schemas import (
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
     UnrealBridgePreviewResponse,
+    AutoAnimateRequest,
 )
+from .services import animation_autoconfig as autoconfig
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
 from .services.ai_client import build_ai_client
@@ -6576,6 +6578,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
     variant2["index"] = int(payload.get("variant_index", 0))
     variant2["duration_s"] = _resolved_project_duration_s(proj, variant, scenes)
 
+    source_image_path = _resolve_project_reference_path(project_id, getattr(settings_obj, "source_asset", None))
     out = render_internal_video_variant(
         ffmpeg_path=settings.ffmpeg_path,
         project_dir=pdir,
@@ -6590,6 +6593,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         cancel_check_fn=_check_canceled,
         chunk_plan=chunk_plan,
         checkpoint_fn=_checkpoint,
+        source_image_path=source_image_path,
     )
     checkpoint_summary = runtime_checkpoint or _load_render_checkpoint(out)
 
@@ -6886,6 +6890,8 @@ def _internal_settings_from_payload(
         anchor_strength=float(payload.get("anchor_strength", 0.20)),
         prompt_blend=bool(payload.get("prompt_blend", True)),
         resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
+        source_asset=(str(payload.get("source_asset")).strip() or None) if payload.get("source_asset") is not None else None,
+        source_strength=float(payload.get("source_strength", 0.55)),
         deforum_overrides=deforum_overrides or None,
     )
 
@@ -7773,6 +7779,125 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
         "render_enqueued": enq.get("enqueued"),
         "assemble_job": assemble_job.__dict__,
     }
+
+
+def _comfyui_available_quick() -> bool:
+    """Best-effort check for a reachable, render-capable ComfyUI node."""
+    try:
+        ckpt, _ = _resolve_comfy_checkpoint_name(settings.comfyui_checkpoint, allow_auto_fallback=True)
+        diag = comfy_pool.diagnose({"checkpoint": ckpt})
+        return bool(diag.get("compatible") or diag.get("busy_compatible"))
+    except Exception:
+        return False
+
+
+@app.get("/v1/render/animation_presets")
+def animation_presets():
+    """List the one-click animation presets (quality + motion intensity buttons)."""
+    return {"ok": True, "presets": autoconfig.list_presets()}
+
+
+@app.post("/v1/projects/{project_id}/render/auto")
+def render_auto(project_id: str, req: AutoAnimateRequest):
+    """AI auto-configure render settings for a chosen animation preset, then
+    optionally launch the full workflow on the internal renderer or ComfyUI.
+
+    Manual configuration endpoints (``/render/internal/video``,
+    ``/render/comfyui/motion_scenes``, etc.) remain available unchanged; this is
+    an additive "push a button and the AI sets everything, then renders" layer.
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated")
+    variants = plan["variants"]
+    vi = int(req.variant_index)
+    if vi < 0 or vi >= len(variants):
+        raise HTTPException(400, "Invalid variant_index")
+    variant = variants[vi]
+    scenes = variant.get("scenes") or []
+
+    preset = autoconfig.resolve_preset(req.preset)
+    if preset is None:
+        raise UserFacingError(
+            f"Unknown animation preset '{req.preset}'",
+            hint="Call GET /v1/render/animation_presets for the available preset ids.",
+            code="UNKNOWN_PRESET",
+            status_code=400,
+        )
+
+    duration_s = _resolved_project_duration_s(proj, variant, scenes)
+    fps = int(req.fps or variant.get("fps") or 24)
+
+    hw = _hardware_profile()
+    provider_status = _render_provider_status(hw)
+    requested_tier = preset.quality if preset.quality in ("draft", "balanced", "quality") else "auto"
+    tier_plan = _build_internal_render_plan(hw, requested_tier=requested_tier, duration_s=duration_s)
+    tier_defaults = dict(tier_plan.get("defaults") or {})
+    device_preference = str(tier_plan.get("device_preference") or "auto")
+    if device_preference == "directml" and not bool((provider_status.get("directml") or {}).get("enabled", True)):
+        device_preference = "cpu"
+
+    comfy_ok = _comfyui_available_quick()
+    cfg = autoconfig.build_autoconfig(
+        preset,
+        engine=req.engine,
+        tier_defaults=tier_defaults,
+        applied_tier=str(tier_plan.get("applied_tier") or "auto"),
+        preferred_model=str(tier_plan.get("preferred_internal_model") or "auto"),
+        device_preference=device_preference,
+        duration_s=duration_s,
+        fps=fps,
+        variant_index=vi,
+        source_asset=req.source_asset,
+        comfyui_available=comfy_ok,
+    )
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "config": cfg.to_public(),
+        "engine": cfg.engine,
+        "hardware": hw,
+        "tier_plan": tier_plan,
+        "comfyui_available": comfy_ok,
+        "launched": False,
+    }
+    if not req.run:
+        return result
+
+    if cfg.engine == "comfyui" and cfg.comfyui_request is not None:
+        motion_payload = {
+            k: v for k, v in cfg.comfyui_request.items() if k in RenderMotionRequest.model_fields
+        }
+        enq = render_motion_scenes(project_id, RenderMotionRequest(**motion_payload))
+        assemble_job = jobs.create(
+            project_id, "assemble_variant", {"variant_index": vi, "fps": int(cfg.comfyui_request.get("fps", 24))}
+        )
+        result.update(
+            {
+                "launched": True,
+                "render_enqueued": enq.get("enqueued"),
+                "jobs": enq.get("jobs"),
+                "assemble_job": assemble_job.__dict__,
+            }
+        )
+        return result
+
+    internal_payload = {
+        k: v for k, v in cfg.internal_request.items() if k in InternalVideoRenderRequest.model_fields
+    }
+    res = render_internal_video(project_id, InternalVideoRenderRequest(**internal_payload))
+    result.update(
+        {
+            "launched": True,
+            "engine": "internal",
+            "job": res.get("job"),
+            "preflight": res.get("preflight"),
+        }
+    )
+    return result
 
 
 @app.get("/v1/projects/{project_id}/assets")

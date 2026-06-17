@@ -61,6 +61,9 @@ class InternalVideoSettings:
     prompt_blend: bool = True
     resume_existing_frames: bool = True
     deforum_overrides: dict[str, Any] | None = None
+    # Image animation: an uploaded still used to seed the first keyframe (img2img).
+    source_asset: str | None = None
+    source_strength: float = 0.55
 
 
 class _PipelineCache:
@@ -308,6 +311,8 @@ def _render_signature(
         "refine_every_n_frames": int(settings.refine_every_n_frames),
         "anchor_strength": float(settings.anchor_strength),
         "prompt_blend": bool(settings.prompt_blend),
+        "source_asset": str(settings.source_asset or ""),
+        "source_strength": float(settings.source_strength),
         "deforum_overrides": settings.deforum_overrides or None,
         "variant_motion_digest": _json_digest((variant or {}).get("motion_schedules") if isinstance(variant, dict) else None),
         "variant_prompt_digest": _json_digest((variant or {}).get("prompts") if isinstance(variant, dict) else None),
@@ -1953,12 +1958,18 @@ def render_internal_video_variant(
     cancel_check_fn=None,
     chunk_plan: dict[str, Any] | None = None,
     checkpoint_fn=None,
+    source_image_path: Path | None = None,
 ) -> Path:
     """Render an internal baseline music video.
 
     Modes:
       - off/keyframes: SD keyframes + Ken Burns + optional overlays
       - frame_img2img: sequential img2img refinement per frame for temporal consistency
+
+    Image animation:
+      - when ``source_image_path`` is provided (or ``settings.source_asset`` resolves),
+        the first keyframe is seeded from that image via img2img so any painting or
+        photo can be "brought to life" with motion + prompt evolution.
     """
     _require_pillow()
 
@@ -2077,7 +2088,30 @@ def render_internal_video_variant(
         cfgk = float((mpk or {}).get('cfg', settings.cfg))
         stepsk = int(float((mpk or {}).get('steps', settings.steps)))
         denk = float((mpk or {}).get('denoise', (mpk or {}).get('strength', settings.temporal_strength)))
-        if prev_key_img is None or settings.temporal_mode in ("off",):
+        seed_from_source = i == 0 and source_image_path is not None
+        if seed_from_source:
+            # Image animation: bring the uploaded still to life as the first keyframe.
+            try:
+                base_src = _load_render_source_image(source_image_path, size=(out_w, out_h))
+                img = _generate_img2img(
+                    pipes,
+                    init_image=base_src,
+                    prompt_embeds=pe,
+                    negative_embeds=negative_embeds,
+                    width=out_w,
+                    height=out_h,
+                    steps=stepsk,
+                    cfg=cfgk,
+                    seed=seed,
+                    strength=max(0.05, min(0.95, float(settings.source_strength))),
+                )
+                if log_fn:
+                    log_fn(f"Seeded first keyframe from source image {Path(source_image_path).name}")
+            except Exception as e:  # pragma: no cover - depends on runtime model
+                if log_fn:
+                    log_fn(f"Source image seed failed ({e}); falling back to txt2img")
+                img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)
+        elif prev_key_img is None or settings.temporal_mode in ("off",):
             img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)
         else:
             # Keyframe continuity: anchor to previous keyframe to keep style stable.
