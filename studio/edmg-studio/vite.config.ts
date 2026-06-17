@@ -15,6 +15,7 @@ export default defineConfig({
         "**/cache/**",
         "**/data/**",
         "**/dist/**",
+        "**/electron/**",
         "**/external/**",
         "**/logs/**",
         "**/models/**",
