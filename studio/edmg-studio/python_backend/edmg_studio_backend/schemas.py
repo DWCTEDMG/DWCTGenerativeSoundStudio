@@ -181,6 +181,9 @@ class InternalVideoRenderRequest(BaseModel):
     anchor_strength: float = Field(default=0.20, ge=0.0, le=1.0)
     prompt_blend: bool = True
     resume_existing_frames: bool = True
+    # Image animation: animate an uploaded still (path under the project, e.g. assets/refs/foo.png)
+    source_asset: str | None = None
+    source_strength: float = Field(default=0.55, ge=0.05, le=0.95)
     deforum_prompts: dict[str, str] | None = None
     deforum_negative_prompts: dict[str, str] | None = None
     deforum_zoom: str | dict[str, float] | None = None
@@ -193,6 +196,22 @@ class InternalVideoRenderRequest(BaseModel):
     deforum_rotation_3d_z: str | dict[str, float] | None = None
     deforum_fov: str | dict[str, float] | None = None
     deforum_strength_schedule: str | dict[str, float] | None = None
+
+class AutoAnimateRequest(BaseModel):
+    """AI auto-configure (and optionally run) an animation render.
+
+    Picks an animation preset (quality + motion intensity), optionally an engine
+    (internal renderer or ComfyUI), and either returns the computed configuration
+    (``run=false``) or launches the full render workflow (``run=true``).
+    """
+
+    preset: str = "balanced_motion"
+    engine: Literal["auto", "internal", "comfyui"] = "auto"
+    variant_index: int = 0
+    source_asset: str | None = None
+    run: bool = True
+    fps: int | None = Field(default=None, ge=1, le=60)
+
 
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
