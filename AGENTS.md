@@ -1,5 +1,13 @@
 # AGENTS.md
 
+## Product / UX priority (user preference)
+
+The **Studio UI is the priority**. When adding or changing functionality, surface it in the
+Studio desktop UI (`studio/edmg-studio/src/`), not just as a backend API endpoint. New backend
+capabilities should come with the corresponding UI controls (e.g. on the Render, Workspace,
+Models, or Settings pages) so users can drive them without curl/API calls. Assume the user wants
+every feature available in the UI unless they say otherwise.
+
 ## Cursor Cloud specific instructions
 
 EDMG Studio is a music-reactive AI video generation studio. The product lives under

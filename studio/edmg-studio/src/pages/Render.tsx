@@ -265,6 +265,15 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [latestInternalLog, setLatestInternalLog] = useState<string>("");
   const [internalPolling, setInternalPolling] = useState<boolean>(true);
 
+  // AI Auto-Render (preset-driven auto-configure + run)
+  const [animationPresets, setAnimationPresets] = useState<any[]>([]);
+  const [autoPreset, setAutoPreset] = useState<string>("full_motion");
+  const [autoEngine, setAutoEngine] = useState<"auto" | "internal" | "comfyui">("auto");
+  const [autoSourceAsset, setAutoSourceAsset] = useState<string>("");
+  const [autoMaskAssets, setAutoMaskAssets] = useState<string[]>([]);
+  const [autoConfig, setAutoConfig] = useState<any>(null);
+  const [autoBusy, setAutoBusy] = useState<boolean>(false);
+
   const [info, setInfo] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -736,6 +745,83 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       await refreshInternalPreflight();
     } catch (e: any) {
       setErr(String(e));
+    }
+  };
+
+  useEffect(() => {
+    apiGet("/v1/render/animation_presets")
+      .then((d) => setAnimationPresets(Array.isArray(d?.presets) ? d.presets : []))
+      .catch(() => setAnimationPresets([]));
+  }, []);
+
+  const selectedAutoPreset = useMemo(
+    () => animationPresets.find((p) => p.id === autoPreset) || null,
+    [animationPresets, autoPreset],
+  );
+  const autoNeedsSource = Boolean(
+    selectedAutoPreset?.uses_source_image || selectedAutoPreset?.animates_objects,
+  );
+  const autoNeedsMasks = Boolean(selectedAutoPreset?.requires_masks);
+  const autoRunDisabled =
+    !(plan?.variants?.length || 0) ||
+    autoBusy ||
+    (autoNeedsSource && !autoSourceAsset) ||
+    (autoNeedsMasks && autoMaskAssets.length === 0);
+
+  const previewAuto = async () => {
+    if (!projectId) return;
+    setErr(null);
+    setInfo(null);
+    setAutoBusy(true);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/auto`, {
+        preset: autoPreset,
+        engine: autoEngine,
+        variant_index: selectedVariant,
+        source_asset: autoSourceAsset || null,
+        run: false,
+      });
+      setAutoConfig(d);
+      setInfo(d);
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const runAuto = async () => {
+    if (!projectId) return;
+    setErr(null);
+    setInfo(null);
+    setAutoBusy(true);
+    try {
+      let d: any;
+      if (autoNeedsMasks) {
+        // Masked / regional object presets need explicit masks -> layered endpoint.
+        d = await apiPost(`/v1/projects/${projectId}/render/animate_layers`, {
+          source_asset: autoSourceAsset,
+          mode: "masked",
+          motion: selectedAutoPreset?.motion || "full_3d",
+          masks: autoMaskAssets.map((m) => ({ mask_asset: m })),
+        });
+      } else {
+        d = await apiPost(`/v1/projects/${projectId}/render/auto`, {
+          preset: autoPreset,
+          engine: autoEngine,
+          variant_index: selectedVariant,
+          source_asset: autoSourceAsset || null,
+          run: true,
+        });
+      }
+      setAutoConfig(d);
+      setInfo(d);
+      await refreshProject(projectId);
+      await refreshInternalStatus();
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setAutoBusy(false);
     }
   };
 
@@ -1216,6 +1302,113 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
             <button onClick={runPipeline} disabled={!variantCount}>Preset + Render (one click)</button>
             <button className="secondary" onClick={runInternalVideo} disabled={!variantCount}>Internal / Hosted</button>
             <button className="secondary" onClick={assemble} disabled={!variantCount}>Assemble only</button>
+          </div>
+
+          <div className="card" style={{ marginTop: 12, padding: 12 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>AI Auto-Render</div>
+            <div className="small" style={{ opacity: 0.85, marginBottom: 8 }}>
+              Pick a preset and the AI sets the render + motion settings and runs it. The manual controls below still work.
+            </div>
+            <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+              <div style={{ flex: 2, minWidth: 220 }}>
+                <div className="small">Animation preset</div>
+                <select
+                  value={autoPreset}
+                  onChange={(e) => { setAutoPreset(e.target.value); setAutoConfig(null); }}
+                >
+                  {animationPresets.length ? (
+                    animationPresets.map((p) => (
+                      <option key={p.id} value={p.id}>{p.label}</option>
+                    ))
+                  ) : (
+                    <option value={autoPreset}>{autoPreset}</option>
+                  )}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <div className="small">Engine</div>
+                <select value={autoEngine} onChange={(e) => setAutoEngine(e.target.value as any)}>
+                  <option value="auto">Auto</option>
+                  <option value="internal">Internal renderer</option>
+                  <option value="comfyui">ComfyUI</option>
+                </select>
+              </div>
+            </div>
+            {selectedAutoPreset ? (
+              <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+                {selectedAutoPreset.description} • motion: <b>{selectedAutoPreset.motion_label || selectedAutoPreset.motion}</b>
+                {selectedAutoPreset.is_3d ? " (3D)" : ""} • quality: <b>{selectedAutoPreset.quality}</b>
+                {selectedAutoPreset.animates_objects ? " • animates objects in the image" : ""}
+              </div>
+            ) : null}
+            {autoNeedsSource ? (
+              <div style={{ marginTop: 8 }}>
+                <div className="small">Source image (required)</div>
+                {projectAssets.refs.length ? (
+                  <select value={autoSourceAsset} onChange={(e) => setAutoSourceAsset(e.target.value)}>
+                    <option value="">— select an uploaded reference —</option>
+                    {projectAssets.refs.map((a) => (
+                      <option key={a.path} value={a.path}>{a.path.replace(/^assets\/refs\//, "")}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="small" style={{ opacity: 0.8 }}>Upload an image under References (Advanced) first.</div>
+                )}
+              </div>
+            ) : null}
+            {autoNeedsMasks ? (
+              <div style={{ marginTop: 8 }}>
+                <div className="small">Object masks (required) — select one or more</div>
+                {maskAssets.length ? (
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+                    {maskAssets.map((m: string) => (
+                      <label key={m} className="small" style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={autoMaskAssets.includes(m)}
+                          onChange={(e) =>
+                            setAutoMaskAssets((prev) =>
+                              e.target.checked ? [...prev, m] : prev.filter((x) => x !== m),
+                            )
+                          }
+                        />
+                        {m}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="small" style={{ opacity: 0.8 }}>Upload masks under Masks (Advanced) first.</div>
+                )}
+              </div>
+            ) : null}
+            <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
+              <button onClick={runAuto} disabled={autoRunDisabled}>{autoBusy ? "Working…" : "Auto-configure & Render"}</button>
+              <button className="secondary" onClick={previewAuto} disabled={!variantCount || autoBusy}>Preview config</button>
+            </div>
+            {autoConfig?.config ? (
+              <div className="card" style={{ marginTop: 10, padding: 10 }}>
+                <div className="small">
+                  Engine: <b>{autoConfig.engine}</b>
+                  {autoConfig.config.internal_request?.render_tier ? <> • tier: <b>{autoConfig.config.internal_request.render_tier}</b></> : null}
+                  {autoConfig.config.animation_mode ? <> • mode: <b>{autoConfig.config.animation_mode}</b></> : null}
+                </div>
+                {autoEngine === "comfyui" && autoConfig.comfyui_available === false ? (
+                  <div className="small" style={{ opacity: 0.8 }}>ComfyUI not reachable; the internal renderer will be used.</div>
+                ) : null}
+                {Array.isArray(autoConfig.config.notes) && autoConfig.config.notes.length ? (
+                  <ul className="small" style={{ marginTop: 6 }}>
+                    {autoConfig.config.notes.map((n: string, i: number) => (<li key={i}>{n}</li>))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+            {autoConfig?.job || autoConfig?.jobs?.length ? (
+              <div className="small" style={{ marginTop: 8 }}>
+                Launched job <b>{autoConfig?.job?.id || autoConfig?.jobs?.[0]?.id || "—"}</b>
+                {" "}({autoConfig?.job?.type || autoConfig?.jobs?.[0]?.type || "render"}).{" "}
+                <button className="secondary" onClick={() => onNavigate?.("queue")}>Open Render Queue</button>
+              </div>
+            ) : null}
           </div>
 
           <details style={{ marginTop: 12 }} open={uiMode === "advanced"}>
