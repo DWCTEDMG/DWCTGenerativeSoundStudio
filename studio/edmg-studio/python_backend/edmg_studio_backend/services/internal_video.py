@@ -4,15 +4,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import re
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-from .render_settings import RenderSettingsStore
 
 from ..errors import UserFacingError
 from .deforum_motion import DeforumMotionScheduleBundle, evaluate_motion_state
@@ -394,18 +391,8 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     if cached is not None:
         return cached
 
-    # Apply CUDA optimizations before loading models
-    if device == "cuda":
-        try:
-            _data_dir = Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()
-            _cuda_cfg = RenderSettingsStore(_data_dir).get().get("cuda") or {}
-            if bool(_cuda_cfg.get("enable_tf32", True)):
-                torch.backends.cuda.matmul.allow_tf32 = True
-                torch.backends.cudnn.allow_tf32 = True
-            torch.backends.cudnn.benchmark = True
-        except Exception:
-            pass
-
+    # TF32 / cuDNN benchmark flags are set at app startup by _apply_cuda_startup_flags()
+    # in app.py, so we don't need to re-apply them here on every pipeline load.
     family = _model_family_from_dir(model_dir)
 
     torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32

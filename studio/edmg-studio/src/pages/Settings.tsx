@@ -967,8 +967,14 @@ export default function Settings(props: PageProps) {
                     <button disabled={saving || !nvidiaApiKey} onClick={() => saveSecret("nvidia_api_key", nvidiaApiKey)}>Save</button>
                     <button className="secondary" disabled={saving || !secrets?.has_nvidia_api_key} onClick={() => clearSecret("nvidia_api_key")}>Clear</button>
                   </div>
+                  {!secrets?.has_nvidia_api_key && (
+                    <div className="small" style={{ marginTop: 6, padding: "6px 10px", borderRadius: 6, background: "var(--warning-bg, #fff3cd)", color: "var(--warning-text, #856404)", border: "1px solid var(--warning-border, #ffc107)" }}>
+                      ⚠ No NVIDIA API key saved — planning will fall back to rule-based mode until you save one above.
+                    </div>
+                  )}
                   <div className="small" style={{ opacity: 0.82 }}>
                     Uses NVIDIA's Nemotron Ultra 253B model via the NVIDIA NIM cloud API. Best-in-class creative planning quality. Requires an NVIDIA API key — no local GPU needed.
+                    Get a free key at <a href="https://build.nvidia.com" target="_blank" rel="noreferrer">build.nvidia.com</a>.
                   </div>
                 </>
               ) : null}
@@ -1221,7 +1227,33 @@ export default function Settings(props: PageProps) {
         <div className="small" style={{ marginBottom: 10 }}>
           This is the provider the backend is using right now. If it differs from the saved startup config above, restart Studio to apply your latest change.
         </div>
-        <pre>{JSON.stringify(aiStatus, null, 2)}</pre>
+        {aiStatus?.ai_config?.warning && (
+          <div className="small" style={{ marginBottom: 10, padding: "8px 12px", borderRadius: 8, background: "var(--warning-bg, #fff3cd)", color: "var(--warning-text, #856404)", border: "1px solid var(--warning-border, #ffc107)" }}>
+            ⚠ {aiStatus.ai_config.warning}
+          </div>
+        )}
+        <div style={{ display: "grid", gap: 6 }}>
+          {[
+            ["Provider", aiStatus?.ai_config?.provider],
+            ["Label", aiStatus?.ai_config?.label],
+            ["Model", aiStatus?.ai_config?.model],
+            ["Base URL", aiStatus?.ai_config?.base_url],
+            ["NVIDIA key", aiStatus?.ai_config?.nvidia_api_key_configured != null
+              ? (aiStatus.ai_config.nvidia_api_key_configured ? "configured" : "not set")
+              : undefined],
+            ["Mode", aiStatus?.ai_config?.mode],
+            ["Hint", aiStatus?.ai_config?.hint],
+          ].map(([label, value]) => value != null ? (
+            <div key={String(label)} className="small" style={{ display: "flex", gap: 10 }}>
+              <span style={{ opacity: 0.7, minWidth: 100 }}>{label}</span>
+              <span style={{ wordBreak: "break-all" }}>{String(value)}</span>
+            </div>
+          ) : null)}
+        </div>
+        <details style={{ marginTop: 10 }}>
+          <summary className="small" style={{ cursor: "pointer", opacity: 0.7 }}>Show full JSON</summary>
+          <pre style={{ marginTop: 6, fontSize: 11, overflow: "auto", maxHeight: 260 }}>{JSON.stringify(aiStatus, null, 2)}</pre>
+        </details>
       </div>
     ) : null,
     tokens: (
@@ -1513,6 +1545,7 @@ export default function Settings(props: PageProps) {
               </button>
               <div className="small" style={{ opacity: 0.82 }}>
                 Render and Models will only surface the hosted Stability controls after a key is saved and the hosted fallback is enabled.
+                If you changed the CUDA enabled toggle, restart the backend and re-start ComfyUI via the ComfyUI panel below for the new mode to take effect.
               </div>
             </div>
           </div>

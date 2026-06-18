@@ -183,6 +183,23 @@ models = ModelManager(
 comfy_portable = ComfyPortableProcess()
 ollama_managed = OllamaManagedProcess()
 
+# Apply CUDA performance flags at process startup so they take effect for
+# every pipeline load without needing to re-read settings on each call.
+def _apply_cuda_startup_flags() -> None:
+    try:
+        import torch  # type: ignore
+        if not (getattr(torch, "cuda", None) and torch.cuda.is_available()):
+            return
+        cuda_cfg = dict((render_settings.get().get("cuda") or {}))
+        if bool(cuda_cfg.get("enable_tf32", True)):
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+    except Exception:
+        pass
+
+_apply_cuda_startup_flags()
+
 _ALLOWED_SECRETS: frozenset[str] = frozenset({
     "hf_token", "civitai_api_key", "openai_compat_api_key",
     "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
@@ -1745,8 +1762,34 @@ def _build_internal_render_plan(hw: dict[str, Any] | None = None, *, requested_t
     }
 
 
+_HW_CACHE: dict[str, Any] = {}
+_HW_CACHE_TTL_S: float = 30.0
+
+
+def _hardware_profile_invalidate() -> None:
+    """Force next call to _hardware_profile() to re-probe hardware."""
+    _HW_CACHE.clear()
+
+
 def _hardware_profile() -> dict[str, Any]:
-    """Best-effort local hardware detection used for auto tiering."""
+    """Best-effort local hardware detection used for auto tiering.
+
+    Results are cached for _HW_CACHE_TTL_S seconds so rapid successive calls
+    (e.g. preflight + render plan + conductor) don't re-probe torch.cuda and
+    the DirectML runtime on every request.
+    """
+    import time as _time
+    now = _time.monotonic()
+    if _HW_CACHE.get("_ts", 0.0) + _HW_CACHE_TTL_S > now:
+        return dict(_HW_CACHE.get("_data") or {})
+    result = _compute_hardware_profile()
+    _HW_CACHE["_ts"] = now
+    _HW_CACHE["_data"] = result
+    return dict(result)
+
+
+def _compute_hardware_profile() -> dict[str, Any]:
+    """Unconditionally probe local hardware — call _hardware_profile() instead."""
     cpu_threads = max(1, int(os.cpu_count() or 1))
     out: dict[str, Any] = {
         "backend": "cpu",
@@ -1986,6 +2029,7 @@ def get_render_providers():
 @app.post("/v1/settings/render_providers")
 def set_render_providers(payload: dict[str, Any]):
     saved = render_settings.update(payload)
+    _hardware_profile_invalidate()  # CUDA enabled/disabled affects hardware profile
     return {
         "ok": True,
         "settings": saved,
@@ -2154,6 +2198,11 @@ def _setup_ai_config() -> dict[str, Any]:
         }
 
     if ai_provider in ("nemotron_cloud", "nvidia_nim", "nemotron"):
+        missing_key_warning = (
+            None if nvidia_api_key_configured else
+            "No NVIDIA API key saved. Planning will fall back to rule-based mode. "
+            "Add your key in Settings → AI Provider → NVIDIA API key."
+        )
         return {
             "mode": "local",
             "provider": "nemotron_cloud",
@@ -2163,6 +2212,7 @@ def _setup_ai_config() -> dict[str, Any]:
             "base_url": nemotron_base_url,
             "model": nemotron_model,
             "nvidia_api_key_configured": nvidia_api_key_configured,
+            "warning": missing_key_warning,
             "hint": "Studio planning uses NVIDIA Nemotron Ultra via the NVIDIA NIM cloud API.",
         }
 

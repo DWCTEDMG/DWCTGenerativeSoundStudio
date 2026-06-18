@@ -133,6 +133,30 @@ studio_bundle_directml = [
   "onnxruntime-directml>=1.18.0; platform_system == 'Windows'",
   "optimum[onnxruntime]>=1.19.0; platform_system == 'Windows'",
 ]
+studio_bundle_cuda = [
+  "numpy>=1.26.0,<2.0",
+  "scipy>=1.10.0",
+  "PyYAML>=6.0.0",
+  "librosa>=0.10.2",
+  "soundfile>=0.12.0",
+  "matplotlib>=3.9.0",
+  "faster-whisper>=1.1.0",
+  "diffusers>=0.30.0",
+  "transformers>=4.42.0",
+  "accelerate>=0.33.0",
+  "safetensors>=0.4.3",
+  "torch>=2.2.0",
+  "torchvision>=0.17.0",
+  "torchaudio>=2.2.0",
+  "tensorboard>=2.16.0",
+  "boto3>=1.34.0",
+  "spacy>=3.5.0",
+  "textblob>=0.17.0",
+  "nltk>=3.8.0",
+  "tzdata>=2024.1",
+  "python-dotenv>=0.21.0",
+  "tbb>=2021.0; platform_system == 'Windows'",
+]
 test = [
   "pytest>=8.3.0",
   "httpx>=0.27.0",
@@ -152,6 +176,12 @@ include = [
   "edmg*",
 ]
 
+
+# Install studio_bundle_cuda with:
+#   pip install -e ".[studio_bundle_cuda]" \
+#       --extra-index-url https://download.pytorch.org/whl/cu124
+# The extra-index-url lets pip resolve the CUDA-enabled torch/torchvision/torchaudio
+# wheels from pytorch.org while falling back to PyPI for everything else.
 
 [tool.ruff]
 target-version = "py310"
