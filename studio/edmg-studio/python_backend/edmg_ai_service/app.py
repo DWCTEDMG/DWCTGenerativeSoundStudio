@@ -51,8 +51,22 @@ def plan(req: PlanRequest) -> PlanResponse:
     return provider.plan(req)
 
 
+def _coerce_bool(value: object, default: bool = True) -> bool:
+    raw = str(value if value is not None else "").strip().lower()
+    if not raw:
+        return default
+    return raw not in {"0", "false", "no", "off"}
+
+
 @app.post("/v1/transcribe")
-async def transcribe_audio(file: UploadFile = File(...), model_size: str = "turbo") -> dict:
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    model_size: str = "turbo",
+    provider: str = "faster_whisper",
+    device: str = "cpu",
+    compute_type: str = "int8",
+    fallback_to_whisper: str = "1",
+) -> dict:
     try:
         from .asr import transcribe_detailed
     except Exception as e:
@@ -62,7 +76,14 @@ async def transcribe_audio(file: UploadFile = File(...), model_size: str = "turb
     tmp_path = await _persist_upload_to_tempfile(file, suffix=suffix)
 
     try:
-        return transcribe_detailed(tmp_path, model_size=model_size)
+        return transcribe_detailed(
+            tmp_path,
+            model_size=model_size,
+            provider=provider,
+            device=device,
+            compute_type=compute_type,
+            fallback_to_whisper=_coerce_bool(fallback_to_whisper, True),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

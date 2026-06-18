@@ -14,7 +14,16 @@ class AiDirector(Protocol):
     def plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         ...
 
-    def transcribe(self, audio_path: str, model_size: str = "turbo") -> dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: str,
+        model_size: str = "turbo",
+        *,
+        provider: str = "faster_whisper",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        fallback_to_whisper: bool = True,
+    ) -> dict[str, Any]:
         ...
 
     def audio_features(self, audio_path: str) -> dict[str, Any]:
@@ -37,13 +46,28 @@ class HttpAiDirectorClient:
         r.raise_for_status()
         return r.json()
 
-    def transcribe(self, audio_path: str, model_size: str = "turbo") -> dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: str,
+        model_size: str = "turbo",
+        *,
+        provider: str = "faster_whisper",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        fallback_to_whisper: bool = True,
+    ) -> dict[str, Any]:
         with open(audio_path, "rb") as f:
             files = {"file": f}
             r = requests.post(
                 f"{self.base_url}/v1/transcribe",
                 files=files,
-                data={"model_size": model_size},
+                data={
+                    "model_size": model_size,
+                    "provider": provider,
+                    "device": device,
+                    "compute_type": compute_type,
+                    "fallback_to_whisper": "1" if fallback_to_whisper else "0",
+                },
                 timeout=self.timeout_s,
             )
         if r.status_code == 501:
@@ -113,7 +137,16 @@ class LocalAiDirectorClient:
         # Pydantic v2
         return resp.model_dump()
 
-    def transcribe(self, audio_path: str, model_size: str = "turbo") -> dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: str,
+        model_size: str = "turbo",
+        *,
+        provider: str = "faster_whisper",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        fallback_to_whisper: bool = True,
+    ) -> dict[str, Any]:
         try:
             self._ensure_import_path()
             from edmg_ai_service.asr import transcribe_detailed
@@ -121,7 +154,14 @@ class LocalAiDirectorClient:
             return {"text": None, "note": f"transcription not available: {e}"}
 
         try:
-            return transcribe_detailed(audio_path, model_size=model_size)
+            return transcribe_detailed(
+                audio_path,
+                model_size=model_size,
+                provider=provider,
+                device=device,
+                compute_type=compute_type,
+                fallback_to_whisper=fallback_to_whisper,
+            )
         except Exception as e:
             return {"text": None, "error": str(e)}
 

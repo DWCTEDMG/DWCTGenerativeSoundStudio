@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost } from "../components/api";
+import { apiGet, apiPost, normalizeBackendUrl, setBrowserBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { STUDIO_THEME_OPTIONS, useStudioAppearance } from "../components/studioAppearance";
 import { useStudioPageLayout } from "../components/studioLayout";
@@ -28,12 +28,21 @@ type StudioBackendSettings = {
   source?: string;
 };
 
+type TranscriptionSettings = {
+  provider: string;
+  model: string;
+  device: string;
+  compute_type: string;
+  fallback_to_whisper: boolean;
+};
+
 type SettingsPanelId =
   | "uiMode"
   | "appearance"
   | "renderDefaults"
   | "desktopBackend"
   | "aiProvider"
+  | "transcription"
   | "backendConfig"
   | "liveAiStatus"
   | "tokens"
@@ -58,6 +67,14 @@ const DEFAULT_BACKEND_SETTINGS: StudioBackendSettings = {
   port: "7863",
   url: "",
   source: "default",
+};
+
+const DEFAULT_TRANSCRIPTION_SETTINGS: TranscriptionSettings = {
+  provider: "faster_whisper",
+  model: "turbo",
+  device: "cpu",
+  compute_type: "int8",
+  fallback_to_whisper: true,
 };
 
 function normalizeAiSettings(payload?: Partial<StudioAiSettings> | null): StudioAiSettings {
@@ -144,21 +161,7 @@ function buildManagedBackendUrl(host: string, port: string): string {
 }
 
 function sanitizeBackendUrl(rawUrl: string): string {
-  const candidate = String(rawUrl || "").trim();
-  if (!candidate) return "";
-  try {
-    const parsed = new URL(candidate);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return "";
-    }
-    const normalizedPath =
-      parsed.pathname && parsed.pathname !== "/"
-        ? parsed.pathname.replace(/\/+$/, "")
-        : "";
-    return `${parsed.origin}${normalizedPath}`;
-  } catch {
-    return "";
-  }
+  return normalizeBackendUrl(rawUrl);
 }
 
 function parseBackendUrl(rawUrl: string): Partial<StudioBackendSettings> {
@@ -176,6 +179,42 @@ function parseBackendUrl(rawUrl: string): Partial<StudioBackendSettings> {
   }
 }
 
+function normalizeTranscriptionSettings(payload?: Partial<TranscriptionSettings> | null): TranscriptionSettings {
+  const current = payload ?? {};
+  const providerRaw = String(current.provider ?? DEFAULT_TRANSCRIPTION_SETTINGS.provider).trim().toLowerCase();
+  const provider =
+    providerRaw === "parakeet" || providerRaw === "nvidia_parakeet"
+      ? "parakeet"
+      : "faster_whisper";
+  const modelRaw = String(current.model ?? "").trim();
+  let model = modelRaw || (provider === "parakeet" ? "nvidia/parakeet-tdt-0.6b-v3" : DEFAULT_TRANSCRIPTION_SETTINGS.model);
+  if (provider === "parakeet") {
+    const lower = model.toLowerCase().replaceAll("_", "-");
+    if (lower === "v2" || lower.endsWith("parakeet-tdt-0.6b-v2")) {
+      model = "nvidia/parakeet-tdt-0.6b-v2";
+    } else if (lower === "v3" || lower.endsWith("parakeet-tdt-0.6b-v3")) {
+      model = "nvidia/parakeet-tdt-0.6b-v3";
+    } else {
+      model = "nvidia/parakeet-tdt-0.6b-v3";
+    }
+  } else if (!["turbo", "large-v3", "medium", "small"].includes(model)) {
+    model = DEFAULT_TRANSCRIPTION_SETTINGS.model;
+  }
+
+  const device = String(current.device ?? DEFAULT_TRANSCRIPTION_SETTINGS.device).trim().toLowerCase();
+  const computeType = String(current.compute_type ?? DEFAULT_TRANSCRIPTION_SETTINGS.compute_type).trim().toLowerCase();
+
+  return {
+    provider,
+    model,
+    device: ["auto", "cuda", "cpu"].includes(device) ? device : DEFAULT_TRANSCRIPTION_SETTINGS.device,
+    compute_type: ["auto", "float16", "int8", "int8_float16"].includes(computeType)
+      ? computeType
+      : DEFAULT_TRANSCRIPTION_SETTINGS.compute_type,
+    fallback_to_whisper: current.fallback_to_whisper !== false,
+  };
+}
+
 export default function Settings(props: PageProps) {
   const { mode, setMode } = useUiMode();
   const { theme, setTheme } = useStudioAppearance();
@@ -187,6 +226,8 @@ export default function Settings(props: PageProps) {
   const [renderProfiles, setRenderProfiles] = useState<any>(null);
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [renderProviderDraft, setRenderProviderDraft] = useState<any>(null);
+  const [transcriptionStatus, setTranscriptionStatus] = useState<any>(null);
+  const [transcriptionDraft, setTranscriptionDraft] = useState<TranscriptionSettings>(DEFAULT_TRANSCRIPTION_SETTINGS);
   const [savedRenderDefaults, setSavedRenderDefaults] = useState<any>(() => readRenderDefaults());
   const [studioBackendSettings, setStudioBackendSettings] = useState<StudioBackendSettings>(DEFAULT_BACKEND_SETTINGS);
   const [backendDraft, setBackendDraft] = useState<StudioBackendSettings>(DEFAULT_BACKEND_SETTINGS);
@@ -202,6 +243,7 @@ export default function Settings(props: PageProps) {
   const [savingBackend, setSavingBackend] = useState<boolean>(false);
   const [savingAi, setSavingAi] = useState<boolean>(false);
   const [savingProviders, setSavingProviders] = useState<boolean>(false);
+  const [savingTranscription, setSavingTranscription] = useState<boolean>(false);
   const [backendRestartRequired, setBackendRestartRequired] = useState<boolean>(false);
   const [backendNotice, setBackendNotice] = useState<string | null>(null);
   const [aiRestartRequired, setAiRestartRequired] = useState<boolean>(false);
@@ -209,6 +251,7 @@ export default function Settings(props: PageProps) {
   const [liveBackendUrl, setLiveBackendUrl] = useState<string>(props.backendUrl || "");
   const [backendReachable, setBackendReachable] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const canPersistBackendSettings = typeof window !== "undefined" && !!window.edmg?.setBackendSettings;
 
   useEffect(() => {
     void refreshPage();
@@ -245,6 +288,10 @@ export default function Settings(props: PageProps) {
       setRenderProviders(d);
       setRenderProviderDraft(d?.settings ?? null);
     }).catch(() => {});
+    apiGet("/v1/settings/transcription").then((d) => {
+      setTranscriptionStatus(d);
+      setTranscriptionDraft(normalizeTranscriptionSettings(d?.settings));
+    }).catch(() => {});
   }
 
   async function refreshAiStartupSettings(nextCfg: any) {
@@ -279,7 +326,7 @@ export default function Settings(props: PageProps) {
   }
 
   async function refreshBackendHealth(urlCandidate: string) {
-    const target = String(urlCandidate || "").trim();
+    const target = sanitizeBackendUrl(urlCandidate);
     if (!target) {
       setBackendReachable(null);
       return;
@@ -319,9 +366,12 @@ export default function Settings(props: PageProps) {
       // fall through to runtime URL snapshot
     }
 
+    const runtimeUrl = sanitizeBackendUrl(props.backendUrl);
     const fallback = normalizeBackendSettings({
-      ...parseBackendUrl(props.backendUrl),
-      source: props.backendUrl ? "runtime" : "default",
+      ...parseBackendUrl(runtimeUrl),
+      mode: runtimeUrl ? "external" : "managed",
+      url: runtimeUrl,
+      source: runtimeUrl ? "runtime" : "default",
     });
     const nextLiveUrl = String(props.backendUrl || buildBackendUrl(fallback)).trim();
     setStudioBackendSettings(fallback);
@@ -417,9 +467,6 @@ export default function Settings(props: PageProps) {
     setErr(null);
     setBackendNotice(null);
     try {
-      if (!window.edmg?.setBackendSettings) {
-        throw new Error("This Studio build cannot persist desktop backend startup settings yet.");
-      }
       const normalizedDraft = normalizeBackendSettings(backendDraft);
       const backendUrl =
         normalizedDraft.mode === "external"
@@ -428,7 +475,32 @@ export default function Settings(props: PageProps) {
       if (normalizedDraft.mode === "external" && !backendUrl) {
         throw new Error("Enter a valid backend URL starting with http:// or https://.");
       }
-      const response = await window.edmg.setBackendSettings({
+      const activeUrl =
+        normalizedDraft.mode === "external"
+          ? backendUrl
+          : buildManagedBackendUrl(normalizedDraft.host, normalizedDraft.port);
+
+      if (!canPersistBackendSettings) {
+        const connectedUrl = setBrowserBackendUrl(activeUrl);
+        if (!connectedUrl) {
+          throw new Error("Enter a valid backend URL starting with http:// or https://.");
+        }
+        const normalized = normalizeBackendSettings({
+          ...normalizedDraft,
+          mode: normalizedDraft.mode === "external" ? "external" : "managed",
+          url: normalizedDraft.mode === "external" ? connectedUrl : "",
+          source: "browser",
+        });
+        setStudioBackendSettings(normalized);
+        setBackendDraft(normalized);
+        setBackendRestartRequired(false);
+        setLiveBackendUrl(connectedUrl);
+        setBackendNotice("Connected for this browser. Desktop startup persistence is available in Electron.");
+        await refreshBackendHealth(connectedUrl);
+        return;
+      }
+
+      const response = await window.edmg?.setBackendSettings?.({
         mode: normalizedDraft.mode,
         host: normalizedDraft.host,
         port: normalizedDraft.port,
@@ -515,6 +587,39 @@ export default function Settings(props: PageProps) {
     }
   }
 
+  function updateTranscriptionDraft(patch: Partial<TranscriptionSettings>) {
+    setTranscriptionDraft((current) => {
+      const merged = { ...current, ...patch };
+      if (patch.provider === "parakeet" && current.provider !== "parakeet") {
+        merged.model = "nvidia/parakeet-tdt-0.6b-v3";
+        merged.device = current.device === "cpu" ? "cuda" : current.device;
+        merged.compute_type = "auto";
+      }
+      if (patch.provider === "faster_whisper" && current.provider !== "faster_whisper") {
+        merged.model = "turbo";
+        merged.device = "cpu";
+        merged.compute_type = "int8";
+      }
+      return normalizeTranscriptionSettings(merged);
+    });
+  }
+
+  async function saveTranscriptionSettings() {
+    setSavingTranscription(true);
+    setErr(null);
+    try {
+      const next = await apiPost("/v1/settings/transcription", normalizeTranscriptionSettings(transcriptionDraft));
+      setTranscriptionStatus(next?.status ?? next);
+      setTranscriptionDraft(normalizeTranscriptionSettings(next?.settings ?? next?.status?.settings ?? transcriptionDraft));
+      const nextCfg = await apiGet("/v1/config").catch(() => null);
+      if (nextCfg) setCfg(nextCfg);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setSavingTranscription(false);
+    }
+  }
+
   const panelDefinitions = useMemo(
     () => [
       {
@@ -541,6 +646,11 @@ export default function Settings(props: PageProps) {
         id: "aiProvider" as const,
         label: "AI Provider",
         description: "Saved startup provider, routing, and credential-adjacent controls.",
+      },
+      {
+        id: "transcription" as const,
+        label: "Transcription",
+        description: "ASR provider, model, and GPU preferences for Analyze + transcribe.",
       },
       {
         id: "backendConfig" as const,
@@ -754,8 +864,8 @@ export default function Settings(props: PageProps) {
           </div>
 
           <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <button disabled={savingBackend || !backendSettingsDirty || !window.edmg?.setBackendSettings} onClick={saveBackendSettings}>
-              {savingBackend ? "Saving…" : "Save backend startup settings"}
+            <button disabled={savingBackend || !backendSettingsDirty} onClick={saveBackendSettings}>
+              {savingBackend ? "Saving…" : canPersistBackendSettings ? "Save backend startup settings" : "Use backend now"}
             </button>
             {backendRestartRequired && window.edmg?.relaunch ? (
               <button className="secondary" disabled={savingBackend} onClick={() => { void window.edmg?.relaunch?.(); }}>
@@ -869,6 +979,113 @@ export default function Settings(props: PageProps) {
               <button className="secondary" disabled={savingAi} onClick={() => { void window.edmg?.relaunch?.(); }}>Restart now</button>
             ) : null}
             {aiNotice ? <div className="small" style={{ opacity: 0.84 }}>{aiNotice}</div> : null}
+          </div>
+        </div>
+      </div>
+    ),
+    transcription: (
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Transcription</div>
+        <div className="small" style={{ marginBottom: 12, opacity: 0.86 }}>
+          Active backend ASR: <b>{transcriptionStatus?.active?.provider || transcriptionDraft.provider}</b>
+          {" "}• model <b>{transcriptionStatus?.active?.model || transcriptionDraft.model}</b>
+          {" "}• device <b>{transcriptionStatus?.active?.device || transcriptionDraft.device}</b>
+        </div>
+        <div className="small" style={{ marginBottom: 12, opacity: 0.82 }}>
+          Parakeet dependencies: <b>{transcriptionStatus?.dependencies?.parakeet_available ? "ready" : "missing"}</b>
+          {" "}• faster-whisper: <b>{transcriptionStatus?.dependencies?.faster_whisper_available ? "ready" : "missing"}</b>
+          {" "}• backend GPU <b>{transcriptionStatus?.hardware?.device_name || hardware?.hardware?.device_name || "unknown"}</b>
+        </div>
+
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+            <div>
+              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>ASR provider</div>
+              <select
+                aria-label="ASR provider"
+                value={transcriptionDraft.provider}
+                onChange={(e) => updateTranscriptionDraft({ provider: e.target.value })}
+              >
+                <option value="faster_whisper">faster-whisper</option>
+                <option value="parakeet">NVIDIA Parakeet</option>
+              </select>
+            </div>
+
+            <div>
+              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>ASR model</div>
+              <select
+                aria-label="ASR model"
+                value={transcriptionDraft.model}
+                onChange={(e) => updateTranscriptionDraft({ model: e.target.value })}
+              >
+                {transcriptionDraft.provider === "parakeet" ? (
+                  <>
+                    <option value="nvidia/parakeet-tdt-0.6b-v3">Parakeet TDT 0.6B v3</option>
+                    <option value="nvidia/parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="turbo">Whisper large-v3-turbo</option>
+                    <option value="large-v3">Whisper large-v3</option>
+                    <option value="medium">Whisper medium</option>
+                    <option value="small">Whisper small</option>
+                  </>
+                )}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+            <div>
+              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>ASR device</div>
+              <select
+                aria-label="ASR device"
+                value={transcriptionDraft.device}
+                onChange={(e) => updateTranscriptionDraft({ device: e.target.value })}
+              >
+                <option value="auto">auto</option>
+                <option value="cuda">cuda</option>
+                <option value="cpu">cpu</option>
+              </select>
+            </div>
+            <div>
+              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Whisper compute</div>
+              <select
+                aria-label="ASR compute type"
+                value={transcriptionDraft.compute_type}
+                onChange={(e) => updateTranscriptionDraft({ compute_type: e.target.value })}
+                disabled={transcriptionDraft.provider === "parakeet"}
+              >
+                <option value="auto">auto</option>
+                <option value="float16">float16</option>
+                <option value="int8">int8</option>
+                <option value="int8_float16">int8_float16</option>
+              </select>
+            </div>
+          </div>
+
+          {transcriptionDraft.provider === "parakeet" ? (
+            <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                style={{ width: "auto" }}
+                checked={!!transcriptionDraft.fallback_to_whisper}
+                onChange={(e) => updateTranscriptionDraft({ fallback_to_whisper: e.target.checked })}
+              />
+              Fall back to faster-whisper if Parakeet is unavailable
+            </label>
+          ) : null}
+
+          {!transcriptionStatus?.dependencies?.parakeet_available ? (
+            <div className="small" style={{ opacity: 0.82 }}>
+              Parakeet install: <code>pip install -e ".[parakeet]"</code> from <code>python_backend</code>.
+            </div>
+          ) : null}
+
+          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button disabled={savingTranscription} onClick={saveTranscriptionSettings}>
+              {savingTranscription ? "Saving…" : "Save transcription settings"}
+            </button>
           </div>
         </div>
       </div>

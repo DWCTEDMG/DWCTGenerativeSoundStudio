@@ -30,7 +30,9 @@ function findRouteKey(routes: MockRouteMap, method: string, path: string) {
   return "";
 }
 
-export function installEdmgBridge(overrides: Partial<NonNullable<Window["edmg"]>> = {}) {
+export function installEdmgBridge(
+  overrides: Partial<NonNullable<Window["edmg"]>> & Record<string, unknown> = {},
+) {
   window.__EDMG_BACKEND_URL__ = "http://127.0.0.1:7863";
   window.edmg = {
     backendUrl: () => "http://127.0.0.1:7863",

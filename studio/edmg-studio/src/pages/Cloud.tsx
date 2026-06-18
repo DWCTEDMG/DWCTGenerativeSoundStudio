@@ -1,17 +1,21 @@
 import React, { useMemo, useState } from "react";
-import { apiPost } from "../components/api";
+import { apiPost, getBackendUrl, normalizeBackendUrl, setBrowserBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
 
 type CloudPanelId = "aws" | "azure" | "lightning" | "result";
 
-export default function Cloud(_props: PageProps) {
+export default function Cloud(props: PageProps) {
   const [bucket, setBucket] = useState("");
   const [bundleKey, setBundleKey] = useState("edmg_project_bundle.zip");
   const [azureContainer, setAzureContainer] = useState("edmg-model-cache");
   const [azurePrefix, setAzurePrefix] = useState("models");
   const [lightningOut, setLightningOut] = useState("lightning_bundle");
+  const [lightningBackendUrl, setLightningBackendUrl] = useState(
+    () => normalizeBackendUrl(props.backendUrl || getBackendUrl()) || "",
+  );
+  const [connectingLightning, setConnectingLightning] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -37,6 +41,49 @@ export default function Cloud(_props: PageProps) {
     setErr(null); setResult(null);
     try { setResult(await apiPost("/v1/cloud/lightning/bundle", { output_dir: lightningOut })); }
     catch (e: any) { setErr(String(e)); }
+  };
+
+  const connectLightningBackend = async () => {
+    setConnectingLightning(true);
+    setErr(null); setResult(null);
+    try {
+      const normalizedUrl = normalizeBackendUrl(lightningBackendUrl);
+      if (!normalizedUrl) {
+        throw new Error("Enter a valid Lightning backend URL starting with http:// or https://.");
+      }
+
+      if (window.edmg?.setBackendSettings) {
+        const response = await window.edmg.setBackendSettings({
+          mode: "external",
+          host: "127.0.0.1",
+          port: "7863",
+          url: normalizedUrl,
+        });
+        if (!response?.ok) {
+          throw new Error(response?.error || "Failed to save Lightning backend settings.");
+        }
+        setResult({
+          ok: true,
+          action: "connect_lightning_backend",
+          backendUrl: normalizedUrl,
+          restartRequired: !!response.restartRequired,
+        });
+      } else {
+        const connectedUrl = setBrowserBackendUrl(normalizedUrl);
+        setLightningBackendUrl(connectedUrl);
+        setResult({
+          ok: true,
+          action: "connect_lightning_backend",
+          backendUrl: connectedUrl,
+          restartRequired: false,
+          source: "browser",
+        });
+      }
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setConnectingLightning(false);
+    }
   };
 
   const panelDefinitions = useMemo(
@@ -137,8 +184,20 @@ export default function Cloud(_props: PageProps) {
           <div className="small">Output dir</div>
           <input value={lightningOut} onChange={(e) => setLightningOut(e.target.value)} />
         </div>
+        <div style={{ marginTop: 10 }}>
+          <div className="small">Lightning backend URL</div>
+          <input
+            aria-label="Lightning backend URL"
+            value={lightningBackendUrl}
+            onChange={(e) => setLightningBackendUrl(e.target.value)}
+            placeholder="https://your-lightning-backend.example.com"
+          />
+        </div>
         <div className="row" style={{ marginTop: 10 }}>
           <button onClick={lightningBundle}>Generate bundle</button>
+          <button className="secondary" disabled={connectingLightning} onClick={connectLightningBackend}>
+            {connectingLightning ? "Connecting…" : window.edmg?.setBackendSettings ? "Save backend target" : "Use backend now"}
+          </button>
         </div>
       </div>
     ),

@@ -1,3 +1,7 @@
+export const BACKEND_URL_CHANGED_EVENT = "edmg:backend-url-changed";
+
+const BROWSER_BACKEND_URL_STORAGE_KEY = "edmg.backendUrl";
+
 function readQueryBackendUrl(): string {
   if (typeof window === "undefined") return "";
   const params = new URLSearchParams(window.location.search);
@@ -5,7 +9,16 @@ function readQueryBackendUrl(): string {
 }
 
 function readEnvBackendUrl(): string {
-  return String(import.meta.env.VITE_EDMG_BACKEND_URL || "").trim();
+  return String(import.meta.env.VITE_EDMG_BACKEND_URL || import.meta.env.VITE_EDMG_STUDIO_BACKEND_URL || "").trim();
+}
+
+function readStoredBackendUrl(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(window.localStorage?.getItem(BROWSER_BACKEND_URL_STORAGE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 function readSameOriginBackendUrl(): string {
@@ -16,35 +29,79 @@ function readSameOriginBackendUrl(): string {
   return window.location.origin;
 }
 
+export function normalizeBackendUrl(rawUrl: string): string {
+  const candidate = String(rawUrl || "").trim();
+  if (!candidate) return "";
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+
+    let normalizedPath =
+      parsed.pathname && parsed.pathname !== "/"
+        ? parsed.pathname.replace(/\/+$/, "")
+        : "";
+    normalizedPath = normalizedPath.replace(/\/(?:health|v1)$/i, "");
+
+    return `${parsed.origin}${normalizedPath}`;
+  } catch {
+    return "";
+  }
+}
+
+function pickBackendUrl(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = normalizeBackendUrl(String(value || ""));
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
 function rememberBackendUrl(value: string): string {
-  const resolved = String(value || "").trim();
+  const resolved = normalizeBackendUrl(value);
   if (typeof window !== "undefined" && resolved) {
     window.__EDMG_BACKEND_URL__ = resolved;
   }
   return resolved;
 }
 
+export function setBrowserBackendUrl(value: string): string {
+  const resolved = normalizeBackendUrl(value);
+  if (!resolved) return "";
+  rememberBackendUrl(resolved);
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage?.setItem(BROWSER_BACKEND_URL_STORAGE_KEY, resolved);
+    } catch {
+      // Browser storage can be disabled; the in-memory value above still updates this page.
+    }
+    window.dispatchEvent(new CustomEvent(BACKEND_URL_CHANGED_EVENT, { detail: { url: resolved } }));
+  }
+  return resolved;
+}
+
 export function getBackendUrl(): string {
   return rememberBackendUrl(
-    readQueryBackendUrl() ||
-    readEnvBackendUrl() ||
-    window.edmg?.backendUrl?.() ||
-    window.__EDMG_BACKEND_URL__ ||
-    readSameOriginBackendUrl() ||
-    "http://127.0.0.1:7863"
+    pickBackendUrl(
+      readQueryBackendUrl(),
+      readStoredBackendUrl(),
+      readEnvBackendUrl(),
+      window.edmg?.backendUrl?.(),
+      window.__EDMG_BACKEND_URL__,
+      readSameOriginBackendUrl(),
+      "http://127.0.0.1:7863"
+    )
   );
 }
 
 export async function getBackendUrlAsync(): Promise<string> {
-  const explicit = readQueryBackendUrl();
+  const explicit = pickBackendUrl(readQueryBackendUrl());
   if (explicit) return rememberBackendUrl(explicit);
-  const envBackendUrl = readEnvBackendUrl();
-  if (envBackendUrl) return rememberBackendUrl(envBackendUrl);
   try {
     const bridged = await window.edmg?.getBackendUrl?.();
-    if (typeof bridged === "string" && bridged.trim()) {
-      return rememberBackendUrl(bridged);
-    }
+    const bridgedUrl = pickBackendUrl(bridged);
+    if (bridgedUrl) return rememberBackendUrl(bridgedUrl);
   } catch {
     // Fall through to the sync fallback chain below.
   }
@@ -55,8 +112,9 @@ export function ensureBrowserBridge(): void {
   if (typeof window === "undefined" || window.edmg) return;
   const backendUrl = rememberBackendUrl(getBackendUrl());
   window.edmg = {
-    backendUrl: () => backendUrl,
-    getBackendUrl: async () => backendUrl,
+    backendUrl: () => getBackendUrl() || backendUrl,
+    getBackendUrl: async () => getBackendUrl() || backendUrl,
+    setBackendUrl: async (url: string) => setBrowserBackendUrl(url),
     openExternal: async (url: string) => {
       window.open(String(url), "_blank", "noopener,noreferrer");
     },

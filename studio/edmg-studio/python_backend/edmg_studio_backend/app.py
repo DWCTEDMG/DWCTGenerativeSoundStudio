@@ -94,6 +94,15 @@ from .services.render_settings import (
     STABILITY_SERVICES,
     STABILITY_STYLE_PRESETS,
 )
+from .services.transcription_settings import (
+    PARAKEET_MODELS,
+    TRANSCRIPTION_COMPUTE_TYPES,
+    TRANSCRIPTION_DEVICES,
+    TRANSCRIPTION_PROVIDERS,
+    WHISPER_MODELS,
+    TranscriptionSettingsStore,
+    transcription_dependency_status,
+)
 from .services.workbench_bridge import (
     build_unreal_bridge_export_payloads,
     build_unreal_bridge_preview,
@@ -160,6 +169,7 @@ ai = build_ai_client(settings.ai_mode, settings.ai_base_url, settings.ai_timeout
 setup_tasks = SetupTaskManager()
 secrets = SecretStore(settings.data_dir)
 render_settings = RenderSettingsStore(settings.data_dir)
+transcription_settings = TranscriptionSettingsStore(settings.data_dir)
 models = ModelManager(
     settings.data_dir,
     settings.models_dir,
@@ -1933,9 +1943,48 @@ def set_render_providers(payload: dict[str, Any]):
     }
 
 
+def _transcription_status() -> dict[str, Any]:
+    cfg = transcription_settings.get()
+    deps = transcription_dependency_status()
+    return {
+        "ok": True,
+        "settings": cfg,
+        "active": {
+            "provider": cfg.get("provider"),
+            "model": cfg.get("model"),
+            "device": cfg.get("device"),
+            "compute_type": cfg.get("compute_type"),
+            "fallback_to_whisper": bool(cfg.get("fallback_to_whisper", True)),
+        },
+        "providers": list(TRANSCRIPTION_PROVIDERS),
+        "whisper_models": list(WHISPER_MODELS),
+        "parakeet_models": list(PARAKEET_MODELS),
+        "devices": list(TRANSCRIPTION_DEVICES),
+        "compute_types": list(TRANSCRIPTION_COMPUTE_TYPES),
+        "dependencies": deps,
+        "hardware": _hardware_profile(),
+    }
+
+
+@app.get("/v1/settings/transcription")
+def get_transcription_settings():
+    return _transcription_status()
+
+
+@app.post("/v1/settings/transcription")
+def set_transcription_settings(payload: dict[str, Any]):
+    saved = transcription_settings.update(payload)
+    return {
+        "ok": True,
+        "settings": saved,
+        "status": _transcription_status(),
+    }
+
+
 @app.get("/v1/config")
 def get_config():
     provider_status = _render_provider_status()
+    transcription_status = _transcription_status()
     return {
         "studio_home": str(settings.studio_home),
         "data_dir": str(settings.data_dir),
@@ -1967,6 +2016,8 @@ def get_config():
         "secrets_store": secrets.status().store,
         "render_provider_settings": provider_status.get("settings"),
         "render_provider_status": provider_status,
+        "transcription_settings": transcription_status.get("settings"),
+        "transcription_status": transcription_status,
     }
 
 
@@ -2843,7 +2894,15 @@ def analyze_audio(project_id: str):
 
     feats = _collect_audio_analysis_features(audio_path)
     try:
-        transcript_result = ai.transcribe(str(audio_path), model_size="turbo")
+        asr_cfg = transcription_settings.get()
+        transcript_result = ai.transcribe(
+            str(audio_path),
+            model_size=str(asr_cfg.get("model") or "turbo"),
+            provider=str(asr_cfg.get("provider") or "faster_whisper"),
+            device=str(asr_cfg.get("device") or "cpu"),
+            compute_type=str(asr_cfg.get("compute_type") or "int8"),
+            fallback_to_whisper=bool(asr_cfg.get("fallback_to_whisper", True)),
+        )
         trans = transcript_result if isinstance(transcript_result, dict) else {"text": str(transcript_result or "")}
     except Exception as e:
         trans = {"error": f"transcribe failed: {e}"}
