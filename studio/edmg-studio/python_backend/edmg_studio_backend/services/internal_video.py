@@ -4,12 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from .render_settings import RenderSettingsStore
 
 from ..errors import UserFacingError
 from .deforum_motion import DeforumMotionScheduleBundle, evaluate_motion_state
@@ -394,10 +397,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     # Apply CUDA optimizations before loading models
     if device == "cuda":
         try:
-            from edmg_studio_backend.services.render_settings import RenderSettingsStore
-            from pathlib import Path as _Path
-            import os as _os
-            _data_dir = _Path(_os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()
+            _data_dir = Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()
             _cuda_cfg = RenderSettingsStore(_data_dir).get().get("cuda") or {}
             if bool(_cuda_cfg.get("enable_tf32", True)):
                 torch.backends.cuda.matmul.allow_tf32 = True

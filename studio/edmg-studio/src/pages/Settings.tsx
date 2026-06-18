@@ -961,11 +961,11 @@ export default function Settings(props: PageProps) {
                         type="password"
                         value={nvidiaApiKey}
                         onChange={(e) => setNvidiaApiKey(e.target.value)}
-                        placeholder={(secrets as any)?.has_nvidia_api_key ? "(set) paste to replace" : "nvapi-…"}
+                        placeholder={secrets?.has_nvidia_api_key ? "(set) paste to replace" : "nvapi-…"}
                       />
                     </div>
                     <button disabled={saving || !nvidiaApiKey} onClick={() => saveSecret("nvidia_api_key", nvidiaApiKey)}>Save</button>
-                    <button className="secondary" disabled={saving || !(secrets as any)?.has_nvidia_api_key} onClick={() => clearSecret("nvidia_api_key")}>Clear</button>
+                    <button className="secondary" disabled={saving || !secrets?.has_nvidia_api_key} onClick={() => clearSecret("nvidia_api_key")}>Clear</button>
                   </div>
                   <div className="small" style={{ opacity: 0.82 }}>
                     Uses NVIDIA's Nemotron Ultra 253B model via the NVIDIA NIM cloud API. Best-in-class creative planning quality. Requires an NVIDIA API key — no local GPU needed.

@@ -183,6 +183,11 @@ models = ModelManager(
 comfy_portable = ComfyPortableProcess()
 ollama_managed = OllamaManagedProcess()
 
+_ALLOWED_SECRETS: frozenset[str] = frozenset({
+    "hf_token", "civitai_api_key", "openai_compat_api_key",
+    "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
+})
+
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
     if settings.worker_autostart:
@@ -2095,10 +2100,6 @@ def secrets_status():
 def secrets_set(payload: dict[str, Any]):
     name = str((payload or {}).get("name") or "").strip().lower()
     value = str((payload or {}).get("value") or "")
-    _ALLOWED_SECRETS = frozenset({
-        "hf_token", "civitai_api_key", "openai_compat_api_key",
-        "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
-    })
     if name not in _ALLOWED_SECRETS:
         raise UserFacingError(
             "Unknown secret",
@@ -2113,10 +2114,6 @@ def secrets_set(payload: dict[str, Any]):
 @app.post("/v1/settings/secrets/clear")
 def secrets_clear(payload: dict[str, Any]):
     name = str((payload or {}).get("name") or "").strip().lower()
-    _ALLOWED_SECRETS = frozenset({
-        "hf_token", "civitai_api_key", "openai_compat_api_key",
-        "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
-    })
     if name not in _ALLOWED_SECRETS:
         raise UserFacingError(
             "Unknown secret",

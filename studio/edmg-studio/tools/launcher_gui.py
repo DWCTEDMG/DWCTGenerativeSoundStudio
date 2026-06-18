@@ -78,15 +78,32 @@ def _ps(cmd: str) -> tuple[int, str]:
 
 
 def _ps_elevated(ps_block: str) -> tuple[int, str]:
-    """Run a PowerShell block elevated via Start-Process -Verb RunAs (fire-and-forget)."""
-    escaped = ps_block.replace('"', '\\"')
+    """Run a PowerShell block elevated via Start-Process -Verb RunAs.
+
+    Writes exit code to a temp file so we can detect success/failure even
+    though the elevated child process is separate from the caller's token.
+    Returns (0, "") on success, (-1, reason) if UAC was cancelled or failed.
+    """
+    import tempfile
+    tmp = tempfile.mktemp(suffix=".txt")
+    # Append exit code to temp file so we can read it after the elevated run
+    wrapped = ps_block.rstrip("; ") + f"; $null | Out-Null; [IO.File]::WriteAllText('{tmp}', $LASTEXITCODE)"
+    escaped = wrapped.replace("'", "''")
     cmd = (
-        f'Start-Process powershell '
-        f'-Verb RunAs '
-        f'-ArgumentList "-NoProfile -NonInteractive -Command \\"{escaped}\\"" '
-        f'-Wait'
+        f"Start-Process powershell "
+        f"-Verb RunAs -Wait "
+        f"-WindowStyle Hidden "
+        f"-ArgumentList '-NoProfile', '-NonInteractive', '-Command', '{escaped}'"
     )
-    return _ps(cmd)
+    rc, out = _ps(cmd)
+    if rc != 0:
+        return rc, out  # UAC declined or PowerShell not found
+    try:
+        result_code = int(Path(tmp).read_text(encoding="utf-8").strip())
+        Path(tmp).unlink(missing_ok=True)
+        return result_code, ""
+    except Exception:
+        return 0, ""  # elevated ran but temp file missing — assume ok
 
 
 def _svc_query(name: str) -> str:

@@ -870,9 +870,12 @@ class ComfyPortableProcess:
         # CUDA environment tweaks when optimize_comfyui is on
         comfy_env = os.environ.copy()
         if flavor_lower in ("nvidia", "cuda"):
+            # Expandable CUDA memory segments prevent fragmentation OOMs
             comfy_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
             comfy_env.setdefault("CUDA_LAUNCH_BLOCKING", "0")
-            comfy_env.setdefault("TORCH_CUDNN_V8_API_ENABLED", "1")
+            # cuDNN determinism off for speed; benchmark mode on
+            comfy_env.setdefault("TORCH_CUDNN_BENCHMARK", "1")
+            comfy_env.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
         # Hide console window.
         creationflags = 0
@@ -1001,17 +1004,23 @@ _CUDA_TORCH_PACKAGES = ["torch", "torchvision", "torchaudio"]
 
 def _install_cuda_torch(task: SetupTask) -> None:
     """Install CUDA-enabled PyTorch (CUDA 12.4 build) before the main bundle install."""
-    SetupTaskManager.log(task, "Installing CUDA-enabled PyTorch (cu124) from pytorch.org...")
-    _run_subprocess(
+    SetupTaskManager.log(task, "Installing CUDA-enabled PyTorch (cu124) from pytorch.org…")
+    rc = _run_subprocess(
         task,
         [
             sys.executable, "-m", "pip", "install",
             *_CUDA_TORCH_PACKAGES,
             "--index-url", _CUDA_TORCH_INDEX_URL,
+            "--timeout", "300",
         ],
         cwd=str(_backend_root()),
     )
-    SetupTaskManager.log(task, "CUDA PyTorch installed.")
+    if rc != 0:
+        raise RuntimeError(
+            "CUDA PyTorch install failed (exit code %d). "
+            "Check your internet connection — the download is ~2.5 GB." % rc
+        )
+    SetupTaskManager.log(task, "CUDA PyTorch installed successfully.")
 
 
 def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle", flavor: str = "cpu") -> None:
