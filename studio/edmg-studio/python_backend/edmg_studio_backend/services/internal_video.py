@@ -391,6 +391,21 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     if cached is not None:
         return cached
 
+    # Apply CUDA optimizations before loading models
+    if device == "cuda":
+        try:
+            from edmg_studio_backend.services.render_settings import RenderSettingsStore
+            from pathlib import Path as _Path
+            import os as _os
+            _data_dir = _Path(_os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()
+            _cuda_cfg = RenderSettingsStore(_data_dir).get().get("cuda") or {}
+            if bool(_cuda_cfg.get("enable_tf32", True)):
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = True
+        except Exception:
+            pass
+
     family = _model_family_from_dir(model_dir)
 
     torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32

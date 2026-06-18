@@ -103,6 +103,7 @@ Desktop.ini
 *.code-workspace
 .vs/
 .vscode/
+.secrets/
 DWCTGenerativeSoundStudio-main/
 Untitled-2 copy 2.jpg
 sdfsd copy.jpg

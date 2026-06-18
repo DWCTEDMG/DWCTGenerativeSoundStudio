@@ -20,9 +20,11 @@ TRANSCRIPTION_COMPUTE_TYPES = ("auto", "float16", "int8", "int8_float16")
 DEFAULT_TRANSCRIPTION_SETTINGS: dict[str, Any] = {
     "provider": "faster_whisper",
     "model": "turbo",
-    "device": "cpu",
-    "compute_type": "int8",
+    "device": "auto",
+    "compute_type": "auto",
     "fallback_to_whisper": True,
+    "separate_vocals": False,
+    "separation_model": "htdemucs",
 }
 
 
@@ -90,12 +92,15 @@ def transcription_dependency_status() -> dict[str, Any]:
     faster_whisper_available = importlib.util.find_spec("faster_whisper") is not None
     nemo_available = importlib.util.find_spec("nemo") is not None
     torch_available = importlib.util.find_spec("torch") is not None
+    demucs_available = importlib.util.find_spec("demucs") is not None
     return {
         "faster_whisper_available": faster_whisper_available,
         "parakeet_available": bool(nemo_available and torch_available),
         "nemo_available": nemo_available,
         "torch_available": torch_available,
+        "demucs_available": demucs_available,
         "parakeet_install_hint": 'Install optional dependencies with `pip install -e ".[parakeet]"` from python_backend.',
+        "demucs_install_hint": 'Install optional dependencies with `pip install -e ".[source_separation]"` from python_backend.',
     }
 
 
@@ -133,4 +138,6 @@ class TranscriptionSettingsStore:
             "device": normalize_device(payload.get("device")),
             "compute_type": normalize_compute_type(payload.get("compute_type")),
             "fallback_to_whisper": bool(payload.get("fallback_to_whisper", True)),
+            "separate_vocals": bool(payload.get("separate_vocals", False)),
+            "separation_model": str(payload.get("separation_model") or "htdemucs").strip() or "htdemucs",
         }

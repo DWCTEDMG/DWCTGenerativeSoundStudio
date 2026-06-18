@@ -139,14 +139,19 @@ const DEV_SERVER_URL =
   process.env.EDMG_STUDIO_DEV_SERVER_URL ??
   `http://127.0.0.1:${UI_PORT}`;
 
+const NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const NEMOTRON_ULTRA_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1";
+
 const AI_SETTINGS_DEFAULTS = Object.freeze({
   mode: "local",
-  provider: "ollama",
+  provider: "nemotron_cloud",
   aiBaseUrl: "http://127.0.0.1:7862",
   ollamaUrl: "http://127.0.0.1:11434",
   ollamaModel: "qwen3:8b",
   openaiCompatBaseUrl: "http://127.0.0.1:8000",
   openaiCompatModel: "qwen3-8b",
+  nvidiaBaseUrl: NVIDIA_NIM_BASE_URL,
+  nvidiaModel: NEMOTRON_ULTRA_MODEL,
 });
 
 const AI_SETTINGS_ENV_KEYS = Object.freeze({
@@ -157,6 +162,8 @@ const AI_SETTINGS_ENV_KEYS = Object.freeze({
   ollamaModel: "EDMG_AI_OLLAMA_MODEL",
   openaiCompatBaseUrl: "EDMG_AI_OPENAI_COMPAT_BASE_URL",
   openaiCompatModel: "EDMG_AI_OPENAI_COMPAT_MODEL",
+  nvidiaBaseUrl: "EDMG_AI_NVIDIA_BASE_URL",
+  nvidiaModel: "EDMG_AI_NVIDIA_MODEL",
 });
 
 const AI_LOCAL_PROVIDER_ALIASES = Object.freeze({
@@ -164,6 +171,9 @@ const AI_LOCAL_PROVIDER_ALIASES = Object.freeze({
   openai: "openai_compat",
   "openai-compatible": "openai_compat",
   openai_compat: "openai_compat",
+  nemotron_cloud: "nemotron_cloud",
+  nemotron: "nemotron_cloud",
+  nvidia_nim: "nemotron_cloud",
   rule_based: "rule_based",
   none: "rule_based",
 });
@@ -425,6 +435,8 @@ function getRawAiSettingsFromEnv(envLike) {
     ollamaModel: env[AI_SETTINGS_ENV_KEYS.ollamaModel],
     openaiCompatBaseUrl: env[AI_SETTINGS_ENV_KEYS.openaiCompatBaseUrl],
     openaiCompatModel: env[AI_SETTINGS_ENV_KEYS.openaiCompatModel],
+    nvidiaBaseUrl: env[AI_SETTINGS_ENV_KEYS.nvidiaBaseUrl],
+    nvidiaModel: env[AI_SETTINGS_ENV_KEYS.nvidiaModel],
   };
 }
 
@@ -540,6 +552,14 @@ function normalizeAiSettings(rawSettings = {}) {
       current.openaiCompatModel,
       AI_SETTINGS_DEFAULTS.openaiCompatModel
     ),
+    nvidiaBaseUrl: pickConfiguredString(
+      current.nvidiaBaseUrl,
+      AI_SETTINGS_DEFAULTS.nvidiaBaseUrl
+    ),
+    nvidiaModel: pickConfiguredString(
+      current.nvidiaModel,
+      AI_SETTINGS_DEFAULTS.nvidiaModel
+    ),
   };
 }
 
@@ -638,6 +658,8 @@ function syncAiSettingsToProcessEnv(rawSettings) {
   process.env.EDMG_AI_OLLAMA_MODEL = aiSettings.ollamaModel;
   process.env.EDMG_AI_OPENAI_COMPAT_BASE_URL = aiSettings.openaiCompatBaseUrl;
   process.env.EDMG_AI_OPENAI_COMPAT_MODEL = aiSettings.openaiCompatModel;
+  process.env.EDMG_AI_NVIDIA_BASE_URL = aiSettings.nvidiaBaseUrl;
+  process.env.EDMG_AI_NVIDIA_MODEL = aiSettings.nvidiaModel;
   return aiSettings;
 }
 
@@ -847,6 +869,8 @@ function buildManagedAiEnv() {
     EDMG_AI_OLLAMA_MODEL: aiSettings.ollamaModel,
     EDMG_AI_OPENAI_COMPAT_BASE_URL: aiSettings.openaiCompatBaseUrl,
     EDMG_AI_OPENAI_COMPAT_MODEL: aiSettings.openaiCompatModel,
+    EDMG_AI_NVIDIA_BASE_URL: aiSettings.nvidiaBaseUrl,
+    EDMG_AI_NVIDIA_MODEL: aiSettings.nvidiaModel,
   };
 }
 
@@ -1311,6 +1335,8 @@ function registerIpcHandlers() {
       EDMG_AI_OLLAMA_MODEL: aiSettings.ollamaModel,
       EDMG_AI_OPENAI_COMPAT_BASE_URL: aiSettings.openaiCompatBaseUrl,
       EDMG_AI_OPENAI_COMPAT_MODEL: aiSettings.openaiCompatModel,
+      EDMG_AI_NVIDIA_BASE_URL: aiSettings.nvidiaBaseUrl,
+      EDMG_AI_NVIDIA_MODEL: aiSettings.nvidiaModel,
     });
 
     return {

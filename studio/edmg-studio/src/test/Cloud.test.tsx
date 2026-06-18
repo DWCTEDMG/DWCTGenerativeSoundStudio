@@ -79,4 +79,24 @@ describe("Cloud page", () => {
     });
     expect(await screen.findByText(/connect_lightning_backend/)).toBeTruthy();
   });
+
+  it("generates Lightning bundles under the organized Studio data cloud path by default", async () => {
+    installEdmgBridge();
+    const fetchMock = installFetchMock({
+      "POST /v1/cloud/lightning/bundle": { ok: true, output_dir: "data/cloud/lightning/lightning_bundle" },
+    });
+
+    renderWithStudio(<Cloud backendUrl="http://127.0.0.1:7863" config={null} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Generate bundle" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) =>
+          String(url).includes("/v1/cloud/lightning/bundle")
+          && String(init?.method || "GET").toUpperCase() === "POST"
+          && String(init?.body || "").includes("lightning/lightning_bundle")),
+      ).toBe(true);
+    });
+  });
 });

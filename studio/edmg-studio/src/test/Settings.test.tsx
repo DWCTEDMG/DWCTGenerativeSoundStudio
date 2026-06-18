@@ -263,6 +263,95 @@ describe("Settings page", () => {
         device: "cuda",
         compute_type: "auto",
         fallback_to_whisper: true,
+        separate_vocals: false,
+        separation_model: "htdemucs",
+      });
+    });
+  });
+
+  it("saves the music transcription setup with Whisper large-v3 and vocal separation", async () => {
+    const postedBodies: any[] = [];
+    installEdmgBridge();
+    installFetchMock({
+      "/v1/config": {
+        ai_mode: "local",
+        ai_provider: "nemotron_cloud",
+      },
+      "/v1/ai/status": { ok: true, provider: "nemotron_cloud" },
+      "/v1/edmg/deforum_template": { ok: true },
+      "/v1/settings/secrets/status": { store: "test", has_openai_compat_api_key: false },
+      "/v1/hardware": {
+        hardware: {
+          device_name: "NVIDIA RTX 4050",
+          backend_family: "cuda",
+          recommended_tier: "balanced",
+        },
+      },
+      "/v1/settings/render_profiles": {
+        recommended_profile: "balanced_auto",
+        profiles: {},
+      },
+      "/v1/settings/render_providers": {
+        settings: {},
+        stability: { has_api_key: false, visible: false, note: "disabled" },
+        directml: { runtime_ready: false, available: false, active: false, device_name: "" },
+        stability_services: [],
+        stability_models: [],
+        style_presets: [],
+      },
+      "/v1/settings/transcription": (path, init) => {
+        if (String(init?.method || "GET").toUpperCase() === "POST") {
+          postedBodies.push(JSON.parse(String(init?.body || "{}")));
+          return {
+            ok: true,
+            settings: postedBodies[postedBodies.length - 1],
+            status: {
+              active: postedBodies[postedBodies.length - 1],
+              settings: postedBodies[postedBodies.length - 1],
+              dependencies: { parakeet_available: false, faster_whisper_available: true, demucs_available: true },
+              hardware: { device_name: "NVIDIA RTX 4050" },
+            },
+          };
+        }
+        return {
+          settings: {
+            provider: "faster_whisper",
+            model: "turbo",
+            device: "auto",
+            compute_type: "auto",
+            fallback_to_whisper: true,
+            separate_vocals: false,
+            separation_model: "htdemucs",
+          },
+          active: { provider: "faster_whisper", model: "turbo", device: "auto", separate_vocals: false },
+          dependencies: { parakeet_available: false, faster_whisper_available: true, demucs_available: true },
+          hardware: { device_name: "NVIDIA RTX 4050" },
+        };
+      },
+    });
+
+    renderWithStudio(<Settings backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByLabelText("ASR model")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("ASR model"), {
+      target: { value: "large-v3" },
+    });
+    fireEvent.change(screen.getByLabelText("ASR device"), {
+      target: { value: "cuda" },
+    });
+    fireEvent.click(screen.getByLabelText("Separate vocals before transcription"));
+    fireEvent.click(screen.getByRole("button", { name: "Save transcription settings" }));
+
+    await waitFor(() => {
+      expect(postedBodies).toContainEqual({
+        provider: "faster_whisper",
+        model: "large-v3",
+        device: "cuda",
+        compute_type: "auto",
+        fallback_to_whisper: true,
+        separate_vocals: true,
+        separation_model: "htdemucs",
       });
     });
   });

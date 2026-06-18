@@ -122,10 +122,15 @@ class LocalAiDirectorClient:
         self._provider_settings = AiSettings()
         backend_settings = Settings()
         provider_name = (self._provider_settings.provider or "").strip().lower()
+        secret_store = SecretStore(backend_settings.data_dir)
         if provider_name in ("openai_compat", "openai-compatible", "openai") and not self._provider_settings.openai_compat_api_key:
-            secret_api_key = SecretStore(backend_settings.data_dir).get("openai_compat_api_key")
+            secret_api_key = secret_store.get("openai_compat_api_key")
             if secret_api_key:
                 self._provider_settings = replace(self._provider_settings, openai_compat_api_key=secret_api_key)
+        if provider_name in ("nemotron_cloud", "nvidia_nim", "nemotron") and not self._provider_settings.nemotron_cloud_api_key:
+            secret_api_key = secret_store.get("nvidia_api_key") or secret_store.get("openai_compat_api_key")
+            if secret_api_key:
+                self._provider_settings = replace(self._provider_settings, nemotron_cloud_api_key=secret_api_key)
         self._provider = build_provider(self._provider_settings)
 
     def plan(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -191,6 +196,12 @@ class LocalAiDirectorClient:
                 provider_status["base_url"] = getattr(self._provider_settings, "openai_compat_base_url", None)
                 provider_status["api_key_configured"] = bool(
                     getattr(self._provider_settings, "openai_compat_api_key", None)
+                )
+            elif provider_name in ("nemotron_cloud", "nvidia_nim", "nemotron"):
+                provider_status["provider"] = "nemotron_cloud"
+                provider_status["base_url"] = getattr(self._provider_settings, "nemotron_cloud_base_url", None)
+                provider_status["api_key_configured"] = bool(
+                    getattr(self._provider_settings, "nemotron_cloud_api_key", None)
                 )
             return {
                 "mode": "local",

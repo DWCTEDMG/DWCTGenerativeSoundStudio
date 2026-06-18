@@ -325,7 +325,7 @@ class CloudAzureTestRequest(BaseModel):
     prefix: str | None = None
 
 class CloudLightningBundleRequest(BaseModel):
-    output_dir: str = "lightning_bundle"
+    output_dir: str = "lightning/lightning_bundle"
 
 
 TraitScope = Literal[

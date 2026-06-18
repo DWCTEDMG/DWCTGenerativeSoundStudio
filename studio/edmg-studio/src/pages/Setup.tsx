@@ -499,14 +499,20 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
     <button
       disabled={busy === "backend_bundle"}
-      onClick={() => run("backend_bundle", "/v1/setup/backend/install", { bundle: "studio_bundle" })}
+      onClick={() => run("backend_bundle", "/v1/setup/backend/install", { bundle: "studio_bundle", flavor: "cpu" })}
     >
-      {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime"}
+      {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime (CPU)"}
+    </button>
+    <button
+      disabled={busy === "backend_bundle_cuda"}
+      onClick={() => run("backend_bundle_cuda", "/v1/setup/backend/install", { bundle: "studio_bundle", flavor: "nvidia" })}
+    >
+      {busy === "backend_bundle_cuda" ? "Installing…" : "Install Backend Runtime (NVIDIA CUDA)"}
     </button>
     {isWindows ? (
       <button
         disabled={busy === "backend_bundle_directml"}
-        onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml" })}
+        onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml", flavor: "cpu" })}
       >
         {busy === "backend_bundle_directml" ? "Installing…" : "Install AMD / DirectML Runtime"}
       </button>

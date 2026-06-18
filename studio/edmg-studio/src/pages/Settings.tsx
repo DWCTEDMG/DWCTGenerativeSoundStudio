@@ -7,7 +7,7 @@ import { useUiMode } from "../components/uiMode";
 import { clearRenderDefaults, readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import type { PageProps } from "../types/pageProps";
 
-type SecretName = "hf_token" | "civitai_api_key" | "openai_compat_api_key" | "stability_api_key";
+type SecretName = "hf_token" | "civitai_api_key" | "openai_compat_api_key" | "stability_api_key" | "nvidia_api_key";
 
 type StudioAiSettings = {
   mode: string;
@@ -17,6 +17,8 @@ type StudioAiSettings = {
   ollamaModel: string;
   openaiCompatBaseUrl: string;
   openaiCompatModel: string;
+  nvidiaBaseUrl?: string;
+  nvidiaModel?: string;
   source?: string;
 };
 
@@ -34,6 +36,8 @@ type TranscriptionSettings = {
   device: string;
   compute_type: string;
   fallback_to_whisper: boolean;
+  separate_vocals: boolean;
+  separation_model: string;
 };
 
 type SettingsPanelId =
@@ -52,12 +56,14 @@ type SettingsPanelId =
 
 const DEFAULT_AI_SETTINGS: StudioAiSettings = {
   mode: "local",
-  provider: "ollama",
+  provider: "nemotron_cloud",
   aiBaseUrl: "http://127.0.0.1:7862",
   ollamaUrl: "http://127.0.0.1:11434",
   ollamaModel: "qwen3:8b",
   openaiCompatBaseUrl: "http://127.0.0.1:8000",
   openaiCompatModel: "qwen3-8b",
+  nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
+  nvidiaModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
   source: "default",
 };
 
@@ -72,9 +78,11 @@ const DEFAULT_BACKEND_SETTINGS: StudioBackendSettings = {
 const DEFAULT_TRANSCRIPTION_SETTINGS: TranscriptionSettings = {
   provider: "faster_whisper",
   model: "turbo",
-  device: "cpu",
-  compute_type: "int8",
+  device: "auto",
+  compute_type: "auto",
   fallback_to_whisper: true,
+  separate_vocals: false,
+  separation_model: "htdemucs",
 };
 
 function normalizeAiSettings(payload?: Partial<StudioAiSettings> | null): StudioAiSettings {
@@ -84,6 +92,8 @@ function normalizeAiSettings(payload?: Partial<StudioAiSettings> | null): Studio
   const provider =
     providerRaw === "openai" || providerRaw === "openai-compatible"
       ? "openai_compat"
+      : providerRaw === "nvidia_nim" || providerRaw === "nemotron"
+      ? "nemotron_cloud"
       : providerRaw || DEFAULT_AI_SETTINGS.provider;
 
   return {
@@ -98,6 +108,12 @@ function normalizeAiSettings(payload?: Partial<StudioAiSettings> | null): Studio
     openaiCompatModel:
       String(current.openaiCompatModel ?? DEFAULT_AI_SETTINGS.openaiCompatModel).trim() ||
       DEFAULT_AI_SETTINGS.openaiCompatModel,
+    nvidiaBaseUrl:
+      String(current.nvidiaBaseUrl ?? DEFAULT_AI_SETTINGS.nvidiaBaseUrl ?? "").trim() ||
+      DEFAULT_AI_SETTINGS.nvidiaBaseUrl,
+    nvidiaModel:
+      String(current.nvidiaModel ?? DEFAULT_AI_SETTINGS.nvidiaModel ?? "").trim() ||
+      DEFAULT_AI_SETTINGS.nvidiaModel,
     source: String(current.source ?? DEFAULT_AI_SETTINGS.source),
   };
 }
@@ -112,6 +128,8 @@ function aiSettingsFingerprint(settings: Partial<StudioAiSettings> | null | unde
     ollamaModel: normalized.ollamaModel,
     openaiCompatBaseUrl: normalized.openaiCompatBaseUrl,
     openaiCompatModel: normalized.openaiCompatModel,
+    nvidiaBaseUrl: normalized.nvidiaBaseUrl,
+    nvidiaModel: normalized.nvidiaModel,
   });
 }
 
@@ -212,6 +230,8 @@ function normalizeTranscriptionSettings(payload?: Partial<TranscriptionSettings>
       ? computeType
       : DEFAULT_TRANSCRIPTION_SETTINGS.compute_type,
     fallback_to_whisper: current.fallback_to_whisper !== false,
+    separate_vocals: current.separate_vocals === true,
+    separation_model: String(current.separation_model ?? DEFAULT_TRANSCRIPTION_SETTINGS.separation_model).trim() || DEFAULT_TRANSCRIPTION_SETTINGS.separation_model,
   };
 }
 
@@ -239,6 +259,7 @@ export default function Settings(props: PageProps) {
   const [civitaiKey, setCivitaiKey] = useState<string>("");
   const [openaiCompatApiKey, setOpenaiCompatApiKey] = useState<string>("");
   const [stabilityApiKey, setStabilityApiKey] = useState<string>("");
+  const [nvidiaApiKey, setNvidiaApiKey] = useState<string>("");
   const [saving, setSaving] = useState<boolean>(false);
   const [savingBackend, setSavingBackend] = useState<boolean>(false);
   const [savingAi, setSavingAi] = useState<boolean>(false);
@@ -318,6 +339,8 @@ export default function Settings(props: PageProps) {
       ollamaModel: nextCfg?.ai_ollama_model,
       openaiCompatBaseUrl: nextCfg?.ai_openai_compat_base_url,
       openaiCompatModel: nextCfg?.ai_openai_compat_model,
+      nvidiaBaseUrl: nextCfg?.ai_nvidia_base_url,
+      nvidiaModel: nextCfg?.ai_nvidia_model,
       source: nextCfg ? "backend" : "default",
     });
     setStudioAiSettings(fallback);
@@ -415,6 +438,7 @@ export default function Settings(props: PageProps) {
       if (name === "civitai_api_key") setCivitaiKey("");
       if (name === "openai_compat_api_key") setOpenaiCompatApiKey("");
       if (name === "stability_api_key") setStabilityApiKey("");
+      if (name === "nvidia_api_key") setNvidiaApiKey("");
       await refreshSecrets();
       await refreshBackendAiStatus();
       const nextProviders = await apiGet("/v1/settings/render_providers");
@@ -669,8 +693,8 @@ export default function Settings(props: PageProps) {
       },
       {
         id: "renderRuntime" as const,
-        label: "Hosted Render / AMD Runtime",
-        description: "Hosted Stability and DirectML runtime preferences.",
+        label: "GPU / Render Runtime",
+        description: "NVIDIA CUDA, Stability hosted, and AMD DirectML render preferences.",
       },
       {
         id: "comfyui" as const,
@@ -902,11 +926,52 @@ export default function Settings(props: PageProps) {
               <div>
                 <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Local provider</div>
                 <select value={aiDraft.provider} onChange={(e) => updateAiDraft({ provider: e.target.value })}>
-                  <option value="ollama">Ollama</option>
-                  <option value="openai_compat">OpenAI-compatible</option>
-                  <option value="rule_based">Rule-based fallback</option>
+                  <option value="nemotron_cloud">Nemotron Ultra (NVIDIA Cloud) ★ default</option>
+                  <option value="ollama">Ollama (local)</option>
+                  <option value="openai_compat">OpenAI-compatible endpoint</option>
+                  <option value="rule_based">Rule-based fallback (no AI)</option>
                 </select>
               </div>
+
+              {aiDraft.provider === "nemotron_cloud" ? (
+                <>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>NVIDIA NIM base URL</div>
+                    <input
+                      value={aiDraft.nvidiaBaseUrl || "https://integrate.api.nvidia.com/v1"}
+                      onChange={(e) => updateAiDraft({ nvidiaBaseUrl: e.target.value })}
+                      placeholder="https://integrate.api.nvidia.com/v1"
+                    />
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Model</div>
+                    <input
+                      value={aiDraft.nvidiaModel || "nvidia/llama-3.1-nemotron-ultra-253b-v1"}
+                      onChange={(e) => updateAiDraft({ nvidiaModel: e.target.value })}
+                      placeholder="nvidia/llama-3.1-nemotron-ultra-253b-v1"
+                    />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center" }}>
+                    <div>
+                      <div className="small" style={{ fontWeight: 800 }}>NVIDIA API key</div>
+                      <div className="small" style={{ opacity: 0.8 }}>
+                        Get a free key at <a href="https://build.nvidia.com" target="_blank" rel="noreferrer">build.nvidia.com</a>. Required for cloud planning.
+                      </div>
+                      <input
+                        type="password"
+                        value={nvidiaApiKey}
+                        onChange={(e) => setNvidiaApiKey(e.target.value)}
+                        placeholder={(secrets as any)?.has_nvidia_api_key ? "(set) paste to replace" : "nvapi-…"}
+                      />
+                    </div>
+                    <button disabled={saving || !nvidiaApiKey} onClick={() => saveSecret("nvidia_api_key", nvidiaApiKey)}>Save</button>
+                    <button className="secondary" disabled={saving || !(secrets as any)?.has_nvidia_api_key} onClick={() => clearSecret("nvidia_api_key")}>Clear</button>
+                  </div>
+                  <div className="small" style={{ opacity: 0.82 }}>
+                    Uses NVIDIA's Nemotron Ultra 253B model via the NVIDIA NIM cloud API. Best-in-class creative planning quality. Requires an NVIDIA API key — no local GPU needed.
+                  </div>
+                </>
+              ) : null}
 
               {aiDraft.provider === "ollama" ? (
                 <>
@@ -990,10 +1055,12 @@ export default function Settings(props: PageProps) {
           Active backend ASR: <b>{transcriptionStatus?.active?.provider || transcriptionDraft.provider}</b>
           {" "}• model <b>{transcriptionStatus?.active?.model || transcriptionDraft.model}</b>
           {" "}• device <b>{transcriptionStatus?.active?.device || transcriptionDraft.device}</b>
+          {" "}• vocals <b>{transcriptionStatus?.active?.separate_vocals ? "Demucs" : "off"}</b>
         </div>
         <div className="small" style={{ marginBottom: 12, opacity: 0.82 }}>
           Parakeet dependencies: <b>{transcriptionStatus?.dependencies?.parakeet_available ? "ready" : "missing"}</b>
           {" "}• faster-whisper: <b>{transcriptionStatus?.dependencies?.faster_whisper_available ? "ready" : "missing"}</b>
+          {" "}• Demucs: <b>{transcriptionStatus?.dependencies?.demucs_available ? "ready" : "missing"}</b>
           {" "}• backend GPU <b>{transcriptionStatus?.hardware?.device_name || hardware?.hardware?.device_name || "unknown"}</b>
         </div>
 
@@ -1076,9 +1143,39 @@ export default function Settings(props: PageProps) {
             </label>
           ) : null}
 
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+            <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                style={{ width: "auto" }}
+                checked={!!transcriptionDraft.separate_vocals}
+                onChange={(e) => updateTranscriptionDraft({ separate_vocals: e.target.checked })}
+              />
+              Separate vocals before transcription
+            </label>
+            <div>
+              <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Vocal separation model</div>
+              <select
+                aria-label="Vocal separation model"
+                value={transcriptionDraft.separation_model}
+                onChange={(e) => updateTranscriptionDraft({ separation_model: e.target.value })}
+                disabled={!transcriptionDraft.separate_vocals}
+              >
+                <option value="htdemucs">Hybrid Transformer Demucs</option>
+                <option value="htdemucs_ft">Hybrid Transformer Demucs fine-tuned</option>
+              </select>
+            </div>
+          </div>
+
           {!transcriptionStatus?.dependencies?.parakeet_available ? (
             <div className="small" style={{ opacity: 0.82 }}>
               Parakeet install: <code>pip install -e ".[parakeet]"</code> from <code>python_backend</code>.
+            </div>
+          ) : null}
+
+          {transcriptionDraft.separate_vocals && !transcriptionStatus?.dependencies?.demucs_available ? (
+            <div className="small" style={{ opacity: 0.82 }}>
+              Vocal separation install: <code>pip install -e ".[source_separation]"</code> from <code>python_backend</code>.
             </div>
           ) : null}
 
@@ -1090,7 +1187,34 @@ export default function Settings(props: PageProps) {
         </div>
       </div>
     ),
-    backendConfig: cfg ? <div className="card"><pre>{JSON.stringify(cfg, null, 2)}</pre></div> : null,
+    backendConfig: cfg ? (
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Backend Configuration</div>
+        <div style={{ display: "grid", gap: 10 }}>
+          {[
+            ["Backend host", cfg.backend_host],
+            ["Backend port", cfg.backend_port],
+            ["Backend URL", cfg.backend_url],
+            ["AI mode", cfg.ai_mode],
+            ["AI provider", cfg.ai_provider],
+            ["AI model", cfg.ai_openai_compat_model ?? cfg.ai_ollama_model],
+            ["ComfyUI URL", cfg.comfyui_url],
+            ["Studio home", cfg.studio_home],
+            ["Data dir", cfg.data_dir],
+            ["Models dir", cfg.models_dir],
+          ].map(([label, value]) => value != null ? (
+            <div key={String(label)} className="small" style={{ display: "flex", gap: 10 }}>
+              <span style={{ opacity: 0.7, minWidth: 130 }}>{label}</span>
+              <code style={{ wordBreak: "break-all" }}>{String(value)}</code>
+            </div>
+          ) : null)}
+        </div>
+        <details style={{ marginTop: 12 }}>
+          <summary className="small" style={{ cursor: "pointer", opacity: 0.7 }}>Show full JSON</summary>
+          <pre style={{ marginTop: 8, fontSize: 11, overflow: "auto", maxHeight: 300 }}>{JSON.stringify(cfg, null, 2)}</pre>
+        </details>
+      </div>
+    ) : null,
     liveAiStatus: aiStatus ? (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Live Backend AI Status</div>
@@ -1156,14 +1280,87 @@ export default function Settings(props: PageProps) {
     ),
     renderRuntime: (
       <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 800, marginBottom: 10 }}>Hosted Render / AMD Runtime</div>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>GPU / Render Runtime</div>
         <div className="small" style={{ marginBottom: 10 }}>
-          These controls affect Studio&apos;s internal render pipeline, not the planning provider above. Hosted Stability mode generates keyframes through the public Stability image API, then Studio assembles the video locally with the same cache, history, and resume flow as local renders.
+          Controls for NVIDIA CUDA GPU acceleration, Stability hosted keyframes, and AMD DirectML. These affect the internal render pipeline — not the AI planning provider above.
         </div>
         {!renderProviders || !renderProviderDraft ? (
           <div className="small" style={{ opacity: 0.75 }}>Loading render provider settings…</div>
         ) : (
           <div style={{ display: "grid", gap: 14 }}>
+
+            {/* ── NVIDIA CUDA ───────────────────────────────────────────── */}
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontWeight: 800 }}>NVIDIA CUDA GPU</div>
+              <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
+                GPU detected: <b>{renderProviders?.cuda?.device_name || "none"}</b>
+                {renderProviders?.cuda?.vram_gb ? <> • <b>{renderProviders.cuda.vram_gb} GB</b> VRAM</> : null}
+                {" "}• runtime ready: <b>{renderProviders?.cuda?.available ? "yes" : "no"}</b>
+                {" "}• active: <b>{renderProviders?.cuda?.active ? "yes" : "no"}</b>
+              </div>
+              <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.cuda?.enabled}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), cuda: { ...(c?.cuda || {}), enabled: e.target.checked },
+                    }))}
+                  />
+                  Enable CUDA GPU acceleration for internal renders
+                </label>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.cuda?.allow_auto_selection}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), cuda: { ...(c?.cuda || {}), allow_auto_selection: e.target.checked },
+                    }))}
+                  />
+                  Let Studio auto-select CUDA when available
+                </label>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.cuda?.enable_tf32}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), cuda: { ...(c?.cuda || {}), enable_tf32: e.target.checked },
+                    }))}
+                  />
+                  Enable TF32 / cuDNN benchmark (faster on Ampere+ GPUs)
+                </label>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.cuda?.optimize_comfyui}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), cuda: { ...(c?.cuda || {}), optimize_comfyui: e.target.checked },
+                    }))}
+                  />
+                  Optimize ComfyUI for CUDA (cuda-malloc, cross-attention, CUDNN env vars)
+                </label>
+                <div style={{ maxWidth: 340 }}>
+                  <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Preferred CUDA internal model</div>
+                  <select
+                    value={renderProviderDraft?.cuda?.preferred_model || "auto"}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), cuda: { ...(c?.cuda || {}), preferred_model: e.target.value },
+                    }))}
+                  >
+                    <option value="auto">auto (pick by VRAM)</option>
+                    <option value="hf_sd35_medium_internal">SD 3.5 Medium (requires ≥ 14 GB VRAM)</option>
+                    <option value="hf_sdxl_internal">SDXL (requires ≥ 6 GB VRAM)</option>
+                    <option value="hf_sd15_internal">SD 1.5 (works on 4 GB+)</option>
+                  </select>
+                </div>
+                {!renderProviders?.cuda?.available && (
+                  <div className="small" style={{ opacity: 0.8, color: "var(--danger)" }}>
+                    CUDA not detected. Install CUDA-enabled PyTorch via Setup → Install Backend Runtime (NVIDIA CUDA).
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
               <div style={{ fontWeight: 800 }}>Stability hosted fallback</div>
               <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
@@ -1324,18 +1521,52 @@ export default function Settings(props: PageProps) {
     ),
     comfyui: (
       <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 800, marginBottom: 10 }}>ComfyUI workflow</div>
-        <div className="small">
-          Studio now ships curated ComfyUI routing for plain stills, AnimateDiff motion, SVD image-to-video, and reference-driven ControlNet stills. The fallback manual checkpoint override still uses <code>EDMG_COMFYUI_CHECKPOINT</code> when no catalog-backed model is selected.
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>ComfyUI</div>
+
+        {/* Quick-start controls */}
+        <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Quick start</div>
+          <div className="small" style={{ marginBottom: 10, opacity: 0.86 }}>
+            Status: <b>{hardware?.hardware?.backend === "cuda" && renderProviders?.cuda?.enabled
+              ? "CUDA GPU available — NVIDIA mode recommended"
+              : hardware?.hardware?.backend
+              ? String(hardware.hardware.backend).toUpperCase()
+              : "unknown"
+            }</b>
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={() => apiPost("/v1/setup/comfyui/portable/start", { flavor: "nvidia" }).catch(() => {})}
+            >
+              Start ComfyUI (NVIDIA CUDA)
+            </button>
+            <button
+              className="secondary"
+              onClick={() => apiPost("/v1/setup/comfyui/portable/start", { flavor: "cpu" }).catch(() => {})}
+            >
+              Start ComfyUI (CPU)
+            </button>
+            <button
+              className="secondary"
+              onClick={() => apiPost("/v1/setup/comfyui/portable/start", { flavor: "auto" }).catch(() => {})}
+            >
+              Start ComfyUI (auto)
+            </button>
+          </div>
+          <div className="small" style={{ marginTop: 8, opacity: 0.75 }}>
+            NVIDIA mode adds <code>--cuda-malloc --use-pytorch-cross-attention</code> and CUDA memory env vars for maximum GPU throughput.
+            "auto" picks NVIDIA if CUDA is enabled in GPU / Render Runtime settings above, otherwise CPU.
+          </div>
         </div>
-        <div className="small" style={{ marginTop: 10, opacity: 0.92 }}>
-          Use this mental model:
+
+        <div className="small">
+          Studio ships curated ComfyUI routing for plain stills, AnimateDiff motion, SVD image-to-video, and reference-driven ControlNet stills. The fallback checkpoint override uses <code>EDMG_COMFYUI_CHECKPOINT</code> when no catalog-backed model is selected.
         </div>
         <ul className="guide-list" style={{ marginTop: 8 }}>
-          <li>Setup gets ComfyUI installed and reachable at the configured URL.</li>
-          <li>Models decides which base checkpoints and ControlNet units Studio knows how to route through that ComfyUI server.</li>
-          <li>Render only exposes ComfyUI workflow export and ComfyUI-specific still or motion paths when the selected model actually uses the `ComfyUI` engine and the server capabilities are live.</li>
-          <li>If Render is still acting like nothing changed, the usual cause is one of three things: ComfyUI is not running, the selected model is an `Internal` model rather than a `ComfyUI` model, or the needed workflow family or ControlNet model is not installed yet.</li>
+          <li>Setup installs ComfyUI and makes it reachable at the configured URL.</li>
+          <li>Models controls which checkpoints and ControlNet units Studio routes through ComfyUI.</li>
+          <li>GPU / Render Runtime → CUDA settings control whether ComfyUI starts in NVIDIA mode.</li>
+          <li>Render exposes ComfyUI paths only when the selected model uses the ComfyUI engine and the server is live.</li>
         </ul>
       </div>
     ),

@@ -6,10 +6,12 @@ license: openrail
 
 - [Root repo overview](../README.md)
 - [Studio repo map](STUDIO_REPO_MAP.md)
+- [Testing quickstart](TESTING_QUICKSTART.md)
 - [Studio release runbook](STUDIO_RELEASE_RUNBOOK.md)
 - [Architecture](architecture.md)
 - [AI providers](AI_PROVIDERS.md)
 - [AI integration design](AI_INTEGRATION.md)
+- [Model manager](MODEL_MANAGER.md)
 - [ComfyUI workflows](COMFYUI_WORKFLOWS.md)
 - [HF video models](HF_VIDEO_MODELS.md)
 - [Benchmarking](BENCHMARKING.md)

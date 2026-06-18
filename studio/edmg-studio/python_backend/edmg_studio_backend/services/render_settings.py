@@ -39,6 +39,13 @@ DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
         "strength": 0.55,
         "cfg_scale": 6.5,
     },
+    "cuda": {
+        "enabled": True,
+        "allow_auto_selection": True,
+        "preferred_model": "auto",
+        "enable_tf32": True,
+        "optimize_comfyui": True,
+    },
     "directml": {
         "enabled": True,
         "allow_auto_selection": True,
@@ -91,7 +98,7 @@ class RenderSettingsStore:
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         current = self.get()
         incoming = payload if isinstance(payload, dict) else {}
-        for key in ("stability", "directml"):
+        for key in ("stability", "cuda", "directml"):
             value = incoming.get(key)
             if isinstance(value, dict):
                 current[key].update(value)
@@ -103,6 +110,7 @@ class RenderSettingsStore:
         out = _clone_defaults()
 
         stability = payload.get("stability") if isinstance(payload.get("stability"), dict) else {}
+        cuda = payload.get("cuda") if isinstance(payload.get("cuda"), dict) else {}
         directml = payload.get("directml") if isinstance(payload.get("directml"), dict) else {}
 
         service = str(stability.get("service") or out["stability"]["service"]).strip().lower()
@@ -125,6 +133,10 @@ class RenderSettingsStore:
         if preferred_model not in {"auto", "hf_sdxl_internal", "hf_sd15_internal"}:
             preferred_model = out["directml"]["preferred_model"]
 
+        cuda_preferred_model = str(cuda.get("preferred_model") or out["cuda"]["preferred_model"]).strip().lower()
+        if cuda_preferred_model not in {"auto", "hf_sd35_medium_internal", "hf_sdxl_internal", "hf_sd15_internal"}:
+            cuda_preferred_model = out["cuda"]["preferred_model"]
+
         out["stability"] = {
             "enabled": bool(stability.get("enabled", out["stability"]["enabled"])),
             "allow_auto_fallback": bool(
@@ -136,6 +148,15 @@ class RenderSettingsStore:
             "output_format": output_format,
             "strength": max(0.1, min(1.0, float(stability.get("strength", out["stability"]["strength"])))),
             "cfg_scale": max(1.0, min(10.0, float(stability.get("cfg_scale", out["stability"]["cfg_scale"])))),
+        }
+        out["cuda"] = {
+            "enabled": bool(cuda.get("enabled", out["cuda"]["enabled"])),
+            "allow_auto_selection": bool(
+                cuda.get("allow_auto_selection", out["cuda"]["allow_auto_selection"])
+            ),
+            "preferred_model": cuda_preferred_model,
+            "enable_tf32": bool(cuda.get("enable_tf32", out["cuda"]["enable_tf32"])),
+            "optimize_comfyui": bool(cuda.get("optimize_comfyui", out["cuda"]["optimize_comfyui"])),
         }
         out["directml"] = {
             "enabled": bool(directml.get("enabled", out["directml"]["enabled"])),

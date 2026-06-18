@@ -9,6 +9,7 @@ import json
 import hashlib
 import shutil
 import subprocess
+import sys
 from copy import deepcopy
 import math
 import re
@@ -1812,6 +1813,31 @@ def _hardware_profile() -> dict[str, Any]:
         elif not out.get("gpu_vendor") and directml.get("vendor"):
             out["gpu_vendor"] = directml.get("vendor")
 
+    cuda_cfg: dict[str, Any] = {}
+    try:
+        cuda_cfg = dict((render_settings.get().get("cuda") or {}))
+    except Exception:
+        cuda_cfg = {}
+    cuda_available = bool("cuda" in list(out.get("available_backends") or []) or str(out.get("backend") or "").lower() == "cuda")
+    cuda_enabled = bool(cuda_cfg.get("enabled", True))
+    cuda_auto = bool(cuda_cfg.get("allow_auto_selection", True))
+    out["cuda_runtime_ready"] = cuda_available
+    out["cuda_enabled"] = cuda_enabled
+    out["cuda_allow_auto_selection"] = cuda_auto
+    out["cuda_preferred_model"] = str(cuda_cfg.get("preferred_model") or "auto")
+    out["cuda_tf32_enabled"] = bool(cuda_cfg.get("enable_tf32", True))
+    if cuda_available:
+        out["cuda_device_name"] = out.get("device_name") if str(out.get("backend") or "").lower() == "cuda" else None
+        out["cuda_vram_gb"] = float(out.get("vram_gb") or 0.0) if str(out.get("backend") or "").lower() == "cuda" else 0.0
+    if str(out.get("backend") or "").lower() == "cuda" and (not cuda_enabled or not cuda_auto):
+        out["backend"] = "cpu"
+        out["device"] = "cpu"
+        out["device_name"] = "CPU"
+        out["vram_gb"] = 0.0
+        out["gpu_vendor"] = out.get("gpu_vendor") or "nvidia"
+        out["cuda_disabled_by_settings"] = not cuda_enabled
+        out["cuda_auto_selection_disabled"] = cuda_enabled and not cuda_auto
+
     out["backend_family"] = _backend_family_for(
         str(out.get("backend") or "cpu"),
         integrated=bool(out.get("integrated_acceleration")),
@@ -1820,6 +1846,10 @@ def _hardware_profile() -> dict[str, Any]:
     out["recommended_tier"] = plan["recommended_tier"]
     out["max_supported_tier"] = plan["max_supported_tier"]
     out["preferred_internal_model"] = plan["preferred_internal_model"]
+    if str(out.get("backend") or "").lower() == "cuda":
+        preferred_cuda_model = str(cuda_cfg.get("preferred_model") or "auto").strip().lower()
+        if preferred_cuda_model != "auto":
+            out["preferred_internal_model"] = preferred_cuda_model
     out["device_preference"] = plan["device_preference"]
     out["supports_internal_diffusion"] = True
     out["supports_proxy_render"] = True
@@ -1877,15 +1907,30 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = render_settings.get()
     stability_cfg = dict(cfg.get("stability") or {})
     directml_cfg = dict(cfg.get("directml") or {})
+    cuda_cfg = dict(cfg.get("cuda") or {})
     has_stability_key = bool(secrets.get("stability_api_key"))
     stability_enabled = bool(stability_cfg.get("enabled"))
     stability_service = str(stability_cfg.get("service") or "sd3")
     stability_model = str(stability_cfg.get("model") or "sd3.5-large-turbo")
     directml_available = bool(hw.get("supports_directml"))
     directml_enabled = bool(directml_cfg.get("enabled"))
+    cuda_available = bool(hw.get("cuda_runtime_ready"))
+    cuda_enabled = bool(cuda_cfg.get("enabled", True))
     return {
         "ok": True,
         "settings": cfg,
+        "cuda": {
+            "provider": "pytorch-cuda",
+            "available": cuda_available,
+            "enabled": cuda_enabled,
+            "active": bool(cuda_available and cuda_enabled and str(hw.get("backend") or "cpu").lower() == "cuda"),
+            "device_name": hw.get("cuda_device_name") or hw.get("device_name"),
+            "vram_gb": float(hw.get("cuda_vram_gb") or hw.get("vram_gb") or 0.0),
+            "allow_auto_selection": bool(cuda_cfg.get("allow_auto_selection", True)),
+            "preferred_model": str(cuda_cfg.get("preferred_model") or "auto"),
+            "enable_tf32": bool(cuda_cfg.get("enable_tf32", True)),
+            "optimize_comfyui": bool(cuda_cfg.get("optimize_comfyui", True)),
+        },
         "stability": {
             "provider": "stability",
             "configured": bool(has_stability_key),
@@ -1955,6 +2000,8 @@ def _transcription_status() -> dict[str, Any]:
             "device": cfg.get("device"),
             "compute_type": cfg.get("compute_type"),
             "fallback_to_whisper": bool(cfg.get("fallback_to_whisper", True)),
+            "separate_vocals": bool(cfg.get("separate_vocals", False)),
+            "separation_model": cfg.get("separation_model"),
         },
         "providers": list(TRANSCRIPTION_PROVIDERS),
         "whisper_models": list(WHISPER_MODELS),
@@ -1996,13 +2043,19 @@ def get_config():
         "ai_mode": settings.ai_mode,
         "ai_base_url": settings.ai_base_url,
         "ai_timeout_s": settings.ai_timeout_s,
-        "ai_provider": os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama",
+        "ai_provider": os.getenv("EDMG_AI_PROVIDER", "nemotron_cloud").strip().lower() or "nemotron_cloud",
         "ai_ollama_url": os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434").strip(),
         "ai_ollama_model": os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b").strip(),
         "ai_openai_compat_base_url": os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000").strip(),
         "ai_openai_compat_model": os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen3-8b").strip(),
         "ai_openai_compat_api_key_configured": bool(
             secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
+        ),
+        "ai_nvidia_base_url": os.getenv("EDMG_AI_NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip(),
+        "ai_nvidia_model": os.getenv("EDMG_AI_NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-ultra-253b-v1").strip(),
+        "ai_nvidia_api_key_configured": bool(
+            secrets.get("nvidia_api_key") or secrets.get("openai_compat_api_key")
+            or os.getenv("EDMG_AI_NVIDIA_API_KEY") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
         ),
         "stability_api_key_configured": bool(secrets.get("stability_api_key")),
         "comfyui_url": settings.comfyui_url,
@@ -2033,6 +2086,7 @@ def secrets_status():
         "has_civitai_api_key": st.has_civitai_api_key,
         "has_openai_compat_api_key": st.has_openai_compat_api_key,
         "has_stability_api_key": st.has_stability_api_key,
+        "has_nvidia_api_key": st.has_nvidia_api_key,
         "note": st.note,
     }
 
@@ -2041,10 +2095,14 @@ def secrets_status():
 def secrets_set(payload: dict[str, Any]):
     name = str((payload or {}).get("name") or "").strip().lower()
     value = str((payload or {}).get("value") or "")
-    if name not in ("hf_token", "civitai_api_key", "openai_compat_api_key", "stability_api_key"):
+    _ALLOWED_SECRETS = frozenset({
+        "hf_token", "civitai_api_key", "openai_compat_api_key",
+        "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
+    })
+    if name not in _ALLOWED_SECRETS:
         raise UserFacingError(
             "Unknown secret",
-            hint="Supported: hf_token, civitai_api_key, openai_compat_api_key, stability_api_key",
+            hint=f"Supported: {', '.join(sorted(_ALLOWED_SECRETS))}",
         )
     if not value:
         raise UserFacingError("Missing value", hint="Paste the token/key value, then click Save.")
@@ -2055,18 +2113,24 @@ def secrets_set(payload: dict[str, Any]):
 @app.post("/v1/settings/secrets/clear")
 def secrets_clear(payload: dict[str, Any]):
     name = str((payload or {}).get("name") or "").strip().lower()
-    if name not in ("hf_token", "civitai_api_key", "openai_compat_api_key", "stability_api_key"):
+    _ALLOWED_SECRETS = frozenset({
+        "hf_token", "civitai_api_key", "openai_compat_api_key",
+        "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
+    })
+    if name not in _ALLOWED_SECRETS:
         raise UserFacingError(
             "Unknown secret",
-            hint="Supported: hf_token, civitai_api_key, openai_compat_api_key, stability_api_key",
+            hint=f"Supported: {', '.join(sorted(_ALLOWED_SECRETS))}",
         )
     secrets.delete(name)
     return {"ok": True}
 
 
 def _setup_ai_config() -> dict[str, Any]:
+    from edmg_ai_service.config import _NVIDIA_NIM_BASE_URL, _NEMOTRON_ULTRA_MODEL
+
     ai_mode = (settings.ai_mode or "local").strip().lower() or "local"
-    ai_provider = (os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama")
+    ai_provider = (os.getenv("EDMG_AI_PROVIDER", "nemotron_cloud").strip().lower() or "nemotron_cloud")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     openai_compat_base_url = os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000")
@@ -2074,6 +2138,12 @@ def _setup_ai_config() -> dict[str, Any]:
     openai_compat_api_key_configured = bool(
         secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
     )
+    nvidia_api_key_configured = bool(
+        secrets.get("nvidia_api_key") or secrets.get("openai_compat_api_key")
+        or os.getenv("EDMG_AI_NVIDIA_API_KEY") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
+    )
+    nemotron_base_url = os.getenv("EDMG_AI_NVIDIA_BASE_URL", _NVIDIA_NIM_BASE_URL)
+    nemotron_model = os.getenv("EDMG_AI_NVIDIA_MODEL", _NEMOTRON_ULTRA_MODEL)
 
     if ai_mode in ("http", "remote"):
         return {
@@ -2086,11 +2156,24 @@ def _setup_ai_config() -> dict[str, Any]:
             "hint": "Studio planning is configured to call a separate EDMG AI service over HTTP.",
         }
 
+    if ai_provider in ("nemotron_cloud", "nvidia_nim", "nemotron"):
+        return {
+            "mode": "local",
+            "provider": "nemotron_cloud",
+            "label": "Nemotron Ultra (NVIDIA Cloud)",
+            "ollama_required": False,
+            "model_required": False,
+            "base_url": nemotron_base_url,
+            "model": nemotron_model,
+            "nvidia_api_key_configured": nvidia_api_key_configured,
+            "hint": "Studio planning uses NVIDIA Nemotron Ultra via the NVIDIA NIM cloud API.",
+        }
+
     if ai_provider in ("openai_compat", "openai-compatible", "openai"):
         return {
             "mode": "local",
             "provider": "openai_compat",
-            "label": "Local OpenAI-compatible provider",
+            "label": "OpenAI-compatible endpoint",
             "ollama_required": False,
             "model_required": False,
             "base_url": openai_compat_base_url,
@@ -2299,7 +2382,10 @@ def setup_7zip_install():
 @app.post("/v1/setup/backend/install")
 def setup_backend_install(payload: dict[str, Any]):
     bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
-    task = setup_tasks.start(f"install_backend_bundle:{bundle}", install_backend_bundle, bundle)
+    flavor = str((payload or {}).get("flavor") or "cpu").strip().lower() or "cpu"
+    if flavor == "nvidia" and bundle == "studio_bundle":
+        bundle = "studio_bundle"  # bundle stays the same; CUDA torch is installed separately
+    task = setup_tasks.start(f"install_backend_bundle:{bundle}:{flavor}", install_backend_bundle, bundle, flavor)
     return {"ok": True, "task": task.to_dict()}
 
 @app.post("/v1/setup/full/install")
@@ -2320,7 +2406,10 @@ def setup_full_install(payload: dict[str, Any]):
         # 1) Ensure backend runtime bundle is present for audio/ASR/internal render paths.
         SetupTaskManager.check_canceled(task, "Full setup canceled.")
         if not check_backend_bundle(bundle).get("ok"):
-            install_backend_bundle(task, bundle)
+            install_backend_bundle(task, bundle, flavor)
+        elif flavor in ("nvidia", "cuda"):
+            SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` already installed; installing CUDA torch.")
+            install_backend_bundle(task, bundle, flavor)
         else:
             SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` already installed.")
 
@@ -2395,7 +2484,15 @@ def setup_comfyui_portable_install(payload: dict[str, Any]):
 
 @app.post("/v1/setup/comfyui/portable/start")
 def setup_comfyui_portable_start(payload: dict[str, Any]):
-    flavor = (payload or {}).get("flavor") or "cpu"
+    raw_flavor = str((payload or {}).get("flavor") or "auto").strip().lower()
+    if raw_flavor == "auto":
+        hw = _hardware_profile()
+        cuda_cfg = dict((render_settings.get().get("cuda") or {}))
+        if str(hw.get("backend") or "cpu").lower() == "cuda" and bool(cuda_cfg.get("enabled", True)):
+            raw_flavor = "nvidia"
+        else:
+            raw_flavor = "cpu"
+    flavor = raw_flavor
     port = int((payload or {}).get("port") or 8188)
     task = setup_tasks.start(
         f"start_comfyui_portable:{flavor}",
@@ -2882,6 +2979,71 @@ else:
         _require_multipart()
 
 
+def _prepare_transcription_audio(audio_path: Path, project_dir: Path, asr_cfg: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    if not bool(asr_cfg.get("separate_vocals", False)):
+        return audio_path, {"enabled": False, "source": "original_mix", "audio_path": str(audio_path)}
+
+    model = str(asr_cfg.get("separation_model") or "htdemucs").strip() or "htdemucs"
+    stems_root = project_dir / "analysis" / "stems"
+    vocals_path = stems_root / model / audio_path.stem / "vocals.wav"
+    metadata = {
+        "enabled": True,
+        "source": "demucs",
+        "model": model,
+        "requested_audio_path": str(audio_path),
+        "audio_path": str(vocals_path),
+    }
+
+    if vocals_path.exists() and vocals_path.stat().st_mtime >= audio_path.stat().st_mtime:
+        metadata["cached"] = True
+        return vocals_path, metadata
+
+    deps = transcription_dependency_status()
+    if not deps.get("demucs_available"):
+        metadata["available"] = False
+        metadata["error"] = deps.get("demucs_install_hint") or "Demucs is not installed."
+        metadata["fallback_audio_path"] = str(audio_path)
+        return audio_path, metadata
+
+    stems_root.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        "-m",
+        "demucs",
+        "-n",
+        model,
+        "--two-stems",
+        "vocals",
+        "-o",
+        str(stems_root),
+        str(audio_path),
+    ]
+    try:
+        subprocess.run(
+            cmd,
+            cwd=str(project_dir),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+    except Exception as exc:
+        metadata["available"] = True
+        metadata["error"] = str(exc)
+        metadata["fallback_audio_path"] = str(audio_path)
+        return audio_path, metadata
+
+    if not vocals_path.exists():
+        metadata["available"] = True
+        metadata["error"] = f"Demucs completed but did not create {vocals_path}."
+        metadata["fallback_audio_path"] = str(audio_path)
+        return audio_path, metadata
+
+    metadata["available"] = True
+    metadata["cached"] = False
+    return vocals_path, metadata
+
+
 @app.post("/v1/projects/{project_id}/analyze_audio")
 def analyze_audio(project_id: str):
     proj = store.get(project_id)
@@ -2895,8 +3057,13 @@ def analyze_audio(project_id: str):
     feats = _collect_audio_analysis_features(audio_path)
     try:
         asr_cfg = transcription_settings.get()
+        transcription_audio_path, separation_meta = _prepare_transcription_audio(
+            audio_path,
+            store.project_dir(project_id),
+            asr_cfg,
+        )
         transcript_result = ai.transcribe(
-            str(audio_path),
+            str(transcription_audio_path),
             model_size=str(asr_cfg.get("model") or "turbo"),
             provider=str(asr_cfg.get("provider") or "faster_whisper"),
             device=str(asr_cfg.get("device") or "cpu"),
@@ -2904,6 +3071,8 @@ def analyze_audio(project_id: str):
             fallback_to_whisper=bool(asr_cfg.get("fallback_to_whisper", True)),
         )
         trans = transcript_result if isinstance(transcript_result, dict) else {"text": str(transcript_result or "")}
+        trans["source_audio_path"] = str(transcription_audio_path)
+        trans["vocal_separation"] = separation_meta
     except Exception as e:
         trans = {"error": f"transcribe failed: {e}"}
 
@@ -3390,12 +3559,14 @@ def _creative_average(values: list[float]) -> float:
 
 def _creative_provider_mode(plan: dict[str, Any]) -> str:
     source = str((plan or {}).get("source") or "").strip().lower()
-    provider = os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower()
+    provider = os.getenv("EDMG_AI_PROVIDER", "nemotron_cloud").strip().lower()
     if source == "ai":
         if provider == "ollama":
             return "ollama-contract"
         if provider in {"openai_compat", "openai-compatible", "openai"}:
             return "openai-contract"
+        if provider in {"nemotron_cloud", "nvidia_nim", "nemotron"}:
+            return "nemotron-contract"
         return f"{provider}-contract" if provider else "provider-contract"
     return "local-heuristic"
 
@@ -9285,11 +9456,28 @@ def cloud_azure_test(req: CloudAzureTestRequest):
     except Exception as e:
         raise HTTPException(status_code=501, detail=str(e))
 
+
+def _resolve_lightning_bundle_output_dir(output_dir: str | None) -> Path:
+    raw = str(output_dir or "lightning/lightning_bundle").strip() or "lightning/lightning_bundle"
+    requested = Path(raw).expanduser()
+    if requested.is_absolute():
+        return requested.resolve()
+
+    cloud_root = (settings.data_dir / "cloud").resolve()
+    resolved = (cloud_root / requested).resolve()
+    if not (resolved == cloud_root or resolved.is_relative_to(cloud_root)):
+        raise HTTPException(400, "Relative Lightning bundle output must stay under Studio data/cloud.")
+    return resolved
+
+
 @app.post("/v1/cloud/lightning/bundle")
 def cloud_lightning_bundle(req: CloudLightningBundleRequest):
     try:
-        return lightning_integration.generate_lightning_bundle(req.output_dir)
+        output_dir = _resolve_lightning_bundle_output_dir(req.output_dir)
+        return lightning_integration.generate_lightning_bundle(str(output_dir))
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(500, str(e))
 
 # ------------------------------

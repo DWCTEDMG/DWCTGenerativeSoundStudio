@@ -11,7 +11,7 @@ export default function Cloud(props: PageProps) {
   const [bundleKey, setBundleKey] = useState("edmg_project_bundle.zip");
   const [azureContainer, setAzureContainer] = useState("edmg-model-cache");
   const [azurePrefix, setAzurePrefix] = useState("models");
-  const [lightningOut, setLightningOut] = useState("lightning_bundle");
+  const [lightningOut, setLightningOut] = useState("lightning/lightning_bundle");
   const [lightningBackendUrl, setLightningBackendUrl] = useState(
     () => normalizeBackendUrl(props.backendUrl || getBackendUrl()) || "",
   );
@@ -181,7 +181,7 @@ export default function Cloud(props: PageProps) {
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Lightning.ai</div>
         <div className="small">Generates a runnable bundle folder (backend + startup script).</div>
         <div style={{ marginTop: 10 }}>
-          <div className="small">Output dir</div>
+          <div className="small">Output dir under Studio data/cloud</div>
           <input value={lightningOut} onChange={(e) => setLightningOut(e.target.value)} />
         </div>
         <div style={{ marginTop: 10 }}>
