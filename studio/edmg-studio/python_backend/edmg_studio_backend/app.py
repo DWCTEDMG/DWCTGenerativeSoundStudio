@@ -7549,9 +7549,25 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
     if str(tier_plan.get("device_preference") or "auto") == "directml":
         fallbacks = [preferred, "hf_sdxl_internal", "hf_sd15_internal"]
     else:
-        fallbacks = [preferred, "hf_sd15_internal", "hf_sdxl_internal"]
+        fallbacks = [preferred, "hf_sd35_medium_internal", "hf_sdxl_internal", "hf_sd15_internal"]
     runtime = _internal_diffusion_runtime_status()
-    picked = next((mid for mid in fallbacks if models.installed_path(mid)), None)
+    picked = None
+    seen: set[str] = set()
+    hardware_issues: list[dict[str, str]] = []
+    for mid in fallbacks:
+        if mid in seen:
+            continue
+        seen.add(mid)
+        installed = models.installed_path(mid)
+        if not installed:
+            continue
+        family = _internal_model_family_for_request(mid, installed)
+        hardware_issue = _internal_model_hardware_issue(mid, family, hw, str(tier_plan.get("device_preference") or "auto"))
+        if hardware_issue:
+            hardware_issues.append(hardware_issue)
+            continue
+        picked = mid
+        break
     if picked and runtime.get("ok"):
         return {
             "mode": "internal",
@@ -7577,7 +7593,8 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
     if picked:
         diagnostics.append(f"internal_model={picked}")
     else:
-        diagnostics.append("internal_models=missing")
+        diagnostics.append("internal_models=unsupported" if hardware_issues else "internal_models=missing")
+        diagnostics.extend(str(issue["message"]) for issue in hardware_issues)
     diagnostics.extend(list(runtime.get("diagnostics") or []))
     proxy_reason = reason
     if picked and not runtime.get("ok"):

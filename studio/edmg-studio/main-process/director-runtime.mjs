@@ -64,7 +64,16 @@ export function createDirectorRuntime({
   function appendChildOutput(stream, filePath) {
     if (!stream || !filePath) return null;
     ensureDirSync(path.dirname(filePath));
-    const fileStream = fs.createWriteStream(filePath, { flags: "a" });
+    let fileStream;
+    try {
+      fileStream = fs.createWriteStream(filePath, { flags: "a" });
+    } catch (error) {
+      console.warn("[director] failed to open log stream", { filePath, error });
+      return null;
+    }
+    fileStream.on("error", (error) => {
+      console.warn("[director] log stream error", { filePath, error });
+    });
     stream.on("data", (chunk) => {
       safeStreamWrite(fileStream, chunk);
     });
