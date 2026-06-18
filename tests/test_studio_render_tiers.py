@@ -255,6 +255,42 @@ def test_run_pipeline_local_fallback_uses_tier_defaults_on_cpu(tmp_path, monkeyp
     assert captured["req"].device_preference == "cpu"
 
 
+def test_pipeline_local_fallback_considers_sd35_on_cpu_when_it_is_only_installed(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cpu",
+        "device": "cpu",
+        "device_name": "CPU",
+        "available_backends": ["cpu"],
+        "vram_gb": 0.0,
+        "ram_gb": 32.0,
+        "cpu_threads": 16,
+        "backend_family": "cpu_only",
+        "preferred_internal_model": "hf_sd15_internal",
+        "recommended_tier": "balanced",
+        "max_supported_tier": "balanced",
+    })
+    monkeypatch.setattr(studio_app, "_render_provider_status", lambda _hw=None: {"directml": {"enabled": True}})
+    monkeypatch.setattr(studio_app, "_internal_diffusion_runtime_status", lambda: {"ok": True, "diagnostics": ["internal_runtime=ready"]})
+    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
+    installed = {
+        "hf_sd35_medium_internal": _fake_internal_model(tmp_path, "hf_sd35_medium_internal", "StableDiffusion3Pipeline"),
+    }
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": False},
+    )
+    fallback = studio_app._recommend_local_fallback(proj.id, "balanced", reason="ComfyUI is not reachable.")
+
+    assert preflight["model_id"] == "hf_sd35_medium_internal"
+    assert fallback["mode"] == "internal"
+    assert fallback["model_id"] == "hf_sd35_medium_internal"
+
+
 def test_cpu_chunk_plan_enabled_for_long_render():
     hw = {"backend": "cpu", "backend_family": "cpu_only", "vram_gb": 0.0, "ram_gb": 8.0, "cpu_threads": 4}
     plan = studio_app._build_internal_render_plan(hw, requested_tier="auto", duration_s=180.0)
