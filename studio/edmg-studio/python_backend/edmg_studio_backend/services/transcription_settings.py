@@ -8,11 +8,17 @@ from typing import Any
 from .render_settings import _config_dir
 
 
-TRANSCRIPTION_PROVIDERS = ("faster_whisper", "parakeet")
+TRANSCRIPTION_PROVIDERS = ("faster_whisper", "parakeet", "parakeet_nim")
 WHISPER_MODELS = ("turbo", "large-v3", "medium", "small")
 PARAKEET_MODELS = (
     "nvidia/parakeet-tdt-0.6b-v3",
     "nvidia/parakeet-tdt-0.6b-v2",
+)
+# Cloud NIM models available via NVIDIA API Catalog (build.nvidia.com)
+PARAKEET_NIM_MODELS = (
+    "parakeet-ctc-1.1b-asr",       # best English accuracy
+    "parakeet-tdt-0.6b-v2",        # fast + timestamps
+    "parakeet-ctc-0.6b-asr",       # fast English
 )
 TRANSCRIPTION_DEVICES = ("auto", "cuda", "cpu")
 TRANSCRIPTION_COMPUTE_TYPES = ("auto", "float16", "int8", "int8_float16")
@@ -54,6 +60,8 @@ def normalize_provider(value: Any) -> str:
         return "faster_whisper"
     if provider in {"parakeet", "nvidia_parakeet", "nvidia-parakeet"}:
         return "parakeet"
+    if provider in {"parakeet_nim", "nvidia_nim_asr", "nim_asr", "parakeet-nim"}:
+        return "parakeet_nim"
     return DEFAULT_TRANSCRIPTION_SETTINGS["provider"]
 
 
@@ -66,6 +74,12 @@ def normalize_model(provider: str, value: Any) -> str:
         if lower in {"v3", "parakeet-v3", "parakeet-tdt-0.6b-v3", "nvidia/parakeet-tdt-0.6b-v3"}:
             return "nvidia/parakeet-tdt-0.6b-v3"
         return raw if raw in PARAKEET_MODELS else DEFAULT_TRANSCRIPTION_SETTINGS["model"]
+    if provider == "parakeet_nim":
+        if lower in {"1.1b", "ctc-1.1b", "parakeet-ctc-1.1b", "parakeet-ctc-1.1b-asr"}:
+            return "parakeet-ctc-1.1b-asr"
+        if lower in {"0.6b-v2", "tdt-0.6b-v2", "parakeet-tdt-0.6b-v2"}:
+            return "parakeet-tdt-0.6b-v2"
+        return raw if raw in PARAKEET_NIM_MODELS else "parakeet-ctc-1.1b-asr"
 
     if lower in {"large-v3-turbo", "whisper-large-v3-turbo"}:
         return "turbo"
@@ -93,13 +107,16 @@ def transcription_dependency_status() -> dict[str, Any]:
     nemo_available = importlib.util.find_spec("nemo") is not None
     torch_available = importlib.util.find_spec("torch") is not None
     demucs_available = importlib.util.find_spec("demucs") is not None
+    requests_available = importlib.util.find_spec("requests") is not None
     return {
         "faster_whisper_available": faster_whisper_available,
         "parakeet_available": bool(nemo_available and torch_available),
+        "parakeet_nim_available": requests_available,  # just needs requests + NVIDIA API key
         "nemo_available": nemo_available,
         "torch_available": torch_available,
         "demucs_available": demucs_available,
         "parakeet_install_hint": 'Install optional dependencies with `pip install -e ".[parakeet]"` from python_backend.',
+        "parakeet_nim_hint": "Parakeet NIM uses your NVIDIA API key — no additional install required.",
         "demucs_install_hint": 'Install optional dependencies with `pip install -e ".[source_separation]"` from python_backend.',
     }
 
@@ -129,6 +146,8 @@ class TranscriptionSettingsStore:
         model = normalize_model(provider, payload.get("model"))
         if provider == "parakeet" and model not in PARAKEET_MODELS:
             model = "nvidia/parakeet-tdt-0.6b-v3"
+        if provider == "parakeet_nim" and model not in PARAKEET_NIM_MODELS:
+            model = "parakeet-ctc-1.1b-asr"
         if provider == "faster_whisper" and model not in WHISPER_MODELS:
             model = DEFAULT_TRANSCRIPTION_SETTINGS["model"]
 

@@ -151,6 +151,8 @@ class LocalAiDirectorClient:
         device: str = "cpu",
         compute_type: str = "int8",
         fallback_to_whisper: bool = True,
+        nvidia_api_key: str = "",
+        nim_base_url: str = "",
     ) -> dict[str, Any]:
         try:
             self._ensure_import_path()
@@ -166,6 +168,8 @@ class LocalAiDirectorClient:
                 device=device,
                 compute_type=compute_type,
                 fallback_to_whisper=fallback_to_whisper,
+                nvidia_api_key=nvidia_api_key,
+                nim_base_url=nim_base_url,
             )
         except Exception as e:
             return {"text": None, "error": str(e)}

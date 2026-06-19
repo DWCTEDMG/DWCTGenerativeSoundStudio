@@ -1087,9 +1087,22 @@ export default function Settings(props: PageProps) {
                 value={transcriptionDraft.provider}
                 onChange={(e) => updateTranscriptionDraft({ provider: e.target.value })}
               >
-                <option value="faster_whisper">faster-whisper</option>
-                <option value="parakeet">NVIDIA Parakeet</option>
+                <option value="faster_whisper">faster-whisper (local, CPU/GPU)</option>
+                <option value="parakeet">NVIDIA Parakeet (local, requires NeMo)</option>
+                <option value="parakeet_nim">
+                  NVIDIA Parakeet NIM ☁ (cloud, uses NVIDIA API key)
+                </option>
               </select>
+              {transcriptionDraft.provider === "parakeet_nim" && !transcriptionStatus?.parakeet_nim_api_key_configured && (
+                <div className="small" style={{ marginTop: 4, color: "var(--danger,#dc2626)" }}>
+                  ⚠ No NVIDIA API key. Add it in AI Provider → NVIDIA API key (same key as Nemotron/Cosmos).
+                </div>
+              )}
+              {transcriptionDraft.provider === "parakeet_nim" && transcriptionStatus?.parakeet_nim_ready && (
+                <div className="small" style={{ marginTop: 4, color: "green" }}>
+                  ✓ Ready — cloud ASR, no local GPU or NeMo install needed.
+                </div>
+              )}
             </div>
 
             <div>
@@ -1099,7 +1112,13 @@ export default function Settings(props: PageProps) {
                 value={transcriptionDraft.model}
                 onChange={(e) => updateTranscriptionDraft({ model: e.target.value })}
               >
-                {transcriptionDraft.provider === "parakeet" ? (
+                {transcriptionDraft.provider === "parakeet_nim" ? (
+                  <>
+                    <option value="parakeet-ctc-1.1b-asr">Parakeet CTC 1.1B (best accuracy)</option>
+                    <option value="parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2 (fast + timestamps)</option>
+                    <option value="parakeet-ctc-0.6b-asr">Parakeet CTC 0.6B (fastest)</option>
+                  </>
+                ) : transcriptionDraft.provider === "parakeet" ? (
                   <>
                     <option value="nvidia/parakeet-tdt-0.6b-v3">Parakeet TDT 0.6B v3</option>
                     <option value="nvidia/parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2</option>

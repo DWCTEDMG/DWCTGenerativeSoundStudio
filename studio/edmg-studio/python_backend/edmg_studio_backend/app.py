@@ -102,6 +102,7 @@ from .services.firefly_platform import FireflyClient, FireflyImageResult
 from .services.cosmos_platform import CosmosClient, COSMOS_MODELS
 from .services.transcription_settings import (
     PARAKEET_MODELS,
+    PARAKEET_NIM_MODELS,
     TRANSCRIPTION_COMPUTE_TYPES,
     TRANSCRIPTION_DEVICES,
     TRANSCRIPTION_PROVIDERS,
@@ -2130,6 +2131,11 @@ def set_render_providers(payload: dict[str, Any]):
 def _transcription_status() -> dict[str, Any]:
     cfg = transcription_settings.get()
     deps = transcription_dependency_status()
+    nvidia_key_configured = bool(
+        secrets.get("nvidia_api_key")
+        or os.getenv("EDMG_AI_NVIDIA_API_KEY")
+        or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
+    )
     return {
         "ok": True,
         "settings": cfg,
@@ -2145,6 +2151,9 @@ def _transcription_status() -> dict[str, Any]:
         "providers": list(TRANSCRIPTION_PROVIDERS),
         "whisper_models": list(WHISPER_MODELS),
         "parakeet_models": list(PARAKEET_MODELS),
+        "parakeet_nim_models": list(PARAKEET_NIM_MODELS),
+        "parakeet_nim_ready": bool(nvidia_key_configured and deps.get("parakeet_nim_available")),
+        "parakeet_nim_api_key_configured": nvidia_key_configured,
         "devices": list(TRANSCRIPTION_DEVICES),
         "compute_types": list(TRANSCRIPTION_COMPUTE_TYPES),
         "dependencies": deps,
@@ -3199,13 +3208,25 @@ def analyze_audio(project_id: str):
             store.project_dir(project_id),
             asr_cfg,
         )
+        asr_provider = str(asr_cfg.get("provider") or "faster_whisper")
+        # Resolve NVIDIA API key for Parakeet NIM cloud path
+        _nvidia_key = ""
+        if asr_provider == "parakeet_nim":
+            _nvidia_key = (
+                secrets.get("nvidia_api_key")
+                or os.getenv("EDMG_AI_NVIDIA_API_KEY")
+                or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
+                or ""
+            )
         transcript_result = ai.transcribe(
             str(transcription_audio_path),
             model_size=str(asr_cfg.get("model") or "turbo"),
-            provider=str(asr_cfg.get("provider") or "faster_whisper"),
-            device=str(asr_cfg.get("device") or "cpu"),
-            compute_type=str(asr_cfg.get("compute_type") or "int8"),
+            provider=asr_provider,
+            device=str(asr_cfg.get("device") or "auto"),
+            compute_type=str(asr_cfg.get("compute_type") or "auto"),
             fallback_to_whisper=bool(asr_cfg.get("fallback_to_whisper", True)),
+            nvidia_api_key=_nvidia_key,
+            nim_base_url=str(asr_cfg.get("nim_base_url") or ""),
         )
         trans = transcript_result if isinstance(transcript_result, dict) else {"text": str(transcript_result or "")}
         trans["source_audio_path"] = str(transcription_audio_path)

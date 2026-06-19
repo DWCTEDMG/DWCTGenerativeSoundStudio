@@ -75,6 +75,8 @@ def _normalize_provider(provider: str | None) -> str:
         return "faster_whisper"
     if raw in {"parakeet", "nvidia_parakeet"}:
         return "parakeet"
+    if raw in {"parakeet_nim", "nvidia_nim_asr", "nim_asr", "parakeet-nim"}:
+        return "parakeet_nim"
     return DEFAULT_ASR_PROVIDER
 
 
@@ -337,6 +339,84 @@ def _transcribe_faster_whisper(
     }
 
 
+_NVIDIA_NIM_ASR_BASE = "https://ai.api.nvidia.com/v1/asr/nvidia"
+
+# Map NIM model names to their catalog slugs
+_NIM_MODEL_SLUG: dict[str, str] = {
+    "parakeet-ctc-1.1b-asr": "parakeet-ctc-1_1b-asr",
+    "parakeet-tdt-0.6b-v2":  "parakeet-tdt-0_6b-v2",
+    "parakeet-ctc-0.6b-asr": "parakeet-ctc-0_6b-asr",
+}
+
+
+def _transcribe_parakeet_nim(
+    path: str,
+    model: str = "parakeet-ctc-1.1b-asr",
+    *,
+    api_key: str,
+    language: str = "en-US",
+    nim_base_url: str = "",
+) -> dict[str, Any]:
+    """Transcribe via NVIDIA NIM cloud ASR — no local GPU or NeMo needed.
+
+    Uses the same NVIDIA API key as Nemotron / Cosmos (nvapi-...).
+    Sends the audio file as multipart/form-data to the NIM speech endpoint.
+    """
+    import requests  # type: ignore
+
+    slug = _NIM_MODEL_SLUG.get(model, model.replace(".", "_").replace("-", "_"))
+    if nim_base_url:
+        endpoint = nim_base_url.rstrip("/") + "/v1/audio/transcriptions"
+    else:
+        endpoint = f"{_NVIDIA_NIM_ASR_BASE}/{slug}/v1/audio/transcriptions"
+
+    with open(path, "rb") as audio_file:
+        resp = requests.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {api_key}"},
+            files={"file": (f"audio{_audio_ext(path)}", audio_file)},
+            data={"language": language},
+            timeout=(30, 300),
+        )
+
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail") or resp.text[:300]
+        except Exception:
+            detail = resp.text[:300]
+        raise RuntimeError(
+            f"NVIDIA NIM ASR returned {resp.status_code}: {detail}. "
+            "Check your NVIDIA API key (same as Nemotron) in Settings."
+        )
+
+    data = resp.json()
+    text = str(data.get("text") or "").strip()
+    duration = _coerce_float(data.get("duration"))
+    segments = []
+    for seg in (data.get("segments") or []):
+        segments.append({
+            "start": _coerce_float(seg.get("start")),
+            "end": _coerce_float(seg.get("end")),
+            "text": str(seg.get("text") or "").strip(),
+        })
+
+    return {
+        "text": text,
+        "segments": segments,
+        "duration": duration,
+        "provider": "parakeet_nim",
+        "model": model,
+        "device": "cloud",
+        "language": language,
+    }
+
+
+def _audio_ext(path: str) -> str:
+    import os
+    ext = os.path.splitext(path)[1].lower()
+    return ext if ext in {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".webm"} else ".wav"
+
+
 def transcribe_detailed(
     path: str,
     model_size: str = DEFAULT_MODEL_SIZE,
@@ -345,9 +425,28 @@ def transcribe_detailed(
     device: str = "cpu",
     compute_type: str = "int8",
     fallback_to_whisper: bool = True,
+    nvidia_api_key: str = "",
+    nim_base_url: str = "",
 ) -> dict[str, Any]:
     """Transcribe audio with long-form metadata and timestamped segments."""
     normalized_provider = _normalize_provider(provider)
+
+    if normalized_provider == "parakeet_nim":
+        try:
+            return _transcribe_parakeet_nim(
+                path,
+                model=model_size or "parakeet-ctc-1.1b-asr",
+                api_key=nvidia_api_key,
+                nim_base_url=nim_base_url,
+            )
+        except Exception as exc:
+            if not fallback_to_whisper:
+                raise
+            fallback = _transcribe_faster_whisper(path, DEFAULT_MODEL_SIZE, device="cpu", compute_type="int8")
+            fallback["note"] = f"Parakeet NIM unavailable; used faster-whisper fallback: {exc}"
+            fallback["requested_provider"] = "parakeet_nim"
+            return fallback
+
     if normalized_provider == "parakeet":
         try:
             return _transcribe_parakeet(path, model_size, device=device)
