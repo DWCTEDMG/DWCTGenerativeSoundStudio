@@ -374,6 +374,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     [installedModels, selectedStillEngine, selectedStillFamily, selectedStillModel?.id, stillModels]
   );
   const internalHostedVisible = !!renderProviders?.stability?.visible;
+  const fireflyVisible = !!renderProviders?.firefly?.visible;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
 
@@ -1027,6 +1028,25 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const renderFireflyScenes = async () => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/firefly/scenes`, {
+        variant_index: selectedVariant,
+        model_id: renderProviders?.firefly?.custom_model_id || undefined,
+        width: renderWidth || undefined,
+        height: renderHeight || undefined,
+        seed: renderSeed ? Number(renderSeed) : undefined,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+      await refreshReferenceAssets(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
   const renderMotion = async () => {
     setErr(null);
     setInfo(null);
@@ -1043,6 +1063,21 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         max_frames_per_scene: maxFramesPerScene,
         context_length: motionContextLength,
         context_overlap: motionContextOverlap,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const assembleFirefly = async () => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/firefly/assemble`, {
+        variant_index: selectedVariant,
+        fps: internalFpsOut,
       });
       setInfo(d);
       await refreshProject(projectId);
@@ -1426,6 +1461,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <option value="auto">Auto</option>
                       <option value="diffusion">Local diffusion</option>
                       {internalHostedVisible ? <option value="hosted">Hosted Stability</option> : null}
+                      {fireflyVisible ? <option value="firefly">Adobe Firefly</option> : null}
                       <option value="proxy">Proxy only</option>
                     </select>
                   </div>
@@ -2608,9 +2644,38 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
                 <button onClick={renderScenes} disabled={!variantCount || renderMode !== "stills"}>Enqueue still scenes</button>
                 <button onClick={renderMotion} disabled={!variantCount || renderMode === "stills"}>Enqueue motion scenes</button>
+                {fireflyVisible ? (
+                  <>
+                    <button
+                      onClick={renderFireflyScenes}
+                      disabled={!variantCount}
+                      title={renderProviders?.firefly?.custom_model_id
+                        ? `Generate with Adobe Firefly custom model: ${renderProviders.firefly.custom_model_id}`
+                        : "Generate keyframes with Adobe Firefly Image 3"}
+                    >
+                      🔥 Render with Firefly
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={assembleFirefly}
+                      disabled={!variantCount}
+                      title="Assemble Firefly stills into a final MP4 (run Render with Firefly first)"
+                    >
+                      Assemble Firefly video
+                    </button>
+                  </>
+                ) : null}
                 <button className="secondary" onClick={tickWorker}>Tick worker (run 1 job)</button>
                 <button className="secondary" onClick={refreshValidate}>Validate capabilities</button>
               </div>
+              {fireflyVisible && (
+                <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                  Adobe Firefly: <b>{renderProviders?.firefly?.configured ? "configured" : "not configured"}</b>
+                  {renderProviders?.firefly?.custom_model_id
+                    ? <> • custom model <code>{renderProviders.firefly.custom_model_id}</code></>
+                    : <> • using standard Firefly Image 3</>}
+                </div>
+              )}
 
               {validate?.recommended?.diagnostics?.length ? (
                 <div className="card" style={{ marginTop: 10 }}>

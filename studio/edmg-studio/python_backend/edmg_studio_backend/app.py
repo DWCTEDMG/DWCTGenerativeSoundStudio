@@ -7057,6 +7057,76 @@ def render_firefly_scenes(project_id: str, req: RenderScenesRequest):
     return {"ok": True, "provider": "adobe-firefly", "results": results, "width": width, "height": height}
 
 
+@app.post("/v1/projects/{project_id}/render/firefly/assemble")
+def render_firefly_assemble(project_id: str, payload: dict[str, Any]):
+    """Assemble Firefly-generated scene stills into a final MP4 video.
+
+    Reads the PNGs from stills/variant_N/ that were produced by
+    /render/firefly/scenes, assigns each scene's duration from the plan,
+    and calls FFmpeg slideshow assembly + optional audio mux.
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    variant_index = int((payload or {}).get("variant_index") or 0)
+    variants = plan["variants"]
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    variant = variants[variant_index]
+    scenes = variant.get("scenes") or []
+    if not scenes:
+        raise HTTPException(400, "No scenes in selected variant.")
+
+    stills_dir = Path(proj.path) / "stills" / f"variant_{variant_index}"
+    imgs: list[Path] = []
+    durations: list[float] = []
+    for idx, scene in enumerate(scenes):
+        img_path = stills_dir / f"scene_{idx:04d}.png"
+        if img_path.exists():
+            imgs.append(img_path)
+            start = float(scene.get("start_s") or 0.0)
+            end = float(scene.get("end_s") or (start + 4.0))
+            durations.append(max(0.5, end - start))
+        else:
+            raise UserFacingError(
+                f"Scene {idx} still not found at {img_path.name}.",
+                hint="Run 'Render with Firefly' first to generate keyframes for all scenes.",
+                code="FIREFLY_STILL_MISSING",
+                status_code=400,
+            )
+
+    if not imgs:
+        raise HTTPException(400, "No Firefly stills found for this variant.")
+
+    out_path = Path(proj.path) / "output" / f"firefly_v{variant_index}.mp4"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    assemble_slideshow(
+        ffmpeg_path=settings.ffmpeg_path,
+        image_paths=imgs,
+        durations_s=durations,
+        out_path=out_path,
+        fps=int((payload or {}).get("fps") or 24),
+    )
+
+    audio_path = Path(proj.meta.get("audio_path") or "")
+    if audio_path.is_absolute() and audio_path.exists() or (proj.path and (Path(proj.path) / "audio.wav").exists()):
+        resolved_audio = audio_path if audio_path.is_absolute() else (Path(proj.path) / "audio.wav")
+        muxed = out_path.with_name(out_path.stem + "_muxed.mp4")
+        try:
+            mux_audio(settings.ffmpeg_path, video_path=out_path, audio_path=resolved_audio, out_path=muxed)
+            out_path = muxed
+        except Exception:
+            pass
+
+    rel = str(out_path.relative_to(Path(proj.path)))
+    return {"ok": True, "provider": "adobe-firefly", "video": rel, "video_abs": str(out_path)}
+
+
 @app.post("/v1/projects/{project_id}/render/stills/scenes")
 @app.post("/v1/projects/{project_id}/render/comfyui/scenes")
 def render_scenes(project_id: str, req: RenderScenesRequest):
