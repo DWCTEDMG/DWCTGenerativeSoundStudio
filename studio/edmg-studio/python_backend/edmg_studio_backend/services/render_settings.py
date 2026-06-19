@@ -7,6 +7,13 @@ from typing import Any
 
 STABILITY_SERVICES = ("core", "ultra", "sd3")
 STABILITY_SD3_MODELS = ("sd3.5-large", "sd3.5-large-turbo", "sd3.5-medium")
+
+FIREFLY_STYLES = (
+    "none", "photo", "art", "graphic", "illustration",
+    "sketch", "watercolor", "pixel-art",
+)
+FIREFLY_CONTENT_CLASSES = ("photo", "art")
+
 STABILITY_STYLE_PRESETS = (
     "none",
     "enhance",
@@ -29,6 +36,14 @@ STABILITY_STYLE_PRESETS = (
 )
 
 DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
+    "firefly": {
+        "enabled": False,
+        "allow_auto_fallback": True,
+        "custom_model_id": "",
+        "style": "none",
+        "content_class": "photo",
+        "strength": 0.6,
+    },
     "stability": {
         "enabled": False,
         "allow_auto_fallback": True,
@@ -98,7 +113,7 @@ class RenderSettingsStore:
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         current = self.get()
         incoming = payload if isinstance(payload, dict) else {}
-        for key in ("stability", "cuda", "directml"):
+        for key in ("firefly", "stability", "cuda", "directml"):
             value = incoming.get(key)
             if isinstance(value, dict):
                 current[key].update(value)
@@ -109,6 +124,7 @@ class RenderSettingsStore:
     def _sanitize(self, payload: dict[str, Any]) -> dict[str, Any]:
         out = _clone_defaults()
 
+        firefly = payload.get("firefly") if isinstance(payload.get("firefly"), dict) else {}
         stability = payload.get("stability") if isinstance(payload.get("stability"), dict) else {}
         cuda = payload.get("cuda") if isinstance(payload.get("cuda"), dict) else {}
         directml = payload.get("directml") if isinstance(payload.get("directml"), dict) else {}
@@ -137,6 +153,21 @@ class RenderSettingsStore:
         if cuda_preferred_model not in {"auto", "hf_sd35_medium_internal", "hf_sdxl_internal", "hf_sd15_internal"}:
             cuda_preferred_model = out["cuda"]["preferred_model"]
 
+        firefly_style = str(firefly.get("style") or out["firefly"]["style"]).strip().lower()
+        if firefly_style not in FIREFLY_STYLES:
+            firefly_style = out["firefly"]["style"]
+        firefly_content_class = str(firefly.get("content_class") or out["firefly"]["content_class"]).strip().lower()
+        if firefly_content_class not in FIREFLY_CONTENT_CLASSES:
+            firefly_content_class = out["firefly"]["content_class"]
+
+        out["firefly"] = {
+            "enabled": bool(firefly.get("enabled", out["firefly"]["enabled"])),
+            "allow_auto_fallback": bool(firefly.get("allow_auto_fallback", out["firefly"]["allow_auto_fallback"])),
+            "custom_model_id": str(firefly.get("custom_model_id") or "").strip(),
+            "style": firefly_style,
+            "content_class": firefly_content_class,
+            "strength": max(0.1, min(1.0, float(firefly.get("strength", out["firefly"]["strength"])))),
+        }
         out["stability"] = {
             "enabled": bool(stability.get("enabled", out["stability"]["enabled"])),
             "allow_auto_fallback": bool(

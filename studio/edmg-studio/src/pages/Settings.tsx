@@ -7,7 +7,7 @@ import { useUiMode } from "../components/uiMode";
 import { clearRenderDefaults, readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import type { PageProps } from "../types/pageProps";
 
-type SecretName = "hf_token" | "civitai_api_key" | "openai_compat_api_key" | "stability_api_key" | "nvidia_api_key";
+type SecretName = "hf_token" | "civitai_api_key" | "openai_compat_api_key" | "stability_api_key" | "nvidia_api_key" | "adobe_client_id" | "adobe_client_secret";
 
 type StudioAiSettings = {
   mode: string;
@@ -260,6 +260,8 @@ export default function Settings(props: PageProps) {
   const [openaiCompatApiKey, setOpenaiCompatApiKey] = useState<string>("");
   const [stabilityApiKey, setStabilityApiKey] = useState<string>("");
   const [nvidiaApiKey, setNvidiaApiKey] = useState<string>("");
+  const [adobeClientId, setAdobeClientId] = useState<string>("");
+  const [adobeClientSecret, setAdobeClientSecret] = useState<string>("");
   const [saving, setSaving] = useState<boolean>(false);
   const [savingBackend, setSavingBackend] = useState<boolean>(false);
   const [savingAi, setSavingAi] = useState<boolean>(false);
@@ -439,6 +441,8 @@ export default function Settings(props: PageProps) {
       if (name === "openai_compat_api_key") setOpenaiCompatApiKey("");
       if (name === "stability_api_key") setStabilityApiKey("");
       if (name === "nvidia_api_key") setNvidiaApiKey("");
+      if (name === "adobe_client_id") setAdobeClientId("");
+      if (name === "adobe_client_secret") setAdobeClientSecret("");
       await refreshSecrets();
       await refreshBackendAiStatus();
       const nextProviders = await apiGet("/v1/settings/render_providers");
@@ -1535,6 +1539,119 @@ export default function Settings(props: PageProps) {
                     <option value="hf_sdxl_internal">hf_sdxl_internal</option>
                     <option value="hf_sd15_internal">hf_sd15_internal</option>
                   </select>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Adobe Firefly ─────────────────────────────────────────── */}
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontWeight: 800 }}>Adobe Firefly (custom model / standard)</div>
+              <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
+                Credentials: Client ID <b>{renderProviders?.firefly?.has_client_id ? "✓" : "not set"}</b>
+                {" "}• Client Secret <b>{renderProviders?.firefly?.has_client_secret ? "✓" : "not set"}</b>
+                {" "}• configured: <b>{renderProviders?.firefly?.configured ? "yes" : "no"}</b>
+              </div>
+              {renderProviders?.firefly?.note && (
+                <div className="small" style={{ marginTop: 4, opacity: 0.8 }}>{renderProviders.firefly.note}</div>
+              )}
+
+              {/* Credentials */}
+              <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "end" }}>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Adobe Client ID</div>
+                    <div className="small" style={{ opacity: 0.75, marginBottom: 4 }}>
+                      From <a href="https://developer.adobe.com/console/" target="_blank" rel="noreferrer">Adobe Developer Console</a> → your Firefly API project.
+                    </div>
+                    <input
+                      value={adobeClientId}
+                      onChange={(e) => setAdobeClientId(e.target.value)}
+                      placeholder={secrets?.has_adobe_client_id ? "(set) paste to replace" : "paste Client ID"}
+                    />
+                  </div>
+                  <button disabled={saving || !adobeClientId} onClick={() => saveSecret("adobe_client_id", adobeClientId)}>Save</button>
+                  <button className="secondary" disabled={saving || !secrets?.has_adobe_client_id} onClick={() => clearSecret("adobe_client_id")}>Clear</button>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "end" }}>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Adobe Client Secret</div>
+                    <input
+                      type="password"
+                      value={adobeClientSecret}
+                      onChange={(e) => setAdobeClientSecret(e.target.value)}
+                      placeholder={secrets?.has_adobe_client_secret ? "(set) paste to replace" : "paste Client Secret"}
+                    />
+                  </div>
+                  <button disabled={saving || !adobeClientSecret} onClick={() => saveSecret("adobe_client_secret", adobeClientSecret)}>Save</button>
+                  <button className="secondary" disabled={saving || !secrets?.has_adobe_client_secret} onClick={() => clearSecret("adobe_client_secret")}>Clear</button>
+                </div>
+
+                {/* Enable toggles */}
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.firefly?.enabled}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), firefly: { ...(c?.firefly || {}), enabled: e.target.checked },
+                    }))}
+                  />
+                  Enable Adobe Firefly as a hosted render provider
+                </label>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.firefly?.allow_auto_fallback}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), firefly: { ...(c?.firefly || {}), allow_auto_fallback: e.target.checked },
+                    }))}
+                  />
+                  Allow automatic Firefly fallback when other providers are unavailable
+                </label>
+
+                {/* Custom model ID */}
+                <div>
+                  <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Custom Model ID</div>
+                  <div className="small" style={{ opacity: 0.75, marginBottom: 4 }}>
+                    From Adobe Firefly custom model training (e.g. <code>urn:firefly:...</code>). Leave blank to use standard Firefly Image 3.
+                  </div>
+                  <input
+                    value={renderProviderDraft?.firefly?.custom_model_id || ""}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), firefly: { ...(c?.firefly || {}), custom_model_id: e.target.value },
+                    }))}
+                    placeholder="urn:firefly:... (optional)"
+                  />
+                </div>
+
+                {/* Style + content class */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Style</div>
+                    <select
+                      value={renderProviderDraft?.firefly?.style || "none"}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), firefly: { ...(c?.firefly || {}), style: e.target.value },
+                      }))}
+                    >
+                      {(renderProviders?.firefly_styles || ["none","photo","art","graphic","illustration","sketch","watercolor","pixel-art"]).map((s: string) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Content class</div>
+                    <select
+                      value={renderProviderDraft?.firefly?.content_class || "photo"}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), firefly: { ...(c?.firefly || {}), content_class: e.target.value },
+                      }))}
+                    >
+                      {(renderProviders?.firefly_content_classes || ["photo","art"]).map((s: string) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>

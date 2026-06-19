@@ -91,10 +91,13 @@ from .services.model_manager import ModelManager
 from .services.secrets import SecretStore
 from .services.render_settings import (
     RenderSettingsStore,
+    FIREFLY_CONTENT_CLASSES,
+    FIREFLY_STYLES,
     STABILITY_SD3_MODELS,
     STABILITY_SERVICES,
     STABILITY_STYLE_PRESETS,
 )
+from .services.firefly_platform import FireflyClient, FireflyImageResult
 from .services.transcription_settings import (
     PARAKEET_MODELS,
     TRANSCRIPTION_COMPUTE_TYPES,
@@ -203,6 +206,7 @@ _apply_cuda_startup_flags()
 _ALLOWED_SECRETS: frozenset[str] = frozenset({
     "hf_token", "civitai_api_key", "openai_compat_api_key",
     "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
+    "adobe_client_id", "adobe_client_secret",
 })
 
 @asynccontextmanager
@@ -1953,10 +1957,15 @@ def hardware():
 def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     hw = dict(hw or _hardware_profile())
     cfg = render_settings.get()
+    firefly_cfg = dict(cfg.get("firefly") or {})
     stability_cfg = dict(cfg.get("stability") or {})
     directml_cfg = dict(cfg.get("directml") or {})
     cuda_cfg = dict(cfg.get("cuda") or {})
     has_stability_key = bool(secrets.get("stability_api_key"))
+    has_adobe_client_id = bool(secrets.get("adobe_client_id") or os.getenv("ADOBE_CLIENT_ID"))
+    has_adobe_client_secret = bool(secrets.get("adobe_client_secret") or os.getenv("ADOBE_CLIENT_SECRET"))
+    firefly_credentials_ok = has_adobe_client_id and has_adobe_client_secret
+    firefly_enabled = bool(firefly_cfg.get("enabled"))
     stability_enabled = bool(stability_cfg.get("enabled"))
     stability_service = str(stability_cfg.get("service") or "sd3")
     stability_model = str(stability_cfg.get("model") or "sd3.5-large-turbo")
@@ -1967,6 +1976,26 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "ok": True,
         "settings": cfg,
+        "firefly": {
+            "provider": "adobe-firefly",
+            "configured": firefly_credentials_ok,
+            "enabled": firefly_enabled,
+            "visible": bool(firefly_credentials_ok and firefly_enabled),
+            "has_client_id": has_adobe_client_id,
+            "has_client_secret": has_adobe_client_secret,
+            "allow_auto_fallback": bool(firefly_cfg.get("allow_auto_fallback", True)),
+            "custom_model_id": str(firefly_cfg.get("custom_model_id") or ""),
+            "style": str(firefly_cfg.get("style") or "none"),
+            "content_class": str(firefly_cfg.get("content_class") or "photo"),
+            "strength": float(firefly_cfg.get("strength") or 0.6),
+            "note": (
+                "No Adobe credentials saved — add Client ID and Client Secret in Settings → Adobe Firefly."
+                if not firefly_credentials_ok else
+                "Adobe Firefly is configured. Set a custom_model_id to use your fine-tuned model."
+                if not firefly_cfg.get("custom_model_id") else
+                f"Adobe Firefly configured with custom model: {firefly_cfg['custom_model_id']}"
+            ),
+        },
         "cuda": {
             "provider": "pytorch-cuda",
             "available": cuda_available,
@@ -2003,6 +2032,8 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
             "preferred_model": str(directml_cfg.get("preferred_model") or "auto"),
             "allow_auto_selection": bool(directml_cfg.get("allow_auto_selection", True)),
         },
+        "firefly_styles": list(FIREFLY_STYLES),
+        "firefly_content_classes": list(FIREFLY_CONTENT_CLASSES),
         "stability_services": list(STABILITY_SERVICES),
         "stability_models": list(STABILITY_SD3_MODELS),
         "style_presets": list(STABILITY_STYLE_PRESETS),
@@ -2019,6 +2050,24 @@ def _hosted_stability_ready(payload: dict[str, Any] | None = None) -> bool:
     if requested_mode == "hosted":
         return True
     return bool(provider.get("allow_auto_fallback")) and bool(payload.get("allow_hosted_fallback", True))
+
+
+def _firefly_client() -> FireflyClient:
+    """Return a configured FireflyClient, reading credentials from secrets or env."""
+    client_id = secrets.get("adobe_client_id") or os.getenv("ADOBE_CLIENT_ID") or ""
+    client_secret = secrets.get("adobe_client_secret") or os.getenv("ADOBE_CLIENT_SECRET") or ""
+    return FireflyClient(client_id=client_id, client_secret=client_secret)
+
+
+def _hosted_firefly_ready(payload: dict[str, Any] | None = None) -> bool:
+    payload = payload or {}
+    provider = _render_provider_status().get("firefly") or {}
+    if not provider.get("configured") or not provider.get("enabled"):
+        return False
+    requested_mode = str(payload.get("render_mode") or "auto").strip().lower()
+    if requested_mode == "firefly":
+        return True
+    return bool(provider.get("allow_auto_fallback")) and bool(payload.get("allow_firefly_fallback", True))
 
 
 @app.get("/v1/settings/render_providers")
@@ -6932,6 +6981,80 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         proj.meta["internal_render_history"] = hist[-20:]
     store.save(proj)
     return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "diffusion", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
+
+
+@app.post("/v1/projects/{project_id}/render/firefly/scenes")
+def render_firefly_scenes(project_id: str, req: RenderScenesRequest):
+    """Generate one keyframe per scene using Adobe Firefly (standard or custom model)."""
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    variants = plan["variants"]
+    if req.variant_index < 0 or req.variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    provider_status = _render_provider_status()
+    firefly_status = provider_status.get("firefly") or {}
+    if not firefly_status.get("configured"):
+        raise UserFacingError(
+            "Adobe Firefly credentials not configured.",
+            hint="Open Settings → Adobe Firefly, save your Client ID and Client Secret, then retry.",
+            code="FIREFLY_NOT_CONFIGURED",
+            status_code=400,
+        )
+
+    firefly_cfg = dict((render_settings.get().get("firefly") or {}))
+    client = _firefly_client()
+    variant = variants[req.variant_index]
+    scenes = variant.get("scenes") or []
+    if not scenes:
+        raise HTTPException(400, "Selected variant has no scenes.")
+
+    width = int(req.width or proj.meta.get("width") or 768)
+    height = int(req.height or proj.meta.get("height") or 432)
+    results = []
+    stills_dir = Path(proj.path) / "stills" / f"variant_{req.variant_index}"
+    stills_dir.mkdir(parents=True, exist_ok=True)
+
+    for idx, scene in enumerate(scenes):
+        prompt = str(scene.get("prompt") or "cinematic music video still").strip()
+        negative = str(scene.get("negative_prompt") or req.negative_prompt or "").strip()
+        seed = req.seed if req.seed is not None else None
+        custom_model_id = str(req.model_id or firefly_cfg.get("custom_model_id") or "").strip() or None
+
+        try:
+            result = client.generate_image(
+                prompt=prompt,
+                width=width,
+                height=height,
+                negative_prompt=negative,
+                seed=seed,
+                style=str(firefly_cfg.get("style") or "none"),
+                content_class=str(firefly_cfg.get("content_class") or "photo"),
+                custom_model_id=custom_model_id,
+                timeout_s=180.0,
+            )
+            out_path = stills_dir / f"scene_{idx:04d}.png"
+            result.image.save(str(out_path), format="PNG")
+            rel = str(out_path.relative_to(Path(proj.path)))
+            results.append({
+                "scene_index": idx,
+                "path": rel,
+                "seed": result.seed,
+                "generation_id": result.generation_id,
+                "custom_model_id": result.custom_model_id,
+                "ok": True,
+            })
+        except UserFacingError:
+            raise
+        except Exception as exc:
+            results.append({"scene_index": idx, "ok": False, "error": str(exc)})
+
+    return {"ok": True, "provider": "adobe-firefly", "results": results, "width": width, "height": height}
 
 
 @app.post("/v1/projects/{project_id}/render/stills/scenes")
