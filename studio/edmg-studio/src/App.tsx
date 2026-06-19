@@ -1,6 +1,12 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import Sidebar from "./components/Sidebar";
-import { apiGet, getBackendUrl, getBackendUrlAsync } from "./components/api";
+import {
+  BACKEND_URL_CHANGED_EVENT,
+  apiGet,
+  getBackendUrl,
+  getBackendUrlAsync,
+  normalizeBackendUrl,
+} from "./components/api";
 
 import Dashboard from "./pages/Dashboard";
 import Projects from "./pages/Projects";
@@ -73,6 +79,25 @@ export default function App() {
     })();
     return () => {
       alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleBackendUrlChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ url?: string }>).detail;
+      const nextUrl = normalizeBackendUrl(detail?.url || "");
+      if (!nextUrl) return;
+      setBackendUrl(nextUrl);
+      setConfig(null);
+      setBackendConfigError("");
+      setSetupChecked(false);
+    };
+
+    window.addEventListener(BACKEND_URL_CHANGED_EVENT, handleBackendUrlChanged);
+    return () => {
+      window.removeEventListener(BACKEND_URL_CHANGED_EVENT, handleBackendUrlChanged);
     };
   }, []);
 

@@ -547,6 +547,107 @@ def built_in_catalog() -> list[dict[str, Any]]:
             tags=["browser_only", "amd", "directml"],
             hardware_targets=["amd", "windows"],
         ),
+
+        # ── Adobe Firefly ────────────────────────────────────────────────────
+        _entry(
+            model_id="firefly_standard",
+            name="Adobe Firefly Image 3 (Hosted)",
+            kind="hosted_api",
+            source="adobe",
+            license_id="adobe-firefly-tos",
+            license_url="https://www.adobe.com/legal/licenses-terms/adobe-firefly-generative-ai-terms.html",
+            recommended="advanced",
+            installable=False,
+            notes=(
+                "Generates keyframes via the Adobe Firefly v3 API. "
+                "No local GPU needed. Requires an Adobe Developer account with the Firefly API scope. "
+                "Configure Client ID and Client Secret in Settings → Adobe Firefly."
+            ),
+            author="adobe",
+            tags=["hosted", "firefly", "adobe", "no-gpu"],
+            hardware_targets=["any"],
+            render={
+                "engine": "firefly",
+                "render_modes": ["stills", "firefly_scenes"],
+                "preferred_for": ["hosted", "adobe_workflow"],
+            },
+        ),
+        _entry(
+            model_id="firefly_custom",
+            name="Adobe Firefly Custom Model (Hosted)",
+            kind="hosted_api",
+            source="adobe",
+            license_id="adobe-firefly-custom-tos",
+            license_url="https://www.adobe.com/legal/licenses-terms/adobe-firefly-generative-ai-terms.html",
+            recommended="advanced",
+            installable=False,
+            notes=(
+                "Uses your own custom-trained Adobe Firefly model accessed via the Adobe Firefly API. "
+                "Train your model at firefly.adobe.com (enterprise), then paste the resulting "
+                "custom model ID (urn:firefly:...) into Settings → Adobe Firefly → Custom Model ID. "
+                "Works with any content you fine-tuned Firefly on: brand assets, characters, styles, etc."
+            ),
+            author="custom",
+            tags=["hosted", "firefly", "adobe", "custom-model", "fine-tuned", "no-gpu"],
+            hardware_targets=["any"],
+            render={
+                "engine": "firefly",
+                "render_modes": ["stills", "firefly_scenes"],
+                "preferred_for": ["custom_brand", "adobe_workflow"],
+                "requires_custom_model_id": True,
+            },
+        ),
+
+        # ── Local custom safetensors (user-supplied) ─────────────────────────
+        _entry(
+            model_id="local_custom_sdxl",
+            name="Local Custom SDXL Checkpoint (.safetensors)",
+            kind="checkpoint",
+            source="local",
+            license_id="user-supplied",
+            license_url="",
+            recommended="advanced",
+            installable=False,
+            notes=(
+                "Point Studio at any SDXL-compatible .safetensors checkpoint you have built or downloaded. "
+                "Place the file under your Studio models directory → checkpoints/, "
+                "then set the model path in Render → Model or via EDMG_COMFYUI_CHECKPOINT. "
+                "Works with models fine-tuned in Kohya_ss, EveryDream, DreamBooth, or exported from Adobe's tools."
+            ),
+            author="user",
+            tags=["local", "custom", "safetensors", "sdxl", "user-trained"],
+            hardware_targets=["discrete_gpu", "apple_silicon"],
+            render={
+                "engine": "comfyui",
+                "workflow_family": "txt2img",
+                "render_modes": ["stills", "internal_video"],
+                "preferred_for": ["custom_model"],
+            },
+        ),
+        _entry(
+            model_id="local_custom_sd15",
+            name="Local Custom SD 1.5 Checkpoint (.safetensors)",
+            kind="checkpoint",
+            source="local",
+            license_id="user-supplied",
+            license_url="",
+            recommended="advanced",
+            installable=False,
+            notes=(
+                "Any SD 1.5-compatible .safetensors checkpoint you supply. "
+                "Compatible with Stable Diffusion 1.x fine-tunes, LoRA merges, and custom DreamBooth outputs. "
+                "Place under models/checkpoints/ and select via Render → Model."
+            ),
+            author="user",
+            tags=["local", "custom", "safetensors", "sd15", "user-trained"],
+            hardware_targets=["cpu", "integrated_gpu", "discrete_gpu"],
+            render={
+                "engine": "comfyui",
+                "workflow_family": "txt2img",
+                "render_modes": ["stills", "internal_video"],
+                "preferred_for": ["custom_model", "fallback"],
+            },
+        ),
     ]
 
 

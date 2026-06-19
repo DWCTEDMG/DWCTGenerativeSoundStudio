@@ -499,14 +499,20 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
     <button
       disabled={busy === "backend_bundle"}
-      onClick={() => run("backend_bundle", "/v1/setup/backend/install", { bundle: "studio_bundle" })}
+      onClick={() => run("backend_bundle", "/v1/setup/backend/install", { bundle: "studio_bundle", flavor: "cpu" })}
     >
-      {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime"}
+      {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime (CPU)"}
+    </button>
+    <button
+      disabled={busy === "backend_bundle_cuda"}
+      onClick={() => run("backend_bundle_cuda", "/v1/setup/backend/install", { bundle: "studio_bundle", flavor: "nvidia" })}
+    >
+      {busy === "backend_bundle_cuda" ? "Installing…" : "Install Backend Runtime (NVIDIA CUDA)"}
     </button>
     {isWindows ? (
       <button
         disabled={busy === "backend_bundle_directml"}
-        onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml" })}
+        onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml", flavor: "cpu" })}
       >
         {busy === "backend_bundle_directml" ? "Installing…" : "Install AMD / DirectML Runtime"}
       </button>
@@ -731,6 +737,12 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
               onClick={() => run("start_comfy", "/v1/setup/comfyui/portable/start", { flavor: "cpu" })}
             >
               {busy === "start_comfy" ? "Starting…" : (isWindows ? "Start ComfyUI (CPU)" : "Windows-only Portable Start")}
+            </button>
+            <button
+              disabled={!isWindows || busy === "start_comfy_n"}
+              onClick={() => run("start_comfy_n", "/v1/setup/comfyui/portable/start", { flavor: "nvidia" })}
+            >
+              {busy === "start_comfy_n" ? "Starting…" : (isWindows ? "Start ComfyUI (NVIDIA)" : "Windows-only Portable Start")}
             </button>
           </div>
 

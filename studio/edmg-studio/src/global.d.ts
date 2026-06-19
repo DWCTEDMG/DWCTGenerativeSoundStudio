@@ -153,6 +153,7 @@ declare global {
         url?: string;
         currentBackendUrl?: string;
       }>;
+      setBackendUrl?: (url: string) => Promise<string>;
       relaunch?: () => Promise<{ ok: boolean }>;
     };
     __EDMG_BACKEND_URL__?: string;

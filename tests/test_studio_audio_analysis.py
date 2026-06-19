@@ -39,7 +39,7 @@ def test_analyze_audio_builds_rich_longform_payload(tmp_path, monkeypatch):
     monkeypatch.setattr(
         studio_app.ai,
         "transcribe",
-        lambda _audio_path, model_size="small": {
+        lambda _audio_path, model_size="small", **_kwargs: {
             "text": (
                 "Neon streets open into the skyline. "
                 "The chorus lifts the crowd through electric rain. "
@@ -109,7 +109,7 @@ def test_analyze_audio_surfaces_no_speech_after_vad_status(tmp_path, monkeypatch
     monkeypatch.setattr(
         studio_app.ai,
         "transcribe",
-        lambda _audio_path, model_size="small": {
+        lambda _audio_path, model_size="small", **_kwargs: {
             "text": "",
             "language": "en",
             "duration_s": 374.8,

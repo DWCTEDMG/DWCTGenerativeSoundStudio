@@ -231,6 +231,39 @@ def test_transcribe_detailed_returns_segment_metadata(monkeypatch):
     assert result["segments"][2]["text"] == "Final transcript cue."
 
 
+def test_transcribe_detailed_supports_parakeet_provider(monkeypatch):
+    class FakeParakeetOutput:
+        text = "Parakeet transcript."
+        timestamp = {
+            "segment": [
+                {"start": 0.0, "end": 2.5, "segment": "Parakeet transcript."},
+            ],
+        }
+
+    class FakeParakeetModel:
+        def transcribe(self, paths, **kwargs):
+            assert paths == ["song.wav"]
+            assert kwargs["timestamps"] is True
+            return [FakeParakeetOutput()]
+
+    monkeypatch.setattr(asr_module, "_load_parakeet_model", lambda model_name, device: FakeParakeetModel())
+    monkeypatch.setattr(asr_module, "_audio_duration_s", lambda path: 2.5)
+
+    result = asr_module.transcribe_detailed(
+        "song.wav",
+        model_size="v3",
+        provider="parakeet",
+        device="cuda",
+    )
+
+    assert result["source"] == "nvidia_parakeet"
+    assert result["provider"] == "parakeet"
+    assert result["model_size"] == "nvidia/parakeet-tdt-0.6b-v3"
+    assert result["device"] == "cuda"
+    assert result["text"] == "Parakeet transcript."
+    assert result["segments"][0]["end"] == pytest.approx(2.5)
+
+
 def test_long_form_audio_defaults_allow_30_minutes():
     assert config_system_complete.AudioConfig().max_duration == 1800
     assert config_system_complete.AudioConfigModel().max_duration == 1800

@@ -75,9 +75,11 @@ Windows or `/mnt/media/EDMG-Studio` on Linux.
 ## Release, strategy, and operator docs
 
 - [studio/edmg-studio/README.md](./studio/edmg-studio/README.md)
+- [docs/TESTING_QUICKSTART.md](./docs/TESTING_QUICKSTART.md)
 - [RELEASE.md](./RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](./docs/STUDIO_RELEASE_RUNBOOK.md)
 - [docs/STUDIO_REPO_MAP.md](./docs/STUDIO_REPO_MAP.md)
+- [docs/MODEL_MANAGER.md](./docs/MODEL_MANAGER.md)
 - [studio/edmg-studio/docs/STUDIO_MODULARITY.md](./studio/edmg-studio/docs/STUDIO_MODULARITY.md)
 - [docs/STUDIO_FORGE.md](./docs/STUDIO_FORGE.md)
 - [docs/UNIFIED_INTERNAL_RENDERER_PLAN.md](./docs/UNIFIED_INTERNAL_RENDERER_PLAN.md)

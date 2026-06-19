@@ -62,6 +62,7 @@ class SecretsStatus:
     has_civitai_api_key: bool
     has_openai_compat_api_key: bool
     has_stability_api_key: bool
+    has_nvidia_api_key: bool = False
     note: str | None = None
 
 
@@ -106,6 +107,7 @@ class SecretStore:
         cv = bool(self.get("civitai_api_key"))
         oa = bool(self.get("openai_compat_api_key"))
         st = bool(self.get("stability_api_key"))
+        nv = bool(self.get("nvidia_api_key"))
         store = "keyring" if self._keyring_ok else "file"
         if self._forced in ("file", "plaintext"):
             store = "file"
@@ -116,6 +118,7 @@ class SecretStore:
             has_civitai_api_key=cv,
             has_openai_compat_api_key=oa,
             has_stability_api_key=st,
+            has_nvidia_api_key=nv,
             note=self._note,
         )
 

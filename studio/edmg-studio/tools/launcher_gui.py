@@ -26,6 +26,114 @@ BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json"
 SUPPORTED_PYTHON_MIN = (3, 10)
 SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 14)
 
+# ── Machine optimiser ──────────────────────────────────────────────────────────
+OPTIMIZE_STATE_PATH = STUDIO_DIR / ".optimize_state.json"
+
+# High Performance power plan GUID (built-in Windows)
+_POWER_HIGH_PERF = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
+# Ultimate Performance (may need to be enabled first)
+_POWER_ULTIMATE   = "e9a42b02-d5df-448d-aa00-03f14749eb61"
+
+# Background user-space processes to kill during optimization
+_OPT_KILL_PROCS: list[str] = [
+    "OneDrive.exe",
+    "Teams.exe", "ms-teams.exe",
+    "XboxApp.exe", "XboxGamingOverlay.exe",
+    "GameBarFTServer.exe", "GameBarPresenceWriter.exe",
+    "Cortana.exe",
+    "YourPhone.exe", "PhoneExperienceHost.exe",
+    "MicrosoftEdgeUpdate.exe", "edgeupdate.exe", "edgeupdatem.exe",
+    "Spotify.exe",
+    "Discord.exe",
+    "Slack.exe",
+    "DropboxUpdate.exe", "Dropbox.exe",
+    "AdobeUpdateService.exe", "AdobeARM.exe",
+    "SteamService.exe",
+    "WerFault.exe", "WerFaultSecure.exe",
+]
+
+# Windows services to stop during optimization (restored afterward)
+_OPT_SERVICES: list[str] = [
+    "SysMain",         # Superfetch – pre-loads apps we don't need
+    "DiagTrack",       # Connected User Experiences / telemetry
+    "WSearch",         # Windows Search indexer – heavy I/O
+    "XblAuthManager",  # Xbox Live auth
+    "XblGameSave",     # Xbox Live game save
+    "XboxNetApiSvc",   # Xbox networking
+    "XboxGipSvc",      # Xbox accessory mgr
+    "MapsBroker",      # Downloaded Maps Manager
+]
+
+
+def _ps(cmd: str) -> tuple[int, str]:
+    """Run a PowerShell command, return (returncode, stdout+stderr)."""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+            capture_output=True, text=True, timeout=30,
+        )
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except Exception as e:
+        return -1, str(e)
+
+
+def _ps_elevated(ps_block: str) -> tuple[int, str]:
+    """Run a PowerShell block elevated via Start-Process -Verb RunAs.
+
+    Writes exit code to a temp file so we can detect success/failure even
+    though the elevated child process is separate from the caller's token.
+    Returns (0, "") on success, (-1, reason) if UAC was cancelled or failed.
+    """
+    import tempfile
+    tmp = tempfile.mktemp(suffix=".txt")
+    # Append exit code to temp file so we can read it after the elevated run
+    wrapped = ps_block.rstrip("; ") + f"; $null | Out-Null; [IO.File]::WriteAllText('{tmp}', $LASTEXITCODE)"
+    escaped = wrapped.replace("'", "''")
+    cmd = (
+        f"Start-Process powershell "
+        f"-Verb RunAs -Wait "
+        f"-WindowStyle Hidden "
+        f"-ArgumentList '-NoProfile', '-NonInteractive', '-Command', '{escaped}'"
+    )
+    rc, out = _ps(cmd)
+    if rc != 0:
+        return rc, out  # UAC declined or PowerShell not found
+    try:
+        result_code = int(Path(tmp).read_text(encoding="utf-8").strip())
+        Path(tmp).unlink(missing_ok=True)
+        return result_code, ""
+    except Exception:
+        return 0, ""  # elevated ran but temp file missing — assume ok
+
+
+def _svc_query(name: str) -> str:
+    """Return service state string: Running / Stopped / unknown."""
+    rc, out = _ps(f"(Get-Service -Name '{name}' -ErrorAction SilentlyContinue).Status")
+    return out.strip() or "unknown"
+
+
+def _get_active_power_plan() -> str:
+    rc, out = _ps("(powercfg /getactivescheme) -replace 'Power Scheme GUID: ',''")
+    # out looks like: e9a42b02-... (Ultimate Performance)
+    m = __import__("re").search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", out, __import__("re").I)
+    return m.group(0).lower() if m else ""
+
+
+def _save_optimize_state(state: dict) -> None:
+    try:
+        OPTIMIZE_STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_optimize_state() -> dict:
+    try:
+        if OPTIMIZE_STATE_PATH.exists():
+            return json.loads(OPTIMIZE_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
 
 def _resolve_ffmpeg_path() -> str:
     explicit = os.environ.get("EDMG_FFMPEG_PATH", "").strip()
@@ -1027,6 +1135,7 @@ class Launcher(tk.Tk):
         btn_row.pack(fill="x")
 
         ttk.Button(btn_row, text="Install/Update Backend (venv + deps)", command=self.install_backend).pack(side="left")
+        ttk.Button(btn_row, text="Install CUDA PyTorch (NVIDIA GPU)", command=self.install_cuda_torch).pack(side="left", padx=8)
         ttk.Button(btn_row, text=f"Install/Update Studio UI ({_studio_package_manager_name()} install)", command=self.install_ui).pack(side="left", padx=8)
         ttk.Button(btn_row, text="Start Backend", command=self.start_backend).pack(side="left", padx=8)
         ttk.Button(btn_row, text="Stop Backend", command=self.stop_backend).pack(side="left")
@@ -1034,6 +1143,17 @@ class Launcher(tk.Tk):
         ttk.Button(btn_row, text="Start Studio (Electron dev)", command=self.start_studio).pack(side="left", padx=8)
         ttk.Button(btn_row, text="Restart Studio", command=self.restart_studio).pack(side="left", padx=8)
         ttk.Button(btn_row, text="Stop Studio", command=self.stop_studio).pack(side="left")
+
+        # Machine optimisation toggle
+        opt_row = ttk.Frame(actions)
+        opt_row.pack(fill="x", pady=(8, 0))
+        ttk.Label(opt_row, text="Machine Optimizer:").pack(side="left")
+        self._opt_status_var = tk.StringVar(value=self._optimize_current_label())
+        ttk.Label(opt_row, textvariable=self._opt_status_var, foreground="#888").pack(side="left", padx=6)
+        ttk.Button(opt_row, text="⚡ Optimize for Dev (ON)",
+                   command=self.optimize_machine).pack(side="left", padx=(8, 4))
+        ttk.Button(opt_row, text="↩ Restore Normal (OFF)",
+                   command=self.restore_machine).pack(side="left")
 
         # Packaging (Windows)
         pkg_row = ttk.Frame(actions)
@@ -1456,6 +1576,222 @@ class Launcher(tk.Tk):
                     self._set_backend_host_port(host, found, reason="auto-detect refresh")
         finally:
             self._refresh_in_progress = False
+
+    # ── Machine Optimiser ──────────────────────────────────────────────────────
+
+    def _optimize_current_label(self) -> str:
+        state = _load_optimize_state()
+        if state.get("optimized"):
+            return "● OPTIMIZED"
+        return "○ normal"
+
+    def _refresh_opt_label(self) -> None:
+        try:
+            self._opt_status_var.set(self._optimize_current_label())
+        except Exception:
+            pass
+
+    def optimize_machine(self) -> None:
+        """Apply performance optimizations for AI dev work."""
+        if not sys.platform.startswith("win"):
+            messagebox.showinfo("Not supported", "Machine optimization is Windows-only.")
+            return
+
+        def work():
+            self._log("=" * 60)
+            self._log("Applying machine optimizations for AI development…")
+            state: dict = {"optimized": True, "prev_power_plan": "", "stopped_services": [], "network_tweaked": False}
+
+            # 1. Save + switch power plan ──────────────────────────────────────
+            prev_plan = _get_active_power_plan()
+            state["prev_power_plan"] = prev_plan
+            self._log(f"Current power plan: {prev_plan or 'unknown'}")
+
+            # Try Ultimate Performance first (needs to be unlocked on some SKUs)
+            rc, out = _ps_elevated(
+                f"powercfg -duplicatescheme {_POWER_ULTIMATE} > $null 2>&1; "
+                f"powercfg /setactive {_POWER_ULTIMATE}"
+            )
+            if rc != 0:
+                rc2, _ = _ps_elevated(f"powercfg /setactive {_POWER_HIGH_PERF}")
+                active = _POWER_HIGH_PERF if rc2 == 0 else prev_plan
+                self._log("Power plan → High Performance" if rc2 == 0 else "Power plan: no change (may need admin)")
+            else:
+                active = _POWER_ULTIMATE
+                self._log("Power plan → Ultimate Performance")
+            state["active_power_plan"] = active
+
+            # 2. Kill unnecessary background processes ─────────────────────────
+            killed: list[str] = []
+            for proc_name in _OPT_KILL_PROCS:
+                rc, _ = _ps(f"Stop-Process -Name '{proc_name.replace('.exe','')}' -Force -ErrorAction SilentlyContinue")
+                if rc == 0:
+                    killed.append(proc_name)
+            if killed:
+                self._log(f"Killed {len(killed)} background process(es): {', '.join(killed)}")
+            else:
+                self._log("No unnecessary processes were running.")
+            state["killed_procs"] = killed
+
+            # 3. Stop non-essential Windows services ───────────────────────────
+            stopped: list[str] = []
+            for svc in _OPT_SERVICES:
+                before = _svc_query(svc)
+                if before.lower() == "running":
+                    rc, _ = _ps_elevated(f"Stop-Service -Name '{svc}' -Force -ErrorAction SilentlyContinue")
+                    if rc == 0:
+                        stopped.append(svc)
+                        self._log(f"  Stopped service: {svc}")
+                    else:
+                        self._log(f"  Could not stop {svc} (may need admin or already stopped)")
+            state["stopped_services"] = stopped
+
+            # 4. NVIDIA GPU – max performance clocks ───────────────────────────
+            if shutil.which("nvidia-smi"):
+                _ps("nvidia-smi --auto-boost-default=0 2>$null")
+                _ps("nvidia-smi -pm 1 2>$null")
+                self._log("NVIDIA GPU: set to max-performance / persistence mode")
+
+            # 5. Network tweaks – disable Nagle's algorithm ────────────────────
+            nagle_ps = r"""
+$base = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
+Get-ChildItem $base | ForEach-Object {
+    Set-ItemProperty -Path $_.PSPath -Name TcpAckFrequency -Value 1 -Type DWord -Force -EA SilentlyContinue
+    Set-ItemProperty -Path $_.PSPath -Name TCPNoDelay      -Value 1 -Type DWord -Force -EA SilentlyContinue
+}
+"""
+            rc, _ = _ps_elevated(nagle_ps.strip().replace("\n", "; "))
+            if rc == 0:
+                state["network_tweaked"] = True
+                self._log("Network: Nagle's algorithm disabled (lower TCP latency)")
+            else:
+                self._log("Network: skipped (needs admin)")
+
+            # 6. Flush DNS cache ───────────────────────────────────────────────
+            _ps("ipconfig /flushdns 2>$null")
+            self._log("DNS cache flushed")
+
+            # 7. Defender – exclude project folder ────────────────────────────
+            proj_path = str(ROOT).replace("'", "''")
+            rc, _ = _ps_elevated(
+                f"Add-MpPreference -ExclusionPath '{proj_path}' -ErrorAction SilentlyContinue"
+            )
+            if rc == 0:
+                state["defender_exclusion"] = proj_path
+                self._log(f"Windows Defender: excluded project folder from real-time scan")
+            else:
+                self._log("Defender exclusion: skipped (needs admin or Defender not active)")
+
+            # 8. Set timer resolution to 1 ms (better scheduler precision) ────
+            _ps_elevated(
+                "Add-Type -TypeDefinition '"
+                "using System; using System.Runtime.InteropServices;"
+                "public class WinMM { [DllImport(\"winmm.dll\")] public static extern int timeBeginPeriod(int p); }"
+                "'; [WinMM]::timeBeginPeriod(1)"
+            )
+            self._log("Timer resolution: requested 1 ms")
+
+            _save_optimize_state(state)
+            self._refresh_opt_label()
+            self._log("✓ Machine optimized. Run 'Restore Normal' to undo all changes.")
+
+        self._run_bg("Optimize Machine (ON)", work)
+
+    def restore_machine(self) -> None:
+        """Undo all optimizations and return to normal operating mode."""
+        if not sys.platform.startswith("win"):
+            messagebox.showinfo("Not supported", "Machine optimization is Windows-only.")
+            return
+
+        def work():
+            self._log("=" * 60)
+            self._log("Restoring machine to normal mode…")
+            state = _load_optimize_state()
+
+            # 1. Restore power plan ────────────────────────────────────────────
+            prev = state.get("prev_power_plan", "")
+            if prev:
+                rc, _ = _ps_elevated(f"powercfg /setactive {prev}")
+                self._log(f"Power plan restored → {prev}" if rc == 0 else f"Power plan restore failed (rc={rc})")
+            else:
+                _ps_elevated(f"powercfg /setactive {_POWER_HIGH_PERF}")
+                self._log("Power plan → High Performance (no saved plan found)")
+
+            # 2. Restart stopped services ─────────────────────────────────────
+            for svc in state.get("stopped_services", []):
+                rc, _ = _ps_elevated(f"Start-Service -Name '{svc}' -ErrorAction SilentlyContinue")
+                self._log(f"  Restarted service: {svc}" if rc == 0 else f"  Could not restart {svc}")
+
+            # 3. Restore Nagle's algorithm ─────────────────────────────────────
+            if state.get("network_tweaked"):
+                nagle_restore = r"""
+$base = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
+Get-ChildItem $base | ForEach-Object {
+    Remove-ItemProperty -Path $_.PSPath -Name TcpAckFrequency -Force -EA SilentlyContinue
+    Remove-ItemProperty -Path $_.PSPath -Name TCPNoDelay      -Force -EA SilentlyContinue
+}
+"""
+                rc, _ = _ps_elevated(nagle_restore.strip().replace("\n", "; "))
+                self._log("Network: Nagle's algorithm restored" if rc == 0 else "Network restore: needs admin")
+
+            # 4. Remove Defender exclusion ─────────────────────────────────────
+            excl = state.get("defender_exclusion", "")
+            if excl:
+                rc, _ = _ps_elevated(
+                    f"Remove-MpPreference -ExclusionPath '{excl}' -ErrorAction SilentlyContinue"
+                )
+                self._log("Defender exclusion removed" if rc == 0 else "Defender exclusion removal: needs admin")
+
+            # 5. Flush DNS again ───────────────────────────────────────────────
+            _ps("ipconfig /flushdns 2>$null")
+            self._log("DNS cache flushed")
+
+            # 6. Clear saved state ─────────────────────────────────────────────
+            try:
+                OPTIMIZE_STATE_PATH.unlink(missing_ok=True)
+            except Exception:
+                pass
+            self._refresh_opt_label()
+            self._log("✓ Machine restored to normal. Restart may be needed for some services to fully reinitialize.")
+
+        self._run_bg("Restore Machine (OFF)", work)
+
+    def install_cuda_torch(self) -> None:
+        """Install CUDA-enabled PyTorch into the backend venv (NVIDIA GPU path)."""
+        def work():
+            venv_ok, venv_detail = _backend_venv_status()
+            if not venv_ok or not BACKEND_VENV.exists():
+                raise RuntimeError(
+                    "Backend venv not found. Run 'Install/Update Backend' first, then install CUDA PyTorch."
+                )
+            py = str(_venv_python(BACKEND_VENV))
+            self._log("Installing CUDA-enabled PyTorch (cu124) — this may take a few minutes (~2.5 GB)…")
+            rc = _run_cmd(
+                [
+                    py, "-m", "pip", "install",
+                    "torch", "torchvision", "torchaudio",
+                    "--index-url", "https://download.pytorch.org/whl/cu124",
+                ],
+                cwd=BACKEND_DIR,
+                log_cb=self._log,
+            )
+            if rc != 0:
+                raise RuntimeError("CUDA PyTorch install failed. Check your internet connection and try again.")
+            self._log("Verifying CUDA availability…")
+            proc = _run_cmd(
+                [py, "-c",
+                 "import torch; print('torch', torch.__version__);"
+                 "print('cuda available:', torch.cuda.is_available());"
+                 "print('device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"],
+                cwd=BACKEND_DIR,
+                log_cb=self._log,
+            )
+            if proc != 0:
+                self._log("Warning: torch imported but CUDA check had an issue — GPU may still work at runtime.")
+            else:
+                self._log("CUDA PyTorch installed and verified successfully.")
+
+        self._run_bg("Install CUDA PyTorch", work)
 
     def install_backend(self) -> None:
         def work():

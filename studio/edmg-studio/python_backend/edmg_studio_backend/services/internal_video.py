@@ -391,6 +391,8 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     if cached is not None:
         return cached
 
+    # TF32 / cuDNN benchmark flags are set at app startup by _apply_cuda_startup_flags()
+    # in app.py, so we don't need to re-apply them here on every pipeline load.
     family = _model_family_from_dir(model_dir)
 
     torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32

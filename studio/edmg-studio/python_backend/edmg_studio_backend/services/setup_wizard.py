@@ -846,6 +846,7 @@ class ComfyPortableProcess:
             SetupTaskManager.log(task, "ComfyUI is already running.")
             return
 
+        flavor_lower = (flavor or "cpu").lower()
         args = [
             str(py),
             "-s",
@@ -856,16 +857,37 @@ class ComfyPortableProcess:
             str(port),
             "--windows-standalone-build",
         ]
-        if (flavor or "cpu").lower() == "cpu":
+        if flavor_lower == "cpu":
             args.insert(3, "--cpu")
+        elif flavor_lower in ("nvidia", "cuda"):
+            # CUDA-optimised flags: let PyTorch manage CUDA memory via
+            # its own allocator and use cross-attention for speed
+            args += [
+                "--cuda-malloc",
+                "--use-pytorch-cross-attention",
+            ]
+
+        # CUDA environment tweaks when optimize_comfyui is on
+        comfy_env = os.environ.copy()
+        if flavor_lower in ("nvidia", "cuda"):
+            # Expandable CUDA memory segments prevent fragmentation OOMs
+            comfy_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+            comfy_env.setdefault("CUDA_LAUNCH_BLOCKING", "0")
+            # cuDNN determinism off for speed; benchmark mode on
+            comfy_env.setdefault("TORCH_CUDNN_BENCHMARK", "1")
+            comfy_env.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
         # Hide console window.
         creationflags = 0
         if os.name == "nt":
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-        SetupTaskManager.log(task, f"Starting ComfyUI Portable ({flavor})…")
-        self.proc = subprocess.Popen(args, cwd=str(root), creationflags=creationflags)
+        SetupTaskManager.log(task, f"Starting ComfyUI Portable ({flavor_lower})…")
+        self.proc = subprocess.Popen(
+            args, cwd=str(root),
+            env=comfy_env if flavor_lower in ("nvidia", "cuda") else None,
+            creationflags=creationflags,
+        )
         self.root = root
 
         # Wait a bit for port to open
@@ -976,13 +998,38 @@ def check_backend_bundle(bundle: str = "studio_bundle") -> dict[str, Any]:
     }
 
 
-def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle") -> None:
+_CUDA_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu124"
+_CUDA_TORCH_PACKAGES = ["torch", "torchvision", "torchaudio"]
+
+
+def _install_cuda_torch(task: SetupTask) -> None:
+    """Install CUDA-enabled PyTorch (CUDA 12.4 build) before the main bundle install."""
+    SetupTaskManager.log(task, "Installing CUDA-enabled PyTorch (cu124) from pytorch.org…")
+    rc = _run_subprocess(
+        task,
+        [
+            sys.executable, "-m", "pip", "install",
+            *_CUDA_TORCH_PACKAGES,
+            "--index-url", _CUDA_TORCH_INDEX_URL,
+            "--timeout", "300",
+        ],
+        cwd=str(_backend_root()),
+    )
+    if rc != 0:
+        raise RuntimeError(
+            "CUDA PyTorch install failed (exit code %d). "
+            "Check your internet connection — the download is ~2.5 GB." % rc
+        )
+    SetupTaskManager.log(task, "CUDA PyTorch installed successfully.")
+
+
+def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle", flavor: str = "cpu") -> None:
     root = _backend_root()
     pyproject = root / "pyproject.toml"
     if not pyproject.exists():
         raise RuntimeError(f"Backend pyproject.toml not found at {pyproject}")
 
-    SetupTaskManager.log(task, f"Installing backend runtime bundle `{bundle}`...")
+    SetupTaskManager.log(task, f"Installing backend runtime bundle `{bundle}` (flavor: {flavor})...")
     SetupTaskManager.set_progress(task, 0.1)
 
     _run_subprocess(
@@ -990,6 +1037,10 @@ def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle") -> No
         [sys.executable, "-m", "pip", "install", "--upgrade", "pip", BACKEND_SETUPTOOLS_CONSTRAINT, "wheel"],
         cwd=str(root),
     )
+
+    if flavor in ("nvidia", "cuda"):
+        SetupTaskManager.set_progress(task, 0.2)
+        _install_cuda_torch(task)
 
     SetupTaskManager.set_progress(task, 0.35)
     SetupTaskManager.log(task, f"Running pip install -e .[{bundle}]")
