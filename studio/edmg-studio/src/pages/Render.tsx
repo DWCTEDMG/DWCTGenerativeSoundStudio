@@ -255,6 +255,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [caps, setCaps] = useState<any>(null);
   const [hardware, setHardware] = useState<any>(null);
   const [renderProviders, setRenderProviders] = useState<any>(null);
+  const [videoRoute, setVideoRoute] = useState<any>(null);
   const [modelCatalog, setModelCatalog] = useState<CatalogEntry[]>([]);
   const [installedModels, setInstalledModels] = useState<Record<string, boolean>>({});
   const [projectAssets, setProjectAssets] = useState<{ refs: { path: string }[] }>({ refs: [] });
@@ -593,6 +594,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     apiGet("/v1/comfyui/capabilities").then(setCaps).catch(() => {});
     apiGet("/v1/hardware").then((d) => setHardware(d)).catch(() => {});
     apiGet("/v1/settings/render_providers").then(setRenderProviders).catch(() => {});
+    apiGet("/v1/render/route").then(setVideoRoute).catch(() => {});
     apiGet("/v1/models/catalog").then((d) => {
       const built = Array.isArray(d?.catalog) ? d.catalog : [];
       const user = Array.isArray(d?.user) ? d.user : [];
@@ -1067,6 +1069,23 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       });
       setInfo(d);
       await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const renderVideoSmart = async (forceRoute?: "local_gpu" | "cosmos_cloud") => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/video/smart`, {
+        variant_index: selectedVariant,
+        preset: internalRenderTier || "balanced",
+        route: forceRoute,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+      apiGet("/v1/render/route").then(setVideoRoute).catch(() => {});
     } catch (e: any) {
       setErr(String(e));
     }
@@ -2674,6 +2693,44 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   </div>
                 </div>
               ) : null}
+
+              {/* ── Unified smart video button ─────────────────────────── */}
+              {videoRoute && videoRoute.route !== "none" && (
+                <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 10, background: "var(--surface2,#f8f9fa)", border: "1px solid var(--line)" }}>
+                  <div className="small" style={{ marginBottom: 8 }}>
+                    <b>Smart video:</b>{" "}
+                    {videoRoute.route === "local_gpu"
+                      ? `🖥 Local GPU — ${videoRoute.local_detail?.device || "GPU"} (${videoRoute.local_detail?.vram_gb || 0} GB)`
+                      : `☁ NVIDIA Cosmos Cloud — ${videoRoute.cosmos_detail?.model || "text2world"}`}
+                    {" "}
+                    <span style={{ opacity: 0.7 }}>({videoRoute.reason})</span>
+                  </div>
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <button onClick={() => renderVideoSmart()} disabled={!variantCount} style={{ fontWeight: 700 }}>
+                      ▶ Generate Video (Auto)
+                    </button>
+                    {videoRoute.local_ready && (
+                      <button className="secondary" onClick={() => renderVideoSmart("local_gpu")} disabled={!variantCount}>
+                        Force GPU
+                      </button>
+                    )}
+                    {videoRoute.cosmos_ready && (
+                      <button className="secondary" onClick={() => renderVideoSmart("cosmos_cloud")} disabled={!variantCount}>
+                        Force Cloud
+                      </button>
+                    )}
+                    <span className="small" style={{ opacity: 0.7, alignSelf: "center" }}>
+                      Change preference in Settings → GPU / Render Runtime
+                    </span>
+                  </div>
+                </div>
+              )}
+              {videoRoute?.route === "none" && (
+                <div className="small" style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8,
+                  background: "var(--warning-bg,#fff3cd)", color: "var(--warning-text,#856404)" }}>
+                  ⚠ No video generation route available. Enable CUDA in Settings or add your NVIDIA API key for Cosmos cloud.
+                </div>
+              )}
 
               <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
                 <button onClick={renderScenes} disabled={!variantCount || renderMode !== "stills"}>Enqueue still scenes</button>

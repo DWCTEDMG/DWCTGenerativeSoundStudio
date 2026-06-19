@@ -96,6 +96,7 @@ from .services.render_settings import (
     STABILITY_SD3_MODELS,
     STABILITY_SERVICES,
     STABILITY_STYLE_PRESETS,
+    VIDEO_GENERATION_PREFERENCES,
 )
 from .services.firefly_platform import FireflyClient, FireflyImageResult
 from .services.cosmos_platform import CosmosClient, COSMOS_MODELS
@@ -8221,6 +8222,192 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
         "diagnostics": diagnostics + [f"project={project_id}"],
         "tier_plan": tier_plan,
     }
+
+
+def _recommend_video_route(project_id: str | None = None) -> dict[str, Any]:
+    """Decide whether to use the local GPU or NVIDIA Cosmos cloud for video generation.
+
+    Returns a dict with:
+      route       : "local_gpu" | "cosmos_cloud" | "none"
+      reason      : human-readable explanation
+      preference  : the saved preference setting
+      local_ready : bool - local GPU path is available
+      cosmos_ready: bool - Cosmos cloud path is configured
+      local_detail: dict  - hardware/model info for local path
+      cosmos_detail: dict - cosmos provider info
+    """
+    cfg = render_settings.get()
+    video_cfg = dict(cfg.get("video") or {})
+    preference = str(video_cfg.get("preference") or "auto").strip().lower()
+    auto_prefer_gpu = bool(video_cfg.get("auto_prefer_gpu", True))
+    cosmos_fallback = bool(video_cfg.get("cosmos_fallback", True))
+
+    hw = _hardware_profile()
+    provider_status = _render_provider_status(hw)
+    cosmos_status = dict(provider_status.get("cosmos") or {})
+    cuda_status = dict(provider_status.get("cuda") or {})
+
+    # Local GPU: CUDA available + enabled
+    local_ready = bool(cuda_status.get("active") or (
+        bool(hw.get("cuda_runtime_ready")) and bool(cuda_status.get("enabled", True))
+    ))
+    # Also consider: does an internal model exist?
+    local_model = str(hw.get("preferred_internal_model") or "hf_sdxl_internal")
+    local_model_installed = bool(_resolve_installed_model_path(local_model, materialize_remote=False))
+
+    # Cosmos cloud: configured API key + enabled
+    cosmos_ready = bool(cosmos_status.get("active") or (
+        cosmos_status.get("configured") and cosmos_status.get("enabled")
+    ))
+
+    local_detail = {
+        "cuda_available": bool(hw.get("cuda_runtime_ready")),
+        "device": hw.get("device_name") or hw.get("device") or "cpu",
+        "vram_gb": float(hw.get("vram_gb") or 0.0),
+        "model": local_model,
+        "model_installed": local_model_installed,
+    }
+    cosmos_detail = {
+        "model": cosmos_status.get("model"),
+        "configured": cosmos_status.get("configured"),
+        "num_frames": cosmos_status.get("num_frames"),
+        "fps": cosmos_status.get("fps"),
+    }
+
+    # Explicit preferences override auto logic
+    if preference == "local_gpu":
+        if local_ready:
+            return {"route": "local_gpu", "reason": "Local GPU selected by preference.",
+                    "preference": preference, "local_ready": local_ready,
+                    "cosmos_ready": cosmos_ready, "local_detail": local_detail,
+                    "cosmos_detail": cosmos_detail}
+        return {"route": "none", "reason": "Local GPU selected but CUDA is not available or disabled.",
+                "preference": preference, "local_ready": False,
+                "cosmos_ready": cosmos_ready, "local_detail": local_detail,
+                "cosmos_detail": cosmos_detail}
+
+    if preference == "cosmos_cloud":
+        if cosmos_ready:
+            return {"route": "cosmos_cloud", "reason": "NVIDIA Cosmos selected by preference.",
+                    "preference": preference, "local_ready": local_ready,
+                    "cosmos_ready": cosmos_ready, "local_detail": local_detail,
+                    "cosmos_detail": cosmos_detail}
+        return {"route": "none", "reason": "Cosmos selected but NVIDIA API key is not configured.",
+                "preference": preference, "local_ready": local_ready,
+                "cosmos_ready": False, "local_detail": local_detail,
+                "cosmos_detail": cosmos_detail}
+
+    # auto: pick intelligently
+    gpu_score = 0
+    if local_ready:
+        gpu_score += 3
+        vram = float(hw.get("vram_gb") or 0.0)
+        if vram >= 8.0:
+            gpu_score += 2  # strong GPU → prefer local
+        elif vram >= 6.0:
+            gpu_score += 1  # RTX 4050 class — local stills ok, Cosmos better for full video
+        if local_model_installed:
+            gpu_score += 1
+
+    cosmos_score = 0
+    if cosmos_ready:
+        cosmos_score += 4  # cloud video quality generally higher than local for full clips
+        if not local_ready:
+            cosmos_score += 3  # only option
+
+    if auto_prefer_gpu and local_ready and gpu_score >= cosmos_score:
+        route = "local_gpu"
+        reason = f"Auto: local GPU preferred ({hw.get('device_name', 'GPU')}, {float(hw.get('vram_gb',0)):.1f} GB VRAM)."
+    elif cosmos_ready:
+        route = "cosmos_cloud"
+        reason = "Auto: NVIDIA Cosmos cloud selected (better full-video quality or GPU not preferred)."
+        if not local_ready:
+            reason = "Auto: local CUDA not available — using NVIDIA Cosmos cloud."
+    elif local_ready:
+        route = "local_gpu"
+        reason = "Auto: Cosmos not configured — using local GPU."
+    else:
+        route = "none"
+        reason = "Auto: neither local GPU nor Cosmos cloud is available. Enable CUDA or add NVIDIA API key."
+
+    # Cosmos fallback: if preferred local but cosmos available, note it
+    fallback_available = cosmos_fallback and cosmos_ready and route == "local_gpu"
+
+    return {
+        "route": route,
+        "reason": reason,
+        "preference": preference,
+        "local_ready": local_ready,
+        "cosmos_ready": cosmos_ready,
+        "fallback_available": fallback_available,
+        "fallback_route": "cosmos_cloud" if fallback_available else None,
+        "local_detail": local_detail,
+        "cosmos_detail": cosmos_detail,
+    }
+
+
+@app.get("/v1/render/route")
+def get_video_route():
+    """Return the current recommended video generation route (GPU vs Cloud)."""
+    return {"ok": True, **_recommend_video_route()}
+
+
+@app.post("/v1/render/route/preferences")
+def set_video_route_preferences(payload: dict[str, Any]):
+    """Save video generation preference (auto / local_gpu / cosmos_cloud / comfyui)."""
+    preference = str((payload or {}).get("preference") or "auto").strip().lower()
+    if preference not in VIDEO_GENERATION_PREFERENCES:
+        raise UserFacingError(
+            f"Unknown preference '{preference}'.",
+            hint=f"Choose one of: {', '.join(VIDEO_GENERATION_PREFERENCES)}",
+            code="INVALID_VIDEO_PREFERENCE",
+            status_code=400,
+        )
+    auto_prefer_gpu = bool((payload or {}).get("auto_prefer_gpu", True))
+    cosmos_fallback = bool((payload or {}).get("cosmos_fallback", True))
+    saved = render_settings.update({"video": {
+        "preference": preference,
+        "auto_prefer_gpu": auto_prefer_gpu,
+        "cosmos_fallback": cosmos_fallback,
+    }})
+    _hardware_profile_invalidate()
+    return {"ok": True, "video": saved.get("video"), "route": _recommend_video_route()}
+
+
+@app.post("/v1/projects/{project_id}/render/video/smart")
+def render_video_smart(project_id: str, payload: dict[str, Any]):
+    """Route a video render to local GPU or NVIDIA Cosmos based on preference.
+
+    Accepts same fields as /render/cosmos/all_scenes and the internal video
+    conductor. The router decides which backend to use; the caller can override
+    with explicit route='local_gpu'|'cosmos_cloud'.
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    explicit_route = str((payload or {}).get("route") or "").strip().lower()
+    recommendation = _recommend_video_route(project_id)
+    route = explicit_route if explicit_route in ("local_gpu", "cosmos_cloud") else recommendation["route"]
+
+    if route == "cosmos_cloud":
+        return render_cosmos_all_scenes(project_id, payload)
+
+    if route == "local_gpu":
+        # Kick off internal video render via the existing conductor flow
+        variant_index = int((payload or {}).get("variant_index") or 0)
+        preset = str((payload or {}).get("preset") or "balanced")
+        return run_pipeline(project_id, variant_index=variant_index, preset=preset, mode="auto", engine="auto")
+
+    raise UserFacingError(
+        "No video generation route is available.",
+        hint=(
+            "Enable CUDA in Settings → GPU / Render Runtime, or add your NVIDIA API key "
+            "(same key as Nemotron) to use Cosmos cloud video generation."
+        ),
+        code="NO_VIDEO_ROUTE",
+        status_code=400,
+    )
 
 
 def _recommend_pipeline(project_id: str, preset: str, mode: str = "auto", engine: str = "auto") -> dict[str, Any]:

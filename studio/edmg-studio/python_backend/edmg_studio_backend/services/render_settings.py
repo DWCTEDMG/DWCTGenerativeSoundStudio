@@ -35,7 +35,14 @@ STABILITY_STYLE_PRESETS = (
     "tile-texture",
 )
 
+VIDEO_GENERATION_PREFERENCES = ("auto", "local_gpu", "cosmos_cloud", "comfyui")
+
 DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
+    "video": {
+        "preference": "auto",
+        "auto_prefer_gpu": True,
+        "cosmos_fallback": True,
+    },
     "cosmos": {
         "enabled": True,
         "model": "text2world",
@@ -124,7 +131,7 @@ class RenderSettingsStore:
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         current = self.get()
         incoming = payload if isinstance(payload, dict) else {}
-        for key in ("cosmos", "firefly", "stability", "cuda", "directml"):
+        for key in ("video", "cosmos", "firefly", "stability", "cuda", "directml"):
             value = incoming.get(key)
             if isinstance(value, dict):
                 current[key].update(value)
@@ -135,6 +142,7 @@ class RenderSettingsStore:
     def _sanitize(self, payload: dict[str, Any]) -> dict[str, Any]:
         out = _clone_defaults()
 
+        video = payload.get("video") if isinstance(payload.get("video"), dict) else {}
         cosmos = payload.get("cosmos") if isinstance(payload.get("cosmos"), dict) else {}
         firefly = payload.get("firefly") if isinstance(payload.get("firefly"), dict) else {}
         stability = payload.get("stability") if isinstance(payload.get("stability"), dict) else {}
@@ -164,6 +172,15 @@ class RenderSettingsStore:
         cuda_preferred_model = str(cuda.get("preferred_model") or out["cuda"]["preferred_model"]).strip().lower()
         if cuda_preferred_model not in {"auto", "hf_sd35_medium_internal", "hf_sdxl_internal", "hf_sd15_internal"}:
             cuda_preferred_model = out["cuda"]["preferred_model"]
+
+        video_pref = str(video.get("preference") or out["video"]["preference"]).strip().lower()
+        if video_pref not in VIDEO_GENERATION_PREFERENCES:
+            video_pref = out["video"]["preference"]
+        out["video"] = {
+            "preference": video_pref,
+            "auto_prefer_gpu": bool(video.get("auto_prefer_gpu", out["video"]["auto_prefer_gpu"])),
+            "cosmos_fallback": bool(video.get("cosmos_fallback", out["video"]["cosmos_fallback"])),
+        }
 
         cosmos_model = str(cosmos.get("model") or out["cosmos"]["model"]).strip().lower()
         if cosmos_model not in {"text2world", "video2world", "cosmos3"}:

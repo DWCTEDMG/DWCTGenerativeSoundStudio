@@ -246,6 +246,8 @@ export default function Settings(props: PageProps) {
   const [renderProfiles, setRenderProfiles] = useState<any>(null);
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [renderProviderDraft, setRenderProviderDraft] = useState<any>(null);
+  const [videoRoute, setVideoRoute] = useState<any>(null);
+  const [savingVideoRoute, setSavingVideoRoute] = useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = useState<any>(null);
   const [transcriptionDraft, setTranscriptionDraft] = useState<TranscriptionSettings>(DEFAULT_TRANSCRIPTION_SETTINGS);
   const [savedRenderDefaults, setSavedRenderDefaults] = useState<any>(() => readRenderDefaults());
@@ -311,6 +313,7 @@ export default function Settings(props: PageProps) {
       setRenderProviders(d);
       setRenderProviderDraft(d?.settings ?? null);
     }).catch(() => {});
+    apiGet("/v1/render/route").then(setVideoRoute).catch(() => {});
     apiGet("/v1/settings/transcription").then((d) => {
       setTranscriptionStatus(d);
       setTranscriptionDraft(normalizeTranscriptionSettings(d?.settings));
@@ -608,6 +611,7 @@ export default function Settings(props: PageProps) {
       const next = await apiPost("/v1/settings/render_providers", renderProviderDraft || {});
       setRenderProviders(next?.status ?? next);
       setRenderProviderDraft(next?.settings ?? renderProviderDraft);
+      apiGet("/v1/render/route").then(setVideoRoute).catch(() => {});
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -1324,6 +1328,60 @@ export default function Settings(props: PageProps) {
           <div className="small" style={{ opacity: 0.75 }}>Loading render provider settings…</div>
         ) : (
           <div style={{ display: "grid", gap: 14 }}>
+
+            {/* ── Video Generation Route ────────────────────────────────── */}
+            <div style={{ border: "2px solid var(--accent, #3b82f6)", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Video Generation — GPU vs Cloud</div>
+              {videoRoute && (
+                <div className="small" style={{ marginBottom: 10, padding: "6px 10px", borderRadius: 6,
+                  background: videoRoute.route === "none" ? "var(--warning-bg,#fff3cd)" : "var(--success-bg,#d1fae5)",
+                  color: videoRoute.route === "none" ? "var(--warning-text,#856404)" : "var(--success-text,#065f46)" }}>
+                  <b>Active route:</b> {videoRoute.route === "local_gpu" ? "🖥 Local GPU" : videoRoute.route === "cosmos_cloud" ? "☁ NVIDIA Cosmos Cloud" : "⚠ None available"}
+                  {" "}— {videoRoute.reason}
+                  {videoRoute.fallback_available ? <span style={{ opacity: 0.8 }}> (Cosmos fallback available)</span> : null}
+                </div>
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Preference</div>
+                  <select
+                    value={renderProviderDraft?.video?.preference || "auto"}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), video: { ...(c?.video || {}), preference: e.target.value },
+                    }))}
+                  >
+                    <option value="auto">Auto (smart routing)</option>
+                    <option value="local_gpu">Always use Local GPU</option>
+                    <option value="cosmos_cloud">Always use NVIDIA Cosmos Cloud</option>
+                    <option value="comfyui">Always use ComfyUI</option>
+                  </select>
+                </div>
+                <div style={{ display: "grid", gap: 6 }}>
+                  <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input type="checkbox"
+                      checked={!!renderProviderDraft?.video?.auto_prefer_gpu}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), video: { ...(c?.video || {}), auto_prefer_gpu: e.target.checked },
+                      }))}
+                    />
+                    Auto: prefer GPU when available
+                  </label>
+                  <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input type="checkbox"
+                      checked={!!renderProviderDraft?.video?.cosmos_fallback}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), video: { ...(c?.video || {}), cosmos_fallback: e.target.checked },
+                      }))}
+                    />
+                    Fall back to Cosmos if GPU render fails
+                  </label>
+                </div>
+              </div>
+              <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
+                Local GPU: {videoRoute?.local_ready ? <b style={{color:"green"}}>ready — {videoRoute?.local_detail?.device} ({videoRoute?.local_detail?.vram_gb} GB)</b> : <b style={{color:"#888"}}>not available</b>}
+                {" "}• Cosmos Cloud: {videoRoute?.cosmos_ready ? <b style={{color:"green"}}>configured</b> : <b style={{color:"#888"}}>not configured (add NVIDIA API key)</b>}
+              </div>
+            </div>
 
             {/* ── NVIDIA CUDA ───────────────────────────────────────────── */}
             <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
