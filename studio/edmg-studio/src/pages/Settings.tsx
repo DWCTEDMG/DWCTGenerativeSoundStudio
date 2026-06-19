@@ -1543,6 +1543,99 @@ export default function Settings(props: PageProps) {
               </div>
             </div>
 
+            {/* ── NVIDIA Cosmos ─────────────────────────────────────────── */}
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontWeight: 800 }}>NVIDIA Cosmos Video Generation</div>
+              <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
+                Status: <b>{renderProviders?.cosmos?.configured ? "ready" : "API key not set"}</b>
+                {" "}• model: <b>{renderProviderDraft?.cosmos?.model || "text2world"}</b>
+              </div>
+              <div className="small" style={{ marginTop: 4, opacity: 0.8 }}>{renderProviders?.cosmos?.note}</div>
+              <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.cosmos?.enabled}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), cosmos: { ...(c?.cosmos || {}), enabled: e.target.checked },
+                    }))}
+                  />
+                  Enable NVIDIA Cosmos video generation (uses NVIDIA API key above)
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Model</div>
+                    <select
+                      value={renderProviderDraft?.cosmos?.model || "text2world"}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), cosmos: { ...(c?.cosmos || {}), model: e.target.value },
+                      }))}
+                    >
+                      <option value="text2world">Text→Video (Predict1 7B)</option>
+                      <option value="video2world">Image→Video (Predict1 7B)</option>
+                      <option value="cosmos3">Cosmos 3 Generator (latest)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Frames</div>
+                    <input type="number" min={25} max={480} step={1}
+                      value={renderProviderDraft?.cosmos?.num_frames ?? 121}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), cosmos: { ...(c?.cosmos || {}), num_frames: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Steps</div>
+                    <input type="number" min={10} max={100} step={5}
+                      value={renderProviderDraft?.cosmos?.steps ?? 50}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), cosmos: { ...(c?.cosmos || {}), steps: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Guidance scale</div>
+                    <input type="number" min={1} max={20} step={0.5}
+                      value={renderProviderDraft?.cosmos?.guidance_scale ?? 7.5}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), cosmos: { ...(c?.cosmos || {}), guidance_scale: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Timeout (s)</div>
+                    <input type="number" min={60} max={1800} step={60}
+                      value={renderProviderDraft?.cosmos?.timeout_s ?? 600}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), cosmos: { ...(c?.cosmos || {}), timeout_s: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                </div>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.cosmos?.prompt_upsampling}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), cosmos: { ...(c?.cosmos || {}), prompt_upsampling: e.target.checked },
+                    }))}
+                  />
+                  Prompt upsampling (Cosmos expands short prompts automatically)
+                </label>
+                <div>
+                  <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Self-hosted NIM base URL (optional)</div>
+                  <input
+                    value={renderProviderDraft?.cosmos?.base_url || ""}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), cosmos: { ...(c?.cosmos || {}), base_url: e.target.value },
+                    }))}
+                    placeholder="http://127.0.0.1:8000 (leave blank to use NVIDIA cloud)"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* ── Adobe Firefly ─────────────────────────────────────────── */}
             <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
               <div style={{ fontWeight: 800 }}>Adobe Firefly (custom model / standard)</div>

@@ -375,6 +375,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   );
   const internalHostedVisible = !!renderProviders?.stability?.visible;
   const fireflyVisible = !!renderProviders?.firefly?.visible;
+  const cosmosReady = !!renderProviders?.cosmos?.active;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
 
@@ -1063,6 +1064,39 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         max_frames_per_scene: maxFramesPerScene,
         context_length: motionContextLength,
         context_overlap: motionContextOverlap,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const renderCosmosScene = async (sceneIndex: number, useKeyframe = false) => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/cosmos/scene`, {
+        variant_index: selectedVariant,
+        scene_index: sceneIndex,
+        use_keyframe: useKeyframe,
+        seed: renderSeed ? Number(renderSeed) : undefined,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const renderCosmosAll = async (useKeyframe = false) => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/cosmos/all_scenes`, {
+        variant_index: selectedVariant,
+        use_keyframe: useKeyframe,
+        seed: renderSeed ? Number(renderSeed) : undefined,
       });
       setInfo(d);
       await refreshProject(projectId);
@@ -2644,6 +2678,25 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
                 <button onClick={renderScenes} disabled={!variantCount || renderMode !== "stills"}>Enqueue still scenes</button>
                 <button onClick={renderMotion} disabled={!variantCount || renderMode === "stills"}>Enqueue motion scenes</button>
+                {cosmosReady ? (
+                  <>
+                    <button
+                      onClick={() => renderCosmosAll(false)}
+                      disabled={!variantCount}
+                      title="Generate a video clip for every scene using NVIDIA Cosmos text-to-video"
+                    >
+                      ⚡ Cosmos: All scenes (text→video)
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() => renderCosmosAll(true)}
+                      disabled={!variantCount}
+                      title="Use rendered keyframes as init images for Cosmos image-to-video"
+                    >
+                      Cosmos: From keyframes (img→video)
+                    </button>
+                  </>
+                ) : null}
                 {fireflyVisible ? (
                   <>
                     <button
@@ -2668,6 +2721,13 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 <button className="secondary" onClick={tickWorker}>Tick worker (run 1 job)</button>
                 <button className="secondary" onClick={refreshValidate}>Validate capabilities</button>
               </div>
+              {cosmosReady && (
+                <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                  NVIDIA Cosmos: <b>ready</b> • model <b>{renderProviders?.cosmos?.model}</b>
+                  {" "}• {renderProviders?.cosmos?.num_frames} frames @ {renderProviders?.cosmos?.fps} fps
+                  {" "}• ~{Math.round((renderProviders?.cosmos?.num_frames || 121) / (renderProviders?.cosmos?.fps || 24))}s clip per scene
+                </div>
+              )}
               {fireflyVisible && (
                 <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
                   Adobe Firefly: <b>{renderProviders?.firefly?.configured ? "configured" : "not configured"}</b>

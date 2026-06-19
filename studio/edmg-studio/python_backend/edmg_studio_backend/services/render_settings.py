@@ -36,6 +36,17 @@ STABILITY_STYLE_PRESETS = (
 )
 
 DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
+    "cosmos": {
+        "enabled": True,
+        "model": "text2world",
+        "steps": 50,
+        "guidance_scale": 7.5,
+        "num_frames": 121,
+        "fps": 24.0,
+        "prompt_upsampling": True,
+        "base_url": "",
+        "timeout_s": 600,
+    },
     "firefly": {
         "enabled": False,
         "allow_auto_fallback": True,
@@ -113,7 +124,7 @@ class RenderSettingsStore:
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         current = self.get()
         incoming = payload if isinstance(payload, dict) else {}
-        for key in ("firefly", "stability", "cuda", "directml"):
+        for key in ("cosmos", "firefly", "stability", "cuda", "directml"):
             value = incoming.get(key)
             if isinstance(value, dict):
                 current[key].update(value)
@@ -124,6 +135,7 @@ class RenderSettingsStore:
     def _sanitize(self, payload: dict[str, Any]) -> dict[str, Any]:
         out = _clone_defaults()
 
+        cosmos = payload.get("cosmos") if isinstance(payload.get("cosmos"), dict) else {}
         firefly = payload.get("firefly") if isinstance(payload.get("firefly"), dict) else {}
         stability = payload.get("stability") if isinstance(payload.get("stability"), dict) else {}
         cuda = payload.get("cuda") if isinstance(payload.get("cuda"), dict) else {}
@@ -152,6 +164,21 @@ class RenderSettingsStore:
         cuda_preferred_model = str(cuda.get("preferred_model") or out["cuda"]["preferred_model"]).strip().lower()
         if cuda_preferred_model not in {"auto", "hf_sd35_medium_internal", "hf_sdxl_internal", "hf_sd15_internal"}:
             cuda_preferred_model = out["cuda"]["preferred_model"]
+
+        cosmos_model = str(cosmos.get("model") or out["cosmos"]["model"]).strip().lower()
+        if cosmos_model not in {"text2world", "video2world", "cosmos3"}:
+            cosmos_model = out["cosmos"]["model"]
+        out["cosmos"] = {
+            "enabled": bool(cosmos.get("enabled", out["cosmos"]["enabled"])),
+            "model": cosmos_model,
+            "steps": max(10, min(100, int(cosmos.get("steps", out["cosmos"]["steps"])))),
+            "guidance_scale": max(1.0, min(20.0, float(cosmos.get("guidance_scale", out["cosmos"]["guidance_scale"])))),
+            "num_frames": max(25, min(480, int(cosmos.get("num_frames", out["cosmos"]["num_frames"])))),
+            "fps": max(1.0, min(60.0, float(cosmos.get("fps", out["cosmos"]["fps"])))),
+            "prompt_upsampling": bool(cosmos.get("prompt_upsampling", out["cosmos"]["prompt_upsampling"])),
+            "base_url": str(cosmos.get("base_url") or "").strip(),
+            "timeout_s": max(60, min(1800, int(cosmos.get("timeout_s", out["cosmos"]["timeout_s"])))),
+        }
 
         firefly_style = str(firefly.get("style") or out["firefly"]["style"]).strip().lower()
         if firefly_style not in FIREFLY_STYLES:

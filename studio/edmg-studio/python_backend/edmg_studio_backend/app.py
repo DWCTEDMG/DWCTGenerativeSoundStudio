@@ -98,6 +98,7 @@ from .services.render_settings import (
     STABILITY_STYLE_PRESETS,
 )
 from .services.firefly_platform import FireflyClient, FireflyImageResult
+from .services.cosmos_platform import CosmosClient, COSMOS_MODELS
 from .services.transcription_settings import (
     PARAKEET_MODELS,
     TRANSCRIPTION_COMPUTE_TYPES,
@@ -1957,10 +1958,15 @@ def hardware():
 def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     hw = dict(hw or _hardware_profile())
     cfg = render_settings.get()
+    cosmos_cfg = dict(cfg.get("cosmos") or {})
     firefly_cfg = dict(cfg.get("firefly") or {})
     stability_cfg = dict(cfg.get("stability") or {})
     directml_cfg = dict(cfg.get("directml") or {})
     cuda_cfg = dict(cfg.get("cuda") or {})
+    has_nvidia_key = bool(
+        secrets.get("nvidia_api_key") or os.getenv("EDMG_AI_NVIDIA_API_KEY") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
+    )
+    cosmos_enabled = bool(cosmos_cfg.get("enabled", True))
     has_stability_key = bool(secrets.get("stability_api_key"))
     has_adobe_client_id = bool(secrets.get("adobe_client_id") or os.getenv("ADOBE_CLIENT_ID"))
     has_adobe_client_secret = bool(secrets.get("adobe_client_secret") or os.getenv("ADOBE_CLIENT_SECRET"))
@@ -2032,6 +2038,26 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
             "preferred_model": str(directml_cfg.get("preferred_model") or "auto"),
             "allow_auto_selection": bool(directml_cfg.get("allow_auto_selection", True)),
         },
+        "cosmos": {
+            "provider": "nvidia-cosmos",
+            "configured": has_nvidia_key,
+            "enabled": cosmos_enabled,
+            "active": bool(has_nvidia_key and cosmos_enabled),
+            "model": str(cosmos_cfg.get("model") or "text2world"),
+            "models": list(COSMOS_MODELS.keys()),
+            "steps": int(cosmos_cfg.get("steps") or 50),
+            "guidance_scale": float(cosmos_cfg.get("guidance_scale") or 7.5),
+            "num_frames": int(cosmos_cfg.get("num_frames") or 121),
+            "fps": float(cosmos_cfg.get("fps") or 24.0),
+            "prompt_upsampling": bool(cosmos_cfg.get("prompt_upsampling", True)),
+            "base_url": str(cosmos_cfg.get("base_url") or ""),
+            "timeout_s": int(cosmos_cfg.get("timeout_s") or 600),
+            "note": (
+                "No NVIDIA API key — save it in Settings → AI Provider → NVIDIA API key."
+                if not has_nvidia_key else
+                "Cosmos is ready. Your existing NVIDIA API key (same as Nemotron) is used."
+            ),
+        },
         "firefly_styles": list(FIREFLY_STYLES),
         "firefly_content_classes": list(FIREFLY_CONTENT_CLASSES),
         "stability_services": list(STABILITY_SERVICES),
@@ -2050,6 +2076,20 @@ def _hosted_stability_ready(payload: dict[str, Any] | None = None) -> bool:
     if requested_mode == "hosted":
         return True
     return bool(provider.get("allow_auto_fallback")) and bool(payload.get("allow_hosted_fallback", True))
+
+
+def _cosmos_client() -> CosmosClient:
+    """Return a configured CosmosClient — uses the same NVIDIA key as Nemotron."""
+    api_key = (
+        secrets.get("nvidia_api_key")
+        or os.getenv("EDMG_AI_NVIDIA_API_KEY")
+        or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
+        or ""
+    )
+    cosmos_cfg = dict((render_settings.get().get("cosmos") or {}))
+    base_url = str(cosmos_cfg.get("base_url") or "").strip()
+    timeout_s = float(cosmos_cfg.get("timeout_s") or 600)
+    return CosmosClient(api_key=api_key, base_url=base_url, timeout_s=timeout_s)
 
 
 def _firefly_client() -> FireflyClient:
@@ -6981,6 +7021,169 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         proj.meta["internal_render_history"] = hist[-20:]
     store.save(proj)
     return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "diffusion", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
+
+
+@app.post("/v1/projects/{project_id}/render/cosmos/scene")
+def render_cosmos_scene(project_id: str, payload: dict[str, Any]):
+    """Generate a single video clip for one scene using NVIDIA Cosmos.
+
+    Uses your existing NVIDIA API key (same as Nemotron Ultra).
+    Returns a base path-relative video path once the clip is saved.
+
+    payload fields (all optional):
+      scene_index   : int   (default 0)
+      variant_index : int   (default 0)
+      model         : str   "text2world" | "video2world" | "cosmos3"
+      seed          : int
+      steps         : int
+      guidance_scale: float
+      num_frames    : int
+      fps           : float
+      use_keyframe  : bool  if true and variant has a rendered keyframe,
+                            passes it as the init image for video2world
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    provider_status = _render_provider_status()
+    cosmos_status = provider_status.get("cosmos") or {}
+    if not cosmos_status.get("configured"):
+        raise UserFacingError(
+            "NVIDIA API key not configured for Cosmos.",
+            hint="Your existing NVIDIA key (same as Nemotron) works. Verify it's saved in Settings → AI Provider.",
+            code="COSMOS_NOT_CONFIGURED",
+            status_code=400,
+        )
+
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    variant_index = int((payload or {}).get("variant_index") or 0)
+    variants = plan["variants"]
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    variant = variants[variant_index]
+    scenes = variant.get("scenes") or []
+    scene_index = int((payload or {}).get("scene_index") or 0)
+    if scene_index < 0 or scene_index >= len(scenes):
+        raise HTTPException(400, f"scene_index {scene_index} out of range (0–{len(scenes)-1})")
+
+    scene = scenes[scene_index]
+    cosmos_cfg = dict((render_settings.get().get("cosmos") or {}))
+    client = _cosmos_client()
+
+    prompt = str(scene.get("prompt") or "cinematic music video").strip()
+    negative = str(scene.get("negative_prompt") or "blurry, low quality, text, watermark, logo").strip()
+    model = str((payload or {}).get("model") or cosmos_cfg.get("model") or "text2world")
+    steps = int((payload or {}).get("steps") or cosmos_cfg.get("steps") or 50)
+    guidance_scale = float((payload or {}).get("guidance_scale") or cosmos_cfg.get("guidance_scale") or 7.5)
+    num_frames = int((payload or {}).get("num_frames") or cosmos_cfg.get("num_frames") or 121)
+    fps = float((payload or {}).get("fps") or cosmos_cfg.get("fps") or 24.0)
+    seed = (payload or {}).get("seed")
+    prompt_upsampling = bool(cosmos_cfg.get("prompt_upsampling", True))
+
+    out_dir = Path(proj.path) / "cosmos" / f"variant_{variant_index}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"scene_{scene_index:04d}.mp4"
+
+    use_keyframe = bool((payload or {}).get("use_keyframe", False))
+    init_image = None
+    if use_keyframe or model in ("video2world",):
+        kf_path = Path(proj.path) / "stills" / f"variant_{variant_index}" / f"scene_{scene_index:04d}.png"
+        if kf_path.exists():
+            try:
+                from PIL import Image as PILImage
+                init_image = PILImage.open(str(kf_path)).convert("RGB")
+            except Exception:
+                init_image = None
+
+    hw = _hardware_profile()
+    width = int(hw.get("preferred_width") or 1280)
+    height = int(hw.get("preferred_height") or 704)
+
+    if init_image is not None and model in ("video2world", "cosmos3"):
+        result = client.image_to_video(
+            image=init_image,
+            out_path=out_path,
+            prompt=prompt,
+            negative_prompt=negative,
+            width=width,
+            height=height,
+            fps=fps,
+            num_frames=num_frames,
+            steps=steps,
+            guidance_scale=guidance_scale,
+            seed=int(seed) if seed is not None else None,
+            model=model,
+        )
+    else:
+        result = client.text_to_video(
+            prompt=prompt,
+            out_path=out_path,
+            negative_prompt=negative,
+            width=width,
+            height=height,
+            fps=fps,
+            num_frames=num_frames,
+            steps=steps,
+            guidance_scale=guidance_scale,
+            seed=int(seed) if seed is not None else None,
+            prompt_upsampling=prompt_upsampling,
+            model=model,
+        )
+
+    rel = str(result.video_path.relative_to(Path(proj.path)))
+    return {
+        "ok": True,
+        "provider": "nvidia-cosmos",
+        "video": rel,
+        "video_abs": str(result.video_path),
+        "scene_index": scene_index,
+        "model": result.model,
+        "duration_s": result.duration_s,
+        "frames": result.frames,
+        "fps": result.fps,
+        "seed": result.seed,
+    }
+
+
+@app.post("/v1/projects/{project_id}/render/cosmos/all_scenes")
+def render_cosmos_all_scenes(project_id: str, payload: dict[str, Any]):
+    """Generate a Cosmos clip for every scene in a variant sequentially.
+
+    Same as calling /render/cosmos/scene for each scene index in order.
+    Returns a list of results. Failed scenes include an error key but do not
+    stop processing of remaining scenes.
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    variant_index = int((payload or {}).get("variant_index") or 0)
+    variants = plan["variants"]
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    scenes = (variants[variant_index].get("scenes") or [])
+    results = []
+    for idx in range(len(scenes)):
+        per_scene_payload = {**(payload or {}), "scene_index": idx, "variant_index": variant_index}
+        try:
+            r = render_cosmos_scene(project_id, per_scene_payload)
+            results.append(r)
+        except UserFacingError as e:
+            results.append({"ok": False, "scene_index": idx, "error": e.message, "hint": e.hint})
+        except Exception as e:
+            results.append({"ok": False, "scene_index": idx, "error": str(e)})
+
+    return {"ok": True, "provider": "nvidia-cosmos", "results": results, "total": len(scenes)}
 
 
 @app.post("/v1/projects/{project_id}/render/firefly/scenes")
