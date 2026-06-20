@@ -38,14 +38,23 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
 - `pnpm run dev` runs Vite **and** Electron concurrently; Electron cannot launch headless in the
   cloud VM. To exercise the UI in a browser, run Vite alone:
   `pnpm exec vite --host 127.0.0.1 --port 5173 --strictPort`.
-- In browser dev mode the frontend defaults to the backend at `http://127.0.0.1:7863` and backend
-  CORS is open, so no extra config is needed.
+- Backend CORS is open, so a browser can call the backend cross-origin without extra config.
+- **Browser-only gotcha:** when running Vite in a plain browser (no Electron), open the UI with the
+ backend URL as a query param:
+ `http://127.0.0.1:5173/?backendUrl=http://127.0.0.1:7863`. Without it the app fails to load
+ because the browser fallback in `src/components/api.ts` recurses infinitely (`getBackendUrl()`
+ calls `window.edmg.backendUrl()` which `ensureBrowserBridge()` wires back to `getBackendUrl()`).
+ This path never triggers under Electron (preload supplies `window.edmg`), so it is a
+ browser-dev-only quirk, not a setup problem.
 
 ### Tests (known results on Linux)
-- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 40 pass.
-- Frontend: `pnpm run test:ui` → all 40 tests pass, but the runner **exits 1** because the
-  Windows-only `src/test/directorRuntime.test.ts` opens a hardcoded `C:\...` log path that errors
-  asynchronously on Linux. This is a pre-existing platform quirk, not a setup problem.
+- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 100 pass.
+- Frontend: `pnpm run test:ui` → 46 pass (22 files). The Windows-only
+ `src/test/directorRuntime.test.ts` logs a hardcoded `C:\...` ENOENT error to stderr but still
+ passes; the runner exits 0. This stderr noise is a pre-existing platform quirk, not a failure.
+- `pnpm run lint` has **3 pre-existing errors** (unused vars in `src/pages/Render.tsx` and
+ `src/pages/Settings.tsx`); `pnpm run typecheck` passes clean. The lint errors are code issues,
+ not environment problems.
 - Repo-level: `python3 -m pytest` from the repo root has **7 pre-existing failures**
   (`test_azure_model_cache`, `test_studio_render_tiers`, `test_studio_sd_feature_slice`) caused by
   test/code mismatches (e.g. expected log text and model-selection logic), unrelated to environment
