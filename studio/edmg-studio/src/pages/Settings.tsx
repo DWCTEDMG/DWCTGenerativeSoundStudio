@@ -247,7 +247,6 @@ export default function Settings(props: PageProps) {
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [renderProviderDraft, setRenderProviderDraft] = useState<any>(null);
   const [videoRoute, setVideoRoute] = useState<any>(null);
-  const [savingVideoRoute, setSavingVideoRoute] = useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = useState<any>(null);
   const [transcriptionDraft, setTranscriptionDraft] = useState<TranscriptionSettings>(DEFAULT_TRANSCRIPTION_SETTINGS);
   const [savedRenderDefaults, setSavedRenderDefaults] = useState<any>(() => readRenderDefaults());

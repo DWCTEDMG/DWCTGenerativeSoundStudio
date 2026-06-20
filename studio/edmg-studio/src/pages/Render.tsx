@@ -1091,23 +1091,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
-  const renderCosmosScene = async (sceneIndex: number, useKeyframe = false) => {
-    setErr(null);
-    setInfo(null);
-    try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/cosmos/scene`, {
-        variant_index: selectedVariant,
-        scene_index: sceneIndex,
-        use_keyframe: useKeyframe,
-        seed: renderSeed ? Number(renderSeed) : undefined,
-      });
-      setInfo(d);
-      await refreshProject(projectId);
-    } catch (e: any) {
-      setErr(String(e));
-    }
-  };
-
   const renderCosmosAll = async (useKeyframe = false) => {
     setErr(null);
     setInfo(null);
