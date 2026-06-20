@@ -48,8 +48,8 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
  browser-dev-only quirk, not a setup problem.
 
 ### Tests (known results on Linux)
-- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 100 pass.
-- Frontend: `pnpm run test:ui` → 46 pass (22 files). The Windows-only
+- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 105 pass.
+- Frontend: `pnpm run test:ui` → 48 pass (23 files). The Windows-only
  `src/test/directorRuntime.test.ts` logs a hardcoded `C:\...` ENOENT error to stderr but still
  passes; the runner exits 0. This stderr noise is a pre-existing platform quirk, not a failure.
 - `pnpm run lint` has **3 pre-existing errors** (unused vars in `src/pages/Render.tsx` and
