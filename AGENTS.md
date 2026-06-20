@@ -55,10 +55,8 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
 - `pnpm run lint` has **3 pre-existing errors** (unused vars in `src/pages/Render.tsx` and
  `src/pages/Settings.tsx`); `pnpm run typecheck` passes clean. The lint errors are code issues,
  not environment problems.
-- Repo-level: `python3 -m pytest` from the repo root has **7 pre-existing failures**
-  (`test_azure_model_cache`, `test_studio_render_tiers`, `test_studio_sd_feature_slice`) caused by
-  test/code mismatches (e.g. expected log text and model-selection logic), unrelated to environment
-  setup; the other 55 pass / 5 skip.
+- Repo-level: `python3 -m pytest` from the repo root → 63 pass / 5 skip (the 5 skips need
+  `tkinter` or opt-in live-smoke env vars). Run both scopes with `python3 scripts/run_pytest_scopes.py`.
 
 ### Storage
 - Backend project data is written to `studio/edmg-studio/python_backend/data/` (gitignored) when
