@@ -621,11 +621,11 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
           });
         }
         setStudioSeedStatus(
-          `Hydrated the saved reactive pass from ${studioProjectName || 'the shared Studio project'}. You can keep refining it here or replace it with a new audio run.`,
+          `Loaded the saved reactive pass from ${studioProjectName || 'the shared Studio project'} — the session audio is reused automatically, so there is no need to re-upload. Keep refining it here or replace it with a new audio run.`,
         );
       } else {
         setStudioSeedStatus(
-          `Using the Overview track from ${studioProjectName || 'the shared Studio project'}. Build a reactive pass here when you want motion schedules, or skip it and keep the core creative direction only.`,
+          `Using the analyzed Overview track from ${studioProjectName || 'the shared Studio project'} — the session audio is reused automatically, so there is no need to re-upload. Build a reactive pass here when you want motion schedules, or skip it and keep the core creative direction only.`,
         );
       }
 

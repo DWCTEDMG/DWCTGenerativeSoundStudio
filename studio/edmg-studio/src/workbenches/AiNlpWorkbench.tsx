@@ -854,6 +854,56 @@ function buildStudioSentimentProgression(analysis: any, scenes: any[], durationS
   });
 }
 
+function firstSentenceOf(text: string): string {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+  return trimmed.split(/(?<=[.!?])\s+/).find(Boolean) || trimmed;
+}
+
+// Build the seed Setup fields (subject focus + creative brief) from whatever the
+// shared Studio session already analyzed/transcribed, so the planner opens with
+// real content instead of a blank/default brief.
+function deriveStudioSeedBrief(
+  project: any,
+  seedAnalysis: AnalysisResult,
+): { subjectFocus: string; creativeBrief: string } {
+  const studioAnalysis = project?.meta?.analysis || {};
+  const transcriptText = String(studioAnalysis?.transcript?.text || '').trim();
+  const summary = looksLikeFallbackBrief(String(studioAnalysis?.summary || ''))
+    ? ''
+    : String(studioAnalysis?.summary || '').trim();
+  const firstVariant = project?.meta?.last_plan?.variants?.[0] || {};
+  const firstScenePrompt = String(
+    (Array.isArray(firstVariant?.scenes) ? firstVariant.scenes : [])[0]?.prompt || '',
+  ).trim();
+  const themeLead = String(seedAnalysis?.themes?.[0]?.theme || '').trim();
+  const imageryLead = String(seedAnalysis?.visualImagery?.[0]?.element || '').trim();
+
+  const creativeBrief =
+    transcriptText ||
+    firstScenePrompt ||
+    summary ||
+    'Use emotionally legible visual storytelling with escalating momentum.';
+
+  const subjectSource = firstSentenceOf(transcriptText) || themeLead || imageryLead;
+  const subjectFocus = subjectSource
+    ? `a magnetic central performer embodying ${subjectSource}`
+    : 'a magnetic central performer';
+
+  return { subjectFocus, creativeBrief };
+}
+
+function looksLikeFallbackBrief(text: string): boolean {
+  const lowered = String(text || '').trim().toLowerCase();
+  if (!lowered) return false;
+  return (
+    lowered.startsWith('no speech detected after vad') ||
+    lowered.startsWith('no transcript is available') ||
+    lowered.startsWith('transcription failed') ||
+    lowered.startsWith('transcription unavailable')
+  );
+}
+
 function synthesizePlannerAnalysisFromStudioProject(project: any, selectedVariant: number): AnalysisResult | null {
   const meta = project?.meta || {};
   const studioAnalysis = meta?.analysis || {};
@@ -1136,6 +1186,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
       if (cancelled || !seedAnalysis) return;
 
       const savedPlannerSettings = studioProject?.meta?.last_planner_lab?.settings || {};
+      const derivedBrief = deriveStudioSeedBrief(studioProject, seedAnalysis);
       const seedSettings = {
         analysisFocus: (savedPlannerSettings?.analysisFocus as AnalysisFocus) || analysisFocus,
         promptStyle: (savedPlannerSettings?.promptStyle as PromptStyle) || promptStyle,
@@ -1145,14 +1196,9 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
         sceneCount:
           Number(studioProject?.meta?.last_plan?.variants?.[studioSelectedVariant]?.scenes?.length || savedPlannerSettings?.sceneCount || sceneCount) || sceneCount,
         subjectFocus:
-          String(savedPlannerSettings?.subjectFocus || subjectFocus || 'a magnetic central performer'),
+          String(savedPlannerSettings?.subjectFocus || derivedBrief.subjectFocus),
         creativeBrief:
-          String(
-            savedPlannerSettings?.creativeBrief ||
-              studioProject?.meta?.analysis?.summary ||
-              creativeBrief ||
-              'Use emotionally legible visual storytelling with escalating momentum.',
-          ),
+          String(savedPlannerSettings?.creativeBrief || derivedBrief.creativeBrief),
         negativePromptSeed:
           String(savedPlannerSettings?.negativePromptSeed || negativePromptSeed || 'oversaturated skin, bad hands'),
         selectedVariantMode:
@@ -1179,7 +1225,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
       if (seedPlan) setPlan(seedPlan);
       setActiveSection(seedPlan?.scenes?.length ? 'prompts' : 'setup');
       setStudioSeedStatus(
-        `Hydrated from ${studioProjectName || 'the shared Studio project'}: audio, transcript, and storyboard data are already loaded here. Regenerate if you want a fresh planner pass.`,
+        `Loaded from ${studioProjectName || 'the shared Studio project'}: audio, transcript, and storyboard are already here — no need to re-upload. The subject focus, creative brief, and prompts are pre-filled from the analysis/transcript; adjust them and regenerate any time.`,
       );
 
       if (studioAudioName && !cancelled) {
@@ -1238,7 +1284,15 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
   };
 
   const runAnalysis = async (): Promise<void> => {
-    if (!audioFile) return;
+    if (!audioFile) {
+      // No local file selected: the shared Studio session already carries the
+      // analyzed audio + transcript, so plan straight from the hydrated analysis
+      // instead of forcing the user to re-upload the track.
+      if (analysis) {
+        regeneratePlan();
+      }
+      return;
+    }
     setIsAnalyzing(true);
     setError(null);
     setStudioSyncMessage(null);
@@ -1740,8 +1794,8 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
           <label className="mt-4 block space-y-2 text-sm"><span className="font-medium text-slate-700">Creative brief</span><textarea value={creativeBrief} onChange={(e) => setCreativeBrief(e.target.value)} rows={3} className="w-full rounded-2xl border border-slate-300 px-3 py-2" /></label>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            <button onClick={runAnalysis} disabled={!audioFile || isAnalyzing} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">
-              {isAnalyzing ? <RefreshCcw className="animate-spin" size={18} /> : <Brain size={18} />} {isAnalyzing ? 'Analyzing and planning...' : 'Run AI planning pass'}
+            <button onClick={runAnalysis} disabled={(!audioFile && !analysis) || isAnalyzing} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">
+              {isAnalyzing ? <RefreshCcw className="animate-spin" size={18} /> : <Brain size={18} />} {isAnalyzing ? 'Analyzing and planning...' : audioFile ? 'Run AI planning pass' : 'Plan from session analysis'}
             </button>
             <button onClick={approveAllScenes} disabled={!plan} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-3 font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
               <CheckCircle2 size={18} /> Approve all
