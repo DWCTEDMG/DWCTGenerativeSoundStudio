@@ -133,6 +133,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     String(savedRenderDefaults.stillNegativePrompt || "blurry, low quality, watermark, text, logo")
   );
   const [renderSeed, setRenderSeed] = useState<string>(String(savedRenderDefaults.stillSeed || ""));
+  const [cosmosSceneIndex, setCosmosSceneIndex] = useState<number>(0);
   const [hiresFix, setHiresFix] = useState<HiresFixDraft>({
     enabled: Boolean(savedRenderDefaults.hiresFixEnabled ?? false),
     scale: Number(savedRenderDefaults.hiresFixScale ?? 1.5),
@@ -1091,6 +1092,23 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const renderCosmosScene = async (sceneIndex: number, useKeyframe = false) => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/cosmos/scene`, {
+        variant_index: selectedVariant,
+        scene_index: sceneIndex,
+        use_keyframe: useKeyframe,
+        seed: renderSeed ? Number(renderSeed) : undefined,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
   const renderCosmosAll = async (useKeyframe = false) => {
     setErr(null);
     setInfo(null);
@@ -1283,6 +1301,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
   const comfyExports = project?.meta?.exports?.comfyui || [];
 
   const variantCount = plan?.variants?.length || 0;
+  const sceneCount = plan?.variants?.[selectedVariant]?.scenes?.length || 0;
 
   return (
     <div>
@@ -2735,6 +2754,27 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                     >
                       Cosmos: From keyframes (img→video)
                     </button>
+                    <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                      <label className="small" htmlFor="cosmos-scene-index">Scene #</label>
+                      <input
+                        id="cosmos-scene-index"
+                        type="number"
+                        min={0}
+                        max={sceneCount ? sceneCount - 1 : 0}
+                        value={cosmosSceneIndex}
+                        onChange={(e) => setCosmosSceneIndex(Math.max(0, Number(e.target.value) || 0))}
+                        disabled={!variantCount}
+                        style={{ width: 64 }}
+                      />
+                      <button
+                        className="secondary"
+                        onClick={() => renderCosmosScene(cosmosSceneIndex, false)}
+                        disabled={!variantCount || cosmosSceneIndex >= sceneCount}
+                        title="Generate a Cosmos video clip for just this one scene"
+                      >
+                        Cosmos: This scene
+                      </button>
+                    </span>
                   </>
                 ) : null}
                 {fireflyVisible ? (
