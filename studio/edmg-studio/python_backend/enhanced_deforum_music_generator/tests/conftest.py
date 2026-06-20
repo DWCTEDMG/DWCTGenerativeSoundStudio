@@ -27,24 +27,16 @@ except Exception:
 
 import pytest
 
+_TEST_AUDIO_FIXTURE = (
+    _ROOT
+    / "tests"
+    / "fixtures"
+    / "audio"
+    / "LANDR-Walkin' In That Rundown Town-Warm-Medium-REV_V1.wav"
+)
+
 @pytest.fixture(scope='session')
-def test_audio_file(tmp_path_factory):
-    """Provide a small dummy WAV file for tests."""
-    import wave
-    import numpy as np
-
-    path = tmp_path_factory.mktemp('data') / 'test.wav'
-    framerate = 44100
-    duration = 1
-    amplitude = 16000
-    freq = 440.0
-    t = np.linspace(0, duration, int(framerate * duration))
-    signal = (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.int16)
-
-    with wave.open(str(path), 'w') as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(framerate)
-        wav_file.writeframes(signal.tobytes())
-
-    return str(path)
+def test_audio_file():
+    """Provide the committed real-audio fixture for analyzer tests."""
+    assert _TEST_AUDIO_FIXTURE.exists(), f"Missing test audio fixture: {_TEST_AUDIO_FIXTURE}"
+    return str(_TEST_AUDIO_FIXTURE)

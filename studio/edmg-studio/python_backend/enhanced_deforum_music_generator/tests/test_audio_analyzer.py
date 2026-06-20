@@ -1,23 +1,15 @@
-import pytest
-import numpy as np
-import librosa
 from enhanced_deforum_music_generator.config.config_system import AudioConfig
 from enhanced_deforum_music_generator.core.audio_analyzer import AudioAnalyzer
 
 
-def test_audio_analyzer_runs_on_sample(tmp_path):
-    # Generate a synthetic sine wave as test audio
-    sr = 22050
-    duration = 2.0
-    t = np.linspace(0, duration, int(sr * duration), endpoint=False)
-    y = 0.5 * np.sin(2 * np.pi * 440.0 * t)  # 440 Hz tone
-
-    audio_path = tmp_path / "test.wav"
-    librosa.output.write_wav(str(audio_path), y, sr)
-
+def test_audio_analyzer_runs_on_committed_test_audio_file(test_audio_file):
     analyzer = AudioAnalyzer(AudioConfig(max_duration=5))
-    results = analyzer.analyze(str(audio_path))
+    results = analyzer.analyze(test_audio_file)
 
     assert "beats" in results
     assert "energy" in results
     assert isinstance(results["energy"], list)
+    assert 4.5 <= results["duration"] <= 5.1
+    assert results["sample_rate"] == 22050
+    assert len(results["energy"]) > 100
+    assert max(results["energy"]) > 0
