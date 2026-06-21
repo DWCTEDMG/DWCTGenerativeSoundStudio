@@ -11,23 +11,35 @@ _ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def _load_launcher_env() -> None:
-    """Load env-style keys from launcher_env.json into the process environment.
+    """Load env-style keys into the process environment before config is read.
 
-    The desktop launcher persists configuration (storage paths, backend URLs,
-    optional model-cache settings, ...) to ``launcher_env.json`` at the Studio
-    root. When the backend is started directly (external mode) instead of being
-    spawned by the launcher, those values would otherwise be lost. We load them
-    here, before any submodule reads configuration, using ``setdefault`` so an
-    explicit value already present in the environment always wins.
+    Sources are applied in priority order (highest first). ``setdefault`` is
+    used throughout, so a value set by a higher-priority source (or already
+    present in the real environment) is never overwritten by a lower one:
+
+      1. ``$EDMG_LAUNCHER_ENV`` (explicit override path), if set.
+      2. ``launcher_env.json`` at the Studio root - local, machine-specific
+         config written by the desktop launcher (gitignored). Holds storage
+         paths, backend URLs, etc.
+      3. ``launcher_env.defaults.json`` at the Studio root - tracked, committed
+         project defaults that ship with the repo (e.g. the Hugging Face bucket
+         model-cache settings) so a fresh clone works without machine setup.
+
+    This lets the backend pick up configuration even when started directly
+    (external mode) rather than spawned by the launcher.
 
     Only keys shaped like environment variables (``UPPER_SNAKE_CASE``) with
     scalar values are imported; camelCase launcher-internal keys are ignored.
+    Secrets (tokens, keys) are never stored here - HF auth uses the locally
+    saved ``hf auth login`` token.
     """
+    studio_root = Path(__file__).resolve().parents[2]
+    candidates: list[Path] = []
     override = os.getenv("EDMG_LAUNCHER_ENV", "").strip()
-    candidates = []
     if override:
         candidates.append(Path(override).expanduser())
-    candidates.append(Path(__file__).resolve().parents[2] / "launcher_env.json")
+    candidates.append(studio_root / "launcher_env.json")
+    candidates.append(studio_root / "launcher_env.defaults.json")
 
     for path in candidates:
         try:
@@ -48,7 +60,7 @@ def _load_launcher_env() -> None:
             elif not isinstance(value, str):
                 continue
             os.environ.setdefault(key, value)
-        break
+        # Continue to lower-priority sources; setdefault keeps earlier wins.
 
 
 _load_launcher_env()

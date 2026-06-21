@@ -1,0 +1,7 @@
+{
+  "_comment": "Tracked project defaults loaded by the backend at startup (see edmg_studio_backend/__init__.py). Local launcher_env.json and real environment variables override these. Do NOT put secrets or machine-specific paths here - HF auth uses the locally saved 'hf auth login' token, and storage paths come from the launcher / local config.",
+  "EDMG_HF_BUCKET_MODEL_CACHE": "1",
+  "EDMG_HF_BUCKET_ID": "gulle1155/DWCTedmgAIStudioModels",
+  "EDMG_HF_BUCKET_PREFIX": "",
+  "EDMG_MODEL_STORAGE_MODE": "cloud_only"
+}
