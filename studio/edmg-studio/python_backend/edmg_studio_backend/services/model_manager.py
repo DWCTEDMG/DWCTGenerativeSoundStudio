@@ -34,6 +34,11 @@ try:
 except Exception:  # pragma: no cover - optional integration
     S3ModelCache = None  # type: ignore
 
+try:
+    from ..integrations.hf_bucket import HFBucketModelCache
+except Exception:  # pragma: no cover - optional integration
+    HFBucketModelCache = None  # type: ignore
+
 
 # ------------------------------ persistence ------------------------------
 
@@ -273,7 +278,7 @@ class ModelManager:
         self._lock = threading.Lock()
 
     def _build_model_cache(self):
-        for cache_type in (S3ModelCache, AzureModelCache):
+        for cache_type in (HFBucketModelCache, S3ModelCache, AzureModelCache):
             if cache_type is None:
                 continue
             try:

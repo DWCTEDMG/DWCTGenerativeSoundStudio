@@ -2703,7 +2703,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                     <b>Smart video:</b>{" "}
                     {videoRoute.route === "local_gpu"
                       ? `🖥 Local GPU — ${videoRoute.local_detail?.device || "GPU"} (${videoRoute.local_detail?.vram_gb || 0} GB)`
-                      : `☁ NVIDIA Cosmos Cloud — ${videoRoute.cosmos_detail?.model || "text2world"}`}
+                      : `☁ NVIDIA Cosmos Cloud — ${videoRoute.cosmos_detail?.model || "cosmos3"}`}
                     {" "}
                     <span style={{ opacity: 0.7 }}>({videoRoute.reason})</span>
                   </div>

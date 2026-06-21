@@ -235,6 +235,19 @@ function normalizeTranscriptionSettings(payload?: Partial<TranscriptionSettings>
   };
 }
 
+function cosmosNimLaunchCommand(size: string): string {
+  const modelSize = size === "super" ? "super" : "nano";
+  return [
+    "docker run -it --rm \\",
+    "  --runtime=nvidia --gpus all \\",
+    "  --shm-size=32GB --ulimit nofile=65536:65536 \\",
+    "  -e NGC_API_KEY=$NGC_API_KEY \\",
+    `  -e NIM_MODEL_SIZE=${modelSize} \\`,
+    "  -p 8000:8000 \\",
+    "  nvcr.io/nim/nvidia/cosmos3-generator:1.0.0",
+  ].join("\n");
+}
+
 export default function Settings(props: PageProps) {
   const { mode, setMode } = useUiMode();
   const { theme, setTheme } = useStudioAppearance();
@@ -261,6 +274,7 @@ export default function Settings(props: PageProps) {
   const [openaiCompatApiKey, setOpenaiCompatApiKey] = useState<string>("");
   const [stabilityApiKey, setStabilityApiKey] = useState<string>("");
   const [nvidiaApiKey, setNvidiaApiKey] = useState<string>("");
+  const [cosmosCmdCopied, setCosmosCmdCopied] = useState<boolean>(false);
   const [adobeClientId, setAdobeClientId] = useState<string>("");
   const [adobeClientSecret, setAdobeClientSecret] = useState<string>("");
   const [saving, setSaving] = useState<boolean>(false);
@@ -1624,7 +1638,10 @@ export default function Settings(props: PageProps) {
               <div style={{ fontWeight: 800 }}>NVIDIA Cosmos Video Generation</div>
               <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
                 Status: <b>{renderProviders?.cosmos?.configured ? "ready" : "API key not set"}</b>
-                {" "}• model: <b>{renderProviderDraft?.cosmos?.model || "text2world"}</b>
+                {" "}• model: <b>{renderProviderDraft?.cosmos?.model || "cosmos3"}</b>
+                {(renderProviderDraft?.cosmos?.model || "cosmos3") === "cosmos3" && (
+                  <> {" "}• size: <b>{renderProviderDraft?.cosmos?.model_size || "nano"}</b></>
+                )}
               </div>
               <div className="small" style={{ marginTop: 4, opacity: 0.8 }}>{renderProviders?.cosmos?.note}</div>
               <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
@@ -1642,14 +1659,28 @@ export default function Settings(props: PageProps) {
                   <div>
                     <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Model</div>
                     <select
-                      value={renderProviderDraft?.cosmos?.model || "text2world"}
+                      value={renderProviderDraft?.cosmos?.model || "cosmos3"}
                       onChange={(e) => setRenderProviderDraft((c: any) => ({
                         ...(c || {}), cosmos: { ...(c?.cosmos || {}), model: e.target.value },
                       }))}
                     >
-                      <option value="text2world">Text→Video (Predict1 7B)</option>
-                      <option value="video2world">Image→Video (Predict1 7B)</option>
-                      <option value="cosmos3">Cosmos 3 Generator (latest)</option>
+                      <option value="cosmos3">Cosmos 3 Generator — text→video (recommended)</option>
+                      <option value="text2world">Cosmos-Predict1 7B — text→video (legacy)</option>
+                      <option value="video2world">Cosmos-Predict1 7B — image→video</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Model size</div>
+                    <select
+                      title="Cosmos 3 Generator size"
+                      value={renderProviderDraft?.cosmos?.model_size || "nano"}
+                      disabled={(renderProviderDraft?.cosmos?.model || "cosmos3") !== "cosmos3"}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), cosmos: { ...(c?.cosmos || {}), model_size: e.target.value },
+                      }))}
+                    >
+                      <option value="nano">Nano — 8B (fast, default)</option>
+                      <option value="super">Super — 32B (highest quality)</option>
                     </select>
                   </div>
                   <div>
@@ -1708,7 +1739,47 @@ export default function Settings(props: PageProps) {
                     }))}
                     placeholder="http://127.0.0.1:8000 (leave blank to use NVIDIA cloud)"
                   />
+                  <div className="small" style={{ marginTop: 4, opacity: 0.75 }}>
+                    Model size applies to the Cosmos 3 Generator. On the NVIDIA cloud the served size is fixed;
+                    for a self-hosted NIM it must match your container's <code>NIM_MODEL_SIZE</code>
+                    {" "}(e.g. <code>-e NIM_MODEL_SIZE=super</code>).
+                  </div>
                 </div>
+                {(renderProviderDraft?.cosmos?.model || "cosmos3") === "cosmos3" && (
+                  <div style={{ marginTop: 4 }}>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>
+                      Self-hosted NIM launch command
+                    </div>
+                    <pre style={{
+                      margin: 0, padding: "8px 10px", borderRadius: 8, overflowX: "auto",
+                      background: "var(--code-bg,#0f172a)", color: "var(--code-fg,#e2e8f0)",
+                      fontSize: 12, lineHeight: 1.5, whiteSpace: "pre",
+                    }}>{cosmosNimLaunchCommand(renderProviderDraft?.cosmos?.model_size || "nano")}</pre>
+                    <div className="row" style={{ gap: 8, marginTop: 6, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={async () => {
+                          const cmd = cosmosNimLaunchCommand(renderProviderDraft?.cosmos?.model_size || "nano");
+                          try {
+                            await navigator.clipboard.writeText(cmd);
+                            setCosmosCmdCopied(true);
+                            setTimeout(() => setCosmosCmdCopied(false), 2000);
+                          } catch {
+                            setCosmosCmdCopied(false);
+                          }
+                        }}
+                      >
+                        Copy launch command
+                      </button>
+                      {cosmosCmdCopied && <span className="small" style={{ color: "var(--success-text,#16a34a)" }}>Copied!</span>}
+                    </div>
+                    <div className="small" style={{ marginTop: 4, opacity: 0.7 }}>
+                      Requires Docker, an NVIDIA GPU (Hopper/Blackwell), and <code>NGC_API_KEY</code> set in your shell.
+                      After it reports ready, set the base URL above to <code>http://127.0.0.1:8000</code>.
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

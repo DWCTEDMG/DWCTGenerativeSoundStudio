@@ -45,7 +45,8 @@ DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
     },
     "cosmos": {
         "enabled": True,
-        "model": "text2world",
+        "model": "cosmos3",
+        "model_size": "nano",
         "steps": 50,
         "guidance_scale": 7.5,
         "num_frames": 121,
@@ -185,9 +186,13 @@ class RenderSettingsStore:
         cosmos_model = str(cosmos.get("model") or out["cosmos"]["model"]).strip().lower()
         if cosmos_model not in {"text2world", "video2world", "cosmos3"}:
             cosmos_model = out["cosmos"]["model"]
+        cosmos_model_size = str(cosmos.get("model_size") or out["cosmos"]["model_size"]).strip().lower()
+        if cosmos_model_size not in {"nano", "super"}:
+            cosmos_model_size = out["cosmos"]["model_size"]
         out["cosmos"] = {
             "enabled": bool(cosmos.get("enabled", out["cosmos"]["enabled"])),
             "model": cosmos_model,
+            "model_size": cosmos_model_size,
             "steps": max(10, min(100, int(cosmos.get("steps", out["cosmos"]["steps"])))),
             "guidance_scale": max(1.0, min(20.0, float(cosmos.get("guidance_scale", out["cosmos"]["guidance_scale"])))),
             "num_frames": max(25, min(480, int(cosmos.get("num_frames", out["cosmos"]["num_frames"])))),

@@ -79,6 +79,7 @@ studio/edmg-studio/.cache/
 studio/edmg-studio/tmp/
 studio/edmg-studio/data/
 studio/edmg-studio/models/
+studio/edmg-studio/python_backend/models/
 studio/edmg-studio/cache/
 studio/edmg-studio/logs/
 studio/edmg-studio/output/

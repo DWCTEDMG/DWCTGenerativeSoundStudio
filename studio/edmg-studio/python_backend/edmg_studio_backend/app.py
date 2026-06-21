@@ -1969,6 +1969,7 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
         secrets.get("nvidia_api_key") or os.getenv("EDMG_AI_NVIDIA_API_KEY") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
     )
     cosmos_enabled = bool(cosmos_cfg.get("enabled", True))
+    cosmos_base_url_set = bool(str(cosmos_cfg.get("base_url") or "").strip())
     has_stability_key = bool(secrets.get("stability_api_key"))
     has_adobe_client_id = bool(secrets.get("adobe_client_id") or os.getenv("ADOBE_CLIENT_ID"))
     has_adobe_client_secret = bool(secrets.get("adobe_client_secret") or os.getenv("ADOBE_CLIENT_SECRET"))
@@ -2042,10 +2043,15 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
         },
         "cosmos": {
             "provider": "nvidia-cosmos",
-            "configured": has_nvidia_key,
+            # Cosmos video generation runs on a self-hosted NIM — it is only usable once a NIM
+            # Base URL is set. (There is no hosted Cosmos video route on the NVIDIA API Catalog.)
+            "configured": cosmos_base_url_set,
             "enabled": cosmos_enabled,
-            "active": bool(has_nvidia_key and cosmos_enabled),
-            "model": str(cosmos_cfg.get("model") or "text2world"),
+            "active": bool(cosmos_base_url_set and cosmos_enabled),
+            "requires_nim": True,
+            "has_nvidia_key": has_nvidia_key,
+            "model": str(cosmos_cfg.get("model") or "cosmos3"),
+            "model_size": str(cosmos_cfg.get("model_size") or "nano"),
             "models": list(COSMOS_MODELS.keys()),
             "steps": int(cosmos_cfg.get("steps") or 50),
             "guidance_scale": float(cosmos_cfg.get("guidance_scale") or 7.5),
@@ -2055,9 +2061,13 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
             "base_url": str(cosmos_cfg.get("base_url") or ""),
             "timeout_s": int(cosmos_cfg.get("timeout_s") or 600),
             "note": (
-                "No NVIDIA API key — save it in Settings → AI Provider → NVIDIA API key."
-                if not has_nvidia_key else
-                "Cosmos is ready. Your existing NVIDIA API key (same as Nemotron) is used."
+                "Cosmos video runs on a self-hosted NVIDIA NIM. Start a Cosmos NIM (e.g. "
+                "cosmos3-generator) on a CUDA GPU and set its URL in Settings → GPU / Render "
+                "Runtime → Cosmos (Base URL), e.g. http://127.0.0.1:8000."
+                if not cosmos_base_url_set else
+                "Cosmos NIM configured. The Studio sends requests to {base}/v1/infer.".format(
+                    base=str(cosmos_cfg.get("base_url") or "").rstrip("/")
+                )
             ),
         },
         "firefly_styles": list(FIREFLY_STYLES),
@@ -7072,8 +7082,12 @@ def render_cosmos_scene(project_id: str, payload: dict[str, Any]):
     cosmos_status = provider_status.get("cosmos") or {}
     if not cosmos_status.get("configured"):
         raise UserFacingError(
-            "NVIDIA API key not configured for Cosmos.",
-            hint="Your existing NVIDIA key (same as Nemotron) works. Verify it's saved in Settings → AI Provider.",
+            "Cosmos NIM is not configured.",
+            hint=(
+                "Cosmos video generation runs on a self-hosted NVIDIA NIM (there is no hosted Cosmos "
+                "video endpoint). Start a Cosmos NIM on a CUDA GPU and set its URL in "
+                "Settings → GPU / Render Runtime → Cosmos (Base URL), e.g. http://127.0.0.1:8000."
+            ),
             code="COSMOS_NOT_CONFIGURED",
             status_code=400,
         )
@@ -7099,7 +7113,7 @@ def render_cosmos_scene(project_id: str, payload: dict[str, Any]):
 
     prompt = str(scene.get("prompt") or "cinematic music video").strip()
     negative = str(scene.get("negative_prompt") or "blurry, low quality, text, watermark, logo").strip()
-    model = str((payload or {}).get("model") or cosmos_cfg.get("model") or "text2world")
+    model = str((payload or {}).get("model") or cosmos_cfg.get("model") or "cosmos3")
     steps = int((payload or {}).get("steps") or cosmos_cfg.get("steps") or 50)
     guidance_scale = float((payload or {}).get("guidance_scale") or cosmos_cfg.get("guidance_scale") or 7.5)
     num_frames = int((payload or {}).get("num_frames") or cosmos_cfg.get("num_frames") or 121)
