@@ -48,17 +48,15 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
  browser-dev-only quirk, not a setup problem.
 
 ### Tests (known results on Linux)
-- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 100 pass.
-- Frontend: `pnpm run test:ui` → 46 pass (22 files). The Windows-only
+- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 105 pass.
+- Frontend: `pnpm run test:ui` → 48 pass (23 files). The Windows-only
  `src/test/directorRuntime.test.ts` logs a hardcoded `C:\...` ENOENT error to stderr but still
  passes; the runner exits 0. This stderr noise is a pre-existing platform quirk, not a failure.
 - `pnpm run lint` has **3 pre-existing errors** (unused vars in `src/pages/Render.tsx` and
  `src/pages/Settings.tsx`); `pnpm run typecheck` passes clean. The lint errors are code issues,
  not environment problems.
-- Repo-level: `python3 -m pytest` from the repo root has **7 pre-existing failures**
-  (`test_azure_model_cache`, `test_studio_render_tiers`, `test_studio_sd_feature_slice`) caused by
-  test/code mismatches (e.g. expected log text and model-selection logic), unrelated to environment
-  setup; the other 55 pass / 5 skip.
+- Repo-level: `python3 -m pytest` from the repo root → 63 pass / 5 skip (the 5 skips need
+  `tkinter` or opt-in live-smoke env vars). Run both scopes with `python3 scripts/run_pytest_scopes.py`.
 
 ### Storage
 - Backend project data is written to `studio/edmg-studio/python_backend/data/` (gitignored) when

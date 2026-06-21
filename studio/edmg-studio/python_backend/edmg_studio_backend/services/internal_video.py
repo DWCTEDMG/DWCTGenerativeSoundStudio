@@ -65,6 +65,11 @@ class InternalVideoSettings:
     source_asset: str | None = None
     source_strength: float = 0.55
 
+    # Proxy renderer (CPU, no diffusion) visual expansion. These only affect the
+    # local draft/proxy path and keep it fully GPU-free.
+    proxy_motion: bool = True   # Ken-Burns zoom/pan from camera keyframes + scene energy
+    proxy_finish: bool = True   # vignette + film-grain finishing pass
+
 
 class _PipelineCache:
     _cache: dict[tuple[str, str, str], Any] = {}
@@ -150,6 +155,8 @@ def _build_proxy_work_tag(
         "interpolation_engine": str(settings.interpolation_engine),
         "render_tier": str(settings.render_tier),
         "device_preference": str(settings.device_preference),
+        "proxy_motion": bool(settings.proxy_motion),
+        "proxy_finish": bool(settings.proxy_finish),
         "scene_digest": _json_digest(scenes or []),
         "timeline_digest": _json_digest(_timeline_render_fingerprint(timeline)),
         "mode": "proxy",
@@ -2767,6 +2774,118 @@ def _wrap_text(text: str, width: int = 28) -> list[str]:
     return lines[:4]
 
 
+def _proxy_camera_at_time(timeline: dict[str, Any] | None, t: float) -> dict[str, float]:
+    """Linear-interpolate camera zoom/pan from timeline camera keyframes (proxy path)."""
+    default = {"zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0}
+    cam = (timeline or {}).get("camera") if isinstance(timeline, dict) else None
+    kfs = cam.get("keyframes") if isinstance(cam, dict) else None
+    if not isinstance(kfs, list) or not kfs:
+        return default
+    pts: list[tuple[float, dict[str, Any]]] = []
+    for k in kfs:
+        if not isinstance(k, dict):
+            continue
+        try:
+            pts.append((float(k.get("t", 0.0) or 0.0), k))
+        except Exception:
+            continue
+    if not pts:
+        return default
+    pts.sort(key=lambda item: item[0])
+
+    def _pick(k: dict[str, Any]) -> dict[str, float]:
+        return {
+            "zoom": float(k.get("zoom", 1.0) or 1.0),
+            "pan_x": float(k.get("pan_x", 0.0) or 0.0),
+            "pan_y": float(k.get("pan_y", 0.0) or 0.0),
+        }
+
+    if t <= pts[0][0]:
+        return _pick(pts[0][1])
+    if t >= pts[-1][0]:
+        return _pick(pts[-1][1])
+    for i in range(len(pts) - 1):
+        ta, ka = pts[i]
+        tb, kb = pts[i + 1]
+        if ta <= t <= tb:
+            w = (t - ta) / max(1e-6, tb - ta)
+
+            def _lerp(key: str, dflt: float) -> float:
+                return float(ka.get(key, dflt) or dflt) * (1.0 - w) + float(kb.get(key, dflt) or dflt) * w
+
+            return {"zoom": _lerp("zoom", 1.0), "pan_x": _lerp("pan_x", 0.0), "pan_y": _lerp("pan_y", 0.0)}
+    return default
+
+
+def _proxy_energy_at_time(scene: dict[str, Any] | None, t: float, duration_s: float) -> float:
+    """Best-effort 0..1 energy for a scene so proxies pulse with the track."""
+    scene = scene or {}
+    for key in ("energy", "avg_energy", "peak_energy"):
+        val = scene.get(key) if isinstance(scene, dict) else None
+        if val is None:
+            continue
+        try:
+            return max(0.0, min(1.0, float(val)))
+        except Exception:
+            continue
+    if duration_s <= 0:
+        return 0.5
+    # Gentle breathing curve so the draft is never perfectly static.
+    return max(0.0, min(1.0, 0.5 + 0.18 * math.sin((t / max(1e-6, duration_s)) * 2.0 * math.pi)))
+
+
+def _proxy_resample():
+    return getattr(getattr(Image, "Resampling", Image), "BILINEAR", 2)
+
+
+def _apply_proxy_motion(img: Image.Image, camera: dict[str, float], energy: float) -> Image.Image:
+    """Apply a Ken-Burns style zoom/pan crop driven by camera keyframes + energy."""
+    w, h = img.size
+    if w < 4 or h < 4:
+        return img
+    zoom = max(1.0, min(2.2, float(camera.get("zoom", 1.0) or 1.0) + 0.06 * float(energy)))
+    if zoom <= 1.0001:
+        return img
+    cw = w / zoom
+    ch = h / zoom
+    max_off_x = (w - cw) / 2.0
+    max_off_y = (h - ch) / 2.0
+    pan_x = float(camera.get("pan_x", 0.0) or 0.0)
+    pan_y = float(camera.get("pan_y", 0.0) or 0.0)
+    cx = w / 2.0 + max(-max_off_x, min(max_off_x, pan_x * w * 0.1))
+    cy = h / 2.0 + max(-max_off_y, min(max_off_y, pan_y * h * 0.1))
+    left = max(0.0, min(w - cw, cx - cw / 2.0))
+    top = max(0.0, min(h - ch, cy - ch / 2.0))
+    box = (int(left), int(top), int(left + cw), int(top + ch))
+    return img.crop(box).resize((w, h), _proxy_resample())
+
+
+def _apply_proxy_finish(img: Image.Image, energy: float) -> Image.Image:
+    """Vignette + subtle film grain so the local proxy reads as a finished draft."""
+    w, h = img.size
+    if w < 4 or h < 4:
+        return img
+    out = img.convert("RGB")
+    # Vignette: darken edges using a radial mask (C-level, fast).
+    try:
+        mask = Image.radial_gradient("L").resize((w, h), _proxy_resample())
+        strength = 0.55
+        edge = mask.point(lambda v: int(v * strength))
+        black = Image.new("RGB", (w, h), (0, 0, 0))
+        out = Image.composite(black, out, edge)
+    except Exception:
+        pass
+    # Film grain: blend low-alpha noise, slightly stronger on high-energy beats.
+    try:
+        sigma = 14.0 + 26.0 * max(0.0, min(1.0, float(energy)))
+        noise = Image.effect_noise((w, h), sigma).convert("RGB")
+        alpha = 0.05 + 0.05 * max(0.0, min(1.0, float(energy)))
+        out = Image.blend(out, noise, alpha)
+    except Exception:
+        pass
+    return out
+
+
 def _build_proxy_base_frame(
     *,
     width: int,
@@ -2905,6 +3024,15 @@ def render_internal_proxy_video_variant(
             img = apply_timeline_layers(img, project_dir=project_dir, timeline=(timeline or {}), t=float(t))
         except Exception:
             pass
+        if settings.proxy_motion or settings.proxy_finish:
+            try:
+                energy = _proxy_energy_at_time(scene, t, duration_s)
+                if settings.proxy_motion:
+                    img = _apply_proxy_motion(img, _proxy_camera_at_time(timeline, t), energy)
+                if settings.proxy_finish:
+                    img = _apply_proxy_finish(img, energy)
+            except Exception:
+                pass
         img.save(existing)
         if progress_fn:
             progress_fn("frames", fi + 1, total_units, f"Rendered proxy frame {fi+1}/{total_frames}")

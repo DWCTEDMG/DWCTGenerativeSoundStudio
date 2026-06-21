@@ -229,7 +229,7 @@ function fmtLabel(trackType: string, clip: Clip): string {
   return String(clip?.id || "clip");
 }
 
-export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
+export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: PageProps) {
   const {
     projectId: sessionProjectId,
     setProjectId,
@@ -407,6 +407,11 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
   // scrub preview frame
   useEffect(() => {
     if (!projectId) return;
+    // During playback the playhead updates several times per second; refreshing
+    // the cached program-monitor frame on every tick floods the backend and
+    // causes jank. The monitor is most useful while paused/scrubbing, so skip
+    // refreshes while audio is playing and update once playback stops.
+    if (isPlaying) return;
     if (previewTimer.current) clearTimeout(previewTimer.current);
     previewTimer.current = setTimeout(() => {
       setPreviewUrl(
@@ -416,7 +421,7 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
     return () => {
       if (previewTimer.current) clearTimeout(previewTimer.current);
     };
-  }, [projectId, playheadS]);
+  }, [projectId, playheadS, isPlaying]);
 
   const tracks: Track[] = Array.isArray(timeline?.tracks) ? timeline.tracks : [];
   const layers: AnyDict[] = Array.isArray(timeline?.layers) ? timeline.layers : [];
@@ -647,6 +652,92 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
       // invalidate proxy preview on save
       setProxyUrl("");
       setProxyBusy(false);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const deleteSelection = () => {
+    if (!selected) return;
+    if (selected.kind === "track") {
+      const tr = tracks[selected.trackIdx];
+      if (!tr) return;
+      const nextTracks = tracks.map((t, i) =>
+        i === selected.trackIdx
+          ? { ...t, clips: (t.clips || []).filter((_, j) => j !== selected.clipIdx) }
+          : t,
+      );
+      setTimeline({ ...timeline, tracks: nextTracks });
+      setTimelineDirty(true);
+      setSelected(null);
+      return;
+    }
+    if (selected.kind === "overlay") {
+      const nextLayers = layers.filter((_, i) => i !== selected.layerIdx);
+      setTimeline({ ...timeline, layers: nextLayers });
+      setTimelineDirty(true);
+      setSelected(null);
+      return;
+    }
+    if (selected.kind === "camera") {
+      const next = camKeyframes.filter((_, i) => i !== selected.kfIdx);
+      setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
+      setTimelineDirty(true);
+      setSelected(null);
+    }
+  };
+
+  const nudgeSelectionToPlayhead = () => {
+    if (!selected) return;
+    const target = clamp(playheadS, 0, durationS);
+    if (selected.kind === "track") {
+      const picked = selectedTrackClip(selected);
+      if (!picked) return;
+      const dur = Math.max(_minLen, Number(picked.cl.end_s) - Number(picked.cl.start_s));
+      const s = clamp(target, 0, Math.max(0, durationS - dur));
+      const e = clamp(s + dur, s + _minLen, durationS);
+      const nextTracks = tracks.map((t, i) => {
+        if (i !== selected.trackIdx) return t;
+        const nextClips = (t.clips || []).map((c, j) =>
+          j === selected.clipIdx ? { ...c, start_s: s, end_s: e } : c,
+        );
+        return { ...t, clips: nextClips };
+      });
+      setTimeline({ ...timeline, tracks: nextTracks });
+      setTimelineDirty(true);
+      return;
+    }
+    if (selected.kind === "overlay") {
+      const l = layers[selected.layerIdx];
+      if (!l) return;
+      const dur = Math.max(_minLen, Number(l.end_s ?? durationS) - Number(l.start_s ?? 0));
+      const s = clamp(target, 0, Math.max(0, durationS - dur));
+      const e = clamp(s + dur, s + _minLen, durationS);
+      updateSelectedOverlayTimes(s, e);
+      return;
+    }
+    if (selected.kind === "camera") {
+      updateSelectedCamera({ t: target });
+    }
+  };
+
+  const syncToRenderer = async () => {
+    if (!projectId) return;
+    setErr(null);
+    try {
+      const saved = await runOperation(
+        {
+          label: "Syncing timeline to renderer",
+          detail: "Saving arrangement edits and opening the internal renderer.",
+          successDetail: "Timeline saved and sent to the internal renderer.",
+        },
+        () => apiPost(`/v1/projects/${projectId}/timeline`, { timeline }),
+      );
+      setTimeline(saved?.timeline || timeline);
+      setTimelineDirty(false);
+      setProxyUrl("");
+      setProxyBusy(false);
+      onNavigate?.("render");
     } catch (e: any) {
       setErr(String(e));
     }
@@ -957,6 +1048,11 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
         quantizeSelection();
         return;
       }
+      if (k === "Delete" || k === "Backspace") {
+        e.preventDefault();
+        deleteSelection();
+        return;
+      }
     };
 
     window.addEventListener("keydown", handler);
@@ -971,6 +1067,7 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
     splitSelection,
     duplicateSelection,
     quantizeSelection,
+    deleteSelection,
   ]);
 
   const setDiffRangeFromSelection = () => {
@@ -1258,6 +1355,14 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
               <button className="primary" onClick={playPause}>
                 {isPlaying ? "Pause" : "Play"}
               </button>
+              <button
+                className="primary"
+                onClick={() => void syncToRenderer()}
+                disabled={!projectId}
+                title="Save the timeline and open it in the internal renderer"
+              >
+                Sync to renderer
+              </button>
               <button className="secondary" onClick={() => setSelected(null)}>
                 Clear selection
               </button>
@@ -1306,6 +1411,12 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
               <button className="secondary" disabled={!selected} onClick={duplicateSelection}>
                 Duplicate
               </button>
+              <button className="secondary" disabled={!selected} onClick={nudgeSelectionToPlayhead}>
+                Nudge to playhead
+              </button>
+              <button className="secondary" disabled={!selected} onClick={deleteSelection}>
+                Delete
+              </button>
               <button className={timelineDirty ? "primary" : "secondary"} onClick={saveTimeline}>
                 {timelineDirty ? "Save timeline *" : "Save timeline"}
               </button>
@@ -1316,7 +1427,7 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
 
       <div className="timeline-toolbarFooter">
         <div className="small">
-          Keyboard: `Space` play/pause, `S` split, `D` duplicate, `Q` quantize.
+          Keyboard: `Space` play/pause, `S` split, `D` duplicate, `Q` quantize, `Delete` remove selection.
         </div>
         <div className="small">Grid source: {quantizeStatus}</div>
       </div>
@@ -1406,6 +1517,13 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
                 >
                   Quant
                 </button>
+                <button
+                  className="secondary"
+                  disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)}
+                  onClick={deleteSelection}
+                >
+                  Del
+                </button>
               </div>
             </div>
           ))}
@@ -1436,6 +1554,13 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
               >
                 Quant
               </button>
+              <button
+                className="secondary"
+                disabled={selected?.kind !== "overlay"}
+                onClick={deleteSelection}
+              >
+                Del
+              </button>
             </div>
           </div>
 
@@ -1459,6 +1584,13 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
                 onClick={quantizeSelection}
               >
                 Quant
+              </button>
+              <button
+                className="secondary"
+                disabled={selected?.kind !== "camera"}
+                onClick={deleteSelection}
+              >
+                Del
               </button>
             </div>
           </div>
@@ -1592,6 +1724,15 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
           </div>
         </div>
         <span className="badge">{selected ? selected.kind : "none"}</span>
+      </div>
+
+      <div className="timeline-inlineActions">
+        <button className="secondary" disabled={!selected} onClick={nudgeSelectionToPlayhead}>
+          Nudge to playhead
+        </button>
+        <button className="secondary" disabled={!selected} onClick={deleteSelection}>
+          Delete selection
+        </button>
       </div>
 
       {selected?.kind === "track" ? (
@@ -1822,6 +1963,9 @@ export default function Timeline({ backendUrl: backendUrlProp }: PageProps) {
         </div>
       </div>
       <div className="timeline-inlineActions">
+        <button className="primary" onClick={() => void syncToRenderer()} disabled={!projectId}>
+          Sync to renderer
+        </button>
         <button className="secondary" onClick={() => setDockSection("inspector")}>
           Open inspector
         </button>
