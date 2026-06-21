@@ -49,7 +49,7 @@ from .schemas import (
     ImportUnrealBridgeReturnRequest,
     BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
-    CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudLightningBundleRequest,
+    CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
@@ -84,6 +84,7 @@ from .services.internal_video import (
 from .services.compositor import apply_timeline_layers
 from .integrations import aws as aws_integration
 from .integrations import azure as azure_integration
+from .integrations import hf_bucket as hf_bucket_integration
 from .integrations import lightning as lightning_integration
 from .utils.path import safe_join
 from .errors import UserFacingError, hint_from_exception
@@ -10118,6 +10119,30 @@ def cloud_aws_bundle(req: CloudAwsBundleRequest):
 def cloud_azure_test(req: CloudAzureTestRequest):
     try:
         return azure_integration.test_credentials(container=req.container, prefix=req.prefix)
+    except Exception as e:
+        raise HTTPException(status_code=501, detail=str(e))
+
+
+@app.get("/v1/cloud/hf/status")
+def cloud_hf_status():
+    try:
+        return hf_bucket_integration.describe_status(
+            models_dir=settings.models_dir,
+            secrets_store=secrets,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=501, detail=str(e))
+
+
+@app.post("/v1/cloud/hf/test")
+def cloud_hf_test(req: CloudHfBucketTestRequest):
+    try:
+        return hf_bucket_integration.test_credentials(
+            bucket=req.bucket,
+            prefix=req.prefix,
+            models_dir=settings.models_dir,
+            secrets_store=secrets,
+        )
     except Exception as e:
         raise HTTPException(status_code=501, detail=str(e))
 

@@ -8,6 +8,7 @@ describe("Cloud page", () => {
   it("keeps AWS test actions working while exposing layout profiles", async () => {
     installEdmgBridge();
     const fetchMock = installFetchMock({
+      "GET /v1/cloud/hf/status": { ok: true, provider: "huggingface_bucket", enabled: false },
       "POST /v1/cloud/aws/test": { ok: true, provider: "aws", bucket: "demo-bucket" },
     });
 
@@ -33,6 +34,7 @@ describe("Cloud page", () => {
   it("posts Azure model cache credential tests with the selected container", async () => {
     installEdmgBridge();
     const fetchMock = installFetchMock({
+      "GET /v1/cloud/hf/status": { ok: true, provider: "huggingface_bucket", enabled: false },
       "POST /v1/cloud/azure/test": { ok: true, provider: "azure", container: "edmg-model-cache" },
     });
 
@@ -53,6 +55,52 @@ describe("Cloud page", () => {
     });
   });
 
+  it("loads HF bucket status and posts credential tests with the selected bucket", async () => {
+    installEdmgBridge();
+    const fetchMock = installFetchMock({
+      "GET /v1/cloud/hf/status": {
+        ok: true,
+        provider: "huggingface_bucket",
+        enabled: true,
+        active: false,
+        bucket: "team/edmg-models",
+        prefix: "weights",
+        has_token: true,
+        token_source: "settings",
+      },
+      "POST /v1/cloud/hf/test": {
+        ok: true,
+        provider: "huggingface_bucket",
+        bucket: "team/custom-bucket",
+        sample_paths: ["checkpoints/demo.safetensors"],
+      },
+    });
+
+    renderWithStudio(<Cloud backendUrl="http://127.0.0.1:7863" config={null} />);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) =>
+          String(url).includes("/v1/cloud/hf/status")
+          && String(init?.method || "GET").toUpperCase() === "GET"),
+      ).toBe(true);
+    });
+
+    fireEvent.change(await screen.findByPlaceholderText("namespace/bucket-name"), {
+      target: { value: "team/custom-bucket" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Test HF bucket" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) =>
+          String(url).includes("/v1/cloud/hf/test")
+          && String(init?.method || "GET").toUpperCase() === "POST"
+          && String(init?.body || "").includes("team/custom-bucket")),
+      ).toBe(true);
+    });
+  });
+
   it("persists a Lightning backend target from the Cloud page", async () => {
     const setBackendSettings = vi.fn(async (settings: { mode: string; host: string; port: string; url?: string }) => ({
       ok: true,
@@ -61,6 +109,9 @@ describe("Cloud page", () => {
       currentBackendUrl: String(settings.url || ""),
     }));
     installEdmgBridge({ setBackendSettings });
+    installFetchMock({
+      "GET /v1/cloud/hf/status": { ok: true, provider: "huggingface_bucket", enabled: false },
+    });
 
     renderWithStudio(<Cloud backendUrl="http://127.0.0.1:7863" config={null} />);
 
@@ -83,6 +134,7 @@ describe("Cloud page", () => {
   it("generates Lightning bundles under the organized Studio data cloud path by default", async () => {
     installEdmgBridge();
     const fetchMock = installFetchMock({
+      "GET /v1/cloud/hf/status": { ok: true, provider: "huggingface_bucket", enabled: false },
       "POST /v1/cloud/lightning/bundle": { ok: true, output_dir: "data/cloud/lightning/lightning_bundle" },
     });
 

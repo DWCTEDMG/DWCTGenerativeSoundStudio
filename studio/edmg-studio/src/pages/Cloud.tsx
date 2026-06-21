@@ -1,17 +1,21 @@
-import React, { useMemo, useState } from "react";
-import { apiPost, getBackendUrl, normalizeBackendUrl, setBrowserBackendUrl } from "../components/api";
+import React, { useEffect, useMemo, useState } from "react";
+import { apiGet, apiPost, getBackendUrl, normalizeBackendUrl, setBrowserBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
 
-type CloudPanelId = "aws" | "azure" | "lightning" | "result";
+type CloudPanelId = "aws" | "azure" | "hf" | "lightning" | "result";
 
 export default function Cloud(props: PageProps) {
   const [bucket, setBucket] = useState("");
   const [bundleKey, setBundleKey] = useState("edmg_project_bundle.zip");
   const [azureContainer, setAzureContainer] = useState("edmg-model-cache");
   const [azurePrefix, setAzurePrefix] = useState("models");
+  const [hfBucket, setHfBucket] = useState("");
+  const [hfPrefix, setHfPrefix] = useState("");
+  const [hfStatus, setHfStatus] = useState<any>(null);
+  const [hfStatusLoading, setHfStatusLoading] = useState(false);
   const [lightningOut, setLightningOut] = useState("lightning/lightning_bundle");
   const [lightningBackendUrl, setLightningBackendUrl] = useState(
     () => normalizeBackendUrl(props.backendUrl || getBackendUrl()) || "",
@@ -37,6 +41,31 @@ export default function Cloud(props: PageProps) {
     try { setResult(await apiPost("/v1/cloud/azure/test", { container: azureContainer || null, prefix: azurePrefix || null })); }
     catch (e: any) { setErr(String(e)); }
   };
+
+  const loadHfStatus = async () => {
+    setHfStatusLoading(true);
+    try {
+      const status = await apiGet("/v1/cloud/hf/status");
+      setHfStatus(status);
+      if (!hfBucket && status?.bucket) setHfBucket(String(status.bucket));
+      if (!hfPrefix && status?.prefix) setHfPrefix(String(status.prefix));
+    } catch (e: any) {
+      setHfStatus({ ok: false, error: String(e) });
+    } finally {
+      setHfStatusLoading(false);
+    }
+  };
+
+  const hfTest = async () => {
+    setErr(null); setResult(null);
+    try {
+      setResult(await apiPost("/v1/cloud/hf/test", { bucket: hfBucket || null, prefix: hfPrefix || null }));
+    } catch (e: any) { setErr(String(e)); }
+  };
+
+  useEffect(() => {
+    void loadHfStatus();
+  }, []);
 
   const lightningBundle = async () => {
     setErr(null); setResult(null);
@@ -98,6 +127,11 @@ export default function Cloud(props: PageProps) {
         id: "azure" as const,
         label: "Azure model cache",
         description: "Blob Storage credential test for on-demand model weight caching.",
+      },
+      {
+        id: "hf" as const,
+        label: "Hugging Face bucket",
+        description: "Status and credential test for HF bucket-backed model cache.",
       },
       {
         id: "lightning" as const,
@@ -174,6 +208,52 @@ export default function Cloud(props: PageProps) {
         </div>
         <div className="row" style={{ marginTop: 10 }}>
           <button onClick={azureTest}>Test Azure</button>
+        </div>
+      </div>
+    ),
+    hf: (
+      <div className="card">
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Hugging Face bucket</div>
+        <div className="small">
+          Optional model cache backed by a Hugging Face bucket. Enable at runtime with{" "}
+          <code>EDMG_HF_BUCKET_MODEL_CACHE=1</code> and <code>EDMG_HF_BUCKET_ID=namespace/bucket-name</code>.
+        </div>
+        {hfStatusLoading ? (
+          <div className="small" style={{ marginTop: 10 }}>Loading backend status…</div>
+        ) : hfStatus ? (
+          <div className="small" style={{ marginTop: 10 }}>
+            {hfStatus.error ? (
+              <span style={{ color: "var(--danger)" }}>{hfStatus.error}</span>
+            ) : (
+              <>
+                Cache enabled: {hfStatus.enabled ? "yes" : "no"} · Active: {hfStatus.active ? "yes" : "no"}
+                {hfStatus.has_token ? ` · Token: ${hfStatus.token_source || "available"}` : " · Token: not found"}
+                {hfStatus.active_error ? ` · ${hfStatus.active_error}` : ""}
+              </>
+            )}
+          </div>
+        ) : null}
+        <div style={{ marginTop: 10 }}>
+          <div className="small">Bucket id (namespace/name)</div>
+          <input
+            value={hfBucket}
+            onChange={(e) => setHfBucket(e.target.value)}
+            placeholder="namespace/bucket-name"
+          />
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <div className="small">Optional prefix</div>
+          <input value={hfPrefix} onChange={(e) => setHfPrefix(e.target.value)} placeholder="models" />
+        </div>
+        <div className="small" style={{ marginTop: 10 }}>
+          Tests use env token (<code>HF_TOKEN</code> / <code>EDMG_HF_TOKEN</code>) first, then Settings → Tokens.
+          The runtime cache only reads env vars unless you export the saved token there.
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button onClick={hfTest}>Test HF bucket</button>
+          <button className="secondary" onClick={() => void loadHfStatus()} disabled={hfStatusLoading}>
+            Refresh status
+          </button>
         </div>
       </div>
     ),

@@ -66,8 +66,45 @@ class HFBucketCacheSettings:
     token: str = ""
 
 
+def _hf_bucket_enabled() -> bool:
+    return _truthy(os.getenv("EDMG_HF_BUCKET_MODEL_CACHE")) or _truthy(
+        os.getenv("EDMG_HF_MODEL_CACHE")
+    )
+
+
+def _configured_bucket_id(*, bucket: str | None = None) -> str:
+    resolved = (
+        str(bucket or "").strip()
+        or os.getenv("EDMG_HF_BUCKET_ID", "").strip()
+        or os.getenv("EDMG_HF_MODEL_BUCKET", "").strip()
+        or os.getenv("EDMG_HF_BUCKET", "").strip()
+    )
+    if "buckets/" in resolved:
+        resolved = resolved.split("buckets/", 1)[1]
+    return resolved.strip().strip("/")
+
+
+def resolve_hf_token(*, secrets_store: Any | None = None) -> tuple[str, str]:
+    env_token = (
+        os.getenv("EDMG_HF_TOKEN", "").strip()
+        or os.getenv("HF_TOKEN", "").strip()
+        or os.getenv("HUGGINGFACE_TOKEN", "").strip()
+    )
+    if env_token:
+        return env_token, "env"
+    if secrets_store is not None:
+        settings_token = str(secrets_store.get("hf_token") or "").strip()
+        if settings_token:
+            return settings_token, "settings"
+    return "", ""
+
+
 def settings_from_env(
-    *, bucket: str | None = None, prefix: str | None = None
+    *,
+    bucket: str | None = None,
+    prefix: str | None = None,
+    token: str | None = None,
+    models_dir: Path | None = None,
 ) -> HFBucketCacheSettings:
     resolved_bucket = (
         str(bucket or "").strip()
@@ -85,7 +122,8 @@ def settings_from_env(
     resolved_bucket = resolved_bucket.strip().strip("/")
 
     models_dir_raw = (
-        os.getenv("EDMG_STUDIO_MODELS_DIR", "").strip()
+        (str(models_dir).strip() if models_dir is not None else "")
+        or os.getenv("EDMG_STUDIO_MODELS_DIR", "").strip()
         or os.getenv("EDMG_HF_BUCKET_MODELS_DIR", "").strip()
     )
     if not models_dir_raw:
@@ -93,17 +131,20 @@ def settings_from_env(
             "Set EDMG_STUDIO_MODELS_DIR so the Hugging Face bucket cache can mirror the models directory."
         )
 
+    resolved_token = (
+        str(token or "").strip()
+        or os.getenv("EDMG_HF_TOKEN", "").strip()
+        or os.getenv("HF_TOKEN", "").strip()
+        or os.getenv("HUGGINGFACE_TOKEN", "").strip()
+    )
+
     return HFBucketCacheSettings(
         bucket=resolved_bucket,
         models_dir=Path(models_dir_raw).expanduser().resolve(),
         prefix=_normalize_remote(
             str(prefix or "").strip() or os.getenv("EDMG_HF_BUCKET_PREFIX", "").strip()
         ),
-        token=(
-            os.getenv("EDMG_HF_TOKEN", "").strip()
-            or os.getenv("HF_TOKEN", "").strip()
-            or os.getenv("HUGGINGFACE_TOKEN", "").strip()
-        ),
+        token=resolved_token,
     )
 
 
@@ -303,3 +344,93 @@ class HFBucketModelCache:
             token=self._token,
         )
         return remote_dir
+
+
+def describe_status(
+    *, models_dir: Path | None = None, secrets_store: Any | None = None
+) -> dict[str, Any]:
+    bucket = _configured_bucket_id()
+    prefix = _normalize_remote(os.getenv("EDMG_HF_BUCKET_PREFIX", "").strip())
+    token, token_source = resolve_hf_token(secrets_store=secrets_store)
+
+    resolved_models_dir = models_dir
+    if resolved_models_dir is None:
+        models_dir_raw = (
+            os.getenv("EDMG_STUDIO_MODELS_DIR", "").strip()
+            or os.getenv("EDMG_HF_BUCKET_MODELS_DIR", "").strip()
+        )
+        if models_dir_raw:
+            resolved_models_dir = Path(models_dir_raw).expanduser().resolve()
+
+    active = False
+    active_error: str | None = None
+    if _hf_bucket_enabled():
+        try:
+            active = HFBucketModelCache.from_env() is not None
+        except Exception as exc:
+            active_error = str(exc)
+
+    return {
+        "ok": True,
+        "provider": "huggingface_bucket",
+        "enabled": _hf_bucket_enabled(),
+        "active": active,
+        "active_error": active_error,
+        "bucket": bucket or None,
+        "prefix": prefix or None,
+        "models_dir": str(resolved_models_dir) if resolved_models_dir else None,
+        "has_token": bool(token),
+        "token_source": token_source or None,
+        "token_note": (
+            "Runtime model cache reads EDMG_HF_TOKEN/HF_TOKEN/HUGGINGFACE_TOKEN env vars. "
+            "Settings → Tokens HF token is used for Cloud tests when env vars are unset."
+        ),
+    }
+
+
+def test_credentials(
+    *,
+    bucket: str | None = None,
+    prefix: str | None = None,
+    models_dir: Path | None = None,
+    secrets_store: Any | None = None,
+) -> dict[str, Any]:
+    token, token_source = resolve_hf_token(secrets_store=secrets_store)
+    if not token:
+        raise RuntimeError(
+            "No Hugging Face token found. Set HF_TOKEN (or EDMG_HF_TOKEN) in the backend "
+            "environment or save a token in Settings → Tokens."
+        )
+
+    settings = settings_from_env(
+        bucket=bucket,
+        prefix=prefix,
+        token=token,
+        models_dir=models_dir,
+    )
+    cache = HFBucketModelCache(settings)
+    prefix_filter = settings.prefix or None
+    items = cache._api.list_bucket_tree(
+        settings.bucket,
+        prefix=prefix_filter,
+        recursive=False,
+        token=cache._token,
+    )
+    sample_paths: list[str] = []
+    for item in items:
+        rel = _normalize_remote(getattr(item, "path", ""))
+        if rel:
+            sample_paths.append(rel)
+        if len(sample_paths) >= 5:
+            break
+
+    return {
+        "ok": True,
+        "provider": "huggingface_bucket",
+        "bucket": settings.bucket,
+        "prefix": settings.prefix or None,
+        "models_dir": str(settings.models_dir),
+        "token_source": token_source,
+        "sample_paths": sample_paths,
+        "bucket_uri": cache._bucket_uri(""),
+    }
