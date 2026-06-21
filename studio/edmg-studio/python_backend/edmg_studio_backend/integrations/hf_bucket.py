@@ -84,6 +84,27 @@ def _configured_bucket_id(*, bucket: str | None = None) -> str:
     return resolved.strip().strip("/")
 
 
+def resolve_models_dir(*, models_dir: Path | None = None) -> Path:
+    """Resolve the Studio models directory (mirrors ``Settings.models_dir`` fallback)."""
+    if models_dir is not None:
+        return Path(models_dir).expanduser().resolve()
+
+    raw = (
+        os.getenv("EDMG_STUDIO_MODELS_DIR", "").strip()
+        or os.getenv("EDMG_HF_BUCKET_MODELS_DIR", "").strip()
+    )
+    if raw:
+        return Path(raw).expanduser().resolve()
+
+    data_dir = Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).expanduser().resolve()
+    studio_home_raw = os.getenv("EDMG_STUDIO_HOME", "").strip()
+    if studio_home_raw:
+        studio_home = Path(studio_home_raw).expanduser().resolve()
+    else:
+        studio_home = data_dir.parent.resolve()
+    return (studio_home / "models").resolve()
+
+
 def resolve_hf_token(*, secrets_store: Any | None = None) -> tuple[str, str]:
     env_token = (
         os.getenv("EDMG_HF_TOKEN", "").strip()
@@ -121,26 +142,15 @@ def settings_from_env(
         resolved_bucket = resolved_bucket.split("buckets/", 1)[1]
     resolved_bucket = resolved_bucket.strip().strip("/")
 
-    models_dir_raw = (
-        (str(models_dir).strip() if models_dir is not None else "")
-        or os.getenv("EDMG_STUDIO_MODELS_DIR", "").strip()
-        or os.getenv("EDMG_HF_BUCKET_MODELS_DIR", "").strip()
-    )
-    if not models_dir_raw:
-        raise RuntimeError(
-            "Set EDMG_STUDIO_MODELS_DIR so the Hugging Face bucket cache can mirror the models directory."
-        )
+    resolved_models_dir = resolve_models_dir(models_dir=models_dir)
 
-    resolved_token = (
-        str(token or "").strip()
-        or os.getenv("EDMG_HF_TOKEN", "").strip()
-        or os.getenv("HF_TOKEN", "").strip()
-        or os.getenv("HUGGINGFACE_TOKEN", "").strip()
-    )
+    resolved_token = str(token or "").strip()
+    if not resolved_token:
+        resolved_token, _ = resolve_hf_token()
 
     return HFBucketCacheSettings(
         bucket=resolved_bucket,
-        models_dir=Path(models_dir_raw).expanduser().resolve(),
+        models_dir=resolved_models_dir,
         prefix=_normalize_remote(
             str(prefix or "").strip() or os.getenv("EDMG_HF_BUCKET_PREFIX", "").strip()
         ),
@@ -161,12 +171,24 @@ class HFBucketModelCache:
 
     @classmethod
     def from_env(cls) -> "HFBucketModelCache | None":
-        if not (
-            _truthy(os.getenv("EDMG_HF_BUCKET_MODEL_CACHE"))
-            or _truthy(os.getenv("EDMG_HF_MODEL_CACHE"))
-        ):
+        return cls.from_runtime()
+
+    @classmethod
+    def from_runtime(
+        cls,
+        *,
+        models_dir: Path | None = None,
+        secrets_store: Any | None = None,
+    ) -> "HFBucketModelCache | None":
+        if not _hf_bucket_enabled():
             return None
-        return cls(settings_from_env())
+        token, _ = resolve_hf_token(secrets_store=secrets_store)
+        return cls(
+            settings_from_env(
+                models_dir=models_dir,
+                token=token or None,
+            )
+        )
 
     # ------------------------------------------------------------------
     # remote-path resolution (mirror of models_dir, with explicit overrides)
@@ -353,20 +375,16 @@ def describe_status(
     prefix = _normalize_remote(os.getenv("EDMG_HF_BUCKET_PREFIX", "").strip())
     token, token_source = resolve_hf_token(secrets_store=secrets_store)
 
-    resolved_models_dir = models_dir
-    if resolved_models_dir is None:
-        models_dir_raw = (
-            os.getenv("EDMG_STUDIO_MODELS_DIR", "").strip()
-            or os.getenv("EDMG_HF_BUCKET_MODELS_DIR", "").strip()
-        )
-        if models_dir_raw:
-            resolved_models_dir = Path(models_dir_raw).expanduser().resolve()
+    resolved_models_dir = resolve_models_dir(models_dir=models_dir)
 
     active = False
     active_error: str | None = None
     if _hf_bucket_enabled():
         try:
-            active = HFBucketModelCache.from_env() is not None
+            active = HFBucketModelCache.from_runtime(
+                models_dir=resolved_models_dir,
+                secrets_store=secrets_store,
+            ) is not None
         except Exception as exc:
             active_error = str(exc)
 
@@ -378,12 +396,12 @@ def describe_status(
         "active_error": active_error,
         "bucket": bucket or None,
         "prefix": prefix or None,
-        "models_dir": str(resolved_models_dir) if resolved_models_dir else None,
+        "models_dir": str(resolved_models_dir),
         "has_token": bool(token),
         "token_source": token_source or None,
         "token_note": (
-            "Runtime model cache reads EDMG_HF_TOKEN/HF_TOKEN/HUGGINGFACE_TOKEN env vars. "
-            "Settings → Tokens HF token is used for Cloud tests when env vars are unset."
+            "Runtime model cache uses HF_TOKEN/EDMG_HF_TOKEN env vars, falling back to "
+            "Settings → Tokens when env vars are unset."
         ),
     }
 

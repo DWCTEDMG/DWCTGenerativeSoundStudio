@@ -278,7 +278,17 @@ class ModelManager:
         self._lock = threading.Lock()
 
     def _build_model_cache(self):
-        for cache_type in (HFBucketModelCache, S3ModelCache, AzureModelCache):
+        if HFBucketModelCache is not None:
+            try:
+                cache = HFBucketModelCache.from_runtime(
+                    models_dir=self.models_dir,
+                    secrets_store=self.secrets,
+                )
+                if cache is not None:
+                    return cache
+            except Exception:
+                pass
+        for cache_type in (S3ModelCache, AzureModelCache):
             if cache_type is None:
                 continue
             try:
@@ -563,7 +573,7 @@ class ModelManager:
             fname = str(e.get("filename") or "")
 
             if engine == "internal":
-                out[mid] = self._internal_asset_installed(e, self._internal_models_dir(folder) / mid)
+                out[mid] = self._entry_is_available(e, probe_remote=True)
                 continue
 
             if fname:
@@ -788,6 +798,10 @@ class ModelManager:
             return None
         folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
         path = self._internal_models_dir(folder) / model_id
+        if self._local_installed_path(entry) is not None:
+            return None
+        if self.is_model_available(model_id, probe_remote=True):
+            return None
         if not path.exists():
             return "missing"
         if self._internal_asset_installed(entry, path):
@@ -1401,6 +1415,41 @@ class ModelManager:
         if not entry:
             return None
         return self._local_installed_path(entry)
+
+    def _entry_is_available(self, entry: dict[str, Any], *, probe_remote: bool = True) -> bool:
+        model_id = str(entry.get("id") or "").strip()
+        if not model_id:
+            return False
+        if self._local_installed_path(entry) is not None:
+            return True
+        if not probe_remote:
+            return False
+        if self._cloud_model_record(model_id) is not None:
+            return True
+        cache = getattr(self, "model_cache", None)
+        if cache is None:
+            return False
+        mode, dest = self._models_dest(entry)
+        try:
+            if mode == "snapshot":
+                return bool(self._cache_snapshot_exists(entry, dest))
+            if mode == "file":
+                return bool(self._cache_model_exists(entry, dest))
+        except Exception:
+            return False
+        return False
+
+    def is_model_available(self, model_id: str, *, probe_remote: bool = True) -> bool:
+        """Return True when a model is installed locally or present in the model cache."""
+        entry = self._find_entry(model_id)
+        if not entry:
+            return False
+        return self._entry_is_available(entry, probe_remote=probe_remote)
+
+    def installed_internal_models(self) -> dict[str, bool]:
+        """Bucket-aware availability for built-in internal diffusion models."""
+        ids = ("hf_sd15_internal", "hf_sdxl_internal", "hf_sd35_medium_internal")
+        return {model_id: self.is_model_available(model_id, probe_remote=True) for model_id in ids}
 
     def resolve_installed_path(self, model_id: str, *, materialize_remote: bool = True) -> Path | None:
         """Return a local runtime path, restoring a cached remote model when requested."""

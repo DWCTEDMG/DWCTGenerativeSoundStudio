@@ -595,6 +595,24 @@ def _resolve_installed_model_path(model_id: str, *, materialize_remote: bool = T
     return None
 
 
+def _installed_internal_models_status() -> dict[str, bool]:
+    getter = getattr(models, "installed_internal_models", None)
+    if callable(getter):
+        return getter()
+    return {
+        "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
+        "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
+        "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
+    }
+
+
+def _internal_model_is_available(model_id: str) -> bool:
+    probe = getattr(models, "is_model_available", None)
+    if callable(probe):
+        return bool(probe(model_id, probe_remote=True))
+    return bool(models.installed_path(model_id))
+
+
 def _resolve_still_scene_selection(
     *,
     model_id: str | None,
@@ -5180,7 +5198,7 @@ def _build_render_conductor_environment() -> dict[str, Any]:
     provider_status = _render_provider_status(hw)
     runtime = _internal_diffusion_runtime_status()
     installed_internal = any(
-        bool(models.installed_path(model_id))
+        _internal_model_is_available(model_id)
         for model_id in ("hf_sd15_internal", "hf_sdxl_internal", "hf_sd35_medium_internal")
     )
     backend_family = str(hw.get("backend_family") or "cpu_only").lower()
@@ -7832,11 +7850,7 @@ def _proxy_render_preflight_data(
         "resume_existing_frames": bool(settings_obj.resume_existing_frames),
         "warnings": warnings,
         "cache": cache,
-        "installed_internal_models": {
-            "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
-            "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
-            "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
-        },
+        "installed_internal_models": _installed_internal_models_status(),
         "settings": {
             "fps_render": settings_obj.fps_render,
             "fps_output": settings_obj.fps_output,
@@ -7947,11 +7961,7 @@ def _hosted_render_preflight_data(
         "resume_existing_frames": bool(settings_obj.resume_existing_frames),
         "warnings": warnings,
         "cache": cache,
-        "installed_internal_models": {
-            "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
-            "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
-            "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
-        },
+        "installed_internal_models": _installed_internal_models_status(),
         "hosted_provider": {
             "provider": "stability",
             "service": hosted_service,
@@ -8027,11 +8037,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         settings=settings_obj,
         total_frames=total_frames,
     )
-    installed_internal = {
-        "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
-        "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
-        "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
-    }
+    installed_internal = _installed_internal_models_status()
     return {
         "ok": True,
         "mode": "diffusion",
@@ -8209,10 +8215,10 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
         if mid in seen:
             continue
         seen.add(mid)
-        installed = models.installed_path(mid)
-        if not installed:
+        if not _internal_model_is_available(mid):
             continue
-        family = _internal_model_family_for_request(mid, installed)
+        installed = _resolve_installed_model_path(mid, materialize_remote=False)
+        family = _internal_model_family_for_request(mid, installed or Path(mid))
         hardware_issue = _internal_model_hardware_issue(mid, family, hw, str(tier_plan.get("device_preference") or "auto"))
         if hardware_issue:
             hardware_issues.append(hardware_issue)

@@ -20,6 +20,35 @@ class _FakeSecrets:
         return ""
 
 
+def test_describe_status_active_without_explicit_models_dir_env(tmp_path, monkeypatch):
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    monkeypatch.setenv("EDMG_HF_BUCKET_MODEL_CACHE", "1")
+    monkeypatch.setenv("EDMG_HF_BUCKET_ID", "team/edmg-models")
+    monkeypatch.delenv("EDMG_STUDIO_MODELS_DIR", raising=False)
+
+    class _FakeCache:
+        label = "Hugging Face bucket"
+
+    monkeypatch.setattr(
+        hf_bucket_integration,
+        "HFBucketModelCache",
+        type(
+            "HFBucketModelCache",
+            (),
+            {"from_runtime": classmethod(lambda cls, **kwargs: _FakeCache())},
+        ),
+    )
+
+    status = hf_bucket_integration.describe_status(
+        models_dir=models_dir,
+        secrets_store=_FakeSecrets("settings-token"),
+    )
+
+    assert status["active"] is True
+    assert status["models_dir"] == str(models_dir.resolve())
+
+
 def test_describe_status_reports_env_configuration(tmp_path, monkeypatch):
     models_dir = tmp_path / "models"
     models_dir.mkdir()
