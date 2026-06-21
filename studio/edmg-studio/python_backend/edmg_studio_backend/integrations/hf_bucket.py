@@ -46,6 +46,17 @@ def _normalize_remote(path: str) -> str:
     return str(path or "").strip().strip("/").replace("\\", "/")
 
 
+def parse_bucket_id(bucket: str) -> str:
+    """Normalize a bucket reference into a bare ``namespace/name`` id.
+
+    Tolerates a full ``hf://buckets/<namespace>/<name>`` URI being pasted in.
+    """
+    resolved = str(bucket or "").strip()
+    if "buckets/" in resolved:
+        resolved = resolved.split("buckets/", 1)[1]
+    return resolved.strip().strip("/")
+
+
 def _require_hf_api():
     try:
         from huggingface_hub import HfApi  # type: ignore
@@ -366,6 +377,69 @@ class HFBucketModelCache:
             token=self._token,
         )
         return remote_dir
+
+
+def download_bucket_snapshot(
+    *,
+    bucket: str,
+    dest: Path,
+    remote_path: str = "",
+    token: str | None = None,
+) -> bool:
+    """Sync a Hugging Face bucket directory into ``dest``.
+
+    Used to install a model whose weights live directly in a bucket
+    (``hf://buckets/<namespace>/<name>``) rather than the shared model-cache
+    mirror. ``remote_path`` selects a sub-directory of the bucket; an empty
+    value mirrors the bucket root. Returns ``True`` when at least one file was
+    written to ``dest``.
+    """
+    bucket_id = parse_bucket_id(bucket)
+    if not bucket_id:
+        raise RuntimeError("Missing Hugging Face bucket id (namespace/name).")
+    HfApi = _require_hf_api()
+    api = HfApi(token=token or None)
+    remote = _normalize_remote(remote_path)
+    base = f"hf://buckets/{bucket_id}"
+    source = f"{base}/{remote}" if remote else base
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    api.sync_bucket(source=source, dest=str(dest), quiet=True, token=token or None)
+    return any(dest.rglob("*"))
+
+
+def download_bucket_file(
+    *,
+    bucket: str,
+    remote_path: str,
+    dest: Path,
+    token: str | None = None,
+) -> bool:
+    """Download a single file from a Hugging Face bucket into ``dest``."""
+    bucket_id = parse_bucket_id(bucket)
+    if not bucket_id:
+        raise RuntimeError("Missing Hugging Face bucket id (namespace/name).")
+    remote = _normalize_remote(remote_path)
+    if not remote:
+        raise RuntimeError("Missing Hugging Face bucket file path.")
+    HfApi = _require_hf_api()
+    api = HfApi(token=token or None)
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".hf.tmp")
+    if tmp.exists():
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    api.download_bucket_files(
+        bucket_id,
+        [(remote, str(tmp))],
+        raise_on_missing_files=True,
+        token=token or None,
+    )
+    os.replace(tmp, dest)
+    return dest.exists()
 
 
 def describe_status(

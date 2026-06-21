@@ -231,6 +231,35 @@ def built_in_catalog() -> list[dict[str, Any]]:
             },
         ),
         _entry(
+            model_id="hf_bucket_sdxl_controlnet_canny_internal",
+            name="ControlNet Canny SDXL — HF Bucket (Internal / Diffusers)",
+            kind="controlnet",
+            source="hf_bucket",
+            hf_bucket_id="gulle1155/controlnet-canny-sdxl-1.0-bucket",
+            hf_bucket_path="",
+            target={"engine": "internal", "folder": "controlnet"},
+            license_id="openrail++",
+            license_url="https://huggingface.co/diffusers/controlnet-canny-sdxl-1.0",
+            recommended="advanced",
+            notes=(
+                "ControlNet Canny SDXL weights served from the gulle1155 Hugging Face bucket "
+                "(hf://buckets/gulle1155/controlnet-canny-sdxl-1.0-bucket) for edge-guided internal stills. "
+                "Studio syncs the bucket into the internal ControlNet folder on install, so it can be used "
+                "during render without re-downloading from the public repo."
+            ),
+            family="sdxl",
+            author="gulle1155",
+            collections=["image"],
+            tags=["internal", "controlnet", "sdxl", "canny", "hf_bucket"],
+            hardware_targets=["discrete_gpu", "apple_silicon"],
+            render={
+                "engine": "internal",
+                "workflow_family": "controlnet",
+                "render_modes": ["stills"],
+                "conditioning_mode": "edge",
+            },
+        ),
+        _entry(
             model_id="hf_sdxl_controlnet_depth_internal",
             name="ControlNet Depth SDXL (Internal / Diffusers)",
             kind="controlnet",

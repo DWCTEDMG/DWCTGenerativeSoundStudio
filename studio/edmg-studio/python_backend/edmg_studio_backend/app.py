@@ -49,7 +49,7 @@ from .schemas import (
     ImportUnrealBridgeReturnRequest,
     BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
-    CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudLightningBundleRequest,
+    CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudHfBucketSettingsRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
@@ -90,6 +90,7 @@ from .utils.path import safe_join
 from .errors import UserFacingError, hint_from_exception
 from .services.model_manager import ModelManager
 from .services.secrets import SecretStore
+from .services.model_cache_settings import ModelCacheSettingsStore
 from .services.render_settings import (
     RenderSettingsStore,
     FIREFLY_CONTENT_CLASSES,
@@ -178,6 +179,12 @@ setup_tasks = SetupTaskManager()
 secrets = SecretStore(settings.data_dir)
 render_settings = RenderSettingsStore(settings.data_dir)
 transcription_settings = TranscriptionSettingsStore(settings.data_dir)
+# Project the persisted model-cache choice onto the environment before the
+# ModelManager resolves its cache, so the UI-selected Hugging Face bucket (the
+# preferred provider over S3/Azure) activates on startup. force=False lets an
+# explicit launcher env var still win.
+model_cache_settings = ModelCacheSettingsStore(settings.data_dir)
+model_cache_settings.apply_to_env(force=False)
 models = ModelManager(
     settings.data_dir,
     settings.models_dir,
@@ -10158,6 +10165,42 @@ def cloud_hf_test(req: CloudHfBucketTestRequest):
             models_dir=settings.models_dir,
             secrets_store=secrets,
         )
+    except Exception as e:
+        raise HTTPException(status_code=501, detail=str(e))
+
+
+def _hf_settings_payload() -> dict[str, Any]:
+    cfg = model_cache_settings.get()
+    status = hf_bucket_integration.describe_status(
+        models_dir=settings.models_dir,
+        secrets_store=secrets,
+    )
+    return {
+        "ok": True,
+        "settings": cfg["hf_bucket"],
+        "status": status,
+        "active_provider": models._model_cache_label() if models.model_cache is not None else None,
+        "priority": ["huggingface_bucket", "aws_s3", "azure_blob"],
+    }
+
+
+@app.get("/v1/cloud/hf/settings")
+def cloud_hf_settings_get():
+    try:
+        return _hf_settings_payload()
+    except Exception as e:
+        raise HTTPException(status_code=501, detail=str(e))
+
+
+@app.post("/v1/cloud/hf/settings")
+def cloud_hf_settings_set(req: CloudHfBucketSettingsRequest):
+    try:
+        model_cache_settings.update(req.model_dump(exclude_none=True))
+        # UI choice is authoritative for this process, then rebuild the cache so
+        # the Hugging Face bucket takes effect (and priority) immediately.
+        model_cache_settings.apply_to_env(force=True)
+        models.refresh_model_cache()
+        return _hf_settings_payload()
     except Exception as e:
         raise HTTPException(status_code=501, detail=str(e))
 

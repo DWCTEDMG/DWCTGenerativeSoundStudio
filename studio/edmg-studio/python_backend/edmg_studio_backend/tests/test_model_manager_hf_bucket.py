@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from edmg_studio_backend.integrations.hf_bucket import (
@@ -69,6 +70,9 @@ def _offline_manager(tmp_path, monkeypatch, *, cache: FakeHFBucketModelCache | N
         "EDMG_AWS_MODEL_BUCKET",
         "EDMG_S3_MODEL_CACHE_BUCKET",
         "EDMG_HF_BUCKET_MODEL_CACHE",
+        "EDMG_MODEL_STORAGE_MODE",
+        "EDMG_AWS_MODEL_CACHE_MODE",
+        "EDMG_MODEL_CACHE_MODE",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(model_manager_module.requests, "get", _offline_get)
@@ -138,6 +142,54 @@ def test_model_manager_detects_internal_model_in_hf_bucket(tmp_path, monkeypatch
     assert resolved == tmp_path / "home" / "models" / "internal" / "diffusers" / "hf_sdxl_internal"
     assert (resolved / "model_index.json").exists()
     assert manager.installed_path("hf_sdxl_internal") == resolved
+
+
+def _wait_for_task(manager: ModelManager, task_id: str, *, timeout: float = 5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        task = next((t for t in manager.tasks.list() if t.id == task_id), None)
+        if task is not None and task.status in {"done", "failed"}:
+            return task
+        time.sleep(0.02)
+    raise AssertionError("model install task did not finish in time")
+
+
+def test_install_hf_bucket_source_syncs_internal_controlnet(tmp_path, monkeypatch) -> None:
+    manager = _offline_manager(tmp_path, monkeypatch)
+
+    model_id = "hf_bucket_sdxl_controlnet_canny_internal"
+    entry = manager._find_entry(model_id)
+    assert entry is not None
+    assert entry.get("source") == "hf_bucket"
+    assert entry.get("hf_bucket_id") == "gulle1155/controlnet-canny-sdxl-1.0-bucket"
+
+    captured: dict = {}
+
+    def _fake_sync(*, bucket, dest, remote_path, token):
+        captured.update(
+            {"bucket": bucket, "dest": Path(dest), "remote_path": remote_path, "token": token}
+        )
+        dest = Path(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "config.json").write_text("{}", encoding="utf-8")
+        (dest / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+        return True
+
+    monkeypatch.setattr(model_manager_module, "_hf_bucket_download_snapshot", _fake_sync)
+
+    manager.accept_license(model_id, str(entry.get("license_id")))
+    task = manager.install(model_id)
+    finished = _wait_for_task(manager, task.id)
+
+    assert finished.status == "done", finished.error
+    assert captured["bucket"] == "gulle1155/controlnet-canny-sdxl-1.0-bucket"
+    assert captured["token"] == "settings-token"
+
+    resolved = manager.resolve_installed_path(model_id, materialize_remote=False)
+    expected = tmp_path / "home" / "models" / "internal" / "controlnet" / model_id
+    assert resolved == expected
+    assert (resolved / "config.json").exists()
+    assert (resolved / "diffusion_pytorch_model.safetensors").exists()
 
 
 def test_model_manager_builds_hf_cache_from_runtime(tmp_path, monkeypatch) -> None:
