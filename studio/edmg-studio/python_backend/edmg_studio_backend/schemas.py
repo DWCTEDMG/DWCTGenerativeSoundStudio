@@ -324,6 +324,10 @@ class CloudAzureTestRequest(BaseModel):
     container: str | None = None
     prefix: str | None = None
 
+class CloudHfBucketTestRequest(BaseModel):
+    bucket: str | None = None
+    prefix: str | None = None
+
 class CloudLightningBundleRequest(BaseModel):
     output_dir: str = "lightning/lightning_bundle"
 
