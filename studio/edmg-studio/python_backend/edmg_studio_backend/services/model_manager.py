@@ -629,6 +629,7 @@ class ModelManager:
             "Scheduler",
             "ImageProcessor",
             "FeatureExtractor",
+            "SafetyChecker",
         )
         required_components: list[str] = []
         for name, spec in data.items():
@@ -643,6 +644,57 @@ class ModelManager:
             return False
 
         return all(self._internal_component_has_weights(path / component) for component in required_components)
+
+    def missing_diffusers_components(self, model_id: str) -> list[str]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            return []
+        target = entry.get("target") or {}
+        engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+        if engine != "internal" or str(entry.get("kind") or "").strip().lower() != "diffusers":
+            return []
+        folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+        path = self._internal_models_dir(folder) / str(model_id or "")
+        if not path.exists():
+            return ["snapshot"]
+        model_index = path / "model_index.json"
+        if not model_index.exists():
+            return ["model_index.json"]
+        try:
+            data = json.loads(model_index.read_text(encoding="utf-8"))
+        except Exception:
+            return ["model_index.json"]
+        if not isinstance(data, dict):
+            return ["model_index.json"]
+
+        weightless_markers = (
+            "Tokenizer",
+            "TokenizerFast",
+            "Scheduler",
+            "ImageProcessor",
+            "FeatureExtractor",
+            "SafetyChecker",
+        )
+        missing: list[str] = []
+        for name, spec in data.items():
+            if not isinstance(name, str) or not isinstance(spec, list) or len(spec) < 2:
+                continue
+            class_name = str(spec[1] or "")
+            if any(marker in class_name for marker in weightless_markers):
+                continue
+            if not self._internal_component_has_weights(path / name):
+                missing.append(name)
+        return missing
+
+    def _clear_incomplete_snapshot(self, dest: Path) -> None:
+        if not dest.exists():
+            return
+        import shutil
+
+        try:
+            shutil.rmtree(dest)
+        except OSError:
+            pass
 
     def _internal_asset_installed(self, entry: dict[str, Any], path: Path) -> bool:
         if not path.exists():
@@ -1462,6 +1514,8 @@ class ModelManager:
             return local
 
         mode, dest = self._models_dest(entry)
+        if mode == "snapshot" and dest.exists() and not self._internal_asset_installed(entry, dest):
+            self._clear_incomplete_snapshot(dest)
         if mode == "file":
             return self._materialize_file_from_model_cache(entry, dest)
         if mode == "snapshot":

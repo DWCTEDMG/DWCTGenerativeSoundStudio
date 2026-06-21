@@ -7736,9 +7736,18 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
     if not model_path:
         issue = getattr(models, "internal_asset_issue", lambda _model_id: None)(model_id)
         if issue == "incomplete":
+            missing = getattr(models, "missing_diffusers_components", lambda _model_id: [])(model_id)
+            missing_hint = (
+                f" Missing components: {', '.join(missing)}."
+                if missing
+                else ""
+            )
             raise UserFacingError(
                 "Internal model install is incomplete",
-                hint="Open Models and reinstall the requested internal model. The local snapshot is missing required weight files.",
+                hint=(
+                    "Open Models and reinstall the requested internal model, or re-sync it from the "
+                    f"Hugging Face bucket.{missing_hint}"
+                ),
                 code="MODEL_NOT_INSTALLED",
                 status_code=400,
             )
