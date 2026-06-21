@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
+import { StructuredSummary } from "../components/StructuredSummary";
 import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
 
@@ -68,21 +69,21 @@ export default function Dashboard({ backendUrl, config }: PageProps) {
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Backend</div>
         <div className="small">{backendUrl}</div>
         <hr />
-        {health && <pre>{JSON.stringify(health, null, 2)}</pre>}
+        {health && <StructuredSummary value={health} showJson />}
       </div>
     ),
     config: (
       <div className="card">
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Config</div>
         {!config && <div className="small">Loading…</div>}
-        {config && <pre>{JSON.stringify(config, null, 2)}</pre>}
+        {config && <StructuredSummary value={config} showJson />}
       </div>
     ),
     edmg: (
       <div className="card">
         <div style={{ fontWeight: 800, marginBottom: 8 }}>EDMG Core</div>
         {!edmg && <div className="small">Not detected (optional).</div>}
-        {edmg && <pre>{JSON.stringify(edmg, null, 2)}</pre>}
+        {edmg && <StructuredSummary value={edmg} showJson />}
         <div className="small" style={{ marginTop: 10 }}>
           Studio backend installs now target EDMG Core by default. If it is missing here, repair it from Setup.
         </div>

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { apiPost, getBackendUrl, normalizeBackendUrl, setBrowserBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
+import { StructuredSummary } from "../components/StructuredSummary";
 import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
 
@@ -204,7 +205,7 @@ export default function Cloud(props: PageProps) {
     result: result ? (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Result</div>
-        <pre>{JSON.stringify(result, null, 2)}</pre>
+        <StructuredSummary value={result} showJson />
       </div>
     ) : null,
   };

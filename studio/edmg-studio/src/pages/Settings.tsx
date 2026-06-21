@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, normalizeBackendUrl, setBrowserBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
+import { StructuredSummary } from "../components/StructuredSummary";
 import { STUDIO_THEME_OPTIONS, useStudioAppearance } from "../components/studioAppearance";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
@@ -1964,7 +1965,9 @@ export default function Settings(props: PageProps) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Deforum template (from EDMG Core)</div>
         <div className="small">This is an editing surface / reference for Deforum exports.</div>
-        <pre>{JSON.stringify(edmgTemplate, null, 2)}</pre>
+        <div style={{ marginTop: 10 }}>
+          <StructuredSummary value={edmgTemplate} showJson maxItems={32} jsonMaxHeight={420} />
+        </div>
       </div>
     ) : null,
   };

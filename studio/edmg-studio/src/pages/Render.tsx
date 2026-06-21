@@ -5,6 +5,7 @@ import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import { copyPathValue, desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
+import { StructuredSummary } from "../components/StructuredSummary";
 import type { PageProps } from "../types/pageProps";
 
 type CatalogEntry = {
@@ -2884,24 +2885,24 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
           <hr />
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Capabilities</div>
           {!caps && <div className="small">Loading…</div>}
-          {caps && <pre>{JSON.stringify(caps, null, 2)}</pre>}
+          {caps && <StructuredSummary value={caps} showJson />}
           {conductorEnvironment ? (
             <>
               <div style={{ fontWeight: 800, margin: "14px 0 10px" }}>Conductor environment</div>
-              <pre>{JSON.stringify(conductorEnvironment, null, 2)}</pre>
+              <StructuredSummary value={conductorEnvironment} showJson />
             </>
           ) : null}
           {visualDna ? (
             <>
               <div style={{ fontWeight: 800, margin: "14px 0 10px" }}>Visual DNA</div>
-              <pre>{JSON.stringify(visualDna, null, 2)}</pre>
+              <StructuredSummary value={visualDna} showJson />
             </>
           ) : null}
 
           <hr />
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Last action result</div>
           {!info && <div className="small">No recent action.</div>}
-          {info && <pre>{JSON.stringify(info, null, 2)}</pre>}
+          {info && <StructuredSummary value={info} showJson />}
         </div>
       </div>
     </div>

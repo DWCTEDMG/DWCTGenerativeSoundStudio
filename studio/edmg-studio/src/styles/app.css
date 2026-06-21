@@ -192,6 +192,56 @@ select:focus {
   font-size: 12px;
   color: var(--muted);
 }
+.structuredSummary {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+.structuredSummary-grid {
+  display: grid;
+  grid-template-columns: minmax(110px, 170px) minmax(0, 1fr);
+  gap: 7px 14px;
+  align-items: start;
+}
+.structuredSummary-key {
+  color: var(--muted);
+  line-height: 1.5;
+}
+.structuredSummary-value {
+  min-width: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.structuredSummary-list {
+  display: grid;
+  gap: 5px;
+}
+.structuredSummary-listItem {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.structuredSummary-empty,
+.structuredSummary-more {
+  color: var(--muted);
+}
+.structuredSummary details > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.structuredSummary-jsonDisclosure {
+  margin-top: 2px;
+}
+.structuredSummary-jsonDisclosure > summary {
+  cursor: pointer;
+  opacity: 0.82;
+}
+.structuredSummary-json {
+  margin-top: 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
 .badge {
   display: inline-block;
   padding: 2px 8px;
@@ -200,6 +250,15 @@ select:focus {
   font-size: 12px;
   color: var(--muted);
   background: rgba(9, 25, 28, 0.74);
+}
+@media (max-width: 720px) {
+  .structuredSummary-grid {
+    grid-template-columns: 1fr;
+    gap: 3px 0;
+  }
+  .structuredSummary-value {
+    margin-bottom: 5px;
+  }
 }
 .studio-themeSwatches {
   display: flex;

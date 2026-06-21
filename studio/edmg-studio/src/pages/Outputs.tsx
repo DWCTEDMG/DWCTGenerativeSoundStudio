@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, getBackendUrl } from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
+import { StructuredSummary } from "../components/StructuredSummary";
 import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
 
@@ -683,10 +684,8 @@ export default function Outputs(props: PageProps) {
     ) : null,
     rawPayload: outs ? (
       <div className="card" style={{ marginTop: 14 }}>
-        <details>
-          <summary style={{ cursor: "pointer", fontWeight: 800 }}>Raw output payload</summary>
-          <pre style={{ marginTop: 10 }}>{JSON.stringify(outs, null, 2)}</pre>
-        </details>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Output payload</div>
+        <StructuredSummary value={outs} showJson jsonMaxHeight={420} />
       </div>
     ) : null,
   };

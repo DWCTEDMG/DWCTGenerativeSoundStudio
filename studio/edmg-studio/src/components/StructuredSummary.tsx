@@ -3,8 +3,11 @@ import React from "react";
 type StructuredSummaryProps = {
   value: unknown;
   emptyLabel?: string;
+  showJson?: boolean;
+  jsonLabel?: string;
   maxDepth?: number;
   maxItems?: number;
+  jsonMaxHeight?: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -33,6 +36,14 @@ function compactSummary(value: unknown): string {
     return `${count} field${count === 1 ? "" : "s"}`;
   }
   return formatScalar(value);
+}
+
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? {}, null, 2);
+  } catch {
+    return String(value ?? "");
+  }
 }
 
 function SummaryValue({
@@ -109,15 +120,33 @@ function SummaryValue({
 export function StructuredSummary({
   value,
   emptyLabel = "No details.",
+  showJson = false,
+  jsonLabel = "Show full JSON",
   maxDepth = 3,
   maxItems = 24,
+  jsonMaxHeight = 300,
 }: StructuredSummaryProps) {
+  const [jsonOpen, setJsonOpen] = React.useState(false);
+
   if (value === null || value === undefined) {
     return <div className="small structuredSummary-empty">{emptyLabel}</div>;
   }
   return (
     <div className="structuredSummary">
       <SummaryValue value={value} depth={0} maxDepth={maxDepth} maxItems={maxItems} />
+      {showJson ? (
+        <details
+          className="structuredSummary-jsonDisclosure"
+          onToggle={(event) => setJsonOpen(event.currentTarget.open)}
+        >
+          <summary className="small">{jsonLabel}</summary>
+          {jsonOpen ? (
+            <pre className="structuredSummary-json" style={{ maxHeight: jsonMaxHeight }}>
+              {prettyJson(value)}
+            </pre>
+          ) : null}
+        </details>
+      ) : null}
     </div>
   );
 }

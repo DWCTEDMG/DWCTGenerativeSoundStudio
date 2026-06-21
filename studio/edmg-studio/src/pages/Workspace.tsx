@@ -6,6 +6,7 @@ import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
 import { useStudioSession } from "../components/studioSession";
 import { useUiMode } from "../components/uiMode";
+import { StructuredSummary } from "../components/StructuredSummary";
 import type { PageProps } from "../types/pageProps";
 import AiNlpWorkbench from "../workbenches/AiNlpWorkbench";
 import AudioReactiveWorkbench from "../workbenches/AudioReactiveWorkbench";
@@ -1086,9 +1087,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
           <details className="card workspace-inspectCard" open={uiMode === "advanced"}>
             <summary className="workspace-inspectSummary">Inspect</summary>
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontWeight: 800, marginBottom: 10 }}>Selected variant (raw)</div>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>Selected variant</div>
               {plan?.variants?.length ? (
-                <pre>{JSON.stringify(plan.variants[selectedVariant], null, 2)}</pre>
+                <StructuredSummary value={plan.variants[selectedVariant]} showJson />
               ) : (
                 <div className="small">No plan.</div>
               )}
@@ -1096,12 +1097,12 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
               <hr />
               <div style={{ fontWeight: 800, marginBottom: 10 }}>Analysis</div>
               {!analysis && <div className="small">No analysis yet.</div>}
-              {analysis && <pre>{JSON.stringify(analysis, null, 2)}</pre>}
+              {analysis && <StructuredSummary value={analysis} showJson />}
 
               <hr />
               <div style={{ fontWeight: 800, marginBottom: 10 }}>Last action result</div>
               {!info && <div className="small">No recent action.</div>}
-              {info && <pre>{JSON.stringify(info, null, 2)}</pre>}
+              {info && <StructuredSummary value={info} showJson />}
             </div>
           </details>
         </div>
