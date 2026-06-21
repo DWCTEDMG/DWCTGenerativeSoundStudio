@@ -36,8 +36,12 @@ except Exception:  # pragma: no cover - optional integration
 
 try:
     from ..integrations.hf_bucket import HFBucketModelCache
+    from ..integrations.hf_bucket import download_bucket_snapshot as _hf_bucket_download_snapshot
+    from ..integrations.hf_bucket import download_bucket_file as _hf_bucket_download_file
 except Exception:  # pragma: no cover - optional integration
     HFBucketModelCache = None  # type: ignore
+    _hf_bucket_download_snapshot = None  # type: ignore
+    _hf_bucket_download_file = None  # type: ignore
 
 
 # ------------------------------ persistence ------------------------------
@@ -277,8 +281,26 @@ class ModelManager:
 
         self._lock = threading.Lock()
 
+    def refresh_model_cache(self):
+        """Rebuild the active model cache after settings/env changes."""
+        self.model_cache = self._build_model_cache()
+        return self.model_cache
+
     def _build_model_cache(self):
-        for cache_type in (HFBucketModelCache, S3ModelCache, AzureModelCache):
+        # Priority: Hugging Face bucket first, then AWS S3, then Azure. The HF
+        # bucket only activates when enabled (EDMG_HF_BUCKET_MODEL_CACHE) with a
+        # configured bucket id, so when it is on it always wins over S3/Azure.
+        if HFBucketModelCache is not None:
+            try:
+                cache = HFBucketModelCache.from_runtime(
+                    models_dir=self.models_dir,
+                    secrets_store=self.secrets,
+                )
+                if cache is not None:
+                    return cache
+            except Exception:
+                pass
+        for cache_type in (S3ModelCache, AzureModelCache):
             if cache_type is None:
                 continue
             try:
@@ -469,7 +491,7 @@ class ModelManager:
         if source == "ollama":
             name = f"Install (Ollama): {entry.get('name')}"
             return self.tasks.start(name, self._install_ollama, entry)
-        if source in ("hf", "civitai", "local", "s3"):
+        if source in ("hf", "civitai", "local", "s3", "hf_bucket"):
             name = f"Install: {entry.get('name')}"
             return self.tasks.start(name, self._install_file_model, entry)
 
@@ -563,7 +585,7 @@ class ModelManager:
             fname = str(e.get("filename") or "")
 
             if engine == "internal":
-                out[mid] = self._internal_asset_installed(e, self._internal_models_dir(folder) / mid)
+                out[mid] = self._entry_is_available(e, probe_remote=True)
                 continue
 
             if fname:
@@ -619,6 +641,7 @@ class ModelManager:
             "Scheduler",
             "ImageProcessor",
             "FeatureExtractor",
+            "SafetyChecker",
         )
         required_components: list[str] = []
         for name, spec in data.items():
@@ -633,6 +656,57 @@ class ModelManager:
             return False
 
         return all(self._internal_component_has_weights(path / component) for component in required_components)
+
+    def missing_diffusers_components(self, model_id: str) -> list[str]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            return []
+        target = entry.get("target") or {}
+        engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+        if engine != "internal" or str(entry.get("kind") or "").strip().lower() != "diffusers":
+            return []
+        folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+        path = self._internal_models_dir(folder) / str(model_id or "")
+        if not path.exists():
+            return ["snapshot"]
+        model_index = path / "model_index.json"
+        if not model_index.exists():
+            return ["model_index.json"]
+        try:
+            data = json.loads(model_index.read_text(encoding="utf-8"))
+        except Exception:
+            return ["model_index.json"]
+        if not isinstance(data, dict):
+            return ["model_index.json"]
+
+        weightless_markers = (
+            "Tokenizer",
+            "TokenizerFast",
+            "Scheduler",
+            "ImageProcessor",
+            "FeatureExtractor",
+            "SafetyChecker",
+        )
+        missing: list[str] = []
+        for name, spec in data.items():
+            if not isinstance(name, str) or not isinstance(spec, list) or len(spec) < 2:
+                continue
+            class_name = str(spec[1] or "")
+            if any(marker in class_name for marker in weightless_markers):
+                continue
+            if not self._internal_component_has_weights(path / name):
+                missing.append(name)
+        return missing
+
+    def _clear_incomplete_snapshot(self, dest: Path) -> None:
+        if not dest.exists():
+            return
+        import shutil
+
+        try:
+            shutil.rmtree(dest)
+        except OSError:
+            pass
 
     def _internal_asset_installed(self, entry: dict[str, Any], path: Path) -> bool:
         if not path.exists():
@@ -788,6 +862,10 @@ class ModelManager:
             return None
         folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
         path = self._internal_models_dir(folder) / model_id
+        if self._local_installed_path(entry) is not None:
+            return None
+        if self.is_model_available(model_id, probe_remote=True):
+            return None
         if not path.exists():
             return "missing"
         if self._internal_asset_installed(entry, path):
@@ -1292,6 +1370,98 @@ class ModelManager:
                         pass
             return
 
+        if src == "hf_bucket":
+            bucket_id = str(
+                entry.get("hf_bucket_id")
+                or entry.get("hf_bucket")
+                or (target.get("hf_bucket_id") if isinstance(target, dict) else "")
+                or ""
+            ).strip()
+            if not bucket_id:
+                raise RuntimeError("Missing hf_bucket_id for Hugging Face bucket install")
+            remote_path = str(
+                entry.get("hf_bucket_path")
+                or entry.get("bucket_path")
+                or (target.get("hf_bucket_path") if isinstance(target, dict) else "")
+                or ""
+            ).strip()
+
+            if mode == "snapshot":
+                if _hf_bucket_download_snapshot is None:
+                    raise RuntimeError(
+                        "huggingface_hub bucket support is not installed (required for hf_bucket snapshot installs)"
+                    )
+                target_path = self._cloud_temp_path(dest) if cloud_only else dest
+                target_path.mkdir(parents=True, exist_ok=True)
+                ModelTaskManager.log(task, f"Syncing HF bucket snapshot: {bucket_id}")
+                try:
+                    ok = _hf_bucket_download_snapshot(
+                        bucket=bucket_id,
+                        dest=target_path,
+                        remote_path=remote_path,
+                        token=(hf_token or None),
+                    )
+                    if not ok:
+                        raise UserFacingError(
+                            f"{entry.get('name') or entry.get('id') or 'Model'} was not found in the Hugging Face bucket",
+                            hint="Check hf_bucket_id / hf_bucket_path and that your HF token can read the bucket.",
+                            code="HF_BUCKET_MISS",
+                        )
+                    if cloud_only:
+                        object_name = self._upload_snapshot_to_model_cache(task, entry, target_path, mode="cloud_only")
+                        if not object_name:
+                            raise RuntimeError("Cloud-only internal snapshot upload failed")
+                        ModelTaskManager.set_progress(task, 1.0)
+                        self._append_task_log(task, f"Cloud-only internal install complete; no local snapshot kept: {object_name}")
+                    else:
+                        self._upload_snapshot_to_model_cache(task, entry, dest)
+                        ModelTaskManager.set_progress(task, 1.0)
+                        ModelTaskManager.log(task, f"Synced from HF bucket: {bucket_id}")
+                finally:
+                    if cloud_only:
+                        shutil.rmtree(target_path.parent, ignore_errors=True)
+                return
+
+            # file mode
+            if _hf_bucket_download_file is None:
+                raise RuntimeError(
+                    "huggingface_hub bucket support is not installed (required for hf_bucket file installs)"
+                )
+            file_remote = remote_path or fname
+            target_path = self._cloud_temp_path(dest) if cloud_only else dest
+            ModelTaskManager.log(task, f"Downloading HF bucket file: {bucket_id}/{file_remote}")
+            try:
+                ok = _hf_bucket_download_file(
+                    bucket=bucket_id,
+                    remote_path=file_remote,
+                    dest=target_path,
+                    token=(hf_token or None),
+                )
+                if not ok:
+                    raise UserFacingError(
+                        f"{entry.get('name') or entry.get('id') or 'Model'} was not found in the Hugging Face bucket",
+                        hint="Check hf_bucket_id / hf_bucket_path and that your HF token can read the bucket.",
+                        code="HF_BUCKET_MISS",
+                    )
+                if cloud_only:
+                    object_name = self._upload_to_model_cache(task, entry, target_path, mode="cloud_only")
+                    if not object_name:
+                        raise RuntimeError("Cloud-only upload failed")
+                    ModelTaskManager.set_progress(task, 1.0)
+                    self._append_task_log(task, f"Cloud-only install complete; no local model file kept: {object_name}")
+                else:
+                    self._upload_to_model_cache(task, entry, dest)
+                    ModelTaskManager.set_progress(task, 1.0)
+                    ModelTaskManager.log(task, f"Saved from HF bucket: {dest.name}")
+            finally:
+                if cloud_only:
+                    try:
+                        target_path.unlink(missing_ok=True)
+                        target_path.parent.rmdir()
+                    except Exception:
+                        pass
+            return
+
         if src == "s3":
             if self.model_cache is None:
                 raise UserFacingError(
@@ -1402,6 +1572,41 @@ class ModelManager:
             return None
         return self._local_installed_path(entry)
 
+    def _entry_is_available(self, entry: dict[str, Any], *, probe_remote: bool = True) -> bool:
+        model_id = str(entry.get("id") or "").strip()
+        if not model_id:
+            return False
+        if self._local_installed_path(entry) is not None:
+            return True
+        if not probe_remote:
+            return False
+        if self._cloud_model_record(model_id) is not None:
+            return True
+        cache = getattr(self, "model_cache", None)
+        if cache is None:
+            return False
+        mode, dest = self._models_dest(entry)
+        try:
+            if mode == "snapshot":
+                return bool(self._cache_snapshot_exists(entry, dest))
+            if mode == "file":
+                return bool(self._cache_model_exists(entry, dest))
+        except Exception:
+            return False
+        return False
+
+    def is_model_available(self, model_id: str, *, probe_remote: bool = True) -> bool:
+        """Return True when a model is installed locally or present in the model cache."""
+        entry = self._find_entry(model_id)
+        if not entry:
+            return False
+        return self._entry_is_available(entry, probe_remote=probe_remote)
+
+    def installed_internal_models(self) -> dict[str, bool]:
+        """Bucket-aware availability for built-in internal diffusion models."""
+        ids = ("hf_sd15_internal", "hf_sdxl_internal", "hf_sd35_medium_internal")
+        return {model_id: self.is_model_available(model_id, probe_remote=True) for model_id in ids}
+
     def resolve_installed_path(self, model_id: str, *, materialize_remote: bool = True) -> Path | None:
         """Return a local runtime path, restoring a cached remote model when requested."""
         entry = self._find_entry(model_id)
@@ -1413,6 +1618,8 @@ class ModelManager:
             return local
 
         mode, dest = self._models_dest(entry)
+        if mode == "snapshot" and dest.exists() and not self._internal_asset_installed(entry, dest):
+            self._clear_incomplete_snapshot(dest)
         if mode == "file":
             return self._materialize_file_from_model_cache(entry, dest)
         if mode == "snapshot":

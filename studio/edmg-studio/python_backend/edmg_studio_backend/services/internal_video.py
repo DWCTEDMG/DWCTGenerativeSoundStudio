@@ -370,6 +370,32 @@ def _model_family_from_dir(model_dir: Path) -> str:
     return family
 
 
+def _diffusers_from_pretrained_kwargs(*, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Prefer safetensors weights; bucket/local snapshots rarely ship legacy .bin files."""
+    kwargs: dict[str, Any] = {"use_safetensors": True}
+    if extra:
+        kwargs.update(extra)
+    return kwargs
+
+
+def _reraise_snapshot_load_error(exc: Exception, model_dir: Path) -> None:
+    message = str(exc).lower()
+    if any(
+        token in message
+        for token in ("no file named", "does not appear to have", "safetensors", "not found in directory")
+    ):
+        raise UserFacingError(
+            "Internal diffusion model failed to load",
+            hint=(
+                f"The Diffusers snapshot at {model_dir} is incomplete or missing weight files. "
+                "Reinstall the model in Models or re-sync from the Hugging Face bucket, then retry."
+            ),
+            code="MODEL_SNAPSHOT_LOAD_FAILED",
+            status_code=400,
+        ) from exc
+    raise exc
+
+
 def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
     try:
         import json
@@ -407,7 +433,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     if family == "sd3":
         txt = StableDiffusion3Pipeline.from_pretrained(
             str(model_dir),
-            torch_dtype=torch_dtype,
+            **_diffusers_from_pretrained_kwargs(extra={"torch_dtype": torch_dtype}),
         )
         if hasattr(txt, "enable_attention_slicing"):
             txt.enable_attention_slicing()
@@ -442,9 +468,13 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     elif family == "sdxl":
         txt = StableDiffusionXLPipeline.from_pretrained(
             str(model_dir),
-            torch_dtype=torch_dtype,
-            safety_checker=None,
-            requires_safety_checker=False,
+            **_diffusers_from_pretrained_kwargs(
+                extra={
+                    "torch_dtype": torch_dtype,
+                    "safety_checker": None,
+                    "requires_safety_checker": False,
+                }
+            ),
         )
         if hasattr(txt, "enable_attention_slicing"):
             txt.enable_attention_slicing()
@@ -479,9 +509,13 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     else:
         txt = StableDiffusionPipeline.from_pretrained(
             str(model_dir),
-            torch_dtype=torch_dtype,
-            safety_checker=None,
-            requires_safety_checker=False,
+            **_diffusers_from_pretrained_kwargs(
+                extra={
+                    "torch_dtype": torch_dtype,
+                    "safety_checker": None,
+                    "requires_safety_checker": False,
+                }
+            ),
         )
         if hasattr(txt, "enable_attention_slicing"):
             txt.enable_attention_slicing()
@@ -576,9 +610,14 @@ def _try_load_directml(model_dir: Path, *, role: str = "video") -> _Pipes:
 
 
 def _try_load_pipelines(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
-    if device == "directml":
-        return _try_load_directml(model_dir, role=role)
-    return _try_load_diffusers(model_dir, device=device, role=role)
+    try:
+        if device == "directml":
+            return _try_load_directml(model_dir, role=role)
+        return _try_load_diffusers(model_dir, device=device, role=role)
+    except UserFacingError:
+        raise
+    except Exception as exc:
+        _reraise_snapshot_load_error(exc, model_dir)
 
 
 def _device_auto(preference: str = "auto") -> str:
@@ -1018,7 +1057,10 @@ def _load_controlnet_model(model_dir: Path, family: str, device: str) -> Any:
         ) from e
 
     torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32
-    controlnet = ControlNetModel.from_pretrained(str(model_dir), torch_dtype=torch_dtype)
+    controlnet = ControlNetModel.from_pretrained(
+        str(model_dir),
+        **_diffusers_from_pretrained_kwargs(extra={"torch_dtype": torch_dtype}),
+    )
     if device != "directml":
         controlnet = controlnet.to(device)
     _ControlNetCache.set(cache_key, controlnet)

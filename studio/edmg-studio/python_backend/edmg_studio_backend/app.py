@@ -49,7 +49,7 @@ from .schemas import (
     ImportUnrealBridgeReturnRequest,
     BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
-    CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudLightningBundleRequest,
+    CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudHfBucketSettingsRequest, CloudLightningBundleRequest,
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
@@ -90,6 +90,7 @@ from .utils.path import safe_join
 from .errors import UserFacingError, hint_from_exception
 from .services.model_manager import ModelManager
 from .services.secrets import SecretStore
+from .services.model_cache_settings import ModelCacheSettingsStore
 from .services.render_settings import (
     RenderSettingsStore,
     FIREFLY_CONTENT_CLASSES,
@@ -178,6 +179,12 @@ setup_tasks = SetupTaskManager()
 secrets = SecretStore(settings.data_dir)
 render_settings = RenderSettingsStore(settings.data_dir)
 transcription_settings = TranscriptionSettingsStore(settings.data_dir)
+# Project the persisted model-cache choice onto the environment before the
+# ModelManager resolves its cache, so the UI-selected Hugging Face bucket (the
+# preferred provider over S3/Azure) activates on startup. force=False lets an
+# explicit launcher env var still win.
+model_cache_settings = ModelCacheSettingsStore(settings.data_dir)
+model_cache_settings.apply_to_env(force=False)
 models = ModelManager(
     settings.data_dir,
     settings.models_dir,
@@ -593,6 +600,24 @@ def _resolve_installed_model_path(model_id: str, *, materialize_remote: bool = T
         if fallback:
             return Path(fallback)
     return None
+
+
+def _installed_internal_models_status() -> dict[str, bool]:
+    getter = getattr(models, "installed_internal_models", None)
+    if callable(getter):
+        return getter()
+    return {
+        "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
+        "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
+        "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
+    }
+
+
+def _internal_model_is_available(model_id: str) -> bool:
+    probe = getattr(models, "is_model_available", None)
+    if callable(probe):
+        return bool(probe(model_id, probe_remote=True))
+    return bool(models.installed_path(model_id))
 
 
 def _resolve_still_scene_selection(
@@ -5180,7 +5205,7 @@ def _build_render_conductor_environment() -> dict[str, Any]:
     provider_status = _render_provider_status(hw)
     runtime = _internal_diffusion_runtime_status()
     installed_internal = any(
-        bool(models.installed_path(model_id))
+        _internal_model_is_available(model_id)
         for model_id in ("hf_sd15_internal", "hf_sdxl_internal", "hf_sd35_medium_internal")
     )
     backend_family = str(hw.get("backend_family") or "cpu_only").lower()
@@ -7718,9 +7743,18 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
     if not model_path:
         issue = getattr(models, "internal_asset_issue", lambda _model_id: None)(model_id)
         if issue == "incomplete":
+            missing = getattr(models, "missing_diffusers_components", lambda _model_id: [])(model_id)
+            missing_hint = (
+                f" Missing components: {', '.join(missing)}."
+                if missing
+                else ""
+            )
             raise UserFacingError(
                 "Internal model install is incomplete",
-                hint="Open Models and reinstall the requested internal model. The local snapshot is missing required weight files.",
+                hint=(
+                    "Open Models and reinstall the requested internal model, or re-sync it from the "
+                    f"Hugging Face bucket.{missing_hint}"
+                ),
                 code="MODEL_NOT_INSTALLED",
                 status_code=400,
             )
@@ -7832,11 +7866,7 @@ def _proxy_render_preflight_data(
         "resume_existing_frames": bool(settings_obj.resume_existing_frames),
         "warnings": warnings,
         "cache": cache,
-        "installed_internal_models": {
-            "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
-            "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
-            "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
-        },
+        "installed_internal_models": _installed_internal_models_status(),
         "settings": {
             "fps_render": settings_obj.fps_render,
             "fps_output": settings_obj.fps_output,
@@ -7947,11 +7977,7 @@ def _hosted_render_preflight_data(
         "resume_existing_frames": bool(settings_obj.resume_existing_frames),
         "warnings": warnings,
         "cache": cache,
-        "installed_internal_models": {
-            "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
-            "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
-            "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
-        },
+        "installed_internal_models": _installed_internal_models_status(),
         "hosted_provider": {
             "provider": "stability",
             "service": hosted_service,
@@ -8027,11 +8053,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         settings=settings_obj,
         total_frames=total_frames,
     )
-    installed_internal = {
-        "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
-        "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
-        "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
-    }
+    installed_internal = _installed_internal_models_status()
     return {
         "ok": True,
         "mode": "diffusion",
@@ -8209,10 +8231,10 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
         if mid in seen:
             continue
         seen.add(mid)
-        installed = models.installed_path(mid)
-        if not installed:
+        if not _internal_model_is_available(mid):
             continue
-        family = _internal_model_family_for_request(mid, installed)
+        installed = _resolve_installed_model_path(mid, materialize_remote=False)
+        family = _internal_model_family_for_request(mid, installed or Path(mid))
         hardware_issue = _internal_model_hardware_issue(mid, family, hw, str(tier_plan.get("device_preference") or "auto"))
         if hardware_issue:
             hardware_issues.append(hardware_issue)
@@ -10143,6 +10165,42 @@ def cloud_hf_test(req: CloudHfBucketTestRequest):
             models_dir=settings.models_dir,
             secrets_store=secrets,
         )
+    except Exception as e:
+        raise HTTPException(status_code=501, detail=str(e))
+
+
+def _hf_settings_payload() -> dict[str, Any]:
+    cfg = model_cache_settings.get()
+    status = hf_bucket_integration.describe_status(
+        models_dir=settings.models_dir,
+        secrets_store=secrets,
+    )
+    return {
+        "ok": True,
+        "settings": cfg["hf_bucket"],
+        "status": status,
+        "active_provider": models._model_cache_label() if models.model_cache is not None else None,
+        "priority": ["huggingface_bucket", "aws_s3", "azure_blob"],
+    }
+
+
+@app.get("/v1/cloud/hf/settings")
+def cloud_hf_settings_get():
+    try:
+        return _hf_settings_payload()
+    except Exception as e:
+        raise HTTPException(status_code=501, detail=str(e))
+
+
+@app.post("/v1/cloud/hf/settings")
+def cloud_hf_settings_set(req: CloudHfBucketSettingsRequest):
+    try:
+        model_cache_settings.update(req.model_dump(exclude_none=True))
+        # UI choice is authoritative for this process, then rebuild the cache so
+        # the Hugging Face bucket takes effect (and priority) immediately.
+        model_cache_settings.apply_to_env(force=True)
+        models.refresh_model_cache()
+        return _hf_settings_payload()
     except Exception as e:
         raise HTTPException(status_code=501, detail=str(e))
 

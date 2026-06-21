@@ -123,6 +123,7 @@ function ModelCard({
   installed,
   cloudRecord,
   storageMode,
+  cacheLabel,
   accepted,
   onAccept,
   onInstall,
@@ -133,6 +134,7 @@ function ModelCard({
   installed: boolean;
   cloudRecord?: any;
   storageMode?: string;
+  cacheLabel?: string;
   accepted: boolean;
   onAccept: () => void;
   onInstall: () => void;
@@ -144,15 +146,16 @@ function ModelCard({
   const canInstall = installable && !needsAccept;
   const cloudStored = !!cloudRecord;
   const cloudOnly = storageMode === "cloud_only";
-  const statusLabel = installed ? "Installed locally" : cloudStored ? "Stored in S3" : installable ? "Not installed" : "Browser only";
+  const cloudProvider = cloudRecord?.provider || cacheLabel || "cloud cache";
+  const statusLabel = installed ? "Installed locally" : cloudStored ? `Stored in ${cloudProvider}` : installable ? "Not installed" : "Browser only";
   const installLabel = installed
     ? "Installed"
     : cloudStored
-      ? "Stored in S3"
+      ? `Stored in ${cloudProvider}`
       : !installable
         ? "Install unavailable"
         : cloudOnly
-          ? "Store in S3"
+          ? `Store in ${cacheLabel || "cloud"}`
           : "Install";
 
   return (
@@ -220,6 +223,7 @@ function HubResultCard({
   matchedCatalog,
   installed,
   cloudStored,
+  cacheLabel,
   accepted,
   onAccept,
   onInstall,
@@ -229,6 +233,7 @@ function HubResultCard({
   matchedCatalog: CatalogEntry | null;
   installed: boolean;
   cloudStored?: boolean;
+  cacheLabel?: string;
   accepted: boolean;
   onAccept: (model: CatalogEntry) => void;
   onInstall: (model: CatalogEntry) => void;
@@ -274,7 +279,7 @@ function HubResultCard({
               {installed
                 ? "Installed in Studio"
                 : cloudStored
-                  ? "Stored in S3"
+                  ? `Stored in ${cacheLabel || "cloud cache"}`
                   : matchedCatalog.installable === false
                     ? "Browser only"
                     : "Install in Studio"}
@@ -431,6 +436,7 @@ export default function Models(props: PageProps) {
   const installedMap = data?.installed ?? {};
   const cloudMap = data?.cloud ?? {};
   const storageMode = data?.storage_mode ?? "local_cache";
+  const cacheLabel = data?.model_cache || "cloud cache";
 
   const internalSummary = useMemo(() => {
     const built = merged.built ?? [];
@@ -454,9 +460,9 @@ export default function Models(props: PageProps) {
     };
     const preferred = availableInternal.sd35 ? "SD3.5 Medium" : availableInternal.sdxl ? "SDXL" : availableInternal.sd15 ? "SD 1.5" : "none";
     const status = (key: "sd15" | "sdxl" | "sd35") =>
-      installedInternal[key] ? "installed locally" : cloudInternal[key] ? "stored in S3" : "missing";
+      installedInternal[key] ? "installed locally" : cloudInternal[key] ? `stored in ${cacheLabel}` : "missing";
     return { sd15, sdxl, sd35, installedInternal, cloudInternal, availableInternal, preferred, status };
-  }, [merged, installedMap, cloudMap]);
+  }, [merged, installedMap, cloudMap, cacheLabel]);
 
   const defaultModels = (merged.built ?? []).filter((m) => m.recommended === "default" && m.installable !== false);
   const advancedModels = (merged.built ?? []).filter((m) => m.recommended !== "default" && m.installable !== false);
@@ -675,6 +681,7 @@ export default function Models(props: PageProps) {
                 matchedCatalog={matchedCatalog}
                 installed={matchedCatalog ? !!installedMap[matchedCatalog.id] : false}
                 cloudStored={matchedCatalog ? !!cloudMap[matchedCatalog.id] : false}
+                cacheLabel={cacheLabel}
                 accepted={matchedCatalog ? !!acceptedMap[matchedCatalog.id] : false}
                 onAccept={accept}
                 onInstall={install}
@@ -736,7 +743,7 @@ export default function Models(props: PageProps) {
             m={m}
             installed={!!installedMap[m.id]}
             cloudRecord={cloudMap[m.id]}
-            storageMode={storageMode}
+            storageMode={storageMode} cacheLabel={cacheLabel}
             accepted={!!acceptedMap[m.id]}
             onAccept={() => accept(m)}
             onInstall={() => install(m)}
@@ -755,7 +762,7 @@ export default function Models(props: PageProps) {
             m={m}
             installed={!!installedMap[m.id]}
             cloudRecord={cloudMap[m.id]}
-            storageMode={storageMode}
+            storageMode={storageMode} cacheLabel={cacheLabel}
             accepted={!!acceptedMap[m.id]}
             onAccept={() => accept(m)}
             onInstall={() => install(m)}
@@ -776,7 +783,7 @@ export default function Models(props: PageProps) {
                 m={m}
                 installed={!!installedMap[m.id]}
                 cloudRecord={cloudMap[m.id]}
-                storageMode={storageMode}
+                storageMode={storageMode} cacheLabel={cacheLabel}
                 accepted={!!acceptedMap[m.id]}
                 onAccept={() => accept(m)}
                 onInstall={() => install(m)}
@@ -795,7 +802,7 @@ export default function Models(props: PageProps) {
                 m={m}
                 installed={!!installedMap[m.id]}
                 cloudRecord={cloudMap[m.id]}
-                storageMode={storageMode}
+                storageMode={storageMode} cacheLabel={cacheLabel}
                 accepted={!!acceptedMap[m.id]}
                 onAccept={() => accept(m)}
                 onInstall={() => install(m)}
@@ -847,8 +854,8 @@ export default function Models(props: PageProps) {
         EDMG ships with a curated model catalog, but does <b>not</b> bundle large weights in the installer. Use this page to install Studio-ready defaults, add community models, or browse curated Stability model families.
       </div>
       <div className="small" style={{ marginTop: 8, opacity: 0.86 }}>
-        Storage mode: <b>{storageMode === "cloud_only" ? "S3-only" : "local + cache"}</b>
-        {data?.model_cache ? <> • Cache: <b>{data.model_cache}</b></> : null}
+        Storage mode: <b>{storageMode === "cloud_only" ? "cloud-only" : "local + cache"}</b>
+        {data?.model_cache ? <> • Cache: <b>{data.model_cache}</b> (priority over S3/Azure)</> : null}
       </div>
 
       {err && (

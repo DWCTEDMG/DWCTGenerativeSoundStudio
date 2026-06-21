@@ -14,8 +14,11 @@ export default function Cloud(props: PageProps) {
   const [azurePrefix, setAzurePrefix] = useState("models");
   const [hfBucket, setHfBucket] = useState("");
   const [hfPrefix, setHfPrefix] = useState("");
+  const [hfEnabled, setHfEnabled] = useState(false);
   const [hfStatus, setHfStatus] = useState<any>(null);
+  const [hfActiveProvider, setHfActiveProvider] = useState<string | null>(null);
   const [hfStatusLoading, setHfStatusLoading] = useState(false);
+  const [hfSaving, setHfSaving] = useState(false);
   const [lightningOut, setLightningOut] = useState("lightning/lightning_bundle");
   const [lightningBackendUrl, setLightningBackendUrl] = useState(
     () => normalizeBackendUrl(props.backendUrl || getBackendUrl()) || "",
@@ -42,17 +45,40 @@ export default function Cloud(props: PageProps) {
     catch (e: any) { setErr(String(e)); }
   };
 
+  const applyHfPayload = (payload: any) => {
+    const cfg = payload?.settings ?? {};
+    setHfStatus(payload?.status ?? null);
+    setHfActiveProvider(payload?.active_provider ?? null);
+    setHfEnabled(!!cfg.enabled);
+    setHfBucket(String(cfg.bucket ?? ""));
+    setHfPrefix(String(cfg.prefix ?? ""));
+  };
+
   const loadHfStatus = async () => {
     setHfStatusLoading(true);
     try {
-      const status = await apiGet("/v1/cloud/hf/status");
-      setHfStatus(status);
-      if (!hfBucket && status?.bucket) setHfBucket(String(status.bucket));
-      if (!hfPrefix && status?.prefix) setHfPrefix(String(status.prefix));
+      applyHfPayload(await apiGet("/v1/cloud/hf/settings"));
     } catch (e: any) {
       setHfStatus({ ok: false, error: String(e) });
     } finally {
       setHfStatusLoading(false);
+    }
+  };
+
+  const saveHf = async () => {
+    setErr(null); setResult(null); setHfSaving(true);
+    try {
+      const payload = await apiPost("/v1/cloud/hf/settings", {
+        enabled: hfEnabled,
+        bucket: hfBucket || null,
+        prefix: hfPrefix || null,
+      });
+      applyHfPayload(payload);
+      setResult(payload);
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setHfSaving(false);
     }
   };
 
@@ -215,8 +241,8 @@ export default function Cloud(props: PageProps) {
       <div className="card">
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Hugging Face bucket</div>
         <div className="small">
-          Optional model cache backed by a Hugging Face bucket. Enable at runtime with{" "}
-          <code>EDMG_HF_BUCKET_MODEL_CACHE=1</code> and <code>EDMG_HF_BUCKET_ID=namespace/bucket-name</code>.
+          Model cache backed by a Hugging Face bucket. When enabled it is used <b>before AWS S3 / Azure</b>
+          {" "}for finding, downloading, and storing model weights. Settings are saved by Studio — no env vars required.
         </div>
         {hfStatusLoading ? (
           <div className="small" style={{ marginTop: 10 }}>Loading backend status…</div>
@@ -233,6 +259,18 @@ export default function Cloud(props: PageProps) {
             )}
           </div>
         ) : null}
+        <div className="small" style={{ marginTop: 6 }}>
+          Active model cache: <b>{hfActiveProvider || "none (local + S3/Azure fallback)"}</b>
+        </div>
+        <label className="row" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={hfEnabled}
+            onChange={(e) => setHfEnabled(e.target.checked)}
+            style={{ width: "auto" }}
+          />
+          <span>Use Hugging Face bucket as the model cache (priority over S3)</span>
+        </label>
         <div style={{ marginTop: 10 }}>
           <div className="small">Bucket id (namespace/name)</div>
           <input
@@ -246,11 +284,14 @@ export default function Cloud(props: PageProps) {
           <input value={hfPrefix} onChange={(e) => setHfPrefix(e.target.value)} placeholder="models" />
         </div>
         <div className="small" style={{ marginTop: 10 }}>
-          Tests use env token (<code>HF_TOKEN</code> / <code>EDMG_HF_TOKEN</code>) first, then Settings → Tokens.
-          The runtime cache only reads env vars unless you export the saved token there.
+          Uploads need a token with write access — env token (<code>HF_TOKEN</code> / <code>EDMG_HF_TOKEN</code>)
+          first, then Settings → Tokens. Public buckets can be read without a token.
         </div>
         <div className="row" style={{ marginTop: 10 }}>
-          <button onClick={hfTest}>Test HF bucket</button>
+          <button onClick={saveHf} disabled={hfSaving}>
+            {hfSaving ? "Saving…" : "Save & apply"}
+          </button>
+          <button className="secondary" onClick={hfTest}>Test HF bucket</button>
           <button className="secondary" onClick={() => void loadHfStatus()} disabled={hfStatusLoading}>
             Refresh status
           </button>
