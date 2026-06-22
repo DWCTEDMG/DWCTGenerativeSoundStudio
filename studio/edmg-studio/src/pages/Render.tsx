@@ -279,11 +279,16 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   const [info, setInfo] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [latestVideoMissing, setLatestVideoMissing] = useState<boolean>(false);
 
   const latestInternalVideoPath = String(project?.meta?.last_internal_render?.video || "");
   const latestInternalVideoUrl = latestInternalVideoPath
     ? `${backendUrl}/v1/projects/${projectId}/file?path=${encodeURIComponent(latestInternalVideoPath)}`
     : "";
+
+  useEffect(() => {
+    setLatestVideoMissing(false);
+  }, [latestInternalVideoUrl]);
 
   const comfyStillModels = useMemo(
     () => modelCatalog.filter((m) => (m.render?.render_modes || []).includes("stills") && m.kind === "checkpoint"),
@@ -1775,12 +1780,29 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <div className="small">
                         {latestInternalVideoPath}
                       </div>
-                      <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                        <a className="secondary" href={latestInternalVideoUrl} target="_blank" rel="noreferrer">Open video</a>
-                        <a className="secondary" href={latestInternalVideoUrl} download>Download video</a>
-                        <button className="secondary" onClick={() => { applyLatestInternalSettings(); setInternalResumeExisting(true); }}>Reuse settings + resume caches</button>
-                      </div>
-                      <video controls style={{ width: "100%", maxWidth: 640, marginTop: 10 }} src={latestInternalVideoUrl} />
+                      {latestVideoMissing ? (
+                        <div className="small" style={{ marginTop: 8 }}>
+                          This render output is no longer on disk (it may have been cleaned up or
+                          belongs to a removed project). Re-render to regenerate it.
+                          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                            <button className="secondary" onClick={() => { applyLatestInternalSettings(); setInternalResumeExisting(false); }}>Reuse settings + re-render</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                            <a className="secondary" href={latestInternalVideoUrl} target="_blank" rel="noreferrer">Open video</a>
+                            <a className="secondary" href={latestInternalVideoUrl} download>Download video</a>
+                            <button className="secondary" onClick={() => { applyLatestInternalSettings(); setInternalResumeExisting(true); }}>Reuse settings + resume caches</button>
+                          </div>
+                          <video
+                            controls
+                            style={{ width: "100%", maxWidth: 640, marginTop: 10 }}
+                            src={latestInternalVideoUrl}
+                            onError={() => setLatestVideoMissing(true)}
+                          />
+                        </>
+                      )}
                     </div>
                   ) : (
                     <div className="small">No completed internal video saved yet.</div>

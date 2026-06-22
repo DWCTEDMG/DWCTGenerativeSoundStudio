@@ -104,6 +104,11 @@ class Settings:
     worker_autostart: bool = os.getenv("EDMG_WORKER_AUTOSTART", "1").strip() not in ("0","false","False","no","NO")
     worker_concurrency: int = int(os.getenv("EDMG_WORKER_CONCURRENCY", "1"))
     worker_poll_interval_s: float = float(os.getenv("EDMG_WORKER_POLL_INTERVAL_S", "0.5"))
+    # Run heavy render jobs in an isolated child process so CPU/GIL-bound rendering
+    # cannot starve the FastAPI server (keeps the Studio UI responsive during renders).
+    render_subprocess: bool = os.getenv("EDMG_RENDER_SUBPROCESS", "1").strip() not in ("0","false","False","no","NO")
+    # Seconds to wait after a cancel request before force-terminating the render process.
+    render_subprocess_cancel_grace_s: float = float(os.getenv("EDMG_RENDER_SUBPROCESS_CANCEL_GRACE_S", "30"))
 
     # Per ComfyUI node max in-flight prompts (simple throttle, per backend process).
     comfyui_node_concurrency: int = int(os.getenv("EDMG_COMFYUI_NODE_CONCURRENCY", "1"))
