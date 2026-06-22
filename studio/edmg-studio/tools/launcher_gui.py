@@ -866,6 +866,55 @@ def _tail_file(path: Path, max_bytes: int = 200_000) -> str:
         return ""
 
 
+def _installed_torch_version(py: str) -> str | None:
+    """Return the base version (no +cpu/+cuXXX local tag) of torch in the venv, if any."""
+    try:
+        proc = subprocess.run(
+            [py, "-c", "import torch,sys; sys.stdout.write(torch.__version__.split('+')[0])"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode == 0:
+            version = str(proc.stdout or "").strip()
+            return version or None
+    except Exception:
+        pass
+    return None
+
+
+def _detect_cuda_wheel_tag() -> str:
+    """Pick the best PyTorch CUDA wheel channel (cuXYZ) for the installed NVIDIA driver.
+
+    Override with EDMG_CUDA_WHEEL_TAG (e.g. "cu128"). Falls back to a broadly
+    compatible modern channel if the driver's CUDA version can't be detected.
+    """
+    override = os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip().lower()
+    if override:
+        return override
+
+    smi = shutil.which("nvidia-smi")
+    if smi:
+        try:
+            proc = subprocess.run([smi], capture_output=True, text=True, timeout=15)
+            text = (proc.stdout or "") + (proc.stderr or "")
+            # nvidia-smi header shows e.g. "CUDA Version: 13.3" / "CUDA UMD Version: 13.3".
+            m = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text, re.IGNORECASE)
+            if m:
+                cuda = int(m.group(1)) * 10 + int(m.group(2))  # 13.3 -> 133
+                if cuda >= 130:
+                    return "cu130"
+                if cuda >= 128:
+                    return "cu128"
+                if cuda >= 126:
+                    return "cu126"
+                return "cu124"
+        except Exception:
+            pass
+    # Modern NVIDIA driver default when detection fails.
+    return "cu128"
+
+
 def _parse_backend_url_from_logs(text: str) -> tuple[str, int] | None:
     """Parse EDMG_BACKEND_URL marker from Electron logs."""
     for pattern in (
@@ -1757,7 +1806,13 @@ Get-ChildItem $base | ForEach-Object {
         self._run_bg("Restore Machine (OFF)", work)
 
     def install_cuda_torch(self) -> None:
-        """Install CUDA-enabled PyTorch into the backend venv (NVIDIA GPU path)."""
+        """Install CUDA-enabled PyTorch into the backend venv (NVIDIA GPU path).
+
+        Auto-detects the correct PyTorch CUDA wheel channel for the installed
+        NVIDIA driver (cu130/cu128/cu126/cu124), preserves the torch version
+        already pinned by the backend install so it does not silently downgrade,
+        and replaces a CPU-only build with the matching CUDA build.
+        """
         def work():
             venv_ok, venv_detail = _backend_venv_status()
             if not venv_ok or not BACKEND_VENV.exists():
@@ -1765,22 +1820,47 @@ Get-ChildItem $base | ForEach-Object {
                     "Backend venv not found. Run 'Install/Update Backend' first, then install CUDA PyTorch."
                 )
             py = str(_venv_python(BACKEND_VENV))
-            self._log("Installing CUDA-enabled PyTorch (cu124) — this may take a few minutes (~2.5 GB)…")
-            rc = _run_cmd(
-                [
-                    py, "-m", "pip", "install",
-                    "torch", "torchvision", "torchaudio",
-                    "--index-url", "https://download.pytorch.org/whl/cu124",
-                ],
-                cwd=BACKEND_DIR,
-                log_cb=self._log,
-            )
+
+            if not shutil.which("nvidia-smi") and not os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip():
+                self._log("Warning: nvidia-smi not found. If you don't have an NVIDIA GPU, CUDA PyTorch won't help.")
+                self._log("Continuing with a default CUDA channel; set EDMG_CUDA_WHEEL_TAG to override.")
+
+            tag = _detect_cuda_wheel_tag()
+            index_url = os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip() or f"https://download.pytorch.org/whl/{tag}"
+            installed = _installed_torch_version(py)
+            torch_req = f"torch=={installed}" if installed else "torch"
+
+            self._log(f"CUDA wheel channel: {tag} ({index_url})")
+            if installed:
+                self._log(f"Preserving installed torch version: {installed}")
+            self._log("Installing CUDA-enabled PyTorch — this may take a few minutes (large download)…")
+
+            def _pip_install(pkgs: list[str]) -> int:
+                return _run_cmd(
+                    [py, "-m", "pip", "install", "--upgrade", "--force-reinstall", *pkgs, "--index-url", index_url],
+                    cwd=BACKEND_DIR,
+                    log_cb=self._log,
+                )
+
+            # Preferred: torch + torchvision + torchaudio (matches the studio_bundle_cuda extra).
+            rc = _pip_install([torch_req, "torchvision", "torchaudio"])
             if rc != 0:
-                raise RuntimeError("CUDA PyTorch install failed. Check your internet connection and try again.")
+                self._log("Combined torch/vision/audio install failed; retrying with torch only…")
+                rc = _pip_install([torch_req])
+                if rc != 0 and installed:
+                    self._log(f"torch=={installed} not on {tag}; retrying with the latest torch available on {tag}…")
+                    rc = _pip_install(["torch"])
+                if rc != 0:
+                    raise RuntimeError(
+                        f"CUDA PyTorch install failed from {index_url}. "
+                        "Check your internet connection and NVIDIA driver, then try again."
+                    )
+
             self._log("Verifying CUDA availability…")
             proc = _run_cmd(
                 [py, "-c",
                  "import torch; print('torch', torch.__version__);"
+                 "print('cuda build:', torch.version.cuda);"
                  "print('cuda available:', torch.cuda.is_available());"
                  "print('device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"],
                 cwd=BACKEND_DIR,
@@ -1789,7 +1869,7 @@ Get-ChildItem $base | ForEach-Object {
             if proc != 0:
                 self._log("Warning: torch imported but CUDA check had an issue — GPU may still work at runtime.")
             else:
-                self._log("CUDA PyTorch installed and verified successfully.")
+                self._log("CUDA PyTorch installed. If 'cuda available: True' above, the backend will render on GPU.")
 
         self._run_bg("Install CUDA PyTorch", work)
 

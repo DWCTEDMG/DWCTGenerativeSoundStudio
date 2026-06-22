@@ -5857,10 +5857,100 @@ def _execute_job(job):
     jobs.save(job)
 
 
+def _job_in_subprocess_enabled() -> bool:
+    """Whether the claimed job should run in an isolated child process.
+
+    Disabled under pytest so the test suite keeps running jobs in-process
+    (TestClient starts the worker via lifespan, and tests assert on in-process
+    state / temporary data dirs).
+    """
+    if not settings.render_subprocess:
+        return False
+    if "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules:
+        return False
+    return True
+
+
+def _run_job_in_subprocess(job) -> None:
+    """Execute a claimed job in a separate Python process.
+
+    The job/project stores are entirely file-based, so the child writes
+    progress, logs and results to the same files this process polls. This keeps
+    CPU/GIL-bound rendering out of the API process so the UI stays responsive
+    and cancellation (a file-based status flag) still works.
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "edmg_studio_backend",
+        "run-job",
+        "--project",
+        job.project_id,
+        "--job",
+        job.id,
+    ]
+    jobs.append_log(job.project_id, job.id, "Dispatching to isolated render process")
+    popen_kwargs: dict[str, Any] = {"env": os.environ.copy()}
+    if os.name == "nt":
+        # Keep the foreground API/UI snappy while the render grinds.
+        popen_kwargs["creationflags"] = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+
+    cancel_deadline: float | None = None
+    while True:
+        try:
+            proc.wait(timeout=1.0)
+            break
+        except subprocess.TimeoutExpired:
+            latest = jobs.get(job.project_id, job.id)
+            if latest and latest.status == "canceled":
+                if cancel_deadline is None:
+                    cancel_deadline = time.time() + max(1.0, settings.render_subprocess_cancel_grace_s)
+                elif time.time() >= cancel_deadline:
+                    jobs.append_log(
+                        job.project_id,
+                        job.id,
+                        "Cancel grace period elapsed; terminating render process",
+                    )
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    break
+
+    rc = proc.returncode
+    latest = jobs.get(job.project_id, job.id)
+    if latest is None:
+        return
+    if latest.status in ("succeeded", "failed", "canceled"):
+        return
+    # Child exited without finalizing the job (crash / OOM / killed).
+    latest.status = "failed"
+    latest.error = f"Render worker process exited unexpectedly (exit code {rc})."
+    jobs.save(latest)
+    jobs.append_log(job.project_id, job.id, latest.error)
+
+
+def _dispatch_job(job) -> None:
+    """Worker entry point: run the job in a child process when enabled."""
+    if _job_in_subprocess_enabled():
+        try:
+            _run_job_in_subprocess(job)
+            return
+        except Exception as exc:  # pragma: no cover - launch failure fallback
+            jobs.append_log(
+                job.project_id,
+                job.id,
+                f"Isolated render process could not start ({exc}); running in-process.",
+            )
+    _execute_job(job)
+
+
 # Initialize always-on worker manager now that _execute_job exists
 worker = WorkerManager(
     jobs=jobs,
-    run_job=_execute_job,
+    run_job=_dispatch_job,
     concurrency=settings.worker_concurrency,
     poll_interval_s=settings.worker_poll_interval_s,
 )
