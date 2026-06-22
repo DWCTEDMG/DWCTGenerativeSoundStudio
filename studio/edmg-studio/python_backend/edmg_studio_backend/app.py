@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import platform
 import mimetypes
 import time
@@ -220,8 +221,36 @@ _ALLOWED_SECRETS: frozenset[str] = frozenset({
     "adobe_client_id", "adobe_client_secret",
 })
 
+def _install_benign_connection_error_filter(loop: asyncio.AbstractEventLoop) -> None:
+    """Silence benign client-disconnect tracebacks on the event loop.
+
+    On Windows (ProactorEventLoop), a browser aborting an HTTP response
+    mid-stream — very common with ``<video>`` range requests when the user
+    seeks, pauses, or navigates away — surfaces as a noisy
+    ``ConnectionResetError: [WinError 10054]`` traceback. It is harmless, so we
+    swallow only connection-reset style errors and defer everything else to the
+    default handler.
+    """
+    previous = loop.get_exception_handler()
+
+    def _handler(loop_: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        exc = context.get("exception")
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return
+        if previous is not None:
+            previous(loop_, context)
+        else:
+            loop_.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
+
+
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
+    try:
+        _install_benign_connection_error_filter(asyncio.get_running_loop())
+    except Exception:
+        pass
     if settings.worker_autostart:
         worker.start()
     try:

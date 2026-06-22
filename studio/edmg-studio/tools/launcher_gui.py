@@ -1908,6 +1908,18 @@ Get-ChildItem $base | ForEach-Object {
             if rc != 0:
                 raise RuntimeError("backend install failed")
 
+            # Parakeet ASR (NVIDIA NeMo) — large/optional. Installed best-effort so a
+            # failure here never blocks the core backend install.
+            self._log("Installing Parakeet ASR extra (NVIDIA NeMo) — large download, optional…")
+            rc_parakeet = _run_cmd([py, "-m", "pip", "install", "-e", ".[parakeet]"], cwd=BACKEND_DIR, log_cb=self._log)
+            if rc_parakeet != 0:
+                self._log(
+                    "Warning: Parakeet ASR extra failed to install (optional). "
+                    "Core backend is still usable; you can retry this step later."
+                )
+            else:
+                self._log("Parakeet ASR extra installed.")
+
         self._run_bg("Install backend", work)
 
     def install_ui(self) -> None:
