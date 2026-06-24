@@ -48,15 +48,20 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
  browser-dev-only quirk, not a setup problem.
 
 ### Tests (known results on Linux)
-- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 105 pass.
-- Frontend: `pnpm run test:ui` → 48 pass (23 files). The Windows-only
+- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 123 pass
+ (count drifts as tests are added).
+- Frontend: `pnpm run test:ui` → ~49 pass (23 files). The Windows-only
  `src/test/directorRuntime.test.ts` logs a hardcoded `C:\...` ENOENT error to stderr but still
  passes; the runner exits 0. This stderr noise is a pre-existing platform quirk, not a failure.
-- `pnpm run lint` has **3 pre-existing errors** (unused vars in `src/pages/Render.tsx` and
- `src/pages/Settings.tsx`); `pnpm run typecheck` passes clean. The lint errors are code issues,
- not environment problems.
-- Repo-level: `python3 -m pytest` from the repo root → 63 pass / 5 skip (the 5 skips need
-  `tkinter` or opt-in live-smoke env vars). Run both scopes with `python3 scripts/run_pytest_scopes.py`.
+- `pnpm run lint` and `pnpm run typecheck` both pass clean on this branch (exit 0).
+- Repo-level: `python3 -m pytest` from the repo root → ~51 pass / 5 skip / 12 fail on this
+ branch. The 5 skips need `tkinter` or opt-in live-smoke env vars. The 12 failures are
+ **pre-existing on this branch** in model-orchestration/render-tier/azure-cache logic
+ (`tests/test_studio_render_tiers.py`, `test_studio_proxy_fallback.py`,
+ `test_studio_sd_feature_slice.py`, `test_studio_workflow_smoke.py`, `test_azure_model_cache.py`);
+ they are mock-based assertion failures (deps import and the backend runs fine), so they are
+ code/branch issues, not environment-setup problems. The backend package suite above is the
+ reliable green signal. Run both scopes with `python3 scripts/run_pytest_scopes.py`.
 
 ### Storage
 - Backend project data is written to `studio/edmg-studio/python_backend/data/` (gitignored) when
