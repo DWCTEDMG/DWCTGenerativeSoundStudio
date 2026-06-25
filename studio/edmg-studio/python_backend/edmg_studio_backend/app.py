@@ -5859,6 +5859,11 @@ def _execute_job(job):
             res = _run_tensorrt_standalone(job.project_id, job.id, job.payload)
             job.result = res
             job.status = "succeeded"
+        elif job.type == "tensorrt_deforum":
+            from .services.tensorrt_deforum import run_deforum_job
+            res = run_deforum_job(job.project_id, job.id, job.payload)
+            job.result = res
+            job.status = "succeeded"
         elif job.type == "layered_animation":
             res = _run_layered_animation(job.project_id, job.id, job.payload)
             job.result = res
@@ -7754,6 +7759,39 @@ def render_tensorrt_standalone(project_id: str, req: TensorRTStandaloneRenderReq
     proj.meta.setdefault("jobs", []).append(job.__dict__)
     store.save(proj)
     return {"ok": True, "job": job.__dict__}
+
+
+@app.post("/v1/projects/{project_id}/render/tensorrt-deforum")
+def render_tensorrt_deforum(project_id: str, req: TensorRTStandaloneRenderRequest):
+    """Enqueue a native TensorRT Deforum image sequence generation job."""
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+        
+    payload = _request_payload(req)
+    
+    # Grab the Deforum settings from the project meta if they ran the workbench
+    # Or expect them directly in the payload
+    deforum_preview = proj.meta.get("creative_payload", {}).get("deforum_preview", {})
+    if not deforum_preview and "deforum_settings" not in payload:
+        raise HTTPException(400, "No Deforum schedule settings found. Please run the Audio Reactive Workbench first.")
+        
+    if "deforum_settings" not in payload:
+        payload["deforum_settings"] = deforum_preview.get("settings", {})
+        
+    job = jobs.create(project_id, "tensorrt_deforum", payload)
+    job.progress = {
+        "stage": "queued",
+        "current": 0,
+        "total": 1,
+        "percent": 0.0,
+        "message": f"Queued TensorRT Deforum render for model {req.model_id}",
+    }
+    jobs.save(job)
+    proj.meta.setdefault("jobs", []).append(job.__dict__)
+    store.save(proj)
+    return {"ok": True, "job": job.__dict__}
+
 
 
 @app.post("/v1/projects/{project_id}/render/tensorrt-standalone/preview")

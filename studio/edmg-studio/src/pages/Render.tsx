@@ -1218,6 +1218,24 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const runTensorrtDeforum = async () => {
+    if (!projectId || !selectedStillModelId) return;
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/tensorrt-deforum`, {
+        variant_index: selectedVariant,
+        model_id: selectedStillModelId,
+        width: Number(renderWidth) || 1024,
+        height: Number(renderHeight) || 1024,
+        batch_size: trtBatchSize,
+      });
+      setInfo(d);
+      await refreshInternalStatus();
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
 
   const tickWorker = async () => {
     setErr(null);
@@ -2904,6 +2922,17 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                     >
                       🚀 Render with TensorRT
                     </button>
+                    {project?.meta?.creative_payload?.deforum_preview && (
+                      <button
+                        className="secondary"
+                        onClick={runTensorrtDeforum}
+                        disabled={!variantCount}
+                        title="Render Audio-Reactive Video using the compiled TensorRT engine"
+                        style={{ marginLeft: 8 }}
+                      >
+                        🚀 Render Audio-Reactive Video (TRT)
+                      </button>
+                    )}
                     {trtLivePreview && trtPreviewImage && (
                       <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 9999, border: "2px solid #00f", borderRadius: 8, padding: 4, background: "#000" }}>
                         <img src={trtPreviewImage} alt="Live Preview" style={{ maxWidth: 256, maxHeight: 256, display: "block" }} />
