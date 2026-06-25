@@ -484,7 +484,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     <Badge ok={backendBundleOk} label={backendBundleOk ? "OK" : "Missing"} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    Installs the backend audio, ASR, and internal-render Python dependencies into the Studio backend environment.
+    Installs the backend audio, ASR, and internal-render Python dependencies into the Studio backend environment. The NVIDIA path also refreshes current CUDA PyTorch and TensorRT runtime packages.
   </div>
   {isWindows ? (
     <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
@@ -507,7 +507,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
       disabled={busy === "backend_bundle_cuda"}
       onClick={() => run("backend_bundle_cuda", "/v1/setup/backend/install", { bundle: "studio_bundle", flavor: "nvidia" })}
     >
-      {busy === "backend_bundle_cuda" ? "Installing…" : "Install Backend Runtime (NVIDIA CUDA)"}
+      {busy === "backend_bundle_cuda" ? "Installing…" : "Install Backend Runtime (NVIDIA CUDA + TensorRT)"}
     </button>
     {isWindows ? (
       <button

@@ -2,6 +2,8 @@
 setlocal
 cd /d %~dp0
 
+if not defined EDMG_INSTALL_CUDA set "EDMG_INSTALL_CUDA=auto"
+
 if /I "%~1"=="build-inno" goto build_inno
 if /I "%~1"=="inno" goto build_inno
 if /I "%~1"=="dist-inno" goto build_inno

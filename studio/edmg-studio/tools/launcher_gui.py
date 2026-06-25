@@ -25,6 +25,10 @@ LAUNCHER_ENV_PATH = STUDIO_DIR / "launcher_env.json"
 BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json"
 SUPPORTED_PYTHON_MIN = (3, 10)
 SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 14)
+PYTORCH_CUDA_INDEX_ROOT = "https://download.pytorch.org/whl"
+PYTORCH_CUDA_TAG_FALLBACKS = ("cu132", "cu130", "cu128", "cu126", "cu124", "cu121", "cu118")
+CUDA_TORCH_PACKAGES = ("torch", "torchvision", "torchaudio")
+TENSORRT_RUNTIME_PACKAGES = ("tensorrt>=11.0.0", "cuda-python>=12.0.0")
 
 # ── Machine optimiser ──────────────────────────────────────────────────────────
 OPTIMIZE_STATE_PATH = STUDIO_DIR / ".optimize_state.json"
@@ -883,36 +887,174 @@ def _installed_torch_version(py: str) -> str | None:
     return None
 
 
-def _detect_cuda_wheel_tag() -> str:
-    """Pick the best PyTorch CUDA wheel channel (cuXYZ) for the installed NVIDIA driver.
+def _cuda_tag_code(tag: str) -> int | None:
+    m = re.fullmatch(r"cu(\d+)", str(tag or "").strip().lower())
+    return int(m.group(1)) if m else None
 
-    Override with EDMG_CUDA_WHEEL_TAG (e.g. "cu128"). Falls back to a broadly
-    compatible modern channel if the driver's CUDA version can't be detected.
-    """
+
+def _detect_driver_cuda_code() -> int | None:
+    smi = shutil.which("nvidia-smi")
+    if not smi:
+        return None
+    try:
+        proc = subprocess.run([smi], capture_output=True, text=True, timeout=15)
+        text = (proc.stdout or "") + (proc.stderr or "")
+        # nvidia-smi header shows e.g. "CUDA Version: 13.3" / "CUDA UMD Version: 13.3".
+        m = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text, re.IGNORECASE)
+        if m:
+            return int(m.group(1)) * 10 + int(m.group(2))  # 13.3 -> 133
+    except Exception:
+        pass
+    return None
+
+
+def _available_pytorch_cuda_tags() -> set[str]:
+    try:
+        with urllib.request.urlopen(PYTORCH_CUDA_INDEX_ROOT + "/", timeout=8) as resp:
+            text = resp.read().decode("utf-8", errors="ignore")
+        tags = {f"cu{m}" for m in re.findall(r"cu(\d{3})/?", text, flags=re.IGNORECASE)}
+        if tags:
+            return tags
+    except Exception:
+        pass
+    return set(PYTORCH_CUDA_TAG_FALLBACKS)
+
+
+def _choose_cuda_wheel_tag(driver_cuda_code: int | None, available_tags: set[str] | tuple[str, ...] | list[str]) -> str:
+    candidates = []
+    for tag in available_tags or PYTORCH_CUDA_TAG_FALLBACKS:
+        norm = str(tag or "").strip().lower()
+        code = _cuda_tag_code(norm)
+        if code is not None:
+            candidates.append((code, norm))
+    if not candidates:
+        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in PYTORCH_CUDA_TAG_FALLBACKS]
+    candidates = sorted(set(candidates), reverse=True)
+    if driver_cuda_code is None:
+        return candidates[0][1]
+    for code, tag in candidates:
+        if code <= driver_cuda_code:
+            return tag
+    return candidates[-1][1]
+
+
+def _cuda_wheel_tag_candidates() -> list[str]:
     override = os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip().lower()
     if override:
-        return override
+        return [override]
 
-    smi = shutil.which("nvidia-smi")
-    if smi:
-        try:
-            proc = subprocess.run([smi], capture_output=True, text=True, timeout=15)
-            text = (proc.stdout or "") + (proc.stderr or "")
-            # nvidia-smi header shows e.g. "CUDA Version: 13.3" / "CUDA UMD Version: 13.3".
-            m = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text, re.IGNORECASE)
-            if m:
-                cuda = int(m.group(1)) * 10 + int(m.group(2))  # 13.3 -> 133
-                if cuda >= 130:
-                    return "cu130"
-                if cuda >= 128:
-                    return "cu128"
-                if cuda >= 126:
-                    return "cu126"
-                return "cu124"
-        except Exception:
-            pass
-    # Modern NVIDIA driver default when detection fails.
-    return "cu128"
+    driver_cuda_code = _detect_driver_cuda_code()
+    available_tags = _available_pytorch_cuda_tags()
+    candidates = []
+    for tag in available_tags or PYTORCH_CUDA_TAG_FALLBACKS:
+        norm = str(tag or "").strip().lower()
+        code = _cuda_tag_code(norm)
+        if code is not None:
+            candidates.append((code, norm))
+    if not candidates:
+        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in PYTORCH_CUDA_TAG_FALLBACKS]
+    candidates = sorted(set(candidates), reverse=True)
+    if driver_cuda_code is None:
+        return [tag for _, tag in candidates]
+    compatible = [tag for code, tag in candidates if code <= driver_cuda_code]
+    return compatible or [candidates[-1][1]]
+
+
+def _detect_cuda_wheel_tag() -> str:
+    """Pick the newest PyTorch CUDA wheel channel compatible with the NVIDIA driver."""
+    return _cuda_wheel_tag_candidates()[0]
+
+
+def _cuda_wheel_index_url(tag: str) -> str:
+    return os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip() or f"{PYTORCH_CUDA_INDEX_ROOT}/{tag}"
+
+
+def _should_auto_install_cuda_runtime() -> bool:
+    flag = os.environ.get("EDMG_INSTALL_CUDA", "").strip().lower()
+    if flag in {"0", "false", "no", "off", "cpu", "skip"}:
+        return False
+    if flag in {"1", "true", "yes", "on", "cuda", "nvidia"}:
+        return True
+    if os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip() or os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip():
+        return True
+    return shutil.which("nvidia-smi") is not None
+
+
+def _install_cuda_runtime(py: str, log_cb, *, allow_without_gpu: bool = False) -> None:
+    if not shutil.which("nvidia-smi") and not os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip():
+        msg = "nvidia-smi not found; CUDA runtime install needs an NVIDIA driver or EDMG_CUDA_WHEEL_TAG override."
+        if not allow_without_gpu:
+            raise RuntimeError(msg)
+        log_cb("Warning: " + msg)
+        log_cb("Continuing with the newest visible PyTorch CUDA wheel channel.")
+
+    rc = 1
+    index_url = ""
+    for tag in _cuda_wheel_tag_candidates():
+        index_url = _cuda_wheel_index_url(tag)
+        log_cb(f"CUDA wheel channel: {tag} ({index_url})")
+        log_cb("Installing latest CUDA-enabled PyTorch packages — this may take a few minutes…")
+        rc = _run_cmd(
+            [
+                py,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--force-reinstall",
+                "--index-url",
+                index_url,
+                *CUDA_TORCH_PACKAGES,
+            ],
+            cwd=BACKEND_DIR,
+            log_cb=log_cb,
+        )
+        if rc != 0:
+            log_cb("Combined torch/vision/audio install failed; retrying with torch only…")
+            rc = _run_cmd(
+                [py, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--index-url", index_url, "torch"],
+                cwd=BACKEND_DIR,
+                log_cb=log_cb,
+            )
+        if rc == 0:
+            break
+        if os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip() or os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip():
+            break
+        log_cb(f"No usable PyTorch wheel found on {tag}; trying the next compatible CUDA channel…")
+
+    if rc != 0:
+        raise RuntimeError(
+            f"CUDA PyTorch install failed from {index_url}. "
+            "Check your NVIDIA driver, internet connection, or set EDMG_CUDA_WHEEL_TAG to a supported channel."
+        )
+
+    log_cb("Installing/updating TensorRT runtime packages for Studio TensorRT renders…")
+    rc = _run_cmd(
+        [py, "-m", "pip", "install", "--upgrade", *TENSORRT_RUNTIME_PACKAGES],
+        cwd=BACKEND_DIR,
+        log_cb=log_cb,
+    )
+    if rc != 0:
+        raise RuntimeError("TensorRT runtime package install failed")
+
+    log_cb("Verifying CUDA/TensorRT runtime…")
+    proc = _run_cmd(
+        [
+            py,
+            "-c",
+            "import torch; print('torch', torch.__version__);"
+            "print('cuda build:', torch.version.cuda);"
+            "print('cuda available:', torch.cuda.is_available());"
+            "print('device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none');"
+            "import tensorrt; print('tensorrt', tensorrt.__version__)",
+        ],
+        cwd=BACKEND_DIR,
+        log_cb=log_cb,
+    )
+    if proc != 0:
+        log_cb("Warning: CUDA/TensorRT verification had an issue — check the log before rendering.")
+    else:
+        log_cb("CUDA/TensorRT runtime is ready for Studio renderer paths.")
 
 
 def _parse_backend_url_from_logs(text: str) -> tuple[str, int] | None:
@@ -1183,8 +1325,8 @@ class Launcher(tk.Tk):
         btn_row = ttk.Frame(actions)
         btn_row.pack(fill="x")
 
-        ttk.Button(btn_row, text="Install/Update Backend (venv + deps)", command=self.install_backend).pack(side="left")
-        ttk.Button(btn_row, text="Install CUDA PyTorch (NVIDIA GPU)", command=self.install_cuda_torch).pack(side="left", padx=8)
+        ttk.Button(btn_row, text="Install/Update Backend (auto CUDA + TensorRT)", command=self.install_backend).pack(side="left")
+        ttk.Button(btn_row, text="Refresh CUDA/TensorRT Runtime", command=self.install_cuda_torch).pack(side="left", padx=8)
         ttk.Button(btn_row, text=f"Install/Update Studio UI ({_studio_package_manager_name()} install)", command=self.install_ui).pack(side="left", padx=8)
         ttk.Button(btn_row, text="Start Backend", command=self.start_backend).pack(side="left", padx=8)
         ttk.Button(btn_row, text="Stop Backend", command=self.stop_backend).pack(side="left")
@@ -1806,72 +1948,17 @@ Get-ChildItem $base | ForEach-Object {
         self._run_bg("Restore Machine (OFF)", work)
 
     def install_cuda_torch(self) -> None:
-        """Install CUDA-enabled PyTorch into the backend venv (NVIDIA GPU path).
-
-        Auto-detects the correct PyTorch CUDA wheel channel for the installed
-        NVIDIA driver (cu130/cu128/cu126/cu124), preserves the torch version
-        already pinned by the backend install so it does not silently downgrade,
-        and replaces a CPU-only build with the matching CUDA build.
-        """
+        """Install/update current CUDA PyTorch and TensorRT runtime packages."""
         def work():
             venv_ok, venv_detail = _backend_venv_status()
             if not venv_ok or not BACKEND_VENV.exists():
                 raise RuntimeError(
-                    "Backend venv not found. Run 'Install/Update Backend' first, then install CUDA PyTorch."
+                    "Backend venv not found. Run 'Install/Update Backend' first, then refresh CUDA/TensorRT."
                 )
             py = str(_venv_python(BACKEND_VENV))
+            _install_cuda_runtime(py, self._log, allow_without_gpu=True)
 
-            if not shutil.which("nvidia-smi") and not os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip():
-                self._log("Warning: nvidia-smi not found. If you don't have an NVIDIA GPU, CUDA PyTorch won't help.")
-                self._log("Continuing with a default CUDA channel; set EDMG_CUDA_WHEEL_TAG to override.")
-
-            tag = _detect_cuda_wheel_tag()
-            index_url = os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip() or f"https://download.pytorch.org/whl/{tag}"
-            installed = _installed_torch_version(py)
-            torch_req = f"torch=={installed}" if installed else "torch"
-
-            self._log(f"CUDA wheel channel: {tag} ({index_url})")
-            if installed:
-                self._log(f"Preserving installed torch version: {installed}")
-            self._log("Installing CUDA-enabled PyTorch — this may take a few minutes (large download)…")
-
-            def _pip_install(pkgs: list[str]) -> int:
-                return _run_cmd(
-                    [py, "-m", "pip", "install", "--upgrade", "--force-reinstall", *pkgs, "--index-url", index_url],
-                    cwd=BACKEND_DIR,
-                    log_cb=self._log,
-                )
-
-            # Preferred: torch + torchvision + torchaudio (matches the studio_bundle_cuda extra).
-            rc = _pip_install([torch_req, "torchvision", "torchaudio"])
-            if rc != 0:
-                self._log("Combined torch/vision/audio install failed; retrying with torch only…")
-                rc = _pip_install([torch_req])
-                if rc != 0 and installed:
-                    self._log(f"torch=={installed} not on {tag}; retrying with the latest torch available on {tag}…")
-                    rc = _pip_install(["torch"])
-                if rc != 0:
-                    raise RuntimeError(
-                        f"CUDA PyTorch install failed from {index_url}. "
-                        "Check your internet connection and NVIDIA driver, then try again."
-                    )
-
-            self._log("Verifying CUDA availability…")
-            proc = _run_cmd(
-                [py, "-c",
-                 "import torch; print('torch', torch.__version__);"
-                 "print('cuda build:', torch.version.cuda);"
-                 "print('cuda available:', torch.cuda.is_available());"
-                 "print('device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"],
-                cwd=BACKEND_DIR,
-                log_cb=self._log,
-            )
-            if proc != 0:
-                self._log("Warning: torch imported but CUDA check had an issue — GPU may still work at runtime.")
-            else:
-                self._log("CUDA PyTorch installed. If 'cuda available: True' above, the backend will render on GPU.")
-
-        self._run_bg("Install CUDA PyTorch", work)
+        self._run_bg("Refresh CUDA/TensorRT Runtime", work)
 
     def install_backend(self) -> None:
         def work():
@@ -1907,6 +1994,15 @@ Get-ChildItem $base | ForEach-Object {
             rc = _run_cmd([py, "-m", "pip", "install", "-e", ".[studio_bundle]"], cwd=BACKEND_DIR, log_cb=self._log)
             if rc != 0:
                 raise RuntimeError("backend install failed")
+
+            if _should_auto_install_cuda_runtime():
+                self._log("NVIDIA CUDA detected or requested; refreshing latest CUDA PyTorch + TensorRT runtime…")
+                _install_cuda_runtime(py, self._log)
+            else:
+                self._log(
+                    "CUDA/TensorRT runtime auto-install skipped (no NVIDIA GPU detected). "
+                    "Set EDMG_INSTALL_CUDA=1 or EDMG_CUDA_WHEEL_TAG to force it."
+                )
 
             # Parakeet ASR (NVIDIA NeMo) — large/optional. Installed best-effort so a
             # failure here never blocks the core backend install.

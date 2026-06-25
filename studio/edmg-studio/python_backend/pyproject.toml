@@ -179,11 +179,12 @@ include = [
 ]
 
 
-# Install studio_bundle_cuda with:
-#   pip install -e ".[studio_bundle_cuda]" \
-#       --extra-index-url https://download.pytorch.org/whl/cu124
-# The extra-index-url lets pip resolve the CUDA-enabled torch/torchvision/torchaudio
-# wheels from pytorch.org while falling back to PyPI for everything else.
+# CUDA installs should use the newest PyTorch CUDA wheel channel compatible with
+# the installed NVIDIA driver, for example cu132, cu130, or cu128:
+#   pip install --upgrade --force-reinstall torch torchvision torchaudio \
+#       --index-url https://download.pytorch.org/whl/cu132
+#   pip install -e ".[studio_bundle_cuda]"
+# RUN_ME.bat and the Setup page auto-detect the channel instead of hardcoding it.
 
 [tool.ruff]
 target-version = "py310"

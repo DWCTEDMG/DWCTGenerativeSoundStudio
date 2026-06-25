@@ -3,7 +3,7 @@
 1. Unzip this folder somewhere short (e.g. `C:\EDMG\`).
 2. Double-click **RUN_ME.bat**
 3. In the Launcher:
-   - Click **Install/Update Backend**
+   - Click **Install/Update Backend (auto CUDA + TensorRT)**
    - Click **Install/Update Studio UI**
    - Click **Start Backend**
    - Click **Run Health Test**
@@ -20,8 +20,9 @@ repo-root `RUN_ME.bat` simply forwards to it.
   - **Ollama** running at `http://127.0.0.1:11434`
   - **ComfyUI** running at `http://127.0.0.1:8188`
   - **FFmpeg** on PATH (for MP4 assembly)
+  - **NVIDIA driver** with `nvidia-smi` for automatic current CUDA PyTorch + TensorRT runtime installs
 
-If Ollama/ComfyUI/FFmpeg aren’t installed yet, the app will still boot and show clear “Fix:” instructions in the Setup / logs.
+If Ollama/ComfyUI/FFmpeg aren’t installed yet, the app will still boot and show clear “Fix:” instructions in the Setup / logs. On CPU-only machines, set `EDMG_INSTALL_CUDA=0` before launching to skip the automatic CUDA/TensorRT refresh.
 
 ## Release proof
 

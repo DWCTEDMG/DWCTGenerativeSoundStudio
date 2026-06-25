@@ -59,3 +59,17 @@ def test_ensure_data_dir_env_ignores_unreachable_saved_home(monkeypatch, tmp_pat
 
     persisted = json.loads(bootstrap_path.read_text(encoding="utf-8"))
     assert persisted["studioHome"] == str(launcher_gui.STUDIO_DIR.resolve())
+
+
+def test_choose_cuda_wheel_tag_uses_newest_supported_driver_channel():
+    launcher_gui = _load_launcher_gui()
+
+    assert launcher_gui._choose_cuda_wheel_tag(133, {"cu124", "cu130", "cu132"}) == "cu132"
+    assert launcher_gui._choose_cuda_wheel_tag(130, {"cu124", "cu130", "cu132"}) == "cu130"
+    assert launcher_gui._choose_cuda_wheel_tag(129, {"cu124", "cu128", "cu130"}) == "cu128"
+
+
+def test_choose_cuda_wheel_tag_defaults_to_newest_visible_channel_without_driver():
+    launcher_gui = _load_launcher_gui()
+
+    assert launcher_gui._choose_cuda_wheel_tag(None, {"cu124", "cu128", "cu132"}) == "cu132"

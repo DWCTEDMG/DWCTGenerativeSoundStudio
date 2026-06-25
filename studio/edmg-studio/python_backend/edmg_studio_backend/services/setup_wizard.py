@@ -998,29 +998,171 @@ def check_backend_bundle(bundle: str = "studio_bundle") -> dict[str, Any]:
     }
 
 
-_CUDA_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu124"
+_PYTORCH_CUDA_INDEX_ROOT = "https://download.pytorch.org/whl"
+_PYTORCH_CUDA_TAG_FALLBACKS = ("cu132", "cu130", "cu128", "cu126", "cu124", "cu121", "cu118")
 _CUDA_TORCH_PACKAGES = ["torch", "torchvision", "torchaudio"]
+_TENSORRT_RUNTIME_PACKAGES = ["tensorrt>=11.0.0", "cuda-python>=12.0.0"]
+
+
+def _cuda_tag_code(tag: str) -> int | None:
+    match = re.fullmatch(r"cu(\d+)", str(tag or "").strip().lower())
+    return int(match.group(1)) if match else None
+
+
+def _detect_driver_cuda_code() -> int | None:
+    smi = shutil.which("nvidia-smi")
+    if not smi:
+        return None
+    try:
+        proc = subprocess.run([smi], capture_output=True, text=True, timeout=15)
+        text = (proc.stdout or "") + (proc.stderr or "")
+        match = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text, re.IGNORECASE)
+        if match:
+            return int(match.group(1)) * 10 + int(match.group(2))
+    except Exception:
+        pass
+    return None
+
+
+def _available_pytorch_cuda_tags() -> set[str]:
+    try:
+        response = requests.get(f"{_PYTORCH_CUDA_INDEX_ROOT}/", timeout=8)
+        if response.ok:
+            tags = {f"cu{m}" for m in re.findall(r"cu(\d{3})/?", response.text, flags=re.IGNORECASE)}
+            if tags:
+                return tags
+    except Exception:
+        pass
+    return set(_PYTORCH_CUDA_TAG_FALLBACKS)
+
+
+def _choose_cuda_wheel_tag(driver_cuda_code: int | None, available_tags: set[str] | tuple[str, ...] | list[str]) -> str:
+    candidates: list[tuple[int, str]] = []
+    for raw in available_tags or _PYTORCH_CUDA_TAG_FALLBACKS:
+        tag = str(raw or "").strip().lower()
+        code = _cuda_tag_code(tag)
+        if code is not None:
+            candidates.append((code, tag))
+    if not candidates:
+        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in _PYTORCH_CUDA_TAG_FALLBACKS]
+    candidates = sorted(set(candidates), reverse=True)
+    if driver_cuda_code is None:
+        return candidates[0][1]
+    for code, tag in candidates:
+        if code <= driver_cuda_code:
+            return tag
+    return candidates[-1][1]
+
+
+def _cuda_wheel_tag_candidates() -> list[str]:
+    override = os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip().lower()
+    if override:
+        return [override]
+
+    driver_cuda_code = _detect_driver_cuda_code()
+    available_tags = _available_pytorch_cuda_tags()
+    candidates: list[tuple[int, str]] = []
+    for raw in available_tags or _PYTORCH_CUDA_TAG_FALLBACKS:
+        tag = str(raw or "").strip().lower()
+        code = _cuda_tag_code(tag)
+        if code is not None:
+            candidates.append((code, tag))
+    if not candidates:
+        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in _PYTORCH_CUDA_TAG_FALLBACKS]
+    candidates = sorted(set(candidates), reverse=True)
+    if driver_cuda_code is None:
+        return [tag for _, tag in candidates]
+    compatible = [tag for code, tag in candidates if code <= driver_cuda_code]
+    return compatible or [candidates[-1][1]]
+
+
+def _detect_cuda_wheel_tag() -> str:
+    return _cuda_wheel_tag_candidates()[0]
+
+
+def _cuda_torch_index_url(tag: str) -> str:
+    return os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip() or f"{_PYTORCH_CUDA_INDEX_ROOT}/{tag}"
 
 
 def _install_cuda_torch(task: SetupTask) -> None:
-    """Install CUDA-enabled PyTorch (CUDA 12.4 build) before the main bundle install."""
-    SetupTaskManager.log(task, "Installing CUDA-enabled PyTorch (cu124) from pytorch.org…")
-    rc = _run_subprocess(
+    """Install the newest compatible CUDA-enabled PyTorch wheel set."""
+    if not shutil.which("nvidia-smi") and not os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip():
+        SetupTaskManager.log(
+            task,
+            "Warning: nvidia-smi not found. Continuing with the newest visible PyTorch CUDA wheel channel.",
+        )
+    last_error: subprocess.CalledProcessError | None = None
+    for tag in _cuda_wheel_tag_candidates():
+        index_url = _cuda_torch_index_url(tag)
+        SetupTaskManager.log(task, f"Installing latest CUDA-enabled PyTorch ({tag}) from {index_url}...")
+        try:
+            _run_subprocess(
+                task,
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    "--force-reinstall",
+                    "--index-url",
+                    index_url,
+                    *_CUDA_TORCH_PACKAGES,
+                    "--timeout",
+                    "300",
+                ],
+                cwd=str(_backend_root()),
+            )
+            last_error = None
+            break
+        except subprocess.CalledProcessError:
+            SetupTaskManager.log(task, "Combined torch/vision/audio install failed; retrying with torch only...")
+            try:
+                _run_subprocess(
+                    task,
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--upgrade",
+                        "--force-reinstall",
+                        "--index-url",
+                        index_url,
+                        "torch",
+                        "--timeout",
+                        "300",
+                    ],
+                    cwd=str(_backend_root()),
+                )
+                last_error = None
+                break
+            except subprocess.CalledProcessError as torch_exc:
+                last_error = torch_exc
+                if os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip() or os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip():
+                    break
+                SetupTaskManager.log(task, f"No usable PyTorch wheel found on {tag}; trying the next compatible CUDA channel...")
+    if last_error is not None:
+        raise last_error
+    SetupTaskManager.log(task, "CUDA PyTorch installed successfully.")
+
+
+def _install_tensorrt_runtime(task: SetupTask) -> None:
+    """Install TensorRT runtime packages used by Studio's standalone TensorRT renderer."""
+    SetupTaskManager.log(task, "Installing/updating TensorRT runtime packages...")
+    _run_subprocess(
         task,
         [
-            sys.executable, "-m", "pip", "install",
-            *_CUDA_TORCH_PACKAGES,
-            "--index-url", _CUDA_TORCH_INDEX_URL,
-            "--timeout", "300",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            *_TENSORRT_RUNTIME_PACKAGES,
         ],
         cwd=str(_backend_root()),
     )
-    if rc != 0:
-        raise RuntimeError(
-            "CUDA PyTorch install failed (exit code %d). "
-            "Check your internet connection — the download is ~2.5 GB." % rc
-        )
-    SetupTaskManager.log(task, "CUDA PyTorch installed successfully.")
+    SetupTaskManager.log(task, "TensorRT runtime packages installed successfully.")
 
 
 def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle", flavor: str = "cpu") -> None:
@@ -1050,6 +1192,10 @@ def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle", flavo
         [sys.executable, "-m", "pip", "install", "-e", f".[{bundle}]"],
         cwd=str(root),
     )
+
+    if flavor in ("nvidia", "cuda"):
+        SetupTaskManager.set_progress(task, 0.75)
+        _install_tensorrt_runtime(task)
 
     SetupTaskManager.set_progress(task, 0.9)
     status = check_backend_bundle(bundle)
