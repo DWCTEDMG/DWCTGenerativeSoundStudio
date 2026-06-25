@@ -79,3 +79,4 @@ def test_model_manager_resolves_local_runtime_bundle_directory(tmp_path):
     assert mode == "snapshot"
     assert dest.name == "local_trt"
     assert manager._local_installed_path(entry) == bundle
+    assert manager._installed_map([entry])["local_trt"] is True

@@ -2377,6 +2377,8 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 <div className="small" style={{ opacity: 0.8, flex: 1, minWidth: 260 }}>
                   {selectedStillEngine === "internal"
                     ? "Studio routes this still model through the internal diffusers adapter and validates workflow compatibility before enqueue."
+                    : selectedStillIsTensorRT
+                      ? "Studio routes this still model through the standalone TensorRT runtime bundle and validates the 512x512 batch-1 engine profile before enqueue."
                     : "Studio routes this still model through ComfyUI checkpoints and exports matching workflows when requested."}
                 </div>
               </div>

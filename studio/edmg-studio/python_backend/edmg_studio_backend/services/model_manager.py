@@ -598,6 +598,9 @@ class ModelManager:
             if engine == "internal":
                 out[mid] = self._entry_is_available(e, probe_remote=True)
                 continue
+            if engine == "runtime_bundle":
+                out[mid] = self._entry_is_available(e, probe_remote=True)
+                continue
 
             if fname:
                 primary = self._comfy_models_dir(folder) / fname
