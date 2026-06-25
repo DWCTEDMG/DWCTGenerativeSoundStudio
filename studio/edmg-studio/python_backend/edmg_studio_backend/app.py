@@ -101,7 +101,7 @@ from .services.render_settings import (
     STABILITY_STYLE_PRESETS,
     VIDEO_GENERATION_PREFERENCES,
 )
-from .services.firefly_platform import FireflyClient, FireflyImageResult
+from .services.firefly_platform import FireflyClient, FireflyImageResult, FireflyVideoResult
 from .services.cosmos_platform import CosmosClient, COSMOS_MODELS
 from .services.transcription_settings import (
     PARAKEET_MODELS,
@@ -2052,6 +2052,8 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
             "style": str(firefly_cfg.get("style") or "none"),
             "content_class": str(firefly_cfg.get("content_class") or "photo"),
             "strength": float(firefly_cfg.get("strength") or 0.6),
+            "video_enabled": bool(firefly_cfg.get("video_enabled", False)),
+            "video_duration_s": int(firefly_cfg.get("video_duration_s") or 5),
             "note": (
                 "No Adobe credentials saved — add Client ID and Client Secret in Settings → Adobe Firefly."
                 if not firefly_credentials_ok else
@@ -7439,6 +7441,104 @@ def render_firefly_scenes(project_id: str, req: RenderScenesRequest):
             results.append({"scene_index": idx, "ok": False, "error": str(exc)})
 
     return {"ok": True, "provider": "adobe-firefly", "results": results, "width": width, "height": height}
+
+
+@app.post("/v1/projects/{project_id}/render/firefly/video")
+def render_firefly_video(project_id: str, payload: dict[str, Any]):
+    """Generate native Firefly video clips (text-to-video) for a plan variant.
+
+    For each scene in the selected variant, submits a Firefly Video job and
+    saves the returned MP4 under clips/variant_N/. Pass ``scene_index`` to
+    render a single scene instead of the whole variant.
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    payload = payload or {}
+    variants = plan["variants"]
+    variant_index = int(payload.get("variant_index") or 0)
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    provider_status = _render_provider_status()
+    firefly_status = provider_status.get("firefly") or {}
+    if not firefly_status.get("configured"):
+        raise UserFacingError(
+            "Adobe Firefly credentials not configured.",
+            hint="Open Settings → Adobe Firefly, save your Client ID and Client Secret, then retry.",
+            code="FIREFLY_NOT_CONFIGURED",
+            status_code=400,
+        )
+
+    firefly_cfg = dict((render_settings.get().get("firefly") or {}))
+    client = _firefly_client()
+    scenes = variants[variant_index].get("scenes") or []
+    if not scenes:
+        raise HTTPException(400, "Selected variant has no scenes.")
+
+    width = int(payload.get("width") or proj.meta.get("width") or 1280)
+    height = int(payload.get("height") or proj.meta.get("height") or 720)
+    duration_s = float(payload.get("duration_s") or firefly_cfg.get("video_duration_s") or 5)
+    custom_model_id = str(payload.get("model_id") or firefly_cfg.get("custom_model_id") or "").strip() or None
+    seed = payload.get("seed")
+    seed = int(seed) if seed is not None else None
+
+    requested_scene = payload.get("scene_index")
+    scene_indices = (
+        [int(requested_scene)]
+        if requested_scene is not None
+        else list(range(len(scenes)))
+    )
+
+    clips_dir = Path(proj.path) / "clips" / f"variant_{variant_index}"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for idx in scene_indices:
+        if idx < 0 or idx >= len(scenes):
+            results.append({"scene_index": idx, "ok": False, "error": "scene_index out of range"})
+            continue
+        scene = scenes[idx]
+        prompt = str(scene.get("prompt") or "cinematic music video clip").strip()
+        negative = str(scene.get("negative_prompt") or payload.get("negative_prompt") or "").strip()
+        try:
+            result = client.generate_video(
+                prompt=prompt,
+                width=width,
+                height=height,
+                duration_s=duration_s,
+                negative_prompt=negative,
+                seed=seed,
+                custom_model_id=custom_model_id,
+            )
+            out_path = clips_dir / f"scene_{idx:04d}.mp4"
+            out_path.write_bytes(result.video_bytes)
+            rel = str(out_path.relative_to(Path(proj.path)))
+            results.append({
+                "scene_index": idx,
+                "path": rel,
+                "seed": result.seed,
+                "generation_id": result.generation_id,
+                "duration_s": result.duration_s,
+                "ok": True,
+            })
+        except UserFacingError:
+            raise
+        except Exception as exc:
+            results.append({"scene_index": idx, "ok": False, "error": str(exc)})
+
+    return {
+        "ok": True,
+        "provider": "adobe-firefly",
+        "kind": "video",
+        "results": results,
+        "width": width,
+        "height": height,
+    }
 
 
 @app.post("/v1/projects/{project_id}/render/firefly/assemble")

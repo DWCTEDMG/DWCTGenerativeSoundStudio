@@ -2,6 +2,8 @@
 
 Supports:
   - Standard Firefly image generation (text-to-image, image-to-image)
+  - Firefly video generation (text-to-video, image-to-video) via the async
+    Firefly Video API (submit job -> poll status -> download MP4)
   - Custom model generation (pass custom_model_id from your Firefly fine-tune)
   - OAuth 2.0 token exchange (client_credentials flow via Adobe IMS)
 
@@ -47,6 +49,14 @@ FIREFLY_STYLES = (
     "sketch", "watercolor", "pixel-art",
 )
 
+# Firefly Video supported output sizes (width x height).
+FIREFLY_VIDEO_SIZES = (
+    (1920, 1080), (1280, 720), (1080, 1920), (720, 1280), (960, 960),
+)
+# Firefly Video clip length bounds (seconds).
+FIREFLY_VIDEO_MIN_SECONDS = 1
+FIREFLY_VIDEO_MAX_SECONDS = 10
+
 
 @dataclass(frozen=True)
 class FireflyImageResult:
@@ -55,6 +65,28 @@ class FireflyImageResult:
     custom_model_id: str | None = None
     seed: int | None = None
     generation_id: str | None = None
+
+
+@dataclass(frozen=True)
+class FireflyVideoResult:
+    video_bytes: bytes
+    content_type: str
+    model: str | None
+    seed: int | None = None
+    generation_id: str | None = None
+    duration_s: float | None = None
+
+
+def _closest_video_size(width: int, height: int) -> tuple[int, int]:
+    target = float(width) / float(max(1, height))
+
+    def _score(s: tuple[int, int]) -> tuple[float, int]:
+        aspect_diff = abs(target - float(s[0]) / float(s[1]))
+        # Tie-break on equal aspect ratios by preferring the closest resolution.
+        size_diff = abs(s[0] - int(width)) + abs(s[1] - int(height))
+        return (aspect_diff, size_diff)
+
+    return min(FIREFLY_VIDEO_SIZES, key=_score)
 
 
 @dataclass
@@ -305,6 +337,161 @@ class FireflyClient:
                 code="FIREFLY_IMAGE_DECODE_FAILED",
                 status_code=502,
             ) from exc
+
+    # ── Video generation ──────────────────────────────────────────────────────
+
+    def generate_video(
+        self,
+        *,
+        prompt: str,
+        width: int,
+        height: int,
+        duration_s: float = 5.0,
+        negative_prompt: str = "",
+        seed: int | None = None,
+        custom_model_id: str | None = None,
+        init_image: Image.Image | None = None,
+        timeout_s: float = 600.0,
+        poll_interval_s: float = 5.0,
+    ) -> FireflyVideoResult:
+        """Generate a video clip via the async Firefly Video API.
+
+        Submits a generation job, polls its status until it succeeds, then
+        downloads the resulting MP4. Works for text-to-video and, when
+        ``init_image`` is given, image-to-video.
+        """
+
+        size_w, size_h = _closest_video_size(int(width), int(height))
+        clip_seconds = max(
+            FIREFLY_VIDEO_MIN_SECONDS,
+            min(FIREFLY_VIDEO_MAX_SECONDS, int(round(float(duration_s) or 5.0))),
+        )
+
+        body: dict[str, Any] = {
+            "prompt": str(prompt or "").strip() or "cinematic music video clip",
+            "sizes": [{"width": int(size_w), "height": int(size_h)}],
+            "videoSettings": {"durationInSeconds": clip_seconds},
+        }
+        if negative_prompt:
+            body["negativePrompt"] = str(negative_prompt)[:1000]
+        if seed is not None:
+            body["seeds"] = [int(seed)]
+        if custom_model_id:
+            body["customModel"] = {"id": str(custom_model_id)}
+        if init_image is not None:
+            upload_id = self._upload_reference_image(init_image, timeout_s=30.0)
+            body["image"] = {"id": upload_id}
+
+        resp = requests.post(
+            f"{self.base_url}/v3/videos/generate",
+            headers=self._headers(),
+            json=body,
+            timeout=(30, 120),
+        )
+        if resp.status_code >= 400:
+            self._raise_api_error(resp)
+
+        submit = resp.json() if resp.content else {}
+        status_url = self._job_status_url(submit)
+        job_id = str(submit.get("jobId") or submit.get("id") or "") or None
+
+        outputs, result_seed = self._poll_video_job(
+            status_url, timeout_s=timeout_s, poll_interval_s=poll_interval_s
+        )
+        video_url = self._extract_video_url(outputs)
+        if not video_url:
+            raise UserFacingError(
+                "Adobe Firefly returned no downloadable video.",
+                hint="Retry the render. If it keeps failing, check your Firefly video quota.",
+                code="FIREFLY_VIDEO_NO_OUTPUT",
+                status_code=502,
+            )
+
+        video_bytes, content_type = self._download_bytes(video_url)
+        return FireflyVideoResult(
+            video_bytes=video_bytes,
+            content_type=content_type or "video/mp4",
+            model="firefly-video",
+            seed=int(result_seed) if result_seed is not None else seed,
+            generation_id=job_id,
+            duration_s=float(clip_seconds),
+        )
+
+    def _job_status_url(self, submit: dict[str, Any]) -> str:
+        links = submit.get("links") if isinstance(submit.get("links"), dict) else {}
+        status_url = (
+            submit.get("statusUrl")
+            or submit.get("status_url")
+            or (links.get("status") if isinstance(links, dict) else None)
+            or ""
+        )
+        if status_url:
+            return str(status_url)
+        job_id = str(submit.get("jobId") or submit.get("id") or "").strip()
+        if job_id:
+            return f"{self.base_url}/v3/status/{job_id}"
+        raise UserFacingError(
+            "Adobe Firefly did not return a video job handle.",
+            hint="Retry the render.",
+            code="FIREFLY_VIDEO_NO_JOB",
+            status_code=502,
+        )
+
+    def _poll_video_job(
+        self, status_url: str, *, timeout_s: float, poll_interval_s: float
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        deadline = time.time() + max(30.0, float(timeout_s))
+        delay = max(1.0, float(poll_interval_s))
+        while True:
+            resp = requests.get(status_url, headers=self._headers(), timeout=(15, 60))
+            if resp.status_code >= 400:
+                self._raise_api_error(resp)
+            data = resp.json() if resp.content else {}
+            status = str(data.get("status") or "").strip().lower()
+            if status in ("succeeded", "complete", "completed", "done"):
+                result = data.get("result") if isinstance(data.get("result"), dict) else data
+                outputs = result.get("outputs") or data.get("outputs") or []
+                seed = None
+                if outputs and isinstance(outputs[0], dict):
+                    seed = outputs[0].get("seed")
+                return list(outputs), (int(seed) if seed is not None else None)
+            if status in ("failed", "error", "cancelled", "canceled"):
+                raise UserFacingError(
+                    f"Adobe Firefly video job {status or 'failed'}.",
+                    hint="Retry the render. If it keeps failing, check your Firefly quota and prompt.",
+                    code="FIREFLY_VIDEO_JOB_FAILED",
+                    status_code=502,
+                )
+            if time.time() >= deadline:
+                raise UserFacingError(
+                    "Adobe Firefly video job timed out.",
+                    hint="The clip took too long to render. Try a shorter duration or smaller size.",
+                    code="FIREFLY_VIDEO_TIMEOUT",
+                    status_code=504,
+                )
+            time.sleep(delay)
+
+    @staticmethod
+    def _extract_video_url(outputs: list[dict[str, Any]]) -> str:
+        for out in outputs or []:
+            if not isinstance(out, dict):
+                continue
+            video = out.get("video") if isinstance(out.get("video"), dict) else {}
+            url = (
+                video.get("url")
+                or (out.get("destination") or {}).get("url")
+                if isinstance(out.get("destination"), dict)
+                else video.get("url")
+            )
+            url = url or video.get("url") or out.get("url") or ""
+            if url:
+                return str(url)
+        return ""
+
+    def _download_bytes(self, url: str) -> tuple[bytes, str]:
+        resp = requests.get(url, timeout=(15, 300))
+        resp.raise_for_status()
+        return resp.content, str(resp.headers.get("Content-Type") or "")
 
     def _raise_api_error(self, response: requests.Response) -> None:
         message = f"Adobe Firefly request failed with status {response.status_code}."

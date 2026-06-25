@@ -1894,6 +1894,37 @@ export default function Settings(props: PageProps) {
                     </select>
                   </div>
                 </div>
+
+                {/* Video generation */}
+                <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                  <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Video generation (beta)</div>
+                  <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={!!renderProviderDraft?.firefly?.video_enabled}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), firefly: { ...(c?.firefly || {}), video_enabled: e.target.checked },
+                      }))}
+                    />
+                    Enable native Firefly video clips (text-to-video)
+                  </label>
+                  <div style={{ marginTop: 6 }}>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Clip duration (seconds)</div>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={renderProviderDraft?.firefly?.video_duration_s ?? 5}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}),
+                        firefly: {
+                          ...(c?.firefly || {}),
+                          video_duration_s: Math.max(1, Math.min(10, Number(e.target.value) || 5)),
+                        },
+                      }))}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 

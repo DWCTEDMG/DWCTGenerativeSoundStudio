@@ -35,7 +35,7 @@ STABILITY_STYLE_PRESETS = (
     "tile-texture",
 )
 
-VIDEO_GENERATION_PREFERENCES = ("auto", "local_gpu", "cosmos_cloud", "comfyui")
+VIDEO_GENERATION_PREFERENCES = ("auto", "local_gpu", "cosmos_cloud", "comfyui", "firefly_cloud")
 
 DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
     "video": {
@@ -62,6 +62,8 @@ DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
         "style": "none",
         "content_class": "photo",
         "strength": 0.6,
+        "video_enabled": False,
+        "video_duration_s": 5,
     },
     "stability": {
         "enabled": False,
@@ -216,6 +218,8 @@ class RenderSettingsStore:
             "style": firefly_style,
             "content_class": firefly_content_class,
             "strength": max(0.1, min(1.0, float(firefly.get("strength", out["firefly"]["strength"])))),
+            "video_enabled": bool(firefly.get("video_enabled", out["firefly"]["video_enabled"])),
+            "video_duration_s": max(1, min(10, int(firefly.get("video_duration_s", out["firefly"]["video_duration_s"])))),
         }
         out["stability"] = {
             "enabled": bool(stability.get("enabled", out["stability"]["enabled"])),
