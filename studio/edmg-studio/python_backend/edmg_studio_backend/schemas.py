@@ -137,6 +137,16 @@ class AssembleVideoRequest(BaseModel):
     variant_index: int = 0
     fps: int = 30
 
+class TensorRTStandaloneRenderRequest(BaseModel):
+    variant_index: int = 0
+    model_id: str | None = None
+    seed: int | None = None
+    width: int = 1024
+    height: int = 1024
+    steps: int = 28
+    cfg: float = 7.0
+    negative_prompt: str = "blurry, low quality, watermark, text, logo"
+
 class InternalVideoRenderRequest(BaseModel):
     """Render a full video using the internal renderer.
 
@@ -361,6 +371,7 @@ EngineKind = Literal[
     "hosted_video",
     "proxy",
     "deforum_export",
+    "tensorrt_standalone",
 ]
 RenderStepKind = Literal[
     "prepare_assets",
@@ -531,6 +542,7 @@ class RenderIntent(BaseModel):
             "hosted_video",
             "proxy",
             "deforum_export",
+            "tensorrt_standalone",
         ]
     )
     fallback_policy: RenderFallbackPolicy = "auto"

@@ -1,0 +1,365 @@
+{
+  "version": 1,
+  "project_id": "proj-123",
+  "project_name": "Neon Drive",
+  "updated_at": "2026-06-25T01:24:11Z",
+  "identity": {
+    "core_themes": [
+      "future nostalgia",
+      "chorus"
+    ],
+    "motifs": [
+      "neon skyline",
+      "lead silhouette",
+      "wet street"
+    ],
+    "palette": {
+      "dominant": [
+        "black chrome",
+        "electric cyan"
+      ],
+      "avoid": []
+    },
+    "lighting_language": [],
+    "camera_language": [
+      "orbit accents",
+      "push-in dynamics",
+      "tracking side profile"
+    ],
+    "texture_language": []
+  },
+  "continuity": {
+    "subject_anchors": [
+      "female lead in reflective jacket"
+    ],
+    "environment_anchors": [
+      "wet asphalt boulevard"
+    ],
+    "transition_rules": [
+      "keep the same reflective jacket silhouette",
+      "Preserve continuity through chorus sections",
+      "lift into chorus"
+    ],
+    "seed_lineage": {
+      "preferred_seed_families": [],
+      "stable_subject_seed": null
+    }
+  },
+  "prompt_guidance": {
+    "positive_fragments": [
+      "lead silhouette",
+      "neon skyline",
+      "rain-slick street",
+      "cinematic night performance",
+      "volumetric haze"
+    ],
+    "negative_fragments": [
+      "muddy lighting",
+      "blurry face",
+      "broken anatomy"
+    ],
+    "style_bias": {
+      "cinematic": 0.82,
+      "music_video": 0.78
+    }
+  },
+  "engine_memory": {
+    "internal": {
+      "success_rate": 1.0,
+      "approved_count": 1,
+      "rejected_count": 0,
+      "repair_count": 0,
+      "best_for": [
+        "continuity-heavy sequence"
+      ],
+      "avoid_for": []
+    }
+  },
+  "quality_memory": {
+    "common_failures": [
+      {
+        "pattern": "face drift",
+        "frequency": 1,
+        "mitigation": "reuse anchor seed"
+      }
+    ],
+    "successful_combinations": [
+      {
+        "engine": "internal",
+        "model": "hf_sdxl_internal",
+        "context": "continuity-heavy sequence",
+        "score": 0.91
+      }
+    ]
+  },
+  "trait_memory": [
+    {
+      "scope": "theme",
+      "value": "future nostalgia",
+      "state": "observed",
+      "weight": 0.65,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "negative_prompt",
+      "value": "muddy lighting",
+      "state": "observed",
+      "weight": 0.63,
+      "evidence_count": 2,
+      "sources": [
+        "planner_lab",
+        "render_feedback"
+      ]
+    },
+    {
+      "scope": "motif",
+      "value": "neon skyline",
+      "state": "observed",
+      "weight": 0.6,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "positive_prompt",
+      "value": "lead silhouette",
+      "state": "observed",
+      "weight": 0.58,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "positive_prompt",
+      "value": "neon skyline",
+      "state": "observed",
+      "weight": 0.58,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "positive_prompt",
+      "value": "rain-slick street",
+      "state": "observed",
+      "weight": 0.58,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "camera",
+      "value": "orbit accents",
+      "state": "observed",
+      "weight": 0.56,
+      "evidence_count": 1,
+      "sources": [
+        "reactive_lab"
+      ]
+    },
+    {
+      "scope": "negative_prompt",
+      "value": "blurry face",
+      "state": "observed",
+      "weight": 0.55,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "negative_prompt",
+      "value": "broken anatomy",
+      "state": "observed",
+      "weight": 0.55,
+      "evidence_count": 1,
+      "sources": [
+        "render_feedback"
+      ]
+    },
+    {
+      "scope": "motif",
+      "value": "lead silhouette",
+      "state": "observed",
+      "weight": 0.55,
+      "evidence_count": 1,
+      "sources": [
+        "render_feedback"
+      ]
+    },
+    {
+      "scope": "motif",
+      "value": "wet street",
+      "state": "observed",
+      "weight": 0.55,
+      "evidence_count": 1,
+      "sources": [
+        "render_feedback"
+      ]
+    },
+    {
+      "scope": "transition_rule",
+      "value": "keep the same reflective jacket silhouette",
+      "state": "observed",
+      "weight": 0.52,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "camera",
+      "value": "push-in dynamics",
+      "state": "observed",
+      "weight": 0.52,
+      "evidence_count": 1,
+      "sources": [
+        "reactive_lab"
+      ]
+    },
+    {
+      "scope": "palette",
+      "value": "black chrome",
+      "state": "observed",
+      "weight": 0.5,
+      "evidence_count": 1,
+      "sources": [
+        "render_feedback"
+      ]
+    },
+    {
+      "scope": "positive_prompt",
+      "value": "cinematic night performance",
+      "state": "observed",
+      "weight": 0.5,
+      "evidence_count": 1,
+      "sources": [
+        "render_feedback"
+      ]
+    },
+    {
+      "scope": "palette",
+      "value": "electric cyan",
+      "state": "observed",
+      "weight": 0.5,
+      "evidence_count": 1,
+      "sources": [
+        "render_feedback"
+      ]
+    },
+    {
+      "scope": "failure",
+      "value": "face drift",
+      "state": "observed",
+      "weight": 0.5,
+      "evidence_count": 1,
+      "sources": [
+        "reactive_lab"
+      ]
+    },
+    {
+      "scope": "transition_rule",
+      "value": "Preserve continuity through chorus sections",
+      "state": "observed",
+      "weight": 0.5,
+      "evidence_count": 1,
+      "sources": [
+        "reactive_lab"
+      ]
+    },
+    {
+      "scope": "camera",
+      "value": "tracking side profile",
+      "state": "observed",
+      "weight": 0.5,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "positive_prompt",
+      "value": "volumetric haze",
+      "state": "observed",
+      "weight": 0.5,
+      "evidence_count": 1,
+      "sources": [
+        "render_feedback"
+      ]
+    },
+    {
+      "scope": "transition_rule",
+      "value": "lift into chorus",
+      "state": "observed",
+      "weight": 0.48,
+      "evidence_count": 1,
+      "sources": [
+        "planner_lab"
+      ]
+    },
+    {
+      "scope": "engine",
+      "value": "performance-led",
+      "state": "observed",
+      "weight": 0.42,
+      "evidence_count": 1,
+      "sources": [
+        "reactive_lab"
+      ]
+    },
+    {
+      "scope": "theme",
+      "value": "chorus",
+      "state": "observed",
+      "weight": 0.4,
+      "evidence_count": 1,
+      "sources": [
+        "reactive_lab"
+      ]
+    }
+  ],
+  "fingerprints": [
+    {
+      "render_id": "render-001",
+      "palette_signature": [
+        "electric cyan",
+        "black chrome"
+      ],
+      "motif_tags": [
+        "lead silhouette",
+        "wet street"
+      ],
+      "motion_profile": null,
+      "continuity_score": 0.91,
+      "user_outcome": "approved",
+      "engine": "internal",
+      "model": "hf_sdxl_internal",
+      "created_at": "2026-06-25T01:24:11Z"
+    }
+  ],
+  "learning_state": {
+    "confidence": 0.38,
+    "sources": {
+      "planner_imports": 1,
+      "reactive_imports": 1,
+      "approved_renders": 1,
+      "rejected_renders": 0,
+      "repair_renders": 0
+    },
+    "locked_fields": [],
+    "soft_fields": [
+      "camera_language",
+      "lighting_language",
+      "texture_language",
+      "negative_fragments",
+      "style_bias"
+    ]
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "ok": true,
+  "mode": "dry_run",
+  "bundle_dir": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle",
+  "asset_path": "/Game/EDMG/Sequences/demo_project_MainSequence",
+  "return_dir": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\returned",
+  "expected_outputs": [
+    "shot_render.mov",
+    "alpha_pass.mov",
+    "metadata.json"
+  ],
+  "diagnostics": [],
+  "plan": {
+    "schema_version": 1,
+    "bundle_dir": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle",
+    "bundle_manifest_path": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\bundle_manifest.json",
+    "asset_name": "demo_project_MainSequence",
+    "asset_path": "/Game/EDMG/Sequences/demo_project_MainSequence",
+    "content_path": "/Game/EDMG/Sequences",
+    "sequence_name": "demo_project_MainSequence",
+    "fps": 24,
+    "playback_start": 0,
+    "playback_end": 192,
+    "duration_seconds": 8.0,
+    "audio_path": null,
+    "expected_return_dir": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\returned",
+    "expected_outputs": [
+      "shot_render.mov",
+      "alpha_pass.mov",
+      "metadata.json"
+    ],
+    "shots": [
+      {
+        "shot_id": "shot_001_scene_1",
+        "scene_id": "scene-1",
+        "title": "Intro",
+        "start_frame": 0,
+        "end_frame": 96,
+        "prompt": "Intro prompt",
+        "continuity_tags": [
+          "preserve skyline silhouette",
+          "approved"
+        ],
+        "camera_tags": [
+          "wide"
+        ],
+        "approved": true,
+        "camera_name": "shot_001_scene_1_Cam"
+      },
+      {
+        "shot_id": "shot_002_scene_2",
+        "scene_id": "scene-2",
+        "title": "Chorus",
+        "start_frame": 96,
+        "end_frame": 192,
+        "prompt": "Chorus prompt",
+        "continuity_tags": [
+          "draft"
+        ],
+        "camera_tags": [
+          "push-in"
+        ],
+        "approved": false,
+        "camera_name": "shot_002_scene_2_Cam"
+      }
+    ],
+    "markers": [
+      {
+        "label": "Intro",
+        "frame": 0,
+        "time_seconds": 0.0,
+        "source": "shot_manifest"
+      },
+      {
+        "label": "flash hit",
+        "frame": 36,
+        "time_seconds": 1.5,
+        "source": "cue_event"
+      },
+      {
+        "label": "impact",
+        "frame": 36,
+        "time_seconds": 1.5,
+        "source": "shot_manifest"
+      },
+      {
+        "label": "Chorus",
+        "frame": 96,
+        "time_seconds": 4.0,
+        "source": "shot_manifest"
+      },
+      {
+        "label": "chorus",
+        "frame": 96,
+        "time_seconds": 4.0,
+        "source": "section_event"
+      }
+    ],
+    "diagnostics": [],
+    "source_payloads": {
+      "bundle_manifest": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\bundle_manifest.json",
+      "shot_manifest": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\shot_manifest.json",
+      "audio_markers": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\audio_markers.json",
+      "style_packet": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\style_packet.json",
+      "render_handoff": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\render_handoff.json",
+      "live_control_bridge": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\live_control_bridge.json",
+      "return_contract": "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\python_backend\\temp_pytest\\test_unreal_import_tool_suppor0\\demo_bundle\\return_contract.json"
+    }
+  }
+}

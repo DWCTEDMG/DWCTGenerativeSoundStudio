@@ -220,6 +220,8 @@ def _engine_score(
         base = 0.12 + speed * 0.1 - quality_bonus * 0.5
     elif engine == "deforum_export":
         base = 0.18 + continuity_priority * 0.08
+    elif engine == "tensorrt_standalone":
+        base = 0.45 + hero_frame * 0.3 + style_lock * 0.15 + (0.15 if has_reference else 0.0) - motion_complexity * 0.20
 
     base += _engine_bias_from_dna(
         dna,
@@ -249,6 +251,9 @@ def _estimate_section(engine: EngineKind, duration_s: float, intent: RenderInten
         return (duration_s * 40.0 * quality, duration_s * 0.35 * quality)
     if engine == "deforum_export":
         return (duration_s * 24.0, duration_s * 0.05)
+    if engine == "tensorrt_standalone":
+        still_factor = max(1.0, duration_s / 3.0)
+        return (still_factor * 8.0 * quality, still_factor * 0.18 * quality)
     return (duration_s * 6.0, duration_s * 0.02)
 
 
@@ -257,6 +262,7 @@ def _continuity_risk(engine: EngineKind, continuity_priority: float, style_lock:
         "internal": 0.18,
         "comfyui_motion": 0.42,
         "comfyui_still": 0.62,
+        "tensorrt_standalone": 0.50,
         "hosted_video": 0.46,
         "proxy": 0.34,
         "deforum_export": 0.38,
@@ -276,6 +282,7 @@ def _fallback_engine(
         "comfyui_still": ["internal", "proxy"],
         "hosted_video": ["internal", "proxy"],
         "deforum_export": ["internal", "proxy"],
+        "tensorrt_standalone": ["internal", "proxy"],
         "proxy": ["proxy"],
     }
     for candidate in preferred_orders.get(primary, ["proxy"]):
@@ -317,7 +324,7 @@ def _section_steps(
             notes=["Blend project DNA into the prompt bundle without mutating the saved storyboard."],
         ),
     ]
-    if engine == "comfyui_still":
+    if engine in ("comfyui_still", "tensorrt_standalone"):
         steps.append(
             RenderStep(
                 id=f"{scene_id}-still",

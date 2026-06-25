@@ -1,0 +1,6 @@
+file 'E:/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend/temp_pytest/test_diffusion_refine_without_0/out_norefine/frames/frame_000000.png'
+file 'E:/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend/temp_pytest/test_diffusion_refine_without_0/out_norefine/frames/frame_000001.png'
+file 'E:/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend/temp_pytest/test_diffusion_refine_without_0/out_norefine/frames/frame_000002.png'
+file 'E:/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend/temp_pytest/test_diffusion_refine_without_0/out_norefine/frames/frame_000003.png'
+file 'E:/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend/temp_pytest/test_diffusion_refine_without_0/out_norefine/frames/frame_000004.png'
+file 'E:/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend/temp_pytest/test_diffusion_refine_without_0/out_norefine/frames/frame_000005.png'

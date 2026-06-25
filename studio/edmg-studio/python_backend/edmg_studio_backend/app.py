@@ -55,6 +55,7 @@ from .schemas import (
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
     LayeredAnimateRequest,
+    TensorRTStandaloneRenderRequest,
 )
 from .services import animation_autoconfig as autoconfig
 from .services import layer_animation as layeranim
@@ -5854,6 +5855,10 @@ def _execute_job(job):
             else:
                 job.result = res
                 job.status = "succeeded"
+        elif job.type == "tensorrt_standalone":
+            res = _run_tensorrt_standalone(job.project_id, job.id, job.payload)
+            job.result = res
+            job.status = "succeeded"
         elif job.type == "layered_animation":
             res = _run_layered_animation(job.project_id, job.id, job.payload)
             job.result = res
@@ -6774,6 +6779,9 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
     finally:
         comfy_pool.release(node_url)
 
+def _run_tensorrt_standalone(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from .services import tensorrt_standalone as trt_service
+    return trt_service.run_job(project_id, job_id, payload)
 
 def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     preflight = _internal_render_preflight_data(project_id, payload)
@@ -7721,6 +7729,31 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
 
     return {"ok": True, "enqueued": len(created), "jobs": created}
 
+
+
+@app.post("/v1/projects/{project_id}/render/tensorrt-standalone")
+def render_tensorrt_standalone(project_id: str, req: TensorRTStandaloneRenderRequest):
+    """Enqueue a standalone TensorRT image render job."""
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated")
+
+    payload = _request_payload(req)
+    job = jobs.create(project_id, "tensorrt_standalone", payload)
+    job.progress = {
+        "stage": "queued",
+        "current": 0,
+        "total": 1,
+        "percent": 0.0,
+        "message": f"Queued TensorRT standalone render for model {req.model_id}",
+    }
+    jobs.save(job)
+    proj.meta.setdefault("jobs", []).append(job.__dict__)
+    store.save(proj)
+    return {"ok": True, "job": job.__dict__}
 
 
 @app.post("/v1/projects/{project_id}/render/internal/video")

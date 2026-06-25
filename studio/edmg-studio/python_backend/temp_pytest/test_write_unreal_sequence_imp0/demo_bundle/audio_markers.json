@@ -1,0 +1,45 @@
+{
+  "project_id": "demo-project",
+  "project_name": "Demo Project",
+  "variant_index": 0,
+  "sequence_name": "demo_project_MainSequence",
+  "audio_path": null,
+  "fps": 24,
+  "bpm": 124.0,
+  "markers": [
+    {
+      "label": "Intro",
+      "frame": 0,
+      "time_seconds": 0.0
+    },
+    {
+      "label": "impact",
+      "frame": 36,
+      "time_seconds": 1.5
+    },
+    {
+      "label": "Chorus",
+      "frame": 96,
+      "time_seconds": 4.0
+    }
+  ],
+  "beat_times": [],
+  "cue_events": [
+    {
+      "cue_id": "cue-1",
+      "frame": 36,
+      "time_seconds": 1.5,
+      "cue_type": "impact",
+      "instruction": "flash hit"
+    }
+  ],
+  "section_events": [
+    {
+      "section_id": "chorus",
+      "label": "chorus",
+      "time_seconds": 4.0,
+      "energy": null,
+      "continuity_priority": 1.0
+    }
+  ]
+}

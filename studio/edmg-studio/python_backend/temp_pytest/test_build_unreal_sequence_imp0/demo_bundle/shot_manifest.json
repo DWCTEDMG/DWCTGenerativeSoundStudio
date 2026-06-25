@@ -1,0 +1,77 @@
+{
+  "engine": "unreal",
+  "handoff_kind": "shot_metadata_export",
+  "sequence_name": "demo_project_MainSequence",
+  "fps": 24,
+  "duration_seconds": 8.0,
+  "audio_path": null,
+  "project_fields": [
+    "project_id",
+    "project_name",
+    "fps",
+    "audio_path"
+  ],
+  "shot_fields": [
+    "shot_id",
+    "scene_id",
+    "start_frame",
+    "end_frame",
+    "prompt",
+    "continuity_tags"
+  ],
+  "marker_fields": [
+    "label",
+    "frame",
+    "time_seconds"
+  ],
+  "shots": [
+    {
+      "shot_id": "shot_001_scene_1",
+      "scene_id": "scene-1",
+      "title": "Intro",
+      "start_frame": 0,
+      "end_frame": 96,
+      "prompt": "Intro prompt",
+      "continuity_tags": [
+        "preserve skyline silhouette",
+        "approved"
+      ],
+      "camera_tags": [
+        "wide"
+      ],
+      "approved": true
+    },
+    {
+      "shot_id": "shot_002_scene_2",
+      "scene_id": "scene-2",
+      "title": "Chorus",
+      "start_frame": 96,
+      "end_frame": 192,
+      "prompt": "Chorus prompt",
+      "continuity_tags": [
+        "draft"
+      ],
+      "camera_tags": [
+        "push-in"
+      ],
+      "approved": false
+    }
+  ],
+  "markers": [
+    {
+      "label": "Intro",
+      "frame": 0,
+      "time_seconds": 0.0
+    },
+    {
+      "label": "impact",
+      "frame": 36,
+      "time_seconds": 1.5
+    },
+    {
+      "label": "Chorus",
+      "frame": 96,
+      "time_seconds": 4.0
+    }
+  ]
+}

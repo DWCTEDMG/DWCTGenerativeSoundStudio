@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "export_family": "unreal_bridge_bundle",
+  "created_at": "2026-05-05 18:00:00",
+  "project_id": "demo-project",
+  "project_name": "Demo Project",
+  "variant_index": 0,
+  "sequence_name": "demo_project_MainSequence",
+  "files": [
+    {
+      "path": "shot_manifest.json",
+      "kind": "shot_metadata_export"
+    },
+    {
+      "path": "audio_markers.json",
+      "kind": "audio_markers"
+    },
+    {
+      "path": "style_packet.json",
+      "kind": "style_packet"
+    },
+    {
+      "path": "render_handoff.json",
+      "kind": "render_handoff"
+    },
+    {
+      "path": "live_control_bridge.json",
+      "kind": "live_control_bridge"
+    },
+    {
+      "path": "return_contract.json",
+      "kind": "return_contract"
+    }
+  ]
+}

@@ -24,6 +24,8 @@ import random
 from pathlib import Path
 from typing import Optional
 
+from enhanced_deforum_music_generator import tensorrt_accel
+
 
 def _parse_dtype(dtype: str):
     import torch
@@ -91,6 +93,8 @@ def _run(args: argparse.Namespace) -> int:
     dtype = _parse_dtype(args.dtype)
     device = args.device
 
+    accel_enabled = tensorrt_accel.resolve_enabled(getattr(args, "accel", None))
+
     family = args.family if args.family != "auto" else _infer_family(args.model_id)
     prompt = args.prompt
     negative_prompt = args.negative_prompt
@@ -109,6 +113,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.enable_model_cpu_offload()
         else:
             pipe.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         result = pipe(
             prompt=prompt,
@@ -148,6 +153,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.enable_model_cpu_offload()
         else:
             pipe.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         kwargs = dict(
             prompt=prompt,
@@ -179,6 +185,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.enable_model_cpu_offload()
         else:
             pipe.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         kwargs = dict(
             prompt=prompt,
@@ -209,6 +216,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.enable_model_cpu_offload()
         else:
             pipe.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         result = pipe(
             image=image,
@@ -246,6 +254,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.to(device)
             if pipe_upsample is not None:
                 pipe_upsample.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         # LTX expects video-like compression for conditions; compress the single image into a 1-frame video.
         cond_video = load_video(export_to_video([image]))
@@ -296,6 +305,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dtype", default="bfloat16", help="float16|bfloat16|float32")
     p.add_argument("--device", default="cuda", help="cuda|cpu|mps")
     p.add_argument("--cpu-offload", action="store_true", help="Enable CPU offload (lower VRAM, slower).")
+    p.add_argument(
+        "--accel",
+        default=None,
+        choices=["none", "tensorrt"],
+        help=(
+            "Optional inference acceleration for the denoiser. 'tensorrt' uses the "
+            "Torch-TensorRT compile backend (requires torch-tensorrt matching your "
+            "torch CUDA build) and falls back to eager PyTorch if unavailable. "
+            "Defaults to the EDMG_TRT_ACCEL env var."
+        ),
+    )
     p.add_argument(
         "--vae-dtype",
         default="float32",

@@ -1,0 +1,42 @@
+{
+  "project_id": "demo-project",
+  "project_name": "Demo Project",
+  "variant_index": 0,
+  "sequence_name": "demo_project_MainSequence",
+  "analysis_context": {
+    "tags": [
+      "future nostalgia",
+      "neon skyline"
+    ],
+    "transcript": "Neon skyline rising into the chorus.",
+    "tempo_bpm": 124.0,
+    "musical_key": "F minor",
+    "energy_curve": [
+      0.1,
+      0.4,
+      0.8
+    ]
+  },
+  "visual_dna": {
+    "identity": {
+      "core_themes": [
+        "future nostalgia"
+      ]
+    },
+    "continuity": {
+      "subject_anchors": [
+        "lead silhouette"
+      ]
+    },
+    "prompt_guidance": {
+      "positive_fragments": [
+        "cinematic neon haze"
+      ]
+    }
+  },
+  "render_hints": {
+    "render_mode": "performance-led",
+    "approved_section_ids": [],
+    "assembly_mode": "ffmpeg_back_in_studio"
+  }
+}

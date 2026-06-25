@@ -1,0 +1,46 @@
+{
+  "engine": "unreal",
+  "handoff_kind": "render_handoff",
+  "execution_owner": "external_runtime",
+  "return_owner": "studio",
+  "render_mode": "performance-led",
+  "schedule_stride": 1,
+  "approved_section_ids": [],
+  "expected_inputs": [
+    "shot_manifest.json",
+    "audio_markers.json",
+    "style_packet.json"
+  ],
+  "expected_outputs": [
+    "shot_render.mov",
+    "alpha_pass.mov",
+    "metadata.json"
+  ],
+  "assembly_mode": "ffmpeg_back_in_studio",
+  "sections": [
+    {
+      "shot_id": "shot_001_scene_1",
+      "scene_id": "scene-1",
+      "start_frame": 0,
+      "end_frame": 96,
+      "prompt": "Intro prompt",
+      "negative_prompt": null,
+      "continuity_note": "preserve skyline silhouette",
+      "approved": true,
+      "engine_hint": "comfyui_motion",
+      "repair_actions": []
+    },
+    {
+      "shot_id": "shot_002_scene_2",
+      "scene_id": "scene-2",
+      "start_frame": 96,
+      "end_frame": 192,
+      "prompt": "Chorus prompt",
+      "negative_prompt": null,
+      "continuity_note": null,
+      "approved": false,
+      "engine_hint": "comfyui_motion",
+      "repair_actions": []
+    }
+  ]
+}

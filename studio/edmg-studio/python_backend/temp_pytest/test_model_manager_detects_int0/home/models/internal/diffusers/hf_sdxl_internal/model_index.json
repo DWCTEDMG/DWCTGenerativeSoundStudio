@@ -1,0 +1,1 @@
+{"_class_name": "StableDiffusionXLPipeline", "scheduler": ["diffusers", "DDIMScheduler"], "unet": ["diffusers", "UNet2DConditionModel"]}

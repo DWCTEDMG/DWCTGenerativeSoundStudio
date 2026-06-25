@@ -1,0 +1,1 @@
+{"_class_name":"StableDiffusionPipeline","vae":["diffusers","AutoencoderKL"],"unet":["diffusers","UNet2DConditionModel"],"text_encoder":["transformers","CLIPTextModel"]}
