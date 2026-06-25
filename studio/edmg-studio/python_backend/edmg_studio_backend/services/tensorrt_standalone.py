@@ -56,15 +56,38 @@ def run_job(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"trt_{int(time.time())}.png"
 
-    # Placeholder for actual TensorRT inference
-    # In a real implementation, we would either:
-    # 1. Use diffusers StableDiffusion3Pipeline and wrap the transformer with a TRT Module
-    # 2. Or use a custom script like NVIDIA's TensorRT-Model-Optimizer runner.
+    # TensorRT Engine loading and dummy execution
+    import torch
     
-    from PIL import Image
-    # Create a dummy image for now to simulate success in the architectural skeleton
-    img = Image.new("RGB", (payload.get("width", 1024), payload.get("height", 1024)), color="black")
-    img.save(out_file)
+    logger = tensorrt.Logger(tensorrt.Logger.INFO)
+    tensorrt.init_libnvinfer_plugins(logger, namespace="")
+    
+    try:
+        with open(engine_path, "rb") as f, tensorrt.Runtime(logger) as runtime:
+            engine = runtime.deserialize_cuda_engine(f.read())
+            
+        if not engine:
+            raise UserFacingError(f"Failed to deserialize TensorRT engine from {engine_path.name}")
+            
+        # In a real implementation we would allocate buffers and run inference:
+        # with engine.create_execution_context() as context:
+        #    ...
+        
+        # For now, to validate the load works, we just read engine IO info
+        for i in range(engine.num_io_tensors):
+            name = engine.get_tensor_name(i)
+            is_input = engine.get_tensor_mode(name) == tensorrt.TensorIOMode.INPUT
+            shape = engine.get_tensor_shape(name)
+            dtype = engine.get_tensor_dtype(name)
+            # print(f"TRT Tensor {name}: {'Input' if is_input else 'Output'}, shape: {shape}, dtype: {dtype}")
+
+        # Simulate success
+        from PIL import Image
+        img = Image.new("RGB", (payload.get("width", 1024), payload.get("height", 1024)), color="green")
+        img.save(out_file)
+            
+    except Exception as e:
+        raise UserFacingError(f"TensorRT execution failed: {str(e)}")
 
     if job:
         job.progress = {

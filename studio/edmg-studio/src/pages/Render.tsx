@@ -1158,6 +1158,28 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const runTensorrtStandalone = async () => {
+    if (!projectId || !selectedStillModelId) return;
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/tensorrt-standalone`, {
+        variant_index: selectedVariant,
+        model_id: selectedStillModelId,
+        width: Number(renderWidth) || 1024,
+        height: Number(renderHeight) || 1024,
+        steps: 28,
+        cfg: 7.0,
+        seed: renderSeed ? Number(renderSeed) : undefined,
+      });
+      setInfo(d);
+      await refreshInternalStatus(); // Poll for TRT job in the generic internal status widget for now
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+
   const tickWorker = async () => {
     setErr(null);
     setInfo(null);
@@ -2818,6 +2840,18 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       title="Assemble Firefly stills into a final MP4 (run Render with Firefly first)"
                     >
                       Assemble Firefly video
+                    </button>
+                  </>
+                ) : null}
+                {stillModels.some((m) => m.render?.engine === "tensorrt_standalone") ? (
+                  <>
+                    <button
+                      className="secondary"
+                      onClick={runTensorrtStandalone}
+                      disabled={!variantCount}
+                      title="Render using the compiled TensorRT Standalone engine"
+                    >
+                      🚀 Render with TensorRT
                     </button>
                   </>
                 ) : null}
