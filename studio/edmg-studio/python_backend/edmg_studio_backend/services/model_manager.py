@@ -169,6 +169,14 @@ def _entry_support_flags(entry: dict[str, Any]) -> dict[str, bool]:
             "supports_outpaint": True,
             "supports_controlnet": not (engine == "internal" and family == "sd35"),
         }
+    if kind == "runtime_bundle" and engine == "tensorrt_standalone":
+        return {
+            "supports_txt2img": True,
+            "supports_img2img": False,
+            "supports_inpaint": False,
+            "supports_outpaint": False,
+            "supports_controlnet": False,
+        }
     return {
         "supports_txt2img": False,
         "supports_img2img": False,
@@ -535,6 +543,9 @@ class ModelManager:
             # Diffusers expects a directory repo snapshot.
             model_dir = self._internal_models_dir(folder) / str(entry.get("id") or "model")
             return "snapshot", model_dir
+        if engine == "runtime_bundle":
+            bundle_dir = self._internal_models_dir(folder) / str(entry.get("id") or "model")
+            return "snapshot", bundle_dir
 
         # default: comfyui file model
         if not fname:
@@ -737,6 +748,14 @@ class ModelManager:
             path = self._internal_models_dir(folder) / model_id
             return path if self._internal_asset_installed(entry, path) else None
         if engine == "runtime_bundle":
+            source_path = str(entry.get("source_path") or "").strip()
+            if source_path:
+                try:
+                    path = Path(source_path).expanduser()
+                    if path.exists():
+                        return path
+                except (OSError, RuntimeError):
+                    pass
             path = self._internal_models_dir(folder) / model_id
             return path if path.exists() else None
 

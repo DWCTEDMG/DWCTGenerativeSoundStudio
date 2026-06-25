@@ -140,11 +140,13 @@ class AssembleVideoRequest(BaseModel):
 class TensorRTStandaloneRenderRequest(BaseModel):
     variant_index: int = 0
     model_id: str | None = None
+    prompt: str | None = None
     seed: int | None = None
     width: int = 1024
     height: int = 1024
     steps: int = 28
     cfg: float = 7.0
+    sampler: str = "pndm"
     negative_prompt: str = "blurry, low quality, watermark, text, logo"
     batch_size: int = 1
 

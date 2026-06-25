@@ -4,6 +4,8 @@ from __future__ import annotations
 # NOTE: We intentionally do NOT bundle large weights in the installer.
 # The catalog drives the GUI "Model Manager" which downloads models on-demand.
 
+import os
+from pathlib import Path
 from typing import Any
 
 
@@ -35,6 +37,25 @@ def _entry(
     }
     entry.update(extra)
     return entry
+
+
+def _local_sd15_tensorrt_bundle_path() -> str:
+    candidates = [
+        os.getenv("EDMG_TENSORRT_SD15_BUNDLE", "").strip(),
+        os.getenv("EDMG_TENSORRT_MODEL_DIR", "").strip(),
+    ]
+    if os.name == "nt":
+        candidates.append(r"D:\my_tensorrt_models")
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            path = Path(candidate).expanduser()
+        except Exception:
+            continue
+        if (path / "engine").exists() and (path / "onnx").exists():
+            return str(path)
+    return ""
 
 
 def built_in_catalog() -> list[dict[str, Any]]:
@@ -116,6 +137,36 @@ def built_in_catalog() -> list[dict[str, Any]]:
                 "workflow_family": "diffusers",
                 "render_modes": ["internal_video"],
                 "preferred_for": ["fallback", "draft", "laptop"],
+            },
+        ),
+        _entry(
+            model_id="local_sd15_tensorrt_bundle",
+            name="Stable Diffusion v1.5 TensorRT (Local Build)",
+            kind="runtime_bundle",
+            source="local",
+            source_path=_local_sd15_tensorrt_bundle_path(),
+            target={"engine": "runtime_bundle", "folder": "tensorrt"},
+            installable=False,
+            license_id="openrail-m",
+            license_url="https://huggingface.co/runwayml/stable-diffusion-v1-5",
+            recommended="advanced",
+            notes=(
+                "Local SD1.5 TensorRT export. Studio uses the compiled UNet engine in this folder "
+                "and loads the matching SD1.5 tokenizer, text encoder, scheduler, and VAE for real image generation."
+            ),
+            family="sd15",
+            author="runwayml",
+            tags=["local", "nvidia", "tensorrt", "sd15"],
+            hardware_targets=["nvidia"],
+            render={
+                "engine": "tensorrt_standalone",
+                "workflow_family": "sd15",
+                "render_modes": ["stills"],
+                "base_model_id": "runwayml/stable-diffusion-v1-5",
+                "profile_width": 512,
+                "profile_height": 512,
+                "max_batch": 1,
+                "live_preview": False,
             },
         ),
         _entry(

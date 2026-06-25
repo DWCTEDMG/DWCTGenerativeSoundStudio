@@ -29,6 +29,12 @@ type CatalogEntry = {
     svd_checkpoint?: string;
     conditioning_mode?: string;
     render_modes?: string[];
+    workflow_family?: string;
+    base_model_id?: string;
+    profile_width?: number;
+    profile_height?: number;
+    max_batch?: number;
+    live_preview?: boolean;
   };
 };
 
@@ -300,7 +306,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     [modelCatalog]
   );
   const stillModels = useMemo(
-    () => modelCatalog.filter((m) => (m.render?.render_modes || []).includes("stills") && (m.kind === "checkpoint" || m.kind === "diffusers")),
+    () => modelCatalog.filter((m) => (
+      (m.render?.render_modes || []).includes("stills") &&
+      (m.kind === "checkpoint" || m.kind === "diffusers" || (m.kind === "runtime_bundle" && m.render?.engine === "tensorrt_standalone"))
+    )),
     [modelCatalog]
   );
   const controlnetModels = useMemo(
@@ -333,6 +342,11 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   );
   const selectedStillEngine = String(selectedStillModel?.engine || selectedStillModel?.render?.engine || (selectedStillModel?.kind === "diffusers" ? "internal" : "comfyui"));
   const selectedStillFamily = String(selectedStillModel?.family || selectedStillModel?.render?.family || "").toLowerCase();
+  const selectedStillIsTensorRT = selectedStillEngine === "tensorrt_standalone";
+  const selectedTrtProfileWidth = Number(selectedStillModel?.render?.profile_width || 0);
+  const selectedTrtProfileHeight = Number(selectedStillModel?.render?.profile_height || 0);
+  const selectedTrtMaxBatch = Number(selectedStillModel?.render?.max_batch || 1);
+  const selectedTrtSupportsLivePreview = Boolean(selectedStillModel?.render?.live_preview);
   const canStillTxt2img = selectedStillModel?.supports_txt2img !== false;
   const canStillImg2img = !!selectedStillModel?.supports_img2img;
   const canStillInpaint = !!selectedStillModel?.supports_inpaint;
@@ -360,6 +374,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   };
   const modelEngineLabel = (engine?: string | null, kind?: string) => {
     const normalized = String(engine || "").trim().toLowerCase();
+    if (normalized === "tensorrt_standalone" || kind === "runtime_bundle") return "TensorRT";
     if (normalized === "internal" || kind === "diffusers") return "Internal";
     return "ComfyUI";
   };
@@ -386,6 +401,33 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }),
     [installedModels, selectedStillEngine, selectedStillFamily, selectedStillModel?.id, stillModels]
   );
+
+  useEffect(() => {
+    if (!selectedStillIsTensorRT) return;
+    if (selectedTrtProfileWidth && renderWidth !== selectedTrtProfileWidth) {
+      setRenderWidth(selectedTrtProfileWidth);
+    }
+    if (selectedTrtProfileHeight && renderHeight !== selectedTrtProfileHeight) {
+      setRenderHeight(selectedTrtProfileHeight);
+    }
+    if (selectedTrtMaxBatch && trtBatchSize > selectedTrtMaxBatch) {
+      setTrtBatchSize(selectedTrtMaxBatch);
+    }
+    if (!selectedTrtSupportsLivePreview && trtLivePreview) {
+      setTrtLivePreview(false);
+      setTrtPreviewImage(null);
+    }
+  }, [
+    selectedStillIsTensorRT,
+    selectedTrtProfileWidth,
+    selectedTrtProfileHeight,
+    selectedTrtMaxBatch,
+    selectedTrtSupportsLivePreview,
+    renderWidth,
+    renderHeight,
+    trtBatchSize,
+    trtLivePreview,
+  ]);
   const internalHostedVisible = !!renderProviders?.stability?.visible;
   const fireflyVisible = !!renderProviders?.firefly?.visible;
   const cosmosReady = !!renderProviders?.cosmos?.active;
@@ -699,7 +741,13 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   }, [compatibleControlnetModels, controlnetModels, selectedStillEngine, selectedStillFamily]);
 
   useEffect(() => {
-    if (!trtLivePreview || !projectId || !selectedStillModelId || !stillModels.some((m) => m.id === selectedStillModelId && m.render?.engine === "tensorrt_standalone")) {
+    if (
+      !trtLivePreview ||
+      !selectedTrtSupportsLivePreview ||
+      !projectId ||
+      !selectedStillModelId ||
+      !stillModels.some((m) => m.id === selectedStillModelId && m.render?.engine === "tensorrt_standalone")
+    ) {
       setTrtPreviewImage(null);
       return;
     }
@@ -729,7 +777,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     return () => clearTimeout(debounceTimer);
   }, [
     trtLivePreview, projectId, selectedVariant, selectedStillModelId,
-    renderWidth, renderHeight, renderCfg, renderSeed, stillModels
+    renderWidth, renderHeight, renderCfg, renderSeed, stillModels, selectedTrtSupportsLivePreview
   ]);
   useEffect(() => {
     if (!refiner.enabled || !refiner.model) return;
@@ -1206,8 +1254,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         model_id: selectedStillModelId,
         width: Number(renderWidth) || 1024,
         height: Number(renderHeight) || 1024,
-        steps: 28,
-        cfg: 7.0,
+        steps: renderSteps,
+        cfg: renderCfg,
+        sampler: renderSampler,
+        negative_prompt: renderNegativePrompt,
         seed: renderSeed ? Number(renderSeed) : undefined,
         batch_size: trtBatchSize,
       });
@@ -2905,15 +2955,29 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                     <div className="row" style={{ alignItems: "center", gap: 8, background: "var(--bg-card)", padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border-color)" }}>
                       <label style={{ fontSize: "0.8em", fontWeight: 700 }}>TRT Batch Size:</label>
                       <select value={trtBatchSize} onChange={(e) => setTrtBatchSize(Number(e.target.value))} style={{ padding: "2px 4px", fontSize: "0.8em" }}>
-                        <option value={1}>1</option>
-                        <option value={2}>2</option>
-                        <option value={4}>4</option>
-                        <option value={8}>8</option>
+                        {[1, 2, 4, 8].map((size) => (
+                          <option key={size} value={size} disabled={selectedStillIsTensorRT && size > selectedTrtMaxBatch}>
+                            {size}{selectedStillIsTensorRT && size > selectedTrtMaxBatch ? " (rebuild required)" : ""}
+                          </option>
+                        ))}
                       </select>
                       <label style={{ fontSize: "0.8em", fontWeight: 700, marginLeft: 8 }}>Live Preview:</label>
-                      <input type="checkbox" checked={trtLivePreview} onChange={(e) => setTrtLivePreview(e.target.checked)} />
+                      <input
+                        type="checkbox"
+                        checked={trtLivePreview}
+                        disabled={selectedStillIsTensorRT && !selectedTrtSupportsLivePreview}
+                        title={selectedStillIsTensorRT && !selectedTrtSupportsLivePreview ? "Standalone TensorRT preview is disabled because this engine takes too long to deserialize synchronously." : undefined}
+                        onChange={(e) => setTrtLivePreview(e.target.checked)}
+                      />
                       {trtPreviewLoading && <span style={{ fontSize: "0.8em", opacity: 0.5 }}>...</span>}
                     </div>
+                    {selectedStillIsTensorRT ? (
+                      <div className="small" style={{ width: "100%", marginTop: -4, opacity: 0.78 }}>
+                        TensorRT profile: <b>{selectedTrtProfileWidth || renderWidth}x{selectedTrtProfileHeight || renderHeight}</b>
+                        {" "}• max batch <b>{selectedTrtMaxBatch || 1}</b>
+                        {" "}• engine <b>{modelFamilyLabel(selectedStillFamily)}</b>
+                      </div>
+                    ) : null}
                     <button
                       className="secondary"
                       onClick={runTensorrtStandalone}

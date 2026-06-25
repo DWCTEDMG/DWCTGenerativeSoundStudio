@@ -7747,6 +7747,16 @@ def render_tensorrt_standalone(project_id: str, req: TensorRTStandaloneRenderReq
         raise HTTPException(400, "No plan generated")
 
     payload = _request_payload(req)
+    entry = _catalog_entry(req.model_id)
+    if entry is not None:
+        render_meta = entry.get("render") if isinstance(entry.get("render"), dict) else {}
+        payload["workflow_family"] = str(render_meta.get("workflow_family") or entry.get("family") or "")
+        if render_meta.get("base_model_id"):
+            payload["base_model_id"] = str(render_meta.get("base_model_id"))
+    if req.model_id:
+        model_path = _resolve_installed_model_path(req.model_id, materialize_remote=True)
+        if model_path is not None:
+            payload["model_path"] = str(model_path)
     job = jobs.create(project_id, "tensorrt_standalone", payload)
     job.progress = {
         "stage": "queued",
@@ -7805,6 +7815,16 @@ def render_tensorrt_standalone_preview(project_id: str, req: TensorRTStandaloneR
     # Run the generation synchronously in the request thread
     try:
         payload = _request_payload(req)
+        entry = _catalog_entry(req.model_id)
+        if entry is not None:
+            render_meta = entry.get("render") if isinstance(entry.get("render"), dict) else {}
+            payload["workflow_family"] = str(render_meta.get("workflow_family") or entry.get("family") or "")
+            if render_meta.get("base_model_id"):
+                payload["base_model_id"] = str(render_meta.get("base_model_id"))
+        if req.model_id:
+            model_path = _resolve_installed_model_path(req.model_id, materialize_remote=True)
+            if model_path is not None:
+                payload["model_path"] = str(model_path)
         # Override steps for fast preview
         payload["steps"] = min(payload.get("steps", 8), 8)
         
