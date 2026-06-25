@@ -148,6 +148,11 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     switch_at: Number(savedRenderDefaults.refinerSwitchAt ?? 0.8),
     steps: Number(savedRenderDefaults.refinerSteps ?? 0),
   });
+
+  const [trtBatchSize, setTrtBatchSize] = useState<number>(1);
+  const [trtLivePreview, setTrtLivePreview] = useState<boolean>(false);
+  const [trtPreviewImage, setTrtPreviewImage] = useState<string | null>(null);
+  const [trtPreviewLoading, setTrtPreviewLoading] = useState<boolean>(false);
   const [selectedLoras, setSelectedLoras] = useState<SelectedLora[]>([]);
   const [loraToAdd, setLoraToAdd] = useState<string>("");
 
@@ -694,6 +699,39 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   }, [compatibleControlnetModels, controlnetModels, selectedStillEngine, selectedStillFamily]);
 
   useEffect(() => {
+    if (!trtLivePreview || !projectId || !selectedStillModelId || !stillModels.some((m) => m.id === selectedStillModelId && m.render?.engine === "tensorrt_standalone")) {
+      setTrtPreviewImage(null);
+      return;
+    }
+    
+    setTrtPreviewLoading(true);
+    const debounceTimer = setTimeout(async () => {
+      try {
+        const d = await apiPost(`/v1/projects/${projectId}/render/tensorrt-standalone/preview`, {
+          variant_index: selectedVariant,
+          model_id: selectedStillModelId,
+          width: Number(renderWidth) || 1024,
+          height: Number(renderHeight) || 1024,
+          steps: 8,
+          cfg: renderCfg,
+          seed: renderSeed ? Number(renderSeed) : undefined,
+        });
+        if (d && d.image) {
+          setTrtPreviewImage(d.image);
+        }
+      } catch (e) {
+        console.error("TRT Preview error", e);
+      } finally {
+        setTrtPreviewLoading(false);
+      }
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(debounceTimer);
+  }, [
+    trtLivePreview, projectId, selectedVariant, selectedStillModelId,
+    renderWidth, renderHeight, renderCfg, renderSeed, stillModels
+  ]);
+  useEffect(() => {
     if (!refiner.enabled || !refiner.model) return;
     const stillValid = compatibleRefinerModels.some((model) => model.id === refiner.model);
     if (!stillValid) {
@@ -1171,6 +1209,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         steps: 28,
         cfg: 7.0,
         seed: renderSeed ? Number(renderSeed) : undefined,
+        batch_size: trtBatchSize,
       });
       setInfo(d);
       await refreshInternalStatus(); // Poll for TRT job in the generic internal status widget for now
@@ -2845,6 +2884,18 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 ) : null}
                 {stillModels.some((m) => m.render?.engine === "tensorrt_standalone") ? (
                   <>
+                    <div className="row" style={{ alignItems: "center", gap: 8, background: "var(--bg-card)", padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border-color)" }}>
+                      <label style={{ fontSize: "0.8em", fontWeight: 700 }}>TRT Batch Size:</label>
+                      <select value={trtBatchSize} onChange={(e) => setTrtBatchSize(Number(e.target.value))} style={{ padding: "2px 4px", fontSize: "0.8em" }}>
+                        <option value={1}>1</option>
+                        <option value={2}>2</option>
+                        <option value={4}>4</option>
+                        <option value={8}>8</option>
+                      </select>
+                      <label style={{ fontSize: "0.8em", fontWeight: 700, marginLeft: 8 }}>Live Preview:</label>
+                      <input type="checkbox" checked={trtLivePreview} onChange={(e) => setTrtLivePreview(e.target.checked)} />
+                      {trtPreviewLoading && <span style={{ fontSize: "0.8em", opacity: 0.5 }}>...</span>}
+                    </div>
                     <button
                       className="secondary"
                       onClick={runTensorrtStandalone}
@@ -2853,6 +2904,11 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                     >
                       🚀 Render with TensorRT
                     </button>
+                    {trtLivePreview && trtPreviewImage && (
+                      <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 9999, border: "2px solid #00f", borderRadius: 8, padding: 4, background: "#000" }}>
+                        <img src={trtPreviewImage} alt="Live Preview" style={{ maxWidth: 256, maxHeight: 256, display: "block" }} />
+                      </div>
+                    )}
                   </>
                 ) : null}
                 <button className="secondary" onClick={tickWorker}>Tick worker (run 1 job)</button>

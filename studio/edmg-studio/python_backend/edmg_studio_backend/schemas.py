@@ -146,6 +146,7 @@ class TensorRTStandaloneRenderRequest(BaseModel):
     steps: int = 28
     cfg: float = 7.0
     negative_prompt: str = "blurry, low quality, watermark, text, logo"
+    batch_size: int = 1
 
 class InternalVideoRenderRequest(BaseModel):
     """Render a full video using the internal renderer.

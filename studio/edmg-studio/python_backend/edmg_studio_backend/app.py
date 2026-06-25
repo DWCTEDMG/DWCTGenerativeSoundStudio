@@ -7756,6 +7756,30 @@ def render_tensorrt_standalone(project_id: str, req: TensorRTStandaloneRenderReq
     return {"ok": True, "job": job.__dict__}
 
 
+@app.post("/v1/projects/{project_id}/render/tensorrt-standalone/preview")
+def render_tensorrt_standalone_preview(project_id: str, req: TensorRTStandaloneRenderRequest):
+    """Synchronously run a low-latency preview render."""
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    from .services import tensorrt_standalone
+    # Run the generation synchronously in the request thread
+    try:
+        payload = _request_payload(req)
+        # Override steps for fast preview
+        payload["steps"] = min(payload.get("steps", 8), 8)
+        
+        # We need a custom run_preview in tensorrt_standalone
+        result = tensorrt_standalone.run_preview(project_id, payload)
+        return {"ok": True, "image": result["image"], "engine_used": result["engine_used"]}
+    except UserFacingError as e:
+        raise HTTPException(e.status_code, str(e.message))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+
 @app.post("/v1/projects/{project_id}/render/internal/video")
 def render_internal_video(project_id: str, req: InternalVideoRenderRequest):
     """Enqueue a full internal render job (CPU-safe baseline)."""
