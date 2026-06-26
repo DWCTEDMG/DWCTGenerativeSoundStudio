@@ -90,6 +90,18 @@ const installRenderMocks = () => {
             max_batch: 1,
           },
         },
+        {
+          id: "hf_svd_xt_1_1_tensorrt_bundle",
+          name: "SVD XT 1.1 TensorRT Bundle",
+          kind: "runtime_bundle",
+          engine: "tensorrt_standalone",
+          family: "svd",
+          render: {
+            render_modes: ["internal_video"],
+            engine: "tensorrt_standalone",
+            family: "svd",
+          },
+        },
       ],
       user: [
         {
@@ -107,6 +119,7 @@ const installRenderMocks = () => {
         hf_sdxl_internal: true,
         hf_sd35_medium_internal: true,
         local_sd15_tensorrt_bundle: true,
+        hf_svd_xt_1_1_tensorrt_bundle: true,
       },
     },
     "/v1/projects/p1": {
@@ -264,6 +277,16 @@ describe("Render page", () => {
         }),
       ).toBe(true);
     });
+  }, 10000);
+
+  it("hides unsupported TensorRT runtime bundles from internal video model selection", async () => {
+    installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    expect(await screen.findByRole("option", { name: "TensorRT SD1.5 video" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Local SD1.5 TensorRT Bundle" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "SVD XT 1.1 TensorRT Bundle" })).toBeNull();
   }, 10000);
 
   it("disables controlnet workflows for internal sd3.5 still models", async () => {

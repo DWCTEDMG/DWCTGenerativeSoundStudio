@@ -4,8 +4,17 @@ from pathlib import Path
 
 from PIL import Image
 
+from edmg_studio_backend import app as app_module
 from edmg_studio_backend.services import tensorrt_video
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
+
+
+def test_stale_tensorrt_runtime_bundle_selection_maps_to_supported_video_bundle() -> None:
+    payload = {"model_id": "hf_svd_xt_1_1_tensorrt_bundle"}
+
+    assert app_module._payload_requests_tensorrt_video(payload) is True
+    assert app_module._tensorrt_model_id_from_payload(payload) == "local_sd15_tensorrt_bundle"
+    assert "hf_svd_xt_1_1_tensorrt_bundle" in (app_module._tensorrt_requested_model_warning(payload) or "")
 
 
 def test_render_tensorrt_video_variant_uses_keyframes_and_assembles_video(tmp_path, monkeypatch) -> None:

@@ -320,15 +320,20 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     () => modelCatalog.filter((m) => (m.render?.render_modes || []).includes("motion_svd") || m.kind === "motion_module"),
     [modelCatalog]
   );
-  const internalModelOptions = useMemo(
-    () => modelCatalog.filter((m) => m.kind === "diffusers" || (m.kind === "runtime_bundle" && m.render?.engine === "tensorrt_standalone")),
+  const supportedTensorRtInternalModels = useMemo(
+    () => modelCatalog.filter((m) => m.id === "local_sd15_tensorrt_bundle" && m.render?.engine === "tensorrt_standalone"),
     [modelCatalog]
   );
+  const internalModelOptions = useMemo(
+    () => [
+      ...modelCatalog.filter((m) => m.kind === "diffusers"),
+      ...supportedTensorRtInternalModels,
+    ],
+    [modelCatalog, supportedTensorRtInternalModels]
+  );
   const tensorRtInternalModel = useMemo(
-    () => modelCatalog.find((m) => m.id === "local_sd15_tensorrt_bundle")
-      || modelCatalog.find((m) => m.kind === "runtime_bundle" && m.render?.engine === "tensorrt_standalone")
-      || null,
-    [modelCatalog]
+    () => supportedTensorRtInternalModels[0] || null,
+    [supportedTensorRtInternalModels]
   );
   const tensorRtInternalVisible = !!tensorRtInternalModel;
   const tensorRtInternalInstalled = !!tensorRtInternalModel && installedModels[tensorRtInternalModel.id] !== false;
@@ -436,6 +441,14 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     trtBatchSize,
     trtLivePreview,
   ]);
+
+  useEffect(() => {
+    if (internalModelId === "auto") return;
+    if (!internalModelOptions.some((m) => m.id === internalModelId)) {
+      setInternalModelId("auto");
+    }
+  }, [internalModelId, internalModelOptions]);
+
   const internalHostedVisible = !!renderProviders?.stability?.visible;
   const fireflyVisible = !!renderProviders?.firefly?.visible;
   const cosmosReady = !!renderProviders?.cosmos?.active;
@@ -444,6 +457,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   const buildInternalPayload = () => {
     const useTensorRt = internalRenderMode === "tensorrt";
+    const tensorRtModelId = tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle";
     return {
       variant_index: selectedVariant,
       fps_output: internalFpsOut,
@@ -456,7 +470,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       refine_every_n_frames: internalRefineEvery,
       anchor_strength: internalAnchorStrength,
       prompt_blend: internalPromptBlend,
-      model_id: useTensorRt && internalModelId === "auto" ? (tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle") : internalModelId,
+      model_id: useTensorRt ? tensorRtModelId : internalModelId,
       render_mode: internalRenderMode,
       render_tier: internalRenderTier,
       device_preference: useTensorRt ? "cuda" : internalDevicePreference,

@@ -8464,11 +8464,29 @@ def _hosted_render_preflight_data(
     }
 
 
+TENSORRT_VIDEO_MODEL_ID = "local_sd15_tensorrt_bundle"
+
+
+def _payload_requests_tensorrt_video(payload: dict[str, Any]) -> bool:
+    requested = str(payload.get("model_id") or "").strip()
+    return bool(requested and requested not in {"auto", "auto_internal"} and "tensorrt" in requested.lower())
+
+
+def _tensorrt_requested_model_warning(payload: dict[str, Any]) -> str | None:
+    requested = str(payload.get("model_id") or "").strip()
+    if _payload_requests_tensorrt_video(payload) and requested != TENSORRT_VIDEO_MODEL_ID:
+        return (
+            f"Requested TensorRT bundle {requested} is not supported by the internal video TensorRT engine yet; "
+            f"using {TENSORRT_VIDEO_MODEL_ID}."
+        )
+    return None
+
+
 def _tensorrt_model_id_from_payload(payload: dict[str, Any]) -> str:
     requested = str(payload.get("model_id") or "").strip()
-    if requested and requested not in {"auto", "auto_internal"} and "tensorrt" in requested.lower():
+    if requested == TENSORRT_VIDEO_MODEL_ID:
         return requested
-    return "local_sd15_tensorrt_bundle"
+    return TENSORRT_VIDEO_MODEL_ID
 
 
 def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -8538,6 +8556,9 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         "TensorRT video mode uses the SD1.5 TensorRT keyframe engine, then assembles and interpolates video locally.",
         "This path is constrained to the compiled 512x512 batch-1 TensorRT profile.",
     ]
+    requested_warning = _tensorrt_requested_model_warning(payload)
+    if requested_warning:
+        warnings.append(requested_warning)
     if settings_obj.fps_render > 4:
         warnings.append("High FPS render values will require many TensorRT keyframes; use 1-2 FPS render for first passes.")
     for note in list(tier_plan.get("notes") or []):
@@ -8583,7 +8604,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         return _proxy_render_preflight_data(project_id, payload, reason="Proxy mode requested explicitly.")
     if requested_mode == "hosted":
         return _hosted_render_preflight_data(project_id, payload)
-    if requested_mode == "tensorrt":
+    if requested_mode == "tensorrt" or (requested_mode in {"auto", "diffusion"} and _payload_requests_tensorrt_video(payload)):
         return _tensorrt_render_preflight_data(project_id, payload)
 
     try:
