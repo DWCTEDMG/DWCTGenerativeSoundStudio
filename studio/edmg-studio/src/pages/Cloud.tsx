@@ -15,6 +15,7 @@ export default function Cloud(props: PageProps) {
   const [hfBucket, setHfBucket] = useState("");
   const [hfPrefix, setHfPrefix] = useState("");
   const [hfEnabled, setHfEnabled] = useState(false);
+  const [hfStorageMode, setHfStorageMode] = useState<"local_cache" | "cloud_only">("local_cache");
   const [hfStatus, setHfStatus] = useState<any>(null);
   const [hfActiveProvider, setHfActiveProvider] = useState<string | null>(null);
   const [hfStatusLoading, setHfStatusLoading] = useState(false);
@@ -52,6 +53,7 @@ export default function Cloud(props: PageProps) {
     setHfEnabled(!!cfg.enabled);
     setHfBucket(String(cfg.bucket ?? ""));
     setHfPrefix(String(cfg.prefix ?? ""));
+    setHfStorageMode(cfg.storage_mode === "cloud_only" ? "cloud_only" : "local_cache");
   };
 
   const loadHfStatus = async () => {
@@ -72,6 +74,7 @@ export default function Cloud(props: PageProps) {
         enabled: hfEnabled,
         bucket: hfBucket || null,
         prefix: hfPrefix || null,
+        storage_mode: hfStorageMode,
       });
       applyHfPayload(payload);
       setResult(payload);
@@ -261,6 +264,16 @@ export default function Cloud(props: PageProps) {
         ) : null}
         <div className="small" style={{ marginTop: 6 }}>
           Active model cache: <b>{hfActiveProvider || "none (local + S3/Azure fallback)"}</b>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <div className="small">Model storage mode</div>
+          <select value={hfStorageMode} onChange={(e) => setHfStorageMode(e.target.value as "local_cache" | "cloud_only")}>
+            <option value="local_cache">Local models + HF/S3 secondary mirrors</option>
+            <option value="cloud_only">Cloud only (no local model copy)</option>
+          </select>
+        </div>
+        <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+          Local-first keeps installed models on this machine. When HF bucket or S3 is enabled, Studio also mirrors supported models there and restores from those caches if the local file is missing.
         </div>
         <label className="row" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
           <input

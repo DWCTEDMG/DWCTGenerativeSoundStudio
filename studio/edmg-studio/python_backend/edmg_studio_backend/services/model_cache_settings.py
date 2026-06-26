@@ -25,6 +25,10 @@ from typing import Any
 DEFAULT_HF_BUCKET_ID = "gulle1155/DWCTedmgAIStudioModels"
 
 DEFAULT_MODEL_CACHE_SETTINGS: dict[str, Any] = {
+    # Local-first storage keeps usable models on disk and mirrors supported
+    # installs into the configured remote caches. This is the normal Studio
+    # mode; cloud_only remains available only when explicitly requested.
+    "storage_mode": "local_cache",
     # Provider preference is HF bucket first; S3/Azure remain automatic
     # fallbacks resolved from their own env vars when HF is not enabled.
     "provider": "huggingface_bucket",
@@ -76,6 +80,13 @@ def _normalize_prefix(value: Any) -> str:
     return str(value or "").strip().strip("/").replace("\\", "/")
 
 
+def _normalize_storage_mode(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"cloud_only", "s3_only", "remote_only"}:
+        return "cloud_only"
+    return "local_cache"
+
+
 def _clone_defaults() -> dict[str, Any]:
     return json.loads(json.dumps(DEFAULT_MODEL_CACHE_SETTINGS))
 
@@ -102,12 +113,15 @@ class ModelCacheSettingsStore:
             hf["bucket"] = _normalize_bucket(hf_in.get("bucket"))
         if "prefix" in hf_in:
             hf["prefix"] = _normalize_prefix(hf_in.get("prefix"))
+        if "storage_mode" in incoming:
+            current["storage_mode"] = _normalize_storage_mode(incoming.get("storage_mode"))
         cleaned = self._sanitize(current)
         _write_json(self._path, cleaned)
         return cleaned
 
     def _sanitize(self, payload: dict[str, Any]) -> dict[str, Any]:
         out = _clone_defaults()
+        out["storage_mode"] = _normalize_storage_mode(payload.get("storage_mode", out["storage_mode"]))
         hf_in = payload.get("hf_bucket") if isinstance(payload.get("hf_bucket"), dict) else {}
         bucket = _normalize_bucket(hf_in.get("bucket", out["hf_bucket"]["bucket"]))
         out["hf_bucket"] = {
@@ -132,6 +146,11 @@ class ModelCacheSettingsStore:
                 os.environ[key] = value
             else:
                 os.environ.setdefault(key, value)
+
+        # The persisted Studio storage mode is authoritative on startup. This
+        # intentionally replaces stale shell values such as cloud_only when the
+        # user switches back to local-first storage from the UI.
+        os.environ["EDMG_MODEL_STORAGE_MODE"] = str(cfg.get("storage_mode") or "local_cache")
 
         if hf["enabled"] and hf["bucket"]:
             _set("EDMG_HF_BUCKET_MODEL_CACHE", "1")

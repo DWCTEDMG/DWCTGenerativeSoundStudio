@@ -83,6 +83,7 @@ from .services.internal_video import (
     render_stability_hosted_video_variant,
     render_internal_diffusion_preview_segment,
 )
+from .services.tensorrt_video import render_tensorrt_video_variant
 from .services.compositor import apply_timeline_layers
 from .integrations import aws as aws_integration
 from .integrations import azure as azure_integration
@@ -7084,6 +7085,136 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         store.save(proj)
         return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "hosted", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
 
+    if preflight.get("mode") == "tensorrt":
+        proj = store.get(project_id)
+        if not proj:
+            raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
+        plan = proj.meta.get("last_plan")
+        if not plan or not (plan.get("variants") or []):
+            raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
+
+        variant_index = int(payload.get("variant_index", 0))
+        variants = plan["variants"]
+        if variant_index < 0 or variant_index >= len(variants):
+            raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
+
+        variant = variants[variant_index]
+        scenes = variant.get("scenes") or []
+        pdir = store.project_dir(project_id)
+        audio_meta = proj.meta.get("audio")
+        audio_path: Path | None = None
+        if audio_meta and audio_meta.get("filename"):
+            audio_path = pdir / "assets" / "audio" / str(audio_meta["filename"])
+            if not audio_path.exists():
+                audio_path = None
+
+        model_id = str(preflight.get("model_id") or _tensorrt_model_id_from_payload(payload))
+        trt_payload = dict(payload)
+        trt_payload.update({"width": 512, "height": 512})
+        settings_obj = _internal_settings_from_payload(
+            trt_payload,
+            model_id=model_id,
+            render_tier=str(payload.get("render_tier") or "auto"),
+            device_preference="cuda",
+            temporal_mode="keyframes",
+        )
+
+        runtime_checkpoint: dict[str, Any] | None = None
+        estimated_total = max(1, int(preflight.get("estimated_frames", 1)) + int(preflight.get("estimated_keyframes", 1)) + 3)
+
+        def _check_canceled() -> None:
+            latest = jobs.get(project_id, job_id)
+            if latest and latest.status == "canceled":
+                jobs.update_progress(
+                    project_id,
+                    job_id,
+                    stage="canceled",
+                    current=int((latest.progress or {}).get("current", 0)),
+                    total=max(1, int((latest.progress or {}).get("total", estimated_total) or estimated_total)),
+                    message="Cancel requested - stopping after current TensorRT step",
+                    extra=_job_checkpoint_extra("tensorrt", model_id, runtime_checkpoint),
+                )
+                raise JobCanceled("TensorRT render canceled")
+
+        def _log(line: str) -> None:
+            _check_canceled()
+            jobs.append_log(project_id, job_id, line)
+
+        def _progress(stage: str, current: int, total: int, message: str | None = None) -> None:
+            _check_canceled()
+            jobs.update_progress(
+                project_id,
+                job_id,
+                stage=stage,
+                current=current,
+                total=max(total, estimated_total),
+                message=message,
+                extra=_job_checkpoint_extra("tensorrt", model_id, runtime_checkpoint),
+            )
+
+        _log(
+            f"TensorRT internal video: fps_render={settings_obj.fps_render} "
+            f"fps_output={settings_obj.fps_output} keyframe_interval_s={settings_obj.keyframe_interval_s}"
+        )
+        _log(f"Using TensorRT model_id={model_id} path={preflight.get('model_path')}")
+        if preflight.get("warnings"):
+            for warning in preflight["warnings"]:
+                _log(f"Warning: {warning}")
+
+        _progress("starting", 0, estimated_total, "Starting TensorRT internal video render")
+        variant2 = dict(variant)
+        variant2["index"] = variant_index
+        variant2["duration_s"] = _resolved_project_duration_s(proj, variant, scenes)
+
+        out = render_tensorrt_video_variant(
+            ffmpeg_path=settings.ffmpeg_path,
+            project_id=project_id,
+            project_dir=pdir,
+            variant=variant2,
+            scenes=scenes,
+            audio_path=audio_path,
+            settings=settings_obj,
+            model_id=model_id,
+            log_fn=_log,
+            progress_fn=_progress,
+            cancel_check_fn=_check_canceled,
+        )
+
+        jobs.update_progress(
+            project_id,
+            job_id,
+            stage="complete",
+            current=estimated_total,
+            total=estimated_total,
+            message=f"Saved {out.name}",
+            extra=_job_checkpoint_extra("tensorrt", model_id, runtime_checkpoint, video=str(out)),
+        )
+
+        rel_video = str(out.relative_to(pdir))
+        videos = proj.meta.setdefault("outputs", {}).setdefault("videos", [])
+        if rel_video not in videos:
+            videos.append(rel_video)
+        render_entry = {
+            "video": rel_video,
+            "model_id": model_id,
+            "mode": "tensorrt",
+            "fps_render": settings_obj.fps_render,
+            "fps_output": settings_obj.fps_output,
+            "temporal_mode": "keyframes",
+            "resume_existing_frames": False,
+            "variant_index": variant_index,
+            "completed_at": time.time(),
+            "preflight": preflight,
+            "runtime_checkpoint": runtime_checkpoint,
+        }
+        proj.meta["last_internal_render"] = render_entry
+        hist = proj.meta.setdefault("internal_render_history", [])
+        hist.append(render_entry)
+        if isinstance(hist, list) and len(hist) > 20:
+            proj.meta["internal_render_history"] = hist[-20:]
+        store.save(proj)
+        return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "tensorrt", "preflight": preflight, "runtime_checkpoint": runtime_checkpoint}
+
     proj, variant, model_id, model_path, settings_obj = _resolve_internal_render_request(project_id, payload)
     scenes = variant.get("scenes") or []
     pdir = store.project_dir(project_id)
@@ -8333,12 +8464,127 @@ def _hosted_render_preflight_data(
     }
 
 
+def _tensorrt_model_id_from_payload(payload: dict[str, Any]) -> str:
+    requested = str(payload.get("model_id") or "").strip()
+    if requested and requested not in {"auto", "auto_internal"} and "tensorrt" in requested.lower():
+        return requested
+    return "local_sd15_tensorrt_bundle"
+
+
+def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    proj = store.get(project_id)
+    if not proj:
+        raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
+
+    variant_index = int(payload.get("variant_index", 0))
+    variants = plan["variants"]
+    if variant_index < 0 or variant_index >= len(variants):
+        raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
+
+    variant = variants[variant_index]
+    scenes = variant.get("scenes") or []
+    if not scenes:
+        raise UserFacingError("Selected variant has no scenes", hint="Re-run Plan with at least 1 scene.")
+
+    hw = _hardware_profile()
+    if str(hw.get("backend") or "").lower() != "cuda":
+        raise UserFacingError(
+            "TensorRT video rendering requires CUDA.",
+            hint="Use an NVIDIA CUDA backend, or switch Internal renderer mode to Local diffusion or Proxy.",
+            code="TRT_CUDA_UNAVAILABLE",
+            status_code=400,
+        )
+
+    model_id = _tensorrt_model_id_from_payload(payload)
+    model_path = models.installed_path(model_id)
+    if not model_path:
+        raise UserFacingError(
+            "Local TensorRT SD1.5 bundle is not installed.",
+            hint="Keep D:\\my_tensorrt_models available or set EDMG_TENSORRT_SD15_BUNDLE to a folder containing engine/ and onnx/.",
+            code="TRT_MODEL_NOT_FOUND",
+            status_code=400,
+        )
+
+    trt_payload = dict(payload)
+    trt_payload.update({"width": 512, "height": 512})
+    settings_obj = _internal_settings_from_payload(
+        trt_payload,
+        model_id=model_id,
+        render_tier=str(payload.get("render_tier") or "auto"),
+        device_preference="cuda",
+        temporal_mode="keyframes",
+    )
+    duration_s = _resolved_project_duration_s(proj, variant, scenes)
+    fps_render = max(1, int(settings_obj.fps_render))
+    total_frames = int(math.ceil(duration_s * fps_render))
+    keyframes = max(1, len(_scene_keyframe_times(scenes, settings_obj.keyframe_interval_s)))
+    tier_plan = _build_internal_render_plan(hw, requested_tier=str(payload.get("render_tier") or settings_obj.render_tier or "auto"), duration_s=duration_s)
+    tier_plan["chunk_plan"] = _build_render_chunk_plan(hw, applied_tier=str(tier_plan.get("applied_tier") or "draft"), duration_s=duration_s, total_frames=total_frames, fps_render=fps_render, render_mode="tensorrt")
+    timeline = proj.meta.get("timeline") or None
+    cache = describe_internal_render_cache(
+        project_dir=store.project_dir(project_id),
+        variant_index=variant_index,
+        variant=variant,
+        scenes=scenes,
+        timeline=timeline if isinstance(timeline, dict) else None,
+        model_dir=Path(model_path),
+        settings=settings_obj,
+        total_frames=total_frames,
+    )
+    warnings = [
+        "TensorRT video mode uses the SD1.5 TensorRT keyframe engine, then assembles and interpolates video locally.",
+        "This path is constrained to the compiled 512x512 batch-1 TensorRT profile.",
+    ]
+    if settings_obj.fps_render > 4:
+        warnings.append("High FPS render values will require many TensorRT keyframes; use 1-2 FPS render for first passes.")
+    for note in list(tier_plan.get("notes") or []):
+        if note not in warnings:
+            warnings.append(str(note))
+    return {
+        "ok": True,
+        "mode": "tensorrt",
+        "variant_index": variant_index,
+        "model_id": model_id,
+        "model_path": str(model_path),
+        "duration_s": duration_s,
+        "estimated_frames": total_frames,
+        "estimated_keyframes": keyframes,
+        "device": "cuda+tensorrt",
+        "hardware": hw,
+        "tier_plan": tier_plan,
+        "resume_existing_frames": False,
+        "warnings": warnings,
+        "cache": cache,
+        "installed_internal_models": _installed_internal_models_status(),
+        "installed_tensorrt_models": {model_id: True},
+        "settings": {
+            "fps_render": settings_obj.fps_render,
+            "fps_output": settings_obj.fps_output,
+            "width": 512,
+            "height": 512,
+            "temporal_mode": "keyframes",
+            "interpolation_engine": settings_obj.interpolation_engine,
+            "render_mode": "tensorrt",
+            "render_tier": settings_obj.render_tier,
+            "device_preference": "cuda",
+            "profile_width": 512,
+            "profile_height": 512,
+            "max_batch": 1,
+        },
+    }
+
+
 def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     requested_mode = str(payload.get("render_mode") or "auto").strip().lower()
     if requested_mode == "proxy":
         return _proxy_render_preflight_data(project_id, payload, reason="Proxy mode requested explicitly.")
     if requested_mode == "hosted":
         return _hosted_render_preflight_data(project_id, payload)
+    if requested_mode == "tensorrt":
+        return _tensorrt_render_preflight_data(project_id, payload)
 
     try:
         proj, variant, model_id, model_path, settings_obj = _resolve_internal_render_request(project_id, payload)
@@ -10511,7 +10757,7 @@ def _hf_settings_payload() -> dict[str, Any]:
     )
     return {
         "ok": True,
-        "settings": cfg["hf_bucket"],
+        "settings": {**cfg["hf_bucket"], "storage_mode": cfg.get("storage_mode", "local_cache")},
         "status": status,
         "active_provider": models._model_cache_label() if models.model_cache is not None else None,
         "priority": ["huggingface_bucket", "aws_s3", "azure_blob"],

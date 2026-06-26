@@ -263,6 +263,99 @@ class ModelTaskManager:
 
 # ------------------------------ manager ------------------------------
 
+class _CompositeModelCache:
+    """Try multiple remote caches in priority order.
+
+    HF bucket is normally first; S3/Azure remain secondary mirrors and restore
+    fallbacks. Uploads are best-effort fan-out so a configured secondary cache
+    can keep a copy without blocking the primary local install path.
+    """
+
+    def __init__(self, caches: list[Any]):
+        self.caches = [cache for cache in caches if cache is not None]
+        self._last_cache = self.caches[0] if self.caches else None
+
+    @property
+    def label(self) -> str:
+        labels = [str(getattr(cache, "label", cache.__class__.__name__)) for cache in self.caches]
+        if not labels:
+            return "No model cache"
+        if len(labels) == 1:
+            return labels[0]
+        return f"{labels[0]} primary + " + " + ".join(f"{label} secondary" for label in labels[1:])
+
+    @property
+    def settings(self) -> Any:
+        return getattr(self._last_cache, "settings", None)
+
+    def _call_exists(self, method_name: str, entry: dict[str, Any], path: Path) -> str | None:
+        for cache in self.caches:
+            method = getattr(cache, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                result = method(entry, path)
+            except Exception:
+                continue
+            if result:
+                self._last_cache = cache
+                return str(result)
+        return None
+
+    def _call_download(self, method_name: str, entry: dict[str, Any], dest: Path) -> bool:
+        for cache in self.caches:
+            method = getattr(cache, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                if method(entry, dest):
+                    self._last_cache = cache
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _call_upload(self, method_name: str, entry: dict[str, Any], path: Path) -> str:
+        first_object: str | None = None
+        first_cache: Any | None = None
+        for cache in self.caches:
+            method = getattr(cache, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                result = method(entry, path)
+            except Exception:
+                continue
+            if not result:
+                continue
+            object_name = str(result)
+            if object_name and first_object is None:
+                first_object = object_name
+                first_cache = cache
+        if first_object is None:
+            raise RuntimeError("No configured model cache accepted the upload")
+        self._last_cache = first_cache
+        return first_object
+
+    def model_exists(self, entry: dict[str, Any], path: Path) -> str | None:
+        return self._call_exists("model_exists", entry, path)
+
+    def model_directory_exists(self, entry: dict[str, Any], path: Path) -> str | None:
+        return self._call_exists("model_directory_exists", entry, path)
+
+    def download_model(self, entry: dict[str, Any], dest: Path) -> bool:
+        return self._call_download("download_model", entry, dest)
+
+    def download_model_directory(self, entry: dict[str, Any], dest: Path) -> bool:
+        return self._call_download("download_model_directory", entry, dest)
+
+    def upload_model(self, entry: dict[str, Any], path: Path) -> str:
+        return self._call_upload("upload_model", entry, path)
+
+    def upload_model_directory(self, entry: dict[str, Any], path: Path) -> str:
+        return self._call_upload("upload_model_directory", entry, path)
+
+
 class ModelManager:
     def __init__(
         self,
@@ -295,9 +388,10 @@ class ModelManager:
         return self.model_cache
 
     def _build_model_cache(self):
-        # Priority: Hugging Face bucket first, then AWS S3, then Azure. The HF
-        # bucket only activates when enabled (EDMG_HF_BUCKET_MODEL_CACHE) with a
-        # configured bucket id, so when it is on it always wins over S3/Azure.
+        # Priority: Hugging Face bucket first, then AWS S3, then Azure. When
+        # more than one cache is configured, keep all of them so HF can be the
+        # primary model mirror while S3/Azure remain secondary storage.
+        caches: list[Any] = []
         if HFBucketModelCache is not None:
             try:
                 cache = HFBucketModelCache.from_runtime(
@@ -305,7 +399,7 @@ class ModelManager:
                     secrets_store=self.secrets,
                 )
                 if cache is not None:
-                    return cache
+                    caches.append(cache)
             except Exception:
                 pass
         for cache_type in (S3ModelCache, AzureModelCache):
@@ -316,8 +410,10 @@ class ModelManager:
             except Exception:
                 continue
             if cache is not None:
-                return cache
-        return None
+                caches.append(cache)
+        if len(caches) > 1:
+            return _CompositeModelCache(caches)
+        return caches[0] if caches else None
 
     def _model_cache_label(self) -> str:
         cache = getattr(self, "model_cache", None)

@@ -1,12 +1,12 @@
 import React from "react";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import Render from "../pages/Render";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
 const installRenderMocks = () => {
   installEdmgBridge();
-  installFetchMock({
+  return installFetchMock({
     "/v1/projects": { projects: [{ id: "p1", name: "Demo Project" }] },
     "/v1/comfyui/capabilities": { ok: true },
     "/v1/hardware": { ok: true, device: "cpu" },
@@ -75,6 +75,21 @@ const installRenderMocks = () => {
           supports_controlnet: false,
           render: { render_modes: ["stills"], engine: "internal", family: "sd35" },
         },
+        {
+          id: "local_sd15_tensorrt_bundle",
+          name: "Local SD1.5 TensorRT Bundle",
+          kind: "runtime_bundle",
+          engine: "tensorrt_standalone",
+          family: "sd15",
+          render: {
+            render_modes: ["stills"],
+            engine: "tensorrt_standalone",
+            family: "sd15",
+            profile_width: 512,
+            profile_height: 512,
+            max_batch: 1,
+          },
+        },
       ],
       user: [
         {
@@ -91,6 +106,7 @@ const installRenderMocks = () => {
         local_lora_neon: true,
         hf_sdxl_internal: true,
         hf_sd35_medium_internal: true,
+        local_sd15_tensorrt_bundle: true,
       },
     },
     "/v1/projects/p1": {
@@ -222,6 +238,32 @@ describe("Render page", () => {
     renderWithStudio(<Render />);
 
     expect(await screen.findByDisplayValue("Keyframes (style-locked)")).toBeTruthy();
+  }, 10000);
+
+  it("sends TensorRT video mode through the internal renderer payload", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    const tensorRtOption = await screen.findByRole("option", { name: "TensorRT SD1.5 video" });
+    const renderModeSelect = tensorRtOption.closest("select");
+    expect(renderModeSelect).toBeTruthy();
+
+    fireEvent.change(renderModeSelect!, { target: { value: "tensorrt" } });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => {
+          if (!String(url).includes("/v1/projects/p1/render/internal/preflight")) return false;
+          const body = String(init?.body || "");
+          return body.includes('"render_mode":"tensorrt"')
+            && body.includes('"model_id":"local_sd15_tensorrt_bundle"')
+            && body.includes('"device_preference":"cuda"')
+            && body.includes('"temporal_mode":"keyframes"')
+            && body.includes('"resume_existing_frames":false');
+        }),
+      ).toBe(true);
+    });
   }, 10000);
 
   it("disables controlnet workflows for internal sd3.5 still models", async () => {

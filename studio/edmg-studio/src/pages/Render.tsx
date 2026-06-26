@@ -167,7 +167,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalKeyInterval, setInternalKeyInterval] = useState<number>(5);
   const [internalInterp, setInternalInterp] = useState<"auto"|"minterpolate"|"fps"|"rife">("auto");
   const [internalModelId, setInternalModelId] = useState<string>("auto");
-  const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"proxy">("auto");
+  const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"tensorrt"|"proxy">("auto");
   const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
 
@@ -321,9 +321,17 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     [modelCatalog]
   );
   const internalModelOptions = useMemo(
-    () => modelCatalog.filter((m) => m.kind === "diffusers"),
+    () => modelCatalog.filter((m) => m.kind === "diffusers" || (m.kind === "runtime_bundle" && m.render?.engine === "tensorrt_standalone")),
     [modelCatalog]
   );
+  const tensorRtInternalModel = useMemo(
+    () => modelCatalog.find((m) => m.id === "local_sd15_tensorrt_bundle")
+      || modelCatalog.find((m) => m.kind === "runtime_bundle" && m.render?.engine === "tensorrt_standalone")
+      || null,
+    [modelCatalog]
+  );
+  const tensorRtInternalVisible = !!tensorRtInternalModel;
+  const tensorRtInternalInstalled = !!tensorRtInternalModel && installedModels[tensorRtInternalModel.id] !== false;
   const loraModels = useMemo(
     () => modelCatalog.filter((m) => m.kind === "lora" && installedModels[m.id] !== false),
     [modelCatalog, installedModels]
@@ -434,26 +442,29 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
 
-  const buildInternalPayload = () => ({
-    variant_index: selectedVariant,
-    fps_output: internalFpsOut,
-    fps_render: internalFpsRender,
-    keyframe_interval_s: internalKeyInterval,
-    interpolation_engine: internalInterp,
-    temporal_mode: internalTemporalMode,
-    temporal_strength: internalTemporalStrength,
-    temporal_steps: internalTemporalSteps,
-    refine_every_n_frames: internalRefineEvery,
-    anchor_strength: internalAnchorStrength,
-    prompt_blend: internalPromptBlend,
-    model_id: internalModelId,
-    render_mode: internalRenderMode,
-    render_tier: internalRenderTier,
-    device_preference: internalDevicePreference,
-    allow_hosted_fallback: true,
-    allow_proxy_fallback: true,
-    resume_existing_frames: internalResumeExisting,
-  });
+  const buildInternalPayload = () => {
+    const useTensorRt = internalRenderMode === "tensorrt";
+    return {
+      variant_index: selectedVariant,
+      fps_output: internalFpsOut,
+      fps_render: internalFpsRender,
+      keyframe_interval_s: internalKeyInterval,
+      interpolation_engine: internalInterp,
+      temporal_mode: useTensorRt ? "keyframes" : internalTemporalMode,
+      temporal_strength: internalTemporalStrength,
+      temporal_steps: internalTemporalSteps,
+      refine_every_n_frames: internalRefineEvery,
+      anchor_strength: internalAnchorStrength,
+      prompt_blend: internalPromptBlend,
+      model_id: useTensorRt && internalModelId === "auto" ? (tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle") : internalModelId,
+      render_mode: internalRenderMode,
+      render_tier: internalRenderTier,
+      device_preference: useTensorRt ? "cuda" : internalDevicePreference,
+      allow_hosted_fallback: true,
+      allow_proxy_fallback: true,
+      resume_existing_frames: useTensorRt ? false : internalResumeExisting,
+    };
+  };
 
   const parsedRenderSeed = useMemo(() => {
     const trimmed = renderSeed.trim();
@@ -1651,6 +1662,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <option value="auto">Auto</option>
                       <option value="diffusion">Local diffusion</option>
                       {internalHostedVisible ? <option value="hosted">Hosted Stability</option> : null}
+                      {tensorRtInternalVisible ? <option value="tensorrt">TensorRT SD1.5 video</option> : null}
                       {fireflyVisible ? <option value="firefly">Adobe Firefly</option> : null}
                       <option value="proxy">Proxy only</option>
                     </select>
@@ -1706,8 +1718,14 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   </div>
                 </div>
                 <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
-                  Tip: install internal models in Models first. Auto tiering adapts the internal renderer for laptops, Apple Silicon, CPU-only systems, and higher-end GPUs.
+                  Tip: install internal models in Models first. Auto tiering adapts the internal renderer for laptops, Apple Silicon, CPU-only systems, higher-end GPUs, and the TensorRT CUDA path.
                 </div>
+                {internalRenderMode === "tensorrt" ? (
+                  <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                    TensorRT video forces CUDA, keyframe temporal mode, the local SD1.5 TensorRT bundle, and the compiled 512x512 batch-1 profile.
+                    {" "}Bundle status: <b>{tensorRtInternalInstalled ? "installed" : "missing"}</b>.
+                  </div>
+                ) : null}
                 {internalHostedVisible ? (
                   <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
                     Hosted Stability fallback is configured: <b>{renderProviders?.stability?.service}</b>
@@ -1740,6 +1758,13 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                           Hosted provider: <b>{internalPreflight.hosted_provider.provider}</b> • service <b>{internalPreflight.hosted_provider.service}</b>
                           {internalPreflight.hosted_provider.model ? <> • model <b>{internalPreflight.hosted_provider.model}</b></> : null}
                           {internalPreflight.hosted_provider.style_preset ? <> • style <b>{internalPreflight.hosted_provider.style_preset}</b></> : null}
+                        </div>
+                      ) : null}
+                      {internalPreflight?.mode === "tensorrt" ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          TensorRT profile: <b>{internalPreflight?.settings?.profile_width || 512}x{internalPreflight?.settings?.profile_height || 512}</b>
+                          {" "}• max batch <b>{internalPreflight?.settings?.max_batch || 1}</b>
+                          {" "}• keyframe engine <b>SD1.5 TensorRT</b>
                         </div>
                       ) : null}
                       <div className="small" style={{ marginTop: 4 }}>

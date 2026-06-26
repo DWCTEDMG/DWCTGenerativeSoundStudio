@@ -221,3 +221,63 @@ def test_model_manager_builds_hf_cache_from_runtime(tmp_path, monkeypatch) -> No
     assert isinstance(manager.model_cache, _FakeHFCache)
     assert calls[0]["models_dir"] == tmp_path / "home" / "models"
     assert calls[0]["secrets_store"] is not None
+
+
+def test_model_manager_keeps_s3_as_secondary_cache_when_hf_is_active(tmp_path, monkeypatch) -> None:
+    calls: dict[str, list[str]] = {"hf_uploads": [], "s3_uploads": []}
+
+    class _FakeHFCache:
+        label = "Hugging Face bucket"
+        settings = type("Settings", (), {"bucket": "team/hf", "prefix": "models"})()
+
+        @classmethod
+        def from_runtime(cls, *, models_dir=None, secrets_store=None):
+            return cls()
+
+        def model_exists(self, entry, path):
+            return None
+
+        def upload_model(self, entry, path):
+            calls["hf_uploads"].append(str(path))
+            return "hf/checkpoints/demo.safetensors"
+
+    class _FakeS3Cache:
+        label = "AWS S3 model cache"
+        settings = type("Settings", (), {"bucket": "team-s3", "prefix": "models"})()
+
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def model_exists(self, entry, path):
+            return "models/checkpoints/demo.safetensors"
+
+        def upload_model(self, entry, path):
+            calls["s3_uploads"].append(str(path))
+            return "models/checkpoints/demo.safetensors"
+
+    monkeypatch.setattr(model_manager_module, "HFBucketModelCache", _FakeHFCache)
+    monkeypatch.setattr(model_manager_module, "S3ModelCache", _FakeS3Cache)
+    monkeypatch.setattr(model_manager_module, "AzureModelCache", None)
+    manager = ModelManager(
+        tmp_path / "data",
+        tmp_path / "home" / "models",
+        tmp_path / "external",
+        "http://127.0.0.1:8188",
+        "http://127.0.0.1:11434",
+    )
+
+    entry = {"id": "demo", "kind": "checkpoint", "filename": "demo.safetensors"}
+    model_path = tmp_path / "home" / "models" / "checkpoints" / "demo.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"weights")
+
+    assert "Hugging Face bucket primary" in manager._model_cache_label()
+    assert manager._cache_model_exists(entry, model_path) == "models/checkpoints/demo.safetensors"
+    assert manager._upload_to_model_cache(
+        model_manager_module.ModelTask(id="test", name="upload"),
+        entry,
+        model_path,
+    ) == "hf/checkpoints/demo.safetensors"
+    assert calls["hf_uploads"] == [str(model_path)]
+    assert calls["s3_uploads"] == [str(model_path)]

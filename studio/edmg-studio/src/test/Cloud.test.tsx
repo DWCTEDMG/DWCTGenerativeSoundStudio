@@ -8,7 +8,7 @@ describe("Cloud page", () => {
   it("keeps AWS test actions working while exposing layout profiles", async () => {
     installEdmgBridge();
     const fetchMock = installFetchMock({
-      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
+      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "", storage_mode: "local_cache" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
       "POST /v1/cloud/aws/test": { ok: true, provider: "aws", bucket: "demo-bucket" },
     });
 
@@ -34,7 +34,7 @@ describe("Cloud page", () => {
   it("posts Azure model cache credential tests with the selected container", async () => {
     installEdmgBridge();
     const fetchMock = installFetchMock({
-      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
+      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "", storage_mode: "local_cache" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
       "POST /v1/cloud/azure/test": { ok: true, provider: "azure", container: "edmg-model-cache" },
     });
 
@@ -60,7 +60,7 @@ describe("Cloud page", () => {
     const fetchMock = installFetchMock({
       "GET /v1/cloud/hf/settings": {
         ok: true,
-        settings: { enabled: true, bucket: "team/edmg-models", prefix: "weights" },
+        settings: { enabled: true, bucket: "team/edmg-models", prefix: "weights", storage_mode: "local_cache" },
         status: {
           ok: true,
           provider: "huggingface_bucket",
@@ -78,6 +78,12 @@ describe("Cloud page", () => {
         provider: "huggingface_bucket",
         bucket: "team/custom-bucket",
         sample_paths: ["checkpoints/demo.safetensors"],
+      },
+      "POST /v1/cloud/hf/settings": {
+        ok: true,
+        settings: { enabled: true, bucket: "team/custom-bucket", prefix: "weights", storage_mode: "cloud_only" },
+        status: { ok: true, provider: "huggingface_bucket", enabled: true, active: true },
+        active_provider: "Hugging Face bucket",
       },
     });
 
@@ -104,6 +110,20 @@ describe("Cloud page", () => {
           && String(init?.body || "").includes("team/custom-bucket")),
       ).toBe(true);
     });
+
+    fireEvent.change(screen.getByDisplayValue("Local models + HF/S3 secondary mirrors"), {
+      target: { value: "cloud_only" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & apply" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) =>
+          String(url).includes("/v1/cloud/hf/settings")
+          && String(init?.method || "GET").toUpperCase() === "POST"
+          && String(init?.body || "").includes('"storage_mode":"cloud_only"')),
+      ).toBe(true);
+    });
   });
 
   it("persists a Lightning backend target from the Cloud page", async () => {
@@ -115,7 +135,7 @@ describe("Cloud page", () => {
     }));
     installEdmgBridge({ setBackendSettings });
     installFetchMock({
-      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
+      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "", storage_mode: "local_cache" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
     });
 
     renderWithStudio(<Cloud backendUrl="http://127.0.0.1:7863" config={null} />);
@@ -139,7 +159,7 @@ describe("Cloud page", () => {
   it("generates Lightning bundles under the organized Studio data cloud path by default", async () => {
     installEdmgBridge();
     const fetchMock = installFetchMock({
-      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
+      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "", storage_mode: "local_cache" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
       "POST /v1/cloud/lightning/bundle": { ok: true, output_dir: "data/cloud/lightning/lightning_bundle" },
     });
 

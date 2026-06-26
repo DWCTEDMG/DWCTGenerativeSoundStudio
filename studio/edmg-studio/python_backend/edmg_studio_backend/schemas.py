@@ -157,6 +157,7 @@ class InternalVideoRenderRequest(BaseModel):
       - auto: prefer diffusion if an internal model is installed, otherwise fall back to proxy
       - diffusion: require an internal diffusion model
       - hosted: use the configured hosted still-image provider for keyframes, then assemble locally
+      - tensorrt: generate SD1.5 TensorRT keyframes, then assemble locally
       - proxy: render a local draft video using timeline compositing only
     """
     variant_index: int = 0
@@ -174,7 +175,7 @@ class InternalVideoRenderRequest(BaseModel):
 
     interpolation_engine: Literal["auto","minterpolate","fps","rife"] = "auto"
     model_id: str = "auto"
-    render_mode: Literal["auto","diffusion","hosted","proxy"] = "auto"
+    render_mode: Literal["auto","diffusion","hosted","tensorrt","proxy"] = "auto"
     render_tier: Literal["auto","draft","balanced","quality"] = "auto"
     device_preference: Literal["auto","cpu","cuda","mps","directml"] = "auto"
     allow_hosted_fallback: bool = True
@@ -345,6 +346,7 @@ class CloudHfBucketSettingsRequest(BaseModel):
     enabled: bool | None = None
     bucket: str | None = None
     prefix: str | None = None
+    storage_mode: Literal["local_cache", "cloud_only"] | None = None
 
 class CloudLightningBundleRequest(BaseModel):
     output_dir: str = "lightning/lightning_bundle"
