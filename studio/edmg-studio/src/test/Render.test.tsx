@@ -258,7 +258,7 @@ describe("Render page", () => {
 
     renderWithStudio(<Render />);
 
-    const tensorRtOption = await screen.findByRole("option", { name: "TensorRT SD1.5 video" });
+    const tensorRtOption = await screen.findByRole("option", { name: "TensorRT SD1.5 keyframes" });
     const renderModeSelect = tensorRtOption.closest("select");
     expect(renderModeSelect).toBeTruthy();
 
@@ -284,7 +284,7 @@ describe("Render page", () => {
 
     renderWithStudio(<Render />);
 
-    expect(await screen.findByRole("option", { name: "TensorRT SD1.5 video" })).toBeTruthy();
+    expect(await screen.findByRole("option", { name: "TensorRT SD1.5 keyframes" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Local SD1.5 TensorRT Bundle" })).toBeTruthy();
     expect(screen.queryByRole("option", { name: "SVD XT 1.1 TensorRT Bundle" })).toBeNull();
   }, 10000);

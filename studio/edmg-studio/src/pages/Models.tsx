@@ -775,7 +775,7 @@ export default function Models(props: PageProps) {
           <>
             <h3 style={{ marginTop: 18 }}>Discovery-only runtime bundles</h3>
             <div className="small" style={{ opacity: 0.82 }}>
-              These are still browser-only packages. Studio&apos;s real AMD path now runs through internal DirectML, while these vendor bundles remain surfaced for discovery and future runtime work.
+              These vendor runtime bundles are listed for discovery and future adapters. Studio currently executes internal TensorRT video only through the local SD1.5 bundle; SVD/SD3.5 TensorRT bundles are not selectable render engines yet.
             </div>
             {browserOnlyModels.map((m) => (
               <ModelCard

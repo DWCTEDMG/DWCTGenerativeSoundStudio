@@ -1,8 +1,0 @@
-{
-  "provider": "huggingface_bucket",
-  "hf_bucket": {
-    "enabled": true,
-    "bucket": "team/edmg-models",
-    "prefix": ""
-  }
-}

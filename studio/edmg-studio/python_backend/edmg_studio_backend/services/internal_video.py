@@ -2818,7 +2818,13 @@ def _wrap_text(text: str, width: int = 28) -> list[str]:
 
 def _proxy_camera_at_time(timeline: dict[str, Any] | None, t: float) -> dict[str, float]:
     """Linear-interpolate camera zoom/pan from timeline camera keyframes (proxy path)."""
-    default = {"zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0}
+    phase = (float(t) % 8.0) / 8.0
+    eased = _ease01(phase)
+    default = {
+        "zoom": 1.03 + 0.12 * eased,
+        "pan_x": math.sin((float(t) / 7.0) * 2.0 * math.pi),
+        "pan_y": math.sin((float(t) / 11.0) * 2.0 * math.pi + 1.1) * 0.7,
+    }
     cam = (timeline or {}).get("camera") if isinstance(timeline, dict) else None
     kfs = cam.get("keyframes") if isinstance(cam, dict) else None
     if not isinstance(kfs, list) or not kfs:

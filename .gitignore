@@ -6,6 +6,7 @@ __pycache__/
 *$py.class
 *.so
 .pytest_cache/
+.pytest-tmp/
 *.log
 *.bak
 nohup.out
@@ -80,6 +81,8 @@ studio/edmg-studio/tmp/
 studio/edmg-studio/data/
 studio/edmg-studio/models/
 studio/edmg-studio/python_backend/models/
+studio/edmg-studio/python_backend/temp_pytest/
+studio/edmg-studio/python_backend/.pytest-tmp/
 studio/edmg-studio/cache/
 studio/edmg-studio/logs/
 studio/edmg-studio/output/

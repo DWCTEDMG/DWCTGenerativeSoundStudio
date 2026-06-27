@@ -617,6 +617,14 @@ def _resolve_comfy_motion_selection(
 
 def _resolve_installed_model_path(model_id: str, *, materialize_remote: bool = True) -> Path | None:
     """Resolve an installed model path with backward-compatible fallbacks."""
+    installed_path = getattr(models, "installed_path", None)
+    if callable(installed_path):
+        fallback = installed_path(model_id)
+        if fallback:
+            return Path(fallback)
+        if not materialize_remote:
+            return None
+
     resolver = getattr(models, "resolve_installed_path", None)
     if callable(resolver):
         try:
@@ -625,29 +633,23 @@ def _resolve_installed_model_path(model_id: str, *, materialize_remote: bool = T
             resolved = resolver(model_id)
         if resolved:
             return Path(resolved)
-    installed_path = getattr(models, "installed_path", None)
-    if callable(installed_path):
-        fallback = installed_path(model_id)
-        if fallback:
-            return Path(fallback)
     return None
 
 
 def _installed_internal_models_status() -> dict[str, bool]:
-    getter = getattr(models, "installed_internal_models", None)
-    if callable(getter):
-        return getter()
     return {
-        "hf_sd15_internal": bool(models.installed_path("hf_sd15_internal")),
-        "hf_sdxl_internal": bool(models.installed_path("hf_sdxl_internal")),
-        "hf_sd35_medium_internal": bool(models.installed_path("hf_sd35_medium_internal")),
+        "hf_sd15_internal": bool(_resolve_installed_model_path("hf_sd15_internal", materialize_remote=False)),
+        "hf_sdxl_internal": bool(_resolve_installed_model_path("hf_sdxl_internal", materialize_remote=False)),
+        "hf_sd35_medium_internal": bool(_resolve_installed_model_path("hf_sd35_medium_internal", materialize_remote=False)),
     }
 
 
-def _internal_model_is_available(model_id: str) -> bool:
+def _internal_model_is_available(model_id: str, *, probe_remote: bool = False) -> bool:
+    if _resolve_installed_model_path(model_id, materialize_remote=False):
+        return True
     probe = getattr(models, "is_model_available", None)
     if callable(probe):
-        return bool(probe(model_id, probe_remote=True))
+        return bool(probe(model_id, probe_remote=probe_remote))
     return bool(models.installed_path(model_id))
 
 
@@ -8174,7 +8176,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             if mid in seen:
                 continue
             seen.add(mid)
-            installed = _resolve_installed_model_path(mid, materialize_remote=True)
+            installed = _resolve_installed_model_path(mid, materialize_remote=False)
             if not installed:
                 continue
             family = _internal_model_family_for_request(mid, installed)
@@ -8204,7 +8206,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             )
         model_id = picked
 
-    model_path = _resolve_installed_model_path(model_id, materialize_remote=True)
+    model_path = _resolve_installed_model_path(model_id, materialize_remote=False)
     if not model_path:
         issue = getattr(models, "internal_asset_issue", lambda _model_id: None)(model_id)
         if issue == "incomplete":
@@ -8476,8 +8478,9 @@ def _tensorrt_requested_model_warning(payload: dict[str, Any]) -> str | None:
     requested = str(payload.get("model_id") or "").strip()
     if _payload_requests_tensorrt_video(payload) and requested != TENSORRT_VIDEO_MODEL_ID:
         return (
-            f"Requested TensorRT bundle {requested} is not supported by the internal video TensorRT engine yet; "
-            f"using {TENSORRT_VIDEO_MODEL_ID}."
+            f"Requested TensorRT bundle {requested} is discovery-only for Studio video. "
+            f"Internal TensorRT video currently supports only {TENSORRT_VIDEO_MODEL_ID}, "
+            "which renders SD1.5 keyframes and assembles/interpolates them locally."
         )
     return None
 
@@ -8553,8 +8556,8 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         total_frames=total_frames,
     )
     warnings = [
-        "TensorRT video mode uses the SD1.5 TensorRT keyframe engine, then assembles and interpolates video locally.",
-        "This path is constrained to the compiled 512x512 batch-1 TensorRT profile.",
+        "TensorRT video mode is SD1.5 keyframe generation plus local assembly/interpolation, not an SVD/AnimateDiff motion model.",
+        "This path uses the local SD1.5 TensorRT bundle only and is constrained to the compiled 512x512 batch-1 profile.",
     ]
     requested_warning = _tensorrt_requested_model_warning(payload)
     if requested_warning:
@@ -8832,10 +8835,10 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
         if mid in seen:
             continue
         seen.add(mid)
-        if not _internal_model_is_available(mid):
-            continue
         installed = _resolve_installed_model_path(mid, materialize_remote=False)
-        family = _internal_model_family_for_request(mid, installed or Path(mid))
+        if not installed:
+            continue
+        family = _internal_model_family_for_request(mid, installed)
         hardware_issue = _internal_model_hardware_issue(mid, family, hw, str(tier_plan.get("device_preference") or "auto"))
         if hardware_issue:
             hardware_issues.append(hardware_issue)

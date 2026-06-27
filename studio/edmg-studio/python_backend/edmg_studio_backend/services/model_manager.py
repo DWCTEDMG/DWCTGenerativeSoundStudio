@@ -982,13 +982,13 @@ class ModelManager:
         path = self._internal_models_dir(folder) / model_id
         if self._local_installed_path(entry) is not None:
             return None
+        if path.exists():
+            if self._internal_asset_installed(entry, path):
+                return None
+            return "incomplete"
         if self.is_model_available(model_id, probe_remote=True):
             return None
-        if not path.exists():
-            return "missing"
-        if self._internal_asset_installed(entry, path):
-            return None
-        return "incomplete"
+        return "missing"
 
     def _find_existing_comfy_file(self, folder: str, ref: str) -> Path | None:
         raw = str(ref or "").strip()
@@ -1145,13 +1145,20 @@ class ModelManager:
                 hint="Pick an internal Studio asset for the internal diffusers path.",
             )
 
-        resolved_path = self.resolve_installed_path(str(entry.get("id") or ""), materialize_remote=True)
+        model_id = str(entry.get("id") or "")
+        issue = self.internal_asset_issue(model_id)
+        if issue == "incomplete":
+            raise UserFacingError(
+                f"{entry.get('name') or raw} is not installed",
+                hint="Reinstall the asset in Model Manager. The current local snapshot is missing required weight files.",
+            )
+
+        resolved_path = self.resolve_installed_path(model_id, materialize_remote=True)
         if resolved_path is None:
-            issue = self.internal_asset_issue(str(entry.get("id") or ""))
             hint = "Install the asset in Model Manager, then retry."
             if issue == "incomplete":
                 hint = "Reinstall the asset in Model Manager. The current local snapshot is missing required weight files."
-            elif self._cloud_model_record(str(entry.get("id") or "")) is not None:
+            elif self._cloud_model_record(model_id) is not None:
                 hint = (
                     "This asset is stored in the cloud cache only. Studio tried to restore it locally for the internal "
                     "renderer but could not materialize a valid Diffusers snapshot."

@@ -1676,7 +1676,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <option value="auto">Auto</option>
                       <option value="diffusion">Local diffusion</option>
                       {internalHostedVisible ? <option value="hosted">Hosted Stability</option> : null}
-                      {tensorRtInternalVisible ? <option value="tensorrt">TensorRT SD1.5 video</option> : null}
+                      {tensorRtInternalVisible ? <option value="tensorrt">TensorRT SD1.5 keyframes</option> : null}
                       {fireflyVisible ? <option value="firefly">Adobe Firefly</option> : null}
                       <option value="proxy">Proxy only</option>
                     </select>
@@ -1732,11 +1732,11 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   </div>
                 </div>
                 <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
-                  Tip: install internal models in Models first. Auto tiering adapts the internal renderer for laptops, Apple Silicon, CPU-only systems, higher-end GPUs, and the TensorRT CUDA path.
+                  Tip: install internal models in Models first. Auto tiering adapts the internal renderer for laptops, Apple Silicon, CPU-only systems, higher-end GPUs, and the TensorRT CUDA keyframe path.
                 </div>
                 {internalRenderMode === "tensorrt" ? (
                   <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
-                    TensorRT video forces CUDA, keyframe temporal mode, the local SD1.5 TensorRT bundle, and the compiled 512x512 batch-1 profile.
+                    TensorRT keyframe video forces CUDA, keyframe temporal mode, the local SD1.5 TensorRT bundle, and the compiled 512x512 batch-1 profile. It is animated still-keyframe assembly, not SVD or AnimateDiff motion.
                     {" "}Bundle status: <b>{tensorRtInternalInstalled ? "installed" : "missing"}</b>.
                   </div>
                 ) : null}
@@ -1778,7 +1778,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                         <div className="small" style={{ marginTop: 4 }}>
                           TensorRT profile: <b>{internalPreflight?.settings?.profile_width || 512}x{internalPreflight?.settings?.profile_height || 512}</b>
                           {" "}• max batch <b>{internalPreflight?.settings?.max_batch || 1}</b>
-                          {" "}• keyframe engine <b>SD1.5 TensorRT</b>
+                          {" "}• keyframe assembly engine <b>SD1.5 TensorRT</b>
                         </div>
                       ) : null}
                       <div className="small" style={{ marginTop: 4 }}>
@@ -2417,7 +2417,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   {selectedStillEngine === "internal"
                     ? "Studio routes this still model through the internal diffusers adapter and validates workflow compatibility before enqueue."
                     : selectedStillIsTensorRT
-                      ? "Studio routes this still model through the standalone TensorRT runtime bundle and validates the 512x512 batch-1 engine profile before enqueue."
+                      ? "Studio routes this still model through the standalone SD1.5 TensorRT runtime bundle and validates the 512x512 batch-1 engine profile before enqueue."
                     : "Studio routes this still model through ComfyUI checkpoints and exports matching workflows when requested."}
                 </div>
               </div>
@@ -3014,7 +3014,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                     </div>
                     {selectedStillIsTensorRT ? (
                       <div className="small" style={{ width: "100%", marginTop: -4, opacity: 0.78 }}>
-                        TensorRT profile: <b>{selectedTrtProfileWidth || renderWidth}x{selectedTrtProfileHeight || renderHeight}</b>
+                        TensorRT still profile: <b>{selectedTrtProfileWidth || renderWidth}x{selectedTrtProfileHeight || renderHeight}</b>
                         {" "}• max batch <b>{selectedTrtMaxBatch || 1}</b>
                         {" "}• engine <b>{modelFamilyLabel(selectedStillFamily)}</b>
                       </div>
@@ -3023,19 +3023,19 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       className="secondary"
                       onClick={runTensorrtStandalone}
                       disabled={!variantCount}
-                      title="Render using the compiled TensorRT Standalone engine"
+                      title="Render one still image with the compiled SD1.5 TensorRT standalone engine"
                     >
-                      🚀 Render with TensorRT
+                      Render TensorRT still
                     </button>
                     {project?.meta?.creative_payload?.deforum_preview && (
                       <button
                         className="secondary"
                         onClick={runTensorrtDeforum}
                         disabled={!variantCount}
-                        title="Render Audio-Reactive Video using the compiled TensorRT engine"
+                        title="Render an audio-reactive keyframe video with the compiled SD1.5 TensorRT still engine"
                         style={{ marginLeft: 8 }}
                       >
-                        🚀 Render Audio-Reactive Video (TRT)
+                        Render TRT keyframe video
                       </button>
                     )}
                     {trtLivePreview && trtPreviewImage && (

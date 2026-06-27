@@ -152,7 +152,8 @@ def built_in_catalog() -> list[dict[str, Any]]:
             recommended="advanced",
             notes=(
                 "Local SD1.5 TensorRT export. Studio uses the compiled UNet engine in this folder "
-                "and loads the matching SD1.5 tokenizer, text encoder, scheduler, and VAE for real image generation."
+                "and loads the matching SD1.5 tokenizer, text encoder, scheduler, and VAE for still-image generation "
+                "and internal keyframe video assembly. This is the only TensorRT bundle Studio can execute for internal video."
             ),
             family="sd15",
             author="runwayml",
@@ -161,7 +162,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             render={
                 "engine": "tensorrt_standalone",
                 "workflow_family": "sd15",
-                "render_modes": ["stills"],
+                "render_modes": ["stills", "internal_video_keyframes"],
                 "base_model_id": "runwayml/stable-diffusion-v1-5",
                 "profile_width": 512,
                 "profile_height": 512,
@@ -562,19 +563,23 @@ def built_in_catalog() -> list[dict[str, Any]]:
             source="hf",
             hf_repo_id="stabilityai/stable-diffusion-3.5-large-tensorrt",
             target={"engine": "runtime_bundle", "folder": "tensorrt"},
+            installable=False,
             license_id="stability-ai-community",
             license_url="https://huggingface.co/stabilityai/stable-diffusion-3.5-large-tensorrt/blob/main/LICENSE.md",
             recommended="advanced",
-            notes="NVIDIA-optimized runtime bundle. Native Studio standalone TensorRT path.",
+            notes=(
+                "Discovery-only NVIDIA runtime bundle. Studio does not execute this SD3.5 TensorRT bundle yet; "
+                "use internal diffusion for SD3.5 rendering or the local SD1.5 TensorRT bundle for keyframe video assembly."
+            ),
             family="sd35",
             author="stabilityai",
             collections=["nvidia-optimized", "stable-diffusion-35"],
             tags=["nvidia", "tensorrt"],
             hardware_targets=["nvidia"],
             render={
-                "engine": "tensorrt_standalone",
+                "engine": "external_tensorrt_bundle",
                 "workflow_family": "sd35",
-                "render_modes": ["stills"],
+                "render_modes": [],
             },
         ),
         _entry(
@@ -584,19 +589,23 @@ def built_in_catalog() -> list[dict[str, Any]]:
             source="hf",
             hf_repo_id="stabilityai/stable-diffusion-3.5-controlnets-tensorrt",
             target={"engine": "runtime_bundle", "folder": "tensorrt"},
+            installable=False,
             license_id="stability-ai-community",
             license_url="https://huggingface.co/stabilityai/stable-diffusion-3.5-controlnets-tensorrt/blob/main/LICENSE.md",
             recommended="advanced",
-            notes="NVIDIA-optimized SD3.5 ControlNet bundle. Native Studio standalone TensorRT path.",
+            notes=(
+                "Discovery-only NVIDIA SD3.5 ControlNet runtime bundle. Studio does not execute this TensorRT bundle yet; "
+                "use standard ControlNet/internal paths until a dedicated adapter exists."
+            ),
             family="sd35",
             author="stabilityai",
             collections=["nvidia-optimized", "stable-diffusion-35"],
             tags=["nvidia", "tensorrt", "controlnet"],
             hardware_targets=["nvidia"],
             render={
-                "engine": "tensorrt_standalone",
+                "engine": "external_tensorrt_bundle",
                 "workflow_family": "sd35",
-                "render_modes": ["stills"],
+                "render_modes": [],
                 "conditioning_mode": "edge",
             },
         ),
@@ -607,19 +616,23 @@ def built_in_catalog() -> list[dict[str, Any]]:
             source="hf",
             hf_repo_id="stabilityai/stable-video-diffusion-img2vid-xt-1-1-tensorrt",
             target={"engine": "runtime_bundle", "folder": "tensorrt"},
+            installable=False,
             license_id="other",
             license_url="https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt-1-1-tensorrt",
             recommended="advanced",
-            notes="NVIDIA-optimized SVD runtime with native Studio standalone TensorRT path.",
+            notes=(
+                "Discovery-only NVIDIA SVD runtime bundle. Studio's internal TensorRT video path does not run SVD yet; "
+                "use the ComfyUI SVD motion model for real img2vid motion or the local SD1.5 TensorRT keyframe path."
+            ),
             family="svd",
             author="stabilityai",
             collections=["nvidia-optimized", "video"],
             tags=["nvidia", "tensorrt", "video"],
             hardware_targets=["nvidia"],
             render={
-                "engine": "tensorrt_standalone",
+                "engine": "external_tensorrt_bundle",
                 "workflow_family": "svd",
-                "render_modes": ["internal_video"],
+                "render_modes": [],
             },
         ),
         _entry(

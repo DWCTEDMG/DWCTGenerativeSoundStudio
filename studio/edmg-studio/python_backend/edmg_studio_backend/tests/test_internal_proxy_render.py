@@ -53,7 +53,8 @@ def test_camera_interpolation_endpoints_and_midpoint():
 
 def test_camera_defaults_without_keyframes():
     cam = _proxy_camera_at_time({}, 5.0)
-    assert cam == {"zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0}
+    assert cam["zoom"] > 1.0
+    assert abs(cam["pan_x"]) > 0.01 or abs(cam["pan_y"]) > 0.01
 
 
 def test_energy_prefers_scene_value_then_breathes():

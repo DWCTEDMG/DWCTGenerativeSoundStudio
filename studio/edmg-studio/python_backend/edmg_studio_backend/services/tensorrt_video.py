@@ -75,20 +75,40 @@ def _negative_for_scene(scene: dict[str, Any], fallback: str) -> str:
     return str(scene.get("negative_prompt") or fallback or "blurry, low quality, watermark, text, logo")
 
 
-def _motion_frame(image_path: Path, *, width: int, height: int, progress: float, direction: int) -> Any:
+def _ease01(value: float) -> float:
+    v = max(0.0, min(1.0, float(value)))
+    return v * v * (3.0 - 2.0 * v)
+
+
+def _motion_frame(
+    image_path: Path,
+    *,
+    width: int,
+    height: int,
+    progress: float,
+    direction: int,
+    next_image_path: Path | None = None,
+) -> Any:
     from PIL import Image, ImageOps
 
     img = Image.open(image_path).convert("RGB")
     img = ImageOps.fit(img, (width, height), method=Image.Resampling.LANCZOS)
     p = max(0.0, min(1.0, float(progress)))
-    zoom = 1.0 + 0.04 * p
+    if next_image_path is not None and next_image_path.exists() and p >= 0.68:
+        nxt = Image.open(next_image_path).convert("RGB")
+        nxt = ImageOps.fit(nxt, (width, height), method=Image.Resampling.LANCZOS)
+        img = Image.blend(img, nxt, _ease01((p - 0.68) / 0.32))
+
+    eased = _ease01(p)
+    zoom = 1.02 + 0.14 * eased
     crop_w = max(1, int(width / zoom))
     crop_h = max(1, int(height / zoom))
     max_x = max(0, width - crop_w)
     max_y = max(0, height - crop_h)
-    bias = 0.5 + (0.18 * direction * (p - 0.5))
-    left = int(max_x * max(0.0, min(1.0, bias)))
-    top = int(max_y * max(0.0, min(1.0, 0.5 - 0.10 * direction * (p - 0.5))))
+    bias_x = 0.5 + (0.34 * direction * (eased - 0.5))
+    bias_y = 0.5 - (0.24 * direction * (eased - 0.5))
+    left = int(max_x * max(0.0, min(1.0, bias_x)))
+    top = int(max_y * max(0.0, min(1.0, bias_y)))
     return img.crop((left, top, left + crop_w, top + crop_h)).resize((width, height), Image.Resampling.LANCZOS)
 
 
@@ -175,6 +195,7 @@ def render_tensorrt_video_variant(
             key_index += 1
         current_t, current_img = rendered_keys[key_index]
         next_t = rendered_keys[key_index + 1][0] if key_index + 1 < len(rendered_keys) else duration_s
+        next_img = rendered_keys[key_index + 1][1] if key_index + 1 < len(rendered_keys) else None
         span = max(0.001, next_t - current_t)
         local_progress = (t - current_t) / span
         frame = _motion_frame(
@@ -183,6 +204,7 @@ def render_tensorrt_video_variant(
             height=height,
             progress=local_progress,
             direction=-1 if key_index % 2 else 1,
+            next_image_path=next_img,
         )
         frame.save(frames_dir / f"frame_{frame_idx:06d}.png")
         if frame_idx % max(1, fps_render) == 0 or frame_idx == render_frames - 1:

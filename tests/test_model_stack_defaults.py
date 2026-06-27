@@ -15,6 +15,12 @@ def test_model_catalog_defaults_and_pack_references() -> None:
     assert catalog["ollama_qwen3_4b"]["ollama_model"] == "qwen3:4b"
     assert catalog["hf_sdxl_base_1_0"]["recommended"] == "default"
     assert catalog["hf_sd35_large_turbo_ckpt"]["recommended"] == "advanced"
+    assert catalog["local_sd15_tensorrt_bundle"]["render"]["render_modes"] == ["stills", "internal_video_keyframes"]
+    assert catalog["hf_svd_xt_1_1_tensorrt_bundle"]["installable"] is False
+    assert catalog["hf_svd_xt_1_1_tensorrt_bundle"]["render"]["engine"] == "external_tensorrt_bundle"
+    assert catalog["hf_svd_xt_1_1_tensorrt_bundle"]["render"]["render_modes"] == []
+    assert catalog["hf_sd35_large_tensorrt_bundle"]["installable"] is False
+    assert catalog["hf_sd35_large_tensorrt_bundle"]["render"]["engine"] == "external_tensorrt_bundle"
 
     packs = {pack["id"]: pack for pack in built_in_packs()}
     for pack in packs.values():
