@@ -83,6 +83,8 @@ from .services.internal_video import (
     render_stability_hosted_video_variant,
     render_internal_diffusion_preview_segment,
 )
+from .services import internal_video_models
+from .services.codex_sdk_bridge import codex_sdk_status, run_render_review as run_codex_render_review_task
 from .services.tensorrt_video import render_tensorrt_video_variant
 from .services.compositor import apply_timeline_layers
 from .integrations import aws as aws_integration
@@ -1535,7 +1537,7 @@ def _internal_render_defaults_for_tier(tier: str, hw: dict[str, Any], *, duratio
             "cfg": 6.8,
             "keyframe_interval_s": 5.0,
             "interpolation_engine": "auto",
-            "temporal_mode": "keyframes",
+            "temporal_mode": "frame_img2img" if backend == "cuda" else "keyframes",
             "temporal_steps": 12,
             "refine_every_n_frames": 2,
             "anchor_strength": 0.18,
@@ -2229,6 +2231,15 @@ def _transcription_status() -> dict[str, Any]:
         "compute_types": list(TRANSCRIPTION_COMPUTE_TYPES),
         "dependencies": deps,
         "hardware": _hardware_profile(),
+        "acceleration": {
+            "asr_runtime": "faster-whisper uses CTranslate2; Parakeet local uses NeMo/PyTorch; Parakeet NIM is remote.",
+            "tensorrt_image_bundle_applicable": False,
+            "tensorrt_note": (
+                "Studio's TensorRT bundle is for Stable Diffusion image/keyframe rendering only. "
+                "It does not accelerate faster-whisper transcription. For local ASR speed, use device=cuda "
+                "with compute=float16 or int8_float16, or use Parakeet/Parakeet NIM."
+            ),
+        },
     }
 
 
@@ -2245,6 +2256,29 @@ def set_transcription_settings(payload: dict[str, Any]):
         "settings": saved,
         "status": _transcription_status(),
     }
+
+
+@app.get("/v1/codex/status")
+def get_codex_status():
+    return codex_sdk_status()
+
+
+@app.post("/v1/projects/{project_id}/codex/render-review")
+def codex_render_review(project_id: str, payload: dict[str, Any]):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    variant_index = int((payload or {}).get("variant_index") or 0)
+    latest_render = proj.meta.get("last_internal_render") if isinstance(proj.meta, dict) else None
+    if not isinstance(latest_render, dict):
+        latest_render = {}
+    return run_codex_render_review_task(
+        project_dir=store.project_dir(project_id),
+        project_id=project_id,
+        variant_index=variant_index,
+        latest_render=latest_render,
+        prompt_extra=str((payload or {}).get("note") or ""),
+    )
 
 
 @app.get("/v1/config")
@@ -7281,6 +7315,11 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         f"Internal render: fps_render={settings_obj.fps_render} fps_output={settings_obj.fps_output} "
         f"keyframe_interval_s={settings_obj.keyframe_interval_s} temporal_mode={settings_obj.temporal_mode}"
     )
+    if settings_obj.temporal_mode == "video_model":
+        _log(
+            f"Internal video model: engine={settings_obj.video_model_engine} "
+            f"model_id={settings_obj.video_model_id} path={settings_obj.video_model_path}"
+        )
     _log(f"Hardware: backend={hw.get('backend')} vram_gb={hw.get('vram_gb')}")
     _log(f"Using model_id={model_id} path={model_path}")
     if preflight.get("warnings"):
@@ -7333,6 +7372,8 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         "fps_render": settings_obj.fps_render,
         "fps_output": settings_obj.fps_output,
         "temporal_mode": settings_obj.temporal_mode,
+        "video_model_engine": settings_obj.video_model_engine,
+        "video_model_id": settings_obj.video_model_id,
         "resume_existing_frames": settings_obj.resume_existing_frames,
         "variant_index": int(payload.get("variant_index", 0)),
         "completed_at": time.time(),
@@ -8109,13 +8150,22 @@ def _internal_settings_from_payload(
         refiner=refiner,
         render_tier=render_tier,
         device_preference=device_preference,
-        temporal_mode=temporal_mode if temporal_mode is not None else str(payload.get("temporal_mode", "keyframes")),
+        temporal_mode=temporal_mode if temporal_mode is not None else str(payload.get("temporal_mode", "frame_img2img")),
         temporal_strength=float(payload.get("temporal_strength", 0.35)),
         temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
         refine_every_n_frames=int(payload.get("refine_every_n_frames", 1)),
         anchor_strength=float(payload.get("anchor_strength", 0.20)),
         prompt_blend=bool(payload.get("prompt_blend", True)),
         resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
+        video_model_engine=str(payload.get("video_model_engine") or "auto"),
+        video_model_id=(str(payload.get("video_model_id")).strip() or None) if payload.get("video_model_id") is not None else None,
+        video_model_path=(str(payload.get("video_model_path")).strip() or None) if payload.get("video_model_path") is not None else None,
+        video_model_max_frames_per_scene=int(payload.get("video_model_max_frames_per_scene", 25)),
+        video_model_motion_bucket_id=int(payload.get("video_model_motion_bucket_id", 127)),
+        video_model_noise_aug_strength=float(payload.get("video_model_noise_aug_strength", 0.02)),
+        video_model_decode_chunk_size=int(payload.get("video_model_decode_chunk_size", 8)),
+        video_model_dtype=str(payload.get("video_model_dtype") or "auto"),
+        video_model_cpu_offload=bool(payload.get("video_model_cpu_offload", False)),
         source_asset=(str(payload.get("source_asset")).strip() or None) if payload.get("source_asset") is not None else None,
         source_strength=float(payload.get("source_strength", 0.55)),
         deforum_overrides=deforum_overrides or None,
@@ -8252,12 +8302,27 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             status_code=400,
         )
 
+    tier_defaults = dict(tier_plan.get("defaults") or {})
+    effective_temporal_mode = (
+        str(payload.get("temporal_mode"))
+        if payload.get("temporal_mode") is not None
+        else str(tier_defaults.get("temporal_mode", "frame_img2img"))
+    )
     settings_obj = _internal_settings_from_payload(
         payload,
         model_id=model_id,
         render_tier=str(tier_plan.get("applied_tier") or payload.get("render_tier") or "auto"),
         device_preference=effective_device_preference,
+        temporal_mode=effective_temporal_mode,
     )
+    if settings_obj.temporal_mode == "video_model":
+        engine, video_model_id, video_model_path = _resolve_internal_video_model_selection(
+            payload,
+            base_model_family=model_family,
+        )
+        settings_obj.video_model_engine = engine
+        settings_obj.video_model_id = video_model_id
+        settings_obj.video_model_path = str(video_model_path)
     return proj, variant, model_id, model_path, settings_obj
 
 
@@ -8467,6 +8532,82 @@ def _hosted_render_preflight_data(
 
 
 TENSORRT_VIDEO_MODEL_ID = "local_sd15_tensorrt_bundle"
+INTERNAL_SVD_VIDEO_MODEL_ID = "hf_svd_xt_1_1_internal"
+INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID = "hf_animatediff_motion_adapter_v15_2_internal"
+INTERNAL_VIDEO_MODEL_IDS = (INTERNAL_SVD_VIDEO_MODEL_ID, INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
+
+
+def _installed_internal_video_models_status() -> dict[str, bool]:
+    return {model_id: bool(models.is_model_available(model_id, probe_remote=True)) for model_id in INTERNAL_VIDEO_MODEL_IDS}
+
+
+def _video_model_engine_from_id(model_id: str | None) -> str:
+    raw = str(model_id or "").lower()
+    if "animatediff" in raw:
+        return "animatediff"
+    if "svd" in raw or "stable-video" in raw:
+        return "svd"
+    return "svd"
+
+
+def _resolve_internal_video_model_selection(
+    payload: dict[str, Any],
+    *,
+    base_model_family: str,
+) -> tuple[str, str, Path]:
+    requested_engine = str(payload.get("video_model_engine") or "auto").strip().lower()
+    requested_model_id = str(payload.get("video_model_id") or "").strip()
+    installed_svd = models.installed_path(INTERNAL_SVD_VIDEO_MODEL_ID)
+    installed_ad = models.installed_path(INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
+
+    if requested_model_id:
+        path = models.installed_path(requested_model_id)
+        if not path:
+            raise UserFacingError(
+                "Selected internal video model is not installed",
+                hint="Open Models and install the selected internal video model, then retry.",
+                code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
+                status_code=400,
+            )
+        engine = requested_engine if requested_engine in {"svd", "animatediff"} else _video_model_engine_from_id(requested_model_id)
+    elif requested_engine == "animatediff":
+        path = installed_ad
+        engine = "animatediff"
+        requested_model_id = INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID
+    elif requested_engine == "svd":
+        path = installed_svd
+        engine = "svd"
+        requested_model_id = INTERNAL_SVD_VIDEO_MODEL_ID
+    elif installed_svd:
+        path = installed_svd
+        engine = "svd"
+        requested_model_id = INTERNAL_SVD_VIDEO_MODEL_ID
+    elif installed_ad:
+        path = installed_ad
+        engine = "animatediff"
+        requested_model_id = INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID
+    else:
+        path = None
+        engine = "svd"
+        requested_model_id = INTERNAL_SVD_VIDEO_MODEL_ID
+
+    if not path:
+        raise UserFacingError(
+            "No internal SVD or AnimateDiff video model is installed",
+            hint="Open Models and install Stable Video Diffusion XT 1.1 (Internal) or AnimateDiff Motion Adapter (Internal).",
+            code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
+            status_code=400,
+        )
+
+    if engine == "animatediff" and str(base_model_family or "").lower() != "sd15":
+        raise UserFacingError(
+            "AnimateDiff internal motion needs an SD 1.5 internal base model",
+            hint="Switch Internal model to Stable Diffusion v1.5, or use SVD internal video model with SDXL/SD3 keyframes.",
+            code="INTERNAL_VIDEO_MODEL_BASE_UNSUPPORTED",
+            status_code=400,
+        )
+
+    return engine, requested_model_id, Path(path)
 
 
 def _payload_requests_tensorrt_video(payload: dict[str, Any]) -> bool:
@@ -8641,6 +8782,15 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         warnings.append("This render is long for the current FPS render setting; consider lowering FPS render or increasing keyframe interval.")
     if settings_obj.temporal_mode == "frame_img2img" and total_frames > 600:
         warnings.append("Frame img2img temporal mode is the most expensive mode for long clips.")
+    if settings_obj.temporal_mode == "video_model":
+        warnings.append(
+            f"Internal video-model motion is enabled via {settings_obj.video_model_engine}; "
+            "this is the path for subject/object motion and is heavier than keyframe assembly."
+        )
+        if settings_obj.video_model_engine == "svd":
+            warnings.append("SVD animates from each generated keyframe; it is best for short subject, fabric, camera, and transition motion.")
+        if settings_obj.video_model_engine == "animatediff":
+            warnings.append("AnimateDiff uses an SD1.5 motion adapter; keep the internal base model on SD1.5 for this mode.")
     if settings_obj.fps_render > settings_obj.fps_output:
         warnings.append("FPS render is higher than FPS output; you may be spending extra time on frames that will be blended down.")
     for note in list(tier_plan.get("notes") or []):
@@ -8674,12 +8824,18 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         "warnings": warnings,
         "cache": cache,
         "installed_internal_models": installed_internal,
+        "installed_internal_video_models": _installed_internal_video_models_status(),
+        "internal_video_model_dependencies": internal_video_models.dependency_status(),
         "settings": {
             "fps_render": settings_obj.fps_render,
             "fps_output": settings_obj.fps_output,
             "width": settings_obj.width,
             "height": settings_obj.height,
             "temporal_mode": settings_obj.temporal_mode,
+            "video_model_engine": settings_obj.video_model_engine,
+            "video_model_id": settings_obj.video_model_id,
+            "video_model_path": settings_obj.video_model_path,
+            "video_model_max_frames_per_scene": settings_obj.video_model_max_frames_per_scene,
             "interpolation_engine": settings_obj.interpolation_engine,
             "render_mode": "diffusion",
             "render_tier": settings_obj.render_tier,

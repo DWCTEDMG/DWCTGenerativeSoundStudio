@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover
 
 from .compositor import apply_timeline_layers
 from .ffmpeg import assemble_image_sequence, interpolate_video_fps, mux_audio
+from .internal_video_models import generate_video_model_frames
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ class InternalVideoSettings:
     device_preference: str = "auto"
 
     # Temporal consistency
-    temporal_mode: str = "frame_img2img"  # off|keyframes|frame_img2img
+    temporal_mode: str = "frame_img2img"  # off|keyframes|frame_img2img|video_model
     temporal_strength: float = 0.35
     temporal_steps: int | None = None
     refine_every_n_frames: int = 1
@@ -61,6 +62,17 @@ class InternalVideoSettings:
     prompt_blend: bool = True
     resume_existing_frames: bool = True
     deforum_overrides: dict[str, Any] | None = None
+    # Internal video-model adapter. SVD is image-to-video from generated
+    # keyframes; AnimateDiff is text-to-video through a Diffusers motion adapter.
+    video_model_engine: str = "auto"  # auto|svd|animatediff
+    video_model_id: str | None = None
+    video_model_path: str | None = None
+    video_model_max_frames_per_scene: int = 25
+    video_model_motion_bucket_id: int = 127
+    video_model_noise_aug_strength: float = 0.02
+    video_model_decode_chunk_size: int = 8
+    video_model_dtype: str = "auto"
+    video_model_cpu_offload: bool = False
     # Image animation: an uploaded still used to seed the first keyframe (img2img).
     source_asset: str | None = None
     source_strength: float = 0.55
@@ -318,6 +330,15 @@ def _render_signature(
         "refine_every_n_frames": int(settings.refine_every_n_frames),
         "anchor_strength": float(settings.anchor_strength),
         "prompt_blend": bool(settings.prompt_blend),
+        "video_model_engine": str(settings.video_model_engine),
+        "video_model_id": str(settings.video_model_id or ""),
+        "video_model_path": str(settings.video_model_path or ""),
+        "video_model_max_frames_per_scene": int(settings.video_model_max_frames_per_scene),
+        "video_model_motion_bucket_id": int(settings.video_model_motion_bucket_id),
+        "video_model_noise_aug_strength": float(settings.video_model_noise_aug_strength),
+        "video_model_decode_chunk_size": int(settings.video_model_decode_chunk_size),
+        "video_model_dtype": str(settings.video_model_dtype),
+        "video_model_cpu_offload": bool(settings.video_model_cpu_offload),
         "source_asset": str(settings.source_asset or ""),
         "source_strength": float(settings.source_strength),
         "deforum_overrides": settings.deforum_overrides or None,
@@ -2198,7 +2219,155 @@ def render_internal_video_variant(
 
     frame_paths: list[Path] = []
 
-    if settings.temporal_mode != "frame_img2img":
+    if settings.temporal_mode == "video_model":
+        video_model_path = Path(str(settings.video_model_path or ""))
+        if not settings.video_model_id or not video_model_path.exists():
+            raise UserFacingError(
+                "Internal video motion model is not installed",
+                hint="Open Models and install Internal SVD or Internal AnimateDiff, then retry with Temporal mode set to Internal video model.",
+                code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
+                status_code=400,
+            )
+
+        engine = str(settings.video_model_engine or "svd").strip().lower()
+        if engine == "auto":
+            engine = "animatediff" if "animatediff" in str(settings.video_model_id or "").lower() else "svd"
+        if engine == "animatediff" and _model_family_from_dir(model_dir) != "sd15":
+            raise UserFacingError(
+                "AnimateDiff internal motion needs an SD 1.5 internal base model",
+                hint="Switch Internal model to Stable Diffusion v1.5, or use the SVD internal video model with SDXL/SD3 keyframes.",
+                code="INTERNAL_VIDEO_MODEL_BASE_UNSUPPORTED",
+                status_code=400,
+            )
+
+        if log_fn:
+            log_fn(
+                f"Internal video model adapter: engine={engine} model_id={settings.video_model_id} "
+                f"path={video_model_path}"
+            )
+
+        sorted_scenes = [sc for sc in scenes if isinstance(sc, dict)] or [{"start_s": 0.0, "end_s": duration_s, "prompt": "cinematic subject motion"}]
+        max_scene_frames = max(2, int(settings.video_model_max_frames_per_scene or 25))
+        fi_cursor = 0
+        for scene_index, scene in enumerate(sorted_scenes):
+            if cancel_check_fn:
+                cancel_check_fn()
+            try:
+                start_s = max(0.0, float(scene.get("start_s", 0.0) or 0.0))
+            except Exception:
+                start_s = 0.0
+            try:
+                end_s = float(scene.get("end_s", 0.0) or 0.0)
+            except Exception:
+                end_s = 0.0
+            if end_s <= start_s:
+                next_start = (
+                    float(sorted_scenes[scene_index + 1].get("start_s", duration_s) or duration_s)
+                    if scene_index + 1 < len(sorted_scenes)
+                    else duration_s
+                )
+                end_s = max(start_s + (1.0 / fps_r), next_start)
+
+            start_f = max(fi_cursor, int(round(start_s * fps_r)))
+            end_f = min(total_frames, max(start_f + 1, int(round(end_s * fps_r))))
+            if scene_index == len(sorted_scenes) - 1:
+                end_f = total_frames
+            if start_f >= total_frames or end_f <= start_f:
+                continue
+
+            while fi_cursor < start_f and fi_cursor < total_frames:
+                t = fi_cursor / fps_r
+                a_t, b_t, w = _key_times_bracket(key_times, t)
+                filler = key_imgs[a_t].convert("RGB")
+                if a_t != b_t:
+                    filler = Image.blend(filler, key_imgs[b_t].convert("RGB"), float(w))
+                frame_paths.append(_save_frame(filler.resize((out_w, out_h), resample=Image.LANCZOS), fi_cursor, t))
+                fi_cursor += 1
+
+            scene_frame_count = max(1, end_f - start_f)
+            if settings.resume_existing_frames and all(_frame_path(out_frames, fi).exists() for fi in range(start_f, end_f)):
+                for fi in range(start_f, end_f):
+                    existing = _frame_path(out_frames, fi)
+                    frame_paths.append(existing)
+                    fi_cursor = fi + 1
+                    emit_checkpoint(stage="frames", status="running", message=f"Reusing video-model frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
+                continue
+
+            adapter_frames = min(max_scene_frames, max(2, scene_frame_count))
+            if engine == "svd":
+                adapter_frames = min(adapter_frames, 25)
+
+            schedule_frame = int(round(start_s * float(fps_schedule)))
+            prompt = _prompt_text_for_frame(
+                frame_idx=schedule_frame,
+                scenes=scenes,
+                timeline=timeline,
+                deforum_context=deforum_context,
+                fps=fps_schedule,
+            ) or str(scene.get("prompt") or "cinematic subject motion")
+            negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
+            a_t, _b_t, _w = _key_times_bracket(key_times, start_s)
+            init_img = key_imgs[a_t].convert("RGB").resize((out_w, out_h), resample=Image.LANCZOS)
+            seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt, work_tag)
+
+            if progress_fn:
+                progress_fn("video_model", len(key_times) + fi_cursor, total_units, f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
+            emit_checkpoint(stage="video_model", status="running", message=f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
+            if log_fn:
+                log_fn(f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} frames={adapter_frames} seed={seed}")
+
+            generated = generate_video_model_frames(
+                engine=engine,
+                video_model_dir=video_model_path,
+                base_model_dir=model_dir,
+                init_image=init_img,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=out_w,
+                height=out_h,
+                num_frames=adapter_frames,
+                fps=fps_r,
+                steps=int(settings.temporal_steps or settings.steps),
+                cfg=float(settings.cfg),
+                seed=seed,
+                device=device,
+                dtype=str(settings.video_model_dtype or "auto"),
+                motion_bucket_id=int(settings.video_model_motion_bucket_id),
+                noise_aug_strength=float(settings.video_model_noise_aug_strength),
+                decode_chunk_size=int(settings.video_model_decode_chunk_size),
+                cpu_offload=bool(settings.video_model_cpu_offload),
+            )
+            if not generated:
+                raise RuntimeError(f"Internal {engine} adapter returned no frames.")
+
+            for local_i, fi in enumerate(range(start_f, end_f)):
+                if cancel_check_fn:
+                    cancel_check_fn()
+                existing = _frame_path(out_frames, fi)
+                if settings.resume_existing_frames and existing.exists():
+                    frame_paths.append(existing)
+                    fi_cursor = fi + 1
+                    emit_checkpoint(stage="frames", status="running", message=f"Reusing video-model frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
+                    continue
+                src_i = int(round((local_i / max(1, scene_frame_count - 1)) * max(0, len(generated) - 1)))
+                fr = generated[max(0, min(len(generated) - 1, src_i))].resize((out_w, out_h), resample=Image.LANCZOS)
+                t = fi / fps_r
+                frame_paths.append(_save_frame(fr, fi, t))
+                fi_cursor = fi + 1
+                if progress_fn:
+                    progress_fn("frames", len(key_times) + fi + 1, total_units, f"Rendered video-model frame {fi+1}/{total_frames}")
+                emit_checkpoint(stage="frames", status="running", message=f"Rendered video-model frame {fi+1}/{total_frames}", frame_event="rendered", rendered_delta=1)
+
+        while fi_cursor < total_frames:
+            t = fi_cursor / fps_r
+            a_t, b_t, w = _key_times_bracket(key_times, t)
+            filler = key_imgs[a_t].convert("RGB")
+            if a_t != b_t:
+                filler = Image.blend(filler, key_imgs[b_t].convert("RGB"), float(w))
+            frame_paths.append(_save_frame(filler.resize((out_w, out_h), resample=Image.LANCZOS), fi_cursor, t))
+            fi_cursor += 1
+
+    elif settings.temporal_mode != "frame_img2img":
         for fi in range(total_frames):
             if cancel_check_fn:
                 cancel_check_fn()
@@ -2439,6 +2608,15 @@ def render_internal_video_variant(
             "refine_every_n_frames": int(settings.refine_every_n_frames),
             "anchor_strength": float(settings.anchor_strength),
             "prompt_blend": bool(settings.prompt_blend),
+            "video_model_engine": str(settings.video_model_engine),
+            "video_model_id": str(settings.video_model_id or ""),
+            "video_model_path": str(settings.video_model_path or ""),
+            "video_model_max_frames_per_scene": int(settings.video_model_max_frames_per_scene),
+            "video_model_motion_bucket_id": int(settings.video_model_motion_bucket_id),
+            "video_model_noise_aug_strength": float(settings.video_model_noise_aug_strength),
+            "video_model_decode_chunk_size": int(settings.video_model_decode_chunk_size),
+            "video_model_dtype": str(settings.video_model_dtype),
+            "video_model_cpu_offload": bool(settings.video_model_cpu_offload),
             "resume_existing_frames": bool(settings.resume_existing_frames),
             "model_id": str(settings.model_id),
             "negative_prompt": str(settings.negative_prompt),

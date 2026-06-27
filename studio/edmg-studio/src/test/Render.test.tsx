@@ -245,12 +245,12 @@ describe("Render page", () => {
     expect(await screen.findByRole("button", { name: "Duplicate" })).toBeTruthy();
   }, 10000);
 
-  it("defaults internal video temporal mode to keyframes", async () => {
+  it("defaults internal video temporal mode to frame img2img motion", async () => {
     installRenderMocks();
 
     renderWithStudio(<Render />);
 
-    expect(await screen.findByDisplayValue("Keyframes (style-locked)")).toBeTruthy();
+    expect(await screen.findByDisplayValue("Internal motion (frame img2img)")).toBeTruthy();
   }, 10000);
 
   it("sends TensorRT video mode through the internal renderer payload", async () => {

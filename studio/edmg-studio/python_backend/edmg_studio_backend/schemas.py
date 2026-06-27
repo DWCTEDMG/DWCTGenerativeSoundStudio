@@ -188,13 +188,21 @@ class InternalVideoRenderRequest(BaseModel):
     vae: str | None = None
     refiner: RefinerSettings | None = None
 
-    temporal_mode: Literal["off","keyframes","frame_img2img"] = "keyframes"
+    temporal_mode: Literal["off","keyframes","frame_img2img","video_model"] = "keyframes"
     temporal_strength: float = Field(default=0.35, ge=0.01, le=0.99)
     temporal_steps: int | None = Field(default=None, ge=1, le=80)
     refine_every_n_frames: int = Field(default=1, ge=1, le=30)
     anchor_strength: float = Field(default=0.20, ge=0.0, le=1.0)
     prompt_blend: bool = True
     resume_existing_frames: bool = True
+    video_model_engine: Literal["auto","svd","animatediff"] = "auto"
+    video_model_id: str | None = None
+    video_model_max_frames_per_scene: int = Field(default=25, ge=2, le=96)
+    video_model_motion_bucket_id: int = Field(default=127, ge=1, le=255)
+    video_model_noise_aug_strength: float = Field(default=0.02, ge=0.0, le=1.0)
+    video_model_decode_chunk_size: int = Field(default=8, ge=1, le=64)
+    video_model_dtype: Literal["auto","float16","bfloat16","float32"] = "auto"
+    video_model_cpu_offload: bool = False
     # Image animation: animate an uploaded still (path under the project, e.g. assets/refs/foo.png)
     source_asset: str | None = None
     source_strength: float = Field(default=0.55, ge=0.05, le=0.95)

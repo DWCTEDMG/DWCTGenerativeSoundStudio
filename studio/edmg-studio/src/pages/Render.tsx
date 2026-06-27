@@ -171,7 +171,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
 
-  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img">("keyframes");
+  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img">("frame_img2img");
   const [internalTemporalStrength, setInternalTemporalStrength] = useState<number>(0.35);
   const [internalTemporalSteps, setInternalTemporalSteps] = useState<number>(12);
   const [internalRefineEvery, setInternalRefineEvery] = useState<number>(1);
@@ -1984,9 +1984,9 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                      <div style={{ minWidth: 190 }}>
                        <div className="small">Temporal mode</div>
                        <select value={internalTemporalMode} onChange={(e) => setInternalTemporalMode(e.target.value as any)}>
-                         <option value="off">Off (keyframes only)</option>
-                         <option value="keyframes">Keyframes (style-locked)</option>
-                         <option value="frame_img2img">Frame img2img (heavy)</option>
+                         <option value="frame_img2img">Internal motion (frame img2img)</option>
+                         <option value="keyframes">Keyframe assembly only</option>
+                         <option value="off">Off (still keyframes)</option>
                        </select>
                      </div>
                      <div style={{ minWidth: 160 }}>
@@ -3032,10 +3032,10 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                         className="secondary"
                         onClick={runTensorrtDeforum}
                         disabled={!variantCount}
-                        title="Render an audio-reactive keyframe video with the compiled SD1.5 TensorRT still engine"
+                        title="Render an audio-reactive keyframe-assembly video with the compiled SD1.5 TensorRT still engine; this is not full internal motion"
                         style={{ marginLeft: 8 }}
                       >
-                        Render TRT keyframe video
+                        Render TRT keyframe assembly
                       </button>
                     )}
                     {trtLivePreview && trtPreviewImage && (

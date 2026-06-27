@@ -823,8 +823,23 @@ class ModelManager:
             return False
 
         kind = str(entry.get("kind") or "").strip().lower()
-        if kind == "diffusers":
+        if kind in {"diffusers", "video_diffusers"}:
             return self._diffusers_snapshot_complete(path)
+        if kind == "motion_adapter":
+            has_config = (path / "config.json").exists() or (path / "adapter_config.json").exists()
+            has_weights = any(
+                candidate.exists()
+                for pattern in (
+                    "diffusion_pytorch_model*.safetensors",
+                    "diffusion_pytorch_model*.bin",
+                    "pytorch_model*.safetensors",
+                    "pytorch_model*.bin",
+                    "model*.safetensors",
+                    "model*.bin",
+                )
+                for candidate in path.glob(pattern)
+            )
+            return bool(has_config and has_weights)
         if kind == "controlnet":
             if not (path / "config.json").exists():
                 return False

@@ -39,6 +39,9 @@ source_separation = [
 parakeet = [
   "nemo_toolkit[asr]>=2.0.0",
 ]
+codex = [
+  "openai-codex",
+]
 core = [
   "numpy>=1.26.0,<2.0",
   "scipy>=1.10.0",

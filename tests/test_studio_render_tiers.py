@@ -83,7 +83,7 @@ def test_auto_model_skips_sd35_on_midrange_cuda(tmp_path, monkeypatch):
     assert preflight["hardware"]["backend"] == "cuda"
 
 
-def test_internal_preflight_defaults_to_keyframes_on_midrange_cuda(tmp_path, monkeypatch):
+def test_internal_preflight_defaults_to_frame_img2img_on_midrange_cuda(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
@@ -112,8 +112,8 @@ def test_internal_preflight_defaults_to_keyframes_on_midrange_cuda(tmp_path, mon
 
     assert preflight["mode"] == "diffusion"
     assert preflight["model_id"] == "hf_sdxl_internal"
-    assert preflight["settings"]["temporal_mode"] == "keyframes"
-    assert preflight["tier_plan"]["defaults"]["temporal_mode"] == "keyframes"
+    assert preflight["settings"]["temporal_mode"] == "frame_img2img"
+    assert preflight["tier_plan"]["defaults"]["temporal_mode"] == "frame_img2img"
 
 
 def test_auto_model_reports_sd35_vram_guard_when_no_lighter_model_installed(tmp_path, monkeypatch):

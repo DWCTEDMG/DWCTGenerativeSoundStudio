@@ -557,6 +557,62 @@ def built_in_catalog() -> list[dict[str, Any]]:
             },
         ),
         _entry(
+            model_id="hf_svd_xt_1_1_internal",
+            name="Stable Video Diffusion XT 1.1 (Internal / Diffusers)",
+            kind="video_diffusers",
+            source="hf",
+            hf_repo_id="stabilityai/stable-video-diffusion-img2vid-xt-1-1",
+            target={"engine": "internal", "folder": "video"},
+            license_id="stability-ai-community",
+            license_url="https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt-1-1/blob/main/LICENSE.md",
+            recommended="advanced",
+            notes=(
+                "Internal image-to-video adapter for real short subject/object motion from generated keyframes. "
+                "Use this for walking, turning, dancing, fabric motion, and transitions when you want motion inside "
+                "the Studio internal renderer without ComfyUI."
+            ),
+            family="svd",
+            author="stabilityai",
+            collections=["video"],
+            tags=["internal", "video", "svd", "diffusers", "motion"],
+            hardware_targets=["discrete_gpu"],
+            render={
+                "engine": "internal_video_model",
+                "workflow_family": "svd",
+                "render_modes": ["internal_video_model"],
+                "video_model_engine": "svd",
+                "preferred_for": ["subject_motion", "fabric_motion", "transitions"],
+            },
+        ),
+        _entry(
+            model_id="hf_animatediff_motion_adapter_v15_2_internal",
+            name="AnimateDiff Motion Adapter v1.5 v2 (Internal / Diffusers)",
+            kind="motion_adapter",
+            source="hf",
+            hf_repo_id="guoyww/animatediff-motion-adapter-v1-5-2",
+            target={"engine": "internal", "folder": "video"},
+            license_id="creativeml-openrail-m",
+            license_url="https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2",
+            recommended="advanced",
+            notes=(
+                "Internal SD1.5 AnimateDiff motion adapter for prompt-driven subject motion. "
+                "Requires the Stable Diffusion v1.5 internal base model; use SVD internal motion for SDXL/SD3 keyframes."
+            ),
+            family="animatediff",
+            author="guoyww",
+            collections=["video"],
+            tags=["internal", "video", "animatediff", "diffusers", "motion", "sd15"],
+            hardware_targets=["discrete_gpu"],
+            render={
+                "engine": "internal_video_model",
+                "workflow_family": "animatediff",
+                "render_modes": ["internal_video_model"],
+                "video_model_engine": "animatediff",
+                "base_family": "sd15",
+                "preferred_for": ["prompt_motion", "dance_motion", "character_motion"],
+            },
+        ),
+        _entry(
             model_id="hf_sd35_large_tensorrt_bundle",
             name="Stable Diffusion 3.5 Large TensorRT Bundle",
             kind="runtime_bundle",
@@ -792,6 +848,7 @@ def built_in_packs() -> list[dict[str, Any]]:
                 "ollama_qwen3_8b",
                 "hf_sd35_large_turbo_ckpt",
                 "hf_svd_xt_1_1",
+                "hf_svd_xt_1_1_internal",
             ],
         },
         {
