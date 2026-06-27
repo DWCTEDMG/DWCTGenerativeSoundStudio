@@ -16,6 +16,14 @@ def ensure_ffmpeg(ffmpeg_path: str) -> str:
 
 
 def ensure_ffprobe(ffmpeg_path: str) -> str:
+    explicit = os.getenv("EDMG_FFPROBE_PATH", "").strip()
+    if explicit:
+        if os.path.isabs(explicit) and Path(explicit).exists():
+            return explicit
+        found_explicit = shutil.which(explicit)
+        if found_explicit:
+            return found_explicit
+
     ffmpeg = Path(ensure_ffmpeg(ffmpeg_path))
     ffprobe_name = "ffprobe.exe" if ffmpeg.suffix.lower() == ".exe" else "ffprobe"
     sibling = ffmpeg.with_name(ffprobe_name)
@@ -30,7 +38,10 @@ def ensure_ffprobe(ffmpeg_path: str) -> str:
 def _probe_duration_seconds(ffmpeg_path: str, media_path: Path) -> float | None:
     if not media_path.exists():
         return None
-    ffprobe = ensure_ffprobe(ffmpeg_path)
+    try:
+        ffprobe = ensure_ffprobe(ffmpeg_path)
+    except RuntimeError:
+        return None
     cmd = [
         ffprobe,
         "-v",
