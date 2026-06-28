@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import UserFacingError
+from .model_weights import diffusers_weight_load_kwargs
 
 
 _VIDEO_PIPELINE_CACHE: dict[tuple[str, str, str, str], Any] = {}
@@ -87,6 +88,25 @@ def _optimize_pipeline(pipe: Any, device: str, *, cpu_offload: bool) -> Any:
     return pipe
 
 
+def _video_model_base_load_kwargs(model_dir: Path, device: str) -> dict[str, object]:
+    return diffusers_weight_load_kwargs(model_dir, device)
+
+
+def _reraise_video_model_load_error(exc: Exception, model_dir: Path) -> None:
+    message = str(exc).lower()
+    if "git-lfs" in message or "git lfs" in message:
+        raise UserFacingError(
+            "Internal video model snapshot contains Git LFS pointer files",
+            hint=(
+                f"The Diffusers snapshot at {model_dir} has placeholder weight files instead of full model weights. "
+                "Reinstall the internal base model in Models or run git lfs pull/re-sync for that snapshot, then retry."
+            ),
+            code="INTERNAL_VIDEO_MODEL_LFS_POINTER",
+            status_code=400,
+        ) from exc
+    raise exc
+
+
 def _load_svd_pipeline(model_dir: Path, *, device: str, dtype: str, cpu_offload: bool):
     try:
         from diffusers import StableVideoDiffusionPipeline  # type: ignore
@@ -104,9 +124,11 @@ def _load_svd_pipeline(model_dir: Path, *, device: str, dtype: str, cpu_offload:
         return cached
 
     load_kwargs: dict[str, Any] = {"torch_dtype": _parse_torch_dtype(dtype, device)}
-    if device == "cuda":
-        load_kwargs["variant"] = "fp16"
-    pipe = StableVideoDiffusionPipeline.from_pretrained(str(model_dir), **load_kwargs)
+    load_kwargs.update(_video_model_base_load_kwargs(model_dir, device))
+    try:
+        pipe = StableVideoDiffusionPipeline.from_pretrained(str(model_dir), **load_kwargs)
+    except Exception as exc:
+        _reraise_video_model_load_error(exc, model_dir)
     pipe = _optimize_pipeline(pipe, device, cpu_offload=cpu_offload)
     _VIDEO_PIPELINE_CACHE[key] = pipe
     return pipe
@@ -136,16 +158,21 @@ def _load_animatediff_pipeline(
         return cached
 
     torch_dtype = _parse_torch_dtype(dtype, device)
-    adapter = MotionAdapter.from_pretrained(str(adapter_dir), torch_dtype=torch_dtype)
+    try:
+        adapter = MotionAdapter.from_pretrained(str(adapter_dir), torch_dtype=torch_dtype)
+    except Exception as exc:
+        _reraise_video_model_load_error(exc, adapter_dir)
     load_kwargs: dict[str, Any] = {
         "motion_adapter": adapter,
         "torch_dtype": torch_dtype,
         "safety_checker": None,
         "requires_safety_checker": False,
     }
-    if device == "cuda" and any(base_model_dir.rglob("*.fp16.safetensors")):
-        load_kwargs["variant"] = "fp16"
-    pipe = AnimateDiffPipeline.from_pretrained(str(base_model_dir), **load_kwargs)
+    load_kwargs.update(_video_model_base_load_kwargs(base_model_dir, device))
+    try:
+        pipe = AnimateDiffPipeline.from_pretrained(str(base_model_dir), **load_kwargs)
+    except Exception as exc:
+        _reraise_video_model_load_error(exc, base_model_dir)
     pipe = _optimize_pipeline(pipe, device, cpu_offload=cpu_offload)
     _VIDEO_PIPELINE_CACHE[key] = pipe
     return pipe

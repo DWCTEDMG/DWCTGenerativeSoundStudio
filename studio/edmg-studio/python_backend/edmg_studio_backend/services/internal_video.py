@@ -16,6 +16,7 @@ from .deforum_motion import DeforumMotionScheduleBundle, evaluate_motion_state
 from .deforum_normalize import UnifiedDeforumRenderContext, build_deforum_render_context
 from .deforum_prompt_timeline import resolve_prompt_frame
 from .deforum_schedule import coerce_schedule_pairs, evaluate_schedule
+from .model_weights import diffusers_weight_load_kwargs
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -401,13 +402,22 @@ def _diffusers_from_pretrained_kwargs(*, extra: dict[str, Any] | None = None) ->
 
 def _diffusers_model_load_kwargs(model_dir: Path, device: str, *, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     kwargs = _diffusers_from_pretrained_kwargs(extra=extra)
-    if device in ("cuda", "rocm") and any(model_dir.rglob("*.fp16.safetensors")):
-        kwargs["variant"] = "fp16"
+    kwargs.update(diffusers_weight_load_kwargs(model_dir, device))
     return kwargs
 
 
 def _reraise_snapshot_load_error(exc: Exception, model_dir: Path) -> None:
     message = str(exc).lower()
+    if "git-lfs" in message or "git lfs" in message:
+        raise UserFacingError(
+            "Internal diffusion model snapshot contains Git LFS pointer files",
+            hint=(
+                f"The Diffusers snapshot at {model_dir} has placeholder weight files instead of full model weights. "
+                "Reinstall the model in Models or run git lfs pull/re-sync for that snapshot, then retry."
+            ),
+            code="MODEL_SNAPSHOT_LFS_POINTER",
+            status_code=400,
+        ) from exc
     if any(
         token in message
         for token in ("no file named", "does not appear to have", "safetensors", "not found in directory")
