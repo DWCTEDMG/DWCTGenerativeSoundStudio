@@ -116,6 +116,49 @@ def test_internal_preflight_defaults_to_frame_img2img_on_midrange_cuda(tmp_path,
     assert preflight["tier_plan"]["defaults"]["temporal_mode"] == "frame_img2img"
 
 
+def test_internal_preflight_resolves_video_model_settings_without_mutating_frozen_dataclass(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 6.0,
+        "ram_gb": 15.64,
+        "cpu_threads": 12,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sd15_internal",
+        "recommended_tier": "balanced",
+        "max_supported_tier": "balanced",
+    })
+    installed = {
+        "hf_sd15_internal": _fake_internal_model(tmp_path, "hf_sd15_internal"),
+        "hf_animatediff_motion_adapter_v15_2_internal": tmp_path / "models" / "internal" / "video" / "hf_animatediff_motion_adapter_v15_2_internal",
+    }
+    installed["hf_animatediff_motion_adapter_v15_2_internal"].mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {
+            "variant_index": 0,
+            "fps_render": 2,
+            "fps_output": 24,
+            "model_id": "hf_sd15_internal",
+            "temporal_mode": "video_model",
+            "video_model_engine": "animatediff",
+            "allow_proxy_fallback": False,
+        },
+    )
+
+    assert preflight["mode"] == "diffusion"
+    assert preflight["settings"]["temporal_mode"] == "video_model"
+    assert preflight["settings"]["video_model_engine"] == "animatediff"
+    assert preflight["settings"]["video_model_id"] == "hf_animatediff_motion_adapter_v15_2_internal"
+
+
 def test_auto_model_reports_sd35_vram_guard_when_no_lighter_model_installed(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)

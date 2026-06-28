@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from copy import deepcopy
+from dataclasses import replace
 import math
 import re
 from contextlib import asynccontextmanager
@@ -8320,9 +8321,12 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             payload,
             base_model_family=model_family,
         )
-        settings_obj.video_model_engine = engine
-        settings_obj.video_model_id = video_model_id
-        settings_obj.video_model_path = str(video_model_path)
+        settings_obj = replace(
+            settings_obj,
+            video_model_engine=engine,
+            video_model_id=video_model_id,
+            video_model_path=str(video_model_path),
+        )
     return proj, variant, model_id, model_path, settings_obj
 
 
