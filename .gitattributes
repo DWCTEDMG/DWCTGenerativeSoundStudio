@@ -1,1 +1,2 @@
 studio/edmg-studio/electron-builder.yml text eol=lf
+studio/edmg-studio/scripts/*.sh text eol=lf

@@ -8,6 +8,10 @@ BACKEND_SETUPTOOLS_CONSTRAINT="setuptools<82"
 BACKEND_NUMPY_CONSTRAINT="${EDMG_BACKEND_NUMPY_CONSTRAINT:-numpy>=1.26,<2}"
 BACKEND_ENV_MODE="${EDMG_BACKEND_ENV_MODE:-auto}" # auto|venv|active
 BACKEND_TORCH_INDEX_URL="${EDMG_BACKEND_TORCH_INDEX_URL:-${PIP_TORCH_INDEX_URL:-}}"
+BACKEND_BUNDLE_EXTRA="${EDMG_BACKEND_BUNDLE_EXTRA:-studio_bundle}"
+if [[ "${EDMG_BACKEND_CUDA_BUNDLE:-0}" == "1" || "${EDMG_STUDIO_CUDA_BUNDLE:-0}" == "1" ]]; then
+  BACKEND_BUNDLE_EXTRA="studio_bundle_cuda"
+fi
 
 pick_python_bin() {
   if [[ -n "${EDMG_PYTHON_BIN:-}" ]]; then
@@ -84,8 +88,8 @@ if [[ "${EDMG_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
     echo "[setup] installing CUDA PyTorch stack from ${BACKEND_TORCH_INDEX_URL}"
     "${PYTHON_CMD}" -m pip install --upgrade torch torchvision torchaudio --index-url "${BACKEND_TORCH_INDEX_URL}"
   fi
-  echo "[setup] installing backend bundle"
-  "${PYTHON_CMD}" -m pip install -e ".[studio_bundle]" "${BACKEND_NUMPY_CONSTRAINT}"
+  echo "[setup] installing backend bundle extra: ${BACKEND_BUNDLE_EXTRA}"
+  "${PYTHON_CMD}" -m pip install -e ".[${BACKEND_BUNDLE_EXTRA}]" "${BACKEND_NUMPY_CONSTRAINT}"
 fi
 
 echo "[edmg] studio root: ${STUDIO_ROOT}"
@@ -95,6 +99,7 @@ echo "[edmg] backend url: http://${EDMG_STUDIO_BACKEND_HOST}:${EDMG_STUDIO_BACKE
 echo "[edmg] python env mode: ${BACKEND_ENV_MODE}"
 echo "[edmg] python cmd: ${PYTHON_CMD}"
 echo "[edmg] numpy constraint: ${BACKEND_NUMPY_CONSTRAINT}"
+echo "[edmg] backend bundle extra: ${BACKEND_BUNDLE_EXTRA}"
 if [[ -n "${BACKEND_TORCH_INDEX_URL}" ]]; then
   echo "[edmg] torch index: ${BACKEND_TORCH_INDEX_URL}"
 fi

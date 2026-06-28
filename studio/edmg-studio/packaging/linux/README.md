@@ -25,6 +25,20 @@ cd studio/edmg-studio
 pnpm run dist:linux
 ```
 
+For an NVIDIA build host where the AppImage should bundle the CUDA/TensorRT
+backend extra instead of the generic backend bundle, use:
+
+```bash
+cd studio/edmg-studio
+EDMG_BACKEND_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
+pnpm run dist:linux:cuda
+```
+
+The CUDA build path uses `studio_bundle_cuda`, which adds TensorRT and
+`cuda-python` on top of the same internal Diffusers, AnimateDiff, and SVD backend
+code used by the standard Linux AppImage. The target machine still needs a
+matching NVIDIA driver and locally installed model weights.
+
 ## Runtime expectations
 
 - FFmpeg can come from the packaged bundle or `EDMG_FFMPEG_PATH`
@@ -54,6 +68,7 @@ launcher in active-env mode instead of creating a virtualenv:
 cd studio/edmg-studio
 EDMG_BACKEND_ENV_MODE=active \
 EDMG_BACKEND_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
+EDMG_BACKEND_CUDA_BUNDLE=1 \
 bash scripts/start_lightning_backend.sh
 ```
 
@@ -62,6 +77,8 @@ Notes:
 - `EDMG_BACKEND_ENV_MODE=active` avoids `python -m venv`.
 - `EDMG_BACKEND_TORCH_INDEX_URL` is optional on older GPUs, but is needed for
   Blackwell-class machines that require current PyTorch CUDA wheels.
+- `EDMG_BACKEND_CUDA_BUNDLE=1` installs `studio_bundle_cuda`, including the
+  TensorRT Python bindings needed by Studio's TensorRT SD1.5 path.
 - The script pins the backend bundle to `numpy>=1.26,<2` to avoid SciPy/librosa
   ABI failures from NumPy 2.x in shared cloud environments.
 - Keep the public Lightning/backend port at `7863`. The local desktop/dev UI

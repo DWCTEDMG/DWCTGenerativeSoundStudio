@@ -20,6 +20,17 @@ const SUPPORTED_PYTHON_MIN = [3, 10];
 const SUPPORTED_PYTHON_MAX_EXCLUSIVE = [3, 14];
 // Torch 2.11.x in the bundled backend currently requires setuptools < 82.
 const backendSetuptoolsConstraint = "setuptools<82";
+const defaultBackendBundleExtra = process.platform === "win32" ? "studio_bundle_directml" : "studio_bundle";
+const backendTorchIndexUrl = String(process.env.EDMG_BACKEND_TORCH_INDEX_URL || process.env.PIP_TORCH_INDEX_URL || "").trim();
+const requiredBackendSourceFiles = [
+  "edmg_studio_backend/app.py",
+  "edmg_studio_backend/services/internal_video.py",
+  "edmg_studio_backend/services/internal_video_models.py",
+  "edmg_studio_backend/services/model_catalog.py",
+  "edmg_studio_backend/services/model_manager.py",
+  "edmg_studio_backend/services/tensorrt_standalone.py",
+  "edmg_studio_backend/services/tensorrt_video.py",
+];
 
 const ignoredDirNames = new Set([
   ".git",
@@ -37,6 +48,27 @@ const trackedRootFiles = new Set([
   "pyproject.toml",
   "README.md",
 ]);
+
+function envFlagEnabled(name) {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function resolveBackendBundleExtra() {
+  const explicit = String(process.env.EDMG_BACKEND_BUNDLE_EXTRA || "").trim();
+  if (explicit) {
+    if (!/^[A-Za-z0-9_.-]+$/.test(explicit)) {
+      throw new Error(`Invalid EDMG_BACKEND_BUNDLE_EXTRA value: ${explicit}`);
+    }
+    return explicit;
+  }
+  if (envFlagEnabled("EDMG_BACKEND_CUDA_BUNDLE") || envFlagEnabled("EDMG_STUDIO_CUDA_BUNDLE")) {
+    return "studio_bundle_cuda";
+  }
+  return defaultBackendBundleExtra;
+}
+
+const backendBundleExtra = resolveBackendBundleExtra();
 
 function runChecked(label, command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -157,7 +189,20 @@ function collectBackendFiles(dir, acc = []) {
   return acc;
 }
 
+function assertRequiredBackendSources() {
+  const missing = [];
+  for (const rel of requiredBackendSourceFiles) {
+    const fullPath = path.join(pythonBackendDir, rel);
+    if (!fs.existsSync(fullPath)) missing.push(rel);
+  }
+  if (missing.length) {
+    throw new Error(`Backend release bundle is missing required source files: ${missing.join(", ")}`);
+  }
+  return [...requiredBackendSourceFiles];
+}
+
 async function computeBackendSourceFingerprint() {
+  const requiredSources = assertRequiredBackendSources();
   const files = [];
   for (const name of trackedRootFiles) {
     const fullPath = path.join(pythonBackendDir, name);
@@ -187,6 +232,7 @@ async function computeBackendSourceFingerprint() {
     sourceHash: hash.digest("hex"),
     fileCount: files.length,
     newestSourceMtimeMs,
+    requiredSources,
   };
 }
 
@@ -212,7 +258,13 @@ function readBundleManifest() {
 
 function currentBundleMatches(sourceHash) {
   const manifest = readBundleManifest();
-  return Boolean(manifest && manifest.sourceHash === sourceHash && fs.existsSync(bundledBackendPath));
+  return Boolean(
+    manifest &&
+    manifest.sourceHash === sourceHash &&
+    manifest.backendBundleExtra === backendBundleExtra &&
+    (manifest.torchIndexUrl || "") === (backendTorchIndexUrl || "") &&
+    fs.existsSync(bundledBackendPath)
+  );
 }
 
 function distBackendCandidates() {
@@ -260,7 +312,11 @@ function ensureBackendBuild() {
   runChecked("upgrade backend packaging tools", venvPython, ["-m", "pip", "install", "-U", "pip", "wheel", backendSetuptoolsConstraint], {
     cwd: pythonBackendDir,
   });
-  const backendBundleExtra = process.platform === "win32" ? "studio_bundle_directml" : "studio_bundle";
+  if (backendTorchIndexUrl) {
+    runChecked("install backend CUDA torch stack", venvPython, ["-m", "pip", "install", "--upgrade", "torch", "torchvision", "torchaudio", "--index-url", backendTorchIndexUrl], {
+      cwd: pythonBackendDir,
+    });
+  }
   runChecked("install backend studio bundle", venvPython, ["-m", "pip", "install", "-e", `.[${backendBundleExtra}]`], {
     cwd: pythonBackendDir,
   });
@@ -287,6 +343,9 @@ async function stageBackendBundle(sourcePath, fingerprint, reusedExistingBuild) 
     builder: "scripts/prepare-release-bundle.mjs",
     sourceHash: fingerprint.sourceHash,
     sourceFileCount: fingerprint.fileCount,
+    requiredBackendSources: fingerprint.requiredSources,
+    backendBundleExtra,
+    torchIndexUrl: backendTorchIndexUrl || "",
     newestSourceMtimeMs: fingerprint.newestSourceMtimeMs,
     bundledBackend: path.relative(root, bundledBackendPath).split(path.sep).join("/"),
     sourceArtifact: path.relative(root, sourcePath).split(path.sep).join("/"),

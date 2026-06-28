@@ -144,6 +144,13 @@ async function runStagedAppProbe() {
   const backendManifest = JSON.parse(await fsp.readFile(resources.backendManifest, "utf8"));
   assert.equal(typeof backendManifest.sourceHash, "string", "backend bundle manifest must include sourceHash");
   assert.equal(typeof backendManifest.binarySha256, "string", "backend bundle manifest must include binarySha256");
+  assert.ok(
+    Array.isArray(backendManifest.requiredBackendSources) &&
+      backendManifest.requiredBackendSources.includes("edmg_studio_backend/services/internal_video.py") &&
+      backendManifest.requiredBackendSources.includes("edmg_studio_backend/services/internal_video_models.py"),
+    "backend bundle manifest must prove internal video source modules were included",
+  );
+  assert.equal(typeof backendManifest.backendBundleExtra, "string", "backend bundle manifest must include backendBundleExtra");
   summary.resources = resources;
   summary.backendManifest = backendManifest;
 
