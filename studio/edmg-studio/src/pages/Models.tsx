@@ -443,25 +443,33 @@ export default function Models(props: PageProps) {
     const sd15 = built.find((m) => m.id === "hf_sd15_internal");
     const sdxl = built.find((m) => m.id === "hf_sdxl_internal");
     const sd35 = built.find((m) => m.id === "hf_sd35_medium_internal");
+    const svd = built.find((m) => m.id === "hf_svd_xt_1_1_internal");
+    const animatediff = built.find((m) => m.id === "hf_animatediff_motion_adapter_v15_2_internal");
     const installedInternal = {
       sd15: !!installedMap["hf_sd15_internal"],
       sdxl: !!installedMap["hf_sdxl_internal"],
       sd35: !!installedMap["hf_sd35_medium_internal"],
+      svd: !!installedMap["hf_svd_xt_1_1_internal"],
+      animatediff: !!installedMap["hf_animatediff_motion_adapter_v15_2_internal"],
     };
     const cloudInternal = {
       sd15: !!cloudMap["hf_sd15_internal"],
       sdxl: !!cloudMap["hf_sdxl_internal"],
       sd35: !!cloudMap["hf_sd35_medium_internal"],
+      svd: !!cloudMap["hf_svd_xt_1_1_internal"],
+      animatediff: !!cloudMap["hf_animatediff_motion_adapter_v15_2_internal"],
     };
     const availableInternal = {
       sd15: installedInternal.sd15 || cloudInternal.sd15,
       sdxl: installedInternal.sdxl || cloudInternal.sdxl,
       sd35: installedInternal.sd35 || cloudInternal.sd35,
+      svd: installedInternal.svd || cloudInternal.svd,
+      animatediff: installedInternal.animatediff || cloudInternal.animatediff,
     };
     const preferred = availableInternal.sd35 ? "SD3.5 Medium" : availableInternal.sdxl ? "SDXL" : availableInternal.sd15 ? "SD 1.5" : "none";
-    const status = (key: "sd15" | "sdxl" | "sd35") =>
+    const status = (key: "sd15" | "sdxl" | "sd35" | "svd" | "animatediff") =>
       installedInternal[key] ? "installed locally" : cloudInternal[key] ? `stored in ${cacheLabel}` : "missing";
-    return { sd15, sdxl, sd35, installedInternal, cloudInternal, availableInternal, preferred, status };
+    return { sd15, sdxl, sd35, svd, animatediff, installedInternal, cloudInternal, availableInternal, preferred, status };
   }, [merged, installedMap, cloudMap, cacheLabel]);
 
   const defaultModels = (merged.built ?? []).filter((m) => m.recommended === "default" && m.installable !== false);
@@ -554,13 +562,17 @@ export default function Models(props: PageProps) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 900 }}>Internal render readiness</div>
         <div className="small" style={{ marginTop: 6 }}>
-          Internal video rendering is ready when at least one diffusers model is installed. SD3.5 Medium is preferred on stronger GPUs; SDXL is the balanced path; SD 1.5 remains the safest fallback.
+          Internal still/keyframe rendering is ready when at least one diffusers model is installed. Full internal motion needs an internal video adapter: SVD for keyframe image-to-video, or AnimateDiff for SD1.5 prompt motion.
         </div>
         <div className="small" style={{ marginTop: 8 }}>
           SD 1.5: <b>{internalSummary.status("sd15")}</b>
           {" "}• SDXL: <b>{internalSummary.status("sdxl")}</b>
           {" "}• SD3.5 Medium: <b>{internalSummary.status("sd35")}</b>
           {" "}• Preferred: <b>{internalSummary.preferred}</b>
+        </div>
+        <div className="small" style={{ marginTop: 6 }}>
+          Internal motion: SVD <b>{internalSummary.status("svd")}</b>
+          {" "}• AnimateDiff <b>{internalSummary.status("animatediff")}</b>
         </div>
         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {!internalSummary.availableInternal.sd15 && internalSummary.sd15 ? (
@@ -580,6 +592,18 @@ export default function Models(props: PageProps) {
           ) : null}
           {internalSummary.cloudInternal.sd35 && !internalSummary.installedInternal.sd35 && internalSummary.sd35 ? (
             <button className="secondary" onClick={() => restoreLocal(internalSummary.sd35)}>Restore SD3.5 internal</button>
+          ) : null}
+          {!internalSummary.availableInternal.svd && internalSummary.svd ? (
+            <button onClick={() => install(internalSummary.svd)}>Install internal SVD motion</button>
+          ) : null}
+          {internalSummary.cloudInternal.svd && !internalSummary.installedInternal.svd && internalSummary.svd ? (
+            <button className="secondary" onClick={() => restoreLocal(internalSummary.svd)}>Restore internal SVD motion</button>
+          ) : null}
+          {!internalSummary.availableInternal.animatediff && internalSummary.animatediff ? (
+            <button onClick={() => install(internalSummary.animatediff)}>Install internal AnimateDiff</button>
+          ) : null}
+          {internalSummary.cloudInternal.animatediff && !internalSummary.installedInternal.animatediff && internalSummary.animatediff ? (
+            <button className="secondary" onClick={() => restoreLocal(internalSummary.animatediff)}>Restore internal AnimateDiff</button>
           ) : null}
           <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
         </div>

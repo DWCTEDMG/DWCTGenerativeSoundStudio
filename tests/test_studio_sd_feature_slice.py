@@ -501,6 +501,20 @@ def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatc
             "target": {"engine": "internal", "folder": "controlnet"},
             "family": "sdxl",
         },
+        "hf_svd_xt_1_1_internal": {
+            "id": "hf_svd_xt_1_1_internal",
+            "name": "SVD Internal",
+            "kind": "video_diffusers",
+            "target": {"engine": "internal", "folder": "video"},
+            "family": "svd",
+        },
+        "hf_animatediff_motion_adapter_v15_2_internal": {
+            "id": "hf_animatediff_motion_adapter_v15_2_internal",
+            "name": "AnimateDiff Internal",
+            "kind": "motion_adapter",
+            "target": {"engine": "internal", "folder": "video"},
+            "family": "animatediff",
+        },
     }
     monkeypatch.setattr(manager, "_find_entry", lambda model_id: entries.get(model_id))
 
@@ -524,6 +538,23 @@ def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatc
     )
     assert manager.installed_path("hf_sdxl_internal") is None
     assert manager.internal_asset_issue("hf_sdxl_internal") == "incomplete"
+    lfs_pointer = "version https://git-lfs.github.com/spec/v1\noid sha256:abc123\nsize 123456789\n"
+    for component, filename in (
+        ("text_encoder", "model.safetensors"),
+        ("text_encoder_2", "model.safetensors"),
+        ("unet", "model.onnx"),
+        ("vae", "diffusion_pytorch_model.safetensors"),
+    ):
+        component_dir = model_dir / component
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / filename).write_text(lfs_pointer, encoding="utf-8")
+    assert manager.installed_path("hf_sdxl_internal") is None
+    assert set(manager.missing_diffusers_components("hf_sdxl_internal")) == {
+        "text_encoder",
+        "text_encoder_2",
+        "unet",
+        "vae",
+    }
     for component, filename in (
         ("text_encoder", "model.safetensors"),
         ("text_encoder_2", "model.safetensors"),
@@ -559,3 +590,37 @@ def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatc
     )
     assert resolved["path"] == str(controlnet_dir)
     assert resolved["family"] == "sdxl"
+
+    svd_dir = manager._internal_models_dir("video") / "hf_svd_xt_1_1_internal"
+    svd_dir.mkdir(parents=True, exist_ok=True)
+    (svd_dir / "model_index.json").write_text(
+        json.dumps(
+            {
+                "_class_name": "StableVideoDiffusionPipeline",
+                "image_encoder": ["transformers", "CLIPVisionModelWithProjection"],
+                "scheduler": ["diffusers", "EulerDiscreteScheduler"],
+                "unet": ["diffusers", "UNetSpatioTemporalConditionModel"],
+                "vae": ["diffusers", "AutoencoderKLTemporalDecoder"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert manager.installed_path("hf_svd_xt_1_1_internal") is None
+    for component, filename in (
+        ("image_encoder", "model.fp16.safetensors"),
+        ("unet", "diffusion_pytorch_model.fp16.safetensors"),
+        ("vae", "diffusion_pytorch_model.fp16.safetensors"),
+    ):
+        component_dir = svd_dir / component
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / filename).write_text("weights", encoding="utf-8")
+    assert manager.installed_path("hf_svd_xt_1_1_internal") == svd_dir
+
+    animatediff_dir = manager._internal_models_dir("video") / "hf_animatediff_motion_adapter_v15_2_internal"
+    animatediff_dir.mkdir(parents=True, exist_ok=True)
+    (animatediff_dir / "config.json").write_text("{}", encoding="utf-8")
+    assert manager.installed_path("hf_animatediff_motion_adapter_v15_2_internal") is None
+    (animatediff_dir / "diffusion_pytorch_model.fp16.safetensors").write_text("weights", encoding="utf-8")
+    assert manager.installed_path("hf_animatediff_motion_adapter_v15_2_internal") == animatediff_dir
+    (animatediff_dir / "diffusion_pytorch_model.fp16.safetensors").write_text(lfs_pointer, encoding="utf-8")
+    assert manager.installed_path("hf_animatediff_motion_adapter_v15_2_internal") is None

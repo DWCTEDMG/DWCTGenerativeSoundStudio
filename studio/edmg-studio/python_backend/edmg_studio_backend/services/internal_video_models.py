@@ -103,11 +103,10 @@ def _load_svd_pipeline(model_dir: Path, *, device: str, dtype: str, cpu_offload:
     if cached is not None:
         return cached
 
-    pipe = StableVideoDiffusionPipeline.from_pretrained(
-        str(model_dir),
-        torch_dtype=_parse_torch_dtype(dtype, device),
-        variant="fp16" if device == "cuda" else None,
-    )
+    load_kwargs: dict[str, Any] = {"torch_dtype": _parse_torch_dtype(dtype, device)}
+    if device == "cuda":
+        load_kwargs["variant"] = "fp16"
+    pipe = StableVideoDiffusionPipeline.from_pretrained(str(model_dir), **load_kwargs)
     pipe = _optimize_pipeline(pipe, device, cpu_offload=cpu_offload)
     _VIDEO_PIPELINE_CACHE[key] = pipe
     return pipe
@@ -138,13 +137,15 @@ def _load_animatediff_pipeline(
 
     torch_dtype = _parse_torch_dtype(dtype, device)
     adapter = MotionAdapter.from_pretrained(str(adapter_dir), torch_dtype=torch_dtype)
-    pipe = AnimateDiffPipeline.from_pretrained(
-        str(base_model_dir),
-        motion_adapter=adapter,
-        torch_dtype=torch_dtype,
-        safety_checker=None,
-        requires_safety_checker=False,
-    )
+    load_kwargs: dict[str, Any] = {
+        "motion_adapter": adapter,
+        "torch_dtype": torch_dtype,
+        "safety_checker": None,
+        "requires_safety_checker": False,
+    }
+    if device == "cuda" and any(base_model_dir.rglob("*.fp16.safetensors")):
+        load_kwargs["variant"] = "fp16"
+    pipe = AnimateDiffPipeline.from_pretrained(str(base_model_dir), **load_kwargs)
     pipe = _optimize_pipeline(pipe, device, cpu_offload=cpu_offload)
     _VIDEO_PIPELINE_CACHE[key] = pipe
     return pipe

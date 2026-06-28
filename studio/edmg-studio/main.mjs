@@ -251,10 +251,16 @@ installSafeProcessLogging();
 app.setName(APP_NAME);
 
 function ensureDirSync(targetPath) {
+  if (isExistingDirectory(targetPath)) {
+    return;
+  }
   try {
     fs.mkdirSync(targetPath, { recursive: true });
   } catch (error) {
     if (error?.code === "ELOOP" && repairMutualJunctionLoopSync(targetPath)) {
+      return;
+    }
+    if ((error?.code === "EPERM" || error?.code === "EEXIST") && isExistingDirectory(targetPath)) {
       return;
     }
     throw error;

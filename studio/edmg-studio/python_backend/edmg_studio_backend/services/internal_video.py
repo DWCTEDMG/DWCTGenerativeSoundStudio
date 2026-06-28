@@ -399,6 +399,13 @@ def _diffusers_from_pretrained_kwargs(*, extra: dict[str, Any] | None = None) ->
     return kwargs
 
 
+def _diffusers_model_load_kwargs(model_dir: Path, device: str, *, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    kwargs = _diffusers_from_pretrained_kwargs(extra=extra)
+    if device in ("cuda", "rocm") and any(model_dir.rglob("*.fp16.safetensors")):
+        kwargs["variant"] = "fp16"
+    return kwargs
+
+
 def _reraise_snapshot_load_error(exc: Exception, model_dir: Path) -> None:
     message = str(exc).lower()
     if any(
@@ -454,7 +461,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     if family == "sd3":
         txt = StableDiffusion3Pipeline.from_pretrained(
             str(model_dir),
-            **_diffusers_from_pretrained_kwargs(extra={"torch_dtype": torch_dtype}),
+            **_diffusers_model_load_kwargs(model_dir, device, extra={"torch_dtype": torch_dtype}),
         )
         if hasattr(txt, "enable_attention_slicing"):
             txt.enable_attention_slicing()
@@ -489,7 +496,9 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     elif family == "sdxl":
         txt = StableDiffusionXLPipeline.from_pretrained(
             str(model_dir),
-            **_diffusers_from_pretrained_kwargs(
+            **_diffusers_model_load_kwargs(
+                model_dir,
+                device,
                 extra={
                     "torch_dtype": torch_dtype,
                     "safety_checker": None,
@@ -530,7 +539,9 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     else:
         txt = StableDiffusionPipeline.from_pretrained(
             str(model_dir),
-            **_diffusers_from_pretrained_kwargs(
+            **_diffusers_model_load_kwargs(
+                model_dir,
+                device,
                 extra={
                     "torch_dtype": torch_dtype,
                     "safety_checker": None,
@@ -1080,7 +1091,7 @@ def _load_controlnet_model(model_dir: Path, family: str, device: str) -> Any:
     torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32
     controlnet = ControlNetModel.from_pretrained(
         str(model_dir),
-        **_diffusers_from_pretrained_kwargs(extra={"torch_dtype": torch_dtype}),
+        **_diffusers_model_load_kwargs(model_dir, device, extra={"torch_dtype": torch_dtype}),
     )
     if device != "directml":
         controlnet = controlnet.to(device)

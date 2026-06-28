@@ -1091,6 +1091,13 @@ export default function Settings(props: PageProps) {
           {" "}• Demucs: <b>{transcriptionStatus?.dependencies?.demucs_available ? "ready" : "missing"}</b>
           {" "}• backend GPU <b>{transcriptionStatus?.hardware?.device_name || hardware?.hardware?.device_name || "unknown"}</b>
         </div>
+        {transcriptionStatus?.acceleration ? (
+          <div className="small" style={{ marginBottom: 12, opacity: 0.82 }}>
+            ASR acceleration: <b>{transcriptionStatus.acceleration.asr_runtime || "auto"}</b>
+            {" "}• TensorRT image bundle applies to ASR <b>{transcriptionStatus.acceleration.tensorrt_image_bundle_applicable ? "yes" : "no"}</b>
+            {" "}• {transcriptionStatus.acceleration.tensorrt_note}
+          </div>
+        ) : null}
 
         <div style={{ display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>

@@ -499,8 +499,12 @@ class ModelManager:
         return root / uuid.uuid4().hex / dest.name
 
     def _all_entries(self) -> list[dict[str, Any]]:
-        cat = self.catalog()
-        return list(cat.get("catalog") or []) + list(cat.get("user") or [])
+        built = [_normalize_catalog_entry(entry) for entry in built_in_catalog()]
+        user = _read_json(self._user_models_path, default=[])
+        if not isinstance(user, list):
+            user = []
+        user = [_normalize_catalog_entry(entry) for entry in user if isinstance(entry, dict)]
+        return built + user
 
     def _find_entry(self, model_id: str) -> dict[str, Any] | None:
         return next(
@@ -692,10 +696,10 @@ class ModelManager:
             fname = str(e.get("filename") or "")
 
             if engine == "internal":
-                out[mid] = self._entry_is_available(e, probe_remote=True)
+                out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
                 continue
             if engine == "runtime_bundle":
-                out[mid] = self._entry_is_available(e, probe_remote=True)
+                out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
                 continue
 
             if fname:
@@ -713,6 +717,21 @@ class ModelManager:
             dirs.append(legacy_root)
         return dirs
 
+    def _is_model_weight_file(self, candidate: Path) -> bool:
+        try:
+            if not candidate.exists() or not candidate.is_file():
+                return False
+            if candidate.stat().st_size <= 0:
+                return False
+            if candidate.stat().st_size <= 4096:
+                with candidate.open("rb") as handle:
+                    prefix = handle.read(256)
+                if prefix.startswith(b"version https://git-lfs.github.com/spec"):
+                    return False
+        except OSError:
+            return False
+        return True
+
     def _internal_component_has_weights(self, component_dir: Path) -> bool:
         if not component_dir.exists() or not component_dir.is_dir():
             return False
@@ -729,7 +748,7 @@ class ModelManager:
             "flax_model.msgpack",
         )
         return any(
-            candidate.exists()
+            self._is_model_weight_file(candidate)
             for pattern in patterns
             for candidate in component_dir.glob(pattern)
         )
@@ -828,7 +847,7 @@ class ModelManager:
         if kind == "motion_adapter":
             has_config = (path / "config.json").exists() or (path / "adapter_config.json").exists()
             has_weights = any(
-                candidate.exists()
+                self._is_model_weight_file(candidate)
                 for pattern in (
                     "diffusion_pytorch_model*.safetensors",
                     "diffusion_pytorch_model*.bin",
@@ -844,7 +863,7 @@ class ModelManager:
             if not (path / "config.json").exists():
                 return False
             return any(
-                candidate.exists()
+                self._is_model_weight_file(candidate)
                 for pattern in ("diffusion_pytorch_model*.safetensors", "diffusion_pytorch_model*.bin")
                 for candidate in path.glob(pattern)
             )

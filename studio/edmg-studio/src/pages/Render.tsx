@@ -35,6 +35,8 @@ type CatalogEntry = {
     profile_height?: number;
     max_batch?: number;
     live_preview?: boolean;
+    video_model_engine?: string;
+    base_family?: string;
   };
 };
 
@@ -171,13 +173,21 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
 
-  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img">("frame_img2img");
+  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img"|"video_model">("frame_img2img");
   const [internalTemporalStrength, setInternalTemporalStrength] = useState<number>(0.35);
   const [internalTemporalSteps, setInternalTemporalSteps] = useState<number>(12);
   const [internalRefineEvery, setInternalRefineEvery] = useState<number>(1);
   const [internalAnchorStrength, setInternalAnchorStrength] = useState<number>(0.2);
   const [internalPromptBlend, setInternalPromptBlend] = useState<boolean>(true);
   const [internalResumeExisting, setInternalResumeExisting] = useState<boolean>(savedRenderDefaults.internalResumeExisting ?? true);
+  const [internalVideoModelEngine, setInternalVideoModelEngine] = useState<"auto"|"svd"|"animatediff">("auto");
+  const [internalVideoModelId, setInternalVideoModelId] = useState<string>("");
+  const [internalVideoMaxFrames, setInternalVideoMaxFrames] = useState<number>(25);
+  const [internalVideoMotionBucket, setInternalVideoMotionBucket] = useState<number>(127);
+  const [internalVideoNoiseAug, setInternalVideoNoiseAug] = useState<number>(0.02);
+  const [internalVideoDecodeChunk, setInternalVideoDecodeChunk] = useState<number>(8);
+  const [internalVideoDtype, setInternalVideoDtype] = useState<"auto"|"float16"|"bfloat16"|"float32">("auto");
+  const [internalVideoCpuOffload, setInternalVideoCpuOffload] = useState<boolean>(false);
 
   const [timeline, setTimeline] = useState<any>({ layers: [], camera: { keyframes: [] } });
   const [timelineDirty, setTimelineDirty] = useState<boolean>(false);
@@ -278,6 +288,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [latestInternalDetail, setLatestInternalDetail] = useState<any>(null);
   const [latestInternalLog, setLatestInternalLog] = useState<string>("");
   const [internalPolling, setInternalPolling] = useState<boolean>(true);
+  const [codexStatus, setCodexStatus] = useState<any>(null);
+  const [codexReview, setCodexReview] = useState<any>(null);
+  const [codexBusy, setCodexBusy] = useState<boolean>(false);
 
   // AI Auto-Render (preset-driven auto-configure + run)
   const [animationPresets, setAnimationPresets] = useState<any[]>([]);
@@ -318,6 +331,15 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   );
   const svdModels = useMemo(
     () => modelCatalog.filter((m) => (m.render?.render_modes || []).includes("motion_svd") || m.kind === "motion_module"),
+    [modelCatalog]
+  );
+  const internalVideoModelOptions = useMemo(
+    () => modelCatalog.filter((m) =>
+      m.render?.engine === "internal_video_model" ||
+      (m.render?.render_modes || []).includes("internal_video_model") ||
+      m.kind === "video_diffusers" ||
+      m.kind === "motion_adapter"
+    ),
     [modelCatalog]
   );
   const supportedTensorRtInternalModels = useMemo(
@@ -449,6 +471,13 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   }, [internalModelId, internalModelOptions]);
 
+  useEffect(() => {
+    if (!internalVideoModelId) return;
+    if (!internalVideoModelOptions.some((m) => m.id === internalVideoModelId)) {
+      setInternalVideoModelId("");
+    }
+  }, [internalVideoModelId, internalVideoModelOptions]);
+
   const internalHostedVisible = !!renderProviders?.stability?.visible;
   const fireflyVisible = !!renderProviders?.firefly?.visible;
   const cosmosReady = !!renderProviders?.cosmos?.active;
@@ -470,6 +499,14 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       refine_every_n_frames: internalRefineEvery,
       anchor_strength: internalAnchorStrength,
       prompt_blend: internalPromptBlend,
+      video_model_engine: internalVideoModelEngine,
+      video_model_id: internalVideoModelId || undefined,
+      video_model_max_frames_per_scene: internalVideoMaxFrames,
+      video_model_motion_bucket_id: internalVideoMotionBucket,
+      video_model_noise_aug_strength: internalVideoNoiseAug,
+      video_model_decode_chunk_size: internalVideoDecodeChunk,
+      video_model_dtype: internalVideoDtype,
+      video_model_cpu_offload: internalVideoCpuOffload,
       model_id: useTensorRt ? tensorRtModelId : internalModelId,
       render_mode: internalRenderMode,
       render_tier: internalRenderTier,
@@ -832,6 +869,14 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalAnchorStrength,
     internalPromptBlend,
     internalResumeExisting,
+    internalVideoModelEngine,
+    internalVideoModelId,
+    internalVideoMaxFrames,
+    internalVideoMotionBucket,
+    internalVideoNoiseAug,
+    internalVideoDecodeChunk,
+    internalVideoDtype,
+    internalVideoCpuOffload,
   ]);
 
   useEffect(() => {
@@ -870,10 +915,33 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const runCodexRenderReview = async () => {
+    if (!projectId) return;
+    setErr(null);
+    setCodexReview(null);
+    setCodexBusy(true);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/codex/render-review`, {
+        variant_index: selectedVariant,
+      });
+      setCodexReview(d);
+    } catch (e: any) {
+      setCodexReview({ ok: false, error: String(e) });
+    } finally {
+      setCodexBusy(false);
+    }
+  };
+
   useEffect(() => {
     apiGet("/v1/render/animation_presets")
       .then((d) => setAnimationPresets(Array.isArray(d?.presets) ? d.presets : []))
       .catch(() => setAnimationPresets([]));
+  }, []);
+
+  useEffect(() => {
+    apiGet("/v1/codex/status")
+      .then((d) => setCodexStatus(d))
+      .catch(() => setCodexStatus(null));
   }, []);
 
   const selectedAutoPreset = useMemo(
@@ -1068,6 +1136,14 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (p.anchor_strength != null) setInternalAnchorStrength(Number(p.anchor_strength));
     if (p.prompt_blend != null) setInternalPromptBlend(Boolean(p.prompt_blend));
     if (p.resume_existing_frames != null) setInternalResumeExisting(Boolean(p.resume_existing_frames));
+    if (p.video_model_engine) setInternalVideoModelEngine(String(p.video_model_engine) as any);
+    if (p.video_model_id != null) setInternalVideoModelId(String(p.video_model_id || ""));
+    if (p.video_model_max_frames_per_scene != null) setInternalVideoMaxFrames(Number(p.video_model_max_frames_per_scene));
+    if (p.video_model_motion_bucket_id != null) setInternalVideoMotionBucket(Number(p.video_model_motion_bucket_id));
+    if (p.video_model_noise_aug_strength != null) setInternalVideoNoiseAug(Number(p.video_model_noise_aug_strength));
+    if (p.video_model_decode_chunk_size != null) setInternalVideoDecodeChunk(Number(p.video_model_decode_chunk_size));
+    if (p.video_model_dtype) setInternalVideoDtype(String(p.video_model_dtype) as any);
+    if (p.video_model_cpu_offload != null) setInternalVideoCpuOffload(Boolean(p.video_model_cpu_offload));
   };
 
   const addSelectedLora = () => {
@@ -1801,6 +1877,16 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <div className="small" style={{ marginTop: 4 }}>
                         Internal models: SD 1.5 <b>{internalPreflight?.installed_internal_models?.hf_sd15_internal ? "installed" : "missing"}</b> • SDXL <b>{internalPreflight?.installed_internal_models?.hf_sdxl_internal ? "installed" : "missing"}</b> • SD3.5 <b>{internalPreflight?.installed_internal_models?.hf_sd35_medium_internal ? "installed" : "missing"}</b>
                       </div>
+                      <div className="small" style={{ marginTop: 4 }}>
+                        Internal video adapters: SVD <b>{internalPreflight?.installed_internal_video_models?.hf_svd_xt_1_1_internal ? "installed" : "missing"}</b> • AnimateDiff <b>{internalPreflight?.installed_internal_video_models?.hf_animatediff_motion_adapter_v15_2_internal ? "installed" : "missing"}</b>
+                        {" "}• deps <b>{internalPreflight?.internal_video_model_dependencies?.diffusers_available ? "ready" : "missing diffusers"}</b>
+                      </div>
+                      {internalPreflight?.settings?.temporal_mode === "video_model" ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          Video-model motion: <b>{internalPreflight?.settings?.video_model_engine || internalVideoModelEngine}</b>
+                          {internalPreflight?.settings?.video_model_id ? <> • model <b>{internalPreflight.settings.video_model_id}</b></> : null}
+                        </div>
+                      ) : null}
                       {internalPreflight?.requested_model_id ? (
                         <div className="small" style={{ marginTop: 4 }}>
                           Requested model: <b>{internalPreflight.requested_model_id}</b>
@@ -1835,6 +1921,11 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       {!internalHostedVisible && !internalPreflight?.installed_internal_models?.hf_sd15_internal && !internalPreflight?.installed_internal_models?.hf_sdxl_internal && !internalPreflight?.installed_internal_models?.hf_sd35_medium_internal ? (
                         <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                           <button className="secondary" onClick={() => onNavigate?.("models")}>Open Models to install internal renderer</button>
+                        </div>
+                      ) : null}
+                      {internalTemporalMode === "video_model" && !internalPreflight?.installed_internal_video_models?.hf_svd_xt_1_1_internal && !internalPreflight?.installed_internal_video_models?.hf_animatediff_motion_adapter_v15_2_internal ? (
+                        <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                          <button className="secondary" onClick={() => onNavigate?.("models")}>Open Models to install internal motion adapters</button>
                         </div>
                       ) : null}
                       {!!internalPreflight?.warnings?.length && (
@@ -1942,6 +2033,34 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 </div>
 
                 <div className="card" style={{ marginTop: 10 }}>
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 900 }}>Codex render diagnosis</div>
+                    <button
+                      className="secondary"
+                      disabled={codexBusy || !projectId || !codexStatus?.installed || !codexStatus?.enabled}
+                      onClick={runCodexRenderReview}
+                    >
+                      {codexBusy ? "Reviewing..." : "Review current render"}
+                    </button>
+                  </div>
+                  <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                    SDK <b>{codexStatus?.installed ? "installed" : "not installed"}</b>
+                    {" "}• enabled <b>{codexStatus?.enabled ? "yes" : "no"}</b>
+                    {" "}• sandbox <b>{codexStatus?.sandbox || "read-only"}</b>
+                    {" "}• model <b>{codexStatus?.model || "gpt-5.4"}</b>
+                  </div>
+                  {codexStatus?.hint ? (
+                    <div className="small" style={{ marginTop: 4, opacity: 0.78 }}>{codexStatus.hint}</div>
+                  ) : null}
+                  {codexReview?.error ? (
+                    <div className="small" style={{ marginTop: 8, color: "var(--danger)" }}>{codexReview.error}</div>
+                  ) : null}
+                  {codexReview?.final_response ? (
+                    <pre style={{ marginTop: 10, maxHeight: 220, overflow: "auto" }}>{codexReview.final_response}</pre>
+                  ) : null}
+                </div>
+
+                <div className="card" style={{ marginTop: 10 }}>
                   <div style={{ fontWeight: 900, marginBottom: 8 }}>Latest internal output</div>
                   {latestInternalVideoUrl ? (
                     <div>
@@ -1984,6 +2103,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                      <div style={{ minWidth: 190 }}>
                        <div className="small">Temporal mode</div>
                        <select value={internalTemporalMode} onChange={(e) => setInternalTemporalMode(e.target.value as any)}>
+                         <option value="video_model">Internal video model (SVD / AnimateDiff)</option>
                          <option value="frame_img2img">Internal motion (frame img2img)</option>
                          <option value="keyframes">Keyframe assembly only</option>
                          <option value="off">Off (still keyframes)</option>
@@ -2018,6 +2138,69 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                        Resume existing cached frames
                      </label>
                    </div>
+
+                   {internalTemporalMode === "video_model" ? (
+                     <div className="card" style={{ marginTop: 10 }}>
+                       <div style={{ fontWeight: 800, marginBottom: 8 }}>Internal video-model adapter</div>
+                       <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                         <div style={{ minWidth: 160 }}>
+                           <div className="small">Adapter engine</div>
+                           <select value={internalVideoModelEngine} onChange={(e) => setInternalVideoModelEngine(e.target.value as any)}>
+                             <option value="auto">Auto installed</option>
+                             <option value="svd">SVD image-to-video</option>
+                             <option value="animatediff">AnimateDiff SD1.5</option>
+                           </select>
+                         </div>
+                         <div style={{ minWidth: 280 }}>
+                           <div className="small">Video model</div>
+                           <select value={internalVideoModelId} onChange={(e) => setInternalVideoModelId(e.target.value)}>
+                             <option value="">Auto select installed adapter</option>
+                             {internalVideoModelOptions.map((m) => (
+                               <option key={m.id} value={m.id}>
+                                 {m.name} {installedModels[m.id] === false ? "(not installed)" : ""}
+                               </option>
+                             ))}
+                           </select>
+                         </div>
+                         <div style={{ minWidth: 170 }}>
+                           <div className="small">Frames per scene</div>
+                           <input type="number" value={internalVideoMaxFrames} min={2} max={96}
+                             onChange={(e) => setInternalVideoMaxFrames(Number(e.target.value))} />
+                         </div>
+                         <div style={{ minWidth: 170 }}>
+                           <div className="small">SVD motion bucket</div>
+                           <input type="number" value={internalVideoMotionBucket} min={1} max={255}
+                             onChange={(e) => setInternalVideoMotionBucket(Number(e.target.value))} />
+                         </div>
+                         <div style={{ minWidth: 170 }}>
+                           <div className="small">SVD noise aug</div>
+                           <input type="number" value={internalVideoNoiseAug} min={0} max={1} step={0.01}
+                             onChange={(e) => setInternalVideoNoiseAug(Number(e.target.value))} />
+                         </div>
+                         <div style={{ minWidth: 170 }}>
+                           <div className="small">Decode chunk</div>
+                           <input type="number" value={internalVideoDecodeChunk} min={1} max={64}
+                             onChange={(e) => setInternalVideoDecodeChunk(Number(e.target.value))} />
+                         </div>
+                         <div style={{ minWidth: 160 }}>
+                           <div className="small">Precision</div>
+                           <select value={internalVideoDtype} onChange={(e) => setInternalVideoDtype(e.target.value as any)}>
+                             <option value="auto">Auto</option>
+                             <option value="float16">float16</option>
+                             <option value="bfloat16">bfloat16</option>
+                             <option value="float32">float32</option>
+                           </select>
+                         </div>
+                         <label className="row small" style={{ gap: 6, alignItems: "center" }}>
+                           <input type="checkbox" checked={internalVideoCpuOffload} onChange={(e) => setInternalVideoCpuOffload(e.target.checked)} />
+                           CPU offload
+                         </label>
+                       </div>
+                       <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
+                         SVD animates from generated keyframes. AnimateDiff is prompt-motion and currently requires the SD1.5 internal base model.
+                       </div>
+                     </div>
+                   ) : null}
 
                    <div style={{ marginTop: 10, fontWeight: 800 }}>Overlays</div>
                    <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>

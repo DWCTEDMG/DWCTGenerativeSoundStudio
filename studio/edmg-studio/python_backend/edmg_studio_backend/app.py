@@ -8538,7 +8538,7 @@ INTERNAL_VIDEO_MODEL_IDS = (INTERNAL_SVD_VIDEO_MODEL_ID, INTERNAL_ANIMATEDIFF_VI
 
 
 def _installed_internal_video_models_status() -> dict[str, bool]:
-    return {model_id: bool(models.is_model_available(model_id, probe_remote=True)) for model_id in INTERNAL_VIDEO_MODEL_IDS}
+    return {model_id: bool(models.installed_path(model_id)) for model_id in INTERNAL_VIDEO_MODEL_IDS}
 
 
 def _video_model_engine_from_id(model_id: str | None) -> str:

@@ -21,6 +21,12 @@ def test_model_catalog_defaults_and_pack_references() -> None:
     assert catalog["hf_svd_xt_1_1_tensorrt_bundle"]["render"]["render_modes"] == []
     assert catalog["hf_sd35_large_tensorrt_bundle"]["installable"] is False
     assert catalog["hf_sd35_large_tensorrt_bundle"]["render"]["engine"] == "external_tensorrt_bundle"
+    assert catalog["hf_svd_xt_1_1_internal"]["kind"] == "video_diffusers"
+    assert catalog["hf_svd_xt_1_1_internal"]["render"]["engine"] == "internal_video_model"
+    assert catalog["hf_svd_xt_1_1_internal"]["render"]["video_model_engine"] == "svd"
+    assert catalog["hf_animatediff_motion_adapter_v15_2_internal"]["kind"] == "motion_adapter"
+    assert catalog["hf_animatediff_motion_adapter_v15_2_internal"]["render"]["engine"] == "internal_video_model"
+    assert catalog["hf_animatediff_motion_adapter_v15_2_internal"]["render"]["video_model_engine"] == "animatediff"
 
     packs = {pack["id"]: pack for pack in built_in_packs()}
     for pack in packs.values():
@@ -30,6 +36,7 @@ def test_model_catalog_defaults_and_pack_references() -> None:
     assert packs["basic"]["models"] == ["ollama_qwen3_8b"]
     assert packs["creator"]["models"] == ["ollama_qwen3_8b", "hf_sdxl_base_1_0"]
     assert "hf_sd35_controlnet_depth" in packs["stability_sd35"]["models"]
+    assert "hf_svd_xt_1_1_internal" in packs["stability_motion"]["models"]
 
 
 def test_hf_video_catalog_api_preserves_primary_and_fallback_order(tmp_path: Path, monkeypatch) -> None:
