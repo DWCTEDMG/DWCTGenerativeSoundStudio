@@ -202,6 +202,77 @@ def test_internal_preflight_resolves_video_model_settings_without_mutating_froze
     assert any("6 GB CUDA AnimateDiff safety" in warning for warning in preflight["warnings"])
 
 
+def test_internal_preflight_reports_motion_score_anchor_and_validation(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    proj.meta["last_plan"]["variants"][0]["scenes"] = [
+        {
+            "start_s": 0.0,
+            "end_s": 4.0,
+            "prompt": "slow foggy introduction",
+            "energy": 0.18,
+            "peak_energy": 0.24,
+        },
+        {
+            "start_s": 4.0,
+            "end_s": 12.0,
+            "prompt": "chorus skyline bursts open",
+            "energy": 0.88,
+            "peak_energy": 0.96,
+        },
+    ]
+    store.save(proj)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4080",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 16.0,
+        "ram_gb": 32.0,
+        "cpu_threads": 16,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sdxl_internal",
+        "recommended_tier": "quality",
+        "max_supported_tier": "quality",
+    })
+    installed = {
+        "hf_sdxl_internal": _fake_internal_model(tmp_path, "hf_sdxl_internal", "StableDiffusionXLPipeline"),
+        "hf_svd_xt_1_1_internal": tmp_path / "models" / "internal" / "video" / "hf_svd_xt_1_1_internal",
+    }
+    installed["hf_svd_xt_1_1_internal"].mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {
+            "variant_index": 0,
+            "fps_render": 2,
+            "fps_output": 24,
+            "width": 770,
+            "height": 434,
+            "model_id": "hf_sdxl_internal",
+            "temporal_mode": "video_model",
+            "video_model_engine": "svd",
+            "video_model_max_frames_per_scene": 48,
+            "video_model_motion_score_mode": "auto",
+            "video_model_anchor_mode": "loop",
+            "video_model_prompt_refine": True,
+            "allow_proxy_fallback": False,
+        },
+    )
+
+    assert preflight["settings"]["video_model_motion_score_mode"] == "auto"
+    assert preflight["settings"]["video_model_anchor_mode"] == "loop"
+    assert preflight["settings"]["video_model_prompt_refine"] is True
+    validation = preflight["internal_video_model_preflight"]
+    assert validation["anchor_mode"] == "loop"
+    assert validation["motion_score_mode"] == "auto"
+    assert validation["scene_scores"][0]["motion_score"] < validation["scene_scores"][1]["motion_score"]
+    assert any("SVD" in warning and "25" in warning for warning in preflight["warnings"])
+    assert any("divisible by 8" in warning for warning in preflight["warnings"])
+
+
 def test_auto_model_reports_sd35_vram_guard_when_no_lighter_model_installed(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)

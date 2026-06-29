@@ -35,7 +35,14 @@ STABILITY_STYLE_PRESETS = (
     "tile-texture",
 )
 
-VIDEO_GENERATION_PREFERENCES = ("auto", "local_gpu", "cosmos_cloud", "comfyui", "firefly_cloud")
+VIDEO_GENERATION_PREFERENCES = (
+    "auto",
+    "local_gpu",
+    "cosmos_cloud",
+    "comfyui",
+    "firefly_cloud",
+    "imagineart_cloud",
+)
 
 DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
     "video": {
@@ -74,6 +81,14 @@ DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
         "output_format": "png",
         "strength": 0.55,
         "cfg_scale": 6.5,
+    },
+    "imagineart": {
+        "enabled": False,
+        "allow_auto_fallback": True,
+        "image_style": "imagine-turbo",
+        "video_style": "kling-1.0-pro",
+        "video_enabled": False,
+        "timeout_s": 600,
     },
     "cuda": {
         "enabled": True,
@@ -134,7 +149,7 @@ class RenderSettingsStore:
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         current = self.get()
         incoming = payload if isinstance(payload, dict) else {}
-        for key in ("video", "cosmos", "firefly", "stability", "cuda", "directml"):
+        for key in ("video", "cosmos", "firefly", "stability", "imagineart", "cuda", "directml"):
             value = incoming.get(key)
             if isinstance(value, dict):
                 current[key].update(value)
@@ -149,6 +164,7 @@ class RenderSettingsStore:
         cosmos = payload.get("cosmos") if isinstance(payload.get("cosmos"), dict) else {}
         firefly = payload.get("firefly") if isinstance(payload.get("firefly"), dict) else {}
         stability = payload.get("stability") if isinstance(payload.get("stability"), dict) else {}
+        imagineart = payload.get("imagineart") if isinstance(payload.get("imagineart"), dict) else {}
         cuda = payload.get("cuda") if isinstance(payload.get("cuda"), dict) else {}
         directml = payload.get("directml") if isinstance(payload.get("directml"), dict) else {}
 
@@ -232,6 +248,29 @@ class RenderSettingsStore:
             "output_format": output_format,
             "strength": max(0.1, min(1.0, float(stability.get("strength", out["stability"]["strength"])))),
             "cfg_scale": max(1.0, min(10.0, float(stability.get("cfg_scale", out["stability"]["cfg_scale"])))),
+        }
+
+        from .imagineart_platform import IMAGINEART_IMAGE_STYLES, IMAGINEART_VIDEO_STYLES
+
+        imagineart_image_style = str(
+            imagineart.get("image_style") or out["imagineart"]["image_style"]
+        ).strip().lower()
+        if imagineart_image_style not in IMAGINEART_IMAGE_STYLES:
+            imagineart_image_style = out["imagineart"]["image_style"]
+        imagineart_video_style = str(
+            imagineart.get("video_style") or out["imagineart"]["video_style"]
+        ).strip().lower()
+        if imagineart_video_style not in IMAGINEART_VIDEO_STYLES:
+            imagineart_video_style = out["imagineart"]["video_style"]
+        out["imagineart"] = {
+            "enabled": bool(imagineart.get("enabled", out["imagineart"]["enabled"])),
+            "allow_auto_fallback": bool(
+                imagineart.get("allow_auto_fallback", out["imagineart"]["allow_auto_fallback"])
+            ),
+            "image_style": imagineart_image_style,
+            "video_style": imagineart_video_style,
+            "video_enabled": bool(imagineart.get("video_enabled", out["imagineart"]["video_enabled"])),
+            "timeout_s": max(60, min(1800, int(imagineart.get("timeout_s", out["imagineart"]["timeout_s"])))),
         }
         out["cuda"] = {
             "enabled": bool(cuda.get("enabled", out["cuda"]["enabled"])),

@@ -82,6 +82,7 @@ from .services.internal_video import (
     InternalVideoSettings,
     _scene_keyframe_times,
     describe_internal_render_cache,
+    describe_internal_video_model_preflight,
     describe_proxy_render_cache,
     render_internal_still_image,
     render_internal_video_variant,
@@ -120,6 +121,12 @@ from .services.render_settings import (
     VIDEO_GENERATION_PREFERENCES,
 )
 from .services.firefly_platform import FireflyClient, FireflyImageResult, FireflyVideoResult
+from .services.imagineart_platform import (
+    IMAGINEART_ASPECT_RATIOS,
+    IMAGINEART_IMAGE_STYLES,
+    IMAGINEART_VIDEO_STYLES,
+    ImagineArtClient,
+)
 from .services.cosmos_platform import CosmosClient, COSMOS_MODELS
 from .services.transcription_settings import (
     PARAKEET_MODELS,
@@ -237,7 +244,7 @@ _apply_cuda_startup_flags()
 _ALLOWED_SECRETS: frozenset[str] = frozenset({
     "hf_token", "civitai_api_key", "openai_compat_api_key",
     "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
-    "adobe_client_id", "adobe_client_secret",
+    "adobe_client_id", "adobe_client_secret", "imagineart_api_key",
 })
 
 def _install_benign_connection_error_filter(loop: asyncio.AbstractEventLoop) -> None:
@@ -2254,6 +2261,7 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     cosmos_cfg = dict(cfg.get("cosmos") or {})
     firefly_cfg = dict(cfg.get("firefly") or {})
     stability_cfg = dict(cfg.get("stability") or {})
+    imagineart_cfg = dict(cfg.get("imagineart") or {})
     directml_cfg = dict(cfg.get("directml") or {})
     cuda_cfg = dict(cfg.get("cuda") or {})
     has_nvidia_key = bool(
@@ -2262,11 +2270,13 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     cosmos_enabled = bool(cosmos_cfg.get("enabled", True))
     cosmos_base_url_set = bool(str(cosmos_cfg.get("base_url") or "").strip())
     has_stability_key = bool(secrets.get("stability_api_key"))
+    has_imagineart_key = bool(secrets.get("imagineart_api_key") or os.getenv("IMAGINEART_API_KEY"))
     has_adobe_client_id = bool(secrets.get("adobe_client_id") or os.getenv("ADOBE_CLIENT_ID"))
     has_adobe_client_secret = bool(secrets.get("adobe_client_secret") or os.getenv("ADOBE_CLIENT_SECRET"))
     firefly_credentials_ok = has_adobe_client_id and has_adobe_client_secret
     firefly_enabled = bool(firefly_cfg.get("enabled"))
     stability_enabled = bool(stability_cfg.get("enabled"))
+    imagineart_enabled = bool(imagineart_cfg.get("enabled"))
     stability_service = str(stability_cfg.get("service") or "sd3")
     stability_model = str(stability_cfg.get("model") or "sd3.5-large-turbo")
     directml_available = bool(hw.get("supports_directml"))
@@ -2324,6 +2334,24 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
             "supports_video_api": False,
             "note": "Studio uses the current public Stability image API for hosted keyframes, then assembles video locally. A public hosted video route was not found in the current API spec.",
         },
+        "imagineart": {
+            "provider": "imagineart",
+            "configured": bool(has_imagineart_key),
+            "enabled": imagineart_enabled,
+            "visible": bool(has_imagineart_key and imagineart_enabled),
+            "has_api_key": has_imagineart_key,
+            "allow_auto_fallback": bool(imagineart_cfg.get("allow_auto_fallback", True)),
+            "image_style": str(imagineart_cfg.get("image_style") or "imagine-turbo"),
+            "video_style": str(imagineart_cfg.get("video_style") or "kling-1.0-pro"),
+            "video_enabled": bool(imagineart_cfg.get("video_enabled", False)),
+            "timeout_s": int(imagineart_cfg.get("timeout_s") or 600),
+            "supports_video_api": True,
+            "note": (
+                "No ImagineArt API key saved — add one in Settings → Tokens → ImagineArt API key."
+                if not has_imagineart_key else
+                "ImagineArt is configured for hosted stills and optional native video clips."
+            ),
+        },
         "directml": {
             "provider": "onnxruntime-directml",
             "enabled": directml_enabled,
@@ -2367,6 +2395,9 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
         "firefly_content_classes": list(FIREFLY_CONTENT_CLASSES),
         "stability_services": list(STABILITY_SERVICES),
         "stability_models": list(STABILITY_SD3_MODELS),
+        "imagineart_image_styles": list(IMAGINEART_IMAGE_STYLES),
+        "imagineart_video_styles": list(IMAGINEART_VIDEO_STYLES),
+        "imagineart_aspect_ratios": list(IMAGINEART_ASPECT_RATIOS),
         "style_presets": list(STABILITY_STYLE_PRESETS),
         "hardware": hw,
     }
@@ -2402,6 +2433,11 @@ def _firefly_client() -> FireflyClient:
     client_id = secrets.get("adobe_client_id") or os.getenv("ADOBE_CLIENT_ID") or ""
     client_secret = secrets.get("adobe_client_secret") or os.getenv("ADOBE_CLIENT_SECRET") or ""
     return FireflyClient(client_id=client_id, client_secret=client_secret)
+
+
+def _imagineart_client() -> ImagineArtClient:
+    api_key = secrets.get("imagineart_api_key") or os.getenv("IMAGINEART_API_KEY") or ""
+    return ImagineArtClient(api_key=api_key)
 
 
 def _hosted_firefly_ready(payload: dict[str, Any] | None = None) -> bool:
@@ -2511,10 +2547,25 @@ def codex_render_review(project_id: str, payload: dict[str, Any]):
     )
 
 
+def _nvidia_prompt_model_family(model: str | None) -> str:
+    raw = str(model or "").strip().lower()
+    if "diffusiongemma" in raw or "diffusion-gemma" in raw:
+        return "diffusiongemma"
+    if "nemotron" in raw:
+        return "nemotron"
+    return "custom"
+
+
 @app.get("/v1/config")
 def get_config():
     provider_status = _render_provider_status()
     transcription_status = _transcription_status()
+    try:
+        from edmg_ai_service.config import _NVIDIA_PROMPT_MODEL_PRESETS
+        nvidia_model_presets = [dict(item) for item in _NVIDIA_PROMPT_MODEL_PRESETS]
+    except Exception:
+        nvidia_model_presets = []
+    nvidia_model = os.getenv("EDMG_AI_NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-ultra-253b-v1").strip()
     return {
         "studio_home": str(settings.studio_home),
         "data_dir": str(settings.data_dir),
@@ -2535,7 +2586,9 @@ def get_config():
             secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
         ),
         "ai_nvidia_base_url": os.getenv("EDMG_AI_NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip(),
-        "ai_nvidia_model": os.getenv("EDMG_AI_NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-ultra-253b-v1").strip(),
+        "ai_nvidia_model": nvidia_model,
+        "ai_nvidia_model_family": _nvidia_prompt_model_family(nvidia_model),
+        "ai_nvidia_model_presets": nvidia_model_presets,
         "ai_nvidia_api_key_configured": bool(
             secrets.get("nvidia_api_key") or secrets.get("openai_compat_api_key")
             or os.getenv("EDMG_AI_NVIDIA_API_KEY") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
@@ -2602,7 +2655,7 @@ def secrets_clear(payload: dict[str, Any]):
 
 
 def _setup_ai_config() -> dict[str, Any]:
-    from edmg_ai_service.config import _NVIDIA_NIM_BASE_URL, _NEMOTRON_ULTRA_MODEL
+    from edmg_ai_service.config import _NVIDIA_NIM_BASE_URL, _NEMOTRON_ULTRA_MODEL, _NVIDIA_PROMPT_MODEL_PRESETS
 
     ai_mode = (settings.ai_mode or "local").strip().lower() or "local"
     ai_provider = (os.getenv("EDMG_AI_PROVIDER", "nemotron_cloud").strip().lower() or "nemotron_cloud")
@@ -2619,6 +2672,8 @@ def _setup_ai_config() -> dict[str, Any]:
     )
     nemotron_base_url = os.getenv("EDMG_AI_NVIDIA_BASE_URL", _NVIDIA_NIM_BASE_URL)
     nemotron_model = os.getenv("EDMG_AI_NVIDIA_MODEL", _NEMOTRON_ULTRA_MODEL)
+    nvidia_model_family = _nvidia_prompt_model_family(nemotron_model)
+    nvidia_presets = [dict(item) for item in _NVIDIA_PROMPT_MODEL_PRESETS]
 
     if ai_mode in ("http", "remote"):
         return {
@@ -2637,17 +2692,32 @@ def _setup_ai_config() -> dict[str, Any]:
             "No NVIDIA API key saved. Planning will fall back to rule-based mode. "
             "Add your key in Settings → AI Provider → NVIDIA API key."
         )
+        if nvidia_model_family == "diffusiongemma":
+            label = "DiffusionGemma (NVIDIA / OpenAI-compatible)"
+            hint = (
+                "DiffusionGemma is used for planning and prompt text through an OpenAI-compatible "
+                "NVIDIA NIM or vLLM endpoint. It does not replace SVD, AnimateDiff, or Cosmos video generation."
+            )
+        else:
+            label = "Nemotron Ultra (NVIDIA Cloud)"
+            hint = "Studio planning uses NVIDIA Nemotron Ultra via the NVIDIA NIM cloud API."
         return {
             "mode": "local",
-            "provider": "nemotron_cloud",
-            "label": "Nemotron Ultra (NVIDIA Cloud)",
+            "provider": "nvidia_nim",
+            "label": label,
             "ollama_required": False,
             "model_required": False,
             "base_url": nemotron_base_url,
             "model": nemotron_model,
+            "model_family": nvidia_model_family,
+            "model_presets": nvidia_presets,
             "nvidia_api_key_configured": nvidia_api_key_configured,
             "warning": missing_key_warning,
-            "hint": "Studio planning uses NVIDIA Nemotron Ultra via the NVIDIA NIM cloud API.",
+            "hint": hint,
+            "nvidia_studio_driver_note": (
+                "NVIDIA Studio Driver updates can improve local CUDA/NIM/vLLM runtime behavior, "
+                "but Studio still calls the configured OpenAI-compatible endpoint for this planner model."
+            ),
         }
 
     if ai_provider in ("openai_compat", "openai-compatible", "openai"):
@@ -3004,7 +3074,7 @@ def setup_edmg_install(payload: dict[str, Any]):
 
 @app.get("/v1/ai/status")
 def ai_status():
-    return {"ok": True, "ai": ai.status()}
+    return {"ok": True, "ai": ai.status(), "ai_config": _setup_ai_config()}
 
 @app.get("/v1/worker/status")
 def worker_status():
@@ -7701,6 +7771,7 @@ def render_cosmos_scene(project_id: str, payload: dict[str, Any]):
         raise HTTPException(400, f"scene_index {scene_index} out of range (0–{len(scenes)-1})")
 
     scene = scenes[scene_index]
+    project_dir = store.project_dir(project_id)
     cosmos_cfg = dict((render_settings.get().get("cosmos") or {}))
     client = _cosmos_client()
 
@@ -7714,14 +7785,14 @@ def render_cosmos_scene(project_id: str, payload: dict[str, Any]):
     seed = (payload or {}).get("seed")
     prompt_upsampling = bool(cosmos_cfg.get("prompt_upsampling", True))
 
-    out_dir = Path(proj.path) / "cosmos" / f"variant_{variant_index}"
+    out_dir = project_dir / "cosmos" / f"variant_{variant_index}"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"scene_{scene_index:04d}.mp4"
 
     use_keyframe = bool((payload or {}).get("use_keyframe", False))
     init_image = None
     if use_keyframe or model in ("video2world",):
-        kf_path = Path(proj.path) / "stills" / f"variant_{variant_index}" / f"scene_{scene_index:04d}.png"
+        kf_path = project_dir / "stills" / f"variant_{variant_index}" / f"scene_{scene_index:04d}.png"
         if kf_path.exists():
             try:
                 from PIL import Image as PILImage
@@ -7764,7 +7835,7 @@ def render_cosmos_scene(project_id: str, payload: dict[str, Any]):
             model=model,
         )
 
-    rel = str(result.video_path.relative_to(Path(proj.path)))
+    rel = result.video_path.relative_to(project_dir).as_posix()
     return {
         "ok": True,
         "provider": "nvidia-cosmos",
@@ -7849,7 +7920,8 @@ def render_firefly_scenes(project_id: str, req: RenderScenesRequest):
     width = int(req.width or proj.meta.get("width") or 768)
     height = int(req.height or proj.meta.get("height") or 432)
     results = []
-    stills_dir = Path(proj.path) / "stills" / f"variant_{req.variant_index}"
+    project_dir = store.project_dir(project_id)
+    stills_dir = project_dir / "stills" / f"variant_{req.variant_index}"
     stills_dir.mkdir(parents=True, exist_ok=True)
 
     for idx, scene in enumerate(scenes):
@@ -7872,7 +7944,7 @@ def render_firefly_scenes(project_id: str, req: RenderScenesRequest):
             )
             out_path = stills_dir / f"scene_{idx:04d}.png"
             result.image.save(str(out_path), format="PNG")
-            rel = str(out_path.relative_to(Path(proj.path)))
+            rel = out_path.relative_to(project_dir).as_posix()
             results.append({
                 "scene_index": idx,
                 "path": rel,
@@ -7940,7 +8012,8 @@ def render_firefly_video(project_id: str, payload: dict[str, Any]):
         else list(range(len(scenes)))
     )
 
-    clips_dir = Path(proj.path) / "clips" / f"variant_{variant_index}"
+    project_dir = store.project_dir(project_id)
+    clips_dir = project_dir / "clips" / f"variant_{variant_index}"
     clips_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
@@ -7963,7 +8036,7 @@ def render_firefly_video(project_id: str, payload: dict[str, Any]):
             )
             out_path = clips_dir / f"scene_{idx:04d}.mp4"
             out_path.write_bytes(result.video_bytes)
-            rel = str(out_path.relative_to(Path(proj.path)))
+            rel = out_path.relative_to(project_dir).as_posix()
             results.append({
                 "scene_index": idx,
                 "path": rel,
@@ -8012,7 +8085,8 @@ def render_firefly_assemble(project_id: str, payload: dict[str, Any]):
     if not scenes:
         raise HTTPException(400, "No scenes in selected variant.")
 
-    stills_dir = Path(proj.path) / "stills" / f"variant_{variant_index}"
+    project_dir = store.project_dir(project_id)
+    stills_dir = project_dir / "stills" / f"variant_{variant_index}"
     imgs: list[Path] = []
     durations: list[float] = []
     for idx, scene in enumerate(scenes):
@@ -8033,7 +8107,7 @@ def render_firefly_assemble(project_id: str, payload: dict[str, Any]):
     if not imgs:
         raise HTTPException(400, "No Firefly stills found for this variant.")
 
-    out_path = Path(proj.path) / "output" / f"firefly_v{variant_index}.mp4"
+    out_path = project_dir / "output" / f"firefly_v{variant_index}.mp4"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     assemble_slideshow(
         ffmpeg_path=settings.ffmpeg_path,
@@ -8044,17 +8118,249 @@ def render_firefly_assemble(project_id: str, payload: dict[str, Any]):
     )
 
     audio_path = Path(proj.meta.get("audio_path") or "")
-    if audio_path.is_absolute() and audio_path.exists() or (proj.path and (Path(proj.path) / "audio.wav").exists()):
-        resolved_audio = audio_path if audio_path.is_absolute() else (Path(proj.path) / "audio.wav")
+    fallback_audio = project_dir / "audio.wav"
+    if (audio_path.is_absolute() and audio_path.exists()) or fallback_audio.exists():
+        resolved_audio = audio_path if audio_path.is_absolute() and audio_path.exists() else fallback_audio
         muxed = out_path.with_name(out_path.stem + "_muxed.mp4")
         try:
-            mux_audio(settings.ffmpeg_path, video_path=out_path, audio_path=resolved_audio, out_path=muxed)
+            mux_audio(settings.ffmpeg_path, video_mp4=out_path, audio_path=resolved_audio, out_mp4=muxed)
             out_path = muxed
         except Exception:
             pass
 
-    rel = str(out_path.relative_to(Path(proj.path)))
+    rel = out_path.relative_to(project_dir).as_posix()
     return {"ok": True, "provider": "adobe-firefly", "video": rel, "video_abs": str(out_path)}
+
+
+@app.post("/v1/projects/{project_id}/render/imagineart/scenes")
+def render_imagineart_scenes(project_id: str, req: RenderScenesRequest):
+    """Generate one keyframe per scene using ImagineArt hosted image generation."""
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    variants = plan["variants"]
+    if req.variant_index < 0 or req.variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    provider_status = _render_provider_status()
+    imagineart_status = provider_status.get("imagineart") or {}
+    if not imagineart_status.get("configured"):
+        raise UserFacingError(
+            "ImagineArt API key not configured.",
+            hint="Open Settings → Tokens, save your ImagineArt API key, then retry.",
+            code="IMAGINEART_NOT_CONFIGURED",
+            status_code=400,
+        )
+    if not imagineart_status.get("enabled"):
+        raise UserFacingError(
+            "ImagineArt provider is disabled.",
+            hint="Open Settings → GPU / Render Runtime → ImagineArt and enable the provider.",
+            code="IMAGINEART_DISABLED",
+            status_code=400,
+        )
+
+    imagineart_cfg = dict((render_settings.get().get("imagineart") or {}))
+    client = _imagineart_client()
+    variant = variants[req.variant_index]
+    scenes = variant.get("scenes") or []
+    if not scenes:
+        raise HTTPException(400, "Selected variant has no scenes.")
+
+    width = int(req.width or proj.meta.get("width") or 768)
+    height = int(req.height or proj.meta.get("height") or 432)
+    results = []
+    project_dir = store.project_dir(project_id)
+    stills_dir = project_dir / "stills" / f"variant_{req.variant_index}"
+    stills_dir.mkdir(parents=True, exist_ok=True)
+
+    for idx, scene in enumerate(scenes):
+        prompt = str(scene.get("prompt") or "cinematic music video still").strip()
+        seed = req.seed if req.seed is not None else None
+        try:
+            result = client.generate_image(
+                prompt=prompt,
+                width=width,
+                height=height,
+                style=str(imagineart_cfg.get("image_style") or "imagine-turbo"),
+                seed=seed,
+                timeout_s=float(imagineart_cfg.get("timeout_s") or 180),
+            )
+            out_path = stills_dir / f"scene_{idx:04d}.png"
+            result.image.save(str(out_path), format="PNG")
+            rel = out_path.relative_to(project_dir).as_posix()
+            results.append({
+                "scene_index": idx,
+                "path": rel,
+                "seed": result.seed,
+                "model": result.model,
+                "ok": True,
+            })
+        except UserFacingError:
+            raise
+        except Exception as exc:
+            results.append({"scene_index": idx, "ok": False, "error": str(exc)})
+
+    return {"ok": True, "provider": "imagineart", "results": results, "width": width, "height": height}
+
+
+@app.post("/v1/projects/{project_id}/render/imagineart/video")
+def render_imagineart_video(project_id: str, payload: dict[str, Any]):
+    """Generate native ImagineArt video clips for plan scenes (text-to-video or image-to-video)."""
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    payload = payload or {}
+    variants = plan["variants"]
+    variant_index = int(payload.get("variant_index") or 0)
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    provider_status = _render_provider_status()
+    imagineart_status = provider_status.get("imagineart") or {}
+    if not imagineart_status.get("configured"):
+        raise UserFacingError(
+            "ImagineArt API key not configured.",
+            hint="Open Settings → Tokens, save your ImagineArt API key, then retry.",
+            code="IMAGINEART_NOT_CONFIGURED",
+            status_code=400,
+        )
+
+    imagineart_cfg = dict((render_settings.get().get("imagineart") or {}))
+    client = _imagineart_client()
+    variant = variants[variant_index]
+    scenes = variant.get("scenes") or []
+    if not scenes:
+        raise HTTPException(400, "No scenes in selected variant.")
+
+    scene_index = payload.get("scene_index")
+    scene_indices = [int(scene_index)] if scene_index is not None else list(range(len(scenes)))
+    use_keyframe = bool(payload.get("use_keyframe", False))
+    video_style = str(payload.get("video_style") or imagineart_cfg.get("video_style") or "kling-1.0-pro")
+    timeout_s = float(payload.get("timeout_s") or imagineart_cfg.get("timeout_s") or 600)
+
+    project_dir = store.project_dir(project_id)
+    clips_dir = project_dir / "clips" / f"variant_{variant_index}"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    stills_dir = project_dir / "stills" / f"variant_{variant_index}"
+    results = []
+
+    for idx in scene_indices:
+        if idx < 0 or idx >= len(scenes):
+            continue
+        scene = scenes[idx]
+        prompt = str(scene.get("prompt") or "cinematic music video clip").strip()
+        init_image = None
+        if use_keyframe:
+            still_path = stills_dir / f"scene_{idx:04d}.png"
+            if still_path.exists():
+                from PIL import Image
+
+                init_image = Image.open(still_path).convert("RGB")
+
+        try:
+            result = client.generate_video(
+                prompt=prompt,
+                style=video_style,
+                init_image=init_image,
+                timeout_s=timeout_s,
+                poll_interval_s=5.0,
+            )
+            out_path = clips_dir / f"scene_{idx:04d}.mp4"
+            out_path.write_bytes(result.video_bytes)
+            rel = out_path.relative_to(project_dir).as_posix()
+            results.append({
+                "scene_index": idx,
+                "path": rel,
+                "generation_id": result.generation_id,
+                "model": result.model,
+                "ok": True,
+            })
+        except UserFacingError:
+            raise
+        except Exception as exc:
+            results.append({"scene_index": idx, "ok": False, "error": str(exc)})
+
+    return {
+        "ok": True,
+        "provider": "imagineart",
+        "results": results,
+        "variant_index": variant_index,
+    }
+
+
+@app.post("/v1/projects/{project_id}/render/imagineart/assemble")
+def render_imagineart_assemble(project_id: str, payload: dict[str, Any]):
+    """Assemble ImagineArt-generated scene stills into a final MP4 video."""
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    variant_index = int((payload or {}).get("variant_index") or 0)
+    variants = plan["variants"]
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    variant = variants[variant_index]
+    scenes = variant.get("scenes") or []
+    if not scenes:
+        raise HTTPException(400, "No scenes in selected variant.")
+
+    project_dir = store.project_dir(project_id)
+    stills_dir = project_dir / "stills" / f"variant_{variant_index}"
+    imgs: list[Path] = []
+    durations: list[float] = []
+    for idx, scene in enumerate(scenes):
+        img_path = stills_dir / f"scene_{idx:04d}.png"
+        if img_path.exists():
+            imgs.append(img_path)
+            start = float(scene.get("start_s") or 0.0)
+            end = float(scene.get("end_s") or (start + 4.0))
+            durations.append(max(0.5, end - start))
+        else:
+            raise UserFacingError(
+                f"Scene {idx} still not found at {img_path.name}.",
+                hint="Run 'Render with ImagineArt' first to generate keyframes for all scenes.",
+                code="IMAGINEART_STILL_MISSING",
+                status_code=400,
+            )
+
+    if not imgs:
+        raise HTTPException(400, "No ImagineArt stills found for this variant.")
+
+    out_path = project_dir / "output" / f"imagineart_v{variant_index}.mp4"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    assemble_slideshow(
+        ffmpeg_path=settings.ffmpeg_path,
+        image_paths=imgs,
+        durations_s=durations,
+        out_path=out_path,
+        fps=int((payload or {}).get("fps") or 24),
+    )
+
+    audio_path = Path(proj.meta.get("audio_path") or "")
+    fallback_audio = project_dir / "audio.wav"
+    if (audio_path.is_absolute() and audio_path.exists()) or fallback_audio.exists():
+        resolved_audio = audio_path if audio_path.is_absolute() and audio_path.exists() else fallback_audio
+        muxed = out_path.with_name(out_path.stem + "_muxed.mp4")
+        try:
+            mux_audio(settings.ffmpeg_path, video_mp4=out_path, audio_path=resolved_audio, out_mp4=muxed)
+            out_path = muxed
+        except Exception:
+            pass
+
+    rel = out_path.relative_to(project_dir).as_posix()
+    return {"ok": True, "provider": "imagineart", "video": rel, "video_abs": str(out_path)}
 
 
 @app.post("/v1/projects/{project_id}/render/stills/scenes")
@@ -8372,6 +8678,22 @@ def _internal_settings_from_payload(
     temporal_mode: str | None = None,
 ) -> InternalVideoSettings:
     refiner = payload.get("refiner") if isinstance(payload.get("refiner"), dict) else None
+    video_motion_score_mode = str(payload.get("video_model_motion_score_mode") or "auto").strip().lower()
+    if video_motion_score_mode not in {"auto", "manual", "off"}:
+        video_motion_score_mode = "auto"
+    video_anchor_mode = str(payload.get("video_model_anchor_mode") or "start").strip().lower()
+    if video_anchor_mode not in {"start", "end", "loop"}:
+        video_anchor_mode = "start"
+    try:
+        video_manual_motion_score = int(payload.get("video_model_manual_motion_score", 4))
+    except Exception:
+        video_manual_motion_score = 4
+    prompt_refine_raw = payload.get("video_model_prompt_refine", True)
+    video_prompt_refine = (
+        str(prompt_refine_raw).strip().lower() not in {"0", "false", "no", "off"}
+        if isinstance(prompt_refine_raw, str)
+        else bool(prompt_refine_raw)
+    )
     deforum_override_keys = (
         "deforum_prompts",
         "deforum_negative_prompts",
@@ -8425,6 +8747,10 @@ def _internal_settings_from_payload(
         video_model_decode_chunk_size=int(payload.get("video_model_decode_chunk_size", 8)),
         video_model_dtype=str(payload.get("video_model_dtype") or "auto"),
         video_model_cpu_offload=bool(payload.get("video_model_cpu_offload", False)),
+        video_model_motion_score_mode=video_motion_score_mode,
+        video_model_manual_motion_score=max(1, min(7, video_manual_motion_score)),
+        video_model_anchor_mode=video_anchor_mode,
+        video_model_prompt_refine=video_prompt_refine,
         source_asset=(str(payload.get("source_asset")).strip() or None) if payload.get("source_asset") is not None else None,
         source_strength=float(payload.get("source_strength", 0.55)),
         deforum_overrides=deforum_overrides or None,
@@ -9162,12 +9488,24 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             f"Internal video-model motion is enabled via {settings_obj.video_model_engine}; "
             "this is the path for subject/object motion and is heavier than keyframe assembly."
         )
+        video_model_preflight = describe_internal_video_model_preflight(
+            scenes=scenes,
+            timeline=(proj.meta.get("timeline") if isinstance(proj.meta.get("timeline"), dict) else None),
+            settings=settings_obj,
+            duration_s=duration_s,
+            total_frames=total_frames,
+            hardware=hw,
+        )
         if settings_obj.video_model_engine == "svd":
             warnings.append("SVD animates from each generated keyframe; it is best for short subject, fabric, camera, and transition motion.")
         if settings_obj.video_model_engine == "animatediff":
             warnings.append("AnimateDiff uses an SD1.5 motion adapter; keep the internal base model on SD1.5 for this mode.")
+        for warning in list(video_model_preflight.get("warnings") or []):
+            warnings.append(str(warning))
         for warning in _internal_video_model_memory_warnings(settings_obj, hw):
             warnings.append(warning)
+    else:
+        video_model_preflight = None
     if settings_obj.fps_render > settings_obj.fps_output:
         warnings.append("FPS render is higher than FPS output; you may be spending extra time on frames that will be blended down.")
     duration_warning = _duration_mismatch_warning(duration_sources)
@@ -9214,6 +9552,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         "installed_internal_models": installed_internal,
         "installed_internal_video_models": _installed_internal_video_models_status(),
         "internal_video_model_dependencies": internal_video_models.dependency_status(),
+        "internal_video_model_preflight": video_model_preflight,
         "settings": {
             "fps_render": settings_obj.fps_render,
             "fps_output": settings_obj.fps_output,
@@ -9227,6 +9566,10 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "video_model_decode_chunk_size": settings_obj.video_model_decode_chunk_size,
             "video_model_dtype": settings_obj.video_model_dtype,
             "video_model_cpu_offload": settings_obj.video_model_cpu_offload,
+            "video_model_motion_score_mode": settings_obj.video_model_motion_score_mode,
+            "video_model_manual_motion_score": settings_obj.video_model_manual_motion_score,
+            "video_model_anchor_mode": settings_obj.video_model_anchor_mode,
+            "video_model_prompt_refine": settings_obj.video_model_prompt_refine,
             "temporal_steps": settings_obj.temporal_steps,
             "interpolation_engine": settings_obj.interpolation_engine,
             "render_mode": "diffusion",

@@ -8,7 +8,7 @@ import { useUiMode } from "../components/uiMode";
 import { clearRenderDefaults, readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import type { PageProps } from "../types/pageProps";
 
-type SecretName = "hf_token" | "civitai_api_key" | "openai_compat_api_key" | "stability_api_key" | "nvidia_api_key" | "adobe_client_id" | "adobe_client_secret";
+type SecretName = "hf_token" | "civitai_api_key" | "openai_compat_api_key" | "stability_api_key" | "nvidia_api_key" | "adobe_client_id" | "adobe_client_secret" | "imagineart_api_key";
 
 type StudioAiSettings = {
   mode: string;
@@ -67,6 +67,77 @@ const DEFAULT_AI_SETTINGS: StudioAiSettings = {
   nvidiaModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
   source: "default",
 };
+
+const NEMOTRON_ULTRA_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1";
+const DIFFUSIONGEMMA_MODEL = "google/diffusiongemma-26B-A4B-it";
+
+type NvidiaPromptModelPreset = {
+  id?: string;
+  label: string;
+  model: string;
+  family?: string;
+  description?: string;
+};
+
+const DEFAULT_NVIDIA_PROMPT_MODEL_PRESETS: NvidiaPromptModelPreset[] = [
+  {
+    id: "nemotron_ultra",
+    label: "Nemotron Ultra 253B",
+    model: NEMOTRON_ULTRA_MODEL,
+    family: "nemotron",
+    description: "High-quality creative planning and storyboard reasoning through NVIDIA's OpenAI-compatible API.",
+  },
+  {
+    id: "diffusiongemma",
+    label: "DiffusionGemma 26B A4B",
+    model: DIFFUSIONGEMMA_MODEL,
+    family: "diffusiongemma",
+    description: "Fast parallel text generation for planner and prompt refinement on NVIDIA NIM or vLLM endpoints.",
+  },
+];
+
+function normalizeNvidiaPromptModelPreset(raw: any): NvidiaPromptModelPreset | null {
+  const model = String(raw?.model ?? "").trim();
+  if (!model) return null;
+  const label = String(raw?.label ?? model).trim() || model;
+  return {
+    id: String(raw?.id ?? label).trim() || label,
+    label,
+    model,
+    family: String(raw?.family ?? "").trim() || undefined,
+    description: String(raw?.description ?? "").trim() || undefined,
+  };
+}
+
+function collectNvidiaPromptModelPresets(cfg: any, aiStatus: any): NvidiaPromptModelPreset[] {
+  const merged = new Map<string, NvidiaPromptModelPreset>();
+  for (const preset of DEFAULT_NVIDIA_PROMPT_MODEL_PRESETS) {
+    merged.set(preset.model, preset);
+  }
+  const candidates = [
+    ...(Array.isArray(cfg?.ai_nvidia_model_presets) ? cfg.ai_nvidia_model_presets : []),
+    ...(Array.isArray(aiStatus?.ai_config?.model_presets) ? aiStatus.ai_config.model_presets : []),
+  ];
+  for (const candidate of candidates) {
+    const preset = normalizeNvidiaPromptModelPreset(candidate);
+    if (preset) merged.set(preset.model, preset);
+  }
+  return Array.from(merged.values());
+}
+
+function nvidiaModelPresetValue(model: string | undefined, presets: NvidiaPromptModelPreset[]): string {
+  const current = String(model || "").trim();
+  return presets.some((preset) => preset.model === current) ? current : "custom";
+}
+
+function nvidiaModelFamily(model: string | undefined, presets: NvidiaPromptModelPreset[]): string {
+  const current = String(model || "").trim().toLowerCase();
+  const preset = presets.find((item) => item.model.toLowerCase() === current);
+  if (preset?.family) return preset.family;
+  if (current.includes("diffusiongemma") || current.includes("diffusion-gemma")) return "diffusiongemma";
+  if (current.includes("nemotron")) return "nemotron";
+  return "custom";
+}
 
 const DEFAULT_BACKEND_SETTINGS: StudioBackendSettings = {
   mode: "managed",
@@ -278,6 +349,7 @@ export default function Settings(props: PageProps) {
   const [cosmosCmdCopied, setCosmosCmdCopied] = useState<boolean>(false);
   const [adobeClientId, setAdobeClientId] = useState<string>("");
   const [adobeClientSecret, setAdobeClientSecret] = useState<string>("");
+  const [imagineartApiKey, setImagineartApiKey] = useState<string>("");
   const [saving, setSaving] = useState<boolean>(false);
   const [savingBackend, setSavingBackend] = useState<boolean>(false);
   const [savingAi, setSavingAi] = useState<boolean>(false);
@@ -300,6 +372,20 @@ export default function Settings(props: PageProps) {
     () => aiSettingsFingerprint(aiDraft) !== aiSettingsFingerprint(studioAiSettings),
     [aiDraft, studioAiSettings]
   );
+
+  const nvidiaPromptModelPresets = useMemo(
+    () => collectNvidiaPromptModelPresets(cfg, aiStatus),
+    [cfg, aiStatus]
+  );
+  const selectedNvidiaPromptPreset = useMemo(
+    () => nvidiaModelPresetValue(aiDraft.nvidiaModel, nvidiaPromptModelPresets),
+    [aiDraft.nvidiaModel, nvidiaPromptModelPresets]
+  );
+  const selectedNvidiaModelFamily = useMemo(
+    () => nvidiaModelFamily(aiDraft.nvidiaModel, nvidiaPromptModelPresets),
+    [aiDraft.nvidiaModel, nvidiaPromptModelPresets]
+  );
+  const selectedNvidiaPromptModel = nvidiaPromptModelPresets.find((preset) => preset.model === aiDraft.nvidiaModel);
 
   const backendSettingsDirty = useMemo(
     () => backendSettingsFingerprint(backendDraft) !== backendSettingsFingerprint(studioBackendSettings),
@@ -460,6 +546,7 @@ export default function Settings(props: PageProps) {
       if (name === "nvidia_api_key") setNvidiaApiKey("");
       if (name === "adobe_client_id") setAdobeClientId("");
       if (name === "adobe_client_secret") setAdobeClientSecret("");
+      if (name === "imagineart_api_key") setImagineartApiKey("");
       await refreshSecrets();
       await refreshBackendAiStatus();
       const nextProviders = await apiGet("/v1/settings/render_providers");
@@ -965,14 +1052,41 @@ export default function Settings(props: PageProps) {
                       placeholder="https://integrate.api.nvidia.com/v1"
                     />
                   </div>
+                  <label>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>NVIDIA prompt model preset</div>
+                    <select
+                      aria-label="NVIDIA prompt model preset"
+                      value={selectedNvidiaPromptPreset}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (value === "custom") return;
+                        updateAiDraft({ nvidiaModel: value });
+                      }}
+                    >
+                      {nvidiaPromptModelPresets.map((preset) => (
+                        <option key={preset.model} value={preset.model}>{preset.label}</option>
+                      ))}
+                      <option value="custom">Custom NVIDIA/OpenAI-compatible model</option>
+                    </select>
+                  </label>
                   <div>
                     <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Model</div>
                     <input
-                      value={aiDraft.nvidiaModel || "nvidia/llama-3.1-nemotron-ultra-253b-v1"}
+                      aria-label="NVIDIA prompt model"
+                      value={aiDraft.nvidiaModel || NEMOTRON_ULTRA_MODEL}
                       onChange={(e) => updateAiDraft({ nvidiaModel: e.target.value })}
-                      placeholder="nvidia/llama-3.1-nemotron-ultra-253b-v1"
+                      placeholder={NEMOTRON_ULTRA_MODEL}
                     />
                   </div>
+                  {selectedNvidiaModelFamily === "diffusiongemma" ? (
+                    <div className="small" style={{ opacity: 0.82 }}>
+                      DiffusionGemma is for planning and prompt text. It can speed prompt refinement on NVIDIA NIM or vLLM endpoints, but internal video still uses the selected renderer path.
+                    </div>
+                  ) : selectedNvidiaPromptModel?.description ? (
+                    <div className="small" style={{ opacity: 0.82 }}>
+                      {selectedNvidiaPromptModel.description}
+                    </div>
+                  ) : null}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center" }}>
                     <div>
                       <div className="small" style={{ fontWeight: 800 }}>NVIDIA API key</div>
@@ -995,8 +1109,7 @@ export default function Settings(props: PageProps) {
                     </div>
                   )}
                   <div className="small" style={{ opacity: 0.82 }}>
-                    Uses NVIDIA's Nemotron Ultra 253B model via the NVIDIA NIM cloud API. Best-in-class creative planning quality. Requires an NVIDIA API key — no local GPU needed.
-                    Get a free key at <a href="https://build.nvidia.com" target="_blank" rel="noreferrer">build.nvidia.com</a>.
+                    Uses NVIDIA's OpenAI-compatible API path for Studio planning and prompt generation. NVIDIA Studio Driver updates can help local CUDA/NIM/vLLM runtime behavior, but this setting is still a text-planning model, not a video renderer.
                   </div>
                 </>
               ) : null}
@@ -1251,7 +1364,8 @@ export default function Settings(props: PageProps) {
             ["Backend URL", cfg.backend_url],
             ["AI mode", cfg.ai_mode],
             ["AI provider", cfg.ai_provider],
-            ["AI model", cfg.ai_openai_compat_model ?? cfg.ai_ollama_model],
+            ["AI model", cfg.ai_nvidia_model ?? cfg.ai_openai_compat_model ?? cfg.ai_ollama_model],
+            ["AI model family", cfg.ai_nvidia_model_family],
             ["ComfyUI URL", cfg.comfyui_url],
             ["Studio home", cfg.studio_home],
             ["Data dir", cfg.data_dir],
@@ -1285,6 +1399,7 @@ export default function Settings(props: PageProps) {
             ["Provider", aiStatus?.ai_config?.provider],
             ["Label", aiStatus?.ai_config?.label],
             ["Model", aiStatus?.ai_config?.model],
+            ["Model family", aiStatus?.ai_config?.model_family],
             ["Base URL", aiStatus?.ai_config?.base_url],
             ["NVIDIA key", aiStatus?.ai_config?.nvidia_api_key_configured != null
               ? (aiStatus.ai_config.nvidia_api_key_configured ? "configured" : "not set")
@@ -1355,6 +1470,18 @@ export default function Settings(props: PageProps) {
           </div>
           <button disabled={saving || !stabilityApiKey} onClick={() => saveSecret("stability_api_key", stabilityApiKey)}>Save</button>
           <button className="secondary" disabled={saving || !secrets?.has_stability_api_key} onClick={() => clearSecret("stability_api_key")}>Clear</button>
+
+          <div>
+            <div className="small" style={{ fontWeight: 800 }}>ImagineArt API key</div>
+            <div className="small" style={{ opacity: 0.8 }}>Used for hosted ImagineArt stills and optional native video clips (same API as the ImagineArt MCP server).</div>
+            <input
+              value={imagineartApiKey}
+              onChange={(e) => setImagineartApiKey(e.target.value)}
+              placeholder={renderProviders?.imagineart?.has_api_key ? "(set) paste to replace" : "paste ImagineArt API key"}
+            />
+          </div>
+          <button disabled={saving || !imagineartApiKey} onClick={() => saveSecret("imagineart_api_key", imagineartApiKey)}>Save</button>
+          <button className="secondary" disabled={saving || !renderProviders?.imagineart?.has_api_key} onClick={() => clearSecret("imagineart_api_key")}>Clear</button>
         </div>
       </div>
     ),
@@ -1393,6 +1520,7 @@ export default function Settings(props: PageProps) {
                     <option value="auto">Auto (smart routing)</option>
                     <option value="local_gpu">Always use Local GPU</option>
                     <option value="cosmos_cloud">Always use NVIDIA Cosmos Cloud</option>
+                    <option value="imagineart_cloud">Always use ImagineArt Cloud</option>
                     <option value="comfyui">Always use ComfyUI</option>
                   </select>
                 </div>
@@ -1928,6 +2056,87 @@ export default function Settings(props: PageProps) {
                           ...(c?.firefly || {}),
                           video_duration_s: Math.max(1, Math.min(10, Number(e.target.value) || 5)),
                         },
+                      }))}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ── ImagineArt ─────────────────────────────────────────────── */}
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>ImagineArt (hosted cloud)</div>
+              <div className="small" style={{ marginBottom: 8 }}>
+                API key saved: <b>{renderProviders?.imagineart?.has_api_key ? "yes" : "no"}</b>
+                {" "}• active in Render: <b>{renderProviders?.imagineart?.visible ? "yes" : "no"}</b>
+                {" "}• image style: <b>{renderProviderDraft?.imagineart?.image_style || "imagine-turbo"}</b>
+                {" "}• video style: <b>{renderProviderDraft?.imagineart?.video_style || "kling-1.0-pro"}</b>
+              </div>
+              <div className="small" style={{ marginBottom: 8, opacity: 0.8 }}>{renderProviders?.imagineart?.note}</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input type="checkbox"
+                    checked={!!renderProviderDraft?.imagineart?.enabled}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), imagineart: { ...(c?.imagineart || {}), enabled: e.target.checked },
+                    }))}
+                  />
+                  Enable ImagineArt hosted rendering
+                </label>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input type="checkbox"
+                    checked={!!renderProviderDraft?.imagineart?.allow_auto_fallback}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), imagineart: { ...(c?.imagineart || {}), allow_auto_fallback: e.target.checked },
+                    }))}
+                  />
+                  Allow auto fallback to ImagineArt when local GPU is unavailable
+                </label>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input type="checkbox"
+                    checked={!!renderProviderDraft?.imagineart?.video_enabled}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), imagineart: { ...(c?.imagineart || {}), video_enabled: e.target.checked },
+                    }))}
+                  />
+                  Enable native ImagineArt video clips (text-to-video / image-to-video)
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Image style</div>
+                    <select
+                      value={renderProviderDraft?.imagineart?.image_style || "imagine-turbo"}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), imagineart: { ...(c?.imagineart || {}), image_style: e.target.value },
+                      }))}
+                    >
+                      {(renderProviders?.imagineart_image_styles || ["imagine-turbo", "realistic", "anime"]).map((s: string) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Video style</div>
+                    <select
+                      value={renderProviderDraft?.imagineart?.video_style || "kling-1.0-pro"}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), imagineart: { ...(c?.imagineart || {}), video_style: e.target.value },
+                      }))}
+                    >
+                      {(renderProviders?.imagineart_video_styles || ["kling-1.0-pro", "imagine-v2"]).map((s: string) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Timeout (seconds)</div>
+                    <input
+                      type="number"
+                      min={60}
+                      max={1800}
+                      value={renderProviderDraft?.imagineart?.timeout_s ?? 600}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), imagineart: { ...(c?.imagineart || {}), timeout_s: Number(e.target.value) },
                       }))}
                     />
                   </div>

@@ -80,6 +80,10 @@ class InternalVideoSettings:
     video_model_decode_chunk_size: int = 8
     video_model_dtype: str = "auto"
     video_model_cpu_offload: bool = False
+    video_model_motion_score_mode: str = "auto"  # auto|manual|off
+    video_model_manual_motion_score: int = 4
+    video_model_anchor_mode: str = "start"  # start|end|loop
+    video_model_prompt_refine: bool = True
     # Image animation: an uploaded still used to seed the first keyframe (img2img).
     source_asset: str | None = None
     source_strength: float = 0.55
@@ -440,6 +444,10 @@ def _render_signature(
         "video_model_decode_chunk_size": int(settings.video_model_decode_chunk_size),
         "video_model_dtype": str(settings.video_model_dtype),
         "video_model_cpu_offload": bool(settings.video_model_cpu_offload),
+        "video_model_motion_score_mode": str(settings.video_model_motion_score_mode),
+        "video_model_manual_motion_score": int(settings.video_model_manual_motion_score),
+        "video_model_anchor_mode": str(settings.video_model_anchor_mode),
+        "video_model_prompt_refine": bool(settings.video_model_prompt_refine),
         "source_asset": str(settings.source_asset or ""),
         "source_strength": float(settings.source_strength),
         "deforum_overrides": settings.deforum_overrides or None,
@@ -2440,16 +2448,41 @@ def render_internal_video_variant(
                 fps=fps_schedule,
             ) or render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
             negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
-            a_t, _b_t, _w = _key_times_bracket(key_times, start_s)
-            init_img = key_imgs[a_t].convert("RGB").resize((out_w, out_h), resample=Image.LANCZOS)
-            seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt, work_tag)
+            start_anchor_img, end_anchor_img = _video_anchor_images(
+                key_imgs=key_imgs,
+                key_times=key_times,
+                start_s=start_s,
+                end_s=end_s,
+                duration_s=duration_s,
+                fps_render=fps_r,
+                width=out_w,
+                height=out_h,
+            )
+            anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
+            init_img = end_anchor_img if anchor_mode == "end" else start_anchor_img
+            score_info = video_model_scene_motion_score(
+                scene=scene,
+                timeline=timeline,
+                start_s=start_s,
+                end_s=end_s,
+                duration_s=duration_s,
+                settings=settings,
+            )
+            prompt_for_model = _refine_video_model_prompt(prompt, score_info=score_info, settings=settings)
+            motion_bucket_id = _video_model_motion_bucket_for_score(settings, score_info)
+            seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt_for_model, motion_bucket_id, anchor_mode, work_tag)
 
             if progress_fn:
                 progress_fn("video_model", len(key_times) + fi_cursor, total_units, f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
             emit_checkpoint(stage="video_model", status="running", message=f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
             if log_fn:
-                prompt_preview = " ".join(prompt.split())[:220]
-                log_fn(f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} frames={adapter_frames} seed={seed} prompt={prompt_preview!r}")
+                prompt_preview = " ".join(prompt_for_model.split())[:220]
+                score_label = score_info.get("motion_score")
+                log_fn(
+                    f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} "
+                    f"frames={adapter_frames} seed={seed} anchor={anchor_mode} "
+                    f"motion_score={score_label} motion_bucket={motion_bucket_id} prompt={prompt_preview!r}"
+                )
 
             adapter_w, adapter_h, adapter_note = _video_model_adapter_canvas(
                 engine=engine,
@@ -2466,7 +2499,7 @@ def render_internal_video_variant(
                 video_model_dir=video_model_path,
                 base_model_dir=model_dir,
                 init_image=init_img,
-                prompt=prompt,
+                prompt=prompt_for_model,
                 negative_prompt=negative_prompt,
                 width=adapter_w,
                 height=adapter_h,
@@ -2477,13 +2510,22 @@ def render_internal_video_variant(
                 seed=seed,
                 device=device,
                 dtype=str(settings.video_model_dtype or "auto"),
-                motion_bucket_id=int(settings.video_model_motion_bucket_id),
+                motion_bucket_id=int(motion_bucket_id),
                 noise_aug_strength=float(settings.video_model_noise_aug_strength),
                 decode_chunk_size=int(settings.video_model_decode_chunk_size),
                 cpu_offload=bool(settings.video_model_cpu_offload),
             )
             if not generated:
                 raise RuntimeError(f"Internal {engine} adapter returned no frames.")
+            if anchor_mode == "end":
+                generated = list(reversed(generated))
+            generated = _apply_video_anchor_frames(
+                [frame.convert("RGB") for frame in generated],
+                anchor_mode=anchor_mode,
+                start_img=start_anchor_img,
+                end_img=end_anchor_img,
+                anchor_strength=float(settings.anchor_strength),
+            )
 
             for local_i, fi in enumerate(range(start_f, end_f)):
                 if cancel_check_fn:
@@ -2762,6 +2804,10 @@ def render_internal_video_variant(
             "video_model_decode_chunk_size": int(settings.video_model_decode_chunk_size),
             "video_model_dtype": str(settings.video_model_dtype),
             "video_model_cpu_offload": bool(settings.video_model_cpu_offload),
+            "video_model_motion_score_mode": str(settings.video_model_motion_score_mode),
+            "video_model_manual_motion_score": int(settings.video_model_manual_motion_score),
+            "video_model_anchor_mode": str(settings.video_model_anchor_mode),
+            "video_model_prompt_refine": bool(settings.video_model_prompt_refine),
             "resume_existing_frames": bool(settings.resume_existing_frames),
             "model_id": str(settings.model_id),
             "negative_prompt": str(settings.negative_prompt),
@@ -3203,6 +3249,399 @@ def _proxy_energy_at_time(scene: dict[str, Any] | None, t: float, duration_s: fl
         return 0.5
     # Gentle breathing curve so the draft is never perfectly static.
     return max(0.0, min(1.0, 0.5 + 0.18 * math.sin((t / max(1e-6, duration_s)) * 2.0 * math.pi)))
+
+
+def _normalize_video_motion_score_mode(mode: Any) -> str:
+    mode_l = str(mode or "auto").strip().lower()
+    return mode_l if mode_l in {"auto", "manual", "off"} else "auto"
+
+
+def _normalize_video_anchor_mode(mode: Any) -> str:
+    mode_l = str(mode or "start").strip().lower()
+    return mode_l if mode_l in {"start", "end", "loop"} else "start"
+
+
+def _clamp_video_motion_score(value: Any, *, default: int = 4) -> int:
+    try:
+        raw = int(round(float(value)))
+    except Exception:
+        raw = int(default)
+    return max(1, min(7, raw))
+
+
+def _coerce_unit_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(out):
+        return None
+    return max(0.0, min(1.0, out))
+
+
+def _scene_energy_values(scene: dict[str, Any] | None) -> tuple[float | None, float | None]:
+    if not isinstance(scene, dict):
+        return None, None
+    energy = None
+    peak = None
+    for key in ("energy", "avg_energy", "avgEnergy", "intensity", "scene_intensity"):
+        energy = _coerce_unit_float(scene.get(key))
+        if energy is not None:
+            break
+    for key in ("peak_energy", "peakEnergy", "onset_energy", "transient_energy"):
+        peak = _coerce_unit_float(scene.get(key))
+        if peak is not None:
+            break
+    return energy, peak
+
+
+def _iter_timeline_sections(timeline: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(timeline, dict):
+        return []
+    candidates: list[Any] = []
+    for key in ("sections", "scene_sections"):
+        value = timeline.get(key)
+        if isinstance(value, list):
+            candidates.extend(value)
+    reactive = timeline.get("reactive_lab")
+    if isinstance(reactive, dict):
+        for key in ("sections", "phrases", "segments"):
+            value = reactive.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+    return [item for item in candidates if isinstance(item, dict)]
+
+
+def _timeline_energy_for_range(timeline: dict[str, Any] | None, start_s: float, end_s: float) -> tuple[float | None, float | None]:
+    sections = _iter_timeline_sections(timeline)
+    if not sections:
+        return None, None
+    weighted = 0.0
+    peak = 0.0
+    total = 0.0
+    for section in sections:
+        try:
+            sec_start = float(section.get("start_s", section.get("start", 0.0)) or 0.0)
+            sec_end = float(section.get("end_s", section.get("end", sec_start)) or sec_start)
+        except Exception:
+            continue
+        overlap = max(0.0, min(end_s, sec_end) - max(start_s, sec_start))
+        if overlap <= 0:
+            continue
+        energy, section_peak = _scene_energy_values(section)
+        if energy is None:
+            continue
+        weighted += energy * overlap
+        peak = max(peak, section_peak if section_peak is not None else energy)
+        total += overlap
+    if total <= 0:
+        return None, None
+    return max(0.0, min(1.0, weighted / total)), max(0.0, min(1.0, peak))
+
+
+def _timeline_event_density(timeline: dict[str, Any] | None, start_s: float, end_s: float) -> float:
+    if not isinstance(timeline, dict):
+        return 0.0
+    reactive = timeline.get("reactive_lab")
+    sources: list[Any] = []
+    if isinstance(reactive, dict):
+        for key in ("cue_events", "onset_events", "beat_markers", "beats"):
+            value = reactive.get(key)
+            if isinstance(value, list):
+                sources.extend(value)
+    for key in ("cue_events", "onset_events", "beat_markers", "beats"):
+        value = timeline.get(key)
+        if isinstance(value, list):
+            sources.extend(value)
+    if not sources:
+        return 0.0
+    count = 0
+    for event in sources:
+        if isinstance(event, dict):
+            raw_t = event.get("time_s", event.get("t", event.get("start_s")))
+        else:
+            raw_t = event
+        try:
+            t = float(raw_t)
+        except Exception:
+            continue
+        if start_s <= t < end_s:
+            count += 1
+    duration = max(0.25, end_s - start_s)
+    return max(0.0, min(1.0, count / max(1.0, duration * 2.0)))
+
+
+def video_model_scene_motion_score(
+    *,
+    scene: dict[str, Any] | None,
+    timeline: dict[str, Any] | None,
+    start_s: float,
+    end_s: float,
+    duration_s: float,
+    settings: InternalVideoSettings,
+) -> dict[str, Any]:
+    mode = _normalize_video_motion_score_mode(settings.video_model_motion_score_mode)
+    manual_score = _clamp_video_motion_score(settings.video_model_manual_motion_score)
+    scene_energy, scene_peak = _scene_energy_values(scene)
+    timeline_energy, timeline_peak = _timeline_energy_for_range(timeline, start_s, end_s)
+    event_density = _timeline_event_density(timeline, start_s, end_s)
+
+    source = "fallback"
+    energy = 0.5
+    peak = 0.5
+    if scene_energy is not None:
+        energy = scene_energy
+        peak = scene_peak if scene_peak is not None else scene_energy
+        source = "scene"
+    elif timeline_energy is not None:
+        energy = timeline_energy
+        peak = timeline_peak if timeline_peak is not None else timeline_energy
+        source = "timeline"
+    elif duration_s > 0:
+        mid_t = (float(start_s) + float(end_s)) * 0.5
+        energy = _proxy_energy_at_time(scene, mid_t, duration_s)
+        peak = energy
+
+    if event_density > 0:
+        energy = max(energy, min(1.0, energy + event_density * 0.18))
+        peak = max(peak, min(1.0, event_density))
+        source = f"{source}+events" if source != "fallback" else "events"
+
+    if mode == "off":
+        score: int | None = None
+    elif mode == "manual":
+        score = manual_score
+        source = "manual"
+    else:
+        blended = max(0.0, min(1.0, (float(energy) * 0.75) + (float(peak) * 0.25)))
+        score = _clamp_video_motion_score(1.0 + blended * 6.0)
+
+    return {
+        "start_s": round(float(start_s), 3),
+        "end_s": round(float(end_s), 3),
+        "energy": round(float(energy), 3),
+        "peak_energy": round(float(peak), 3),
+        "event_density": round(float(event_density), 3),
+        "motion_score": score,
+        "source": source,
+    }
+
+
+def video_model_scene_motion_scores(
+    *,
+    scenes: list[dict[str, Any]],
+    timeline: dict[str, Any] | None,
+    settings: InternalVideoSettings,
+    duration_s: float,
+) -> list[dict[str, Any]]:
+    valid_scenes = [scene for scene in scenes if isinstance(scene, dict)] or [{"start_s": 0.0, "end_s": duration_s}]
+    out: list[dict[str, Any]] = []
+    for index, scene in enumerate(valid_scenes):
+        try:
+            start_s = max(0.0, float(scene.get("start_s", 0.0) or 0.0))
+        except Exception:
+            start_s = 0.0
+        try:
+            end_s = float(scene.get("end_s", 0.0) or 0.0)
+        except Exception:
+            end_s = 0.0
+        if end_s <= start_s:
+            next_start = (
+                float(valid_scenes[index + 1].get("start_s", duration_s) or duration_s)
+                if index + 1 < len(valid_scenes)
+                else duration_s
+            )
+            end_s = max(start_s + 0.5, next_start)
+        item = video_model_scene_motion_score(
+            scene=scene,
+            timeline=timeline,
+            start_s=start_s,
+            end_s=end_s,
+            duration_s=duration_s,
+            settings=settings,
+        )
+        item["scene_index"] = index
+        out.append(item)
+    return out
+
+
+def _video_model_motion_bucket_for_score(settings: InternalVideoSettings, score_info: dict[str, Any]) -> int:
+    base_bucket = max(1, min(255, int(settings.video_model_motion_bucket_id or 127)))
+    if _normalize_video_motion_score_mode(settings.video_model_motion_score_mode) == "off":
+        return base_bucket
+    score = score_info.get("motion_score")
+    if score is None:
+        return base_bucket
+    score_i = _clamp_video_motion_score(score)
+    mapped = int(round(72 + ((score_i - 1) / 6.0) * 120))
+    return max(1, min(255, int(round((mapped * 0.75) + (base_bucket * 0.25)))))
+
+
+def _refine_video_model_prompt(
+    prompt: str,
+    *,
+    score_info: dict[str, Any],
+    settings: InternalVideoSettings,
+) -> str:
+    base = " ".join(str(prompt or DEFAULT_RENDER_PROMPT).split()) or DEFAULT_RENDER_PROMPT
+    additions: list[str] = []
+    score = score_info.get("motion_score")
+    mode = _normalize_video_motion_score_mode(settings.video_model_motion_score_mode)
+    if mode != "off" and score is not None and "motion score" not in base.lower():
+        additions.append(f"{_clamp_video_motion_score(score)} motion score.")
+    if bool(settings.video_model_prompt_refine):
+        if score is not None:
+            score_i = _clamp_video_motion_score(score)
+            if score_i <= 2:
+                additions.append("Slow restrained subject motion.")
+            elif score_i >= 6:
+                additions.append("Energetic music-reactive subject motion with clear transitions.")
+            else:
+                additions.append("Controlled music-reactive subject motion.")
+        anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
+        if anchor_mode == "end":
+            additions.append("Resolve into the ending anchor.")
+        elif anchor_mode == "loop":
+            additions.append("Connect the opening anchor into a seamless loop.")
+        else:
+            additions.append("Preserve the opening anchor.")
+    if not additions:
+        return base
+    return f"{base.rstrip('. ')}. {' '.join(additions)}"
+
+
+def describe_internal_video_model_preflight(
+    *,
+    scenes: list[dict[str, Any]],
+    timeline: dict[str, Any] | None,
+    settings: InternalVideoSettings,
+    duration_s: float,
+    total_frames: int,
+    hardware: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    hw = hardware or {}
+    engine = str(settings.video_model_engine or "svd").strip().lower()
+    if engine == "auto":
+        engine = "animatediff" if "animatediff" in str(settings.video_model_id or "").lower() else "svd"
+    mode = _normalize_video_motion_score_mode(settings.video_model_motion_score_mode)
+    anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
+    checks: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    if int(settings.width) % 8 != 0 or int(settings.height) % 8 != 0:
+        warnings.append(
+            f"Internal video models expect dimensions divisible by 8; requested {int(settings.width)}x{int(settings.height)} may fail or force a resize."
+        )
+        checks.append({"name": "dimensions", "status": "warn"})
+    else:
+        checks.append({"name": "dimensions", "status": "ok"})
+
+    if engine == "svd" and int(settings.video_model_max_frames_per_scene or 25) > 25:
+        warnings.append("SVD supports short image-to-video windows; Studio will cap generated adapter frames to 25 per scene.")
+        checks.append({"name": "frame_count", "status": "warn", "cap": 25})
+    elif engine == "animatediff" and int(settings.video_model_max_frames_per_scene or 25) > 32:
+        warnings.append("AnimateDiff works best with shorter context windows; consider 16-32 generated frames per scene before scaling up.")
+        checks.append({"name": "frame_count", "status": "warn", "recommended_max": 32})
+    else:
+        checks.append({"name": "frame_count", "status": "ok"})
+
+    backend = str(settings.device_preference or "").strip().lower()
+    if backend in {"", "auto"}:
+        backend = str(hw.get("backend") or hw.get("device") or "cpu").lower()
+    dtype = str(settings.video_model_dtype or "auto").strip().lower()
+    if backend == "cpu" and dtype in {"float16", "bfloat16"}:
+        warnings.append("float16/bfloat16 video-model precision is a GPU setting; CPU runs should use auto or float32.")
+        checks.append({"name": "dtype", "status": "warn"})
+    else:
+        checks.append({"name": "dtype", "status": "ok"})
+
+    vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
+    if backend == "cuda" and engine == "animatediff" and vram_gb and vram_gb <= 8.5 and not bool(settings.video_model_cpu_offload):
+        warnings.append("AnimateDiff on low-VRAM CUDA should use CPU offload before rendering.")
+        checks.append({"name": "offload", "status": "warn"})
+    else:
+        checks.append({"name": "offload", "status": "ok"})
+
+    scene_scores = video_model_scene_motion_scores(
+        scenes=scenes,
+        timeline=timeline,
+        settings=settings,
+        duration_s=duration_s,
+    )
+
+    return {
+        "engine": engine,
+        "motion_score_mode": mode,
+        "manual_motion_score": _clamp_video_motion_score(settings.video_model_manual_motion_score),
+        "anchor_mode": anchor_mode,
+        "prompt_refine": bool(settings.video_model_prompt_refine),
+        "total_frames": int(total_frames),
+        "max_frames_per_scene": int(settings.video_model_max_frames_per_scene or 25),
+        "scene_scores": scene_scores,
+        "checks": checks,
+        "warnings": warnings,
+    }
+
+
+def _key_image_at_time(
+    key_imgs: dict[float, Image.Image],
+    key_times: list[float],
+    t: float,
+    *,
+    width: int,
+    height: int,
+) -> Image.Image:
+    a_t, b_t, w = _key_times_bracket(key_times, t)
+    img = key_imgs[a_t].convert("RGB")
+    if a_t != b_t:
+        img = Image.blend(img, key_imgs[b_t].convert("RGB"), float(w))
+    return img.resize((int(width), int(height)), resample=Image.LANCZOS)
+
+
+def _video_anchor_images(
+    *,
+    key_imgs: dict[float, Image.Image],
+    key_times: list[float],
+    start_s: float,
+    end_s: float,
+    duration_s: float,
+    fps_render: int,
+    width: int,
+    height: int,
+) -> tuple[Image.Image, Image.Image]:
+    start_img = _key_image_at_time(key_imgs, key_times, float(start_s), width=width, height=height)
+    end_probe = min(float(duration_s), max(float(start_s), float(end_s) - (1.0 / max(1, int(fps_render)))))
+    end_img = _key_image_at_time(key_imgs, key_times, end_probe, width=width, height=height)
+    return start_img, end_img
+
+
+def _apply_video_anchor_frames(
+    frames: list[Image.Image],
+    *,
+    anchor_mode: str,
+    start_img: Image.Image,
+    end_img: Image.Image,
+    anchor_strength: float,
+) -> list[Image.Image]:
+    if not frames:
+        return frames
+    mode = _normalize_video_anchor_mode(anchor_mode)
+    out = [frame.convert("RGB") for frame in frames]
+    edge = max(1, min(8, max(1, len(out) // 4)))
+    blend_max = max(0.20, min(0.85, 0.35 + float(anchor_strength) * 0.5))
+    start = start_img.convert("RGB").resize(out[0].size, resample=Image.LANCZOS)
+    tail_target = start if mode == "loop" else end_img.convert("RGB").resize(out[-1].size, resample=Image.LANCZOS)
+
+    if mode in {"start", "loop"}:
+        for i in range(edge):
+            alpha = blend_max * (1.0 - (i / max(1, edge)))
+            out[i] = Image.blend(out[i], start, alpha)
+    if mode in {"end", "loop"}:
+        for i in range(edge):
+            idx = len(out) - 1 - i
+            alpha = blend_max * (1.0 - (i / max(1, edge)))
+            out[idx] = Image.blend(out[idx], tail_target, alpha)
+    return out
 
 
 def _proxy_resample():

@@ -218,7 +218,8 @@ def test_model_manager_builds_hf_cache_from_runtime(tmp_path, monkeypatch) -> No
         secrets=_FakeSecrets("settings-token"),
     )
 
-    assert isinstance(manager.model_cache, _FakeHFCache)
+    cache_chain = getattr(manager.model_cache, "caches", [manager.model_cache])
+    assert isinstance(cache_chain[0], _FakeHFCache)
     assert calls[0]["models_dir"] == tmp_path / "home" / "models"
     assert calls[0]["secrets_store"] is not None
 

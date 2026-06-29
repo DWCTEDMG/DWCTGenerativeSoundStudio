@@ -20,6 +20,8 @@ const IDLE_STATE: OperationProgressState = {
 export function useOperationProgress() {
   const [progress, setProgress] = useState<OperationProgressState>(IDLE_STATE);
   const timerRef = useRef<number | null>(null);
+  const resetTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef<boolean>(true);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current != null) {
@@ -28,7 +30,21 @@ export function useOperationProgress() {
     }
   }, []);
 
-  useEffect(() => stopTimer, [stopTimer]);
+  const stopResetTimer = useCallback(() => {
+    if (resetTimerRef.current != null) {
+      window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stopTimer();
+      stopResetTimer();
+    };
+  }, [stopResetTimer, stopTimer]);
 
   const runOperation = useCallback(
     async <T,>(
@@ -41,6 +57,7 @@ export function useOperationProgress() {
       work: () => Promise<T>,
     ) => {
       stopTimer();
+      stopResetTimer();
       setProgress({
         active: true,
         value: 12,
@@ -63,6 +80,7 @@ export function useOperationProgress() {
       try {
         const result = await work();
         stopTimer();
+        if (!mountedRef.current) return result;
         setProgress({
           active: false,
           value: 100,
@@ -70,25 +88,36 @@ export function useOperationProgress() {
           detail: args.successDetail || "Complete.",
           tone: args.successTone || "success",
         });
-        window.setTimeout(() => {
+        resetTimerRef.current = window.setTimeout(() => {
+          if (!mountedRef.current) return;
           setProgress((current) => (current.value === 100 ? IDLE_STATE : current));
+          resetTimerRef.current = null;
         }, 1400);
         return result;
       } catch (error) {
         stopTimer();
+        stopResetTimer();
         const message = error instanceof Error ? error.message : String(error);
-        setProgress({
-          active: false,
-          value: 100,
-          label: args.label,
-          detail: message,
-          tone: "danger",
-        });
+        if (mountedRef.current) {
+          setProgress({
+            active: false,
+            value: 100,
+            label: args.label,
+            detail: message,
+            tone: "danger",
+          });
+        }
         throw error;
       }
     },
-    [stopTimer],
+    [stopResetTimer, stopTimer],
   );
 
-  return { progress, runOperation, clearProgress: () => setProgress(IDLE_STATE) };
+  const clearProgress = useCallback(() => {
+    stopTimer();
+    stopResetTimer();
+    if (mountedRef.current) setProgress(IDLE_STATE);
+  }, [stopResetTimer, stopTimer]);
+
+  return { progress, runOperation, clearProgress };
 }

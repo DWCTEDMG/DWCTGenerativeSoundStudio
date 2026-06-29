@@ -253,6 +253,34 @@ describe("Render page", () => {
     expect(await screen.findByDisplayValue("Internal motion (frame img2img)")).toBeTruthy();
   }, 10000);
 
+  it("sends video-model motion score and anchor controls in the internal renderer payload", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    const temporalOption = await screen.findByRole("option", { name: "Internal video model (SVD / AnimateDiff)" });
+    const temporalSelect = temporalOption.closest("select");
+    expect(temporalSelect).toBeTruthy();
+    fireEvent.change(temporalSelect!, { target: { value: "video_model" } });
+
+    expect(await screen.findByText("Motion score")).toBeTruthy();
+    fireEvent.change(await screen.findByDisplayValue("Start anchor"), { target: { value: "loop" } });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => {
+          if (!String(url).includes("/v1/projects/p1/render/internal/preflight")) return false;
+          const body = String(init?.body || "");
+          return body.includes('"temporal_mode":"video_model"')
+            && body.includes('"video_model_motion_score_mode":"auto"')
+            && body.includes('"video_model_manual_motion_score":4')
+            && body.includes('"video_model_anchor_mode":"loop"')
+            && body.includes('"video_model_prompt_refine":true');
+        }),
+      ).toBe(true);
+    });
+  }, 10000);
+
   it("sends TensorRT video mode through the internal renderer payload", async () => {
     const fetchMock = installRenderMocks();
 

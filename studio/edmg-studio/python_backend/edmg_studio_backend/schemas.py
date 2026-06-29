@@ -203,6 +203,10 @@ class InternalVideoRenderRequest(BaseModel):
     video_model_decode_chunk_size: int = Field(default=8, ge=1, le=64)
     video_model_dtype: Literal["auto","float16","bfloat16","float32"] = "auto"
     video_model_cpu_offload: bool = False
+    video_model_motion_score_mode: Literal["auto","manual","off"] = "auto"
+    video_model_manual_motion_score: int = Field(default=4, ge=1, le=7)
+    video_model_anchor_mode: Literal["start","end","loop"] = "start"
+    video_model_prompt_refine: bool = True
     # Image animation: animate an uploaded still (path under the project, e.g. assets/refs/foo.png)
     source_asset: str | None = None
     source_strength: float = Field(default=0.55, ge=0.05, le=0.95)

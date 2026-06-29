@@ -5,6 +5,23 @@ from dataclasses import dataclass
 
 _NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 _NEMOTRON_ULTRA_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+_DIFFUSIONGEMMA_MODEL = "google/diffusiongemma-26B-A4B-it"
+_NVIDIA_PROMPT_MODEL_PRESETS = (
+    {
+        "id": "nemotron_ultra",
+        "label": "Nemotron Ultra 253B",
+        "model": _NEMOTRON_ULTRA_MODEL,
+        "family": "nemotron",
+        "description": "High-quality creative planning and storyboard reasoning through NVIDIA's OpenAI-compatible API.",
+    },
+    {
+        "id": "diffusiongemma",
+        "label": "DiffusionGemma 26B A4B",
+        "model": _DIFFUSIONGEMMA_MODEL,
+        "family": "diffusiongemma",
+        "description": "Fast parallel text generation for planner and prompt refinement on NVIDIA NIM or vLLM endpoints.",
+    },
+)
 
 
 @dataclass(frozen=True)

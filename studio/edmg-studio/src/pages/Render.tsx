@@ -197,6 +197,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalVideoDecodeChunk, setInternalVideoDecodeChunk] = useState<number>(8);
   const [internalVideoDtype, setInternalVideoDtype] = useState<"auto"|"float16"|"bfloat16"|"float32">("auto");
   const [internalVideoCpuOffload, setInternalVideoCpuOffload] = useState<boolean>(false);
+  const [internalVideoMotionScoreMode, setInternalVideoMotionScoreMode] = useState<"auto"|"manual"|"off">("auto");
+  const [internalVideoManualMotionScore, setInternalVideoManualMotionScore] = useState<number>(4);
+  const [internalVideoAnchorMode, setInternalVideoAnchorMode] = useState<"start"|"end"|"loop">("start");
+  const [internalVideoPromptRefine, setInternalVideoPromptRefine] = useState<boolean>(true);
 
   const [timeline, setTimeline] = useState<any>({ layers: [], camera: { keyframes: [] } });
   const [timelineDirty, setTimelineDirty] = useState<boolean>(false);
@@ -489,6 +493,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   const internalHostedVisible = !!renderProviders?.stability?.visible;
   const fireflyVisible = !!renderProviders?.firefly?.visible;
+  const imagineartVisible = !!renderProviders?.imagineart?.visible;
   const cosmosReady = !!renderProviders?.cosmos?.active;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
@@ -516,6 +521,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       video_model_decode_chunk_size: internalVideoDecodeChunk,
       video_model_dtype: internalVideoDtype,
       video_model_cpu_offload: internalVideoCpuOffload,
+      video_model_motion_score_mode: internalVideoMotionScoreMode,
+      video_model_manual_motion_score: internalVideoManualMotionScore,
+      video_model_anchor_mode: internalVideoAnchorMode,
+      video_model_prompt_refine: internalVideoPromptRefine,
       model_id: useTensorRt ? tensorRtModelId : internalModelId,
       render_mode: internalRenderMode,
       render_tier: internalRenderTier,
@@ -886,6 +895,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalVideoDecodeChunk,
     internalVideoDtype,
     internalVideoCpuOffload,
+    internalVideoMotionScoreMode,
+    internalVideoManualMotionScore,
+    internalVideoAnchorMode,
+    internalVideoPromptRefine,
   ]);
 
   useEffect(() => {
@@ -1153,6 +1166,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (p.video_model_decode_chunk_size != null) setInternalVideoDecodeChunk(Number(p.video_model_decode_chunk_size));
     if (p.video_model_dtype) setInternalVideoDtype(String(p.video_model_dtype) as any);
     if (p.video_model_cpu_offload != null) setInternalVideoCpuOffload(Boolean(p.video_model_cpu_offload));
+    if (p.video_model_motion_score_mode) setInternalVideoMotionScoreMode(String(p.video_model_motion_score_mode) as any);
+    if (p.video_model_manual_motion_score != null) setInternalVideoManualMotionScore(Number(p.video_model_manual_motion_score));
+    if (p.video_model_anchor_mode) setInternalVideoAnchorMode(String(p.video_model_anchor_mode) as any);
+    if (p.video_model_prompt_refine != null) setInternalVideoPromptRefine(Boolean(p.video_model_prompt_refine));
   };
 
   const addSelectedLora = () => {
@@ -1253,6 +1270,40 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const renderImagineartScenes = async () => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/imagineart/scenes`, {
+        variant_index: selectedVariant,
+        width: renderWidth || undefined,
+        height: renderHeight || undefined,
+        seed: renderSeed ? Number(renderSeed) : undefined,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+      await refreshReferenceAssets(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const renderImagineartVideo = async (sceneIndex?: number, useKeyframe = false) => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/imagineart/video`, {
+        variant_index: selectedVariant,
+        scene_index: sceneIndex,
+        use_keyframe: useKeyframe,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
   const renderMotion = async () => {
     setErr(null);
     setInfo(null);
@@ -1332,6 +1383,21 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setInfo(null);
     try {
       const d = await apiPost(`/v1/projects/${projectId}/render/firefly/assemble`, {
+        variant_index: selectedVariant,
+        fps: internalFpsOut,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const assembleImagineart = async () => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/imagineart/assemble`, {
         variant_index: selectedVariant,
         fps: internalFpsOut,
       });
@@ -1911,6 +1977,17 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                         <div className="small" style={{ marginTop: 4 }}>
                           Video-model motion: <b>{internalPreflight?.settings?.video_model_engine || internalVideoModelEngine}</b>
                           {internalPreflight?.settings?.video_model_id ? <> • model <b>{internalPreflight.settings.video_model_id}</b></> : null}
+                          {" "}• score <b>{internalPreflight?.internal_video_model_preflight?.motion_score_mode || internalPreflight?.settings?.video_model_motion_score_mode || internalVideoMotionScoreMode}</b>
+                          {" "}• anchor <b>{internalPreflight?.internal_video_model_preflight?.anchor_mode || internalPreflight?.settings?.video_model_anchor_mode || internalVideoAnchorMode}</b>
+                        </div>
+                      ) : null}
+                      {internalPreflight?.internal_video_model_preflight?.scene_scores?.length ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          Scene motion scores: {internalPreflight.internal_video_model_preflight.scene_scores.slice(0, 4).map((item: any) => (
+                            <span key={item.scene_index ?? item.start_s} style={{ marginRight: 8 }}>
+                              <b>{Number(item.start_s || 0).toFixed(1)}s</b> {item.motion_score ?? "off"}
+                            </span>
+                          ))}
                         </div>
                       ) : null}
                       {internalPreflight?.requested_model_id ? (
@@ -2221,9 +2298,36 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                            <input type="checkbox" checked={internalVideoCpuOffload} onChange={(e) => setInternalVideoCpuOffload(e.target.checked)} />
                            CPU offload
                          </label>
+                         <div style={{ minWidth: 170 }}>
+                           <div className="small">Motion score</div>
+                           <select value={internalVideoMotionScoreMode} onChange={(e) => setInternalVideoMotionScoreMode(e.target.value as any)}>
+                             <option value="auto">Auto from scene energy</option>
+                             <option value="manual">Manual</option>
+                             <option value="off">Off</option>
+                           </select>
+                         </div>
+                         {internalVideoMotionScoreMode === "manual" ? (
+                           <div style={{ minWidth: 150 }}>
+                             <div className="small">Manual score</div>
+                             <input type="number" value={internalVideoManualMotionScore} min={1} max={7}
+                               onChange={(e) => setInternalVideoManualMotionScore(Number(e.target.value))} />
+                           </div>
+                         ) : null}
+                         <div style={{ minWidth: 170 }}>
+                           <div className="small">I2V anchor</div>
+                           <select value={internalVideoAnchorMode} onChange={(e) => setInternalVideoAnchorMode(e.target.value as any)}>
+                             <option value="start">Start anchor</option>
+                             <option value="end">End anchor</option>
+                             <option value="loop">Loop anchor</option>
+                           </select>
+                         </div>
+                         <label className="row small" style={{ gap: 6, alignItems: "center" }}>
+                           <input type="checkbox" checked={internalVideoPromptRefine} onChange={(e) => setInternalVideoPromptRefine(e.target.checked)} />
+                           Prompt refine
+                         </label>
                        </div>
                        <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
-                         SVD animates from generated keyframes. AnimateDiff is prompt-motion and currently requires the SD1.5 internal base model.
+                         SVD animates from generated keyframes. Motion score follows scene energy; anchor modes bias start, end, or loop continuity.
                        </div>
                      </div>
                    ) : null}
@@ -3200,6 +3304,35 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                     </button>
                   </>
                 ) : null}
+                {imagineartVisible ? (
+                  <>
+                    <button
+                      onClick={renderImagineartScenes}
+                      disabled={!variantCount}
+                      title={`Generate keyframes with ImagineArt (${renderProviders?.imagineart?.image_style || "imagine-turbo"})`}
+                    >
+                      ✨ Render with ImagineArt
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={assembleImagineart}
+                      disabled={!variantCount}
+                      title="Assemble ImagineArt stills into a final MP4 (run Render with ImagineArt first)"
+                    >
+                      Assemble ImagineArt video
+                    </button>
+                    {renderProviders?.imagineart?.video_enabled ? (
+                      <button
+                        className="secondary"
+                        onClick={() => renderImagineartVideo(undefined, false)}
+                        disabled={!variantCount}
+                        title={`Generate native ImagineArt video clips (${renderProviders?.imagineart?.video_style || "kling-1.0-pro"})`}
+                      >
+                        ImagineArt native video
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
                 {stillModels.some((m) => m.render?.engine === "tensorrt_standalone") ? (
                   <>
                     <div className="row" style={{ alignItems: "center", gap: 8, background: "var(--bg-card)", padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border-color)" }}>
@@ -3270,6 +3403,13 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   {renderProviders?.firefly?.custom_model_id
                     ? <> • custom model <code>{renderProviders.firefly.custom_model_id}</code></>
                     : <> • using standard Firefly Image 3</>}
+                </div>
+              )}
+              {imagineartVisible && (
+                <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                  ImagineArt: <b>{renderProviders?.imagineart?.configured ? "configured" : "not configured"}</b>
+                  {" "}• image <b>{renderProviders?.imagineart?.image_style}</b>
+                  {" "}• video <b>{renderProviders?.imagineart?.video_enabled ? renderProviders.imagineart.video_style : "disabled"}</b>
                 </div>
               )}
 
