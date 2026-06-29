@@ -43,6 +43,46 @@ def _seeded_generator(seed: int | None, device: str):
     return generator, used_seed
 
 
+def clear_video_pipeline_cache() -> None:
+    _VIDEO_PIPELINE_CACHE.clear()
+
+
+def _cleanup_cuda(device: str) -> None:
+    if str(device or "").lower() != "cuda":
+        return
+    try:
+        import torch  # type: ignore
+
+        if getattr(torch, "cuda", None) and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+    except Exception:
+        pass
+
+
+def _is_cuda_out_of_memory(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "cuda out of memory" in message
+        or "torch.cuda.outofmemoryerror" in message
+        or ("out of memory" in message and "cuda" in message)
+    )
+
+
+def _raise_cuda_oom(engine: str, exc: Exception) -> None:
+    clear_video_pipeline_cache()
+    raise UserFacingError(
+        f"Internal {engine} video model ran out of CUDA memory",
+        hint=(
+            "Studio will fit 6 GB CUDA best with CPU offload, 8-12 frames per scene, "
+            "8-10 temporal steps, and an adapter canvas near 640x360."
+        ),
+        code="INTERNAL_VIDEO_MODEL_CUDA_OOM",
+        status_code=400,
+    ) from exc
+
+
 def _normalize_frames(raw_frames: Any) -> list[Any]:
     frames = raw_frames
     if hasattr(frames, "frames"):
@@ -72,6 +112,16 @@ def _optimize_pipeline(pipe: Any, device: str, *, cpu_offload: bool) -> Any:
             pipe.enable_attention_slicing()
         except Exception:
             pass
+    if hasattr(pipe, "enable_vae_slicing"):
+        try:
+            pipe.enable_vae_slicing()
+        except Exception:
+            pass
+    if hasattr(pipe, "enable_vae_tiling"):
+        try:
+            pipe.enable_vae_tiling()
+        except Exception:
+            pass
     if device == "cuda" and hasattr(pipe, "enable_xformers_memory_efficient_attention"):
         try:
             pipe.enable_xformers_memory_efficient_attention()
@@ -80,6 +130,12 @@ def _optimize_pipeline(pipe: Any, device: str, *, cpu_offload: bool) -> Any:
     if cpu_offload and hasattr(pipe, "enable_model_cpu_offload"):
         try:
             pipe.enable_model_cpu_offload()
+            return pipe
+        except Exception:
+            pass
+    if cpu_offload and hasattr(pipe, "enable_sequential_cpu_offload"):
+        try:
+            pipe.enable_sequential_cpu_offload()
             return pipe
         except Exception:
             pass
@@ -118,7 +174,7 @@ def _load_svd_pipeline(model_dir: Path, *, device: str, dtype: str, cpu_offload:
             status_code=500,
         ) from exc
 
-    key = ("svd", str(model_dir), device, dtype)
+    key = ("svd", str(model_dir), device, f"{dtype}|offload={int(bool(cpu_offload))}")
     cached = _VIDEO_PIPELINE_CACHE.get(key)
     if cached is not None:
         return cached
@@ -152,7 +208,7 @@ def _load_animatediff_pipeline(
             status_code=500,
         ) from exc
 
-    key = ("animatediff", f"{base_model_dir}|{adapter_dir}", device, dtype)
+    key = ("animatediff", f"{base_model_dir}|{adapter_dir}", device, f"{dtype}|offload={int(bool(cpu_offload))}")
     cached = _VIDEO_PIPELINE_CACHE.get(key)
     if cached is not None:
         return cached
@@ -248,7 +304,18 @@ def generate_video_model_frames(
             kwargs.pop("min_guidance_scale", None)
             kwargs.pop("max_guidance_scale", None)
             kwargs["guidance_scale"] = float(cfg)
-            result = pipe(**kwargs)
+            try:
+                result = pipe(**kwargs)
+            except Exception as exc:
+                _cleanup_cuda(device)
+                if _is_cuda_out_of_memory(exc):
+                    _raise_cuda_oom("SVD", exc)
+                raise
+        except Exception as exc:
+            _cleanup_cuda(device)
+            if _is_cuda_out_of_memory(exc):
+                _raise_cuda_oom("SVD", exc)
+            raise
         frames = _normalize_frames(result)
         if not frames:
             raise RuntimeError(f"SVD returned no frames (seed={used_seed}).")
@@ -262,16 +329,22 @@ def generate_video_model_frames(
             dtype=dtype_l,
             cpu_offload=cpu_offload,
         )
-        result = pipe(
-            prompt=str(prompt or "cinematic subject motion"),
-            negative_prompt=str(negative_prompt or ""),
-            num_frames=int(num_frames),
-            num_inference_steps=int(steps),
-            guidance_scale=float(cfg),
-            generator=generator,
-            width=int(width),
-            height=int(height),
-        )
+        try:
+            result = pipe(
+                prompt=str(prompt or "cinematic subject motion"),
+                negative_prompt=str(negative_prompt or ""),
+                num_frames=int(num_frames),
+                num_inference_steps=int(steps),
+                guidance_scale=float(cfg),
+                generator=generator,
+                width=int(width),
+                height=int(height),
+            )
+        except Exception as exc:
+            _cleanup_cuda(device)
+            if _is_cuda_out_of_memory(exc):
+                _raise_cuda_oom("AnimateDiff", exc)
+            raise
         frames = _normalize_frames(result)
         if not frames:
             raise RuntimeError(f"AnimateDiff returned no frames (seed={used_seed}).")

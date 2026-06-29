@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import gc
 import json
 import math
 import re
@@ -95,6 +96,10 @@ class _PipelineCache:
     def set(cls, key: tuple[str, str, str], value: Any) -> None:
         cls._cache[key] = value
 
+    @classmethod
+    def clear(cls) -> None:
+        cls._cache.clear()
+
 
 class _EmbedCache:
     _cache: dict[tuple[str, str], Any] = {}
@@ -106,6 +111,10 @@ class _EmbedCache:
     @classmethod
     def set(cls, key: tuple[str, str], value: Any) -> None:
         cls._cache[key] = value
+
+    @classmethod
+    def clear(cls) -> None:
+        cls._cache.clear()
 
 
 class _ControlNetCache:
@@ -119,8 +128,94 @@ class _ControlNetCache:
     def set(cls, key: tuple[str, str, str], value: Any) -> None:
         cls._cache[key] = value
 
+    @classmethod
+    def clear(cls) -> None:
+        cls._cache.clear()
+
 
 _STILL_PIPELINE_LOCK = threading.Lock()
+
+
+def _cuda_total_vram_gb(device: str) -> float:
+    if str(device or "").lower() != "cuda":
+        return 0.0
+    try:
+        import torch  # type: ignore
+
+        if not (getattr(torch, "cuda", None) and torch.cuda.is_available()):
+            return 0.0
+        props = torch.cuda.get_device_properties(0)
+        return round(float(getattr(props, "total_memory", 0.0)) / float(1024 ** 3), 2)
+    except Exception:
+        return 0.0
+
+
+def _cleanup_torch_cuda(device: str) -> None:
+    gc.collect()
+    if str(device or "").lower() != "cuda":
+        return
+    try:
+        import torch  # type: ignore
+
+        if getattr(torch, "cuda", None) and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+    except Exception:
+        pass
+
+
+def _release_still_pipeline_memory(pipes: _Pipes | None, device: str, *, log_fn=None) -> None:
+    for pipe in (
+        getattr(pipes, "txt2img", None),
+        getattr(pipes, "img2img", None),
+        getattr(pipes, "inpaint", None),
+    ):
+        if hasattr(pipe, "to"):
+            try:
+                pipe.to("cpu")
+            except Exception:
+                pass
+    _PipelineCache.clear()
+    _EmbedCache.clear()
+    _ControlNetCache.clear()
+    _cleanup_torch_cuda(device)
+    if log_fn:
+        log_fn("Released still-image diffusion pipelines before loading the internal video model.")
+
+
+def _fit_multiple_of_8(width: int, height: int, *, max_width: int, max_height: int) -> tuple[int, int]:
+    width_i = max(64, int(width))
+    height_i = max(64, int(height))
+    scale = min(1.0, float(max_width) / float(width_i), float(max_height) / float(height_i))
+    out_w = max(64, int(math.floor((width_i * scale) / 8.0) * 8))
+    out_h = max(64, int(math.floor((height_i * scale) / 8.0) * 8))
+    return out_w, out_h
+
+
+def _video_model_adapter_canvas(
+    *,
+    engine: str,
+    width: int,
+    height: int,
+    device: str,
+    cpu_offload: bool,
+) -> tuple[int, int, str | None]:
+    engine_l = str(engine or "").lower()
+    if engine_l != "animatediff" or str(device or "").lower() != "cuda":
+        return int(width), int(height), None
+    vram_gb = _cuda_total_vram_gb(device)
+    if vram_gb <= 0.0:
+        return int(width), int(height), None
+    if vram_gb <= 6.5:
+        adapter_w, adapter_h = _fit_multiple_of_8(int(width), int(height), max_width=640, max_height=384)
+        if (adapter_w, adapter_h) != (int(width), int(height)):
+            return adapter_w, adapter_h, f"6 GB CUDA AnimateDiff canvas capped to {adapter_w}x{adapter_h}"
+    elif vram_gb <= 8.5 and not bool(cpu_offload):
+        adapter_w, adapter_h = _fit_multiple_of_8(int(width), int(height), max_width=704, max_height=448)
+        if (adapter_w, adapter_h) != (int(width), int(height)):
+            return adapter_w, adapter_h, f"8 GB CUDA AnimateDiff canvas capped to {adapter_w}x{adapter_h}"
+    return int(width), int(height), None
 
 
 def _stable_seed_int(*parts: Any, fallback: int = 0) -> int:
@@ -2241,6 +2336,12 @@ def render_internal_video_variant(
     frame_paths: list[Path] = []
 
     if settings.temporal_mode == "video_model":
+        pe = None
+        negative_embeds = None
+        default_negative_embeds = None
+        _release_still_pipeline_memory(pipes, device, log_fn=log_fn)
+        pipes = None  # type: ignore[assignment]
+
         video_model_path = Path(str(settings.video_model_path or ""))
         if not settings.video_model_id or not video_model_path.exists():
             raise UserFacingError(
@@ -2317,6 +2418,12 @@ def render_internal_video_variant(
             adapter_frames = min(max_scene_frames, max(2, scene_frame_count))
             if engine == "svd":
                 adapter_frames = min(adapter_frames, 25)
+            elif engine == "animatediff":
+                cuda_vram = _cuda_total_vram_gb(device)
+                if cuda_vram and cuda_vram <= 6.5:
+                    adapter_frames = min(adapter_frames, 12)
+                elif cuda_vram and cuda_vram <= 8.5 and not bool(settings.video_model_cpu_offload):
+                    adapter_frames = min(adapter_frames, 16)
 
             schedule_frame = int(round(start_s * float(fps_schedule)))
             prompt = _prompt_text_for_frame(
@@ -2337,6 +2444,16 @@ def render_internal_video_variant(
             if log_fn:
                 log_fn(f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} frames={adapter_frames} seed={seed}")
 
+            adapter_w, adapter_h, adapter_note = _video_model_adapter_canvas(
+                engine=engine,
+                width=out_w,
+                height=out_h,
+                device=device,
+                cpu_offload=bool(settings.video_model_cpu_offload),
+            )
+            if adapter_note and log_fn:
+                log_fn(f"{adapter_note}; final frames will be resized to {out_w}x{out_h}.")
+
             generated = generate_video_model_frames(
                 engine=engine,
                 video_model_dir=video_model_path,
@@ -2344,8 +2461,8 @@ def render_internal_video_variant(
                 init_image=init_img,
                 prompt=prompt,
                 negative_prompt=negative_prompt,
-                width=out_w,
-                height=out_h,
+                width=adapter_w,
+                height=adapter_h,
                 num_frames=adapter_frames,
                 fps=fps_r,
                 steps=int(settings.temporal_steps or settings.steps),

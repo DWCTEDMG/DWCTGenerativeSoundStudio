@@ -3,6 +3,10 @@ from __future__ import annotations
 import argparse
 import sys
 
+from .cuda_dll_path import prepare_cuda_dll_path
+
+prepare_cuda_dll_path()
+
 import uvicorn
 
 from .app import app, jobs, _execute_job

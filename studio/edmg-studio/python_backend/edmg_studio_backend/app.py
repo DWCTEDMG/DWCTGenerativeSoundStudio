@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from .cuda_dll_path import prepare_cuda_dll_path
+
+prepare_cuda_dll_path()
+
 import os
 import asyncio
 import platform
@@ -207,6 +211,7 @@ ollama_managed = OllamaManagedProcess()
 # every pipeline load without needing to re-read settings on each call.
 def _apply_cuda_startup_flags() -> None:
     try:
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
         import torch  # type: ignore
         if not (getattr(torch, "cuda", None) and torch.cuda.is_available()):
             return
@@ -8327,6 +8332,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             video_model_id=video_model_id,
             video_model_path=str(video_model_path),
         )
+        settings_obj = _apply_internal_video_model_memory_safety(settings_obj, hw)
     return proj, variant, model_id, model_path, settings_obj
 
 
@@ -8614,6 +8620,50 @@ def _resolve_internal_video_model_selection(
     return engine, requested_model_id, Path(path)
 
 
+def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSettings, hw: dict[str, Any]) -> InternalVideoSettings:
+    if str(settings_obj.temporal_mode or "").lower() != "video_model":
+        return settings_obj
+    engine = str(settings_obj.video_model_engine or "").lower()
+    backend = str(settings_obj.device_preference or hw.get("backend") or "cpu").lower()
+    if engine != "animatediff" or backend != "cuda":
+        return settings_obj
+    vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
+    updates: dict[str, Any] = {}
+    if vram_gb and vram_gb <= 6.5:
+        updates["video_model_cpu_offload"] = True
+        updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
+        updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
+        if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 8:
+            updates["temporal_steps"] = 8
+    elif vram_gb and vram_gb <= 8.5:
+        updates["video_model_cpu_offload"] = True
+        updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 16)
+        updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 4)
+        if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 10:
+            updates["temporal_steps"] = 10
+    return replace(settings_obj, **updates) if updates else settings_obj
+
+
+def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, hw: dict[str, Any]) -> list[str]:
+    if str(settings_obj.temporal_mode or "").lower() != "video_model":
+        return []
+    if str(settings_obj.video_model_engine or "").lower() != "animatediff":
+        return []
+    backend = str(settings_obj.device_preference or hw.get("backend") or "cpu").lower()
+    if backend != "cuda":
+        return []
+    vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
+    if vram_gb and vram_gb <= 6.5:
+        return [
+            "6 GB CUDA AnimateDiff safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps adapter frames to 12, caps temporal steps to 8, uses small decode chunks, and renders the adapter at a lower working canvas before resizing to the final video size."
+        ]
+    if vram_gb and vram_gb <= 8.5:
+        return [
+            "8 GB CUDA AnimateDiff safety is active: Studio enables CPU offload, caps adapter frames to 16, caps temporal steps to 10, and uses smaller decode chunks."
+        ]
+    return []
+
+
 def _payload_requests_tensorrt_video(payload: dict[str, Any]) -> bool:
     requested = str(payload.get("model_id") or "").strip()
     return bool(requested and requested not in {"auto", "auto_internal"} and "tensorrt" in requested.lower())
@@ -8795,6 +8845,8 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             warnings.append("SVD animates from each generated keyframe; it is best for short subject, fabric, camera, and transition motion.")
         if settings_obj.video_model_engine == "animatediff":
             warnings.append("AnimateDiff uses an SD1.5 motion adapter; keep the internal base model on SD1.5 for this mode.")
+        for warning in _internal_video_model_memory_warnings(settings_obj, hw):
+            warnings.append(warning)
     if settings_obj.fps_render > settings_obj.fps_output:
         warnings.append("FPS render is higher than FPS output; you may be spending extra time on frames that will be blended down.")
     for note in list(tier_plan.get("notes") or []):
@@ -8840,6 +8892,10 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "video_model_id": settings_obj.video_model_id,
             "video_model_path": settings_obj.video_model_path,
             "video_model_max_frames_per_scene": settings_obj.video_model_max_frames_per_scene,
+            "video_model_decode_chunk_size": settings_obj.video_model_decode_chunk_size,
+            "video_model_dtype": settings_obj.video_model_dtype,
+            "video_model_cpu_offload": settings_obj.video_model_cpu_offload,
+            "temporal_steps": settings_obj.temporal_steps,
             "interpolation_engine": settings_obj.interpolation_engine,
             "render_mode": "diffusion",
             "render_tier": settings_obj.render_tier,

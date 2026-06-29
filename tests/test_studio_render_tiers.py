@@ -157,6 +157,11 @@ def test_internal_preflight_resolves_video_model_settings_without_mutating_froze
     assert preflight["settings"]["temporal_mode"] == "video_model"
     assert preflight["settings"]["video_model_engine"] == "animatediff"
     assert preflight["settings"]["video_model_id"] == "hf_animatediff_motion_adapter_v15_2_internal"
+    assert preflight["settings"]["video_model_cpu_offload"] is True
+    assert preflight["settings"]["video_model_max_frames_per_scene"] == 12
+    assert preflight["settings"]["video_model_decode_chunk_size"] == 2
+    assert preflight["settings"]["temporal_steps"] == 8
+    assert any("6 GB CUDA AnimateDiff safety" in warning for warning in preflight["warnings"])
 
 
 def test_auto_model_reports_sd35_vram_guard_when_no_lighter_model_installed(tmp_path, monkeypatch):
