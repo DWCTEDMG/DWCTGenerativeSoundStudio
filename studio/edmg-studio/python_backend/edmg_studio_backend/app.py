@@ -15,6 +15,7 @@ import hashlib
 import shutil
 import subprocess
 import sys
+import wave
 from copy import deepcopy
 from dataclasses import replace
 import math
@@ -76,7 +77,7 @@ from .services.edmg_core import (
 from .integrations import comfyui as comfy
 from .integrations.comfyui_pool import ComfyUINodePool
 from .services.worker_manager import WorkerManager
-from .services.ffmpeg import assemble_slideshow, assemble_image_sequence, concat_videos, interpolate_video_fps, mux_audio
+from .services.ffmpeg import assemble_slideshow, assemble_image_sequence, concat_videos, interpolate_video_fps, mux_audio, _probe_duration_seconds
 from .services.internal_video import (
     InternalVideoSettings,
     _scene_keyframe_times,
@@ -325,6 +326,16 @@ def _stable_seed(project_id: str, variant_index: int, scene_index: int) -> int:
     return int(h, 16)
 
 
+def _positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if math.isnan(number) or math.isinf(number) or number <= 0:
+        return None
+    return number
+
+
 def _analysis_duration_s(analysis: Any) -> float | None:
     if not isinstance(analysis, dict):
         return None
@@ -336,24 +347,229 @@ def _analysis_duration_s(analysis: Any) -> float | None:
         features.get("duration"),
     )
     for candidate in candidates:
-        try:
-            value = float(candidate)
-        except Exception:
-            continue
-        if value > 0:
+        value = _positive_float(candidate)
+        if value is not None:
             return value
     return None
 
 
+def _duration_source(source: str, value: Any) -> dict[str, Any] | None:
+    duration_s = _positive_float(value)
+    if duration_s is None:
+        return None
+    return {"source": source, "duration_s": float(duration_s)}
+
+
+def _append_duration_source(sources: list[dict[str, Any]], source: str, value: Any) -> None:
+    item = _duration_source(source, value)
+    if item:
+        sources.append(item)
+
+
+def _scenes_duration_s(scenes: Any) -> float | None:
+    if not isinstance(scenes, list):
+        return None
+    values: list[float] = []
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            continue
+        value = _positive_float(scene.get("end_s") or scene.get("end"))
+        if value is not None:
+            values.append(value)
+    return max(values) if values else None
+
+
+def _reactive_payload_duration_s(payload: Any) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    sections = payload.get("sections") if isinstance(payload.get("sections"), list) else []
+    keyframes = payload.get("keyframes") if isinstance(payload.get("keyframes"), list) else []
+    cue_events = payload.get("cue_events") if isinstance(payload.get("cue_events"), list) else []
+
+    candidates: list[float] = []
+    for key in ("duration_s", "duration", "durationSeconds", "duration_seconds"):
+        value = _positive_float(metadata.get(key))
+        if value is not None:
+            candidates.append(value)
+
+    total_frames = _positive_float(
+        metadata.get("totalFrames")
+        or metadata.get("total_frames")
+        or metadata.get("frameCount")
+        or metadata.get("frame_count")
+    )
+    fps = _positive_float(metadata.get("fps") or metadata.get("fps_output") or metadata.get("frameRate"))
+    if total_frames is not None and fps is not None:
+        candidates.append(total_frames / fps)
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        value = _positive_float(section.get("endTime") or section.get("end_s") or section.get("end"))
+        if value is not None:
+            candidates.append(value)
+
+    for frame in keyframes:
+        if not isinstance(frame, dict):
+            continue
+        value = _positive_float(frame.get("time") or frame.get("t"))
+        if value is not None:
+            candidates.append(value)
+
+    for cue in cue_events:
+        if not isinstance(cue, dict):
+            continue
+        value = _positive_float(cue.get("time") or cue.get("t"))
+        if value is not None:
+            candidates.append(value)
+
+    return max(candidates) if candidates else None
+
+
+def _timeline_duration_s(timeline: Any) -> float | None:
+    if not isinstance(timeline, dict):
+        return None
+    candidates: list[float] = []
+    for key in ("duration_s", "duration"):
+        value = _positive_float(timeline.get(key))
+        if value is not None:
+            candidates.append(value)
+
+    render = timeline.get("render") if isinstance(timeline.get("render"), dict) else {}
+    for key in ("duration_s", "duration"):
+        value = _positive_float(render.get(key))
+        if value is not None:
+            candidates.append(value)
+
+    tracks = timeline.get("tracks") if isinstance(timeline.get("tracks"), list) else []
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        clips = track.get("clips") if isinstance(track.get("clips"), list) else []
+        for clip in clips:
+            if not isinstance(clip, dict):
+                continue
+            value = _positive_float(clip.get("end_s") or clip.get("end"))
+            if value is not None:
+                candidates.append(value)
+
+    camera = timeline.get("camera") if isinstance(timeline.get("camera"), dict) else {}
+    keyframes = camera.get("keyframes") if isinstance(camera.get("keyframes"), list) else []
+    for keyframe in keyframes:
+        if not isinstance(keyframe, dict):
+            continue
+        value = _positive_float(keyframe.get("t") or keyframe.get("time"))
+        if value is not None:
+            candidates.append(value)
+
+    reactive_duration = _reactive_payload_duration_s(timeline.get("reactive_lab"))
+    if reactive_duration is not None:
+        candidates.append(reactive_duration)
+
+    return max(candidates) if candidates else None
+
+
+def _project_audio_path(proj: Any) -> Path | None:
+    meta = getattr(proj, "meta", {}) if proj is not None else {}
+    audio_meta = meta.get("audio") if isinstance(meta, dict) and isinstance(meta.get("audio"), dict) else {}
+    filename = str(audio_meta.get("filename") or "").strip()
+    if not filename:
+        return None
+    try:
+        path = safe_join(store.project_dir(str(proj.id)) / "assets" / "audio", filename)
+    except Exception:
+        return None
+    return path if path.exists() else None
+
+
+def _audio_file_duration_s(path: Path | None) -> float | None:
+    if not path or not path.exists():
+        return None
+    if path.suffix.lower() == ".wav":
+        try:
+            with wave.open(str(path), "rb") as handle:
+                frames = handle.getnframes()
+                rate = handle.getframerate()
+            if frames > 0 and rate > 0:
+                return float(frames) / float(rate)
+        except Exception:
+            pass
+    try:
+        return _probe_duration_seconds(settings.ffmpeg_path, path)
+    except Exception:
+        return None
+
+
+def _project_duration_sources(
+    proj: Any,
+    variant: dict[str, Any] | None = None,
+    scenes: list[dict[str, Any]] | None = None,
+    *,
+    analysis: Any | None = None,
+) -> list[dict[str, Any]]:
+    meta = getattr(proj, "meta", {}) if proj is not None else {}
+    meta = meta if isinstance(meta, dict) else {}
+    variant = variant if isinstance(variant, dict) else {}
+    scenes = scenes if isinstance(scenes, list) else []
+    sources: list[dict[str, Any]] = []
+
+    _append_duration_source(sources, "analysis", _analysis_duration_s(analysis if analysis is not None else meta.get("analysis")))
+    _append_duration_source(sources, "plan", variant.get("duration_s") or variant.get("duration"))
+    _append_duration_source(sources, "scenes", _scenes_duration_s(scenes))
+    _append_duration_source(sources, "timeline", _timeline_duration_s(meta.get("timeline")))
+    _append_duration_source(sources, "reactive_lab", _reactive_payload_duration_s(meta.get("last_reactive_lab")))
+    _append_duration_source(sources, "audio", _audio_file_duration_s(_project_audio_path(proj)))
+
+    best_by_source: dict[str, dict[str, Any]] = {}
+    for item in sources:
+        source = str(item.get("source") or "")
+        if not source:
+            continue
+        existing = best_by_source.get(source)
+        if existing is None or float(item["duration_s"]) > float(existing["duration_s"]):
+            best_by_source[source] = item
+    return sorted(best_by_source.values(), key=lambda item: float(item["duration_s"]), reverse=True)
+
+
+def _project_duration_hint_s(
+    proj: Any,
+    variant: dict[str, Any] | None = None,
+    scenes: list[dict[str, Any]] | None = None,
+    *,
+    analysis: Any | None = None,
+) -> float | None:
+    sources = _project_duration_sources(proj, variant, scenes, analysis=analysis)
+    if not sources:
+        return None
+    return float(sources[0]["duration_s"])
+
+
+def _duration_mismatch_warning(duration_sources: list[dict[str, Any]]) -> str | None:
+    if not duration_sources:
+        return None
+    best = duration_sources[0]
+    best_duration = float(best.get("duration_s") or 0.0)
+    if best_duration <= 0:
+        return None
+    planned = [
+        float(item.get("duration_s") or 0.0)
+        for item in duration_sources
+        if str(item.get("source") or "") in {"analysis", "plan", "scenes"}
+    ]
+    planned_duration = max(planned) if planned else 0.0
+    if planned_duration <= 0 or planned_duration >= best_duration - 1.0:
+        return None
+    best_source = str(best.get("source") or "project")
+    return (
+        f"Project duration resolved from {best_source} ({best_duration:.1f}s), but the current plan/scenes reach "
+        f"only {planned_duration:.1f}s. Regenerate and apply the plan to spread prompts across the full track."
+    )
+
+
 def _resolved_project_duration_s(proj: Any, variant: dict[str, Any], scenes: list[dict[str, Any]]) -> float:
-    analysis_duration = _analysis_duration_s(getattr(proj, "meta", {}).get("analysis"))
-    if analysis_duration:
-        return float(analysis_duration)
-    if variant.get("duration_s"):
-        return float(variant.get("duration_s") or 0.0)
-    if scenes:
-        return float(scenes[-1].get("end_s") or 60.0)
-    return 60.0
+    duration = _project_duration_hint_s(proj, variant, scenes)
+    return float(duration or 60.0)
 
 @app.get("/health", response_model=HealthResponse)
 def health():
@@ -3749,7 +3965,7 @@ def _build_public_audio_analysis(proj: Any) -> Any:
     analysis = (proj.meta.get("analysis") or {}) if hasattr(proj, "meta") else {}
     feats = (analysis.get("features") or {}) if isinstance(analysis, dict) else {}
 
-    duration = float(feats.get("duration_s") or feats.get("duration") or 0.0)
+    duration = float(_project_duration_hint_s(proj, analysis=analysis) or feats.get("duration_s") or feats.get("duration") or 0.0)
     bpm = float(feats.get("bpm") or feats.get("tempo_bpm") or feats.get("tempo") or 0.0)
 
     beats = _coerce_float_list(feats.get("beats") or feats.get("beat_times") or feats.get("beat_timestamps"))
@@ -5148,6 +5364,32 @@ def _normalize_plan_scene_list(
     if final_duration <= 0:
         final_duration = max(0.5, float(len(normalized)))
 
+    source_duration = max(_coerce_scene_time(scene.get("end_s"), 0.0) for scene in normalized)
+    if source_duration > 0 and final_duration > source_duration + 1e-6:
+        scale = final_duration / source_duration
+        for scene in normalized:
+            scene["start_s"] = _coerce_scene_time(scene.get("start_s"), 0.0) * scale
+            scene["end_s"] = _coerce_scene_time(scene.get("end_s"), 0.0) * scale
+
+    if len(normalized) >= 3 and final_duration > 0:
+        last_start = _coerce_scene_time(normalized[-1].get("start_s"), 0.0)
+        last_end = _coerce_scene_time(normalized[-1].get("end_s"), 0.0)
+        prior_lengths = [
+            max(0.0, _coerce_scene_time(scene.get("end_s"), 0.0) - _coerce_scene_time(scene.get("start_s"), 0.0))
+            for scene in normalized[:-1]
+        ]
+        typical_prior = sorted(prior_lengths)[len(prior_lengths) // 2] if prior_lengths else 0.0
+        final_scene_len = max(0.0, last_end - last_start)
+        if (
+            last_end >= final_duration - 1e-6
+            and last_start < final_duration * 0.5
+            and final_scene_len > max(final_duration * 0.25, typical_prior * 4.0)
+        ):
+            slice_s = final_duration / float(len(normalized))
+            for index, scene in enumerate(normalized):
+                scene["start_s"] = float(index) * slice_s
+                scene["end_s"] = final_duration if index == len(normalized) - 1 else float(index + 1) * slice_s
+
     carry_start = 0.0
     for index, scene in enumerate(normalized):
         scene["start_s"] = carry_start
@@ -5177,10 +5419,11 @@ def _normalize_plan_payload(
         if not isinstance(raw_variant, dict):
             continue
         variant = dict(raw_variant)
-        variant_duration = _coerce_scene_time(
+        raw_duration = _coerce_scene_time(
             raw_variant.get("duration_s") or normalized.get("duration_s") or duration_s_hint,
             duration_s_hint or 0.0,
         )
+        variant_duration = max(float(raw_duration or 0.0), float(duration_s_hint or 0.0))
         variant["duration_s"] = variant_duration
         variant["scenes"] = _normalize_plan_scene_list(
             raw_variant.get("scenes"),
@@ -5409,10 +5652,11 @@ def _apply_plan_to_project_timeline(proj: Any, *, variant_index: int, overwrite:
         raise HTTPException(400, "Invalid variant_index")
     variant = variants[vi] if isinstance(variants[vi], dict) else {}
     scenes = variant.get("scenes") if isinstance(variant.get("scenes"), list) else []
-    duration_s = float(variant.get("duration_s") or plan.get("duration_s") or 60.0)
+    duration_s = float(_project_duration_hint_s(proj, variant, scenes) or variant.get("duration_s") or plan.get("duration_s") or 60.0)
 
     timeline = proj.meta.get("timeline") if isinstance(proj.meta.get("timeline"), dict) else {}
     timeline = {**timeline}
+    timeline["duration_s"] = duration_s
 
     tracks = timeline.get("tracks") if isinstance(timeline.get("tracks"), list) else []
     tracks = [t for t in tracks if isinstance(t, dict)]
@@ -5528,11 +5772,12 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
     analysis = proj.meta.get("analysis") or {}
     feats = (analysis.get("features") or {})
     transcript = _analysis_transcript_text(analysis)
+    duration_hint = _project_duration_hint_s(proj, analysis=analysis)
 
     payload = {
         "title": req.title or proj.name,
         "user_notes": req.user_notes,
-        "duration_s": feats.get("duration_s") or feats.get("duration"),
+        "duration_s": duration_hint or feats.get("duration_s") or feats.get("duration"),
         "bpm": feats.get("bpm") or feats.get("tempo_bpm") or feats.get("tempo"),
         "lyrics": transcript,
         "tags": (analysis.get("tags") or []),
@@ -5581,7 +5826,7 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
             plan,
             requested_variants=req.num_variants,
             requested_max_scenes=req.max_scenes,
-            duration_s_hint=_analysis_duration_s(analysis),
+            duration_s_hint=duration_hint,
         )
         plan = _enrich_normalized_plan(plan, analysis if isinstance(analysis, dict) else {})
 
@@ -5621,7 +5866,7 @@ def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
 
     variant = variants[variant_index] if isinstance(variants[variant_index], dict) else {}
     duration_hint = _coerce_scene_time(
-        variant.get("duration_s") if isinstance(variant, dict) else None,
+        _project_duration_hint_s(proj, variant, variant.get("scenes") if isinstance(variant, dict) else []),
         _analysis_duration_s(proj.meta.get("analysis") or {}),
     )
 
@@ -5644,7 +5889,7 @@ def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
         {**plan, "variants": variants},
         requested_variants=max(1, len(variants)),
         requested_max_scenes=max([len((item or {}).get("scenes") or []) for item in variants] or [1]),
-        duration_s_hint=_analysis_duration_s(proj.meta.get("analysis") or {}) or plan.get("duration_s"),
+        duration_s_hint=_project_duration_hint_s(proj, updated_variant, updated_variant["scenes"]) or plan.get("duration_s"),
     )
     proj.meta["last_plan"] = normalized_plan
 
@@ -5683,7 +5928,7 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
         imported_plan,
         requested_variants=max(1, len(imported_plan.get("variants") or [])),
         requested_max_scenes=max(scene_counts or [1]),
-        duration_s_hint=_analysis_duration_s(proj.meta.get("analysis") or imported_analysis),
+        duration_s_hint=_project_duration_hint_s(proj, analysis=proj.meta.get("analysis") or imported_analysis),
     )
     proj.meta["last_plan"] = normalized_plan
     proj.meta["last_planner_lab"] = {
@@ -8376,6 +8621,7 @@ def _proxy_render_preflight_data(
         temporal_mode="off",
     )
 
+    duration_sources = _project_duration_sources(proj, variant, scenes)
     duration_s = _resolved_project_duration_s(proj, variant, scenes)
     total_frames = int(math.ceil(duration_s * max(1, int(settings_obj.fps_render))))
     hw = _hardware_profile()
@@ -8400,6 +8646,9 @@ def _proxy_render_preflight_data(
     ]
     if reason:
         warnings.insert(0, reason)
+    duration_warning = _duration_mismatch_warning(duration_sources)
+    if duration_warning:
+        warnings.append(duration_warning)
     return {
         "ok": True,
         "mode": "proxy",
@@ -8408,6 +8657,7 @@ def _proxy_render_preflight_data(
         "requested_model_id": str(requested_model_id or payload.get("model_id") or "auto"),
         "model_path": None,
         "duration_s": duration_s,
+        "duration_sources": duration_sources,
         "estimated_frames": total_frames,
         "estimated_keyframes": max(1, len(_scene_keyframe_times(scenes, settings_obj.keyframe_interval_s))),
         "device": str(tier_plan.get("device_preference") or "cpu"),
@@ -8798,6 +9048,7 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         device_preference="cuda",
         temporal_mode="keyframes",
     )
+    duration_sources = _project_duration_sources(proj, variant, scenes)
     duration_s = _resolved_project_duration_s(proj, variant, scenes)
     fps_render = max(1, int(settings_obj.fps_render))
     total_frames = int(math.ceil(duration_s * fps_render))
@@ -8822,6 +9073,9 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     requested_warning = _tensorrt_requested_model_warning(payload)
     if requested_warning:
         warnings.append(requested_warning)
+    duration_warning = _duration_mismatch_warning(duration_sources)
+    if duration_warning:
+        warnings.append(duration_warning)
     if settings_obj.fps_render > 4:
         warnings.append("High FPS render values will require many TensorRT keyframes; use 1-2 FPS render for first passes.")
     for note in list(tier_plan.get("notes") or []):
@@ -8834,6 +9088,7 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         "model_id": model_id,
         "model_path": str(model_path),
         "duration_s": duration_s,
+        "duration_sources": duration_sources,
         "estimated_frames": total_frames,
         "estimated_keyframes": keyframes,
         "device": "cuda+tensorrt",
@@ -8881,6 +9136,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         raise
 
     scenes = variant.get("scenes") or []
+    duration_sources = _project_duration_sources(proj, variant, scenes)
     duration_s = _resolved_project_duration_s(proj, variant, scenes)
     fps_render = max(1, int(settings_obj.fps_render))
     total_frames = int(math.ceil(duration_s * fps_render))
@@ -8914,6 +9170,9 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             warnings.append(warning)
     if settings_obj.fps_render > settings_obj.fps_output:
         warnings.append("FPS render is higher than FPS output; you may be spending extra time on frames that will be blended down.")
+    duration_warning = _duration_mismatch_warning(duration_sources)
+    if duration_warning:
+        warnings.append(duration_warning)
     for note in list(tier_plan.get("notes") or []):
         if note not in warnings:
             warnings.append(str(note))
@@ -8942,6 +9201,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         "model_id": model_id,
         "model_path": str(model_path),
         "duration_s": duration_s,
+        "duration_sources": duration_sources,
         "estimated_frames": total_frames,
         "estimated_keyframes": keyframes,
         "device": str(tier_plan.get("device_preference") or hw.get("backend") or "cpu"),

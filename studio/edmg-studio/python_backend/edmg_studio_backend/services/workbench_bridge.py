@@ -417,6 +417,8 @@ def merge_reactive_lab_into_timeline(
     }
 
     timeline = deepcopy(source_timeline)
+    if duration_s > 0:
+        timeline["duration_s"] = duration_s
     tracks = timeline.get("tracks") if isinstance(timeline.get("tracks"), list) else []
     timeline["tracks"] = _upsert_track(
         tracks,

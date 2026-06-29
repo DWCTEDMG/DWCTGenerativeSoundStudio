@@ -98,6 +98,15 @@ const UPSCALER_OPTIONS = [
   { value: "pixel_bicubic", label: "Pixel bicubic" },
 ];
 
+function formatDurationSources(preflight: any): string {
+  const sources = Array.isArray(preflight?.duration_sources) ? preflight.duration_sources : [];
+  return sources
+    .filter((item: any) => item && item.source && Number(item.duration_s) > 0)
+    .slice(0, 4)
+    .map((item: any) => `${String(item.source).replace(/_/g, " ")} ${Number(item.duration_s).toFixed(1)}s`)
+    .join(" • ");
+}
+
 export default function Render({ onNavigate, backendUrl: backendUrlProp }: RenderProps) {
   const savedRenderDefaults = readRenderDefaults();
   const { mode: uiMode } = useUiMode();
@@ -1863,6 +1872,11 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <div className="small" style={{ marginTop: 4 }}>
                         Estimated frames: <b>{internalPreflight.estimated_frames}</b> • Keyframes: <b>{internalPreflight.estimated_keyframes}</b> • Duration: <b>{Number(internalPreflight.duration_s || 0).toFixed(1)}s</b>
                       </div>
+                      {formatDurationSources(internalPreflight) ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          Duration sources: <b>{formatDurationSources(internalPreflight)}</b>
+                        </div>
+                      ) : null}
                       {!!internalPreflight?.prompt_preview?.length ? (
                         <div style={{ marginTop: 8 }}>
                           <div className="small" style={{ fontWeight: 800 }}>Resolved render prompts</div>

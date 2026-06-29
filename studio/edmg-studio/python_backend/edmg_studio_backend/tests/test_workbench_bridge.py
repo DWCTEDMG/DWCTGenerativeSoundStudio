@@ -115,6 +115,7 @@ def test_reactive_lab_merge_upserts_motion_track_and_camera_keyframes():
     assert motion_data["strength_schedule"] == "0:(0.3600), 48:(0.5200)"
     assert motion_data["cfg_scale_schedule"] == "0:(6.5000), 48:(7.5000)"
     assert motion_data["zoom_schedule"] == "0:(1.0000), 48:(1.2200)"
+    assert merged["duration_s"] == 8.0
     assert merged["render"]["fps_output"] == 12
     assert merged["camera"]["keyframes"][0]["zoom"] == 1.0
     assert merged["camera"]["keyframes"][-1]["rotation_deg"] == 5.0
