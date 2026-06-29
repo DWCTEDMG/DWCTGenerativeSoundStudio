@@ -116,6 +116,44 @@ def test_internal_preflight_defaults_to_frame_img2img_on_midrange_cuda(tmp_path,
     assert preflight["tier_plan"]["defaults"]["temporal_mode"] == "frame_img2img"
 
 
+def test_internal_preflight_previews_resolved_planner_text_prompt(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    proj.meta["last_plan"]["variants"][0]["scenes"] = [
+        {
+            "start_s": 0.0,
+            "end_s": 6.0,
+            "prompt": "Cinematic image sequence with a coherent subject and controlled atmosphere.",
+            "text": "A red-cloaked dancer turns under glass rain in a neon alley.",
+            "negativePrompt": "washed out color",
+        }
+    ]
+    store.save(proj)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 6.0,
+        "ram_gb": 15.64,
+        "cpu_threads": 12,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sd15_internal",
+        "recommended_tier": "balanced",
+        "max_supported_tier": "balanced",
+    })
+    installed = {"hf_sd15_internal": _fake_internal_model(tmp_path, "hf_sd15_internal")}
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "hf_sd15_internal", "allow_proxy_fallback": False},
+    )
+
+    assert preflight["prompt_preview"][0]["prompt"].startswith("A red-cloaked dancer")
+
+
 def test_internal_preflight_resolves_video_model_settings_without_mutating_frozen_dataclass(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)

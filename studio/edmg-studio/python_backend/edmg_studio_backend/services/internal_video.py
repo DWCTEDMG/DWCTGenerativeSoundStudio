@@ -14,7 +14,12 @@ from typing import Any
 
 from ..errors import UserFacingError
 from .deforum_motion import DeforumMotionScheduleBundle, evaluate_motion_state
-from .deforum_normalize import UnifiedDeforumRenderContext, build_deforum_render_context
+from .deforum_normalize import (
+    DEFAULT_RENDER_PROMPT,
+    UnifiedDeforumRenderContext,
+    build_deforum_render_context,
+    render_prompt_from_scene,
+)
 from .deforum_prompt_timeline import resolve_prompt_frame
 from .deforum_schedule import coerce_schedule_pairs, evaluate_schedule
 from .model_weights import diffusers_weight_load_kwargs
@@ -1700,8 +1705,8 @@ def _prompt_at_time(scenes: list[dict[str, Any]], t: float, timeline: Any | None
         s = float(sc.get("start_s", 0.0))
         e = float(sc.get("end_s", s + 5.0))
         if s <= t < e:
-            return str(sc.get("prompt") or "").strip()
-    return str(scenes[0].get("prompt") or "").strip() if scenes else "cinematic"
+            return render_prompt_from_scene(sc, fallback="")
+    return render_prompt_from_scene(scenes[0], fallback="") if scenes else DEFAULT_RENDER_PROMPT
 
 
 
@@ -1772,7 +1777,7 @@ def _prompt_text_for_frame(
     prompt = resolve_prompt_frame(deforum_context.prompts, frame_idx, default="")
     if str(prompt or "").strip():
         return str(prompt).strip()
-    return _prompt_at_time(scenes, float(frame_idx) / float(max(1, fps)), timeline=timeline) or "cinematic"
+    return _prompt_at_time(scenes, float(frame_idx) / float(max(1, fps)), timeline=timeline) or DEFAULT_RENDER_PROMPT
 
 
 def _negative_prompt_for_frame(
@@ -2271,7 +2276,8 @@ def render_internal_video_variant(
         )
         seed = _stable_seed_int("key", settings.seed, t, p, work_tag)
         if log_fn:
-            log_fn(f"Keyframe {i+1}/{len(key_times)} t={t:.2f}s seed={seed} device={device}")
+            prompt_preview = " ".join(str(p or "").split())[:220]
+            log_fn(f"Keyframe {i+1}/{len(key_times)} t={t:.2f}s seed={seed} device={device} prompt={prompt_preview!r}")
         if progress_fn:
             progress_fn("keyframes", i, total_units, f"Generating keyframe {i+1}/{len(key_times)}")
         emit_checkpoint(stage="keyframes", status="running", message=f"Generating keyframe {i+1}/{len(key_times)}")
@@ -2368,7 +2374,7 @@ def render_internal_video_variant(
                 f"path={video_model_path}"
             )
 
-        sorted_scenes = [sc for sc in scenes if isinstance(sc, dict)] or [{"start_s": 0.0, "end_s": duration_s, "prompt": "cinematic subject motion"}]
+        sorted_scenes = [sc for sc in scenes if isinstance(sc, dict)] or [{"start_s": 0.0, "end_s": duration_s, "prompt": DEFAULT_RENDER_PROMPT}]
         max_scene_frames = max(2, int(settings.video_model_max_frames_per_scene or 25))
         fi_cursor = 0
         for scene_index, scene in enumerate(sorted_scenes):
@@ -2432,7 +2438,7 @@ def render_internal_video_variant(
                 timeline=timeline,
                 deforum_context=deforum_context,
                 fps=fps_schedule,
-            ) or str(scene.get("prompt") or "cinematic subject motion")
+            ) or render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
             negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
             a_t, _b_t, _w = _key_times_bracket(key_times, start_s)
             init_img = key_imgs[a_t].convert("RGB").resize((out_w, out_h), resample=Image.LANCZOS)
@@ -2442,7 +2448,8 @@ def render_internal_video_variant(
                 progress_fn("video_model", len(key_times) + fi_cursor, total_units, f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
             emit_checkpoint(stage="video_model", status="running", message=f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
             if log_fn:
-                log_fn(f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} frames={adapter_frames} seed={seed}")
+                prompt_preview = " ".join(prompt.split())[:220]
+                log_fn(f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} frames={adapter_frames} seed={seed} prompt={prompt_preview!r}")
 
             adapter_w, adapter_h, adapter_note = _video_model_adapter_canvas(
                 engine=engine,

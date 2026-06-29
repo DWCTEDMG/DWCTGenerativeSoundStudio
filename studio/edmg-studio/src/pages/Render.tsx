@@ -1863,6 +1863,18 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <div className="small" style={{ marginTop: 4 }}>
                         Estimated frames: <b>{internalPreflight.estimated_frames}</b> • Keyframes: <b>{internalPreflight.estimated_keyframes}</b> • Duration: <b>{Number(internalPreflight.duration_s || 0).toFixed(1)}s</b>
                       </div>
+                      {!!internalPreflight?.prompt_preview?.length ? (
+                        <div style={{ marginTop: 8 }}>
+                          <div className="small" style={{ fontWeight: 800 }}>Resolved render prompts</div>
+                          <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
+                            {internalPreflight.prompt_preview.slice(0, 4).map((item: any, idx: number) => (
+                              <div key={`${item?.frame ?? idx}-${idx}`} className="small" style={{ opacity: 0.9 }}>
+                                <b>{Number(item?.time_s || 0).toFixed(1)}s</b>: {String(item?.prompt || "").slice(0, 260)}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="small" style={{ marginTop: 4 }}>
                         Resume existing frames: <b>{internalPreflight.resume_existing_frames ? "on" : "off"}</b>
                       </div>

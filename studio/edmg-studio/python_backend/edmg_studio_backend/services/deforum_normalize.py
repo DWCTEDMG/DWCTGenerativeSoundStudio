@@ -18,6 +18,99 @@ class UnifiedDeforumRenderContext:
     motion: DeforumMotionScheduleBundle = field(default_factory=DeforumMotionScheduleBundle)
 
 
+DEFAULT_RENDER_PROMPT = "Cinematic image sequence with a coherent subject and controlled atmosphere."
+DEFAULT_NEGATIVE_PROMPT = "blurry, low quality, watermark, text, logo"
+
+
+_SCENE_PROMPT_FIELDS: tuple[str, ...] = (
+    "prompt_pack",
+    "prompt",
+    "text",
+    "description",
+    "visual_description",
+    "image_prompt",
+    "scene_prompt",
+    "positive_prompt",
+)
+
+_SCENE_CONTEXT_FIELDS: tuple[str, ...] = (
+    "name",
+    "title",
+    "transcript_cue",
+    "camera_hint",
+    "motion_hint",
+    "continuity_note",
+    "continuityNote",
+)
+
+
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " ".join(_clean_text(item) for item in value if _clean_text(item)).strip()
+    if isinstance(value, dict):
+        return ""
+    return " ".join(str(value).replace("\r", " ").replace("\n", " ").split()).strip()
+
+
+def _is_generic_render_prompt(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return True
+    generic = {
+        DEFAULT_RENDER_PROMPT.lower(),
+        "cinematic",
+        "cinematic subject motion",
+        "cinematic music video keyframe, detailed, high quality",
+        "edmg studio draft proxy",
+    }
+    if normalized in generic:
+        return True
+    return normalized.startswith("cinematic image sequence with a coherent subject")
+
+
+def render_prompt_from_scene(scene: dict[str, Any], *, fallback: str = DEFAULT_RENDER_PROMPT) -> str:
+    """Return the strongest render prompt carried by a Studio scene payload."""
+    if not isinstance(scene, dict):
+        return fallback
+
+    primary: list[str] = []
+    for field in _SCENE_PROMPT_FIELDS:
+        text = _clean_text(scene.get(field))
+        if text and text not in primary:
+            primary.append(text)
+
+    visual = scene.get("visual") if isinstance(scene.get("visual"), dict) else {}
+    for field in ("prompt", "description", "subject", "setting", "style"):
+        text = _clean_text(visual.get(field))
+        if text and text not in primary:
+            primary.append(text)
+
+    strong_primary = [text for text in primary if not _is_generic_render_prompt(text)]
+    base = strong_primary[0] if strong_primary else (primary[0] if primary else "")
+
+    context: list[str] = []
+    for field in _SCENE_CONTEXT_FIELDS:
+        text = _clean_text(scene.get(field))
+        if text and not _is_generic_render_prompt(text) and text not in context and text != base:
+            context.append(text)
+
+    if base and context:
+        base = " ".join([base, *context[:3]]).strip()
+    return base or fallback
+
+
+def negative_prompt_from_scene(scene: dict[str, Any], *, fallback: str = DEFAULT_NEGATIVE_PROMPT) -> str:
+    if not isinstance(scene, dict):
+        return fallback
+    for field in ("negative_prompt", "negativePrompt", "negative", "negative_prompt_pack"):
+        text = _clean_text(scene.get(field))
+        if text:
+            return text
+    return fallback
+
+
 def _frame_at_time(seconds: Any, fps: int) -> int:
     try:
         return max(0, int(round(float(seconds) * float(max(1, fps)))))
@@ -63,7 +156,7 @@ def _scene_prompt_pairs(scenes: list[dict[str, Any]], fps: int) -> list[tuple[in
     for scene in scenes:
         if not isinstance(scene, dict):
             continue
-        pairs.append((_frame_at_time(scene.get("start_s", 0.0), fps), str(scene.get("prompt") or "")))
+        pairs.append((_frame_at_time(scene.get("start_s", 0.0), fps), render_prompt_from_scene(scene, fallback="")))
     return normalize_prompt_map(pairs)
 
 
@@ -72,10 +165,10 @@ def _scene_negative_pairs(scenes: list[dict[str, Any]], fps: int) -> list[tuple[
     for scene in scenes:
         if not isinstance(scene, dict):
             continue
-        negative = scene.get("negative_prompt")
-        if negative is None:
+        negative = negative_prompt_from_scene(scene, fallback="")
+        if not negative:
             continue
-        pairs.append((_frame_at_time(scene.get("start_s", 0.0), fps), str(negative)))
+        pairs.append((_frame_at_time(scene.get("start_s", 0.0), fps), negative))
     return normalize_prompt_map(pairs)
 
 

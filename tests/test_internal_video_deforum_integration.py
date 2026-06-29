@@ -5,7 +5,7 @@ import pytest
 from edmg_studio_backend import app as studio_app
 from edmg_studio_backend.schemas import InternalVideoRenderRequest
 from edmg_studio_backend.services.deforum_motion import evaluate_motion_state
-from edmg_studio_backend.services.deforum_normalize import build_deforum_render_context
+from edmg_studio_backend.services.deforum_normalize import build_deforum_render_context, render_prompt_from_scene
 from edmg_studio_backend.services.deforum_prompt_timeline import resolve_prompt_frame
 
 
@@ -75,3 +75,27 @@ def test_internal_video_request_deforum_overrides_take_precedence():
     assert motion.translation_x == pytest.approx(12.0)
     assert motion.translation_y == pytest.approx(-6.0)
     assert motion.strength == pytest.approx(0.4)
+
+
+def test_scene_prompt_resolution_uses_planner_text_fields_before_generic_fallback():
+    scene = {
+        "start_s": 0.0,
+        "end_s": 2.0,
+        "prompt": "Cinematic image sequence with a coherent subject and controlled atmosphere.",
+        "text": "A dancer in a red coat walks through reflective rain.",
+        "description": "Close street-level neon reflections.",
+        "negativePrompt": "washed out color",
+    }
+
+    assert render_prompt_from_scene(scene).startswith("A dancer in a red coat")
+
+    ctx = build_deforum_render_context(
+        scenes=[scene],
+        timeline=None,
+        variant={},
+        fps=24,
+        default_negative_prompt="blurry",
+    )
+
+    assert resolve_prompt_frame(ctx.prompts, 0).startswith("A dancer in a red coat")
+    assert resolve_prompt_frame(ctx.negative_prompts, 0) == "washed out color"

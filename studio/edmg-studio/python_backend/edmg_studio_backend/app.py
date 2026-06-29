@@ -88,6 +88,14 @@ from .services.internal_video import (
     render_stability_hosted_video_variant,
     render_internal_diffusion_preview_segment,
 )
+from .services.deforum_normalize import (
+    DEFAULT_NEGATIVE_PROMPT,
+    DEFAULT_RENDER_PROMPT,
+    build_deforum_render_context,
+    negative_prompt_from_scene,
+    render_prompt_from_scene,
+)
+from .services.deforum_prompt_timeline import resolve_prompt_frame
 from .services import internal_video_models
 from .services.codex_sdk_bridge import codex_sdk_status, run_render_review as run_codex_render_review_task
 from .services.tensorrt_video import render_tensorrt_video_variant
@@ -4685,7 +4693,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             energy_label = _creative_energy_label(float(metrics["energy"]))
             camera_hint = _creative_camera_hint(float(metrics["energy"]))
             motion_hint = _creative_motion_hint(params)
-        prompt = str(scene.get("prompt") or "").strip() or "Cinematic image sequence with a coherent subject and controlled atmosphere."
+        prompt = render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
         scene_tokens = _analysis_top_keywords(" ".join([name, prompt, transcript_cue]), limit=5)
         scene_motifs = list(
             dict.fromkeys(
@@ -5074,7 +5082,7 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
             if narrative_cue and narrative_cue.lower() not in str(scene.get('prompt') or '').lower():
                 additions.append(f"narrative cue {narrative_cue}.")
 
-            prompt = str(scene.get("prompt") or "").strip() or "Cinematic image sequence with a coherent subject and controlled atmosphere."
+            prompt = render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
             scene["prompt"] = " ".join([prompt, *additions]).strip()
             if not str(scene.get("name") or "").strip() or re.fullmatch(r"scene\s*\d+", str(scene.get("name") or "").strip(), re.IGNORECASE):
                 scene["name"] = role.title()
@@ -5112,8 +5120,8 @@ def _normalize_plan_scene_list(
         scene = dict(raw_scene)
         scene["start_s"] = start_s
         scene["end_s"] = end_s
-        scene["prompt"] = str(raw_scene.get("prompt") or "").strip() or "Cinematic image sequence with a coherent subject and controlled atmosphere."
-        scene["negative_prompt"] = str(raw_scene.get("negative_prompt") or "blurry, low quality, watermark, text, logo").strip()
+        scene["prompt"] = render_prompt_from_scene(raw_scene, fallback=DEFAULT_RENDER_PROMPT)
+        scene["negative_prompt"] = negative_prompt_from_scene(raw_scene, fallback=DEFAULT_NEGATIVE_PROMPT)
         normalized.append(scene)
 
     normalized.sort(key=lambda scene: (_coerce_scene_time(scene.get("start_s"), 0.0), _coerce_scene_time(scene.get("end_s"), 0.0)))
@@ -5124,8 +5132,8 @@ def _normalize_plan_scene_list(
                 {
                     "start_s": 0.0,
                     "end_s": float(duration_s),
-                    "prompt": "Cinematic image sequence with a coherent subject and controlled atmosphere.",
-                    "negative_prompt": "blurry, low quality, watermark, text, logo",
+                    "prompt": DEFAULT_RENDER_PROMPT,
+                    "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
                 }
             ]
         return []
@@ -5431,8 +5439,8 @@ def _apply_plan_to_project_timeline(proj: Any, *, variant_index: int, overwrite:
                 "start_s": ss,
                 "end_s": ee,
                 "data": {
-                    "prompt": str(s.get("prompt") or "").strip(),
-                    "negative_prompt": str(s.get("negative_prompt") or "").strip(),
+                    "prompt": render_prompt_from_scene(s, fallback=""),
+                    "negative_prompt": negative_prompt_from_scene(s, fallback=""),
                 },
             }
         )
@@ -8664,6 +8672,63 @@ def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, h
     return []
 
 
+def _internal_render_prompt_preview(
+    *,
+    variant: dict[str, Any],
+    scenes: list[dict[str, Any]],
+    timeline: dict[str, Any] | None,
+    settings_obj: InternalVideoSettings,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    fps = max(1, int(settings_obj.fps_output or 24))
+    ctx = build_deforum_render_context(
+        scenes=scenes,
+        timeline=timeline,
+        variant=variant,
+        fps=fps,
+        default_negative_prompt=str(settings_obj.negative_prompt or ""),
+        overrides=settings_obj.deforum_overrides,
+    )
+    valid_scenes = [scene for scene in scenes if isinstance(scene, dict)]
+    sample_times: list[float] = []
+    for scene in valid_scenes:
+        try:
+            sample_times.append(max(0.0, float(scene.get("start_s", 0.0) or 0.0)))
+        except Exception:
+            continue
+    if not sample_times:
+        sample_times = [0.0]
+    sample_times = sorted(dict.fromkeys(round(t, 3) for t in sample_times))[: max(1, int(limit))]
+
+    preview: list[dict[str, Any]] = []
+    last_prompt = ""
+    for time_s in sample_times:
+        frame = int(round(float(time_s) * float(fps)))
+        prompt = resolve_prompt_frame(ctx.prompts, frame, default="")
+        if not str(prompt or "").strip():
+            scene = next(
+                (
+                    candidate
+                    for candidate in valid_scenes
+                    if float(candidate.get("start_s", 0.0) or 0.0) <= time_s < float(candidate.get("end_s", time_s + 1.0) or time_s + 1.0)
+                ),
+                valid_scenes[0] if valid_scenes else {},
+            )
+            prompt = render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
+        prompt = " ".join(str(prompt or DEFAULT_RENDER_PROMPT).split())
+        if prompt == last_prompt:
+            continue
+        last_prompt = prompt
+        preview.append(
+            {
+                "time_s": float(time_s),
+                "frame": frame,
+                "prompt": prompt[:420],
+            }
+        )
+    return preview
+
+
 def _payload_requests_tensorrt_video(payload: dict[str, Any]) -> bool:
     requested = str(payload.get("model_id") or "").strip()
     return bool(requested and requested not in {"auto", "auto_internal"} and "tensorrt" in requested.lower())
@@ -8863,6 +8928,12 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         settings=settings_obj,
         total_frames=total_frames,
     )
+    prompt_preview = _internal_render_prompt_preview(
+        variant=variant,
+        scenes=scenes,
+        timeline=timeline if isinstance(timeline, dict) else None,
+        settings_obj=settings_obj,
+    )
     installed_internal = _installed_internal_models_status()
     return {
         "ok": True,
@@ -8877,6 +8948,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         "hardware": hw,
         "tier_plan": tier_plan,
         "resume_existing_frames": bool(settings_obj.resume_existing_frames),
+        "prompt_preview": prompt_preview,
         "warnings": warnings,
         "cache": cache,
         "installed_internal_models": installed_internal,
