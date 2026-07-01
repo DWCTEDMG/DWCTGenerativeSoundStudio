@@ -39,6 +39,18 @@ def test_diffusers_model_load_kwargs_uses_real_fp16_bin_when_safetensors_is_lfs_
     assert kwargs["use_safetensors"] is False
 
 
+def test_diffusers_model_load_kwargs_uses_real_fp16_bin_when_safetensors_peer_is_missing(tmp_path: Path) -> None:
+    (tmp_path / "unet").mkdir(parents=True)
+    (tmp_path / "unet" / "diffusion_pytorch_model.fp16.bin").write_bytes(b"real fp16 bin weights")
+    (tmp_path / "text_encoder").mkdir(parents=True)
+    (tmp_path / "text_encoder" / "model.fp16.safetensors").write_bytes(b"real fp16 safetensors")
+
+    kwargs = iv._diffusers_model_load_kwargs(tmp_path, "cuda")
+
+    assert kwargs["variant"] == "fp16"
+    assert kwargs["use_safetensors"] is False
+
+
 def test_diffusers_model_load_kwargs_keeps_real_fp16_safetensors_preferred(tmp_path: Path) -> None:
     (tmp_path / "unet").mkdir(parents=True)
     (tmp_path / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"real fp16 safetensors")
