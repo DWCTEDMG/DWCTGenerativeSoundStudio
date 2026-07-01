@@ -403,10 +403,34 @@ def download_and_install_ollama(
 ) -> None:
     """Install Ollama silently into the Studio-managed external-tools root."""
 
-    if platform.system().lower() != "windows":
-        raise RuntimeError("Managed Ollama install is only implemented for Windows.")
     if external_dir is None:
         raise RuntimeError("Managed Ollama install requires a Studio external tools directory.")
+
+    if platform.system().lower() == "linux":
+        if models_dir is None:
+            raise RuntimeError("Linux Ollama setup requires a Studio models directory.")
+        base = _ollama_base(ollama_url or os.environ.get("EDMG_AI_OLLAMA_URL") or "http://127.0.0.1:11434")
+        parsed = urlparse(base)
+        port = str(parsed.port or (443 if parsed.scheme == "https" else 11434))
+        studio_home = _infer_studio_home(external_dir, models_dir)
+        models_root = (models_dir.expanduser().resolve() / "ollama").resolve()
+        env = os.environ.copy()
+        env["EDMG_STUDIO_HOME"] = str(studio_home)
+        env["OLLAMA_MODELS"] = str(models_root)
+        env["EDMG_AI_OLLAMA_URL"] = base
+        env["OLLAMA_PORT"] = port
+        env["OLLAMA_PULL_MODEL"] = "0"
+        env["OLLAMA_START"] = "1"
+        _run_linux_setup_script(task, "setup_linux_ollama.sh", env)
+        SetupTaskManager.set_progress(task, 1.0)
+        SetupTaskManager.log(
+            task,
+            f"Linux Ollama setup is ready at {base}. Studio-managed models live under {env['OLLAMA_MODELS']}.",
+        )
+        return
+
+    if platform.system().lower() != "windows":
+        raise RuntimeError("Managed Ollama install is implemented for Windows and Linux.")
 
     dest_dir = dest_dir.expanduser().resolve()
     external_dir = external_dir.expanduser().resolve()
@@ -607,7 +631,14 @@ def _legacy_external_root(data_dir: Path | None) -> Path | None:
     return (data_dir / "third_party").resolve()
 
 
+def linux_comfyui_root(external_dir: Path) -> Path:
+    return (external_dir / "ComfyUI").resolve()
+
+
 def comfy_portable_root(external_dir: Path, data_dir: Path | None = None) -> Path:
+    if platform.system().lower() == "linux":
+        return linux_comfyui_root(external_dir)
+
     preferred = (external_dir / "ComfyUI_windows_portable").resolve()
     if (preferred / "ComfyUI").exists() and (preferred / "python_embeded").exists():
         return preferred
@@ -623,6 +654,8 @@ def comfy_portable_root(external_dir: Path, data_dir: Path | None = None) -> Pat
 
 def comfy_portable_installed(external_dir: Path, data_dir: Path | None = None) -> bool:
     root = comfy_portable_root(external_dir, data_dir)
+    if platform.system().lower() == "linux":
+        return (root / "main.py").exists()
     return (root / "ComfyUI").exists() and (root / "python_embeded").exists()
 
 
@@ -711,6 +744,32 @@ def ensure_comfyui_model_paths(external_dir: Path, models_dir: Path, data_dir: P
     return yaml_path
 
 
+def install_linux_comfyui_sidecar(
+    task: SetupTask,
+    external_dir: Path,
+    flavor: str,
+    data_dir: Path | None = None,
+    models_dir: Path | None = None,
+    *,
+    start: bool = False,
+) -> Path:
+    root = linux_comfyui_root(external_dir)
+    studio_home = _infer_studio_home(external_dir, models_dir)
+    env = os.environ.copy()
+    env["EDMG_STUDIO_HOME"] = str(studio_home)
+    env["COMFY_ROOT"] = str(root)
+    env.setdefault("COMFY_HOST", "127.0.0.1")
+    env.setdefault("COMFY_PORT", "8188")
+    env["COMFY_PYTHON_BIN"] = sys.executable
+    env["COMFY_START"] = "1" if start else "0"
+    env["COMFY_INSTALL_MODELS"] = "0"
+
+    _run_linux_setup_script(task, "setup_linux_comfyui.sh", env)
+    SetupTaskManager.set_progress(task, 1.0)
+    SetupTaskManager.log(task, f"Linux ComfyUI setup is ready at {root}.")
+    return root
+
+
 def download_and_extract_portable(
     task: SetupTask,
     external_dir: Path,
@@ -718,6 +777,11 @@ def download_and_extract_portable(
     data_dir: Path | None = None,
     models_dir: Path | None = None,
 ) -> Path:
+    if platform.system().lower() == "linux":
+        return install_linux_comfyui_sidecar(task, external_dir, flavor, data_dir, models_dir, start=False)
+
+    if platform.system().lower() != "windows":
+        raise RuntimeError("ComfyUI Portable setup is implemented for Windows; Linux uses the sidecar installer.")
 
     assets = _github_latest_assets(COMFY_REPO)
     asset = _pick_portable_asset(assets, flavor)
@@ -827,6 +891,70 @@ class ComfyPortableProcess:
         data_dir: Path | None = None,
         models_dir: Path | None = None,
     ) -> None:
+        if platform.system().lower() == "linux":
+            root = linux_comfyui_root(external_dir)
+            main = root / "main.py"
+            if not main.exists():
+                raise RuntimeError("Linux ComfyUI is not installed yet. Click Install first.")
+
+            if self.running():
+                SetupTaskManager.log(task, "ComfyUI is already running.")
+                return
+
+            flavor_lower = (flavor or "cpu").lower()
+            args = [
+                sys.executable,
+                str(main),
+                "--listen",
+                host,
+                "--port",
+                str(port),
+            ]
+            if flavor_lower == "cpu":
+                args.append("--cpu")
+            elif flavor_lower in ("nvidia", "cuda"):
+                args += [
+                    "--cuda-malloc",
+                    "--use-pytorch-cross-attention",
+                ]
+
+            comfy_env = os.environ.copy()
+            if flavor_lower in ("nvidia", "cuda"):
+                comfy_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+                comfy_env.setdefault("CUDA_LAUNCH_BLOCKING", "0")
+                comfy_env.setdefault("TORCH_CUDNN_BENCHMARK", "1")
+                comfy_env.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+            SetupTaskManager.log(task, f"Starting Linux ComfyUI ({flavor_lower})...")
+            self.proc = subprocess.Popen(
+                args,
+                cwd=str(root),
+                env=comfy_env,
+            )
+            self.root = root
+
+            try:
+                for _ in range(90):
+                    SetupTaskManager.check_canceled(task, "ComfyUI startup canceled.")
+                    try:
+                        r = requests.get(f"http://{host}:{port}/object_info", timeout=1.0)
+                        if r.status_code == 200:
+                            SetupTaskManager.log(task, "ComfyUI is running.")
+                            return
+                    except Exception:
+                        pass
+                    if self.proc.poll() is not None:
+                        break
+                    time.sleep(1.0)
+            except SetupTaskCanceled:
+                self.stop()
+                raise
+
+            if self.proc.poll() is not None:
+                raise RuntimeError("ComfyUI exited before it became reachable.")
+            SetupTaskManager.log(task, "ComfyUI started (still warming up).")
+            return
+
         if platform.system().lower() != "windows":
             raise RuntimeError("ComfyUI Portable auto-start is currently implemented for Windows.")
 
@@ -966,6 +1094,43 @@ BACKEND_BUNDLE_ALIASES: dict[str, tuple[str, ...]] = {
 
 def _backend_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _studio_root() -> Path:
+    return _backend_root().parent
+
+
+def _infer_studio_home(external_dir: Path | None = None, models_dir: Path | None = None) -> Path:
+    if external_dir is not None:
+        external = external_dir.expanduser().resolve()
+        if external.name.lower() in {"external", "external_tools", "tools"}:
+            return external.parent
+    if models_dir is not None:
+        models = models_dir.expanduser().resolve()
+        if models.name.lower() == "models":
+            return models.parent
+    return Path(os.environ.get("EDMG_STUDIO_HOME") or (Path.home() / "edmg-studio-home")).expanduser().resolve()
+
+
+def _linux_setup_script(name: str) -> Path:
+    return (_studio_root() / "scripts" / name).resolve()
+
+
+def _run_linux_setup_script(
+    task: SetupTask,
+    script_name: str,
+    env: dict[str, str],
+) -> None:
+    if platform.system().lower() != "linux":
+        raise RuntimeError(f"{script_name} is only available on Linux.")
+    script = _linux_setup_script(script_name)
+    if not script.exists():
+        raise RuntimeError(f"Linux setup script not found: {script}")
+    bash = shutil.which("bash")
+    if not bash:
+        raise RuntimeError("bash is required for Linux setup tasks.")
+    SetupTaskManager.log(task, f"Running Linux setup script: {script}")
+    _run_subprocess(task, [bash, str(script)], cwd=str(_studio_root()), env=env)
 
 
 def _bundle_module_map(bundle: str) -> dict[str, str]:

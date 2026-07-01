@@ -281,6 +281,34 @@ describe("Render page", () => {
     });
   }, 10000);
 
+  it("sends storyboard full motion strategy with generated-anchor video mode", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    const strategyOption = await screen.findByRole("option", { name: "Storyboard full motion" });
+    const strategySelect = strategyOption.closest("select");
+    expect(strategySelect).toBeTruthy();
+    fireEvent.change(strategySelect!, { target: { value: "storyboard_full_motion" } });
+
+    expect(await screen.findByText(/generate scene keyframe anchors/i)).toBeTruthy();
+    expect(await screen.findByDisplayValue("Internal video model (SVD / AnimateDiff)")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => {
+          if (!String(url).includes("/v1/projects/p1/render/internal/preflight")) return false;
+          const body = String(init?.body || "");
+          return body.includes('"motion_strategy":"storyboard_full_motion"')
+            && body.includes('"storyboard_shot_max_s":4')
+            && body.includes('"temporal_mode":"video_model"')
+            && body.includes('"video_model_motion_score_mode":"auto"')
+            && body.includes('"video_model_prompt_refine":true');
+        }),
+      ).toBe(true);
+    });
+  }, 10000);
+
   it("sends TensorRT video mode through the internal renderer payload", async () => {
     const fetchMock = installRenderMocks();
 

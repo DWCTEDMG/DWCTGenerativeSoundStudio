@@ -189,6 +189,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalAnchorStrength, setInternalAnchorStrength] = useState<number>(0.2);
   const [internalPromptBlend, setInternalPromptBlend] = useState<boolean>(true);
   const [internalResumeExisting, setInternalResumeExisting] = useState<boolean>(savedRenderDefaults.internalResumeExisting ?? true);
+  const [internalMotionStrategy, setInternalMotionStrategy] = useState<"manual"|"storyboard_full_motion">((savedRenderDefaults.internalMotionStrategy as any) || "manual");
+  const [internalStoryboardShotMax, setInternalStoryboardShotMax] = useState<number>(Number(savedRenderDefaults.internalStoryboardShotMaxS ?? 4));
   const [internalVideoModelEngine, setInternalVideoModelEngine] = useState<"auto"|"svd"|"animatediff">("auto");
   const [internalVideoModelId, setInternalVideoModelId] = useState<string>("");
   const [internalVideoMaxFrames, setInternalVideoMaxFrames] = useState<number>(25);
@@ -322,6 +324,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const latestInternalVideoUrl = latestInternalVideoPath
     ? `${backendUrl}/v1/projects/${projectId}/file?path=${encodeURIComponent(latestInternalVideoPath)}`
     : "";
+  const effectiveInternalTemporalMode = internalMotionStrategy === "storyboard_full_motion" ? "video_model" : internalTemporalMode;
 
   useEffect(() => {
     setLatestVideoMissing(false);
@@ -507,12 +510,14 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       fps_render: internalFpsRender,
       keyframe_interval_s: internalKeyInterval,
       interpolation_engine: internalInterp,
-      temporal_mode: useTensorRt ? "keyframes" : internalTemporalMode,
+      temporal_mode: useTensorRt ? "keyframes" : effectiveInternalTemporalMode,
       temporal_strength: internalTemporalStrength,
       temporal_steps: internalTemporalSteps,
       refine_every_n_frames: internalRefineEvery,
       anchor_strength: internalAnchorStrength,
       prompt_blend: internalPromptBlend,
+      motion_strategy: useTensorRt ? "manual" : internalMotionStrategy,
+      storyboard_shot_max_s: internalStoryboardShotMax,
       video_model_engine: internalVideoModelEngine,
       video_model_id: internalVideoModelId || undefined,
       video_model_max_frames_per_scene: internalVideoMaxFrames,
@@ -756,8 +761,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       refinerModel: refiner.model,
       refinerSwitchAt: refiner.switch_at,
       refinerSteps: refiner.steps,
+      internalMotionStrategy,
+      internalStoryboardShotMaxS: internalStoryboardShotMax,
     });
-  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed, hiresFix, refiner]);
+  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed, hiresFix, refiner, internalMotionStrategy, internalStoryboardShotMax]);
 
   useEffect(() => {
     if (!loraToAdd && loraModels.length) setLoraToAdd(loraModels[0].id);
@@ -887,6 +894,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalAnchorStrength,
     internalPromptBlend,
     internalResumeExisting,
+    internalMotionStrategy,
+    internalStoryboardShotMax,
     internalVideoModelEngine,
     internalVideoModelId,
     internalVideoMaxFrames,
@@ -1158,6 +1167,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (p.anchor_strength != null) setInternalAnchorStrength(Number(p.anchor_strength));
     if (p.prompt_blend != null) setInternalPromptBlend(Boolean(p.prompt_blend));
     if (p.resume_existing_frames != null) setInternalResumeExisting(Boolean(p.resume_existing_frames));
+    if (p.motion_strategy) setInternalMotionStrategy(String(p.motion_strategy) as any);
+    if (p.storyboard_shot_max_s != null) setInternalStoryboardShotMax(Number(p.storyboard_shot_max_s));
     if (p.video_model_engine) setInternalVideoModelEngine(String(p.video_model_engine) as any);
     if (p.video_model_id != null) setInternalVideoModelId(String(p.video_model_id || ""));
     if (p.video_model_max_frames_per_scene != null) setInternalVideoMaxFrames(Number(p.video_model_max_frames_per_scene));
@@ -1981,6 +1992,13 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                           {" "}• anchor <b>{internalPreflight?.internal_video_model_preflight?.anchor_mode || internalPreflight?.settings?.video_model_anchor_mode || internalVideoAnchorMode}</b>
                         </div>
                       ) : null}
+                      {internalPreflight?.internal_video_model_preflight?.storyboard_motion_plan ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          Storyboard full motion: <b>{internalPreflight.internal_video_model_preflight.storyboard_motion_plan.shot_count}</b> generated-anchor shots
+                          {" "}• max <b>{Number(internalPreflight.internal_video_model_preflight.storyboard_motion_plan.shot_max_s || internalStoryboardShotMax).toFixed(1)}s</b>
+                          {" "}• anchor <b>{internalPreflight.internal_video_model_preflight.storyboard_motion_plan.anchor_source === "source_image" ? "source image" : "generated keyframe"}</b>
+                        </div>
+                      ) : null}
                       {internalPreflight?.internal_video_model_preflight?.scene_scores?.length ? (
                         <div className="small" style={{ marginTop: 4 }}>
                           Scene motion scores: {internalPreflight.internal_video_model_preflight.scene_scores.slice(0, 4).map((item: any) => (
@@ -2026,7 +2044,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                           <button className="secondary" onClick={() => onNavigate?.("models")}>Open Models to install internal renderer</button>
                         </div>
                       ) : null}
-                      {internalTemporalMode === "video_model" && !internalPreflight?.installed_internal_video_models?.hf_svd_xt_1_1_internal && !internalPreflight?.installed_internal_video_models?.hf_animatediff_motion_adapter_v15_2_internal ? (
+                      {effectiveInternalTemporalMode === "video_model" && !internalPreflight?.installed_internal_video_models?.hf_svd_xt_1_1_internal && !internalPreflight?.installed_internal_video_models?.hf_animatediff_motion_adapter_v15_2_internal ? (
                         <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                           <button className="secondary" onClick={() => onNavigate?.("models")}>Open Models to install internal motion adapters</button>
                         </div>
@@ -2203,9 +2221,31 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                    <div style={{ fontWeight: 900, marginBottom: 8 }}>Temporal consistency + compositing</div>
 
                    <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+                     <div style={{ minWidth: 230 }}>
+                       <div className="small">Motion strategy</div>
+                       <select value={internalMotionStrategy} onChange={(e) => {
+                         const next = e.target.value as "manual"|"storyboard_full_motion";
+                         setInternalMotionStrategy(next);
+                         if (next === "storyboard_full_motion") {
+                           setInternalTemporalMode("video_model");
+                           setInternalVideoMotionScoreMode("auto");
+                           setInternalVideoPromptRefine(true);
+                         }
+                       }}>
+                         <option value="manual">Manual temporal controls</option>
+                         <option value="storyboard_full_motion">Storyboard full motion</option>
+                       </select>
+                     </div>
+                     {internalMotionStrategy === "storyboard_full_motion" ? (
+                       <div style={{ minWidth: 170 }}>
+                         <div className="small">Max shot seconds</div>
+                         <input type="number" value={internalStoryboardShotMax} min={1} max={12} step={0.5}
+                           onChange={(e) => setInternalStoryboardShotMax(Number(e.target.value))} />
+                       </div>
+                     ) : null}
                      <div style={{ minWidth: 190 }}>
                        <div className="small">Temporal mode</div>
-                       <select value={internalTemporalMode} onChange={(e) => setInternalTemporalMode(e.target.value as any)}>
+                       <select value={effectiveInternalTemporalMode} disabled={internalMotionStrategy === "storyboard_full_motion"} onChange={(e) => setInternalTemporalMode(e.target.value as any)}>
                          <option value="video_model">Internal video model (SVD / AnimateDiff)</option>
                          <option value="frame_img2img">Internal motion (frame img2img)</option>
                          <option value="keyframes">Keyframe assembly only</option>
@@ -2241,8 +2281,13 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                        Resume existing cached frames
                      </label>
                    </div>
+                   {internalMotionStrategy === "storyboard_full_motion" ? (
+                     <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>
+                       Uses the transcript, scene prompts, and audio energy to generate scene keyframe anchors, split long scenes into short motion shots, and stitch them into the final video.
+                     </div>
+                   ) : null}
 
-                   {internalTemporalMode === "video_model" ? (
+                   {effectiveInternalTemporalMode === "video_model" ? (
                      <div className="card" style={{ marginTop: 10 }}>
                        <div style={{ fontWeight: 800, marginBottom: 8 }}>Internal video-model adapter</div>
                        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -2327,7 +2372,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                          </label>
                        </div>
                        <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
-                         SVD animates from generated keyframes. Motion score follows scene energy; anchor modes bias start, end, or loop continuity.
+                         SVD animates from generated keyframes. AnimateDiff follows scene text directly. Motion score follows scene energy; anchor modes bias start, end, or loop continuity.
                        </div>
                      </div>
                    ) : null}

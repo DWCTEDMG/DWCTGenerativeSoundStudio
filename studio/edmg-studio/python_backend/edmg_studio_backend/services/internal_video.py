@@ -68,6 +68,8 @@ class InternalVideoSettings:
     anchor_strength: float = 0.20
     prompt_blend: bool = True
     resume_existing_frames: bool = True
+    motion_strategy: str = "manual"  # manual|storyboard_full_motion
+    storyboard_shot_max_s: float = 4.0
     deforum_overrides: dict[str, Any] | None = None
     # Internal video-model adapter. SVD is image-to-video from generated
     # keyframes; AnimateDiff is text-to-video through a Diffusers motion adapter.
@@ -92,6 +94,13 @@ class InternalVideoSettings:
     # local draft/proxy path and keep it fully GPU-free.
     proxy_motion: bool = True   # Ken-Burns zoom/pan from camera keyframes + scene energy
     proxy_finish: bool = True   # vignette + film-grain finishing pass
+
+
+def normalize_internal_motion_strategy(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"storyboard", "storyboard_full_motion", "full_motion_storyboard", "auto_storyboard"}:
+        return "storyboard_full_motion"
+    return "manual"
 
 
 class _PipelineCache:
@@ -435,6 +444,8 @@ def _render_signature(
         "refine_every_n_frames": int(settings.refine_every_n_frames),
         "anchor_strength": float(settings.anchor_strength),
         "prompt_blend": bool(settings.prompt_blend),
+        "motion_strategy": normalize_internal_motion_strategy(settings.motion_strategy),
+        "storyboard_shot_max_s": float(_storyboard_shot_max_s(settings)),
         "video_model_engine": str(settings.video_model_engine),
         "video_model_id": str(settings.video_model_id or ""),
         "video_model_path": str(settings.video_model_path or ""),
@@ -2382,9 +2393,15 @@ def render_internal_video_variant(
                 f"path={video_model_path}"
             )
 
-        sorted_scenes = [sc for sc in scenes if isinstance(sc, dict)] or [{"start_s": 0.0, "end_s": duration_s, "prompt": DEFAULT_RENDER_PROMPT}]
+        source_scenes = [sc for sc in scenes if isinstance(sc, dict)] or [{"start_s": 0.0, "end_s": duration_s, "prompt": DEFAULT_RENDER_PROMPT}]
+        sorted_scenes = _storyboard_scene_windows(scenes=source_scenes, duration_s=duration_s, settings=settings)
         max_scene_frames = max(2, int(settings.video_model_max_frames_per_scene or 25))
         fi_cursor = 0
+        if log_fn and normalize_internal_motion_strategy(settings.motion_strategy) == "storyboard_full_motion":
+            log_fn(
+                f"Storyboard full motion: generated anchors with {len(sorted_scenes)} short motion shots "
+                f"(max { _storyboard_shot_max_s(settings):.1f}s each)."
+            )
         for scene_index, scene in enumerate(sorted_scenes):
             if cancel_check_fn:
                 cancel_check_fn()
@@ -2478,9 +2495,17 @@ def render_internal_video_variant(
             if log_fn:
                 prompt_preview = " ".join(prompt_for_model.split())[:220]
                 score_label = score_info.get("motion_score")
+                source_scene = scene.get("_storyboard_source_scene_index")
+                shot_index = scene.get("_storyboard_shot_index")
+                shot_count = scene.get("_storyboard_shot_count")
+                storyboard_label = (
+                    f" scene={int(source_scene) + 1} shot={int(shot_index) + 1}/{int(shot_count)}"
+                    if source_scene is not None and shot_index is not None and shot_count
+                    else ""
+                )
                 log_fn(
                     f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} "
-                    f"frames={adapter_frames} seed={seed} anchor={anchor_mode} "
+                    f"frames={adapter_frames} seed={seed} anchor={anchor_mode}{storyboard_label} "
                     f"motion_score={score_label} motion_bucket={motion_bucket_id} prompt={prompt_preview!r}"
                 )
 
@@ -2795,6 +2820,8 @@ def render_internal_video_variant(
             "refine_every_n_frames": int(settings.refine_every_n_frames),
             "anchor_strength": float(settings.anchor_strength),
             "prompt_blend": bool(settings.prompt_blend),
+            "motion_strategy": normalize_internal_motion_strategy(settings.motion_strategy),
+            "storyboard_shot_max_s": float(_storyboard_shot_max_s(settings)),
             "video_model_engine": str(settings.video_model_engine),
             "video_model_id": str(settings.video_model_id or ""),
             "video_model_path": str(settings.video_model_path or ""),
@@ -3465,6 +3492,148 @@ def video_model_scene_motion_scores(
     return out
 
 
+def _storyboard_shot_max_s(settings: InternalVideoSettings) -> float:
+    try:
+        value = float(settings.storyboard_shot_max_s or 4.0)
+    except Exception:
+        value = 4.0
+    return max(1.0, min(12.0, value))
+
+
+def _storyboard_scene_windows(
+    *,
+    scenes: list[dict[str, Any]],
+    duration_s: float,
+    settings: InternalVideoSettings,
+) -> list[dict[str, Any]]:
+    valid_scenes = [scene for scene in scenes if isinstance(scene, dict)] or [
+        {"start_s": 0.0, "end_s": duration_s, "prompt": DEFAULT_RENDER_PROMPT}
+    ]
+    strategy = normalize_internal_motion_strategy(settings.motion_strategy)
+    max_shot_s = _storyboard_shot_max_s(settings)
+    windows: list[dict[str, Any]] = []
+
+    for scene_index, scene in enumerate(valid_scenes):
+        try:
+            start_s = max(0.0, float(scene.get("start_s", 0.0) or 0.0))
+        except Exception:
+            start_s = 0.0
+        try:
+            end_s = float(scene.get("end_s", 0.0) or 0.0)
+        except Exception:
+            end_s = 0.0
+        if end_s <= start_s:
+            next_start = (
+                float(valid_scenes[scene_index + 1].get("start_s", duration_s) or duration_s)
+                if scene_index + 1 < len(valid_scenes)
+                else duration_s
+            )
+            end_s = max(start_s + 0.5, next_start)
+
+        duration = max(0.5, end_s - start_s)
+        shot_count = 1
+        if strategy == "storyboard_full_motion":
+            shot_count = max(1, int(math.ceil(duration / max_shot_s)))
+        for shot_index in range(shot_count):
+            shot_start = start_s + (duration * (shot_index / shot_count))
+            shot_end = start_s + (duration * ((shot_index + 1) / shot_count))
+            if shot_index == shot_count - 1:
+                shot_end = end_s
+            shot = dict(scene)
+            shot["start_s"] = round(float(shot_start), 3)
+            shot["end_s"] = round(float(shot_end), 3)
+            shot["_storyboard_source_scene_index"] = scene_index
+            shot["_storyboard_shot_index"] = shot_index
+            shot["_storyboard_shot_count"] = shot_count
+            shot["_storyboard_original_start_s"] = round(float(start_s), 3)
+            shot["_storyboard_original_end_s"] = round(float(end_s), 3)
+            shot["_storyboard_motion_strategy"] = strategy
+            windows.append(shot)
+    return windows
+
+
+def _motion_intent_for_score(score: Any) -> dict[str, str]:
+    if score is None:
+        return {
+            "subject_motion": "prompt-led subject motion",
+            "camera_motion": "steady cinematic camera",
+            "environment_motion": "subtle atmosphere",
+        }
+    score_i = _clamp_video_motion_score(score)
+    if score_i <= 2:
+        return {
+            "subject_motion": "restrained breathing motion",
+            "camera_motion": "slow locked-off push",
+            "environment_motion": "soft ambient drift",
+        }
+    if score_i >= 6:
+        return {
+            "subject_motion": "energetic beat-reactive movement",
+            "camera_motion": "assertive dolly or orbit",
+            "environment_motion": "visible particles, light, or fabric motion",
+        }
+    return {
+        "subject_motion": "controlled music-reactive movement",
+        "camera_motion": "smooth forward glide",
+        "environment_motion": "moderate atmospheric motion",
+    }
+
+
+def describe_storyboard_motion_plan(
+    *,
+    scenes: list[dict[str, Any]],
+    timeline: dict[str, Any] | None,
+    settings: InternalVideoSettings,
+    duration_s: float,
+) -> dict[str, Any] | None:
+    strategy = normalize_internal_motion_strategy(settings.motion_strategy)
+    if strategy != "storyboard_full_motion":
+        return None
+
+    windows = _storyboard_scene_windows(scenes=scenes, duration_s=duration_s, settings=settings)
+    shots: list[dict[str, Any]] = []
+    for shot in windows:
+        start_s = float(shot.get("start_s") or 0.0)
+        end_s = float(shot.get("end_s") or max(start_s + 0.5, duration_s))
+        score_info = video_model_scene_motion_score(
+            scene=shot,
+            timeline=timeline,
+            start_s=start_s,
+            end_s=end_s,
+            duration_s=duration_s,
+            settings=settings,
+        )
+        prompt = render_prompt_from_scene(shot, fallback=DEFAULT_RENDER_PROMPT)
+        intent = _motion_intent_for_score(score_info.get("motion_score"))
+        source_scene_index = int(shot.get("_storyboard_source_scene_index", 0) or 0)
+        shot_index = int(shot.get("_storyboard_shot_index", 0) or 0)
+        shot_count = int(shot.get("_storyboard_shot_count", 1) or 1)
+        shots.append(
+            {
+                "scene_index": source_scene_index,
+                "shot_index": shot_index,
+                "shot_count": shot_count,
+                "start_s": round(start_s, 3),
+                "end_s": round(end_s, 3),
+                "prompt": " ".join(prompt.split())[:240],
+                "anchor_source": "source_image" if settings.source_asset else "generated_scene_keyframe",
+                "transition": "continue scene motion" if shot_index else "start from generated visual anchor",
+                **intent,
+                "motion_score": score_info.get("motion_score"),
+                "motion_source": score_info.get("source"),
+            }
+        )
+
+    return {
+        "strategy": strategy,
+        "anchor_source": "source_image" if settings.source_asset else "generated_scene_keyframe",
+        "shot_max_s": _storyboard_shot_max_s(settings),
+        "scene_count": len([scene for scene in scenes if isinstance(scene, dict)]),
+        "shot_count": len(shots),
+        "shots": shots,
+    }
+
+
 def _video_model_motion_bucket_for_score(settings: InternalVideoSettings, score_info: dict[str, Any]) -> int:
     base_bucket = max(1, min(255, int(settings.video_model_motion_bucket_id or 127)))
     if _normalize_video_motion_score_mode(settings.video_model_motion_score_mode) == "off":
@@ -3568,6 +3737,12 @@ def describe_internal_video_model_preflight(
         settings=settings,
         duration_s=duration_s,
     )
+    storyboard_motion_plan = describe_storyboard_motion_plan(
+        scenes=scenes,
+        timeline=timeline,
+        settings=settings,
+        duration_s=duration_s,
+    )
 
     return {
         "engine": engine,
@@ -3575,6 +3750,8 @@ def describe_internal_video_model_preflight(
         "manual_motion_score": _clamp_video_motion_score(settings.video_model_manual_motion_score),
         "anchor_mode": anchor_mode,
         "prompt_refine": bool(settings.video_model_prompt_refine),
+        "motion_strategy": normalize_internal_motion_strategy(settings.motion_strategy),
+        "storyboard_motion_plan": storyboard_motion_plan,
         "total_frames": int(total_frames),
         "max_frames_per_scene": int(settings.video_model_max_frames_per_scene or 25),
         "scene_scores": scene_scores,

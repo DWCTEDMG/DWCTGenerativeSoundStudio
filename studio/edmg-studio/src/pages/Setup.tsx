@@ -161,6 +161,8 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   const modelRequired = !!aiConfig?.model_required;
   const platformKind = normalizePlatformKind(studioPaths?.platform);
   const isWindows = platformKind === "windows";
+  const isLinux = platformKind === "linux";
+  const managedSetupSupported = isWindows || isLinux;
   const ollamaDownloadUrl = isWindows
     ? "https://ollama.com/download/windows"
     : platformKind === "linux"
@@ -171,7 +173,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     : "https://docs.comfy.org/";
   const storageFieldConfigs = getStorageFieldConfigs(platformKind);
   const setupReady = backendBundleOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
-  const fullSetupReady = isWindows && setupReady && sevenOk;
+  const fullSetupReady = managedSetupSupported && setupReady && (isWindows ? sevenOk : true);
 
   function deriveStorageLayout(studioHome: string): StorageDraft {
     const home = String(studioHome || "").trim();
@@ -418,18 +420,22 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
 
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-    <div style={{ fontWeight: 800 }}>{isWindows ? "0) Full System Setup (One-Click)" : "0) System Setup"}</div>
-    <Badge ok={isWindows ? fullSetupReady : setupReady} label={isWindows ? (fullSetupReady ? "Ready" : "Setup") : (setupReady ? "Ready" : "Manual")} />
+    <div style={{ fontWeight: 800 }}>{managedSetupSupported ? "0) Full System Setup (One-Click)" : "0) System Setup"}</div>
+    <Badge ok={managedSetupSupported ? fullSetupReady : setupReady} label={managedSetupSupported ? (fullSetupReady ? "Ready" : "Setup") : (setupReady ? "Ready" : "Manual")} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
     {isWindows ? (
       ollamaRequired
       ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → managed Ollama install → pull model → optional ComfyUI Portable install + start for alternate still/motion workflows."
       : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → optional ComfyUI Portable install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
+    ) : isLinux ? (
+      ollamaRequired
+        ? "Runs the Linux setup pipeline: backend runtime bundle → Ollama sidecar setup → pull model → optional ComfyUI sidecar install + start for alternate still/motion workflows."
+        : `Runs the Linux setup pipeline: backend runtime bundle → optional ComfyUI sidecar install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
     ) : (
       ollamaRequired
-        ? "Linux and macOS use the manual setup path: install the backend runtime here, install Ollama system-wide if needed, pull the configured model, and run a local ComfyUI instance only if you want the optional ComfyUI workflows."
-        : `Linux and macOS use the manual setup path: install the backend runtime here and add ComfyUI only if you want the optional ComfyUI workflows. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
+        ? "macOS uses the manual setup path: install the backend runtime here, install Ollama system-wide if needed, pull the configured model, and run a local ComfyUI instance only if you want the optional ComfyUI workflows."
+        : `macOS uses the manual setup path: install the backend runtime here and add ComfyUI only if you want the optional ComfyUI workflows. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
     )}
   </div>
   <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
@@ -458,6 +464,21 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
           onClick={() => run("full_amd", "/v1/setup/full/install", { flavor: "amd", bundle: "studio_bundle_directml" })}
         >
           {busy === "full_amd" ? "Running…" : "Full Setup (AMD / DirectML)"}
+        </button>
+      </>
+    ) : isLinux ? (
+      <>
+        <button
+          disabled={busy === "full_cpu"}
+          onClick={() => run("full_cpu", "/v1/setup/full/install", { flavor: "cpu" })}
+        >
+          {busy === "full_cpu" ? "Running…" : "Full Setup (CPU)"}
+        </button>
+        <button
+          disabled={busy === "full_nvidia"}
+          onClick={() => run("full_nvidia", "/v1/setup/full/install", { flavor: "nvidia" })}
+        >
+          {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
         </button>
       </>
     ) : (
@@ -491,9 +512,13 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
       DirectML available on this machine: <b>{directmlAvailable ? "yes" : "no"}</b>
       {status?.hardware?.directml_device_name ? <> • device <code>{status.hardware.directml_device_name}</code></> : null}
     </div>
+  ) : isLinux ? (
+    <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+      Linux uses the standard backend runtime bundle plus the same NVIDIA CUDA + TensorRT setup path. DirectML remains Windows-only.
+    </div>
   ) : (
     <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
-      Linux uses the standard backend runtime bundle. The DirectML runtime remains Windows-only.
+      This platform uses the standard backend runtime bundle. DirectML remains Windows-only.
     </div>
   )}
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -581,9 +606,13 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
           <div className="small" style={{ marginTop: 6, opacity: 0.9 }}>
             Studio-managed Ollama models live under <code>{status?.ollama?.managed_models_dir ?? "(set your Models path first)"}</code>.
           </div>
-          {!isWindows ? (
+          {isLinux ? (
             <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
-              Linux support expects a system-installed <code>ollama</code> binary or a custom <code>EDMG_OLLAMA_PATH</code>. The automatic Ollama installer remains Windows-only.
+              Linux setup uses Studio&apos;s bundled sidecar script to install or start Ollama, keep models under the Studio models root, and write the launch helper.
+            </div>
+          ) : !isWindows ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+              macOS support expects a system-installed <code>ollama</code> binary or a custom <code>EDMG_OLLAMA_PATH</code>.
             </div>
           ) : null}
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -594,10 +623,10 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
               Open Ollama Download Page
             </button>
             <button
-              disabled={!isWindows || busy === "ollama"}
+              disabled={!managedSetupSupported || busy === "ollama"}
               onClick={() => run("ollama", "/v1/setup/ollama/install_managed", {})}
             >
-              {busy === "ollama" ? "Installing…" : (isWindows ? "Install Ollama Into External Tools" : "Windows-only Managed Install")}
+              {busy === "ollama" ? "Installing…" : (isWindows ? "Install Ollama Into External Tools" : isLinux ? "Install/Start Ollama Sidecar" : "Manual Install")}
             </button>
             <button
               className="secondary"
@@ -707,9 +736,13 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
           <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
             In other words, installing ComfyUI alone does not switch the product over. It only adds an alternate engine path that becomes available when the active render model is ComfyUI-backed.
           </div>
-          {!isWindows ? (
+          {isLinux ? (
             <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
-              Linux support uses a manually installed ComfyUI instance. Start it yourself only if you want those optional workflows, and keep <code>EDMG_COMFYUI_URL</code> pointed at the running server.
+              Linux setup uses Studio&apos;s bundled ComfyUI sidecar script and can install or start the CPU/NVIDIA paths from this wizard.
+            </div>
+          ) : !isWindows ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+              macOS support uses a manually installed ComfyUI instance. Start it yourself only if you want those optional workflows, and keep <code>EDMG_COMFYUI_URL</code> pointed at the running server.
             </div>
           ) : null}
 
@@ -721,28 +754,28 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
               {isWindows ? "Open ComfyUI Portable Guide" : "Open ComfyUI Docs"}
             </button>
             <button
-              disabled={!isWindows || busy === "comfyui"}
+              disabled={!managedSetupSupported || busy === "comfyui"}
               onClick={() => run("comfyui", "/v1/setup/comfyui/portable/install", { flavor: "cpu" })}
             >
-              {busy === "comfyui" ? "Working…" : (isWindows ? "Install ComfyUI Portable (CPU)" : "Windows-only Portable Install")}
+              {busy === "comfyui" ? "Working…" : (isWindows ? "Install ComfyUI Portable (CPU)" : isLinux ? "Install ComfyUI Sidecar (CPU)" : "Manual Install")}
             </button>
             <button
-              disabled={!isWindows || busy === "comfyui_n"}
+              disabled={!managedSetupSupported || busy === "comfyui_n"}
               onClick={() => run("comfyui_n", "/v1/setup/comfyui/portable/install", { flavor: "nvidia" })}
             >
-              {busy === "comfyui_n" ? "Working…" : (isWindows ? "Install ComfyUI Portable (NVIDIA)" : "Windows-only Portable Install")}
+              {busy === "comfyui_n" ? "Working…" : (isWindows ? "Install ComfyUI Portable (NVIDIA)" : isLinux ? "Install ComfyUI Sidecar (NVIDIA)" : "Manual Install")}
             </button>
             <button
-              disabled={!isWindows || busy === "start_comfy"}
+              disabled={!managedSetupSupported || busy === "start_comfy"}
               onClick={() => run("start_comfy", "/v1/setup/comfyui/portable/start", { flavor: "cpu" })}
             >
-              {busy === "start_comfy" ? "Starting…" : (isWindows ? "Start ComfyUI (CPU)" : "Windows-only Portable Start")}
+              {busy === "start_comfy" ? "Starting…" : "Start ComfyUI (CPU)"}
             </button>
             <button
-              disabled={!isWindows || busy === "start_comfy_n"}
+              disabled={!managedSetupSupported || busy === "start_comfy_n"}
               onClick={() => run("start_comfy_n", "/v1/setup/comfyui/portable/start", { flavor: "nvidia" })}
             >
-              {busy === "start_comfy_n" ? "Starting…" : (isWindows ? "Start ComfyUI (NVIDIA)" : "Windows-only Portable Start")}
+              {busy === "start_comfy_n" ? "Starting…" : "Start ComfyUI (NVIDIA)"}
             </button>
           </div>
 

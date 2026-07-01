@@ -273,6 +273,58 @@ def test_internal_preflight_reports_motion_score_anchor_and_validation(tmp_path,
     assert any("divisible by 8" in warning for warning in preflight["warnings"])
 
 
+def test_storyboard_full_motion_preflight_generates_anchor_shot_plan(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4080",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 16.0,
+        "ram_gb": 32.0,
+        "cpu_threads": 16,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sdxl_internal",
+        "recommended_tier": "quality",
+        "max_supported_tier": "quality",
+    })
+    installed = {
+        "hf_sdxl_internal": _fake_internal_model(tmp_path, "hf_sdxl_internal", "StableDiffusionXLPipeline"),
+        "hf_svd_xt_1_1_internal": tmp_path / "models" / "internal" / "video" / "hf_svd_xt_1_1_internal",
+    }
+    installed["hf_svd_xt_1_1_internal"].mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {
+            "variant_index": 0,
+            "fps_render": 2,
+            "fps_output": 24,
+            "model_id": "hf_sdxl_internal",
+            "temporal_mode": "keyframes",
+            "motion_strategy": "storyboard_full_motion",
+            "storyboard_shot_max_s": 3.0,
+            "allow_proxy_fallback": False,
+        },
+    )
+
+    assert preflight["settings"]["temporal_mode"] == "video_model"
+    assert preflight["settings"]["motion_strategy"] == "storyboard_full_motion"
+    assert preflight["settings"]["storyboard_shot_max_s"] == 3.0
+    assert preflight["settings"]["keyframe_interval_s"] == 3.0
+    validation = preflight["internal_video_model_preflight"]
+    assert validation["motion_strategy"] == "storyboard_full_motion"
+    plan = validation["storyboard_motion_plan"]
+    assert plan["anchor_source"] == "generated_scene_keyframe"
+    assert plan["shot_count"] == 4
+    assert plan["shots"][0]["transition"] == "start from generated visual anchor"
+    assert plan["shots"][0]["anchor_source"] == "generated_scene_keyframe"
+    assert any("Storyboard full motion is active" in warning for warning in preflight["warnings"])
+
+
 def test_auto_model_reports_sd35_vram_guard_when_no_lighter_model_installed(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)

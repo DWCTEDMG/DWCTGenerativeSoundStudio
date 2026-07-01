@@ -26,7 +26,7 @@ describe("Setup page", () => {
     expect(await screen.findByDisplayValue("D:\\EDMG-Studio")).toBeTruthy();
   });
 
-  it("shows Linux-friendly storage paths and manual setup guidance", async () => {
+  it("shows Linux-friendly storage paths and managed setup actions", async () => {
     installEdmgBridge({
       getStudioPaths: async () => ({
         ok: true,
@@ -60,10 +60,15 @@ describe("Setup page", () => {
     renderWithStudio(<Setup />);
 
     expect(await screen.findByDisplayValue("/home/test/EDMG-Studio")).toBeTruthy();
-    expect(await screen.findByText("0) System Setup")).toBeTruthy();
-    expect(await screen.findByText(/Linux and macOS use the manual setup path/)).toBeTruthy();
-    expect(await screen.findByText(/Linux support expects a system-installed/i)).toBeTruthy();
-    expect(await screen.findByText(/Linux support uses a manually installed ComfyUI instance.*optional workflows/i)).toBeTruthy();
+    expect(await screen.findByText("0) Full System Setup (One-Click)")).toBeTruthy();
+    expect(await screen.findByText(/Runs the Linux setup pipeline/)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Full Setup (CPU)" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Full Setup (NVIDIA)" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Install/Start Ollama Sidecar" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Install ComfyUI Sidecar (CPU)" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Install ComfyUI Sidecar (NVIDIA)" })).toBeTruthy();
+    expect(await screen.findByText(/Linux setup uses Studio's bundled sidecar script/i)).toBeTruthy();
+    expect(await screen.findByText(/Linux setup uses Studio's bundled ComfyUI sidecar script/i)).toBeTruthy();
   });
 
   it("shows Start ComfyUI NVIDIA button on Windows", async () => {

@@ -5,6 +5,8 @@ export type StudioRenderDefaults = {
   renderPreset?: "fast" | "balanced" | "quality" | "ultra";
   internalRenderTier?: "auto" | "draft" | "balanced" | "quality";
   internalResumeExisting?: boolean;
+  internalMotionStrategy?: "manual" | "storyboard_full_motion";
+  internalStoryboardShotMaxS?: number;
   stillWidth?: number;
   stillHeight?: number;
   stillSteps?: number;

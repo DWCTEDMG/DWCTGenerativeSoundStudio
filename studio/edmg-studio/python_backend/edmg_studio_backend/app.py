@@ -84,6 +84,7 @@ from .services.internal_video import (
     describe_internal_render_cache,
     describe_internal_video_model_preflight,
     describe_proxy_render_cache,
+    normalize_internal_motion_strategy,
     render_internal_still_image,
     render_internal_video_variant,
     render_internal_proxy_video_variant,
@@ -2788,7 +2789,12 @@ def setup_status():
                 f"{settings.ollama_models_dir}."
             )
             if is_windows
-            else "Install Ollama system-wide, or set EDMG_OLLAMA_PATH to your ollama binary, then point Studio at the running Ollama service."
+            else (
+                "Run the Linux sidecar setup from this wizard, install Ollama system-wide, or set EDMG_OLLAMA_PATH "
+                "to your ollama binary, then point Studio at the running Ollama service."
+                if platform.system().lower() == "linux"
+                else "Install Ollama system-wide, or set EDMG_OLLAMA_PATH to your ollama binary, then point Studio at the running Ollama service."
+            )
         )
 
     # ComfyUI availability
@@ -2807,7 +2813,11 @@ def setup_status():
             comfy_hint = None if comfy_ok else (
                 "Install and start ComfyUI (Portable) or ComfyUI Desktop, then ensure it is reachable at the configured URL(s)."
                 if is_windows
-                else "Install and start ComfyUI, then ensure it is reachable at the configured URL(s)."
+                else (
+                    "Install and start the Linux ComfyUI sidecar from this wizard, or point Studio at another reachable ComfyUI URL."
+                    if platform.system().lower() == "linux"
+                    else "Install and start ComfyUI, then ensure it is reachable at the configured URL(s)."
+                )
             )
         comfy_status = {
             "ok": comfy_ok,
@@ -2829,7 +2839,11 @@ def setup_status():
             "hint": (
                 "Configure EDMG_COMFYUI_URL to a running ComfyUI instance, or install ComfyUI Portable via this wizard."
                 if is_windows
-                else "Configure EDMG_COMFYUI_URL to a running ComfyUI instance."
+                else (
+                    "Configure EDMG_COMFYUI_URL to a running ComfyUI instance, or install the Linux ComfyUI sidecar via this wizard."
+                    if platform.system().lower() == "linux"
+                    else "Configure EDMG_COMFYUI_URL to a running ComfyUI instance."
+                )
             ),
         }
 
@@ -8713,6 +8727,11 @@ def _internal_settings_from_payload(
         for key in deforum_override_keys
         if payload.get(key) is not None
     }
+    motion_strategy = normalize_internal_motion_strategy(payload.get("motion_strategy") or payload.get("internal_motion_strategy"))
+    try:
+        storyboard_shot_max_s = float(payload.get("storyboard_shot_max_s", 4.0))
+    except Exception:
+        storyboard_shot_max_s = 4.0
     return InternalVideoSettings(
         fps_render=int(payload.get("fps_render", 2)),
         fps_output=int(payload.get("fps_output", 24)),
@@ -8738,6 +8757,8 @@ def _internal_settings_from_payload(
         anchor_strength=float(payload.get("anchor_strength", 0.20)),
         prompt_blend=bool(payload.get("prompt_blend", True)),
         resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
+        motion_strategy=motion_strategy,
+        storyboard_shot_max_s=max(1.0, min(12.0, storyboard_shot_max_s)),
         video_model_engine=str(payload.get("video_model_engine") or "auto"),
         video_model_id=(str(payload.get("video_model_id")).strip() or None) if payload.get("video_model_id") is not None else None,
         video_model_path=(str(payload.get("video_model_path")).strip() or None) if payload.get("video_model_path") is not None else None,
@@ -8888,11 +8909,14 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
         )
 
     tier_defaults = dict(tier_plan.get("defaults") or {})
+    motion_strategy = normalize_internal_motion_strategy(payload.get("motion_strategy") or payload.get("internal_motion_strategy"))
     effective_temporal_mode = (
         str(payload.get("temporal_mode"))
         if payload.get("temporal_mode") is not None
         else str(tier_defaults.get("temporal_mode", "frame_img2img"))
     )
+    if motion_strategy == "storyboard_full_motion":
+        effective_temporal_mode = "video_model"
     settings_obj = _internal_settings_from_payload(
         payload,
         model_id=model_id,
@@ -8900,6 +8924,14 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
         device_preference=effective_device_preference,
         temporal_mode=effective_temporal_mode,
     )
+    if motion_strategy == "storyboard_full_motion":
+        settings_obj = replace(
+            settings_obj,
+            video_model_motion_score_mode="auto",
+            video_model_prompt_refine=True,
+            keyframe_interval_s=min(float(settings_obj.keyframe_interval_s), float(settings_obj.storyboard_shot_max_s)),
+            source_asset=None,
+        )
     if settings_obj.temporal_mode == "video_model":
         engine, video_model_id, video_model_path = _resolve_internal_video_model_selection(
             payload,
@@ -9504,6 +9536,15 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             warnings.append(str(warning))
         for warning in _internal_video_model_memory_warnings(settings_obj, hw):
             warnings.append(warning)
+        if normalize_internal_motion_strategy(settings_obj.motion_strategy) == "storyboard_full_motion":
+            storyboard_plan = video_model_preflight.get("storyboard_motion_plan") if isinstance(video_model_preflight, dict) else None
+            shot_count = int((storyboard_plan or {}).get("shot_count") or 0)
+            warnings.append(
+                "Storyboard full motion is active: Studio generates scene keyframe anchors from the plan/transcript prompts, "
+                "then renders short video-model motion shots without requiring a source image."
+            )
+            if shot_count:
+                warnings.append(f"Storyboard full motion will render {shot_count} short motion shot(s) before stitching.")
     else:
         video_model_preflight = None
     if settings_obj.fps_render > settings_obj.fps_output:
@@ -9558,6 +9599,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "fps_output": settings_obj.fps_output,
             "width": settings_obj.width,
             "height": settings_obj.height,
+            "keyframe_interval_s": settings_obj.keyframe_interval_s,
             "temporal_mode": settings_obj.temporal_mode,
             "video_model_engine": settings_obj.video_model_engine,
             "video_model_id": settings_obj.video_model_id,
@@ -9570,6 +9612,8 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "video_model_manual_motion_score": settings_obj.video_model_manual_motion_score,
             "video_model_anchor_mode": settings_obj.video_model_anchor_mode,
             "video_model_prompt_refine": settings_obj.video_model_prompt_refine,
+            "motion_strategy": normalize_internal_motion_strategy(settings_obj.motion_strategy),
+            "storyboard_shot_max_s": settings_obj.storyboard_shot_max_s,
             "temporal_steps": settings_obj.temporal_steps,
             "interpolation_engine": settings_obj.interpolation_engine,
             "render_mode": "diffusion",
