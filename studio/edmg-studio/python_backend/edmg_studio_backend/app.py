@@ -7174,16 +7174,8 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         proj = store.get(project_id)
         if not proj:
             raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
-        plan = proj.meta.get("last_plan")
-        if not plan or not (plan.get("variants") or []):
-            raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
-
         variant_index = int(payload.get("variant_index", 0))
-        variants = plan["variants"]
-        if variant_index < 0 or variant_index >= len(variants):
-            raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
-
-        variant = variants[variant_index]
+        variant, _used_fallback = _internal_render_variant_or_fallback(proj, variant_index)
         scenes = variant.get("scenes") or []
         pdir = store.project_dir(project_id)
         audio_meta = proj.meta.get("audio")
@@ -8597,9 +8589,6 @@ def render_internal_video(project_id: str, req: InternalVideoRenderRequest):
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
 
     payload = _request_payload(req)
     preflight = _internal_render_preflight_data(project_id, payload)
@@ -8778,20 +8767,90 @@ def _internal_settings_from_payload(
     )
 
 
+def _creative_direction_fallback_variant(proj: Any, variant_index: int) -> dict[str, Any] | None:
+    if variant_index != 0:
+        return None
+    payload = _build_creative_direction_payload(
+        proj,
+        variant_index=0,
+        preset="cinematic",
+        sensitivity=1.0,
+    )
+    scenes_raw = list(payload.get("scenes") or [])
+    if not scenes_raw:
+        return None
+
+    scenes: list[dict[str, Any]] = []
+    for index, scene in enumerate(scenes_raw):
+        if not isinstance(scene, dict):
+            continue
+        try:
+            start_s = float(scene.get("start_s") or index * 5.0)
+        except Exception:
+            start_s = float(index * 5.0)
+        try:
+            end_s = float(scene.get("end_s") or (start_s + float(scene.get("duration_s") or 5.0)))
+        except Exception:
+            end_s = start_s + 5.0
+        duration_s = max(0.2, end_s - start_s)
+        prompt = str(scene.get("prompt_pack") or scene.get("prompt") or DEFAULT_RENDER_PROMPT).strip()
+        scenes.append(
+            {
+                "index": index,
+                "name": str(scene.get("name") or f"Scene {index + 1}"),
+                "start_s": start_s,
+                "end_s": start_s + duration_s,
+                "duration_s": duration_s,
+                "energy": scene.get("energy"),
+                "energy_label": scene.get("energy_label"),
+                "prompt": prompt or DEFAULT_RENDER_PROMPT,
+                "negative_prompt": str(payload.get("negative_prompt") or "blurry, low quality, watermark, text, logo"),
+                "transcript_cue": str(scene.get("transcript_cue") or ""),
+                "camera_hint": str(scene.get("camera_hint") or ""),
+                "motion_hint": str(scene.get("motion_hint") or ""),
+                "reactive_params": scene.get("reactive_params") if isinstance(scene.get("reactive_params"), dict) else {},
+                "scene_source": "creative_direction_fallback",
+            }
+        )
+    if not scenes:
+        return None
+
+    duration_s = max(float(scene.get("end_s") or 0.0) for scene in scenes)
+    return {
+        "index": 0,
+        "name": "Creative direction fallback",
+        "duration_s": duration_s,
+        "provider_mode": "local-heuristic",
+        "scenes": scenes,
+        "_fallback_plan_source": "creative_direction_fallback",
+    }
+
+
+def _internal_render_variant_or_fallback(proj: Any, variant_index: int) -> tuple[dict[str, Any], bool]:
+    plan = proj.meta.get("last_plan") if isinstance(getattr(proj, "meta", None), dict) else None
+    variants = list(plan.get("variants") or []) if isinstance(plan, dict) else []
+    if variants:
+        if variant_index < 0 or variant_index >= len(variants):
+            raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
+        variant = variants[variant_index]
+        if not isinstance(variant, dict):
+            raise UserFacingError("Selected variant is invalid", hint="Re-run Plan, then retry.")
+        return variant, False
+
+    fallback = _creative_direction_fallback_variant(proj, variant_index)
+    if fallback:
+        return fallback, True
+
+    raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
+
+
 def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -> tuple[Any, dict[str, Any], str, Path, InternalVideoSettings]:
     proj = store.get(project_id)
     if not proj:
         raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
 
     variant_index = int(payload.get("variant_index", 0))
-    variants = plan["variants"]
-    if variant_index < 0 or variant_index >= len(variants):
-        raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
-
-    variant = variants[variant_index]
+    variant, _used_fallback = _internal_render_variant_or_fallback(proj, variant_index)
     scenes = variant.get("scenes") or []
     if not scenes:
         raise UserFacingError("Selected variant has no scenes", hint="Re-run Plan with at least 1 scene.")
@@ -8957,16 +9016,9 @@ def _proxy_render_preflight_data(
     proj = store.get(project_id)
     if not proj:
         raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
 
     variant_index = int(payload.get("variant_index", 0))
-    variants = plan["variants"]
-    if variant_index < 0 or variant_index >= len(variants):
-        raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
-
-    variant = variants[variant_index]
+    variant, used_fallback = _internal_render_variant_or_fallback(proj, variant_index)
     scenes = variant.get("scenes") or []
     if not scenes:
         raise UserFacingError("Selected variant has no scenes", hint="Re-run Plan with at least 1 scene.")
@@ -9002,6 +9054,11 @@ def _proxy_render_preflight_data(
         f"Using proxy draft render because {fallback_reason}",
         "Proxy mode renders pacing, prompts, and timeline overlays locally without ComfyUI or Diffusers.",
     ]
+    if used_fallback:
+        warnings.append(
+            "No saved plan found; using the generated creative-direction fallback scene pack. "
+            "Run Analyze + Plan for transcript/audio-accurate scenes."
+        )
     if reason:
         warnings.insert(0, reason)
     duration_warning = _duration_mismatch_warning(duration_sources)
@@ -9010,6 +9067,7 @@ def _proxy_render_preflight_data(
     return {
         "ok": True,
         "mode": "proxy",
+        "plan_source": "creative_direction_fallback" if used_fallback else "last_plan",
         "variant_index": variant_index,
         "model_id": "proxy_draft",
         "requested_model_id": str(requested_model_id or payload.get("model_id") or "auto"),
@@ -9494,6 +9552,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         raise
 
     scenes = variant.get("scenes") or []
+    used_fallback_plan = str(variant.get("_fallback_plan_source") or "") == "creative_direction_fallback"
     duration_sources = _project_duration_sources(proj, variant, scenes)
     duration_s = _resolved_project_duration_s(proj, variant, scenes)
     fps_render = max(1, int(settings_obj.fps_render))
@@ -9503,6 +9562,11 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     tier_plan = _build_internal_render_plan(hw, requested_tier=str(payload.get("render_tier") or settings_obj.render_tier or "auto"), duration_s=duration_s)
     tier_plan["chunk_plan"] = _build_render_chunk_plan(hw, applied_tier=str(tier_plan.get("applied_tier") or "draft"), duration_s=duration_s, total_frames=total_frames, fps_render=fps_render, render_mode="diffusion")
     warnings: list[str] = []
+    if used_fallback_plan:
+        warnings.append(
+            "No saved plan found; using the generated creative-direction fallback scene pack. "
+            "Run Analyze + Plan for transcript/audio-accurate scenes."
+        )
     if str(hw.get("backend") or "").lower() == "cpu":
         warnings.append("No GPU acceleration detected; internal diffusion will run on CPU and may be slow on longer renders.")
     elif str(hw.get("backend") or "").lower() == "mps":
@@ -9576,6 +9640,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     return {
         "ok": True,
         "mode": "diffusion",
+        "plan_source": "creative_direction_fallback" if used_fallback_plan else "last_plan",
         "variant_index": int(payload.get("variant_index", 0)),
         "model_id": model_id,
         "model_path": str(model_path),

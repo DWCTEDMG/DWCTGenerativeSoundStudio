@@ -39,6 +39,45 @@ def _fake_internal_model(tmp_path: Path, model_id: str, class_name: str | None =
     return path
 
 
+def test_internal_preflight_uses_creative_direction_fallback_when_plan_is_missing(tmp_path, monkeypatch):
+    store = ProjectStore(tmp_path / "data")
+    jobs = JobStore(store.projects_dir)
+    proj = store.create("The End")
+    proj.meta = {}
+    store.save(proj)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app, "_hardware_profile", lambda: {
+        "backend": "cuda",
+        "device": "cuda",
+        "device_name": "NVIDIA RTX",
+        "available_backends": ["cpu", "cuda"],
+        "vram_gb": 24.0,
+        "ram_gb": 64.0,
+        "cpu_threads": 16,
+        "backend_family": "discrete_gpu",
+        "preferred_internal_model": "hf_sdxl_internal",
+        "recommended_tier": "quality",
+        "max_supported_tier": "quality",
+    })
+    installed = {
+        "hf_sdxl_internal": _fake_internal_model(tmp_path, "hf_sdxl_internal", "StableDiffusionXLPipeline"),
+    }
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": False},
+    )
+
+    assert preflight["ok"] is True
+    assert preflight["mode"] == "diffusion"
+    assert preflight["plan_source"] == "creative_direction_fallback"
+    assert preflight["estimated_frames"] > 1
+    assert preflight["prompt_preview"]
+    assert any("No saved plan found" in warning for warning in preflight["warnings"])
+
+
 def test_internal_render_plan_prefers_quality_on_strong_cuda():
     hw = {"backend": "cuda", "vram_gb": 12.0, "ram_gb": 32.0, "cpu_threads": 16}
     plan = studio_app._build_internal_render_plan(hw, requested_tier="auto")

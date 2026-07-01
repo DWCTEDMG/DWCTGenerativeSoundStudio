@@ -131,6 +131,13 @@ function formatBackendError(d: any, fallback: string): string {
   // FastAPI HTTPException: { detail: ... }
   const detail = d?.detail;
   if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length) {
+    const first = detail[0] || {};
+    const loc = Array.isArray(first.loc) ? first.loc.filter(Boolean).join(".") : "";
+    const msg = first.msg || first.message || "Request validation failed";
+    const suffix = detail.length > 1 ? ` (${detail.length} validation issues)` : "";
+    return loc ? `${loc}: ${msg}${suffix}` : `${msg}${suffix}`;
+  }
   if (detail?.message) {
     const hint = detail?.hint ? `\nFix: ${detail.hint}` : "";
     return `${detail.message}${hint}`;
