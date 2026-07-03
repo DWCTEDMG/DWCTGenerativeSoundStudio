@@ -72,6 +72,22 @@ def test_auto_dry_run_cinematic_3d(tmp_path, monkeypatch):
         assert "deforum_rotation_3d_y" in req
 
 
+def test_auto_dry_run_full_motion_uses_storyboard_video_model(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/auto",
+            json={"preset": "full_motion", "engine": "internal", "run": False},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        req = data["config"]["internal_request"]
+        assert req["temporal_mode"] == "video_model"
+        assert req["motion_strategy"] == "storyboard_full_motion"
+        assert req["video_model_engine"] == "auto"
+
+
 def test_auto_dry_run_image_animation_with_source(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     _patch(monkeypatch, store, jobs)

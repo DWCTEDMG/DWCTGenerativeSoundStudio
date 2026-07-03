@@ -99,6 +99,27 @@ def test_build_autoconfig_internal_3d_includes_motion_overrides():
     assert cfg.comfyui_request is None
 
 
+def test_build_autoconfig_full_motion_uses_storyboard_video_model():
+    preset = ac.resolve_preset("full_motion")
+    cfg = ac.build_autoconfig(
+        preset,
+        engine="internal",
+        tier_defaults=_TIER_DEFAULTS,
+        applied_tier="quality",
+        preferred_model="hf_sdxl_internal",
+        device_preference="cuda",
+        duration_s=8.0,
+        fps=24,
+        comfyui_available=False,
+    )
+    req = cfg.internal_request
+    assert req["temporal_mode"] == "video_model"
+    assert req["motion_strategy"] == "storyboard_full_motion"
+    assert req["video_model_engine"] == "auto"
+    assert req["video_model_motion_score_mode"] == "auto"
+    assert any("storyboard full motion" in note.lower() for note in cfg.notes)
+
+
 def test_build_autoconfig_image_animation_sets_source():
     preset = ac.resolve_preset("image_animation")
     cfg = ac.build_autoconfig(

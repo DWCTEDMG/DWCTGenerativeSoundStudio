@@ -92,7 +92,8 @@ class AnimationPreset:
     description: str
     quality: str  # draft | balanced | quality
     motion: str  # key into MOTION_PROFILES
-    temporal_mode: str  # off | keyframes | frame_img2img
+    temporal_mode: str  # off | keyframes | frame_img2img | video_model
+    motion_strategy: str = "manual"  # manual | storyboard_full_motion
     engine_hint: str = "auto"  # auto | internal | comfyui
     comfyui_engine: str = "animatediff"  # animatediff | svd | regional
     uses_source_image: bool = False
@@ -116,6 +117,7 @@ class AnimationPreset:
             "motion_label": profile.label,
             "is_3d": profile.is_3d,
             "temporal_mode": self.temporal_mode,
+            "motion_strategy": self.motion_strategy,
             "engine_hint": self.engine_hint,
             "comfyui_engine": self.comfyui_engine,
             "uses_source_image": self.uses_source_image,
@@ -154,10 +156,11 @@ ANIMATION_PRESETS: list[AnimationPreset] = [
     AnimationPreset(
         id="full_motion",
         label="High quality, full motion",
-        description="High quality render with full 2D camera motion.",
+        description="Storyboard-driven full motion using generated keyframe anchors and internal video-model shots.",
         quality="quality",
         motion="full",
-        temporal_mode="frame_img2img",
+        temporal_mode="video_model",
+        motion_strategy="storyboard_full_motion",
     ),
     AnimationPreset(
         id="cinematic_3d",
@@ -423,6 +426,7 @@ def build_autoconfig(
         "render_tier": str(applied_tier or "auto"),
         "device_preference": str(device_preference or "auto"),
         "temporal_mode": str(preset.temporal_mode or td.get("temporal_mode", "keyframes")),
+        "motion_strategy": str(preset.motion_strategy or "manual"),
         "temporal_steps": int(td.get("temporal_steps", 12)),
         "refine_every_n_frames": int(td.get("refine_every_n_frames", 1)),
         "anchor_strength": float(td.get("anchor_strength", 0.20)),
@@ -430,6 +434,18 @@ def build_autoconfig(
         "allow_hosted_fallback": True,
         "allow_proxy_fallback": True,
     }
+    if preset.motion_strategy == "storyboard_full_motion":
+        internal_request.update(
+            {
+                "video_model_engine": "auto",
+                "video_model_motion_score_mode": "auto",
+                "video_model_anchor_mode": "start",
+                "video_model_prompt_refine": True,
+            }
+        )
+        notes.append(
+            "Storyboard full motion enabled: Studio generates keyframe anchors from the plan, then renders short internal video-model shots."
+        )
     internal_request.update(schedule_to_request_overrides(schedule))
     if use_source:
         internal_request["source_asset"] = str(source_asset)

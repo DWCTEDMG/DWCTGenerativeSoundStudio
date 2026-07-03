@@ -1749,6 +1749,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
             {selectedAutoPreset ? (
               <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
                 {selectedAutoPreset.description} • motion: <b>{selectedAutoPreset.motion_label || selectedAutoPreset.motion}</b>
+                {selectedAutoPreset.motion_strategy === "storyboard_full_motion" ? <> • route: <b>storyboard video model</b></> : null}
                 {selectedAutoPreset.is_3d ? " (3D)" : ""} • quality: <b>{selectedAutoPreset.quality}</b>
                 {selectedAutoPreset.animates_objects ? " • animates objects in the image" : ""}
               </div>
@@ -1802,6 +1803,8 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 <div className="small">
                   Engine: <b>{autoConfig.engine}</b>
                   {autoConfig.config.internal_request?.render_tier ? <> • tier: <b>{autoConfig.config.internal_request.render_tier}</b></> : null}
+                  {autoConfig.config.internal_request?.temporal_mode ? <> • temporal: <b>{autoConfig.config.internal_request.temporal_mode}</b></> : null}
+                  {autoConfig.config.internal_request?.motion_strategy ? <> • strategy: <b>{autoConfig.config.internal_request.motion_strategy}</b></> : null}
                   {autoConfig.config.animation_mode ? <> • mode: <b>{autoConfig.config.animation_mode}</b></> : null}
                 </div>
                 {autoEngine === "comfyui" && autoConfig.comfyui_available === false ? (
