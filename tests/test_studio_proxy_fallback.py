@@ -5,6 +5,7 @@ import json
 from contextlib import ExitStack
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from edmg_studio_backend import app as studio_app
@@ -54,6 +55,38 @@ def test_internal_preflight_falls_back_to_proxy(tmp_path, monkeypatch):
     assert preflight["estimated_frames"] == 12
     assert preflight["cache"]["frames_expected"] == 12
     assert any("proxy" in w.lower() for w in preflight["warnings"])
+
+
+def test_internal_preflight_blocks_explicit_proxy_when_disabled(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app.render_settings, "get", lambda: {"video": {"allow_proxy_renders": False}})
+
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        studio_app._internal_render_preflight_data(
+            proj.id,
+            {"variant_index": 0, "render_mode": "proxy", "allow_proxy_fallback": True},
+        )
+
+    assert exc.value.code == "PROXY_RENDER_DISABLED"
+
+
+def test_internal_preflight_blocks_proxy_fallback_when_disabled(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
+    monkeypatch.setattr(studio_app.render_settings, "get", lambda: {"video": {"allow_proxy_renders": False}})
+
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        studio_app._internal_render_preflight_data(
+            proj.id,
+            {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": True},
+        )
+
+    assert exc.value.code == "PROXY_RENDER_DISABLED"
 
 
 def test_internal_preflight_falls_back_to_proxy_for_incomplete_internal_model(tmp_path, monkeypatch):
@@ -107,6 +140,21 @@ def test_run_pipeline_auto_uses_proxy_when_comfy_and_models_missing(tmp_path, mo
     assert captured["project_id"] == proj.id
     assert captured["req"].render_mode == "proxy"
     assert captured["req"].allow_proxy_fallback is True
+
+
+def test_run_pipeline_auto_reports_no_route_when_proxy_disabled(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    monkeypatch.setattr(studio_app.comfy_pool, "diagnose", lambda _req: {"compatible": [], "busy_compatible": []})
+    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
+    monkeypatch.setattr(studio_app.render_settings, "get", lambda: {"video": {"allow_proxy_renders": False}})
+
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        studio_app.run_pipeline(proj.id, variant_index=0, preset="balanced", mode="auto", engine="auto")
+
+    assert exc.value.code == "NO_RENDER_ROUTE"
 
 
 def test_proxy_renderer_creates_video_and_metadata_without_ffmpeg(tmp_path, monkeypatch):

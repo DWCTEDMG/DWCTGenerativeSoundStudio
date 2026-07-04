@@ -503,6 +503,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const fireflyVisible = !!renderProviders?.firefly?.visible;
   const imagineartVisible = !!renderProviders?.imagineart?.visible;
   const cosmosReady = !!renderProviders?.cosmos?.active;
+  const proxyRendersEnabled = renderProviders
+    ? renderProviders?.proxy?.enabled !== false && renderProviders?.settings?.video?.allow_proxy_renders !== false
+    : true;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
 
@@ -546,7 +549,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       render_tier: internalRenderTier,
       device_preference: useTensorRt ? "cuda" : internalDevicePreference,
       allow_hosted_fallback: true,
-      allow_proxy_fallback: true,
+      allow_proxy_fallback: proxyRendersEnabled,
       resume_existing_frames: useTensorRt ? false : internalResumeExisting,
     };
   };
@@ -638,6 +641,12 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       setInternalRenderMode("auto");
     }
   }, [internalHostedVisible, internalRenderMode]);
+
+  useEffect(() => {
+    if (!proxyRendersEnabled && internalRenderMode === "proxy") {
+      setInternalRenderMode("auto");
+    }
+  }, [proxyRendersEnabled, internalRenderMode]);
 
   useEffect(() => {
     if (!internalDirectmlAvailable && internalDevicePreference === "directml") {
@@ -937,6 +946,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalVideoKeyframeRenderer,
     motionSequencerEnabled,
     tensorRtInternalModel,
+    proxyRendersEnabled,
   ]);
 
   useEffect(() => {
@@ -1953,7 +1963,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       {internalHostedVisible ? <option value="hosted">Hosted Stability</option> : null}
                       {tensorRtInternalVisible ? <option value="tensorrt">TensorRT SD1.5 keyframe assembly</option> : null}
                       {fireflyVisible ? <option value="firefly">Adobe Firefly</option> : null}
-                      <option value="proxy">Proxy only</option>
+                      {proxyRendersEnabled ? <option value="proxy">Proxy only</option> : null}
                     </select>
                   </div>
                   <div style={{ minWidth: 140 }}>
@@ -2009,6 +2019,11 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
                   Tip: install internal models in Models first. Auto tiering adapts the internal renderer for laptops, Apple Silicon, CPU-only systems, higher-end GPUs, and the TensorRT CUDA keyframe path.
                 </div>
+                {!proxyRendersEnabled ? (
+                  <div className="small" style={{ marginTop: 6, color: "var(--warning,#d97706)" }}>
+                    Proxy draft renders are disabled. Auto mode will require local internal models or a configured hosted fallback.
+                  </div>
+                ) : null}
                 {internalRenderMode === "tensorrt" ? (
                   <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
                     TensorRT keyframe assembly forces CUDA, keyframe temporal mode, the local SD1.5 TensorRT bundle, and the compiled 512x512 batch-1 profile. It is still-frame assembly with interpolation, not SVD or AnimateDiff subject motion. For moving subjects, use Internal video model with TensorRT SD1.5 storyboard anchors.

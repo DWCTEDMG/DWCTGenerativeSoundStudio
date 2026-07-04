@@ -2308,9 +2308,28 @@ def hardware():
     return {"ok": True, "hardware": hw, "render_tier_plan": _build_internal_render_plan(hw, requested_tier="auto")}
 
 
+def _proxy_renders_enabled() -> bool:
+    video_cfg = dict((render_settings.get().get("video") or {}))
+    return bool(video_cfg.get("allow_proxy_renders", True))
+
+
+def _proxy_render_disabled_error(reason: str | None = None) -> UserFacingError:
+    detail = f" {reason}" if reason else ""
+    return UserFacingError(
+        f"Proxy draft renders are disabled.{detail}",
+        hint=(
+            "Install or select a local internal model, enable a hosted fallback, or turn proxy draft "
+            "renders back on in Settings -> GPU / Render Runtime."
+        ),
+        code="PROXY_RENDER_DISABLED",
+        status_code=400,
+    )
+
+
 def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     hw = dict(hw or _hardware_profile())
     cfg = render_settings.get()
+    video_cfg = dict(cfg.get("video") or {})
     cosmos_cfg = dict(cfg.get("cosmos") or {})
     firefly_cfg = dict(cfg.get("firefly") or {})
     stability_cfg = dict(cfg.get("stability") or {})
@@ -2339,6 +2358,17 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "ok": True,
         "settings": cfg,
+        "proxy": {
+            "provider": "local-proxy-draft",
+            "enabled": bool(video_cfg.get("allow_proxy_renders", True)),
+            "available": True,
+            "active": bool(video_cfg.get("allow_proxy_renders", True)),
+            "note": (
+                "Local draft proxy renders are available for pacing previews and missing-model fallback."
+                if bool(video_cfg.get("allow_proxy_renders", True))
+                else "Local draft proxy renders are disabled; renders must use internal models or a hosted fallback."
+            ),
+        },
         "firefly": {
             "provider": "adobe-firefly",
             "configured": firefly_credentials_ok,
@@ -5674,6 +5704,7 @@ def _build_render_conductor_environment() -> dict[str, Any]:
     hw = _hardware_profile()
     provider_status = _render_provider_status(hw)
     runtime = _internal_diffusion_runtime_status()
+    proxy_enabled = _proxy_renders_enabled()
     installed_internal = any(
         _internal_model_is_available(model_id)
         for model_id in ("hf_sd15_internal", "hf_sdxl_internal", "hf_sd35_medium_internal")
@@ -5761,7 +5792,7 @@ def _build_render_conductor_environment() -> dict[str, Any]:
                 "speed_score": 0.82,
             },
             "proxy": {
-                "available": True,
+                "available": proxy_enabled,
                 "quality_score": 0.38,
                 "speed_score": 0.95,
             },
@@ -9151,6 +9182,9 @@ def _proxy_render_preflight_data(
     reason: str | None = None,
     requested_model_id: str | None = None,
 ) -> dict[str, Any]:
+    if not _proxy_renders_enabled():
+        raise _proxy_render_disabled_error(reason)
+
     proj = store.get(project_id)
     if not proj:
         raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
@@ -10137,6 +10171,15 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
         diagnostics.append("internal_models=unsupported" if hardware_issues else "internal_models=missing")
         diagnostics.extend(str(issue["message"]) for issue in hardware_issues)
     diagnostics.extend(list(runtime.get("diagnostics") or []))
+    if not _proxy_renders_enabled():
+        return {
+            "mode": "none",
+            "engine": None,
+            "model_id": None,
+            "reason": f"{reason} No local internal render route is available, and proxy draft renders are disabled.",
+            "diagnostics": diagnostics + ["proxy_renders=disabled", f"project={project_id}"],
+            "tier_plan": tier_plan,
+        }
     proxy_reason = reason
     if picked and not runtime.get("ok"):
         proxy_reason = f"{reason} Internal diffusion runtime is not installed."
@@ -10502,13 +10545,20 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             refine_every_n_frames=int(tier_defaults.get("refine_every_n_frames", 1)),
             anchor_strength=float(tier_defaults.get("anchor_strength", 0.20)),
             prompt_blend=bool(tier_defaults.get("prompt_blend", True)),
-            allow_proxy_fallback=True,
+            allow_proxy_fallback=_proxy_renders_enabled(),
         )
         res = render_internal_video(project_id, internal_req)
         return {"ok": True, "mode": str(res.get("preflight", {}).get("mode") or "internal"), "job": res.get("job"), "preflight": res.get("preflight")}
 
     defaults = _preset_defaults(preset)
     rec = _recommend_pipeline(project_id, preset=preset, mode=mode, engine=engine)
+    if rec.get("mode") == "none":
+        raise UserFacingError(
+            "No render route is available.",
+            hint=str(rec.get("reason") or "Enable local internal models, a hosted fallback, or proxy draft renders."),
+            code="NO_RENDER_ROUTE",
+            status_code=400,
+        )
 
     if rec["mode"] in ("internal", "proxy", "hosted"):
         hw = _hardware_profile()
@@ -10538,7 +10588,7 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             anchor_strength=float(tier_defaults.get("anchor_strength", 0.20)),
             prompt_blend=bool(tier_defaults.get("prompt_blend", True)),
             allow_hosted_fallback=True,
-            allow_proxy_fallback=True,
+            allow_proxy_fallback=_proxy_renders_enabled(),
         )
         res = render_internal_video(project_id, internal_req)
         effective_mode = str(res.get("preflight", {}).get("mode") or rec["mode"])

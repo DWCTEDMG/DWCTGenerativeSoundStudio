@@ -49,6 +49,7 @@ DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
         "preference": "auto",
         "auto_prefer_gpu": True,
         "cosmos_fallback": True,
+        "allow_proxy_renders": True,
     },
     "cosmos": {
         "enabled": True,
@@ -199,6 +200,7 @@ class RenderSettingsStore:
             "preference": video_pref,
             "auto_prefer_gpu": bool(video.get("auto_prefer_gpu", out["video"]["auto_prefer_gpu"])),
             "cosmos_fallback": bool(video.get("cosmos_fallback", out["video"]["cosmos_fallback"])),
+            "allow_proxy_renders": bool(video.get("allow_proxy_renders", out["video"]["allow_proxy_renders"])),
         }
 
         cosmos_model = str(cosmos.get("model") or out["cosmos"]["model"]).strip().lower()

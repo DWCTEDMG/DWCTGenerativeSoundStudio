@@ -1547,11 +1547,21 @@ export default function Settings(props: PageProps) {
                     />
                     Fall back to Cosmos if GPU render fails
                   </label>
+                  <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input type="checkbox"
+                      checked={renderProviderDraft?.video?.allow_proxy_renders !== false}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), video: { ...(c?.video || {}), allow_proxy_renders: e.target.checked },
+                      }))}
+                    />
+                    Allow local proxy draft renders and missing-model fallback
+                  </label>
                 </div>
               </div>
               <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
                 Local GPU: {videoRoute?.local_ready ? <b style={{color:"green"}}>ready — {videoRoute?.local_detail?.device} ({videoRoute?.local_detail?.vram_gb} GB)</b> : <b style={{color:"#888"}}>not available</b>}
                 {" "}• Cosmos Cloud: {videoRoute?.cosmos_ready ? <b style={{color:"green"}}>configured</b> : <b style={{color:"#888"}}>not configured (add NVIDIA API key)</b>}
+                {" "}• Proxy drafts: {renderProviderDraft?.video?.allow_proxy_renders !== false ? <b style={{color:"green"}}>allowed</b> : <b style={{color:"#888"}}>disabled</b>}
               </div>
             </div>
 
