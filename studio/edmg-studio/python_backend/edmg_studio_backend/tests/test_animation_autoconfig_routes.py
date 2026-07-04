@@ -92,6 +92,38 @@ def test_auto_dry_run_full_motion_uses_storyboard_video_model(tmp_path, monkeypa
         assert req["video_model_keyframe_model_id"] == "local_sd15_tensorrt_bundle"
 
 
+def test_motion_sequencer_apply_generates_active_parseq_manifest(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/motion_sequencer/apply",
+            json={"variant_index": 0, "fps": 24, "activate": True},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["active"] is True
+        assert data["summary"]["schedules"] >= 1
+        assert data["overrides"]["video_model_motion_score_schedule"]
+        saved = store.get(proj.id)
+        assert saved.meta["active_parseq_manifest"]["format"] == "edmg_parseq_motion_manifest"
+        assert saved.meta["render_recipe_graph"]["source"] == "studio_native"
+
+
+def test_motion_sequencer_preview_returns_generated_manifest(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    with TestClient(backend_app.app) as client:
+        resp = client.get(f"/v1/projects/{proj.id}/render/motion_sequencer?variant_index=0&fps=24")
+        resp.raise_for_status()
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["active"] is None
+        assert data["generated"]["format"] == "edmg_parseq_motion_manifest"
+        assert data["recipe_graph"]["source"] == "studio_native"
+
+
 def test_auto_dry_run_image_animation_with_source(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     _patch(monkeypatch, store, jobs)

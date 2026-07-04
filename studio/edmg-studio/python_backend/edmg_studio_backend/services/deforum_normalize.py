@@ -319,6 +319,9 @@ def _request_override_motion(overrides: dict[str, Any] | None) -> DeforumMotionS
         "rotation_3d_z": overrides.get("deforum_rotation_3d_z"),
         "fov": overrides.get("deforum_fov"),
         "strength_schedule": overrides.get("deforum_strength_schedule"),
+        "cfg_scale_schedule": overrides.get("deforum_cfg_scale_schedule"),
+        "steps_schedule": overrides.get("deforum_steps_schedule"),
+        "denoise_schedule": overrides.get("deforum_denoise_schedule"),
     }
     return motion_bundle_from_mapping({key: value for key, value in mapped.items() if value is not None})
 

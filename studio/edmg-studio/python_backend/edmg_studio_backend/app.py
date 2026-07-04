@@ -60,11 +60,13 @@ from .schemas import (
     ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
+    ParseqMotionApplyRequest,
     LayeredAnimateRequest,
     TensorRTStandaloneRenderRequest,
 )
 from .services import animation_autoconfig as autoconfig
 from .services import layer_animation as layeranim
+from .services import parseq_adapter
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
 from .services.ai_client import build_ai_client
@@ -595,6 +597,53 @@ def _request_payload(model: Any) -> dict[str, Any]:
     if callable(legacy):
         return legacy()
     raise TypeError(f"Object {type(model)!r} is not a supported request model")
+
+
+def _project_variant_for_render(proj: Any, variant_index: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    plan = proj.meta.get("last_plan") if isinstance(getattr(proj, "meta", None), dict) else {}
+    variants = plan.get("variants") if isinstance(plan, dict) and isinstance(plan.get("variants"), list) else []
+    vi = int(variant_index or 0)
+    if variants and 0 <= vi < len(variants) and isinstance(variants[vi], dict):
+        variant = variants[vi]
+    else:
+        fallback = _creative_direction_fallback_variant(proj, vi)
+        variant = fallback if isinstance(fallback, dict) else {"index": vi, "scenes": []}
+    scenes = [scene for scene in list(variant.get("scenes") or []) if isinstance(scene, dict)]
+    return variant, scenes
+
+
+def _active_parseq_manifest(proj: Any) -> dict[str, Any] | None:
+    meta = proj.meta if isinstance(getattr(proj, "meta", None), dict) else {}
+    manifest = meta.get("active_parseq_manifest")
+    return manifest if isinstance(manifest, dict) else None
+
+
+def _parseq_payload_enabled(payload: dict[str, Any]) -> bool:
+    raw = payload.get("parseq_enabled", True)
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(raw)
+
+
+def _apply_active_parseq_motion(proj: Any, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if not _parseq_payload_enabled(payload):
+        return payload, None
+    manifest = payload.get("parseq_manifest") if isinstance(payload.get("parseq_manifest"), dict) else _active_parseq_manifest(proj)
+    if not isinstance(manifest, dict):
+        return payload, None
+    parsed = parseq_adapter.parseq_manifest_to_internal_overrides(manifest)
+    overrides = parsed.get("overrides") if isinstance(parsed.get("overrides"), dict) else {}
+    if not overrides:
+        return payload, parsed
+    merged = dict(payload)
+    for key, value in overrides.items():
+        merged[key] = value
+    merged["_parseq_motion"] = parsed.get("summary") or {}
+    merged["_render_recipe_graph"] = parseq_adapter.build_render_recipe_graph(
+        manifest=manifest,
+        internal_request=merged,
+    )
+    return merged, parsed
 
 
 def _catalog_entry(model_id: str | None) -> dict[str, Any] | None:
@@ -8605,7 +8654,7 @@ def render_internal_video(project_id: str, req: InternalVideoRenderRequest):
     if not proj:
         raise HTTPException(404, "Project not found")
 
-    payload = _request_payload(req)
+    payload, _parseq = _apply_active_parseq_motion(proj, _request_payload(req))
     preflight = _internal_render_preflight_data(project_id, payload)
     payload["render_mode"] = str(preflight.get("mode") or payload.get("render_mode") or "auto")
     job = jobs.create(project_id, "internal_video", payload)
@@ -8620,6 +8669,68 @@ def render_internal_video(project_id: str, req: InternalVideoRenderRequest):
     proj.meta.setdefault("jobs", []).append(job.__dict__)
     store.save(proj)
     return {"ok": True, "job": job.__dict__, "preflight": preflight}
+
+
+@app.get("/v1/projects/{project_id}/render/motion_sequencer")
+def render_motion_sequencer(project_id: str, variant_index: int = 0, fps: int = 24):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    variant, scenes = _project_variant_for_render(proj, int(variant_index or 0))
+    duration_s = _resolved_project_duration_s(proj, variant, scenes)
+    analysis = proj.meta.get("analysis") if isinstance(proj.meta.get("analysis"), dict) else {}
+    generated = parseq_adapter.build_parseq_manifest(
+        variant=variant,
+        analysis=analysis,
+        fps=max(1, min(60, int(fps or variant.get("fps") or 24))),
+        duration_s=duration_s,
+    )
+    active = _active_parseq_manifest(proj)
+    manifest = active or generated
+    parsed = parseq_adapter.parseq_manifest_to_internal_overrides(manifest)
+    recipe_graph = parseq_adapter.build_render_recipe_graph(
+        manifest=manifest,
+        internal_request=(proj.meta.get("last_internal_render") if isinstance(proj.meta.get("last_internal_render"), dict) else {}),
+    )
+    return {
+        "ok": True,
+        "variant_index": int(variant_index or 0),
+        "active": active,
+        "generated": generated,
+        "summary": parsed.get("summary"),
+        "overrides": parsed.get("overrides"),
+        "recipe_graph": recipe_graph,
+    }
+
+
+@app.post("/v1/projects/{project_id}/render/motion_sequencer/apply")
+def render_motion_sequencer_apply(project_id: str, req: ParseqMotionApplyRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    variant, scenes = _project_variant_for_render(proj, int(req.variant_index or 0))
+    duration_s = _resolved_project_duration_s(proj, variant, scenes)
+    analysis = proj.meta.get("analysis") if isinstance(proj.meta.get("analysis"), dict) else {}
+    manifest = req.manifest if isinstance(req.manifest, dict) else parseq_adapter.build_parseq_manifest(
+        variant=variant,
+        analysis=analysis,
+        fps=int(req.fps or variant.get("fps") or 24),
+        duration_s=duration_s,
+    )
+    parsed = parseq_adapter.parseq_manifest_to_internal_overrides(manifest)
+    recipe_graph = parseq_adapter.build_render_recipe_graph(manifest=manifest, internal_request={})
+    if req.activate:
+        proj.meta["active_parseq_manifest"] = manifest
+        proj.meta["render_recipe_graph"] = recipe_graph
+        store.save(proj)
+    return {
+        "ok": True,
+        "active": bool(req.activate),
+        "manifest": manifest,
+        "summary": parsed.get("summary"),
+        "overrides": parsed.get("overrides"),
+        "recipe_graph": recipe_graph,
+    }
 
 
 
@@ -8725,6 +8836,9 @@ def _internal_settings_from_payload(
         "deforum_rotation_3d_z",
         "deforum_fov",
         "deforum_strength_schedule",
+        "deforum_cfg_scale_schedule",
+        "deforum_steps_schedule",
+        "deforum_denoise_schedule",
     )
     deforum_overrides = {
         key: payload.get(key)
@@ -8781,6 +8895,9 @@ def _internal_settings_from_payload(
         video_model_scene_motion=video_scene_motion,
         video_model_keyframe_renderer=video_keyframe_renderer,
         video_model_keyframe_model_id=(str(payload.get("video_model_keyframe_model_id")).strip() or None) if payload.get("video_model_keyframe_model_id") is not None else None,
+        video_model_motion_score_schedule=payload.get("video_model_motion_score_schedule"),
+        video_model_noise_aug_schedule=payload.get("video_model_noise_aug_schedule"),
+        anchor_strength_schedule=payload.get("anchor_strength_schedule"),
         source_asset=(str(payload.get("source_asset")).strip() or None) if payload.get("source_asset") is not None else None,
         source_strength=float(payload.get("source_strength", 0.55)),
         deforum_overrides=deforum_overrides or None,
@@ -9392,6 +9509,69 @@ def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, h
     return []
 
 
+def _studio_native_resource_policy(
+    *,
+    settings_obj: InternalVideoSettings,
+    hw: dict[str, Any],
+    model_family: str,
+) -> dict[str, Any]:
+    """Forge-inspired resource policy implemented inside Studio, with no Forge API dependency."""
+    requested = str(settings_obj.device_preference or "auto").strip().lower()
+    backend = requested if requested in {"cuda", "cpu", "mps", "directml"} else str(hw.get("backend") or "cpu").lower()
+    vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
+    family = str(model_family or "").lower()
+    video_model = str(settings_obj.temporal_mode or "").lower() == "video_model"
+    notes: list[str] = []
+
+    if backend == "cuda":
+        dtype = "float16"
+        if vram_gb and vram_gb <= 6.5:
+            offload = "aggressive_cpu_offload"
+            attention = "sliced_attention_and_small_decode_chunks"
+            notes.append("6 GB CUDA policy: prefer SD1.5/SDXL anchors, CPU offload, sliced decode, and short video-model shots.")
+        elif vram_gb and vram_gb <= 8.5:
+            offload = "balanced_cpu_offload"
+            attention = "sliced_decode"
+            notes.append("8 GB CUDA policy: keep video shots short, use CPU offload for SVD/AnimateDiff, and avoid stacking many adapters.")
+        else:
+            offload = "gpu_preferred"
+            attention = "standard_attention"
+    elif backend == "directml":
+        dtype = "float16"
+        offload = "directml_safe"
+        attention = "single_adapter"
+        notes.append("DirectML policy: prefer SDXL/SD1.5 still or frame motion paths; keep video-model adapters on CUDA when available.")
+    else:
+        dtype = "float32" if backend == "cpu" else "auto"
+        offload = "cpu_or_unified_memory"
+        attention = "low_parallelism"
+        notes.append("Non-CUDA policy: use lower FPS render, smaller frames, and proxy/keyframe paths for long clips.")
+
+    lora_count = len(tuple(settings_obj.loras or ()))
+    if lora_count > 2 and vram_gb and vram_gb <= 8.5:
+        notes.append("Multiple LoRAs on low VRAM can destabilize long renders; Studio keeps them as prompt/keyframe adapters only.")
+    if family in {"sd3", "sd35"} and backend == "cuda" and vram_gb and vram_gb < SD35_INTERNAL_MIN_CUDA_VRAM_GB:
+        notes.append("SD3.5 is too large for this CUDA video path; Studio will prefer SDXL/SD1.5 or hosted fallback.")
+    if video_model and backend == "cuda" and vram_gb and vram_gb <= 8.5:
+        notes.append("Video-model memory safety is active before motion generation so still-image pipelines can be released first.")
+
+    return {
+        "source": "studio_native_forge_equivalent",
+        "backend": backend,
+        "model_family": family or "unknown",
+        "vram_gb": vram_gb,
+        "precision_policy": dtype,
+        "offload_policy": offload,
+        "attention_policy": attention,
+        "adapter_policy": {
+            "loras": {"count": lora_count, "policy": "keyframe_safe_merge" if lora_count else "none"},
+            "controlnet": {"policy": "still_image_workflow_only"},
+            "ip_adapter": {"policy": "not_enabled_for_internal_video"},
+        },
+        "notes": notes,
+    }
+
+
 def _internal_render_prompt_preview(
     *,
     variant: dict[str, Any],
@@ -9604,6 +9784,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         if allow_proxy and e.code in {"MODEL_NOT_INSTALLED", "MODEL_UNSUPPORTED_FOR_HARDWARE"}:
             return _proxy_render_preflight_data(project_id, payload, reason=e.message, requested_model_id=str(payload.get("model_id") or "auto"))
         raise
+    model_family = _internal_model_family_for_request(model_id, model_path)
 
     scenes = variant.get("scenes") or []
     used_fallback_plan = str(variant.get("_fallback_plan_source") or "") == "creative_direction_fallback"
@@ -9616,6 +9797,15 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     tier_plan = _build_internal_render_plan(hw, requested_tier=str(payload.get("render_tier") or settings_obj.render_tier or "auto"), duration_s=duration_s)
     tier_plan["chunk_plan"] = _build_render_chunk_plan(hw, applied_tier=str(tier_plan.get("applied_tier") or "draft"), duration_s=duration_s, total_frames=total_frames, fps_render=fps_render, render_mode="diffusion")
     warnings: list[str] = []
+    parseq_motion = payload.get("_parseq_motion") if isinstance(payload.get("_parseq_motion"), dict) else None
+    if parseq_motion:
+        warnings.append(
+            f"Parseq-style motion sequencer is active: {int(parseq_motion.get('schedules') or 0)} schedule(s), "
+            f"{int(parseq_motion.get('keyframes') or 0)} keyframe row(s), {int(parseq_motion.get('prompts') or 0)} prompt override(s)."
+        )
+    resource_policy = _studio_native_resource_policy(settings_obj=settings_obj, hw=hw, model_family=model_family)
+    for note in list(resource_policy.get("notes") or []):
+        warnings.append(str(note))
     if used_fallback_plan:
         warnings.append(
             "No saved plan found; using the generated creative-direction fallback scene pack. "
@@ -9712,6 +9902,12 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         "resume_existing_frames": bool(settings_obj.resume_existing_frames),
         "prompt_preview": prompt_preview,
         "warnings": warnings,
+        "parseq_motion": parseq_motion,
+        "render_recipe_graph": payload.get("_render_recipe_graph") or parseq_adapter.build_render_recipe_graph(
+            manifest=payload.get("parseq_manifest") if isinstance(payload.get("parseq_manifest"), dict) else None,
+            internal_request=payload,
+        ),
+        "resource_policy": resource_policy,
         "cache": cache,
         "installed_internal_models": installed_internal,
         "installed_internal_video_models": _installed_internal_video_models_status(),
@@ -9738,6 +9934,9 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "video_model_scene_motion": normalize_video_model_scene_motion(settings_obj.video_model_scene_motion),
             "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings_obj.video_model_keyframe_renderer),
             "video_model_keyframe_model_id": settings_obj.video_model_keyframe_model_id,
+            "video_model_motion_score_schedule": settings_obj.video_model_motion_score_schedule,
+            "video_model_noise_aug_schedule": settings_obj.video_model_noise_aug_schedule,
+            "anchor_strength_schedule": settings_obj.anchor_strength_schedule,
             "motion_strategy": normalize_internal_motion_strategy(settings_obj.motion_strategy),
             "storyboard_shot_max_s": settings_obj.storyboard_shot_max_s,
             "temporal_steps": settings_obj.temporal_steps,
@@ -9751,7 +9950,11 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
 
 @app.post("/v1/projects/{project_id}/render/internal/preflight")
 def render_internal_preflight(project_id: str, req: InternalVideoRenderRequest):
-    return _internal_render_preflight_data(project_id, _request_payload(req))
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    payload, _parseq = _apply_active_parseq_motion(proj, _request_payload(req))
+    return _internal_render_preflight_data(project_id, payload)
 
 @app.post("/v1/projects/{project_id}/render/comfyui/motion_scenes")
 def render_motion_scenes(project_id: str, req: RenderMotionRequest):

@@ -212,6 +212,11 @@ class InternalVideoRenderRequest(BaseModel):
     video_model_scene_motion: Literal["camera","subject","scene"] = "subject"
     video_model_keyframe_renderer: Literal["internal","tensorrt_sd15"] = "internal"
     video_model_keyframe_model_id: str | None = None
+    video_model_motion_score_schedule: str | dict[str, float] | None = None
+    video_model_noise_aug_schedule: str | dict[str, float] | None = None
+    anchor_strength_schedule: str | dict[str, float] | None = None
+    parseq_enabled: bool = True
+    parseq_manifest: dict[str, Any] | None = None
     # Image animation: animate an uploaded still (path under the project, e.g. assets/refs/foo.png)
     source_asset: str | None = None
     source_strength: float = Field(default=0.55, ge=0.05, le=0.95)
@@ -227,6 +232,9 @@ class InternalVideoRenderRequest(BaseModel):
     deforum_rotation_3d_z: str | dict[str, float] | None = None
     deforum_fov: str | dict[str, float] | None = None
     deforum_strength_schedule: str | dict[str, float] | None = None
+    deforum_cfg_scale_schedule: str | dict[str, float] | None = None
+    deforum_steps_schedule: str | dict[str, float] | None = None
+    deforum_denoise_schedule: str | dict[str, float] | None = None
 
 class AutoAnimateRequest(BaseModel):
     """AI auto-configure (and optionally run) an animation render.
@@ -242,6 +250,13 @@ class AutoAnimateRequest(BaseModel):
     source_asset: str | None = None
     run: bool = True
     fps: int | None = Field(default=None, ge=1, le=60)
+
+
+class ParseqMotionApplyRequest(BaseModel):
+    variant_index: int = 0
+    fps: int = Field(default=24, ge=1, le=60)
+    manifest: dict[str, Any] | None = None
+    activate: bool = True
 
 
 class LayerMaskSpec(BaseModel):

@@ -202,6 +202,42 @@ const installRenderMocks = () => {
       },
     },
     "POST /v1/projects/p1/render/internal/preflight": { ok: true, mode: "proxy" },
+    "/v1/projects/p1/render/motion_sequencer*": {
+      ok: true,
+      active: null,
+      generated: {
+        format: "edmg_parseq_motion_manifest",
+        schedules: { motion_score: "0:(4.0000), 96:(6.0000)" },
+      },
+      summary: { schedules: 3, keyframes: 2, prompts: 2 },
+      overrides: { video_model_motion_score_schedule: "0:(4.0000), 96:(6.0000)" },
+      recipe_graph: {
+        source: "studio_native",
+        nodes: [
+          { id: "analysis", label: "Analysis + transcript" },
+          { id: "motion_sequencer", label: "Parseq-style motion sequencer" },
+          { id: "motion", label: "Full-motion adapter" },
+        ],
+      },
+    },
+    "POST /v1/projects/p1/render/motion_sequencer/apply": {
+      ok: true,
+      active: true,
+      manifest: {
+        format: "edmg_parseq_motion_manifest",
+        schedules: { motion_score: "0:(4.0000), 96:(6.0000)" },
+      },
+      summary: { schedules: 3, keyframes: 2, prompts: 2 },
+      overrides: { video_model_motion_score_schedule: "0:(4.0000), 96:(6.0000)" },
+      recipe_graph: {
+        source: "studio_native",
+        nodes: [
+          { id: "analysis", label: "Analysis + transcript" },
+          { id: "motion_sequencer", label: "Parseq-style motion sequencer" },
+          { id: "motion", label: "Full-motion adapter" },
+        ],
+      },
+    },
     "/v1/projects/p1/jobs": { jobs: [] },
   });
 };
@@ -309,6 +345,26 @@ describe("Render page", () => {
         }),
       ).toBe(true);
     });
+  }, 10000);
+
+  it("shows and applies the Parseq-style motion sequencer", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    expect(await screen.findByText("Motion Sequencer")).toBeTruthy();
+    expect(await screen.findByText(/Parseq-style schedules/i)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Generate + apply schedules" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) =>
+          String(url).includes("/v1/projects/p1/render/motion_sequencer/apply")
+          && String(init?.method || "GET").toUpperCase() === "POST"
+        ),
+      ).toBe(true);
+    });
+    expect(await screen.findByText(/Parseq-style motion sequencer/)).toBeTruthy();
   }, 10000);
 
   it("sends TensorRT SD1.5 as the video-model storyboard anchor renderer", async () => {

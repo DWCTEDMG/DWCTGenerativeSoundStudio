@@ -90,6 +90,9 @@ class InternalVideoSettings:
     video_model_scene_motion: str = "subject"  # camera|subject|scene
     video_model_keyframe_renderer: str = "internal"  # internal|tensorrt_sd15
     video_model_keyframe_model_id: str | None = None
+    video_model_motion_score_schedule: Any = None
+    video_model_noise_aug_schedule: Any = None
+    anchor_strength_schedule: Any = None
     # Image animation: an uploaded still used to seed the first keyframe (img2img).
     source_asset: str | None = None
     source_strength: float = 0.55
@@ -486,6 +489,9 @@ def _render_signature(
         "video_model_scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
         "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer),
         "video_model_keyframe_model_id": str(settings.video_model_keyframe_model_id or ""),
+        "video_model_motion_score_schedule": settings.video_model_motion_score_schedule,
+        "video_model_noise_aug_schedule": settings.video_model_noise_aug_schedule,
+        "anchor_strength_schedule": settings.anchor_strength_schedule,
         "source_asset": str(settings.source_asset or ""),
         "source_strength": float(settings.source_strength),
         "deforum_overrides": settings.deforum_overrides or None,
@@ -1844,6 +1850,26 @@ def _eval_schedule(pairs: list[tuple[int, float]], frame: int) -> float | None:
     return evaluate_schedule(pairs, frame, default=None)
 
 
+def _scheduled_numeric(
+    schedule: Any,
+    frame: int,
+    *,
+    default: float,
+    lo: float | None = None,
+    hi: float | None = None,
+) -> float:
+    value = evaluate_schedule(schedule, frame, default=float(default))
+    try:
+        out = float(value if value is not None else default)
+    except Exception:
+        out = float(default)
+    if lo is not None:
+        out = max(float(lo), out)
+    if hi is not None:
+        out = min(float(hi), out)
+    return out
+
+
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, float(v)))
 
@@ -2602,9 +2628,39 @@ def render_internal_video_variant(
                 duration_s=duration_s,
                 settings=settings,
             )
+            if settings.video_model_motion_score_schedule is not None and _normalize_video_motion_score_mode(settings.video_model_motion_score_mode) != "off":
+                scheduled_score = int(round(_scheduled_numeric(
+                    settings.video_model_motion_score_schedule,
+                    schedule_frame,
+                    default=float(score_info.get("motion_score") or settings.video_model_manual_motion_score or 4),
+                    lo=1.0,
+                    hi=7.0,
+                )))
+                score_info = {**score_info, "motion_score": scheduled_score, "source": "parseq_schedule"}
             prompt_for_model = _refine_video_model_prompt(prompt, score_info=score_info, settings=settings)
             motion_bucket_id = _video_model_motion_bucket_for_score(settings, score_info)
             seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt_for_model, motion_bucket_id, anchor_mode, work_tag)
+            mp_scene = evaluate_motion_state(
+                schedule_frame,
+                deforum_context.motion,
+                defaults={"cfg": settings.cfg, "steps": float(settings.temporal_steps or settings.steps)},
+            )
+            cfg_for_scene = float(mp_scene.cfg if mp_scene.cfg is not None else settings.cfg)
+            steps_for_scene = int(float(mp_scene.steps if mp_scene.steps is not None else (settings.temporal_steps or settings.steps)))
+            noise_aug_strength = _scheduled_numeric(
+                settings.video_model_noise_aug_schedule,
+                schedule_frame,
+                default=float(settings.video_model_noise_aug_strength),
+                lo=0.0,
+                hi=1.0,
+            )
+            shot_anchor_strength = _scheduled_numeric(
+                settings.anchor_strength_schedule,
+                schedule_frame,
+                default=float(settings.anchor_strength),
+                lo=0.0,
+                hi=1.0,
+            )
 
             if progress_fn:
                 progress_fn("video_model", len(key_times) + fi_cursor, total_units, f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
@@ -2623,7 +2679,9 @@ def render_internal_video_variant(
                 log_fn(
                     f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} "
                     f"frames={adapter_frames} seed={seed} anchor={anchor_mode}{storyboard_label} "
-                    f"motion_score={score_label} motion_bucket={motion_bucket_id} prompt={prompt_preview!r}"
+                    f"motion_score={score_label} motion_bucket={motion_bucket_id} "
+                    f"cfg={cfg_for_scene:.2f} steps={steps_for_scene} noise_aug={noise_aug_strength:.3f} "
+                    f"anchor_strength={shot_anchor_strength:.2f} prompt={prompt_preview!r}"
                 )
 
             adapter_w, adapter_h, adapter_note = _video_model_adapter_canvas(
@@ -2647,13 +2705,13 @@ def render_internal_video_variant(
                 height=adapter_h,
                 num_frames=adapter_frames,
                 fps=fps_r,
-                steps=int(settings.temporal_steps or settings.steps),
-                cfg=float(settings.cfg),
+                steps=steps_for_scene,
+                cfg=cfg_for_scene,
                 seed=seed,
                 device=device,
                 dtype=str(settings.video_model_dtype or "auto"),
                 motion_bucket_id=int(motion_bucket_id),
-                noise_aug_strength=float(settings.video_model_noise_aug_strength),
+                noise_aug_strength=float(noise_aug_strength),
                 decode_chunk_size=int(settings.video_model_decode_chunk_size),
                 cpu_offload=bool(settings.video_model_cpu_offload),
             )
@@ -2666,7 +2724,7 @@ def render_internal_video_variant(
                 anchor_mode=anchor_mode,
                 start_img=start_anchor_img,
                 end_img=end_anchor_img,
-                anchor_strength=float(settings.anchor_strength),
+                anchor_strength=float(shot_anchor_strength),
             )
 
             for local_i, fi in enumerate(range(start_f, end_f)):
@@ -2955,6 +3013,9 @@ def render_internal_video_variant(
             "video_model_scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
             "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer),
             "video_model_keyframe_model_id": str(settings.video_model_keyframe_model_id or ""),
+            "video_model_motion_score_schedule": settings.video_model_motion_score_schedule,
+            "video_model_noise_aug_schedule": settings.video_model_noise_aug_schedule,
+            "anchor_strength_schedule": settings.anchor_strength_schedule,
             "resume_existing_frames": bool(settings.resume_existing_frames),
             "model_id": str(settings.model_id),
             "negative_prompt": str(settings.negative_prompt),

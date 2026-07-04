@@ -308,6 +308,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [codexStatus, setCodexStatus] = useState<any>(null);
   const [codexReview, setCodexReview] = useState<any>(null);
   const [codexBusy, setCodexBusy] = useState<boolean>(false);
+  const [motionSequencer, setMotionSequencer] = useState<any>(null);
+  const [motionSequencerBusy, setMotionSequencerBusy] = useState<boolean>(false);
+  const [motionSequencerEnabled, setMotionSequencerEnabled] = useState<boolean>(true);
 
   // AI Auto-Render (preset-driven auto-configure + run)
   const [animationPresets, setAnimationPresets] = useState<any[]>([]);
@@ -537,6 +540,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       video_model_keyframe_model_id: internalVideoKeyframeRenderer === "tensorrt_sd15"
         ? (tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle")
         : undefined,
+      parseq_enabled: motionSequencerEnabled,
       model_id: useTensorRt ? tensorRtModelId : internalModelId,
       render_mode: internalRenderMode,
       render_tier: internalRenderTier,
@@ -690,6 +694,16 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const refreshMotionSequencer = async () => {
+    if (!projectId) return;
+    try {
+      const d = await apiGet(`/v1/projects/${projectId}/render/motion_sequencer?variant_index=${selectedVariant}&fps=${internalFpsOut || 24}`);
+      setMotionSequencer(d);
+    } catch {
+      setMotionSequencer(null);
+    }
+  };
+
   const refreshConductorPlan = async () => {
     if (!projectId || !(plan?.variants?.length || 0)) {
       setConductorPlan(null);
@@ -783,6 +797,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       refreshReferenceAssets(projectId).catch(() => {});
     }
   }, [projectId]);
+
+  useEffect(() => {
+    refreshMotionSequencer().catch(() => {});
+  }, [projectId, selectedVariant, internalFpsOut, plan]);
 
   useEffect(() => {
     refreshValidate().catch(() => {});
@@ -917,6 +935,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalVideoPromptRefine,
     internalVideoSceneMotion,
     internalVideoKeyframeRenderer,
+    motionSequencerEnabled,
     tensorRtInternalModel,
   ]);
 
@@ -970,6 +989,34 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       setCodexReview({ ok: false, error: String(e) });
     } finally {
       setCodexBusy(false);
+    }
+  };
+
+  const applyGeneratedMotionSequencer = async () => {
+    if (!projectId) return;
+    setErr(null);
+    setMotionSequencerBusy(true);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/motion_sequencer/apply`, {
+        variant_index: selectedVariant,
+        fps: internalFpsOut || 24,
+        activate: true,
+      });
+      setMotionSequencer({
+        ...(motionSequencer || {}),
+        active: d.manifest,
+        summary: d.summary,
+        overrides: d.overrides,
+        recipe_graph: d.recipe_graph,
+      });
+      setMotionSequencerEnabled(true);
+      setInfo(d);
+      await refreshProject(projectId);
+      await refreshInternalPreflight();
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setMotionSequencerBusy(false);
     }
   };
 
@@ -1841,6 +1888,54 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
             ) : null}
           </div>
 
+          <div className="card" style={{ marginTop: 12, padding: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 900 }}>Motion Sequencer</div>
+                <div className="small" style={{ opacity: 0.85 }}>
+                  Parseq-style schedules from the analysis and storyboard drive camera, diffusion controls, motion score, noise, and anchor blending.
+                </div>
+              </div>
+              <label className="row small" style={{ gap: 6, alignItems: "center" }}>
+                <input type="checkbox" checked={motionSequencerEnabled} onChange={(e) => setMotionSequencerEnabled(e.target.checked)} />
+                Use active schedules
+              </label>
+            </div>
+            <div className="small" style={{ marginTop: 8 }}>
+              Active: <b>{motionSequencer?.active ? "yes" : "generated preview"}</b>
+              {" "}• schedules <b>{motionSequencer?.summary?.schedules ?? 0}</b>
+              {" "}• keyframes <b>{motionSequencer?.summary?.keyframes ?? 0}</b>
+              {" "}• prompts <b>{motionSequencer?.summary?.prompts ?? 0}</b>
+            </div>
+            {Array.isArray(motionSequencer?.recipe_graph?.nodes) ? (
+              <div className="small" style={{ marginTop: 6 }}>
+                Recipe: {motionSequencer.recipe_graph.nodes.map((node: any) => String(node.label || node.id)).join(" -> ")}
+              </div>
+            ) : null}
+            <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              <button className="secondary" onClick={applyGeneratedMotionSequencer} disabled={!variantCount || motionSequencerBusy}>
+                {motionSequencerBusy ? "Applying..." : "Generate + apply schedules"}
+              </button>
+              <button className="secondary" onClick={() => refreshMotionSequencer().catch(() => {})} disabled={!projectId || motionSequencerBusy}>Refresh preview</button>
+            </div>
+            {motionSequencer?.summary ? (
+              <details style={{ marginTop: 8 }}>
+                <summary className="small" style={{ cursor: "pointer" }}>Schedule details</summary>
+                <StructuredSummary
+                  value={{
+                    summary: motionSequencer.summary,
+                    overrides: motionSequencer.overrides,
+                    recipe_graph: motionSequencer.recipe_graph,
+                  }}
+                  showJson
+                  jsonLabel="Show sequencer JSON"
+                  maxDepth={2}
+                  maxItems={12}
+                />
+              </details>
+            ) : null}
+          </div>
+
           <details style={{ marginTop: 12 }} open={uiMode === "advanced"}>
             <summary style={{ cursor: "pointer", fontWeight: 800 }}>Advanced routing & controls</summary>
             <div style={{ marginTop: 10 }}>
@@ -2002,6 +2097,25 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                         Internal video adapters: SVD <b>{internalPreflight?.installed_internal_video_models?.hf_svd_xt_1_1_internal ? "installed" : "missing"}</b> • AnimateDiff <b>{internalPreflight?.installed_internal_video_models?.hf_animatediff_motion_adapter_v15_2_internal ? "installed" : "missing"}</b>
                         {" "}• deps <b>{internalPreflight?.internal_video_model_dependencies?.diffusers_available ? "ready" : "missing diffusers"}</b>
                       </div>
+                      {internalPreflight?.parseq_motion ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          Motion sequencer: <b>{internalPreflight.parseq_motion.schedules}</b> schedule(s)
+                          {" "}• keyframes <b>{internalPreflight.parseq_motion.keyframes}</b>
+                          {" "}• prompts <b>{internalPreflight.parseq_motion.prompts}</b>
+                        </div>
+                      ) : null}
+                      {internalPreflight?.resource_policy ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          Resource policy: <b>{internalPreflight.resource_policy.offload_policy}</b>
+                          {" "}• precision <b>{internalPreflight.resource_policy.precision_policy}</b>
+                          {" "}• adapters <b>{internalPreflight.resource_policy.adapter_policy?.loras?.count ?? 0} LoRA</b>
+                        </div>
+                      ) : null}
+                      {Array.isArray(internalPreflight?.render_recipe_graph?.nodes) ? (
+                        <div className="small" style={{ marginTop: 4 }}>
+                          Recipe graph: {internalPreflight.render_recipe_graph.nodes.slice(0, 7).map((node: any) => String(node.label || node.id)).join(" -> ")}
+                        </div>
+                      ) : null}
                       {internalPreflight?.settings?.temporal_mode === "video_model" ? (
                         <div className="small" style={{ marginTop: 4 }}>
                           Video-model motion: <b>{internalPreflight?.settings?.video_model_engine || internalVideoModelEngine}</b>
