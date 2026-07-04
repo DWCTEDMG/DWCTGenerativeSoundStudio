@@ -394,6 +394,7 @@ def build_autoconfig(
     variant_index: int = 0,
     source_asset: str | None = None,
     comfyui_available: bool = False,
+    tensorrt_sd15_available: bool = False,
 ) -> AutoConfig:
     """Produce a complete render configuration for a preset + engine choice."""
     notes: list[str] = []
@@ -438,19 +439,29 @@ def build_autoconfig(
         "allow_proxy_fallback": True,
     }
     if preset.motion_strategy == "storyboard_full_motion":
-        internal_request.update(
-            {
-                "video_model_engine": "auto",
-                "video_model_motion_score_mode": "auto",
-                "video_model_anchor_mode": "start",
-                "video_model_prompt_refine": True,
-                "video_model_scene_motion": str(preset.scene_motion or "subject"),
-                "video_model_noise_aug_strength": max(float(td.get("video_model_noise_aug_strength", 0.02)), 0.06),
-            }
-        )
+        storyboard_request = {
+            "video_model_engine": "auto",
+            "video_model_motion_score_mode": "auto",
+            "video_model_anchor_mode": "start",
+            "video_model_prompt_refine": True,
+            "video_model_scene_motion": str(preset.scene_motion or "subject"),
+            "video_model_noise_aug_strength": max(float(td.get("video_model_noise_aug_strength", 0.02)), 0.06),
+        }
+        if tensorrt_sd15_available:
+            storyboard_request.update(
+                {
+                    "video_model_keyframe_renderer": "tensorrt_sd15",
+                    "video_model_keyframe_model_id": "local_sd15_tensorrt_bundle",
+                }
+            )
+        internal_request.update(storyboard_request)
         notes.append(
             "Storyboard full motion enabled: Studio generates keyframe anchors from the plan, then renders short internal video-model shots with subject and scene motion prompts."
         )
+        if tensorrt_sd15_available:
+            notes.append(
+                "TensorRT SD1.5 storyboard anchors enabled: TensorRT generates the prompt-derived keyframes quickly, while SVD or AnimateDiff remains the motion engine."
+            )
     internal_request.update(schedule_to_request_overrides(schedule))
     if use_source:
         internal_request["source_asset"] = str(source_asset)

@@ -1819,6 +1819,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   {autoConfig.config.internal_request?.temporal_mode ? <> • temporal: <b>{autoConfig.config.internal_request.temporal_mode}</b></> : null}
                   {autoConfig.config.internal_request?.motion_strategy ? <> • strategy: <b>{autoConfig.config.internal_request.motion_strategy}</b></> : null}
                   {autoConfig.config.internal_request?.video_model_scene_motion ? <> • scene: <b>{autoConfig.config.internal_request.video_model_scene_motion}</b></> : null}
+                  {autoConfig.config.internal_request?.video_model_keyframe_renderer ? <> • keyframes: <b>{autoConfig.config.internal_request.video_model_keyframe_renderer}</b></> : null}
                   {autoConfig.config.animation_mode ? <> • mode: <b>{autoConfig.config.animation_mode}</b></> : null}
                 </div>
                 {autoEngine === "comfyui" && autoConfig.comfyui_available === false ? (
@@ -1855,7 +1856,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <option value="auto">Auto</option>
                       <option value="diffusion">Local diffusion</option>
                       {internalHostedVisible ? <option value="hosted">Hosted Stability</option> : null}
-                      {tensorRtInternalVisible ? <option value="tensorrt">TensorRT SD1.5 keyframes</option> : null}
+                      {tensorRtInternalVisible ? <option value="tensorrt">TensorRT SD1.5 keyframe assembly</option> : null}
                       {fireflyVisible ? <option value="firefly">Adobe Firefly</option> : null}
                       <option value="proxy">Proxy only</option>
                     </select>
@@ -1915,7 +1916,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                 </div>
                 {internalRenderMode === "tensorrt" ? (
                   <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
-                    TensorRT keyframe video forces CUDA, keyframe temporal mode, the local SD1.5 TensorRT bundle, and the compiled 512x512 batch-1 profile. It is animated still-keyframe assembly, not SVD or AnimateDiff motion.
+                    TensorRT keyframe assembly forces CUDA, keyframe temporal mode, the local SD1.5 TensorRT bundle, and the compiled 512x512 batch-1 profile. It is still-frame assembly with interpolation, not SVD or AnimateDiff subject motion. For moving subjects, use Internal video model with TensorRT SD1.5 storyboard anchors.
                     {" "}Bundle status: <b>{tensorRtInternalInstalled ? "installed" : "missing"}</b>.
                   </div>
                 ) : null}

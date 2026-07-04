@@ -9242,6 +9242,10 @@ INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID = "hf_animatediff_motion_adapter_v15_2_inter
 INTERNAL_VIDEO_MODEL_IDS = (INTERNAL_SVD_VIDEO_MODEL_ID, INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
 
 
+def _tensorrt_sd15_bundle_available() -> bool:
+    return bool(_resolve_installed_model_path(TENSORRT_VIDEO_MODEL_ID, materialize_remote=False))
+
+
 def _installed_internal_video_models_status() -> dict[str, bool]:
     return {model_id: bool(models.installed_path(model_id)) for model_id in INTERNAL_VIDEO_MODEL_IDS}
 
@@ -9319,40 +9323,69 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
     if str(settings_obj.temporal_mode or "").lower() != "video_model":
         return settings_obj
     engine = str(settings_obj.video_model_engine or "").lower()
-    backend = str(settings_obj.device_preference or hw.get("backend") or "cpu").lower()
-    if engine != "animatediff" or backend != "cuda":
+    if engine == "auto":
+        engine = _video_model_engine_from_id(settings_obj.video_model_id)
+    backend = str(settings_obj.device_preference or "").strip().lower()
+    if backend in {"", "auto"}:
+        backend = str(hw.get("backend") or hw.get("device") or "cpu").lower()
+    if engine not in {"animatediff", "svd"} or backend != "cuda":
         return settings_obj
     vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
     updates: dict[str, Any] = {}
     if vram_gb and vram_gb <= 6.5:
         updates["video_model_cpu_offload"] = True
-        updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
-        updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
-        if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 8:
-            updates["temporal_steps"] = 8
+        if engine == "svd":
+            updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 8)
+            updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 1)
+            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 6:
+                updates["temporal_steps"] = 6
+        else:
+            updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
+            updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
+            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 8:
+                updates["temporal_steps"] = 8
     elif vram_gb and vram_gb <= 8.5:
         updates["video_model_cpu_offload"] = True
-        updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 16)
-        updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 4)
-        if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 10:
-            updates["temporal_steps"] = 10
+        if engine == "svd":
+            updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
+            updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
+            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 8:
+                updates["temporal_steps"] = 8
+        else:
+            updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 16)
+            updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 4)
+            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 10:
+                updates["temporal_steps"] = 10
     return replace(settings_obj, **updates) if updates else settings_obj
 
 
 def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, hw: dict[str, Any]) -> list[str]:
     if str(settings_obj.temporal_mode or "").lower() != "video_model":
         return []
-    if str(settings_obj.video_model_engine or "").lower() != "animatediff":
+    engine = str(settings_obj.video_model_engine or "").lower()
+    if engine == "auto":
+        engine = _video_model_engine_from_id(settings_obj.video_model_id)
+    if engine not in {"animatediff", "svd"}:
         return []
-    backend = str(settings_obj.device_preference or hw.get("backend") or "cpu").lower()
+    backend = str(settings_obj.device_preference or "").strip().lower()
+    if backend in {"", "auto"}:
+        backend = str(hw.get("backend") or hw.get("device") or "cpu").lower()
     if backend != "cuda":
         return []
     vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
     if vram_gb and vram_gb <= 6.5:
+        if engine == "svd":
+            return [
+                "6 GB CUDA SVD safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps SVD adapter frames to 8, caps temporal steps to 6, uses decode chunks of 1, and renders the SVD adapter at a lower working canvas before resizing to the final video size."
+            ]
         return [
             "6 GB CUDA AnimateDiff safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps adapter frames to 12, caps temporal steps to 8, uses small decode chunks, and renders the adapter at a lower working canvas before resizing to the final video size."
         ]
     if vram_gb and vram_gb <= 8.5:
+        if engine == "svd":
+            return [
+                "8 GB CUDA SVD safety is active: Studio enables CPU offload, caps SVD adapter frames to 12, caps temporal steps to 8, and uses smaller decode chunks."
+            ]
         return [
             "8 GB CUDA AnimateDiff safety is active: Studio enables CPU offload, caps adapter frames to 16, caps temporal steps to 10, and uses smaller decode chunks."
         ]
@@ -10444,6 +10477,7 @@ def render_auto(project_id: str, req: AutoAnimateRequest):
         variant_index=vi,
         source_asset=req.source_asset,
         comfyui_available=comfy_ok,
+        tensorrt_sd15_available=_tensorrt_sd15_bundle_available(),
     )
 
     result: dict[str, Any] = {

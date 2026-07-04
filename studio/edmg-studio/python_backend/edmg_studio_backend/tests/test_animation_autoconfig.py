@@ -122,6 +122,28 @@ def test_build_autoconfig_full_motion_uses_storyboard_video_model():
     assert any("storyboard full motion" in note.lower() for note in cfg.notes)
 
 
+def test_build_autoconfig_full_motion_uses_tensorrt_storyboard_anchors_when_available():
+    preset = ac.resolve_preset("full_motion")
+    cfg = ac.build_autoconfig(
+        preset,
+        engine="internal",
+        tier_defaults=_TIER_DEFAULTS,
+        applied_tier="quality",
+        preferred_model="hf_sdxl_internal",
+        device_preference="cuda",
+        duration_s=8.0,
+        fps=24,
+        comfyui_available=False,
+        tensorrt_sd15_available=True,
+    )
+    req = cfg.internal_request
+    assert req["temporal_mode"] == "video_model"
+    assert req["motion_strategy"] == "storyboard_full_motion"
+    assert req["video_model_keyframe_renderer"] == "tensorrt_sd15"
+    assert req["video_model_keyframe_model_id"] == "local_sd15_tensorrt_bundle"
+    assert any("tensorrt sd1.5 storyboard anchors" in note.lower() for note in cfg.notes)
+
+
 def test_build_autoconfig_image_animation_sets_source():
     preset = ac.resolve_preset("image_animation")
     cfg = ac.build_autoconfig(

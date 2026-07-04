@@ -240,19 +240,23 @@ def _video_model_adapter_canvas(
     cpu_offload: bool,
 ) -> tuple[int, int, str | None]:
     engine_l = str(engine or "").lower()
-    if engine_l != "animatediff" or str(device or "").lower() != "cuda":
+    if engine_l not in {"animatediff", "svd"} or str(device or "").lower() != "cuda":
         return int(width), int(height), None
     vram_gb = _cuda_total_vram_gb(device)
     if vram_gb <= 0.0:
         return int(width), int(height), None
     if vram_gb <= 6.5:
-        adapter_w, adapter_h = _fit_multiple_of_8(int(width), int(height), max_width=640, max_height=384)
+        max_w, max_h = (576, 320) if engine_l == "svd" else (640, 384)
+        adapter_w, adapter_h = _fit_multiple_of_8(int(width), int(height), max_width=max_w, max_height=max_h)
         if (adapter_w, adapter_h) != (int(width), int(height)):
-            return adapter_w, adapter_h, f"6 GB CUDA AnimateDiff canvas capped to {adapter_w}x{adapter_h}"
+            label = "SVD" if engine_l == "svd" else "AnimateDiff"
+            return adapter_w, adapter_h, f"6 GB CUDA {label} canvas capped to {adapter_w}x{adapter_h}"
     elif vram_gb <= 8.5 and not bool(cpu_offload):
-        adapter_w, adapter_h = _fit_multiple_of_8(int(width), int(height), max_width=704, max_height=448)
+        max_w, max_h = (640, 360) if engine_l == "svd" else (704, 448)
+        adapter_w, adapter_h = _fit_multiple_of_8(int(width), int(height), max_width=max_w, max_height=max_h)
         if (adapter_w, adapter_h) != (int(width), int(height)):
-            return adapter_w, adapter_h, f"8 GB CUDA AnimateDiff canvas capped to {adapter_w}x{adapter_h}"
+            label = "SVD" if engine_l == "svd" else "AnimateDiff"
+            return adapter_w, adapter_h, f"8 GB CUDA {label} canvas capped to {adapter_w}x{adapter_h}"
     return int(width), int(height), None
 
 
@@ -2557,6 +2561,11 @@ def render_internal_video_variant(
             adapter_frames = min(max_scene_frames, max(2, scene_frame_count))
             if engine == "svd":
                 adapter_frames = min(adapter_frames, 25)
+                cuda_vram = _cuda_total_vram_gb(device)
+                if cuda_vram and cuda_vram <= 6.5:
+                    adapter_frames = min(adapter_frames, 8)
+                elif cuda_vram and cuda_vram <= 8.5 and not bool(settings.video_model_cpu_offload):
+                    adapter_frames = min(adapter_frames, 12)
             elif engine == "animatediff":
                 cuda_vram = _cuda_total_vram_gb(device)
                 if cuda_vram and cuda_vram <= 6.5:

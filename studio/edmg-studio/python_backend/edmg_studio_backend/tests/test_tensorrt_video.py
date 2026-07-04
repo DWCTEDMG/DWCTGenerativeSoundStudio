@@ -176,3 +176,44 @@ def test_video_model_scene_motion_refines_prompt_and_preflight() -> None:
     )
     assert preflight["scene_motion"] == "scene"
     assert preflight["storyboard_motion_plan"]["shots"][0]["scene_motion"] == "scene"
+
+
+def test_svd_low_vram_memory_safety_caps_settings_and_warns() -> None:
+    settings = InternalVideoSettings(
+        temporal_mode="video_model",
+        video_model_engine="svd",
+        video_model_id="hf_svd_xt_1_1_internal",
+        video_model_max_frames_per_scene=25,
+        video_model_decode_chunk_size=8,
+        temporal_steps=20,
+    )
+
+    safe = app_module._apply_internal_video_model_memory_safety(
+        settings,
+        {"backend": "cuda", "vram_gb": 6.0},
+    )
+    warnings = app_module._internal_video_model_memory_warnings(
+        safe,
+        {"backend": "cuda", "vram_gb": 6.0},
+    )
+
+    assert safe.video_model_cpu_offload is True
+    assert safe.video_model_max_frames_per_scene == 8
+    assert safe.video_model_decode_chunk_size == 1
+    assert safe.temporal_steps == 6
+    assert any("6 GB CUDA SVD safety" in warning for warning in warnings)
+
+
+def test_svd_low_vram_canvas_is_capped(monkeypatch) -> None:
+    monkeypatch.setattr(internal_video, "_cuda_total_vram_gb", lambda _device: 6.0)
+
+    width, height, note = internal_video._video_model_adapter_canvas(  # noqa: SLF001 - pure sizing helper
+        engine="svd",
+        width=768,
+        height=432,
+        device="cuda",
+        cpu_offload=True,
+    )
+
+    assert (width, height) == (568, 320)
+    assert note == "6 GB CUDA SVD canvas capped to 568x320"

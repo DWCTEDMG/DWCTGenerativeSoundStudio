@@ -35,12 +35,13 @@ def _make_project(tmp_path: Path):
     return store, jobs, proj
 
 
-def _patch(monkeypatch, store, jobs, *, comfy_available=False):
+def _patch(monkeypatch, store, jobs, *, comfy_available=False, tensorrt_available=False):
     monkeypatch.setattr(backend_app, "store", store)
     monkeypatch.setattr(backend_app, "jobs", jobs)
     # Keep tests deterministic: never let the background worker execute jobs.
     monkeypatch.setattr(backend_app.worker, "start", lambda *a, **k: None)
     monkeypatch.setattr(backend_app, "_comfyui_available_quick", lambda: comfy_available)
+    monkeypatch.setattr(backend_app, "_tensorrt_sd15_bundle_available", lambda: tensorrt_available)
 
 
 def test_list_animation_presets():
@@ -74,7 +75,7 @@ def test_auto_dry_run_cinematic_3d(tmp_path, monkeypatch):
 
 def test_auto_dry_run_full_motion_uses_storyboard_video_model(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
-    _patch(monkeypatch, store, jobs)
+    _patch(monkeypatch, store, jobs, tensorrt_available=True)
     with TestClient(backend_app.app) as client:
         resp = client.post(
             f"/v1/projects/{proj.id}/render/auto",
@@ -87,6 +88,8 @@ def test_auto_dry_run_full_motion_uses_storyboard_video_model(tmp_path, monkeypa
         assert req["motion_strategy"] == "storyboard_full_motion"
         assert req["video_model_engine"] == "auto"
         assert req["video_model_scene_motion"] == "scene"
+        assert req["video_model_keyframe_renderer"] == "tensorrt_sd15"
+        assert req["video_model_keyframe_model_id"] == "local_sd15_tensorrt_bundle"
 
 
 def test_auto_dry_run_image_animation_with_source(tmp_path, monkeypatch):
