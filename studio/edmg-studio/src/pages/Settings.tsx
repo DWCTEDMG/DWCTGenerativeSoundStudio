@@ -1423,12 +1423,16 @@ export default function Settings(props: PageProps) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Tokens</div>
         <div className="small" style={{ marginBottom: 10 }}>
-          Optional. Needed only for gated Hugging Face downloads and some Civitai downloads. Stored in OS keychain when available; otherwise stored locally under the Studio data directory.
+          Optional. Used for gated Hugging Face downloads and some Civitai downloads. Studio checks explicit HF environment tokens, your local <code>hf auth login</code> session, then this saved token. Saved tokens are stored in OS keychain when available; otherwise stored locally under the Studio data directory.
         </div>
         {secrets ? (
           <div className="small" style={{ marginBottom: 10, opacity: 0.9 }}>
             Storage: <b>{secrets.store}</b>
             {secrets.note ? <span style={{ marginLeft: 10, opacity: 0.85 }}>{secrets.note}</span> : null}
+            <span style={{ marginLeft: 10, opacity: 0.85 }}>
+              HF auth: <b>{secrets.hf_auth_available ? (secrets.hf_auth_token_source || "available") : "not found"}</b>
+              {secrets.hf_cli_available ? <> · CLI: <code>{secrets.hf_login_command || "hf auth login"}</code></> : " · CLI: hf not found"}
+            </span>
           </div>
         ) : (
           <div className="small" style={{ marginBottom: 10, opacity: 0.75 }}>Loading token status…</div>
@@ -1437,7 +1441,7 @@ export default function Settings(props: PageProps) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center" }}>
           <div>
             <div className="small" style={{ fontWeight: 800 }}>Hugging Face token</div>
-            <div className="small" style={{ opacity: 0.8 }}>Used for gated HF models/checkpoints.</div>
+            <div className="small" style={{ opacity: 0.8 }}>Manual fallback for gated HF models/checkpoints when the backend is not logged in with <code>hf auth login</code>.</div>
             <input
               value={hfToken}
               onChange={(e) => setHfToken(e.target.value)}

@@ -297,8 +297,8 @@ export default function Cloud(props: PageProps) {
           <input value={hfPrefix} onChange={(e) => setHfPrefix(e.target.value)} placeholder="models" />
         </div>
         <div className="small" style={{ marginTop: 10 }}>
-          Uploads need a token with write access — env token (<code>HF_TOKEN</code> / <code>EDMG_HF_TOKEN</code>)
-          first, then Settings → Tokens. Public buckets can be read without a token.
+          Uploads need a token with write access. Studio checks env tokens (<code>HF_TOKEN</code> / <code>EDMG_HF_TOKEN</code>),
+          then the modern <code>hf auth login</code> session, then Settings → Tokens. Public buckets can be read without a token.
         </div>
         <div className="row" style={{ marginTop: 10 }}>
           <button onClick={saveHf} disabled={hfSaving}>

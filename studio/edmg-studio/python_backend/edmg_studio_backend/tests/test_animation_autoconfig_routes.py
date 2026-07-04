@@ -86,6 +86,7 @@ def test_auto_dry_run_full_motion_uses_storyboard_video_model(tmp_path, monkeypa
         assert req["temporal_mode"] == "video_model"
         assert req["motion_strategy"] == "storyboard_full_motion"
         assert req["video_model_engine"] == "auto"
+        assert req["video_model_scene_motion"] == "scene"
 
 
 def test_auto_dry_run_image_animation_with_source(tmp_path, monkeypatch):

@@ -22,6 +22,7 @@ from ..errors import UserFacingError
 from .setup_wizard import _ollama_base  # reuse
 from .model_catalog import built_in_catalog, built_in_packs
 from ..services.setup_wizard import comfy_portable_installed, comfy_portable_root
+from .hf_auth import resolve_hf_token
 from .secrets import SecretStore
 
 try:
@@ -1286,7 +1287,7 @@ class ModelManager:
             if r.status_code in (401, 403):
                 raise UserFacingError(
                     "Download unauthorized",
-                    hint="Set an API token in Settings → Tokens (Hugging Face token for HF downloads, Civitai API key for Civitai downloads), then retry."
+                    hint="Run `hf auth login` on the backend, or set an API token in Settings → Tokens (Hugging Face token for HF downloads, Civitai API key for Civitai downloads), then retry."
                 )
             r.raise_for_status()
             total = int(r.headers.get("content-length") or 0)
@@ -1458,12 +1459,9 @@ class ModelManager:
                 return
 
         headers: dict[str, str] = {}
-        # optional HF token support (prefer SecretStore; fall back to env vars)
-        hf_token = ""
-        if self.secrets is not None:
-            hf_token = self.secrets.get("hf_token") or ""
-        if not hf_token:
-            hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or ""
+        # Optional HF token support. Prefer explicit env vars, then the modern
+        # `hf auth login` / Hub token cache, then Studio Settings.
+        hf_token, hf_token_source = resolve_hf_token(secrets_store=self.secrets)
         if hf_token:
             headers["Authorization"] = f"Bearer {hf_token}"
 
@@ -1484,6 +1482,8 @@ class ModelManager:
                 target_path = self._cloud_temp_path(dest) if cloud_only else dest
                 target_path.mkdir(parents=True, exist_ok=True)
                 ModelTaskManager.log(task, f"Downloading HF snapshot: {repo_id}")
+                if hf_token_source:
+                    ModelTaskManager.log(task, f"Using Hugging Face auth from {hf_token_source}")
                 try:
                     snapshot_download(
                         repo_id=repo_id,

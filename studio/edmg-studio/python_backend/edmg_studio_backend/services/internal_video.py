@@ -25,11 +25,12 @@ from .deforum_schedule import coerce_schedule_pairs, evaluate_schedule
 from .model_weights import diffusers_weight_load_kwargs
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
 except Exception:  # pragma: no cover
     Image = None  # type: ignore
     ImageDraw = None  # type: ignore
     ImageFont = None  # type: ignore
+    ImageOps = None  # type: ignore
 
 from .compositor import apply_timeline_layers
 from .ffmpeg import assemble_image_sequence, interpolate_video_fps, mux_audio
@@ -86,6 +87,9 @@ class InternalVideoSettings:
     video_model_manual_motion_score: int = 4
     video_model_anchor_mode: str = "start"  # start|end|loop
     video_model_prompt_refine: bool = True
+    video_model_scene_motion: str = "subject"  # camera|subject|scene
+    video_model_keyframe_renderer: str = "internal"  # internal|tensorrt_sd15
+    video_model_keyframe_model_id: str | None = None
     # Image animation: an uploaded still used to seed the first keyframe (img2img).
     source_asset: str | None = None
     source_strength: float = 0.55
@@ -101,6 +105,22 @@ def normalize_internal_motion_strategy(value: Any) -> str:
     if raw in {"storyboard", "storyboard_full_motion", "full_motion_storyboard", "auto_storyboard"}:
         return "storyboard_full_motion"
     return "manual"
+
+
+def normalize_video_model_keyframe_renderer(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"trt", "tensorrt", "tensorrt_sd15", "sd15_tensorrt", "trt_sd15"}:
+        return "tensorrt_sd15"
+    return "internal"
+
+
+def normalize_video_model_scene_motion(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"camera", "camera_only", "atmosphere", "ambient"}:
+        return "camera"
+    if raw in {"scene", "whole_scene", "full_scene", "objects", "object_motion", "living_scene"}:
+        return "scene"
+    return "subject"
 
 
 class _PipelineCache:
@@ -459,6 +479,9 @@ def _render_signature(
         "video_model_manual_motion_score": int(settings.video_model_manual_motion_score),
         "video_model_anchor_mode": str(settings.video_model_anchor_mode),
         "video_model_prompt_refine": bool(settings.video_model_prompt_refine),
+        "video_model_scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
+        "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer),
+        "video_model_keyframe_model_id": str(settings.video_model_keyframe_model_id or ""),
         "source_asset": str(settings.source_asset or ""),
         "source_strength": float(settings.source_strength),
         "deforum_overrides": settings.deforum_overrides or None,
@@ -1145,6 +1168,60 @@ def _generate_img2img(
         kwargs["generator"] = g
     out = pipes.img2img(**kwargs)
     return out.images[0]
+
+
+def _generate_tensorrt_sd15_keyframe(
+    *,
+    project_id: str | None,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    steps: int,
+    cfg: float,
+    sampler: str,
+    seed: int,
+    model_id: str | None,
+) -> "Image.Image":
+    if not project_id:
+        raise UserFacingError(
+            "TensorRT keyframe anchors need a project id",
+            hint="Use the Studio render endpoint so TensorRT anchors can write into the project runtime folder.",
+            code="TRT_ANCHOR_PROJECT_MISSING",
+            status_code=400,
+        )
+    if ImageOps is None:
+        raise UserFacingError(
+            "Pillow image operations are unavailable",
+            hint="Install Pillow in the backend environment and retry.",
+            code="PILLOW_UNAVAILABLE",
+            status_code=500,
+        )
+
+    from . import tensorrt_standalone
+
+    result = tensorrt_standalone.run_job(
+        project_id,
+        None,
+        {
+            "model_id": str(model_id or "local_sd15_tensorrt_bundle"),
+            "workflow_family": "sd15",
+            "prompt": str(prompt or "cinematic music video keyframe"),
+            "negative_prompt": str(negative_prompt or "blurry, low quality, watermark, text, logo"),
+            "steps": max(1, min(80, int(steps))),
+            "cfg": float(cfg),
+            "sampler": str(sampler or "pndm"),
+            "seed": int(seed) & 0xFFFFFFFF,
+            "batch_size": 1,
+        },
+    )
+    src = Path(str(result.get("output_path") or ""))
+    if not src.exists():
+        raise RuntimeError("TensorRT SD1.5 keyframe render did not produce an image")
+    image = Image.open(src).convert("RGB")
+    if image.size != (int(width), int(height)):
+        image = ImageOps.fit(image, (int(width), int(height)), method=Image.LANCZOS)
+    return image
 
 
 def _generate_inpaint(
@@ -2163,6 +2240,7 @@ def render_internal_video_variant(
     *,
     ffmpeg_path: str,
     project_dir: Path,
+    project_id: str | None = None,
     variant: dict[str, Any],
     scenes: list[dict[str, Any]],
     audio_path: Path | None,
@@ -2190,7 +2268,16 @@ def render_internal_video_variant(
     _require_pillow()
 
     device = _device_auto(settings.device_preference)
-    pipes = _try_load_pipelines(model_dir, device=device)
+    keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
+    use_tensorrt_keyframes = settings.temporal_mode == "video_model" and keyframe_renderer == "tensorrt_sd15"
+    if use_tensorrt_keyframes and device != "cuda":
+        raise UserFacingError(
+            "TensorRT SD1.5 storyboard anchors require CUDA",
+            hint="Switch Device to CUDA or use Internal diffusion keyframes for SVD/AnimateDiff anchors.",
+            code="TRT_ANCHOR_CUDA_REQUIRED",
+            status_code=400,
+        )
+    pipes = None if use_tensorrt_keyframes else _try_load_pipelines(model_dir, device=device)
 
     out_w, out_h = settings.width, settings.height
     fps_r = max(1, int(settings.fps_render))
@@ -2248,11 +2335,16 @@ def render_internal_video_variant(
         progress_fn("preparing", 0, total_units, f"Preparing internal render on {device}")
     emit_checkpoint(stage="preparing", status="running", force=True, message=f"Preparing internal render on {device}")
 
-    default_negative_embeds = _encode_prompt(pipes, settings.negative_prompt)
+    default_negative_embeds = None if use_tensorrt_keyframes else _encode_prompt(pipes, settings.negative_prompt)
     if log_fn:
         log_fn(
             f"Render cache tag={work_tag} resume_existing_frames={'yes' if settings.resume_existing_frames else 'no'}"
         )
+        if use_tensorrt_keyframes:
+            log_fn(
+                "Video-model storyboard anchors: TensorRT SD1.5 keyframes enabled. "
+                "SVD will use these images directly; AnimateDiff still loads its SD1.5 Diffusers base and uses anchors for shot blending."
+            )
         log_fn(
             f"Cache status frames={cache_info['frames_present']}/{cache_info['frames_expected']} "
             f"raw={'yes' if cache_info['raw_exists'] else 'no'} "
@@ -2288,11 +2380,13 @@ def render_internal_video_variant(
             fps=fps_schedule,
         ) or "cinematic"
         negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
-        negative_embeds = (
-            default_negative_embeds
-            if negative_prompt == settings.negative_prompt
-            else _encode_prompt(pipes, negative_prompt)
-        )
+        negative_embeds = None
+        if not use_tensorrt_keyframes:
+            negative_embeds = (
+                default_negative_embeds
+                if negative_prompt == settings.negative_prompt
+                else _encode_prompt(pipes, negative_prompt)  # type: ignore[arg-type]
+            )
         seed = _stable_seed_int("key", settings.seed, t, p, work_tag)
         if log_fn:
             prompt_preview = " ".join(str(p or "").split())[:220]
@@ -2300,50 +2394,64 @@ def render_internal_video_variant(
         if progress_fn:
             progress_fn("keyframes", i, total_units, f"Generating keyframe {i+1}/{len(key_times)}")
         emit_checkpoint(stage="keyframes", status="running", message=f"Generating keyframe {i+1}/{len(key_times)}")
-        pe = _encode_prompt(pipes, p)
         mpk = _motion_params_at_time(t, timeline, deforum_motion=deforum_context.motion, fps=fps_schedule)
         cfgk = float((mpk or {}).get('cfg', settings.cfg))
         stepsk = int(float((mpk or {}).get('steps', settings.steps)))
         denk = float((mpk or {}).get('denoise', (mpk or {}).get('strength', settings.temporal_strength)))
         seed_from_source = i == 0 and source_image_path is not None
-        if seed_from_source:
-            # Image animation: bring the uploaded still to life as the first keyframe.
-            try:
-                base_src = _load_render_source_image(source_image_path, size=(out_w, out_h))
+        if use_tensorrt_keyframes:
+            img = _generate_tensorrt_sd15_keyframe(
+                project_id=project_id,
+                prompt=p,
+                negative_prompt=negative_prompt,
+                width=out_w,
+                height=out_h,
+                steps=stepsk,
+                cfg=cfgk,
+                sampler=settings.sampler,
+                seed=seed,
+                model_id=settings.video_model_keyframe_model_id or "local_sd15_tensorrt_bundle",
+            )
+        else:
+            pe = _encode_prompt(pipes, p)  # type: ignore[arg-type]
+            if seed_from_source:
+                # Image animation: bring the uploaded still to life as the first keyframe.
+                try:
+                    base_src = _load_render_source_image(source_image_path, size=(out_w, out_h))
+                    img = _generate_img2img(
+                        pipes,  # type: ignore[arg-type]
+                        init_image=base_src,
+                        prompt_embeds=pe,
+                        negative_embeds=negative_embeds,
+                        width=out_w,
+                        height=out_h,
+                        steps=stepsk,
+                        cfg=cfgk,
+                        seed=seed,
+                        strength=max(0.05, min(0.95, float(settings.source_strength))),
+                    )
+                    if log_fn:
+                        log_fn(f"Seeded first keyframe from source image {Path(source_image_path).name}")
+                except Exception as e:  # pragma: no cover - depends on runtime model
+                    if log_fn:
+                        log_fn(f"Source image seed failed ({e}); falling back to txt2img")
+                    img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)  # type: ignore[arg-type]
+            elif prev_key_img is None or settings.temporal_mode in ("off",):
+                img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)  # type: ignore[arg-type]
+            else:
+                # Keyframe continuity: anchor to previous keyframe to keep style stable.
                 img = _generate_img2img(
-                    pipes,
-                    init_image=base_src,
+                    pipes,  # type: ignore[arg-type]
+                    init_image=prev_key_img,
                     prompt_embeds=pe,
                     negative_embeds=negative_embeds,
                     width=out_w,
                     height=out_h,
-                    steps=stepsk,
+                    steps=max(6, int(settings.temporal_steps or max(8, settings.steps - 3))),
                     cfg=cfgk,
                     seed=seed,
-                    strength=max(0.05, min(0.95, float(settings.source_strength))),
+                    strength=max(0.05, min(0.95, denk)),
                 )
-                if log_fn:
-                    log_fn(f"Seeded first keyframe from source image {Path(source_image_path).name}")
-            except Exception as e:  # pragma: no cover - depends on runtime model
-                if log_fn:
-                    log_fn(f"Source image seed failed ({e}); falling back to txt2img")
-                img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)
-        elif prev_key_img is None or settings.temporal_mode in ("off",):
-            img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)
-        else:
-            # Keyframe continuity: anchor to previous keyframe to keep style stable.
-            img = _generate_img2img(
-                pipes,
-                init_image=prev_key_img,
-                prompt_embeds=pe,
-                negative_embeds=negative_embeds,
-                width=out_w,
-                height=out_h,
-                steps=max(6, int(settings.temporal_steps or max(8, settings.steps - 3))),
-                cfg=cfgk,
-                seed=seed,
-                strength=max(0.05, min(0.95, denk)),
-            )
         key_imgs[t] = img
         prev_key_img = img
         prev_key_prompt = p
@@ -2835,6 +2943,9 @@ def render_internal_video_variant(
             "video_model_manual_motion_score": int(settings.video_model_manual_motion_score),
             "video_model_anchor_mode": str(settings.video_model_anchor_mode),
             "video_model_prompt_refine": bool(settings.video_model_prompt_refine),
+            "video_model_scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
+            "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer),
+            "video_model_keyframe_model_id": str(settings.video_model_keyframe_model_id or ""),
             "resume_existing_frames": bool(settings.resume_existing_frames),
             "model_id": str(settings.model_id),
             "negative_prompt": str(settings.negative_prompt),
@@ -3589,6 +3700,12 @@ def describe_storyboard_motion_plan(
     strategy = normalize_internal_motion_strategy(settings.motion_strategy)
     if strategy != "storyboard_full_motion":
         return None
+    keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
+    anchor_source = (
+        "source_image"
+        if settings.source_asset
+        else ("tensorrt_sd15_keyframe" if keyframe_renderer == "tensorrt_sd15" else "generated_scene_keyframe")
+    )
 
     windows = _storyboard_scene_windows(scenes=scenes, duration_s=duration_s, settings=settings)
     shots: list[dict[str, Any]] = []
@@ -3616,7 +3733,9 @@ def describe_storyboard_motion_plan(
                 "start_s": round(start_s, 3),
                 "end_s": round(end_s, 3),
                 "prompt": " ".join(prompt.split())[:240],
-                "anchor_source": "source_image" if settings.source_asset else "generated_scene_keyframe",
+                "anchor_source": anchor_source,
+                "keyframe_renderer": keyframe_renderer,
+                "scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
                 "transition": "continue scene motion" if shot_index else "start from generated visual anchor",
                 **intent,
                 "motion_score": score_info.get("motion_score"),
@@ -3626,7 +3745,13 @@ def describe_storyboard_motion_plan(
 
     return {
         "strategy": strategy,
-        "anchor_source": "source_image" if settings.source_asset else "generated_scene_keyframe",
+        "anchor_source": anchor_source,
+        "keyframe_renderer": keyframe_renderer,
+        "keyframe_model_id": (
+            settings.video_model_keyframe_model_id or "local_sd15_tensorrt_bundle"
+            if keyframe_renderer == "tensorrt_sd15"
+            else None
+        ),
         "shot_max_s": _storyboard_shot_max_s(settings),
         "scene_count": len([scene for scene in scenes if isinstance(scene, dict)]),
         "shot_count": len(shots),
@@ -3656,17 +3781,31 @@ def _refine_video_model_prompt(
     additions: list[str] = []
     score = score_info.get("motion_score")
     mode = _normalize_video_motion_score_mode(settings.video_model_motion_score_mode)
+    scene_motion = normalize_video_model_scene_motion(settings.video_model_scene_motion)
     if mode != "off" and score is not None and "motion score" not in base.lower():
         additions.append(f"{_clamp_video_motion_score(score)} motion score.")
     if bool(settings.video_model_prompt_refine):
         if score is not None:
             score_i = _clamp_video_motion_score(score)
             if score_i <= 2:
-                additions.append("Slow restrained subject motion.")
+                additions.append("Slow restrained subject motion with subtle pose changes.")
             elif score_i >= 6:
-                additions.append("Energetic music-reactive subject motion with clear transitions.")
+                additions.append("Energetic music-reactive subject motion with clear pose and object transitions.")
             else:
-                additions.append("Controlled music-reactive subject motion.")
+                additions.append("Controlled music-reactive subject motion with visible changes between frames.")
+        if scene_motion == "camera":
+            additions.append("Camera motion is primary with only gentle atmosphere movement.")
+        elif scene_motion == "scene":
+            additions.append(
+                "Animate the whole scene: foreground subject changes pose, clothing or hair moves, props shift, "
+                "lights flicker, particles, water, smoke, dust, trees, and background atmosphere move naturally."
+            )
+            additions.append("Camera motion is secondary; the visible objects themselves move through the shot.")
+        else:
+            additions.append(
+                "Animate visible subjects and foreground objects: walking, turning, gesturing, breathing, "
+                "cloth or hair sway, and reactive environmental motion."
+            )
         anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
         if anchor_mode == "end":
             additions.append("Resolve into the ending anchor.")
@@ -3694,6 +3833,7 @@ def describe_internal_video_model_preflight(
         engine = "animatediff" if "animatediff" in str(settings.video_model_id or "").lower() else "svd"
     mode = _normalize_video_motion_score_mode(settings.video_model_motion_score_mode)
     anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
+    keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
     checks: list[dict[str, Any]] = []
     warnings: list[str] = []
 
@@ -3731,6 +3871,13 @@ def describe_internal_video_model_preflight(
     else:
         checks.append({"name": "offload", "status": "ok"})
 
+    if keyframe_renderer == "tensorrt_sd15":
+        checks.append({"name": "keyframe_renderer", "status": "ok", "renderer": "tensorrt_sd15"})
+        if engine == "animatediff":
+            warnings.append("TensorRT SD1.5 anchors can guide AnimateDiff shot blending, but AnimateDiff is still text-to-video and still loads its SD1.5 Diffusers base.")
+    else:
+        checks.append({"name": "keyframe_renderer", "status": "ok", "renderer": "internal"})
+
     scene_scores = video_model_scene_motion_scores(
         scenes=scenes,
         timeline=timeline,
@@ -3750,6 +3897,13 @@ def describe_internal_video_model_preflight(
         "manual_motion_score": _clamp_video_motion_score(settings.video_model_manual_motion_score),
         "anchor_mode": anchor_mode,
         "prompt_refine": bool(settings.video_model_prompt_refine),
+        "scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
+        "keyframe_renderer": keyframe_renderer,
+        "keyframe_model_id": (
+            settings.video_model_keyframe_model_id or "local_sd15_tensorrt_bundle"
+            if keyframe_renderer == "tensorrt_sd15"
+            else None
+        ),
         "motion_strategy": normalize_internal_motion_strategy(settings.motion_strategy),
         "storyboard_motion_plan": storyboard_motion_plan,
         "total_frames": int(total_frames),

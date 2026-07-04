@@ -203,6 +203,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalVideoManualMotionScore, setInternalVideoManualMotionScore] = useState<number>(4);
   const [internalVideoAnchorMode, setInternalVideoAnchorMode] = useState<"start"|"end"|"loop">("start");
   const [internalVideoPromptRefine, setInternalVideoPromptRefine] = useState<boolean>(true);
+  const [internalVideoSceneMotion, setInternalVideoSceneMotion] = useState<"camera"|"subject"|"scene">("subject");
+  const [internalVideoKeyframeRenderer, setInternalVideoKeyframeRenderer] = useState<"internal"|"tensorrt_sd15">("internal");
 
   const [timeline, setTimeline] = useState<any>({ layers: [], camera: { keyframes: [] } });
   const [timelineDirty, setTimelineDirty] = useState<boolean>(false);
@@ -530,6 +532,11 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       video_model_manual_motion_score: internalVideoManualMotionScore,
       video_model_anchor_mode: internalVideoAnchorMode,
       video_model_prompt_refine: internalVideoPromptRefine,
+      video_model_scene_motion: internalVideoSceneMotion,
+      video_model_keyframe_renderer: internalVideoKeyframeRenderer,
+      video_model_keyframe_model_id: internalVideoKeyframeRenderer === "tensorrt_sd15"
+        ? (tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle")
+        : undefined,
       model_id: useTensorRt ? tensorRtModelId : internalModelId,
       render_mode: internalRenderMode,
       render_tier: internalRenderTier,
@@ -908,6 +915,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalVideoManualMotionScore,
     internalVideoAnchorMode,
     internalVideoPromptRefine,
+    internalVideoSceneMotion,
+    internalVideoKeyframeRenderer,
+    tensorRtInternalModel,
   ]);
 
   useEffect(() => {
@@ -1181,6 +1191,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (p.video_model_manual_motion_score != null) setInternalVideoManualMotionScore(Number(p.video_model_manual_motion_score));
     if (p.video_model_anchor_mode) setInternalVideoAnchorMode(String(p.video_model_anchor_mode) as any);
     if (p.video_model_prompt_refine != null) setInternalVideoPromptRefine(Boolean(p.video_model_prompt_refine));
+    if (p.video_model_scene_motion) setInternalVideoSceneMotion(String(p.video_model_scene_motion) as any);
+    if (p.video_model_keyframe_renderer) setInternalVideoKeyframeRenderer(String(p.video_model_keyframe_renderer) as any);
   };
 
   const addSelectedLora = () => {
@@ -1750,6 +1762,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
                 {selectedAutoPreset.description} • motion: <b>{selectedAutoPreset.motion_label || selectedAutoPreset.motion}</b>
                 {selectedAutoPreset.motion_strategy === "storyboard_full_motion" ? <> • route: <b>storyboard video model</b></> : null}
+                {selectedAutoPreset.scene_motion ? <> • scene: <b>{selectedAutoPreset.scene_motion}</b></> : null}
                 {selectedAutoPreset.is_3d ? " (3D)" : ""} • quality: <b>{selectedAutoPreset.quality}</b>
                 {selectedAutoPreset.animates_objects ? " • animates objects in the image" : ""}
               </div>
@@ -1805,6 +1818,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   {autoConfig.config.internal_request?.render_tier ? <> • tier: <b>{autoConfig.config.internal_request.render_tier}</b></> : null}
                   {autoConfig.config.internal_request?.temporal_mode ? <> • temporal: <b>{autoConfig.config.internal_request.temporal_mode}</b></> : null}
                   {autoConfig.config.internal_request?.motion_strategy ? <> • strategy: <b>{autoConfig.config.internal_request.motion_strategy}</b></> : null}
+                  {autoConfig.config.internal_request?.video_model_scene_motion ? <> • scene: <b>{autoConfig.config.internal_request.video_model_scene_motion}</b></> : null}
                   {autoConfig.config.animation_mode ? <> • mode: <b>{autoConfig.config.animation_mode}</b></> : null}
                 </div>
                 {autoEngine === "comfyui" && autoConfig.comfyui_available === false ? (
@@ -1993,13 +2007,15 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                           {internalPreflight?.settings?.video_model_id ? <> • model <b>{internalPreflight.settings.video_model_id}</b></> : null}
                           {" "}• score <b>{internalPreflight?.internal_video_model_preflight?.motion_score_mode || internalPreflight?.settings?.video_model_motion_score_mode || internalVideoMotionScoreMode}</b>
                           {" "}• anchor <b>{internalPreflight?.internal_video_model_preflight?.anchor_mode || internalPreflight?.settings?.video_model_anchor_mode || internalVideoAnchorMode}</b>
+                          {" "}• scene <b>{internalPreflight?.internal_video_model_preflight?.scene_motion || internalPreflight?.settings?.video_model_scene_motion || internalVideoSceneMotion}</b>
+                          {" "}• keyframes <b>{internalPreflight?.internal_video_model_preflight?.keyframe_renderer || internalPreflight?.settings?.video_model_keyframe_renderer || internalVideoKeyframeRenderer}</b>
                         </div>
                       ) : null}
                       {internalPreflight?.internal_video_model_preflight?.storyboard_motion_plan ? (
                         <div className="small" style={{ marginTop: 4 }}>
                           Storyboard full motion: <b>{internalPreflight.internal_video_model_preflight.storyboard_motion_plan.shot_count}</b> generated-anchor shots
                           {" "}• max <b>{Number(internalPreflight.internal_video_model_preflight.storyboard_motion_plan.shot_max_s || internalStoryboardShotMax).toFixed(1)}s</b>
-                          {" "}• anchor <b>{internalPreflight.internal_video_model_preflight.storyboard_motion_plan.anchor_source === "source_image" ? "source image" : "generated keyframe"}</b>
+                          {" "}• anchor <b>{internalPreflight.internal_video_model_preflight.storyboard_motion_plan.anchor_source === "source_image" ? "source image" : internalPreflight.internal_video_model_preflight.storyboard_motion_plan.anchor_source === "tensorrt_sd15_keyframe" ? "TensorRT SD1.5" : "generated keyframe"}</b>
                         </div>
                       ) : null}
                       {internalPreflight?.internal_video_model_preflight?.scene_scores?.length ? (
@@ -2233,6 +2249,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                            setInternalTemporalMode("video_model");
                            setInternalVideoMotionScoreMode("auto");
                            setInternalVideoPromptRefine(true);
+                           setInternalVideoSceneMotion("scene");
                          }
                        }}>
                          <option value="manual">Manual temporal controls</option>
@@ -2302,19 +2319,26 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                              <option value="animatediff">AnimateDiff SD1.5</option>
                            </select>
                          </div>
-                         <div style={{ minWidth: 280 }}>
-                           <div className="small">Video model</div>
-                           <select value={internalVideoModelId} onChange={(e) => setInternalVideoModelId(e.target.value)}>
+                        <div style={{ minWidth: 280 }}>
+                          <div className="small">Video model</div>
+                          <select value={internalVideoModelId} onChange={(e) => setInternalVideoModelId(e.target.value)}>
                              <option value="">Auto select installed adapter</option>
                              {internalVideoModelOptions.map((m) => (
                                <option key={m.id} value={m.id}>
                                  {m.name} {installedModels[m.id] === false ? "(not installed)" : ""}
                                </option>
                              ))}
-                           </select>
-                         </div>
-                         <div style={{ minWidth: 170 }}>
-                           <div className="small">Frames per scene</div>
+                          </select>
+                        </div>
+                        <div style={{ minWidth: 230 }}>
+                          <div className="small">Storyboard anchors</div>
+                          <select value={internalVideoKeyframeRenderer} onChange={(e) => setInternalVideoKeyframeRenderer(e.target.value as any)}>
+                            <option value="internal">Internal diffusion keyframes</option>
+                            <option value="tensorrt_sd15">TensorRT SD1.5 keyframes{tensorRtInternalInstalled ? "" : " (not installed)"}</option>
+                          </select>
+                        </div>
+                        <div style={{ minWidth: 170 }}>
+                          <div className="small">Frames per scene</div>
                            <input type="number" value={internalVideoMaxFrames} min={2} max={96}
                              onChange={(e) => setInternalVideoMaxFrames(Number(e.target.value))} />
                          </div>
@@ -2369,14 +2393,22 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                              <option value="loop">Loop anchor</option>
                            </select>
                          </div>
+                         <div style={{ minWidth: 190 }}>
+                           <div className="small">Scene motion</div>
+                           <select value={internalVideoSceneMotion} onChange={(e) => setInternalVideoSceneMotion(e.target.value as any)}>
+                             <option value="camera">Camera + atmosphere</option>
+                             <option value="subject">Animate subjects</option>
+                             <option value="scene">Animate whole scene</option>
+                           </select>
+                         </div>
                          <label className="row small" style={{ gap: 6, alignItems: "center" }}>
                            <input type="checkbox" checked={internalVideoPromptRefine} onChange={(e) => setInternalVideoPromptRefine(e.target.checked)} />
                            Prompt refine
                          </label>
-                       </div>
-                       <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
-                         SVD animates from generated keyframes. AnimateDiff follows scene text directly. Motion score follows scene energy; anchor modes bias start, end, or loop continuity.
-                       </div>
+                      </div>
+                      <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
+                        SVD animates from generated keyframes. TensorRT SD1.5 can generate fast storyboard anchors for SVD. AnimateDiff follows scene text directly; TensorRT anchors only guide start/end/loop blending and do not replace the SD1.5 Diffusers base.
+                      </div>
                      </div>
                    ) : null}
 

@@ -209,6 +209,9 @@ class InternalVideoRenderRequest(BaseModel):
     video_model_manual_motion_score: int = Field(default=4, ge=1, le=7)
     video_model_anchor_mode: Literal["start","end","loop"] = "start"
     video_model_prompt_refine: bool = True
+    video_model_scene_motion: Literal["camera","subject","scene"] = "subject"
+    video_model_keyframe_renderer: Literal["internal","tensorrt_sd15"] = "internal"
+    video_model_keyframe_model_id: str | None = None
     # Image animation: animate an uploaded still (path under the project, e.g. assets/refs/foo.png)
     source_asset: str | None = None
     source_strength: float = Field(default=0.55, ge=0.05, le=0.95)

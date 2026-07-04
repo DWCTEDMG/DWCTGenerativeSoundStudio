@@ -2,7 +2,7 @@
   "backend": {
     "host": "127.0.0.1",
     "port": 7863,
-    "url": "http://127.0.0.1:17863",
+    "url": "https://bridges-apartments-theoretical-value.trycloudflare.com",
     "spawnBackend": false
   }
 }

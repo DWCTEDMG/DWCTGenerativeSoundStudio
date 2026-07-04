@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from edmg_studio_backend import app as backend_app
 from edmg_studio_backend.integrations import hf_bucket as hf_bucket_integration
+from edmg_studio_backend.services import hf_auth as hf_auth_module
 
 
 class _FakeSecrets:
@@ -20,9 +21,15 @@ class _FakeSecrets:
         return ""
 
 
+def _disable_cached_hf_auth(monkeypatch) -> None:
+    monkeypatch.setattr(hf_auth_module, "_hf_hub_cache_token", lambda: "")
+    monkeypatch.setattr(hf_auth_module, "_hf_cli_token", lambda: "")
+
+
 def test_describe_status_active_without_explicit_models_dir_env(tmp_path, monkeypatch):
     models_dir = tmp_path / "models"
     models_dir.mkdir()
+    _disable_cached_hf_auth(monkeypatch)
     monkeypatch.setenv("EDMG_HF_BUCKET_MODEL_CACHE", "1")
     monkeypatch.setenv("EDMG_HF_BUCKET_ID", "team/edmg-models")
     monkeypatch.delenv("EDMG_STUDIO_MODELS_DIR", raising=False)
@@ -42,7 +49,7 @@ def test_describe_status_active_without_explicit_models_dir_env(tmp_path, monkey
 
     status = hf_bucket_integration.describe_status(
         models_dir=models_dir,
-        secrets_store=_FakeSecrets("settings-token"),
+        secrets_store=_FakeSecrets("settings-token-1234567890"),
     )
 
     assert status["active"] is True
@@ -52,15 +59,16 @@ def test_describe_status_active_without_explicit_models_dir_env(tmp_path, monkey
 def test_describe_status_reports_env_configuration(tmp_path, monkeypatch):
     models_dir = tmp_path / "models"
     models_dir.mkdir()
+    _disable_cached_hf_auth(monkeypatch)
     monkeypatch.setenv("EDMG_HF_BUCKET_MODEL_CACHE", "1")
     monkeypatch.setenv("EDMG_HF_BUCKET_ID", "team/edmg-models")
     monkeypatch.setenv("EDMG_HF_BUCKET_PREFIX", "weights")
-    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token_1234567890")
     monkeypatch.delenv("EDMG_STUDIO_MODELS_DIR", raising=False)
 
     status = hf_bucket_integration.describe_status(
         models_dir=models_dir,
-        secrets_store=_FakeSecrets("settings-token"),
+        secrets_store=_FakeSecrets("settings-token-1234567890"),
     )
 
     assert status["provider"] == "huggingface_bucket"
@@ -69,10 +77,11 @@ def test_describe_status_reports_env_configuration(tmp_path, monkeypatch):
     assert status["prefix"] == "weights"
     assert status["models_dir"] == str(models_dir.resolve())
     assert status["has_token"] is True
-    assert status["token_source"] == "env"
+    assert status["token_source"] == "env:HF_TOKEN"
 
 
 def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
+    _disable_cached_hf_auth(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("EDMG_HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
@@ -80,7 +89,7 @@ def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
     class _FakeApi:
         def list_bucket_tree(self, bucket, *, prefix=None, recursive=False, token=None):
             assert bucket == "team/edmg-models"
-            assert token == "settings-token"
+            assert token == "settings-token-1234567890"
             return [SimpleNamespace(path="checkpoints/demo.safetensors")]
 
     class _FakeCache:
@@ -90,7 +99,7 @@ def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
             models_dir=Path("/tmp/models"),
         )
         _api = _FakeApi()
-        _token = "settings-token"
+        _token = "settings-token-1234567890"
 
         def _bucket_uri(self, remote_dir: str) -> str:
             return f"hf://buckets/team/edmg-models/{remote_dir}".rstrip("/")
@@ -109,7 +118,7 @@ def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
     result = hf_bucket_integration.test_credentials(
         bucket="team/edmg-models",
         models_dir=Path("/tmp/models"),
-        secrets_store=_FakeSecrets("settings-token"),
+            secrets_store=_FakeSecrets("settings-token-1234567890"),
     )
 
     assert result["ok"] is True
@@ -118,6 +127,7 @@ def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
 
 
 def test_test_credentials_requires_a_token(monkeypatch):
+    _disable_cached_hf_auth(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("EDMG_HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
@@ -146,7 +156,7 @@ def test_cloud_hf_routes_expose_status_and_test(tmp_path, monkeypatch):
     monkeypatch.setattr(
         backend_app,
         "secrets",
-        _FakeSecrets("settings-token"),
+        _FakeSecrets("settings-token-1234567890"),
     )
     monkeypatch.setattr(
         hf_bucket_integration,

@@ -77,6 +77,7 @@ from .services.edmg_core import (
 from .integrations import comfyui as comfy
 from .integrations.comfyui_pool import ComfyUINodePool
 from .services.worker_manager import WorkerManager
+from .services.hf_auth import describe_hf_auth
 from .services.ffmpeg import assemble_slideshow, assemble_image_sequence, concat_videos, interpolate_video_fps, mux_audio, _probe_duration_seconds
 from .services.internal_video import (
     InternalVideoSettings,
@@ -85,6 +86,8 @@ from .services.internal_video import (
     describe_internal_video_model_preflight,
     describe_proxy_render_cache,
     normalize_internal_motion_strategy,
+    normalize_video_model_keyframe_renderer,
+    normalize_video_model_scene_motion,
     render_internal_still_image,
     render_internal_video_variant,
     render_internal_proxy_video_variant,
@@ -2615,11 +2618,19 @@ def get_config():
 def secrets_status():
     """Return whether optional tokens are configured (never returns the values)."""
     st = secrets.status()
+    hf_auth = describe_hf_auth(secrets_store=secrets)
     return {
         "ok": True,
         "store": st.store,
         "available": st.available,
         "has_hf_token": st.has_hf_token,
+        "hf_auth_available": hf_auth["available"],
+        "hf_auth_token_source": hf_auth["token_source"],
+        "hf_modern_cli": hf_auth["modern_cli"],
+        "hf_cli_available": hf_auth["cli_available"],
+        "hf_login_command": hf_auth["login_command"],
+        "hf_whoami_command": hf_auth["whoami_command"],
+        "hf_token_command": hf_auth["token_command"],
         "has_civitai_api_key": st.has_civitai_api_key,
         "has_openai_compat_api_key": st.has_openai_compat_api_key,
         "has_stability_api_key": st.has_stability_api_key,
@@ -7671,6 +7682,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
     out = render_internal_video_variant(
         ffmpeg_path=settings.ffmpeg_path,
         project_dir=pdir,
+        project_id=project_id,
         variant=variant2,
         scenes=scenes,
         audio_path=audio_path,
@@ -7709,6 +7721,9 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         "temporal_mode": settings_obj.temporal_mode,
         "video_model_engine": settings_obj.video_model_engine,
         "video_model_id": settings_obj.video_model_id,
+        "video_model_scene_motion": normalize_video_model_scene_motion(settings_obj.video_model_scene_motion),
+        "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings_obj.video_model_keyframe_renderer),
+        "video_model_keyframe_model_id": settings_obj.video_model_keyframe_model_id,
         "resume_existing_frames": settings_obj.resume_existing_frames,
         "variant_index": int(payload.get("variant_index", 0)),
         "completed_at": time.time(),
@@ -8717,6 +8732,8 @@ def _internal_settings_from_payload(
         if payload.get(key) is not None
     }
     motion_strategy = normalize_internal_motion_strategy(payload.get("motion_strategy") or payload.get("internal_motion_strategy"))
+    video_keyframe_renderer = normalize_video_model_keyframe_renderer(payload.get("video_model_keyframe_renderer"))
+    video_scene_motion = normalize_video_model_scene_motion(payload.get("video_model_scene_motion"))
     try:
         storyboard_shot_max_s = float(payload.get("storyboard_shot_max_s", 4.0))
     except Exception:
@@ -8761,6 +8778,9 @@ def _internal_settings_from_payload(
         video_model_manual_motion_score=max(1, min(7, video_manual_motion_score)),
         video_model_anchor_mode=video_anchor_mode,
         video_model_prompt_refine=video_prompt_refine,
+        video_model_scene_motion=video_scene_motion,
+        video_model_keyframe_renderer=video_keyframe_renderer,
+        video_model_keyframe_model_id=(str(payload.get("video_model_keyframe_model_id")).strip() or None) if payload.get("video_model_keyframe_model_id") is not None else None,
         source_asset=(str(payload.get("source_asset")).strip() or None) if payload.get("source_asset") is not None else None,
         source_strength=float(payload.get("source_strength", 0.55)),
         deforum_overrides=deforum_overrides or None,
@@ -8988,6 +9008,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             settings_obj,
             video_model_motion_score_mode="auto",
             video_model_prompt_refine=True,
+            video_model_scene_motion=normalize_video_model_scene_motion(payload.get("video_model_scene_motion") or "scene"),
             keyframe_interval_s=min(float(settings_obj.keyframe_interval_s), float(settings_obj.storyboard_shot_max_s)),
             source_asset=None,
         )
@@ -9596,6 +9617,10 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             warnings.append("SVD animates from each generated keyframe; it is best for short subject, fabric, camera, and transition motion.")
         if settings_obj.video_model_engine == "animatediff":
             warnings.append("AnimateDiff uses an SD1.5 motion adapter; keep the internal base model on SD1.5 for this mode.")
+        if normalize_video_model_keyframe_renderer(settings_obj.video_model_keyframe_renderer) == "tensorrt_sd15":
+            warnings.append(
+                "TensorRT SD1.5 storyboard anchors are enabled: Studio generates fast SD1.5 keyframes first, then SVD can animate those anchors directly. AnimateDiff still uses its SD1.5 Diffusers base and only uses these anchors for start/end/loop blending."
+            )
         for warning in list(video_model_preflight.get("warnings") or []):
             warnings.append(str(warning))
         for warning in _internal_video_model_memory_warnings(settings_obj, hw):
@@ -9677,6 +9702,9 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "video_model_manual_motion_score": settings_obj.video_model_manual_motion_score,
             "video_model_anchor_mode": settings_obj.video_model_anchor_mode,
             "video_model_prompt_refine": settings_obj.video_model_prompt_refine,
+            "video_model_scene_motion": normalize_video_model_scene_motion(settings_obj.video_model_scene_motion),
+            "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings_obj.video_model_keyframe_renderer),
+            "video_model_keyframe_model_id": settings_obj.video_model_keyframe_model_id,
             "motion_strategy": normalize_internal_motion_strategy(settings_obj.motion_strategy),
             "storyboard_shot_max_s": settings_obj.storyboard_shot_max_s,
             "temporal_steps": settings_obj.temporal_steps,

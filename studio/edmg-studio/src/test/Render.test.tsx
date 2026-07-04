@@ -275,6 +275,7 @@ describe("Render page", () => {
             && body.includes('"video_model_motion_score_mode":"auto"')
             && body.includes('"video_model_manual_motion_score":4')
             && body.includes('"video_model_anchor_mode":"loop"')
+            && body.includes('"video_model_scene_motion":"subject"')
             && body.includes('"video_model_prompt_refine":true');
         }),
       ).toBe(true);
@@ -303,7 +304,34 @@ describe("Render page", () => {
             && body.includes('"storyboard_shot_max_s":4')
             && body.includes('"temporal_mode":"video_model"')
             && body.includes('"video_model_motion_score_mode":"auto"')
+            && body.includes('"video_model_scene_motion":"scene"')
             && body.includes('"video_model_prompt_refine":true');
+        }),
+      ).toBe(true);
+    });
+  }, 10000);
+
+  it("sends TensorRT SD1.5 as the video-model storyboard anchor renderer", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    const temporalOption = await screen.findByRole("option", { name: "Internal video model (SVD / AnimateDiff)" });
+    const temporalSelect = temporalOption.closest("select");
+    expect(temporalSelect).toBeTruthy();
+    fireEvent.change(temporalSelect!, { target: { value: "video_model" } });
+
+    expect(await screen.findByText("Storyboard anchors")).toBeTruthy();
+    fireEvent.change(await screen.findByDisplayValue("Internal diffusion keyframes"), { target: { value: "tensorrt_sd15" } });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => {
+          if (!String(url).includes("/v1/projects/p1/render/internal/preflight")) return false;
+          const body = String(init?.body || "");
+          return body.includes('"temporal_mode":"video_model"')
+            && body.includes('"video_model_keyframe_renderer":"tensorrt_sd15"')
+            && body.includes('"video_model_keyframe_model_id":"local_sd15_tensorrt_bundle"');
         }),
       ).toBe(true);
     });

@@ -94,6 +94,7 @@ class AnimationPreset:
     motion: str  # key into MOTION_PROFILES
     temporal_mode: str  # off | keyframes | frame_img2img | video_model
     motion_strategy: str = "manual"  # manual | storyboard_full_motion
+    scene_motion: str = "subject"  # camera | subject | scene
     engine_hint: str = "auto"  # auto | internal | comfyui
     comfyui_engine: str = "animatediff"  # animatediff | svd | regional
     uses_source_image: bool = False
@@ -118,6 +119,7 @@ class AnimationPreset:
             "is_3d": profile.is_3d,
             "temporal_mode": self.temporal_mode,
             "motion_strategy": self.motion_strategy,
+            "scene_motion": self.scene_motion,
             "engine_hint": self.engine_hint,
             "comfyui_engine": self.comfyui_engine,
             "uses_source_image": self.uses_source_image,
@@ -161,6 +163,7 @@ ANIMATION_PRESETS: list[AnimationPreset] = [
         motion="full",
         temporal_mode="video_model",
         motion_strategy="storyboard_full_motion",
+        scene_motion="scene",
     ),
     AnimationPreset(
         id="cinematic_3d",
@@ -441,10 +444,12 @@ def build_autoconfig(
                 "video_model_motion_score_mode": "auto",
                 "video_model_anchor_mode": "start",
                 "video_model_prompt_refine": True,
+                "video_model_scene_motion": str(preset.scene_motion or "subject"),
+                "video_model_noise_aug_strength": max(float(td.get("video_model_noise_aug_strength", 0.02)), 0.06),
             }
         )
         notes.append(
-            "Storyboard full motion enabled: Studio generates keyframe anchors from the plan, then renders short internal video-model shots."
+            "Storyboard full motion enabled: Studio generates keyframe anchors from the plan, then renders short internal video-model shots with subject and scene motion prompts."
         )
     internal_request.update(schedule_to_request_overrides(schedule))
     if use_source:

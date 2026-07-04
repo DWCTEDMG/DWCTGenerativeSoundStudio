@@ -8,6 +8,7 @@ from edmg_studio_backend.integrations.hf_bucket import (
     HFBucketModelCache,
     resolve_models_dir,
 )
+from edmg_studio_backend.services import hf_auth as hf_auth_module
 from edmg_studio_backend.services import model_manager as model_manager_module
 from edmg_studio_backend.services.model_manager import ModelManager
 
@@ -59,10 +60,16 @@ class FakeHFBucketModelCache:
         return True
 
 
+def _disable_cached_hf_auth(monkeypatch) -> None:
+    monkeypatch.setattr(hf_auth_module, "_hf_hub_cache_token", lambda: "")
+    monkeypatch.setattr(hf_auth_module, "_hf_cli_token", lambda: "")
+
+
 def _offline_manager(tmp_path, monkeypatch, *, cache: FakeHFBucketModelCache | None = None) -> ModelManager:
     def _offline_get(*_args, **_kwargs):
         raise RuntimeError("offline")
 
+    _disable_cached_hf_auth(monkeypatch)
     for key in (
         "EDMG_AWS_MODEL_CACHE",
         "EDMG_S3_MODEL_CACHE",
@@ -73,6 +80,9 @@ def _offline_manager(tmp_path, monkeypatch, *, cache: FakeHFBucketModelCache | N
         "EDMG_MODEL_STORAGE_MODE",
         "EDMG_AWS_MODEL_CACHE_MODE",
         "EDMG_MODEL_CACHE_MODE",
+        "EDMG_HF_TOKEN",
+        "HF_TOKEN",
+        "HUGGINGFACE_TOKEN",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(model_manager_module.requests, "get", _offline_get)
@@ -83,7 +93,7 @@ def _offline_manager(tmp_path, monkeypatch, *, cache: FakeHFBucketModelCache | N
         tmp_path / "external",
         "http://127.0.0.1:8188",
         "http://127.0.0.1:11434",
-        secrets=_FakeSecrets("settings-token"),
+        secrets=_FakeSecrets("settings-token-1234567890"),
     )
     if cache is not None:
         manager.model_cache = cache
@@ -102,10 +112,12 @@ def test_resolve_models_dir_falls_back_to_studio_home(tmp_path, monkeypatch) -> 
 def test_hf_bucket_from_runtime_uses_settings_token(tmp_path, monkeypatch) -> None:
     from edmg_studio_backend.integrations import hf_bucket as hf_bucket_module
 
+    _disable_cached_hf_auth(monkeypatch)
     monkeypatch.setenv("EDMG_HF_BUCKET_MODEL_CACHE", "1")
     monkeypatch.setenv("EDMG_HF_BUCKET_ID", "team/edmg-models")
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("EDMG_HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
 
     captured: dict = {}
 
@@ -121,11 +133,11 @@ def test_hf_bucket_from_runtime_uses_settings_token(tmp_path, monkeypatch) -> No
 
     cache = HFBucketModelCache.from_runtime(
         models_dir=tmp_path / "models",
-        secrets_store=_FakeSecrets("settings-token"),
+            secrets_store=_FakeSecrets("settings-token-1234567890"),
     )
 
     assert cache is not None
-    assert captured["token"] == "settings-token"
+    assert captured["token"] == "settings-token-1234567890"
     assert captured["models_dir"] == tmp_path / "models"
 
 
@@ -183,7 +195,7 @@ def test_install_hf_bucket_source_syncs_internal_controlnet(tmp_path, monkeypatc
 
     assert finished.status == "done", finished.error
     assert captured["bucket"] == "gulle1155/controlnet-canny-sdxl-1.0-bucket"
-    assert captured["token"] == "settings-token"
+    assert captured["token"] == "settings-token-1234567890"
 
     resolved = manager.resolve_installed_path(model_id, materialize_remote=False)
     expected = tmp_path / "home" / "models" / "internal" / "controlnet" / model_id
@@ -197,6 +209,8 @@ def test_model_manager_builds_hf_cache_from_runtime(tmp_path, monkeypatch) -> No
     monkeypatch.setenv("EDMG_HF_BUCKET_ID", "team/edmg-models")
     monkeypatch.delenv("EDMG_STUDIO_MODELS_DIR", raising=False)
     monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("EDMG_HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
 
     calls: list[dict] = []
 
@@ -215,7 +229,7 @@ def test_model_manager_builds_hf_cache_from_runtime(tmp_path, monkeypatch) -> No
         tmp_path / "external",
         "http://127.0.0.1:8188",
         "http://127.0.0.1:11434",
-        secrets=_FakeSecrets("settings-token"),
+        secrets=_FakeSecrets("settings-token-1234567890"),
     )
 
     cache_chain = getattr(manager.model_cache, "caches", [manager.model_cache])

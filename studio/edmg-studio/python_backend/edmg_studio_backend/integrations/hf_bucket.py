@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..services.hf_auth import resolve_hf_token as _resolve_hf_auth_token
+
 
 def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -117,18 +119,7 @@ def resolve_models_dir(*, models_dir: Path | None = None) -> Path:
 
 
 def resolve_hf_token(*, secrets_store: Any | None = None) -> tuple[str, str]:
-    env_token = (
-        os.getenv("EDMG_HF_TOKEN", "").strip()
-        or os.getenv("HF_TOKEN", "").strip()
-        or os.getenv("HUGGINGFACE_TOKEN", "").strip()
-    )
-    if env_token:
-        return env_token, "env"
-    if secrets_store is not None:
-        settings_token = str(secrets_store.get("hf_token") or "").strip()
-        if settings_token:
-            return settings_token, "settings"
-    return "", ""
+    return _resolve_hf_auth_token(secrets_store=secrets_store)
 
 
 def settings_from_env(
@@ -474,8 +465,8 @@ def describe_status(
         "has_token": bool(token),
         "token_source": token_source or None,
         "token_note": (
-            "Runtime model cache uses HF_TOKEN/EDMG_HF_TOKEN env vars, falling back to "
-            "Settings → Tokens when env vars are unset."
+            "Runtime model cache uses HF_TOKEN/EDMG_HF_TOKEN env vars, then `hf auth login` "
+            "or the Hugging Face Hub token cache, then Settings → Tokens."
         ),
     }
 
@@ -490,8 +481,8 @@ def test_credentials(
     token, token_source = resolve_hf_token(secrets_store=secrets_store)
     if not token:
         raise RuntimeError(
-            "No Hugging Face token found. Set HF_TOKEN (or EDMG_HF_TOKEN) in the backend "
-            "environment or save a token in Settings → Tokens."
+            "No Hugging Face token found. Run `hf auth login`, set HF_TOKEN (or EDMG_HF_TOKEN) "
+            "in the backend environment, or save a token in Settings → Tokens."
         )
 
     settings = settings_from_env(

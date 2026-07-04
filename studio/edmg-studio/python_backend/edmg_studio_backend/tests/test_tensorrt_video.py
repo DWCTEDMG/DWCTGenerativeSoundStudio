@@ -5,7 +5,9 @@ from pathlib import Path
 from PIL import Image
 
 from edmg_studio_backend import app as app_module
+from edmg_studio_backend.services import internal_video
 from edmg_studio_backend.services import tensorrt_video
+from edmg_studio_backend.services import tensorrt_standalone
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 
 
@@ -91,3 +93,86 @@ def test_render_tensorrt_video_variant_uses_keyframes_and_assembles_video(tmp_pa
         assert payload["batch_size"] == 1
     assert len(list((project_dir / "outputs" / "tensorrt_video").glob("*/frames/frame_*.png"))) == 4
     assert progress_events[-1][0] == "complete"
+
+
+def test_tensorrt_sd15_keyframe_anchor_resizes_and_uses_bundle(tmp_path, monkeypatch) -> None:
+    generated = tmp_path / "trt.png"
+    Image.new("RGB", (512, 512), (12, 34, 56)).save(generated)
+    calls: list[dict] = []
+
+    def fake_run_job(project_id: str, job_id: str | None, payload: dict) -> dict:
+        calls.append({"project_id": project_id, "job_id": job_id, "payload": dict(payload)})
+        return {"output_path": str(generated)}
+
+    monkeypatch.setattr(tensorrt_standalone, "run_job", fake_run_job)
+
+    image = internal_video._generate_tensorrt_sd15_keyframe(
+        project_id="p1",
+        prompt="neon skyline",
+        negative_prompt="blur",
+        width=320,
+        height=180,
+        steps=4,
+        cfg=6.5,
+        sampler="pndm",
+        seed=123,
+        model_id="local_sd15_tensorrt_bundle",
+    )
+
+    assert image.size == (320, 180)
+    assert calls[0]["project_id"] == "p1"
+    assert calls[0]["job_id"] is None
+    assert calls[0]["payload"]["model_id"] == "local_sd15_tensorrt_bundle"
+    assert calls[0]["payload"]["workflow_family"] == "sd15"
+    assert "width" not in calls[0]["payload"]
+    assert "height" not in calls[0]["payload"]
+
+
+def test_video_model_preflight_reports_tensorrt_anchor_renderer() -> None:
+    preflight = internal_video.describe_internal_video_model_preflight(
+        scenes=[{"start_s": 0, "end_s": 2, "prompt": "neon skyline"}],
+        timeline=None,
+        settings=InternalVideoSettings(
+            temporal_mode="video_model",
+            motion_strategy="storyboard_full_motion",
+            video_model_engine="svd",
+            video_model_keyframe_renderer="tensorrt_sd15",
+            video_model_keyframe_model_id="local_sd15_tensorrt_bundle",
+        ),
+        duration_s=2.0,
+        total_frames=4,
+        hardware={"backend": "cuda", "vram_gb": 6.0},
+    )
+
+    assert preflight["keyframe_renderer"] == "tensorrt_sd15"
+    assert preflight["keyframe_model_id"] == "local_sd15_tensorrt_bundle"
+    assert preflight["storyboard_motion_plan"]["anchor_source"] == "tensorrt_sd15_keyframe"
+
+
+def test_video_model_scene_motion_refines_prompt_and_preflight() -> None:
+    settings = InternalVideoSettings(
+        temporal_mode="video_model",
+        motion_strategy="storyboard_full_motion",
+        video_model_prompt_refine=True,
+        video_model_scene_motion="scene",
+        video_model_motion_score_mode="manual",
+        video_model_manual_motion_score=6,
+    )
+    refined = internal_video._refine_video_model_prompt(  # noqa: SLF001 - pure prompt helper
+        "cinematic figure in an old town",
+        score_info={"motion_score": 6},
+        settings=settings,
+    )
+    assert "whole scene" in refined
+    assert "visible objects themselves move" in refined
+
+    preflight = internal_video.describe_internal_video_model_preflight(
+        scenes=[{"start_s": 0, "end_s": 2, "prompt": "cinematic figure in an old town"}],
+        timeline=None,
+        settings=settings,
+        duration_s=2.0,
+        total_frames=4,
+        hardware={"backend": "cuda", "vram_gb": 12.0},
+    )
+    assert preflight["scene_motion"] == "scene"
+    assert preflight["storyboard_motion_plan"]["shots"][0]["scene_motion"] == "scene"
