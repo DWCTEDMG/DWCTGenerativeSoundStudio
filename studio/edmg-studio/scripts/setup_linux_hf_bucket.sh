@@ -49,7 +49,7 @@ mkdir -p "${EDMG_STUDIO_HOME}"
 
 if [[ "${HF_INSTALL_HUB}" == "1" ]]; then
   log "Ensuring huggingface_hub is installed"
-  "${HF_PYTHON_BIN}" -m pip install -U "huggingface_hub>=0.26"
+  "${HF_PYTHON_BIN}" -m pip install -U "huggingface_hub>=0.34,<1.0"
 fi
 
 log "Validating Hugging Face auth"

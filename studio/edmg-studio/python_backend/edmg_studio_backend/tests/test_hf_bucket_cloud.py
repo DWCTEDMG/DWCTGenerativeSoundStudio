@@ -126,6 +126,53 @@ def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
     assert result["sample_paths"] == ["checkpoints/demo.safetensors"]
 
 
+def test_test_credentials_falls_back_when_list_bucket_tree_missing(monkeypatch):
+    _disable_cached_hf_auth(monkeypatch)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    class _LegacyApi:
+        pass
+
+    class _FakeCache:
+        settings = SimpleNamespace(
+            bucket="team/edmg-models",
+            prefix="",
+            models_dir=Path("/tmp/models"),
+        )
+        _api = _LegacyApi()
+        _token = "settings-token-1234567890"
+
+        def _bucket_uri(self, remote_dir: str) -> str:
+            return f"hf://buckets/team/edmg-models/{remote_dir}".rstrip("/")
+
+    monkeypatch.setattr(
+        hf_bucket_integration,
+        "settings_from_env",
+        lambda **kwargs: SimpleNamespace(
+            bucket="team/edmg-models",
+            prefix="",
+            models_dir=Path("/tmp/models"),
+        ),
+    )
+    monkeypatch.setattr(hf_bucket_integration, "HFBucketModelCache", lambda settings: _FakeCache())
+    monkeypatch.setattr(
+        hf_bucket_integration,
+        "_list_bucket_tree",
+        lambda api, bucket_id, *, prefix=None, recursive=False, token=None: [
+            SimpleNamespace(path="checkpoints/legacy.safetensors")
+        ],
+    )
+
+    result = hf_bucket_integration.test_credentials(
+        bucket="team/edmg-models",
+        models_dir=Path("/tmp/models"),
+        secrets_store=_FakeSecrets("settings-token-1234567890"),
+    )
+
+    assert result["ok"] is True
+    assert result["sample_paths"] == ["checkpoints/legacy.safetensors"]
+
+
 def test_test_credentials_requires_a_token(monkeypatch):
     _disable_cached_hf_auth(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)

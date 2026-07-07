@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from ..services.hf_auth import resolve_hf_token as _resolve_hf_auth_token
@@ -69,6 +70,70 @@ def _require_hf_api():
             "Hugging Face bucket cache requires 'huggingface_hub' with bucket support "
             "(huggingface_hub>=0.34). Reinstall the Studio backend dependencies."
         ) from exc
+
+
+def _relative_bucket_path(full_path: str, bucket_id: str) -> str:
+    bucket = parse_bucket_id(bucket_id)
+    normalized = str(full_path or "").replace("\\", "/").strip("/")
+    root = f"buckets/{bucket}"
+    if normalized == root:
+        return ""
+    prefix = f"{root}/"
+    if normalized.startswith(prefix):
+        return normalized[len(prefix) :]
+    return _normalize_remote(normalized)
+
+
+def _list_bucket_tree(
+    api: Any,
+    bucket_id: str,
+    *,
+    prefix: str | None = None,
+    recursive: bool = False,
+    token: str | None = None,
+) -> list[Any]:
+    """List bucket entries across huggingface_hub versions."""
+    list_fn = getattr(api, "list_bucket_tree", None)
+    if callable(list_fn):
+        return list(list_fn(bucket_id, prefix=prefix, recursive=recursive, token=token))
+
+    try:
+        from huggingface_hub import HfFileSystem  # type: ignore
+    except Exception as exc:  # pragma: no cover - import guard
+        raise RuntimeError(
+            "Installed huggingface_hub is too old for HF bucket listing. "
+            "Upgrade with: pip install -U 'huggingface_hub>=0.34'"
+        ) from exc
+
+    bucket = parse_bucket_id(bucket_id)
+    remote_prefix = _normalize_remote(prefix or "")
+    root = f"buckets/{bucket}"
+    path = f"{root}/{remote_prefix}" if remote_prefix else root
+    hffs = HfFileSystem(token=token or None)
+
+    raw_paths: list[str] = []
+    if recursive:
+        found = hffs.find(path, detail=False)
+        if isinstance(found, dict):
+            raw_paths = [str(key) for key in found.keys()]
+        else:
+            raw_paths = [str(item) for item in found]
+    else:
+        entries = hffs.ls(path, detail=False)
+        for entry in entries:
+            raw_paths.append(str(entry))
+
+    items: list[Any] = []
+    for full_path in raw_paths:
+        rel = _relative_bucket_path(full_path, bucket)
+        if not rel:
+            continue
+        if not recursive and remote_prefix:
+            remainder = rel[len(remote_prefix) :].strip("/") if rel.startswith(remote_prefix) else rel
+            if "/" in remainder:
+                continue
+        items.append(SimpleNamespace(path=rel))
+    return items
 
 
 @dataclass(frozen=True)
@@ -319,7 +384,8 @@ class HFBucketModelCache:
         remote_dir = _normalize_remote(remote_dir)
         out: list[str] = []
         try:
-            items = self._api.list_bucket_tree(
+            items = _list_bucket_tree(
+                self._api,
                 self.settings.bucket,
                 prefix=remote_dir or None,
                 recursive=True,
@@ -328,7 +394,7 @@ class HFBucketModelCache:
         except Exception:
             return out
         for item in items:
-            if type(item).__name__ != "BucketFile":
+            if type(item).__name__ == "BucketFolder":
                 continue
             rel = _normalize_remote(getattr(item, "path", ""))
             if not rel:
@@ -493,7 +559,8 @@ def test_credentials(
     )
     cache = HFBucketModelCache(settings)
     prefix_filter = settings.prefix or None
-    items = cache._api.list_bucket_tree(
+    items = _list_bucket_tree(
+        cache._api,
         settings.bucket,
         prefix=prefix_filter,
         recursive=False,
