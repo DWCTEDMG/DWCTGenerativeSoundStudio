@@ -32,4 +32,12 @@ describe("backend URL resolution", () => {
     expect(getBackendUrl()).toBe(FRESH_TUNNEL);
     expect(window.localStorage.getItem("edmg.backendUrl")).toBe(FRESH_TUNNEL);
   });
+
+  it("persists a resolved backend URL when localStorage is empty", () => {
+    window.localStorage.removeItem("edmg.backendUrl");
+    window.__EDMG_BACKEND_URL__ = `${FRESH_TUNNEL}/v1`;
+
+    expect(getBackendUrl()).toBe(FRESH_TUNNEL);
+    expect(window.localStorage.getItem("edmg.backendUrl")).toBe(FRESH_TUNNEL);
+  });
 });

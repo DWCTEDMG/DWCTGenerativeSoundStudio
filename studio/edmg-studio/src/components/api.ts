@@ -75,7 +75,7 @@ function rememberBackendUrl(value: string): string {
     window.__EDMG_BACKEND_URL__ = resolved;
     try {
       const stored = normalizeBackendUrl(window.localStorage?.getItem(BROWSER_BACKEND_URL_STORAGE_KEY) || "");
-      if (stored && stored !== resolved) {
+      if (stored !== resolved) {
         window.localStorage?.setItem(BROWSER_BACKEND_URL_STORAGE_KEY, resolved);
       }
     } catch {

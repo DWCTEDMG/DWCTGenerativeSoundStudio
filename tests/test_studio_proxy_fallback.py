@@ -10,8 +10,19 @@ from fastapi.testclient import TestClient
 
 from edmg_studio_backend import app as studio_app
 from edmg_studio_backend.services import internal_video as internal_video_service
+from edmg_studio_backend.services.render_settings import DEFAULT_RENDER_PROVIDER_SETTINGS
 from edmg_studio_backend.store.projects import ProjectStore
 from edmg_studio_backend.store.jobs import JobStore
+
+
+def _enable_proxy_renders(monkeypatch):
+    monkeypatch.setattr(studio_app.render_settings, "get", lambda: DEFAULT_RENDER_PROVIDER_SETTINGS)
+
+
+def _disable_proxy_renders(monkeypatch):
+    settings = DEFAULT_RENDER_PROVIDER_SETTINGS.copy()
+    settings["video"] = {**settings["video"], "allow_proxy_renders": False}
+    monkeypatch.setattr(studio_app.render_settings, "get", lambda: settings)
 
 
 def _make_project(tmp_path: Path):
@@ -43,6 +54,7 @@ def test_internal_preflight_falls_back_to_proxy(tmp_path, monkeypatch):
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    _enable_proxy_renders(monkeypatch)
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
@@ -61,7 +73,7 @@ def test_internal_preflight_blocks_explicit_proxy_when_disabled(tmp_path, monkey
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
-    monkeypatch.setattr(studio_app.render_settings, "get", lambda: {"video": {"allow_proxy_renders": False}})
+    _disable_proxy_renders(monkeypatch)
 
     with pytest.raises(studio_app.UserFacingError) as exc:
         studio_app._internal_render_preflight_data(
@@ -78,7 +90,7 @@ def test_internal_preflight_blocks_proxy_fallback_when_disabled(tmp_path, monkey
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
     monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
-    monkeypatch.setattr(studio_app.render_settings, "get", lambda: {"video": {"allow_proxy_renders": False}})
+    _disable_proxy_renders(monkeypatch)
 
     with pytest.raises(studio_app.UserFacingError) as exc:
         studio_app._internal_render_preflight_data(
@@ -94,6 +106,7 @@ def test_internal_preflight_falls_back_to_proxy_for_incomplete_internal_model(tm
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    _enable_proxy_renders(monkeypatch)
     monkeypatch.setattr(
         studio_app.models,
         "internal_asset_issue",
@@ -122,6 +135,7 @@ def test_run_pipeline_auto_uses_proxy_when_comfy_and_models_missing(tmp_path, mo
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
     monkeypatch.setattr(studio_app.comfy_pool, "diagnose", lambda _req: {"compatible": [], "busy_compatible": []})
+    _enable_proxy_renders(monkeypatch)
 
     captured = {}
 
@@ -149,7 +163,7 @@ def test_run_pipeline_auto_reports_no_route_when_proxy_disabled(tmp_path, monkey
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
     monkeypatch.setattr(studio_app.comfy_pool, "diagnose", lambda _req: {"compatible": [], "busy_compatible": []})
     monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
-    monkeypatch.setattr(studio_app.render_settings, "get", lambda: {"video": {"allow_proxy_renders": False}})
+    _disable_proxy_renders(monkeypatch)
 
     with pytest.raises(studio_app.UserFacingError) as exc:
         studio_app.run_pipeline(proj.id, variant_index=0, preset="balanced", mode="auto", engine="auto")
@@ -214,6 +228,7 @@ def test_resume_and_restart_routes_clone_internal_job_with_checkpoint(tmp_path, 
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    _disable_proxy_renders(monkeypatch)
 
     source = jobs.create(
         proj.id,

@@ -2,7 +2,7 @@
   "backend": {
     "host": "127.0.0.1",
     "port": 7863,
-    "url": "https://equity-kilometers-periodically-floating.trycloudflare.com",
-    "spawnBackend": false
+    "url": "",
+    "spawnBackend": true
   }
 }

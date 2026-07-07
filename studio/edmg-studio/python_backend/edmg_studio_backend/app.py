@@ -2308,9 +2308,17 @@ def hardware():
     return {"ok": True, "hardware": hw, "render_tier_plan": _build_internal_render_plan(hw, requested_tier="auto")}
 
 
-def _proxy_renders_enabled() -> bool:
+def _proxy_renders_enabled(payload: dict[str, Any] | None = None) -> bool:
     video_cfg = dict((render_settings.get().get("video") or {}))
-    return bool(video_cfg.get("allow_proxy_renders", True))
+    if bool(video_cfg.get("allow_proxy_renders", True)):
+        return True
+    if not payload:
+        return False
+    mode = str(payload.get("render_mode") or "").strip().lower()
+    action = str(payload.get("queue_action") or "").strip().lower()
+    if mode == "proxy" and payload.get("source_job_id") and action in {"resume_from_checkpoint", "restart_clean"}:
+        return True
+    return False
 
 
 def _proxy_render_disabled_error(reason: str | None = None) -> UserFacingError:
@@ -9215,7 +9223,7 @@ def _proxy_render_preflight_data(
     reason: str | None = None,
     requested_model_id: str | None = None,
 ) -> dict[str, Any]:
-    if not _proxy_renders_enabled():
+    if not _proxy_renders_enabled(payload):
         raise _proxy_render_disabled_error(reason)
 
     proj = store.get(project_id)
@@ -9849,6 +9857,8 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             return _hosted_render_preflight_data(project_id, payload, reason=e.message)
         allow_proxy = bool(payload.get("allow_proxy_fallback", True))
         if allow_proxy and e.code in {"MODEL_NOT_INSTALLED", "MODEL_UNSUPPORTED_FOR_HARDWARE"}:
+            if not _proxy_renders_enabled(payload):
+                raise _proxy_render_disabled_error(e.message)
             return _proxy_render_preflight_data(project_id, payload, reason=e.message, requested_model_id=str(payload.get("model_id") or "auto"))
         raise
     model_family = _internal_model_family_for_request(model_id, model_path)

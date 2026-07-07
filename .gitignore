@@ -104,6 +104,11 @@ studio/edmg-studio/electron-resources/bin/*.exe
 studio/edmg-studio/electron-resources/director/
 
 # ----------------------------
+# Local agent / tunnel tooling (download binaries locally)
+# ----------------------------
+.codex-tools/
+
+# ----------------------------
 # OS / editor
 # ----------------------------
 Thumbs.db
