@@ -161,9 +161,9 @@ For local Studio use, the native Director page does not require ChatGPT. If you 
 - `EDMG_STUDIO_HOME` (optional; preferred root for Studio storage)
 - `EDMG_STUDIO_DATA_DIR` (default: `./data`)
 - `EDMG_AI_MODE` (default: `local`)
-- `EDMG_AI_PROVIDER` (default: `ollama`)
+- `EDMG_AI_PROVIDER` (default: `nemotron_cloud`; alternatives: `openai_compat`, `ollama`, `rule_based`)
 - `EDMG_AI_OLLAMA_URL` (default: `http://127.0.0.1:11434`)
-- `EDMG_AI_OLLAMA_MODEL` (default: `qwen3:8b`)
+- `EDMG_AI_OLLAMA_MODEL` (default for Ollama path: `nemotron-3-ultra:cloud`; low-resource: `qwen3:4b`)
 - `EDMG_AI_OPENAI_COMPAT_BASE_URL` (default: `https://integrate.api.nvidia.com/v1`)
 - `EDMG_AI_OPENAI_COMPAT_MODEL` (default: `nvidia/llama-3.1-nemotron-ultra-253b-v1`)
 - `EDMG_AI_OPENAI_COMPAT_API_KEY` (optional)
@@ -174,8 +174,10 @@ For local Studio use, the native Director page does not require ChatGPT. If you 
 - `EDMG_AWS_MODEL_CACHE_BUCKET` and `EDMG_AWS_MODEL_CACHE_PREFIX` (S3 bucket/prefix for model objects)
 - `EDMG_MODEL_STORAGE_MODE` (`local_cache` keeps local files and mirrors them to S3; `cloud_only` stores supported models in S3 and restores them on demand)
 - `EDMG_S3_ENDPOINT_URL` (optional S3-compatible endpoint)
+- `EDMG_HF_BUCKET_MODEL_CACHE` (`1` enables Hugging Face bucket model cache/hosting)
+- `EDMG_HF_BUCKET_ID` and `EDMG_HF_BUCKET_PREFIX` (HF dataset/bucket id and optional prefix)
 
-If you need a lighter local planner for weaker CPUs or low-memory systems, set `EDMG_AI_OLLAMA_MODEL=qwen3:4b`.
+If you need a lighter local planner for weaker CPUs or low-memory systems, set `EDMG_AI_PROVIDER=ollama` and `EDMG_AI_OLLAMA_MODEL=qwen3:4b`.
 
 If you use an OpenAI-compatible gateway that exposes a different model alias than `nvidia/llama-3.1-nemotron-ultra-253b-v1`,
 override `EDMG_AI_OPENAI_COMPAT_MODEL` to match that server.
@@ -184,8 +186,8 @@ S3-hosted model entries can use `source: "s3"` with either `s3_uri: "s3://bucket
 
 ## Recommended local model stack
 
-- Planner default: `qwen3:8b`
-- Low-resource planner: `qwen3:4b`
+- Planner default: NVIDIA Nemotron Ultra via `nemotron_cloud` (NIM)
+- Local Ollama planner: `nemotron-3-ultra:cloud` or low-resource `qwen3:4b`
 - Broad still-image default: SDXL Base 1.0
 - Fast still-image option: SD3.5 Large Turbo
 - Reference still guidance: SD3.5 ControlNet Blur, Canny, and Depth
@@ -194,9 +196,9 @@ S3-hosted model entries can use `source: "s3"` with either `s3_uri: "s3://bucket
 
 ## Hardware tiers
 
-- Low-spec: `qwen3:4b` + SDXL Base 1.0
-- Mid-range: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
-- High-end: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
+- Low-spec: `qwen3:4b` (Ollama) + SDXL Base 1.0
+- Mid-range: Nemotron cloud or `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
+- High-end: Nemotron cloud + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
 
 If `EDMG_STUDIO_HOME` is set, Studio uses it as the root for:
 - backend project data (`<studio-home>/data`)

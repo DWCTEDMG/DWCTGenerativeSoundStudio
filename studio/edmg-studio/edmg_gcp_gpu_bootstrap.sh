@@ -21,6 +21,7 @@ START_UI="${START_UI:-1}"
 ENABLE_BACKEND_SERVICE="${ENABLE_BACKEND_SERVICE:-1}"
 QUEUE_DEFAULT_MODELS="${QUEUE_DEFAULT_MODELS:-0}"
 PIP_TORCH_INDEX_URL="${PIP_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}"
+BACKEND_CUDA_BUNDLE="${BACKEND_CUDA_BUNDLE:-1}"
 BACKEND_NUMPY_CONSTRAINT="${BACKEND_NUMPY_CONSTRAINT:-numpy>=1.26,<2}"
 HF_TOKEN_VALUE="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 
@@ -43,12 +44,13 @@ BACKEND_SERVICE_NAME="edmg-backend"
 
 if [[ "$INSTALL_OLLAMA" == "1" ]]; then
   AI_PROVIDER="${AI_PROVIDER:-ollama}"
+  AI_OLLAMA_MODEL="${AI_OLLAMA_MODEL:-nemotron-3-ultra:cloud}"
 else
-  AI_PROVIDER="${AI_PROVIDER:-rule_based}"
+  AI_PROVIDER="${AI_PROVIDER:-nemotron_cloud}"
+  AI_OLLAMA_MODEL="${AI_OLLAMA_MODEL:-nemotron-3-ultra:cloud}"
 fi
 AI_MODE="${AI_MODE:-local}"
 AI_OLLAMA_URL="${AI_OLLAMA_URL:-http://127.0.0.1:${OLLAMA_PORT}}"
-AI_OLLAMA_MODEL="${AI_OLLAMA_MODEL:-qwen3:8b}"
 
 if [[ $EUID -eq 0 ]]; then
   SUDO=()
@@ -113,6 +115,12 @@ export EDMG_AI_MODE=${AI_MODE}
 export EDMG_AI_PROVIDER=${AI_PROVIDER}
 export EDMG_AI_OLLAMA_URL=${AI_OLLAMA_URL}
 export EDMG_AI_OLLAMA_MODEL=${AI_OLLAMA_MODEL}
+export EDMG_AI_OPENAI_COMPAT_BASE_URL=https://integrate.api.nvidia.com/v1
+export EDMG_AI_OPENAI_COMPAT_MODEL=nvidia/llama-3.1-nemotron-ultra-253b-v1
+export EDMG_HF_BUCKET_MODEL_CACHE=1
+export EDMG_HF_BUCKET_ID=gulle1155/DWCTedmgAIStudioModels
+export EDMG_HF_BUCKET_PREFIX=
+export EDMG_MODEL_STORAGE_MODE=cloud_only
 export EDMG_COMFYUI_URL=http://127.0.0.1:8188
 export PATH=${BIN_DIR}:\$PATH
 EOF
@@ -187,7 +195,11 @@ install_backend() {
   source .venv/bin/activate
   python -m pip install --upgrade pip setuptools wheel
   python -m pip install torch torchvision torchaudio --index-url "${PIP_TORCH_INDEX_URL}"
-  python -m pip install -e ".[studio_bundle]" "${BACKEND_NUMPY_CONSTRAINT}"
+  local bundle_extra="studio_bundle"
+  if [[ "${BACKEND_CUDA_BUNDLE}" == "1" ]]; then
+    bundle_extra="studio_bundle_cuda"
+  fi
+  python -m pip install -e ".[${bundle_extra}]" "${BACKEND_NUMPY_CONSTRAINT}"
 
   step "Validating CUDA visibility from PyTorch"
   python - <<'PY'

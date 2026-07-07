@@ -54,15 +54,18 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
  `src/test/directorRuntime.test.ts` logs a hardcoded `C:\...` ENOENT error to stderr but still
  passes; the runner exits 0. This stderr noise is a pre-existing platform quirk, not a failure.
 - `pnpm run lint` and `pnpm run typecheck` both pass clean on this branch (exit 0).
-- Repo-level: `python3 -m pytest` from the repo root → ~51 pass / 5 skip / 12 fail on this
- branch. The 5 skips need `tkinter` or opt-in live-smoke env vars. The 12 failures are
- **pre-existing on this branch** in model-orchestration/render-tier/azure-cache logic
- (`tests/test_studio_render_tiers.py`, `test_studio_proxy_fallback.py`,
- `test_studio_sd_feature_slice.py`, `test_studio_workflow_smoke.py`, `test_azure_model_cache.py`);
- they are mock-based assertion failures (deps import and the backend runs fine), so they are
- code/branch issues, not environment-setup problems. The backend package suite above is the
- reliable green signal. Run both scopes with `python3 scripts/run_pytest_scopes.py`.
+- Repo-level: `python3 -m pytest` from the repo root → backend package suite is the reliable green signal.
+  Some repo-root orchestration tests may still fail on branches with in-flight render-tier work.
+  Run both scopes with `python3 scripts/run_pytest_scopes.py`.
+  Proxy fallback coverage: `python3 -m pytest tests/test_studio_proxy_fallback.py`.
 
 ### Storage
 - Backend project data is written to `studio/edmg-studio/python_backend/data/` (gitignored) when
   `EDMG_STUDIO_HOME` is not set. Set `EDMG_STUDIO_HOME` to relocate data/models/cache/logs.
+
+### Linux operator docs
+- Canonical Linux packaging and Lightning setup: `studio/edmg-studio/packaging/linux/README.md`
+- Lightning backend: `bash scripts/start_lightning_backend.sh` with `EDMG_BACKEND_ENV_MODE=active`
+- HF bucket defaults ship in `launcher_env.defaults.json`; run `bash scripts/setup_linux_hf_bucket.sh`
+- Remote backend switch: `bash scripts/set_studio_remote_backend.sh external https://...`
+- Repo-level proxy-fallback tests in `tests/test_studio_proxy_fallback.py` should pass when run from repo root

@@ -80,17 +80,26 @@ source-tree compatibility shims for development and tests. The packaged Studio
 backend relies on the declared dependencies in this `pyproject.toml` and does
 not package those repo-root shims.
 
-## AI (Ollama by default)
+## AI (NVIDIA Nemotron cloud by default)
 
-The backend defaults to **EDMG_AI_MODE=local** and will call **Ollama** directly (no separate AI server to run).
+The backend defaults to **EDMG_AI_MODE=local** with **EDMG_AI_PROVIDER=nemotron_cloud** and calls NVIDIA NIM through the OpenAI-compatible API. No separate AI server is required when `EDMG_AI_OPENAI_COMPAT_API_KEY` (or Studio Settings → Tokens) is configured.
 
 Recommended env vars:
 
 ```bash
 EDMG_AI_MODE=local
+EDMG_AI_PROVIDER=nemotron_cloud
+EDMG_AI_OPENAI_COMPAT_BASE_URL=https://integrate.api.nvidia.com/v1
+EDMG_AI_OPENAI_COMPAT_MODEL=nvidia/llama-3.1-nemotron-ultra-253b-v1
+```
+
+Local Ollama option:
+
+```bash
+EDMG_AI_MODE=local
 EDMG_AI_PROVIDER=ollama
 EDMG_AI_OLLAMA_URL=http://127.0.0.1:11434
-EDMG_AI_OLLAMA_MODEL=qwen3:8b
+EDMG_AI_OLLAMA_MODEL=nemotron-3-ultra:cloud
 ```
 
 Use `qwen3:4b` instead on lighter CPU-only or low-memory systems.
@@ -117,8 +126,8 @@ If your OpenAI-compatible gateway exposes a different endpoint or model alias, o
 
 ## Recommended local model stack
 
-- Planner default: `qwen3:8b`
-- Low-resource planner: `qwen3:4b`
+- Planner default: NVIDIA Nemotron Ultra via `nemotron_cloud` (NIM)
+- Local Ollama planner: `nemotron-3-ultra:cloud` or low-resource `qwen3:4b`
 - Broad still-image default: SDXL Base 1.0
 - Fast still-image option: SD3.5 Large Turbo
 - Reference still guidance: SD3.5 ControlNet Blur, Canny, and Depth
@@ -127,13 +136,13 @@ If your OpenAI-compatible gateway exposes a different endpoint or model alias, o
 
 ## Hardware tiers
 
-- Low-spec: `qwen3:4b` + SDXL Base 1.0
-- Mid-range: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
-- High-end: `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
+- Low-spec: `qwen3:4b` (Ollama) + SDXL Base 1.0
+- Mid-range: Nemotron cloud or `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
+- High-end: Nemotron cloud + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
 
 ## Integrations
 - ComfyUI renders are queued locally.
 - Planning/transcription run in-process by default through the selected provider; an external AI service on `7862` is optional.
-- S3-backed model hosting can cache or source supported ComfyUI model files and internal Diffusers snapshot archives.
+- S3-backed and Hugging Face bucket model hosting can cache or source supported ComfyUI model files and internal Diffusers snapshot archives.
 - EDMG Core is bundled into the Studio backend install/build target; Studio Setup can repair or reinstall it if needed.
 - FFmpeg defaults to the Studio-bundled binary when available; `EDMG_FFMPEG_PATH` remains an override.

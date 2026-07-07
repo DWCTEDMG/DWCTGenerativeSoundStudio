@@ -174,7 +174,8 @@ cd studio\edmg-studio
 Useful switches:
 
 - `-InstallOllama`
-  installs and starts Ollama on the VM, then pulls `qwen3:8b`
+  installs and starts Ollama on the VM, then pulls `nemotron-3-ultra:cloud`
+- Without `-InstallOllama`, the bootstrap defaults to `nemotron_cloud` (NVIDIA NIM)
 - `-QueueDefaultModels`
   asks the remote bootstrap to queue curated model installs after the backend is healthy
 - `-SkipUi`
@@ -204,6 +205,13 @@ config:
 ```powershell
 cd studio\edmg-studio
 .\set_studio_gcp_backend.ps1 -BackendUrl http://YOUR_VM_IP:7863
+```
+
+On Linux or macOS, use the cross-platform helper instead:
+
+```bash
+cd studio/edmg-studio
+bash scripts/set_studio_remote_backend.sh external http://YOUR_VM_IP:7863
 ```
 
 That script updates:

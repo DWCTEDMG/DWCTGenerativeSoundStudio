@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const root = process.cwd();
@@ -100,6 +101,17 @@ function updateRuntimeDefaultsJson(json, config) {
   };
 }
 
+function resolveBootstrapPath() {
+  if (process.platform === "win32" && process.env.APPDATA) {
+    return path.join(process.env.APPDATA, "EDMG Studio", "bootstrap.json");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "EDMG Studio", "bootstrap.json");
+  }
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  return path.join(configHome, "EDMG Studio", "bootstrap.json");
+}
+
 function updateBootstrapJson(json, config) {
   return {
     ...json,
@@ -180,11 +192,8 @@ writeJson(launcherEnvFile, updateLauncherEnvJson(readJson(launcherEnvFile), conf
 const runtimeDefaultsFile = path.join(root, "electron-resources", "runtime-defaults.json");
 writeJson(runtimeDefaultsFile, updateRuntimeDefaultsJson(readJson(runtimeDefaultsFile), config));
 
-const appData = process.env.APPDATA;
-if (appData) {
-  const bootstrap = path.join(appData, "EDMG Studio", "bootstrap.json");
-  writeJson(bootstrap, updateBootstrapJson(readJson(bootstrap), config));
-}
+const bootstrap = resolveBootstrapPath();
+writeJson(bootstrap, updateBootstrapJson(readJson(bootstrap), config));
 
 console.log(`[backend:use] mode=${config.mode}`);
 console.log(`[backend:use] url=${config.activeUrl}`);

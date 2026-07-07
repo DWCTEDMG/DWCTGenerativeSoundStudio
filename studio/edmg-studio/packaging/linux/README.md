@@ -181,9 +181,13 @@ sidecar and configure the backend's OpenAI-compatible provider:
 export EDMG_AI_MODE=local
 export EDMG_AI_PROVIDER=openai_compat
 export EDMG_AI_OPENAI_COMPAT_BASE_URL=https://integrate.api.nvidia.com/v1
-export EDMG_AI_OPENAI_COMPAT_MODEL=nvidia/nemotron-3-ultra-550b-a55b
+export EDMG_AI_OPENAI_COMPAT_MODEL=nvidia/llama-3.1-nemotron-ultra-253b-v1
 export EDMG_AI_OPENAI_COMPAT_API_KEY="$NVIDIA_API_KEY"
 ```
+
+Fresh backends with no env vars also default to `nemotron_cloud` through the
+OpenAI-compatible NVIDIA NIM endpoint. Use the Ollama sidecar above only when
+you want Ollama Cloud instead of direct NIM.
 
 ## Linux S3 Model Hosting
 
@@ -246,3 +250,83 @@ Required permissions for the configured bucket/prefix:
 
 To create the bucket from the helper, set `S3_CREATE_BUCKET=1`; by default it
 only validates an existing bucket.
+
+## Linux Hugging Face Bucket Model Cache
+
+The backend also supports Hugging Face bucket-backed model hosting through the
+built-in model cache. Project defaults ship in `launcher_env.defaults.json`
+(`EDMG_HF_BUCKET_MODEL_CACHE=1`, `EDMG_MODEL_STORAGE_MODE=cloud_only`).
+
+Authenticate once on the Linux host:
+
+```bash
+hf auth login
+```
+
+Configure and write a sourceable env file:
+
+```bash
+cd studio/edmg-studio
+
+export EDMG_HF_BUCKET_ID=gulle1155/DWCTedmgAIStudioModels
+export EDMG_HF_BUCKET_PREFIX=
+export EDMG_MODEL_STORAGE_MODE=cloud_only
+
+bash scripts/setup_linux_hf_bucket.sh
+```
+
+Restart the backend with the generated env file:
+
+```bash
+source "$EDMG_STUDIO_HOME/hf-bucket.env"
+EDMG_BACKEND_ENV_MODE=active EDMG_SKIP_BOOTSTRAP=1 bash scripts/start_lightning_backend.sh
+```
+
+Use `local_cache` instead of `cloud_only` when you want local files mirrored into
+the bucket.
+
+## Point Studio at a remote backend (Lightning / Vast / GCP)
+
+Use the cross-platform backend switcher from the Studio root:
+
+```bash
+cd studio/edmg-studio
+bash scripts/set_studio_remote_backend.sh external https://7863-example.cloudspaces.litng.ai
+```
+
+For a managed local backend on the same machine:
+
+```bash
+bash scripts/set_studio_remote_backend.sh managed 7863
+```
+
+This updates `.env`, `launcher_env.json`, `electron-resources/runtime-defaults.json`,
+and `~/.config/EDMG Studio/bootstrap.json` on Linux.
+
+## Browser-only dev on Linux
+
+When running Vite without Electron:
+
+```bash
+cd studio/edmg-studio
+pnpm exec vite --host 127.0.0.1 --port 5173 --strictPort
+```
+
+Open the UI with the backend URL as a query param:
+
+```text
+http://127.0.0.1:5173/?backendUrl=http://127.0.0.1:7863
+```
+
+## Render features on Linux
+
+- **Proxy draft renders**: enabled by default. Disable in Settings → GPU / Render Runtime.
+- **Motion sequencer**: available on the Render page for Parseq-style motion schedules on internal renders.
+- **TensorRT path**: install with `EDMG_BACKEND_CUDA_BUNDLE=1` or build `pnpm run dist:linux:cuda`.
+
+CUDA release validation:
+
+```bash
+cd studio/edmg-studio
+pnpm run validate:release:linux:cuda
+```

@@ -19,6 +19,10 @@ HF_TOKEN_VALUE="${HF_TOKEN:-}"
 BACKEND_PORT="${BACKEND_PORT:-8080}"
 UI_PORT="${UI_PORT:-1111}"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+INSTALL_OLLAMA="${INSTALL_OLLAMA:-0}"
+BACKEND_CUDA_BUNDLE="${BACKEND_CUDA_BUNDLE:-1}"
+PIP_TORCH_INDEX_URL="${PIP_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}"
+BACKEND_NUMPY_CONSTRAINT="${BACKEND_NUMPY_CONSTRAINT:-numpy>=1.26,<2}"
 
 export DEBIAN_FRONTEND=noninteractive
 export EDMG_STUDIO_HOME="$STUDIO_HOME"
@@ -49,9 +53,15 @@ export HF_HOME=$HF_HOME
 export TORCH_HOME=$TORCH_HOME
 export OLLAMA_MODELS=$OLLAMA_MODELS
 export EDMG_AI_MODE=local
-export EDMG_AI_PROVIDER=ollama
+export EDMG_AI_PROVIDER=nemotron_cloud
+export EDMG_AI_OPENAI_COMPAT_BASE_URL=https://integrate.api.nvidia.com/v1
+export EDMG_AI_OPENAI_COMPAT_MODEL=nvidia/llama-3.1-nemotron-ultra-253b-v1
 export EDMG_AI_OLLAMA_URL=http://127.0.0.1:$OLLAMA_PORT
-export EDMG_AI_OLLAMA_MODEL=qwen3:8b
+export EDMG_AI_OLLAMA_MODEL=nemotron-3-ultra:cloud
+export EDMG_HF_BUCKET_MODEL_CACHE=1
+export EDMG_HF_BUCKET_ID=gulle1155/DWCTedmgAIStudioModels
+export EDMG_HF_BUCKET_PREFIX=
+export EDMG_MODEL_STORAGE_MODE=cloud_only
 export PATH=\$PATH:/workspace/bin
 DWCTPROFILEEOF
 
@@ -90,7 +100,12 @@ cd "$BACKEND_DIR"
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e ".[studio_bundle]"
+if [[ "$BACKEND_CUDA_BUNDLE" == "1" ]]; then
+  python -m pip install --upgrade torch torchvision torchaudio --index-url "$PIP_TORCH_INDEX_URL"
+  python -m pip install -e ".[studio_bundle_cuda]" "$BACKEND_NUMPY_CONSTRAINT"
+else
+  python -m pip install -e ".[studio_bundle]"
+fi
 python - <<'PY'
 try:
     import torch
@@ -107,27 +122,27 @@ printf '\n[5/8] Installing frontend deps...\n'
 cd "$STUDIO_DIR"
 pnpm install --frozen-lockfile || pnpm install
 
-printf '\n[6/8] Installing and starting Ollama planner runtime...\n'
-if ! command -v ollama >/dev/null 2>&1; then
-  curl -fsSL https://ollama.com/install.sh | sh
+printf '\n[6/8] Installing optional Ollama planner runtime...\n'
+if [[ "$INSTALL_OLLAMA" == "1" ]]; then
+  if ! command -v ollama >/dev/null 2>&1; then
+    curl -fsSL https://ollama.com/install.sh | sh
+  fi
+  pkill -f 'ollama serve' || true
+  nohup env OLLAMA_HOST="0.0.0.0:$OLLAMA_PORT" OLLAMA_MODELS="$OLLAMA_MODELS" ollama serve > "$LOG_DIR/ollama.log" 2>&1 &
+  for i in $(seq 1 60); do
+    if curl -fsS "http://127.0.0.1:$OLLAMA_PORT/api/version" >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+  nohup bash -lc 'OLLAMA_MODELS="'$OLLAMA_MODELS'" ollama pull nemotron-3-ultra:cloud' > "$LOG_DIR/ollama-pull-nemotron.log" 2>&1 &
+else
+  printf 'Skipping Ollama install. Backend defaults to nemotron_cloud (NVIDIA NIM).\n'
 fi
-pkill -f 'ollama serve' || true
-nohup env OLLAMA_HOST="0.0.0.0:$OLLAMA_PORT" OLLAMA_MODELS="$OLLAMA_MODELS" ollama serve > "$LOG_DIR/ollama.log" 2>&1 &
-for i in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:$OLLAMA_PORT/api/version" >/dev/null 2>&1; then break; fi
-  sleep 2
-done
-nohup bash -lc 'OLLAMA_MODELS="'$OLLAMA_MODELS'" ollama pull qwen3:8b' > "$LOG_DIR/ollama-pull-qwen3-8b.log" 2>&1 &
 
 printf '\n[7/8] Writing service helper scripts...\n'
 cat > /workspace/bin/dwct-start-backend <<DWCTBACKENDEOF
 #!/usr/bin/env bash
 set -euo pipefail
 source /etc/profile.d/dwct-edmg.sh
-export EDMG_AI_MODE=local
-export EDMG_AI_PROVIDER=ollama
-export EDMG_AI_OLLAMA_URL=http://127.0.0.1:$OLLAMA_PORT
-export EDMG_AI_OLLAMA_MODEL=qwen3:8b
 cd /workspace/src/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend
 . .venv/bin/activate
 exec edmg-studio-backend serve --host 0.0.0.0 --port $BACKEND_PORT
