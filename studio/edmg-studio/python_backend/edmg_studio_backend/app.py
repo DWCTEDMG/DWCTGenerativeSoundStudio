@@ -2644,11 +2644,35 @@ def get_config():
     provider_status = _render_provider_status()
     transcription_status = _transcription_status()
     try:
-        from edmg_ai_service.config import _NVIDIA_PROMPT_MODEL_PRESETS
+        from edmg_ai_service.config import (
+            _OPENAI_COMPAT_DEFAULT_BASE_URL,
+            _OPENAI_COMPAT_DEFAULT_MODEL,
+            _NEMOTRON_ULTRA_MODEL,
+            _NVIDIA_NIM_BASE_URL,
+            _NVIDIA_PROMPT_MODEL_PRESETS,
+            normalize_openai_compat_defaults,
+        )
         nvidia_model_presets = [dict(item) for item in _NVIDIA_PROMPT_MODEL_PRESETS]
     except Exception:
+        _OPENAI_COMPAT_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
+        _OPENAI_COMPAT_DEFAULT_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+        _NEMOTRON_ULTRA_MODEL = _OPENAI_COMPAT_DEFAULT_MODEL
+        _NVIDIA_NIM_BASE_URL = _OPENAI_COMPAT_DEFAULT_BASE_URL
+        def normalize_openai_compat_defaults(base_url: str | None, model: str | None) -> tuple[str, str]:
+            base = (base_url or "").strip()
+            selected_model = (model or "").strip()
+            if (
+                base == "http://127.0.0.1:8000"
+                and selected_model in {"", "qwen3-8b"}
+            ) or (not base and selected_model == "qwen3-8b"):
+                return _OPENAI_COMPAT_DEFAULT_BASE_URL, _OPENAI_COMPAT_DEFAULT_MODEL
+            return base or _OPENAI_COMPAT_DEFAULT_BASE_URL, selected_model or _OPENAI_COMPAT_DEFAULT_MODEL
         nvidia_model_presets = []
-    nvidia_model = os.getenv("EDMG_AI_NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-ultra-253b-v1").strip()
+    nvidia_model = os.getenv("EDMG_AI_NVIDIA_MODEL", _NEMOTRON_ULTRA_MODEL).strip()
+    openai_compat_base_url, openai_compat_model = normalize_openai_compat_defaults(
+        os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL"),
+        os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL"),
+    )
     return {
         "studio_home": str(settings.studio_home),
         "data_dir": str(settings.data_dir),
@@ -2663,12 +2687,12 @@ def get_config():
         "ai_provider": os.getenv("EDMG_AI_PROVIDER", "nemotron_cloud").strip().lower() or "nemotron_cloud",
         "ai_ollama_url": os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434").strip(),
         "ai_ollama_model": os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b").strip(),
-        "ai_openai_compat_base_url": os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000").strip(),
-        "ai_openai_compat_model": os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen3-8b").strip(),
+        "ai_openai_compat_base_url": openai_compat_base_url,
+        "ai_openai_compat_model": openai_compat_model,
         "ai_openai_compat_api_key_configured": bool(
             secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
         ),
-        "ai_nvidia_base_url": os.getenv("EDMG_AI_NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip(),
+        "ai_nvidia_base_url": os.getenv("EDMG_AI_NVIDIA_BASE_URL", _NVIDIA_NIM_BASE_URL).strip(),
         "ai_nvidia_model": nvidia_model,
         "ai_nvidia_model_family": _nvidia_prompt_model_family(nvidia_model),
         "ai_nvidia_model_presets": nvidia_model_presets,
@@ -2746,14 +2770,23 @@ def secrets_clear(payload: dict[str, Any]):
 
 
 def _setup_ai_config() -> dict[str, Any]:
-    from edmg_ai_service.config import _NVIDIA_NIM_BASE_URL, _NEMOTRON_ULTRA_MODEL, _NVIDIA_PROMPT_MODEL_PRESETS
+    from edmg_ai_service.config import (
+        _OPENAI_COMPAT_DEFAULT_BASE_URL,
+        _OPENAI_COMPAT_DEFAULT_MODEL,
+        _NEMOTRON_ULTRA_MODEL,
+        _NVIDIA_NIM_BASE_URL,
+        _NVIDIA_PROMPT_MODEL_PRESETS,
+        normalize_openai_compat_defaults,
+    )
 
     ai_mode = (settings.ai_mode or "local").strip().lower() or "local"
     ai_provider = (os.getenv("EDMG_AI_PROVIDER", "nemotron_cloud").strip().lower() or "nemotron_cloud")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
-    openai_compat_base_url = os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000")
-    openai_compat_model = os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen3-8b")
+    openai_compat_base_url, openai_compat_model = normalize_openai_compat_defaults(
+        os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL"),
+        os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL"),
+    )
     openai_compat_api_key_configured = bool(
         secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
     )

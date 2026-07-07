@@ -90,4 +90,53 @@ describe("Timeline page", () => {
     fireEvent.click(syncButtons[0]);
     await waitFor(() => expect(onNavigate).toHaveBeenCalledWith("render"));
   });
+
+  it("provides DAW-style grid jumps and loop locator controls", async () => {
+    installEdmgBridge();
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Locator Test" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Locator Test",
+          meta: {
+            audio: { filename: "track.wav", duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120, beat_times_s: [0, 0.5, 1, 1.5, 2, 2.5, 3] } },
+            last_plan: {
+              variants: [
+                {
+                  name: "Variant 1",
+                  scenes: [{ id: "scene_0", start_s: 0, end_s: 8, prompt: "A calm cinematic scene." }],
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    const playhead = await screen.findByLabelText("Playhead time") as HTMLInputElement;
+    const loopIn = await screen.findByLabelText("Loop in") as HTMLInputElement;
+    const loopOut = await screen.findByLabelText("Loop out") as HTMLInputElement;
+
+    fireEvent.click(screen.getByRole("button", { name: "Next grid" }));
+    expect(playhead.value).toBe("0.5");
+
+    fireEvent.click(screen.getByRole("button", { name: "Set in" }));
+    expect(loopIn.value).toBe("0.5");
+
+    fireEvent.change(playhead, { target: { value: "2.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Set out" }));
+    expect(loopOut.value).toBe("2.5");
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable loop" }));
+    expect(screen.getByRole("button", { name: "Disable loop" })).toBeTruthy();
+
+    fireEvent.pointerDown(await screen.findByTitle(/A calm cinematic scene/));
+    fireEvent.click(screen.getByRole("button", { name: "Use selection" }));
+    expect(loopIn.value).toBe("0");
+    expect(loopOut.value).toBe("8");
+  });
 });

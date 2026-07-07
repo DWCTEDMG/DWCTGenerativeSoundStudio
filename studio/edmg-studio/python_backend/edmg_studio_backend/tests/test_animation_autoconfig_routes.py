@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from edmg_studio_backend import app as backend_app
+from edmg_studio_backend.services.render_settings import RenderSettingsStore
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
 
@@ -38,6 +39,7 @@ def _make_project(tmp_path: Path):
 def _patch(monkeypatch, store, jobs, *, comfy_available=False, tensorrt_available=False):
     monkeypatch.setattr(backend_app, "store", store)
     monkeypatch.setattr(backend_app, "jobs", jobs)
+    monkeypatch.setattr(backend_app, "render_settings", RenderSettingsStore(store.base_dir))
     # Keep tests deterministic: never let the background worker execute jobs.
     monkeypatch.setattr(backend_app.worker, "start", lambda *a, **k: None)
     monkeypatch.setattr(backend_app, "_comfyui_available_quick", lambda: comfy_available)

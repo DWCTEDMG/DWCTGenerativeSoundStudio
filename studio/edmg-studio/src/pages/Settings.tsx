@@ -55,21 +55,24 @@ type SettingsPanelId =
   | "comfyui"
   | "deforum";
 
+const NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const NEMOTRON_ULTRA_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1";
+const DIFFUSIONGEMMA_MODEL = "google/diffusiongemma-26B-A4B-it";
+const LEGACY_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8000";
+const LEGACY_OPENAI_COMPAT_MODEL = "qwen3-8b";
+
 const DEFAULT_AI_SETTINGS: StudioAiSettings = {
   mode: "local",
   provider: "nemotron_cloud",
   aiBaseUrl: "http://127.0.0.1:7862",
   ollamaUrl: "http://127.0.0.1:11434",
   ollamaModel: "qwen3:8b",
-  openaiCompatBaseUrl: "http://127.0.0.1:8000",
-  openaiCompatModel: "qwen3-8b",
-  nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
-  nvidiaModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+  openaiCompatBaseUrl: NVIDIA_NIM_BASE_URL,
+  openaiCompatModel: NEMOTRON_ULTRA_MODEL,
+  nvidiaBaseUrl: NVIDIA_NIM_BASE_URL,
+  nvidiaModel: NEMOTRON_ULTRA_MODEL,
   source: "default",
 };
-
-const NEMOTRON_ULTRA_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1";
-const DIFFUSIONGEMMA_MODEL = "google/diffusiongemma-26B-A4B-it";
 
 type NvidiaPromptModelPreset = {
   id?: string;
@@ -139,6 +142,27 @@ function nvidiaModelFamily(model: string | undefined, presets: NvidiaPromptModel
   return "custom";
 }
 
+function normalizeOpenAiCompatDefaults(
+  rawBaseUrl: string | undefined,
+  rawModel: string | undefined,
+): { baseUrl: string; model: string } {
+  const baseUrl = String(rawBaseUrl ?? "").trim();
+  const model = String(rawModel ?? "").trim();
+  if (
+    (baseUrl === LEGACY_OPENAI_COMPAT_BASE_URL && (!model || model === LEGACY_OPENAI_COMPAT_MODEL)) ||
+    (!baseUrl && model === LEGACY_OPENAI_COMPAT_MODEL)
+  ) {
+    return {
+      baseUrl: DEFAULT_AI_SETTINGS.openaiCompatBaseUrl,
+      model: DEFAULT_AI_SETTINGS.openaiCompatModel,
+    };
+  }
+  return {
+    baseUrl: baseUrl || DEFAULT_AI_SETTINGS.openaiCompatBaseUrl,
+    model: model || DEFAULT_AI_SETTINGS.openaiCompatModel,
+  };
+}
+
 const DEFAULT_BACKEND_SETTINGS: StudioBackendSettings = {
   mode: "managed",
   host: "127.0.0.1",
@@ -167,6 +191,10 @@ function normalizeAiSettings(payload?: Partial<StudioAiSettings> | null): Studio
       : providerRaw === "nvidia_nim" || providerRaw === "nemotron"
       ? "nemotron_cloud"
       : providerRaw || DEFAULT_AI_SETTINGS.provider;
+  const openaiCompat = normalizeOpenAiCompatDefaults(
+    current.openaiCompatBaseUrl,
+    current.openaiCompatModel,
+  );
 
   return {
     mode: mode === "http" || mode === "remote" ? "http" : "local",
@@ -174,12 +202,8 @@ function normalizeAiSettings(payload?: Partial<StudioAiSettings> | null): Studio
     aiBaseUrl: String(current.aiBaseUrl ?? DEFAULT_AI_SETTINGS.aiBaseUrl).trim() || DEFAULT_AI_SETTINGS.aiBaseUrl,
     ollamaUrl: String(current.ollamaUrl ?? DEFAULT_AI_SETTINGS.ollamaUrl).trim() || DEFAULT_AI_SETTINGS.ollamaUrl,
     ollamaModel: String(current.ollamaModel ?? DEFAULT_AI_SETTINGS.ollamaModel).trim() || DEFAULT_AI_SETTINGS.ollamaModel,
-    openaiCompatBaseUrl:
-      String(current.openaiCompatBaseUrl ?? DEFAULT_AI_SETTINGS.openaiCompatBaseUrl).trim() ||
-      DEFAULT_AI_SETTINGS.openaiCompatBaseUrl,
-    openaiCompatModel:
-      String(current.openaiCompatModel ?? DEFAULT_AI_SETTINGS.openaiCompatModel).trim() ||
-      DEFAULT_AI_SETTINGS.openaiCompatModel,
+    openaiCompatBaseUrl: openaiCompat.baseUrl,
+    openaiCompatModel: openaiCompat.model,
     nvidiaBaseUrl:
       String(current.nvidiaBaseUrl ?? DEFAULT_AI_SETTINGS.nvidiaBaseUrl ?? "").trim() ||
       DEFAULT_AI_SETTINGS.nvidiaBaseUrl,
@@ -1047,9 +1071,9 @@ export default function Settings(props: PageProps) {
                   <div>
                     <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>NVIDIA NIM base URL</div>
                     <input
-                      value={aiDraft.nvidiaBaseUrl || "https://integrate.api.nvidia.com/v1"}
+                      value={aiDraft.nvidiaBaseUrl || NVIDIA_NIM_BASE_URL}
                       onChange={(e) => updateAiDraft({ nvidiaBaseUrl: e.target.value })}
-                      placeholder="https://integrate.api.nvidia.com/v1"
+                      placeholder={NVIDIA_NIM_BASE_URL}
                     />
                   </div>
                   <label>
@@ -1134,11 +1158,11 @@ export default function Settings(props: PageProps) {
                 <>
                   <div>
                     <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>OpenAI-compatible base URL</div>
-                    <input value={aiDraft.openaiCompatBaseUrl} onChange={(e) => updateAiDraft({ openaiCompatBaseUrl: e.target.value })} placeholder="http://127.0.0.1:8000" />
+                    <input value={aiDraft.openaiCompatBaseUrl} onChange={(e) => updateAiDraft({ openaiCompatBaseUrl: e.target.value })} placeholder={NVIDIA_NIM_BASE_URL} />
                   </div>
                   <div>
                     <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Model</div>
-                    <input value={aiDraft.openaiCompatModel} onChange={(e) => updateAiDraft({ openaiCompatModel: e.target.value })} placeholder="qwen3-8b" />
+                    <input value={aiDraft.openaiCompatModel} onChange={(e) => updateAiDraft({ openaiCompatModel: e.target.value })} placeholder={NEMOTRON_ULTRA_MODEL} />
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center" }}>
                     <div>
@@ -1156,7 +1180,7 @@ export default function Settings(props: PageProps) {
                     <button className="secondary" disabled={saving || !secrets?.has_openai_compat_api_key} onClick={() => clearSecret("openai_compat_api_key")}>Clear</button>
                   </div>
                   <div className="small" style={{ opacity: 0.82 }}>
-                    Use this for OpenAI-style endpoints such as hosted gateways, self-hosted vLLM/TGI adapters, or local tools that expose <code>/v1/chat/completions</code>.
+                    Defaults to NVIDIA&apos;s OpenAI-compatible API. Use this for hosted gateways, self-hosted vLLM/TGI adapters, or local tools that expose <code>/v1/chat/completions</code>.
                   </div>
                 </>
               ) : null}

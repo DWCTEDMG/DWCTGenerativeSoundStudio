@@ -141,6 +141,8 @@ const DEV_SERVER_URL =
 
 const NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const NEMOTRON_ULTRA_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1";
+const LEGACY_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8000";
+const LEGACY_OPENAI_COMPAT_MODEL = "qwen3-8b";
 
 const AI_SETTINGS_DEFAULTS = Object.freeze({
   mode: "local",
@@ -148,8 +150,8 @@ const AI_SETTINGS_DEFAULTS = Object.freeze({
   aiBaseUrl: "http://127.0.0.1:7862",
   ollamaUrl: "http://127.0.0.1:11434",
   ollamaModel: "qwen3:8b",
-  openaiCompatBaseUrl: "http://127.0.0.1:8000",
-  openaiCompatModel: "qwen3-8b",
+  openaiCompatBaseUrl: NVIDIA_NIM_BASE_URL,
+  openaiCompatModel: NEMOTRON_ULTRA_MODEL,
   nvidiaBaseUrl: NVIDIA_NIM_BASE_URL,
   nvidiaModel: NEMOTRON_ULTRA_MODEL,
 });
@@ -502,7 +504,7 @@ function normalizeAiMode(rawValue) {
 }
 
 function normalizeBackendMode(rawValue) {
-  const mode = String(rawValue ?? "").trim().toLowerCase();
+  const mode = String(rawValue ?? BACKEND_SETTINGS_DEFAULTS.mode).trim().toLowerCase();
   return mode === "external" || mode === "remote" || mode === "connect" ? "external" : "managed";
 }
 
@@ -542,22 +544,38 @@ function normalizeBackendUrl(rawValue, fallbackUrl = "") {
   }
 }
 
+function normalizeOpenAiCompatDefaults(rawBaseUrl, rawModel) {
+  const baseUrl = pickConfiguredString(rawBaseUrl, "");
+  const model = pickConfiguredString(rawModel, "");
+  if (
+    (baseUrl === LEGACY_OPENAI_COMPAT_BASE_URL && (!model || model === LEGACY_OPENAI_COMPAT_MODEL)) ||
+    (!baseUrl && model === LEGACY_OPENAI_COMPAT_MODEL)
+  ) {
+    return {
+      baseUrl: AI_SETTINGS_DEFAULTS.openaiCompatBaseUrl,
+      model: AI_SETTINGS_DEFAULTS.openaiCompatModel,
+    };
+  }
+  return {
+    baseUrl: baseUrl || AI_SETTINGS_DEFAULTS.openaiCompatBaseUrl,
+    model: model || AI_SETTINGS_DEFAULTS.openaiCompatModel,
+  };
+}
+
 function normalizeAiSettings(rawSettings = {}) {
   const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  const openaiCompat = normalizeOpenAiCompatDefaults(
+    current.openaiCompatBaseUrl,
+    current.openaiCompatModel
+  );
   return {
     mode: normalizeAiMode(current.mode),
     provider: normalizeAiProvider(current.provider),
     aiBaseUrl: pickConfiguredString(current.aiBaseUrl, AI_SETTINGS_DEFAULTS.aiBaseUrl),
     ollamaUrl: pickConfiguredString(current.ollamaUrl, AI_SETTINGS_DEFAULTS.ollamaUrl),
     ollamaModel: pickConfiguredString(current.ollamaModel, AI_SETTINGS_DEFAULTS.ollamaModel),
-    openaiCompatBaseUrl: pickConfiguredString(
-      current.openaiCompatBaseUrl,
-      AI_SETTINGS_DEFAULTS.openaiCompatBaseUrl
-    ),
-    openaiCompatModel: pickConfiguredString(
-      current.openaiCompatModel,
-      AI_SETTINGS_DEFAULTS.openaiCompatModel
-    ),
+    openaiCompatBaseUrl: openaiCompat.baseUrl,
+    openaiCompatModel: openaiCompat.model,
     nvidiaBaseUrl: pickConfiguredString(
       current.nvidiaBaseUrl,
       AI_SETTINGS_DEFAULTS.nvidiaBaseUrl
@@ -575,7 +593,11 @@ function normalizeBackendSettings(rawSettings = {}) {
   const host = pickConfiguredString(current.host, BACKEND_SETTINGS_DEFAULTS.host);
   const port = normalizeBackendPort(current.port);
   const fallbackUrl = buildManagedBackendUrl(host, port);
-  const url = mode === "external" ? normalizeBackendUrl(current.url, fallbackUrl) : "";
+  const hasHostOrPortOverride = !!(
+    pickConfiguredString(current.host, "") || pickConfiguredString(current.port, "")
+  );
+  const defaultExternalUrl = hasHostOrPortOverride ? fallbackUrl : BACKEND_SETTINGS_DEFAULTS.url;
+  const url = mode === "external" ? normalizeBackendUrl(current.url, defaultExternalUrl || fallbackUrl) : "";
 
   return {
     mode,

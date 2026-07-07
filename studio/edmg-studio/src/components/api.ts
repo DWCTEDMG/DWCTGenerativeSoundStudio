@@ -4,6 +4,7 @@ const BROWSER_BACKEND_URL_STORAGE_KEY = "edmg.backendUrl";
 
 function readQueryBackendUrl(): string {
   if (typeof window === "undefined") return "";
+  if (!window.location) return "";
   const params = new URLSearchParams(window.location.search);
   return (params.get("backendUrl") || params.get("backend") || "").trim();
 }
@@ -23,10 +24,20 @@ function readStoredBackendUrl(): string {
 
 function readSameOriginBackendUrl(): string {
   if (typeof window === "undefined") return "";
+  if (!window.location) return "";
   if (import.meta.env.DEV) return "";
   const protocol = window.location.protocol;
   if (protocol !== "http:" && protocol !== "https:") return "";
   return window.location.origin;
+}
+
+function readBridgeBackendUrl(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(window.edmg?.backendUrl?.() || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 export function normalizeBackendUrl(rawUrl: string): string {
@@ -62,8 +73,29 @@ function rememberBackendUrl(value: string): string {
   const resolved = normalizeBackendUrl(value);
   if (typeof window !== "undefined" && resolved) {
     window.__EDMG_BACKEND_URL__ = resolved;
+    try {
+      const stored = normalizeBackendUrl(window.localStorage?.getItem(BROWSER_BACKEND_URL_STORAGE_KEY) || "");
+      if (stored && stored !== resolved) {
+        window.localStorage?.setItem(BROWSER_BACKEND_URL_STORAGE_KEY, resolved);
+      }
+    } catch {
+      // Browser storage can be disabled; the in-memory value above still updates this page.
+    }
   }
   return resolved;
+}
+
+function getBrowserFallbackBackendUrl(): string {
+  return rememberBackendUrl(
+    pickBackendUrl(
+      readQueryBackendUrl(),
+      window.__EDMG_BACKEND_URL__,
+      readEnvBackendUrl(),
+      readStoredBackendUrl(),
+      readSameOriginBackendUrl(),
+      "http://127.0.0.1:7863"
+    )
+  );
 }
 
 export function setBrowserBackendUrl(value: string): string {
@@ -85,10 +117,10 @@ export function getBackendUrl(): string {
   return rememberBackendUrl(
     pickBackendUrl(
       readQueryBackendUrl(),
-      readStoredBackendUrl(),
-      readEnvBackendUrl(),
-      window.edmg?.backendUrl?.(),
+      readBridgeBackendUrl(),
       window.__EDMG_BACKEND_URL__,
+      readEnvBackendUrl(),
+      readStoredBackendUrl(),
       readSameOriginBackendUrl(),
       "http://127.0.0.1:7863"
     )
@@ -110,10 +142,9 @@ export async function getBackendUrlAsync(): Promise<string> {
 
 export function ensureBrowserBridge(): void {
   if (typeof window === "undefined" || window.edmg) return;
-  const backendUrl = rememberBackendUrl(getBackendUrl());
   window.edmg = {
-    backendUrl: () => getBackendUrl() || backendUrl,
-    getBackendUrl: async () => getBackendUrl() || backendUrl,
+    backendUrl: () => getBrowserFallbackBackendUrl(),
+    getBackendUrl: async () => getBrowserFallbackBackendUrl(),
     setBackendUrl: async (url: string) => setBrowserBackendUrl(url),
     openExternal: async (url: string) => {
       window.open(String(url), "_blank", "noopener,noreferrer");

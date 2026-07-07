@@ -107,8 +107,8 @@ echo "[edmg] ai provider: ${EDMG_AI_PROVIDER:-ollama}"
 echo "[edmg] comfyui url: ${EDMG_COMFYUI_URL:-http://127.0.0.1:8188}"
 
 if [[ "${EDMG_AI_PROVIDER:-ollama}" == "openai_compat" ]]; then
-  warn_if_unset "EDMG_AI_OPENAI_COMPAT_BASE_URL" "http://127.0.0.1:8000"
-  warn_if_unset "EDMG_AI_OPENAI_COMPAT_MODEL" "qwen3-8b"
+  warn_if_unset "EDMG_AI_OPENAI_COMPAT_BASE_URL" "https://integrate.api.nvidia.com/v1"
+  warn_if_unset "EDMG_AI_OPENAI_COMPAT_MODEL" "nvidia/llama-3.1-nemotron-ultra-253b-v1"
 else
   warn_if_unset "EDMG_AI_OLLAMA_URL" "http://127.0.0.1:11434"
   warn_if_unset "EDMG_AI_OLLAMA_MODEL" "qwen3:8b"

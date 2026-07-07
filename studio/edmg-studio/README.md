@@ -164,8 +164,8 @@ For local Studio use, the native Director page does not require ChatGPT. If you 
 - `EDMG_AI_PROVIDER` (default: `ollama`)
 - `EDMG_AI_OLLAMA_URL` (default: `http://127.0.0.1:11434`)
 - `EDMG_AI_OLLAMA_MODEL` (default: `qwen3:8b`)
-- `EDMG_AI_OPENAI_COMPAT_BASE_URL` (default: `http://127.0.0.1:8000`)
-- `EDMG_AI_OPENAI_COMPAT_MODEL` (default: `qwen3-8b`)
+- `EDMG_AI_OPENAI_COMPAT_BASE_URL` (default: `https://integrate.api.nvidia.com/v1`)
+- `EDMG_AI_OPENAI_COMPAT_MODEL` (default: `nvidia/llama-3.1-nemotron-ultra-253b-v1`)
 - `EDMG_AI_OPENAI_COMPAT_API_KEY` (optional)
 - `EDMG_COMFYUI_URL` (default: `http://127.0.0.1:8188`)
 - `EDMG_COMFYUI_CHECKPOINT` (default: `sd_xl_base_1.0.safetensors`)
@@ -177,7 +177,7 @@ For local Studio use, the native Director page does not require ChatGPT. If you 
 
 If you need a lighter local planner for weaker CPUs or low-memory systems, set `EDMG_AI_OLLAMA_MODEL=qwen3:4b`.
 
-If you use an OpenAI-compatible gateway that exposes a different model alias than `qwen3-8b`,
+If you use an OpenAI-compatible gateway that exposes a different model alias than `nvidia/llama-3.1-nemotron-ultra-253b-v1`,
 override `EDMG_AI_OPENAI_COMPAT_MODEL` to match that server.
 
 S3-hosted model entries can use `source: "s3"` with either `s3_uri: "s3://bucket/key"` or `s3_key: "prefix/model.safetensors"` plus the configured model-cache bucket. Runtime resolution materializes supported single-file ComfyUI assets before rendering. Internal renderer entries use the same S3 path, but the object must be a `.zip`, `.tar`, `.tar.gz`, or `.tgz` archive containing a Diffusers snapshot with `model_index.json` at the archive root or inside one top-level directory.

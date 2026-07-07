@@ -6,6 +6,66 @@ import Settings from "../pages/Settings";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
 describe("Settings page", () => {
+  it("normalizes the legacy local qwen OpenAI-compatible default pair", async () => {
+    installEdmgBridge({
+      getAiSettings: async () => ({
+        ok: true,
+        mode: "local",
+        provider: "openai_compat",
+        aiBaseUrl: "http://127.0.0.1:7862",
+        ollamaUrl: "http://127.0.0.1:11434",
+        ollamaModel: "qwen3:8b",
+        openaiCompatBaseUrl: "http://127.0.0.1:8000",
+        openaiCompatModel: "qwen3-8b",
+        nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
+        nvidiaModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+        source: "launcher",
+      }),
+    });
+
+    installFetchMock({
+      "/v1/config": {
+        ai_mode: "local",
+        ai_provider: "openai_compat",
+        ai_openai_compat_base_url: "https://integrate.api.nvidia.com/v1",
+        ai_openai_compat_model: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      },
+      "/v1/ai/status": { ok: true, provider: "openai_compat" },
+      "/v1/edmg/deforum_template": { ok: true },
+      "/v1/settings/secrets/status": { store: "test", has_openai_compat_api_key: false },
+      "/v1/hardware": { hardware: { device_name: "Test GPU", backend_family: "cuda", recommended_tier: "balanced" } },
+      "/v1/settings/render_profiles": { recommended_profile: "balanced_auto", profiles: {} },
+      "/v1/settings/render_providers": {
+        settings: {},
+        stability: { has_api_key: false, visible: false, note: "disabled" },
+        imagineart: { has_api_key: false, visible: false, configured: false, note: "disabled" },
+        imagineart_image_styles: ["imagine-turbo"],
+        imagineart_video_styles: ["kling-1.0-pro"],
+        directml: { runtime_ready: false, available: false, active: false, device_name: "" },
+        stability_services: [],
+        stability_models: [],
+        style_presets: [],
+      },
+      "/v1/settings/transcription": {
+        settings: {
+          provider: "faster_whisper",
+          model: "turbo",
+          device: "auto",
+          compute_type: "auto",
+          fallback_to_whisper: true,
+        },
+        active: { provider: "faster_whisper", model: "turbo", device: "auto" },
+        dependencies: { parakeet_available: false, faster_whisper_available: true },
+        hardware: { device_name: "Test GPU" },
+      },
+    });
+
+    renderWithStudio(<Settings backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByDisplayValue("https://integrate.api.nvidia.com/v1")).toBeTruthy();
+    expect(await screen.findByDisplayValue("nvidia/llama-3.1-nemotron-ultra-253b-v1")).toBeTruthy();
+  });
+
   it("saves DiffusionGemma as an NVIDIA planning model preset", async () => {
     const diffusionGemmaModel = "google/diffusiongemma-26B-A4B-it";
     const setAiSettings = vi.fn(async (settings: any) => ({
@@ -22,8 +82,8 @@ describe("Settings page", () => {
         aiBaseUrl: "http://127.0.0.1:7862",
         ollamaUrl: "http://127.0.0.1:11434",
         ollamaModel: "qwen3:8b",
-        openaiCompatBaseUrl: "http://127.0.0.1:8000",
-        openaiCompatModel: "qwen3-8b",
+        openaiCompatBaseUrl: "https://integrate.api.nvidia.com/v1",
+        openaiCompatModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
         nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
         nvidiaModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
         source: "test",

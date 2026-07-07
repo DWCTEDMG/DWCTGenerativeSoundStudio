@@ -102,18 +102,18 @@ EDMG_AI_MODE=http
 EDMG_AI_BASE_URL=http://127.0.0.1:7862
 ```
 
-OpenAI-compatible option (LM Studio / llama.cpp server / vLLM / Groq / Together, etc.):
+OpenAI-compatible option (NVIDIA NIM / LM Studio / llama.cpp server / vLLM / Groq / Together, etc.):
 
 ```bash
 EDMG_AI_MODE=local
 EDMG_AI_PROVIDER=openai_compat
-EDMG_AI_OPENAI_COMPAT_BASE_URL=http://127.0.0.1:1234/v1
-EDMG_AI_OPENAI_COMPAT_MODEL=qwen3-8b
+EDMG_AI_OPENAI_COMPAT_BASE_URL=https://integrate.api.nvidia.com/v1
+EDMG_AI_OPENAI_COMPAT_MODEL=nvidia/llama-3.1-nemotron-ultra-253b-v1
 EDMG_AI_OPENAI_COMPAT_API_KEY=...  # if required
 ```
 
-If your OpenAI-compatible gateway exposes a different model alias, override
-`EDMG_AI_OPENAI_COMPAT_MODEL` to match that server.
+If your OpenAI-compatible gateway exposes a different endpoint or model alias, override
+`EDMG_AI_OPENAI_COMPAT_BASE_URL` and `EDMG_AI_OPENAI_COMPAT_MODEL` to match that server.
 
 ## Recommended local model stack
 

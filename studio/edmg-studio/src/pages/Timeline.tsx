@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
 import { apiGet, apiPost, getBackendUrl } from "../components/api";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
@@ -22,6 +23,7 @@ type TimelineDensity = "compact" | "comfortable";
 
 const TIMELINE_MIN_ZOOM = 4;
 const TIMELINE_MAX_ZOOM = 360;
+const TIMELINE_MIN_RANGE_S = 0.1;
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -255,6 +257,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const [quantizeBeats, setQuantizeBeats] = useState<number>(1);
   const [bpmOverride, setBpmOverride] = useState<number | null>(null);
+  const [loopEnabled, setLoopEnabled] = useState<boolean>(false);
+  const [locatorInS, setLocatorInS] = useState<number>(0);
+  const [locatorOutS, setLocatorOutS] = useState<number>(5);
 
   const [selected, setSelected] = useState<Selected>(null);
 
@@ -371,7 +376,16 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const handlePlay = () => setIsPlaying(true);
     const handlePause = () => setIsPlaying(false);
     const handleEnded = () => setIsPlaying(false);
-    const handleTimeUpdate = () => setPlayheadS(audioEl.currentTime || 0);
+    const handleTimeUpdate = () => {
+      const currentTime = audioEl.currentTime || 0;
+      if (loopEnabled && locatorOutS > locatorInS + TIMELINE_MIN_RANGE_S && currentTime >= locatorOutS) {
+        audioEl.currentTime = locatorInS;
+        setPlayheadS(locatorInS);
+        if (!audioEl.paused) audioEl.play().catch(() => {});
+        return;
+      }
+      setPlayheadS(currentTime);
+    };
 
     audioEl.addEventListener("play", handlePlay);
     audioEl.addEventListener("pause", handlePause);
@@ -384,7 +398,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       audioEl.removeEventListener("ended", handleEnded);
       audioEl.removeEventListener("timeupdate", handleTimeUpdate);
     };
-  }, [audioUrl]);
+  }, [audioUrl, loopEnabled, locatorInS, locatorOutS]);
 
   // draw waveform
   useEffect(() => {
@@ -435,11 +449,17 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const rect = c.getBoundingClientRect();
     const u = clamp((e.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
     const t = u * durationS;
-    setPlayheadS(t);
-    if (audioRef.current) audioRef.current.currentTime = t;
+    seekTo(t);
   };
 
   const clipPx = (t: number) => Math.round(t * pxPerSecond);
+  const seekTo = (seconds: number, syncAudio = true) => {
+    const next = clamp(Number(seconds) || 0, 0, Math.max(0, durationS));
+    setPlayheadS(next);
+    if (syncAudio && audioRef.current) {
+      audioRef.current.currentTime = next;
+    }
+  };
 
   const setTimelineZoomWithFocus = (nextZoom: number, focusSeconds?: number) => {
     const scroller = timelineScrollRef.current;
@@ -884,7 +904,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     return Math.max(0, Math.round(t / step) * step);
   };
 
-  const _minLen = 0.1;
+  const _minLen = TIMELINE_MIN_RANGE_S;
 
   const duplicateSelection = () => {
     if (!selected) return;
@@ -1153,6 +1173,69 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     setTimelineDirty(true);
   };
 
+  const selectedTimeRange = (): [number, number] | null => {
+    if (!selected) return null;
+    if (selected.kind === "track") {
+      const picked = selectedTrackClip(selected);
+      if (!picked) return null;
+      return [Number(picked.cl.start_s), Number(picked.cl.end_s)];
+    }
+    if (selected.kind === "overlay") {
+      const layer = layers[selected.layerIdx];
+      if (!layer) return null;
+      return [Number(layer.start_s ?? 0), Number(layer.end_s ?? durationS)];
+    }
+    if (selected.kind === "camera") {
+      const keyframe = camKeyframes[selected.kfIdx];
+      if (!keyframe) return null;
+      const t = Number(keyframe.t || 0);
+      return [clamp(t - 1, 0, durationS), clamp(t + 1, 0, durationS)];
+    }
+    return null;
+  };
+
+  const setLoopRange = (start: number, end: number) => {
+    const s = clamp(Number(start) || 0, 0, Math.max(0, durationS - TIMELINE_MIN_RANGE_S));
+    const e = clamp(Number(end) || durationS, s + TIMELINE_MIN_RANGE_S, durationS);
+    setLocatorInS(s);
+    setLocatorOutS(e);
+  };
+
+  const useSelectionAsLoopRange = () => {
+    const range = selectedTimeRange();
+    if (!range) return;
+    setLoopRange(range[0], range[1]);
+    setLoopEnabled(true);
+  };
+
+  const timelineGridMarkers = (() => {
+    const detectedGrid = _beatGrid();
+    const detected = detectedGrid && detectedGrid.length >= 2 ? detectedGrid : null;
+    if (detected) return detected.filter((t) => t >= 0 && t <= durationS);
+
+    const step = _quantStepS();
+    if (!step || step <= 0) return [];
+    const count = Math.floor(durationS / step);
+    const stride = Math.max(1, Math.ceil(count / 700));
+    const markers: number[] = [];
+    for (let i = 0; i <= count; i += stride) markers.push(Number((i * step).toFixed(4)));
+    if (!markers.includes(0)) markers.unshift(0);
+    if (durationS > 0 && markers[markers.length - 1] < durationS - TIMELINE_MIN_RANGE_S) {
+      markers.push(durationS);
+    }
+    return markers;
+  })();
+
+  const jumpToPreviousGrid = () => {
+    const before = [...timelineGridMarkers].reverse().find((t) => t < playheadS - 0.03);
+    seekTo(before ?? 0);
+  };
+
+  const jumpToNextGrid = () => {
+    const after = timelineGridMarkers.find((t) => t > playheadS + 0.03);
+    seekTo(after ?? durationS);
+  };
+
   const generateProxy = () => {
     if (!projectId) return;
     const s = clamp(Number(proxyStart), 0, durationS);
@@ -1167,6 +1250,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const a = audioRef.current;
     if (!a) return;
     if (a.paused) {
+      if (a.currentTime >= durationS - TIMELINE_MIN_RANGE_S) {
+        a.currentTime = loopEnabled ? locatorInS : 0;
+        setPlayheadS(a.currentTime);
+      }
       a.play().catch(() => {});
     } else {
       a.pause();
@@ -1264,6 +1351,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           <strong>{fmtTime(playheadS)}</strong>
         </div>
         <div className="timeline-stat">
+          <span className="small">Loop</span>
+          <strong>{loopEnabled ? "On" : "Off"} {fmtTime(locatorInS)} - {fmtTime(locatorOutS)}</strong>
+        </div>
+        <div className="timeline-stat">
           <span className="small">Selection</span>
           <strong>{selectionStatus}</strong>
         </div>
@@ -1315,11 +1406,42 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             <div className="timeline-miniField">
               <span className="timeline-miniLabel">Playhead</span>
               <input
+                aria-label="Playhead time"
                 type="number"
                 step={0.1}
                 value={playheadS}
-                onChange={(e) => setPlayheadS(Number(e.target.value))}
+                onChange={(e) => seekTo(Number(e.target.value))}
               />
+            </div>
+            <div className="timeline-miniField timeline-miniField--transport">
+              <span className="timeline-miniLabel">Controls</span>
+              <div className="timeline-transportControls">
+                <button className="secondary timeline-iconButton" type="button" aria-label="Go to start" title="Go to start" onClick={() => seekTo(0)}>
+                  <SkipBack size={16} aria-hidden="true" />
+                </button>
+                <button className="secondary timeline-iconButton" type="button" aria-label="Previous grid" title="Previous grid" onClick={jumpToPreviousGrid}>
+                  <StepBack size={16} aria-hidden="true" />
+                </button>
+                <button className="primary timeline-iconButton" type="button" aria-label={isPlaying ? "Pause" : "Play"} title={isPlaying ? "Pause" : "Play"} onClick={playPause}>
+                  {isPlaying ? <Pause size={17} aria-hidden="true" /> : <Play size={17} aria-hidden="true" />}
+                </button>
+                <button className="secondary timeline-iconButton" type="button" aria-label="Next grid" title="Next grid" onClick={jumpToNextGrid}>
+                  <StepForward size={16} aria-hidden="true" />
+                </button>
+                <button className="secondary timeline-iconButton" type="button" aria-label="Go to end" title="Go to end" onClick={() => seekTo(durationS)}>
+                  <SkipForward size={16} aria-hidden="true" />
+                </button>
+                <button
+                  className={`${loopEnabled ? "primary" : "secondary"} timeline-loopButton`}
+                  type="button"
+                  aria-label={loopEnabled ? "Disable loop" : "Enable loop"}
+                  title={loopEnabled ? "Disable loop" : "Enable loop"}
+                  onClick={() => setLoopEnabled((value) => !value)}
+                >
+                  <Repeat size={15} aria-hidden="true" />
+                  <span>Loop</span>
+                </button>
+              </div>
             </div>
             <div className="timeline-miniField">
               <span className="timeline-miniLabel">Zoom</span>
@@ -1352,9 +1474,6 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               </div>
             </div>
             <div className="timeline-toolbarActions">
-              <button className="primary" onClick={playPause}>
-                {isPlaying ? "Pause" : "Play"}
-              </button>
               <button
                 className="primary"
                 onClick={() => void syncToRenderer()}
@@ -1400,6 +1519,45 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <option value="compact">Compact</option>
                 <option value="comfortable">Comfortable</option>
               </select>
+            </div>
+            <div className="timeline-miniField timeline-miniField--locator">
+              <span className="timeline-miniLabel">Loop range</span>
+              <div className="timeline-locatorInputs">
+                <label className="small">
+                  In
+                  <input
+                    aria-label="Loop in"
+                    type="number"
+                    step={0.1}
+                    value={locatorInS}
+                    onChange={(e) => setLoopRange(Number(e.target.value), locatorOutS)}
+                  />
+                </label>
+                <label className="small">
+                  Out
+                  <input
+                    aria-label="Loop out"
+                    type="number"
+                    step={0.1}
+                    value={locatorOutS}
+                    onChange={(e) => setLoopRange(locatorInS, Number(e.target.value))}
+                  />
+                </label>
+              </div>
+              <div className="timeline-locatorActions">
+                <button className="secondary" type="button" onClick={() => setLoopRange(playheadS, locatorOutS)}>
+                  Set in
+                </button>
+                <button className="secondary" type="button" onClick={() => setLoopRange(locatorInS, playheadS)}>
+                  Set out
+                </button>
+                <button className="secondary" type="button" disabled={!selected} onClick={useSelectionAsLoopRange}>
+                  Use selection
+                </button>
+                <button className="secondary" type="button" onClick={() => setLoopRange(0, durationS)}>
+                  Full
+                </button>
+              </div>
             </div>
             <div className="timeline-toolbarActions timeline-toolbarActions--wide">
               <button className="secondary" disabled={!selected} onClick={quantizeSelection}>
@@ -1602,6 +1760,22 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           onWheel={onTimelineWheel}
         >
           <div className="timeline-boardCanvas" style={timelineSurfaceStyle}>
+            <div
+              className="timeline-locatorRange"
+              style={{
+                left: clipPx(locatorInS),
+                width: Math.max(2, clipPx(locatorOutS) - clipPx(locatorInS)),
+              }}
+              aria-hidden="true"
+            />
+            {timelineGridMarkers.map((marker) => (
+              <div
+                key={marker}
+                className="timeline-gridMarker"
+                style={{ left: clipPx(marker) }}
+                aria-hidden="true"
+              />
+            ))}
             <div className="timeline-rulerRow">
               {rulerTicks.map((tick) => (
                 <div key={tick} className="timeline-rulerTick" style={{ left: clipPx(tick) }}>
