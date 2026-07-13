@@ -16,6 +16,10 @@ local `studio_bundle` runtime.
 Set these environment variables on the backend app:
 
 - `PORT=8080`
+- `EDMG_STUDIO_BACKEND_HOST=0.0.0.0`
+- `EDMG_BACKEND_AUTH_MODE=required`
+- `EDMG_BACKEND_AUTH_TOKEN=<generate a long random secret in the Hyperlift secret manager>`
+- `EDMG_BACKEND_CORS_ORIGINS=https://<your-studio-frontend-domain>`
 - `EDMG_AI_MODE=http`
 - `EDMG_AI_BASE_URL=https://<your-ai-service-domain>`
 

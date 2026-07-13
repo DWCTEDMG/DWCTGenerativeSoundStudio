@@ -294,6 +294,13 @@ cd studio/edmg-studio
 bash scripts/set_studio_remote_backend.sh external https://7863-example.cloudspaces.litng.ai
 ```
 
+`start_lightning_backend.sh` now requires bearer authentication for its default `0.0.0.0` bind.
+When `EDMG_BACKEND_AUTH_TOKEN` is not already present, it creates a mode-0600 token file at
+`$EDMG_STUDIO_HOME/config/backend-auth-token` and reports that path without printing the token.
+Transfer the token over your authenticated SSH/Lightning session, then paste it into **Studio
+Settings → Desktop Backend → Backend Access Security**. The browser keeps it only for that tab;
+Electron can persist it with OS-backed encryption. Keep the public endpoint behind HTTPS.
+
 For a managed local backend on the same machine:
 
 ```bash

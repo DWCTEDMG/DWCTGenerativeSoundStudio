@@ -1,6 +1,66 @@
 export const BACKEND_URL_CHANGED_EVENT = "edmg:backend-url-changed";
 
 const BROWSER_BACKEND_URL_STORAGE_KEY = "edmg.backendUrl";
+let backendAuthToken = "";
+let backendAuthTokenLoaded = false;
+
+export function setBackendAuthTokenForSession(value: string): string {
+  backendAuthToken = String(value || "").trim();
+  backendAuthTokenLoaded = true;
+  return backendAuthToken;
+}
+
+export function hasBackendAuthToken(): boolean {
+  return !!backendAuthToken;
+}
+
+export async function getBackendAuthTokenAsync(): Promise<string> {
+  if (backendAuthTokenLoaded) return backendAuthToken;
+  backendAuthTokenLoaded = true;
+  if (typeof window === "undefined") return "";
+  try {
+    const result = await window.edmg?.getBackendAuthToken?.();
+    const token = typeof result === "string" ? result : String(result?.token || "");
+    backendAuthToken = token.trim();
+  } catch {
+    backendAuthToken = "";
+  }
+  return backendAuthToken;
+}
+
+export async function saveBackendAuthToken(value: string): Promise<{
+  configured: boolean;
+  persisted: boolean;
+  secureStorageAvailable: boolean;
+  note?: string;
+}> {
+  const token = setBackendAuthTokenForSession(value);
+  if (typeof window !== "undefined" && window.edmg?.setBackendAuthToken) {
+    const result = await window.edmg.setBackendAuthToken(token);
+    if (result?.ok === false) {
+      throw new Error(String(result.error || "Unable to save backend access token"));
+    }
+    return {
+      configured: !!token,
+      persisted: !!result?.persisted,
+      secureStorageAvailable: result?.secureStorageAvailable !== false,
+      note: result?.note,
+    };
+  }
+  return {
+    configured: !!token,
+    persisted: false,
+    secureStorageAvailable: false,
+    note: "Browser mode keeps the token in memory for this tab only.",
+  };
+}
+
+async function backendAuthHeaders(extra?: HeadersInit): Promise<Headers> {
+  const headers = new Headers(extra || {});
+  const token = await getBackendAuthTokenAsync();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return headers;
+}
 
 function readQueryBackendUrl(): string {
   if (typeof window === "undefined") return "";
@@ -152,6 +212,16 @@ export function ensureBrowserBridge(): void {
   };
 }
 
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const base = await getBackendUrlAsync();
+  const headers = await backendAuthHeaders(init.headers);
+  const target = new URL(/^https?:\/\//i.test(path) ? path : `${base}${path}`);
+  if (target.origin !== new URL(base).origin) {
+    throw new Error("Refusing to send Studio backend credentials to a different origin.");
+  }
+  return fetch(target.toString(), { ...init, headers });
+}
+
 function formatBackendError(d: any, fallback: string): string {
   // New backend format: { error: { message, hint, code } }
   const e = d?.error;
@@ -178,16 +248,14 @@ function formatBackendError(d: any, fallback: string): string {
 }
 
 export async function apiGet(path: string) {
-  const base = await getBackendUrlAsync();
-  const r = await fetch(`${base}${path}`);
+  const r = await apiFetch(path);
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `GET ${path} failed`));
   return d;
 }
 
 export async function apiPost(path: string, body: any) {
-  const base = await getBackendUrlAsync();
-  const r = await fetch(`${base}${path}`, {
+  const r = await apiFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -198,18 +266,16 @@ export async function apiPost(path: string, body: any) {
 }
 
 export async function apiDelete(path: string) {
-  const base = await getBackendUrlAsync();
-  const r = await fetch(`${base}${path}`, { method: "DELETE" });
+  const r = await apiFetch(path, { method: "DELETE" });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `DELETE ${path} failed`));
   return d;
 }
 
 export async function apiUpload(path: string, file: File) {
-  const base = await getBackendUrlAsync();
   const fd = new FormData();
   fd.append("file", file);
-  const r = await fetch(`${base}${path}`, { method: "POST", body: fd });
+  const r = await apiFetch(path, { method: "POST", body: fd });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `UPLOAD ${path} failed`));
   return d;

@@ -17,7 +17,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
-import { getBackendUrl } from '../components/api';
+import { apiFetch } from '../components/api';
 import { ProgressBar } from '../components/ProgressBar';
 
 type AnalysisFocus = 'balanced' | 'emotion' | 'visual';
@@ -1111,7 +1111,7 @@ function buildPlannerPlanFromStudioProject(args: {
 
 async function fetchStudioAudioFile(projectId: string, fileName: string): Promise<File | null> {
   if (!projectId || !fileName) return null;
-  const response = await fetch(`${getBackendUrl()}/v1/projects/${projectId}/audio`);
+  const response = await apiFetch(`/v1/projects/${projectId}/audio`);
   if (!response.ok || typeof (response as Response & { blob?: () => Promise<Blob> }).blob !== 'function') return null;
   const blob = await response.blob();
   return new File([blob], fileName, { type: blob.type || 'audio/*' });

@@ -5,6 +5,22 @@ declare global {
     edmg?: {
       backendUrl: () => string;
       getBackendUrl?: () => Promise<string>;
+      getBackendAuthToken?: () => Promise<{
+        ok: boolean;
+        token?: string;
+        configured: boolean;
+        persisted: boolean;
+        secureStorageAvailable: boolean;
+        note?: string;
+      }>;
+      setBackendAuthToken?: (token: string) => Promise<{
+        ok: boolean;
+        error?: string;
+        configured: boolean;
+        persisted: boolean;
+        secureStorageAvailable: boolean;
+        note?: string;
+      }>;
       getBackendSettings?: () => Promise<{
         ok: boolean;
         mode: string;

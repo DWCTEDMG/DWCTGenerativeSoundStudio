@@ -17,7 +17,7 @@ A desktop-style "studio" application:
 ## Quick start
 
 ### Prereqs
-- Node.js LTS
+- Node.js `20.19+` or `22.12+` (Node 22 LTS recommended; `.node-version` is provided)
 - Python `>=3.10,<3.14`
 - FFmpeg on PATH for dev checkouts, or the bundled Studio FFmpeg for packaged builds (used for MP4 assembly)
 - ComfyUI only if you want ComfyUI-backed still or motion workflows (default `http://127.0.0.1:8188`)
@@ -34,7 +34,7 @@ venv\Scripts\Activate.ps1
 # macOS/Linux
 source venv/bin/activate
 pip install -U pip
-pip install -e ".[studio_bundle]"
+pip install -e ".[studio_bundle,test]"
 edmg-studio-backend serve --host 127.0.0.1 --port 7863
 ```
 
@@ -95,8 +95,22 @@ files, run one of these from `studio/edmg-studio/`:
 
 ```bash
 pnpm backend:use managed 7863
-pnpm backend:use external http://HOST:PORT
+pnpm backend:use external https://HOST
 ```
+
+### Remote backend access security
+
+Loopback development remains zero-configuration. A backend bound to a non-loopback host must use
+bearer authentication unless `EDMG_BACKEND_ALLOW_INSECURE_REMOTE=1` is deliberately set for an
+isolated development network. Configure the server with `EDMG_BACKEND_AUTH_TOKEN` and
+`EDMG_BACKEND_AUTH_MODE=required`, then open **Settings → Desktop Backend → Backend Access
+Security** in Studio and save the matching token. Electron encrypts the token with the operating
+system credential service; browser-only Studio keeps it in memory for the current tab.
+
+Use HTTPS for production remote targets. Project media GET routes retain a narrow, read-only
+compatibility path so native `<audio>`, `<video>`, and image previews continue to work; project
+metadata, settings, model operations, setup actions, and render control routes require the bearer
+token.
 
 ## Versioning
 
@@ -160,6 +174,12 @@ For local Studio use, the native Director page does not require ChatGPT. If you 
 ## Environment variables (Backend)
 - `EDMG_STUDIO_HOME` (optional; preferred root for Studio storage)
 - `EDMG_STUDIO_DATA_DIR` (default: `./data`)
+- `EDMG_BACKEND_AUTH_MODE` (`auto`, `required`, or `disabled`; remote launch helpers use `required`)
+- `EDMG_BACKEND_AUTH_TOKEN` (bearer token for protected backend routes; never place it in a frontend `VITE_*` variable)
+- `EDMG_BACKEND_CORS_ORIGINS` (comma-separated trusted browser origins)
+- `EDMG_BACKEND_CORS_ORIGIN_REGEX` (optional trusted-origin regex, primarily for managed cloud workspaces)
+- `EDMG_BACKEND_PUBLIC_MEDIA_GETS` (`1` preserves read-only native media URL compatibility; set `0` when all clients use authenticated fetches)
+- `EDMG_BACKEND_ALLOW_INSECURE_REMOTE` (explicit development-only override for a non-loopback backend without auth)
 - `EDMG_AI_MODE` (default: `local`)
 - `EDMG_AI_PROVIDER` (default: `nemotron_cloud`; alternatives: `openai_compat`, `ollama`, `rule_based`)
 - `EDMG_AI_OLLAMA_URL` (default: `http://127.0.0.1:11434`)

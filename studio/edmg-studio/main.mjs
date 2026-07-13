@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
@@ -14,7 +14,118 @@ const APP_NAME = "EDMG Studio";
 const IS_DEV = !app.isPackaged;
 const IS_WINDOWS = process.platform === "win32";
 const BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json";
+const BACKEND_AUTH_TOKEN_BASENAME = "backend-auth-token.bin";
 const IGNORABLE_WRITE_ERROR_CODES = new Set(["EPIPE", "ERR_STREAM_DESTROYED"]);
+
+function backendAuthTokenPath() {
+  return path.join(app.getPath("userData"), BACKEND_AUTH_TOKEN_BASENAME);
+}
+
+function secureStorageAvailable() {
+  try {
+    return safeStorage.isEncryptionAvailable();
+  } catch {
+    return false;
+  }
+}
+
+function readBackendAuthToken() {
+  const environmentToken = String(
+    process.env.EDMG_BACKEND_AUTH_TOKEN || process.env.EDMG_STUDIO_BACKEND_AUTH_TOKEN || "",
+  ).trim();
+  if (environmentToken) {
+    return {
+      token: environmentToken,
+      persisted: false,
+      secureStorageAvailable: secureStorageAvailable(),
+      note: "Loaded from the Studio process environment.",
+    };
+  }
+
+  const available = secureStorageAvailable();
+  const tokenPath = backendAuthTokenPath();
+  if (!available || !fs.existsSync(tokenPath)) {
+    return {
+      token: "",
+      persisted: false,
+      secureStorageAvailable: available,
+      note: available
+        ? "No encrypted backend token is saved."
+        : "OS-backed Electron encryption is unavailable; tokens remain session-only.",
+    };
+  }
+
+  try {
+    const encrypted = fs.readFileSync(tokenPath);
+    return {
+      token: safeStorage.decryptString(encrypted).trim(),
+      persisted: true,
+      secureStorageAvailable: true,
+      note: "Loaded from encrypted Electron storage.",
+    };
+  } catch (error) {
+    console.warn("[backend-auth] unable to read encrypted token", String(error?.message ?? error));
+    return {
+      token: "",
+      persisted: false,
+      secureStorageAvailable: available,
+      note: "The encrypted token could not be read. Save it again in Studio Settings.",
+    };
+  }
+}
+
+function writeBackendAuthToken(rawToken) {
+  const token = String(rawToken || "").trim();
+  const tokenPath = backendAuthTokenPath();
+  if (!token) {
+    delete process.env.EDMG_BACKEND_AUTH_TOKEN;
+    try {
+      fs.rmSync(tokenPath, { force: true });
+    } catch {}
+    return {
+      ok: true,
+      configured: false,
+      persisted: false,
+      secureStorageAvailable: secureStorageAvailable(),
+      note: "Backend access token cleared.",
+    };
+  }
+
+  process.env.EDMG_BACKEND_AUTH_TOKEN = token;
+  if (!secureStorageAvailable()) {
+    return {
+      ok: true,
+      configured: true,
+      persisted: false,
+      secureStorageAvailable: false,
+      note: "OS-backed encryption is unavailable; the token is active for this Studio session only.",
+    };
+  }
+
+  try {
+    ensureDirSync(path.dirname(tokenPath));
+    const encrypted = safeStorage.encryptString(token);
+    const tmp = `${tokenPath}.tmp`;
+    fs.writeFileSync(tmp, encrypted, { mode: 0o600 });
+    fs.renameSync(tmp, tokenPath);
+    return {
+      ok: true,
+      configured: true,
+      persisted: true,
+      secureStorageAvailable: true,
+      note: "Backend access token saved with Electron OS-backed encryption.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message ?? error),
+      configured: true,
+      persisted: false,
+      secureStorageAvailable: true,
+      note: "The token is active for this session but could not be persisted.",
+    };
+  }
+}
 
 function readRuntimeDefaults() {
   const candidates = [];
@@ -1278,6 +1389,13 @@ console.log(`EDMG_currentBackendUrl=${backendRuntime.getCurrentBackendUrl()}`);
 
 function registerIpcHandlers() {
   ipcMain.handle("edmg:getBackendUrl", async () => backendRuntime.getCurrentBackendUrl());
+  ipcMain.handle("edmg:getBackendAuthToken", async () => {
+    const result = readBackendAuthToken();
+    return { ok: true, configured: !!result.token, ...result };
+  });
+  ipcMain.handle("edmg:setBackendAuthToken", async (_event, token = "") =>
+    writeBackendAuthToken(token),
+  );
   ipcMain.handle("edmg:getBackendSettings", async () => ({
     ok: true,
     ...getConfiguredBackendSettings(),

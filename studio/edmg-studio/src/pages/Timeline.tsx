@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
-import { apiGet, apiPost, getBackendUrl } from "../components/api";
+import { apiFetch, apiGet, apiPost, getBackendUrl } from "../components/api";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
@@ -200,7 +200,7 @@ function ensureTimelineShape(timeline: AnyDict, planVariant: AnyDict | null): An
 }
 
 async function fetchAudioPeaks(audioUrl: string, targetPoints: number): Promise<number[]> {
-  const res = await fetch(audioUrl);
+  const res = await apiFetch(audioUrl);
   if (!res.ok) return [];
   const buf = await res.arrayBuffer();
   const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;

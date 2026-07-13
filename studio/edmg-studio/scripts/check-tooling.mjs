@@ -12,6 +12,19 @@ const electronBuilderPath = path.join(root, "electron-builder.yml");
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 const errors = [];
 
+function nodeVersionSupported(version) {
+  const [major = 0, minor = 0] = String(version || "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+  return (major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22;
+}
+
+if (!nodeVersionSupported(process.versions.node)) {
+  errors.push(
+    `Node ${process.versions.node} is unsupported. EDMG Studio requires Node 20.19+ or Node 22.12+ (Node 22 LTS recommended).`,
+  );
+}
+
 if (!String(packageJson.packageManager || "").startsWith("pnpm@")) {
   errors.push("package.json must declare pnpm as the canonical package manager via packageManager.");
 }
@@ -66,5 +79,6 @@ if (errors.length) {
 }
 
 console.log(`[tooling-check] pnpm canonical: ${packageJson.packageManager}`);
+console.log(`[tooling-check] node runtime: ${process.versions.node} (${packageJson.engines?.node})`);
 console.log(`[tooling-check] shipped desktop version source: ${path.relative(repoRoot, packageJsonPath)}#version (${packageJson.version})`);
 console.log(`[tooling-check] lockfile: ${path.relative(repoRoot, lockfilePath)}`);

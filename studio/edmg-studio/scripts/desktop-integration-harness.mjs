@@ -81,6 +81,8 @@ async function assertPreloadContract() {
 
   assert.ok(exposed.edmg, "preload must expose window.edmg");
   assert.equal(typeof exposed.edmg.getBackendUrl, "function");
+  assert.equal(typeof exposed.edmg.getBackendAuthToken, "function");
+  assert.equal(typeof exposed.edmg.setBackendAuthToken, "function");
   assert.equal(typeof exposed.edmg.revealPath, "function");
   assert.equal(typeof exposed.edmg.openPath, "function");
   assert.equal(typeof exposed.__edmgTest?.writeReport, "function", "test bridge must be exposed in test mode");

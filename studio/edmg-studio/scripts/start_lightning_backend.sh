@@ -52,7 +52,25 @@ mkdir -p \
   "${EDMG_STUDIO_HOME}/models" \
   "${EDMG_STUDIO_HOME}/cache" \
   "${EDMG_STUDIO_HOME}/logs" \
-  "${EDMG_STUDIO_HOME}/external"
+  "${EDMG_STUDIO_HOME}/external" \
+  "${EDMG_STUDIO_HOME}/config"
+
+if [[ "${EDMG_STUDIO_BACKEND_HOST}" != "127.0.0.1" && "${EDMG_STUDIO_BACKEND_HOST}" != "localhost" && "${EDMG_STUDIO_BACKEND_HOST}" != "::1" ]]; then
+  export EDMG_BACKEND_AUTH_MODE="${EDMG_BACKEND_AUTH_MODE:-required}"
+  AUTH_TOKEN_FILE="${EDMG_BACKEND_AUTH_TOKEN_FILE:-${EDMG_STUDIO_HOME}/config/backend-auth-token}"
+  if [[ -z "${EDMG_BACKEND_AUTH_TOKEN:-}" ]]; then
+    if [[ ! -s "${AUTH_TOKEN_FILE}" ]]; then
+      umask 077
+      "${PYTHON_BIN}" -c "import secrets,sys; open(sys.argv[1], 'w', encoding='utf-8').write(secrets.token_urlsafe(48))" "${AUTH_TOKEN_FILE}"
+    fi
+    export EDMG_BACKEND_AUTH_TOKEN="$(<"${AUTH_TOKEN_FILE}")"
+  fi
+  export EDMG_BACKEND_CORS_ORIGIN_REGEX="${EDMG_BACKEND_CORS_ORIGIN_REGEX:-^https://[A-Za-z0-9.-]+\\.litng\\.ai$}"
+  echo "[edmg] backend authentication: required"
+  echo "[edmg] backend token file: ${AUTH_TOKEN_FILE}"
+else
+  export EDMG_BACKEND_AUTH_MODE="${EDMG_BACKEND_AUTH_MODE:-auto}"
+fi
 
 cd "${BACKEND_DIR}"
 
@@ -100,6 +118,7 @@ echo "[edmg] python env mode: ${BACKEND_ENV_MODE}"
 echo "[edmg] python cmd: ${PYTHON_CMD}"
 echo "[edmg] numpy constraint: ${BACKEND_NUMPY_CONSTRAINT}"
 echo "[edmg] backend bundle extra: ${BACKEND_BUNDLE_EXTRA}"
+echo "[edmg] backend auth mode: ${EDMG_BACKEND_AUTH_MODE}"
 if [[ -n "${BACKEND_TORCH_INDEX_URL}" ]]; then
   echo "[edmg] torch index: ${BACKEND_TORCH_INDEX_URL}"
 fi

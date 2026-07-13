@@ -34,6 +34,8 @@ MODELS_DIR="${STUDIO_HOME}/models"
 CACHE_DIR="${STUDIO_HOME}/cache"
 LOG_DIR="${STUDIO_HOME}/logs"
 EXTERNAL_DIR="${STUDIO_HOME}/external"
+CONFIG_DIR="${STUDIO_HOME}/config"
+BACKEND_AUTH_TOKEN_FILE="${EDMG_BACKEND_AUTH_TOKEN_FILE:-${CONFIG_DIR}/backend-auth-token}"
 HF_HOME_DIR="${CACHE_DIR}/huggingface"
 TORCH_HOME_DIR="${CACHE_DIR}/torch"
 OLLAMA_MODELS_DIR="${MODELS_DIR}/ollama"
@@ -99,6 +101,12 @@ pick_python_bin() {
 
 write_env_file() {
   step "Writing ${EDMG_ENV_FILE}"
+  local external_ip=""
+  local cors_origins="http://127.0.0.1:5173,http://localhost:5173"
+  external_ip="$(curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip" || true)"
+  if [[ -n "${external_ip}" && "${START_UI}" == "1" ]]; then
+    cors_origins="${cors_origins},http://${external_ip}:${UI_PORT}"
+  fi
   cat >"${EDMG_ENV_FILE}" <<EOF
 export EDMG_STUDIO_HOME=${STUDIO_HOME}
 export EDMG_STUDIO_DATA_DIR=${DATA_DIR}
@@ -111,6 +119,9 @@ export TORCH_HOME=${TORCH_HOME_DIR}
 export OLLAMA_MODELS=${OLLAMA_MODELS_DIR}
 export EDMG_STUDIO_BACKEND_HOST=${BACKEND_HOST}
 export EDMG_STUDIO_BACKEND_PORT=${BACKEND_PORT}
+export EDMG_BACKEND_AUTH_MODE=required
+export EDMG_BACKEND_AUTH_TOKEN="\$(<${BACKEND_AUTH_TOKEN_FILE})"
+export EDMG_BACKEND_CORS_ORIGINS=${cors_origins}
 export EDMG_AI_MODE=${AI_MODE}
 export EDMG_AI_PROVIDER=${AI_PROVIDER}
 export EDMG_AI_OLLAMA_URL=${AI_OLLAMA_URL}
@@ -129,8 +140,22 @@ EOF
 
 ensure_directories() {
   step "Creating runtime directories under ${STUDIO_HOME}"
-  "${SUDO[@]}" mkdir -p "${REPO_PARENT}" "${DATA_DIR}" "${MODELS_DIR}" "${CACHE_DIR}" "${LOG_DIR}" "${EXTERNAL_DIR}" "${HF_HOME_DIR}" "${TORCH_HOME_DIR}" "${OLLAMA_MODELS_DIR}" "${BIN_DIR}"
+  "${SUDO[@]}" mkdir -p "${REPO_PARENT}" "${DATA_DIR}" "${MODELS_DIR}" "${CACHE_DIR}" "${LOG_DIR}" "${EXTERNAL_DIR}" "${CONFIG_DIR}" "${HF_HOME_DIR}" "${TORCH_HOME_DIR}" "${OLLAMA_MODELS_DIR}" "${BIN_DIR}"
   "${SUDO[@]}" chown -R "${BOOTSTRAP_USER}:${BOOTSTRAP_USER}" "${REPO_PARENT}" "${STUDIO_HOME}" "${BIN_DIR}"
+}
+
+ensure_backend_auth_token() {
+  if [[ -n "${EDMG_BACKEND_AUTH_TOKEN:-}" ]]; then
+    umask 077
+    printf '%s' "${EDMG_BACKEND_AUTH_TOKEN}" >"${BACKEND_AUTH_TOKEN_FILE}"
+  elif [[ ! -s "${BACKEND_AUTH_TOKEN_FILE}" ]]; then
+    local python_bin
+    python_bin="$(pick_python_bin)" || fail "No usable Python interpreter found for backend token generation."
+    umask 077
+    "${python_bin}" -c "import secrets,sys; open(sys.argv[1], 'w', encoding='utf-8').write(secrets.token_urlsafe(48))" "${BACKEND_AUTH_TOKEN_FILE}"
+  fi
+  chmod 600 "${BACKEND_AUTH_TOKEN_FILE}"
+  step "Backend bearer authentication configured; token stored at ${BACKEND_AUTH_TOKEN_FILE}"
 }
 
 install_system_packages() {
@@ -150,16 +175,12 @@ ensure_gpu_ready() {
 }
 
 install_node_and_pnpm() {
-  local current_node=""
-  if command -v node >/dev/null 2>&1; then
-    current_node="$(node --version || true)"
-  fi
-  if [[ ! "$current_node" =~ ^v20\. ]]; then
-    step "Installing Node.js 20"
+  if ! command -v node >/dev/null 2>&1 || ! node -e 'const [M,m]=process.versions.node.split(".").map(Number); process.exit((M===20&&m>=19)||(M===22&&m>=12)||M>22?0:1)' >/dev/null 2>&1; then
+    step "Installing Node.js 22 LTS"
     if [[ ${#SUDO[@]} -gt 0 ]]; then
-      curl -fsSL https://deb.nodesource.com/setup_20.x | "${SUDO[@]}" -E bash -
+      curl -fsSL https://deb.nodesource.com/setup_22.x | "${SUDO[@]}" -E bash -
     else
-      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     fi
     "${SUDO[@]}" apt-get install -y nodejs
   fi
@@ -273,9 +294,12 @@ cd "${BACKEND_DIR}"
 source .venv/bin/activate
 python - <<'PY'
 import json
+import os
 import urllib.request
 
 backend_url = f"http://127.0.0.1:${BACKEND_PORT}"
+auth_token = os.environ["EDMG_BACKEND_AUTH_TOKEN"]
+auth_headers = {"Authorization": f"Bearer {auth_token}"}
 model_ids = [
     "hf_sd15_internal",
     "hf_sdxl_internal",
@@ -287,7 +311,8 @@ model_ids = [
     "hf_svd_xt_1_1",
 ]
 
-with urllib.request.urlopen(f"{backend_url}/v1/models/catalog", timeout=30) as response:
+catalog_request = urllib.request.Request(f"{backend_url}/v1/models/catalog", headers=auth_headers)
+with urllib.request.urlopen(catalog_request, timeout=30) as response:
     payload = json.load(response)
 
 catalog = {entry.get("id"): entry for entry in payload.get("catalog", [])}
@@ -297,7 +322,7 @@ def post_json(path: str, body: dict) -> None:
     request = urllib.request.Request(
         f"{backend_url}{path}",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **auth_headers},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=60) as response:
@@ -437,6 +462,7 @@ print_summary() {
   fi
   echo "Studio Home: ${STUDIO_HOME}"
   echo "Backend log dir: ${LOG_DIR}"
+  echo "Backend token file: ${BACKEND_AUTH_TOKEN_FILE}"
   echo "UI log: ${UI_LOG_PATH}"
   if [[ "${INSTALL_OLLAMA}" == "1" ]]; then
     echo "Ollama log: ${OLLAMA_LOG_PATH}"
@@ -452,6 +478,7 @@ main() {
   install_system_packages
   ensure_gpu_ready
   ensure_directories
+  ensure_backend_auth_token
   write_env_file
   # shellcheck source=/dev/null
   source "${EDMG_ENV_FILE}"

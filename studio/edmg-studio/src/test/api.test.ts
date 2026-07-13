@@ -1,14 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  apiGet,
+  apiFetch,
   ensureBrowserBridge,
   getBackendUrl,
   getBackendUrlAsync,
+  setBackendAuthTokenForSession,
 } from "../components/api";
 
 const FRESH_TUNNEL = "https://equity-kilometers-periodically-floating.trycloudflare.com";
 const DEAD_TUNNEL = "https://bridges-apartments-theoretical-value.trycloudflare.com";
 
 describe("backend URL resolution", () => {
+  beforeEach(() => {
+    setBackendAuthTokenForSession("");
+  });
+
+  afterEach(() => {
+    setBackendAuthTokenForSession("");
+  });
+
   it("prefers the live Electron bridge URL over stale browser storage", async () => {
     window.localStorage.setItem("edmg.backendUrl", DEAD_TUNNEL);
     window.__EDMG_BACKEND_URL__ = DEAD_TUNNEL;
@@ -39,5 +50,34 @@ describe("backend URL resolution", () => {
 
     expect(getBackendUrl()).toBe(FRESH_TUNNEL);
     expect(window.localStorage.getItem("edmg.backendUrl")).toBe(FRESH_TUNNEL);
+  });
+
+  it("attaches the in-memory backend bearer token without writing it to storage", async () => {
+    window.__EDMG_BACKEND_URL__ = FRESH_TUNNEL;
+    setBackendAuthTokenForSession("secret-test-token");
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    } as Response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiGet("/v1/config")).resolves.toEqual({ ok: true });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer secret-test-token");
+    expect(window.localStorage.getItem("edmg.backendAuthToken")).toBeNull();
+  });
+
+  it("refuses to send backend credentials to another origin", async () => {
+    window.__EDMG_BACKEND_URL__ = FRESH_TUNNEL;
+    setBackendAuthTokenForSession("secret-test-token");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiFetch("https://attacker.example/v1/config")).rejects.toThrow(
+      "different origin",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

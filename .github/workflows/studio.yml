@@ -1,0 +1,95 @@
+name: EDMG Studio
+
+on:
+  push:
+    paths:
+      - "studio/edmg-studio/**"
+      - "scripts/run_pytest_scopes.py"
+      - "tests/**"
+      - "pytest.ini"
+      - "sitecustomize.py"
+      - ".github/workflows/studio.yml"
+  pull_request:
+    paths:
+      - "studio/edmg-studio/**"
+      - "scripts/run_pytest_scopes.py"
+      - "tests/**"
+      - "pytest.ini"
+      - "sitecustomize.py"
+      - ".github/workflows/studio.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: studio-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Studio (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+          cache-dependency-path: studio/edmg-studio/pnpm-lock.yaml
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: studio/edmg-studio/python_backend/pyproject.toml
+
+      - name: Install Studio frontend
+        working-directory: studio/edmg-studio
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Studio backend test dependencies
+        run: python -m pip install -e "./studio/edmg-studio/python_backend[audio,test]"
+
+      - name: Check canonical tooling
+        working-directory: studio/edmg-studio
+        run: pnpm run check:tooling
+
+      - name: Typecheck
+        working-directory: studio/edmg-studio
+        run: pnpm run typecheck
+
+      - name: Lint
+        working-directory: studio/edmg-studio
+        run: pnpm run lint
+
+      - name: Frontend tests
+        working-directory: studio/edmg-studio
+        run: pnpm run test:ui -- --maxWorkers=1 --minWorkers=1
+
+      - name: Frontend production build
+        working-directory: studio/edmg-studio
+        run: pnpm run build
+
+      - name: Electron bridge syntax
+        working-directory: studio/edmg-studio
+        run: pnpm run validate:electron-bridge
+
+      - name: Python test scopes
+        run: python scripts/run_pytest_scopes.py
+
+      - name: Windows Electron integration smoke
+        if: runner.os == 'Windows'
+        working-directory: studio/edmg-studio
+        run: pnpm run validate:desktop-integration:best-effort

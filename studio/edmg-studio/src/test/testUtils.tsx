@@ -37,6 +37,20 @@ export function installEdmgBridge(
   window.edmg = {
     backendUrl: () => "http://127.0.0.1:7863",
     getBackendUrl: async () => "http://127.0.0.1:7863",
+    getBackendAuthToken: async () => ({
+      ok: true,
+      token: "",
+      configured: false,
+      persisted: false,
+      secureStorageAvailable: true,
+    }),
+    setBackendAuthToken: async (token) => ({
+      ok: true,
+      configured: !!String(token || "").trim(),
+      persisted: !!String(token || "").trim(),
+      secureStorageAvailable: true,
+      note: String(token || "").trim() ? "saved" : "cleared",
+    }),
     getBackendSettings: async () => ({
       ok: true,
       mode: "managed",

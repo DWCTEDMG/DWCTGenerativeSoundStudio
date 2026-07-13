@@ -261,6 +261,7 @@ describe("Settings page", () => {
     renderWithStudio(<Settings backendUrl="http://127.0.0.1:7863" config={{}} />);
 
     expect(await screen.findByText("Desktop Backend")).toBeTruthy();
+    expect(await screen.findByText("Backend Access Security")).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Desktop backend mode"), {
       target: { value: "external" },
@@ -281,6 +282,39 @@ describe("Settings page", () => {
     });
 
     expect(await screen.findByText(/Saved\. Restart Studio so it relaunches against the selected backend target\./)).toBeTruthy();
+  });
+
+  it("saves a backend access token through encrypted desktop storage", async () => {
+    const setBackendAuthToken = vi.fn(async (token: string) => ({
+      ok: true,
+      configured: !!token,
+      persisted: !!token,
+      secureStorageAvailable: true,
+      note: "Backend access token saved with Electron OS-backed encryption.",
+    }));
+    installEdmgBridge({ setBackendAuthToken });
+    installFetchMock({
+      "/health": { ok: true },
+      "/v1/security/status": {
+        ok: true,
+        auth_required: true,
+        cors_origins: ["http://127.0.0.1:5173"],
+        public_media_gets: true,
+      },
+      "/v1/config": { ai_mode: "local", ai_provider: "rule_based" },
+    });
+
+    renderWithStudio(<Settings backendUrl="https://edmg-backend.example.com" config={{}} />);
+
+    fireEvent.change(await screen.findByLabelText("Backend access token"), {
+      target: { value: "test-remote-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save encrypted token" }));
+
+    await waitFor(() => {
+      expect(setBackendAuthToken).toHaveBeenCalledWith("test-remote-token");
+    });
+    expect(await screen.findByText(/saved with Electron OS-backed encryption/i)).toBeTruthy();
   });
 
   it("connects browser mode to a Lightning backend URL immediately", async () => {

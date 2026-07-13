@@ -14,7 +14,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
-import { getBackendUrl } from '../components/api';
+import { apiFetch } from '../components/api';
 import { ProgressBar } from '../components/ProgressBar';
 
 type MappingPreset = 'cinematic' | 'psychedelic' | 'ambient' | 'percussive';
@@ -631,7 +631,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
 
       if (!studioAudioName) return;
       try {
-        const response = await fetch(`${getBackendUrl()}/v1/projects/${studioProjectId}/audio`);
+        const response = await apiFetch(`/v1/projects/${studioProjectId}/audio`);
         if (!response.ok || typeof (response as Response & { blob?: () => Promise<Blob> }).blob !== 'function') return;
         const blob = await response.blob();
         if (cancelled) return;

@@ -114,6 +114,7 @@ from .integrations import hf_bucket as hf_bucket_integration
 from .integrations import lightning as lightning_integration
 from .utils.path import safe_join
 from .errors import UserFacingError, hint_from_exception
+from .security import BackendSecurityMiddleware, BackendSecuritySettings
 from .services.model_manager import ModelManager
 from .services.secrets import SecretStore
 from .services.model_cache_settings import ModelCacheSettingsStore
@@ -294,14 +295,20 @@ async def _app_lifespan(_app: FastAPI):
             pass
 
 
+backend_security = BackendSecuritySettings.from_env()
+
 app = FastAPI(title="EDMG Studio Backend", version="1.1.0", lifespan=_app_lifespan)
+
+app.add_middleware(BackendSecurityMiddleware, settings=backend_security)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=list(backend_security.cors_origins),
+    allow_origin_regex=backend_security.cors_origin_regex,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Range"],
+    expose_headers=["Accept-Ranges", "Content-Length", "Content-Range"],
 )
 
 
@@ -587,6 +594,14 @@ def _resolved_project_duration_s(proj: Any, variant: dict[str, Any], scenes: lis
 @app.get("/health", response_model=HealthResponse)
 def health():
     return HealthResponse(ok=True)
+
+
+@app.get("/v1/security/status")
+def backend_security_status(request: Request):
+    return backend_security.public_status(
+        request_scheme=request.url.scheme,
+        request_server_host=(request.scope.get("server") or (None,))[0],
+    )
 
 
 def _request_payload(model: Any) -> dict[str, Any]:

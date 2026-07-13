@@ -10,6 +10,7 @@ prepare_cuda_dll_path()
 import uvicorn
 
 from .app import app, jobs, _execute_job
+from .security import validate_remote_bind_security
 
 
 def _run_single_job(project_id: str, job_id: str) -> int:
@@ -50,6 +51,10 @@ def main() -> None:
     args = p.parse_args()
 
     if args.cmd == "serve":
+        try:
+            validate_remote_bind_security(args.host)
+        except RuntimeError as exc:
+            p.error(str(exc))
         uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
     elif args.cmd == "run-job":
         raise SystemExit(_run_single_job(args.project, args.job))

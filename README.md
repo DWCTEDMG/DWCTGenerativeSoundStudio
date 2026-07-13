@@ -69,6 +69,7 @@ Windows or `/mnt/media/EDMG-Studio` on Linux.
 ## JS Tooling
 
 - Run all JS/Electron commands from `studio/edmg-studio/`.
+- Use Node.js `20.19+` or `22.12+`; Node 22 LTS is pinned in `studio/edmg-studio/.node-version`.
 - The canonical package manager is `pnpm@10.33.0`, pinned in `studio/edmg-studio/package.json`.
 - The shipped desktop app version also comes from `studio/edmg-studio/package.json#version`.
 

@@ -140,19 +140,29 @@ gcloud compute instances create edmg-gpu-studio `
 
 ## Phase 4: open only the required ports
 
+Determine the operator or VPN CIDR that should reach Studio, then restrict both ports to that
+network. Do not expose the development UI or raw backend port to the entire internet.
+
 ```powershell
+$StudioSourceCidr = "YOUR.PUBLIC.IP/32"
+
 gcloud compute firewall-rules create edmg-backend-7863 `
   --allow=tcp:7863 `
   --target-tags=edmg-studio `
-  --source-ranges=0.0.0.0/0
+  --source-ranges=$StudioSourceCidr
 
 gcloud compute firewall-rules create edmg-ui-5173 `
   --allow=tcp:5173 `
   --target-tags=edmg-studio `
-  --source-ranges=0.0.0.0/0
+  --source-ranges=$StudioSourceCidr
 ```
 
-Keep Ollama private unless you intentionally lock it to a narrow source range.
+The bootstrap creates a mode-0600 backend bearer-token file under
+`/mnt/edmg-studio-home/config/backend-auth-token` and never prints the token. Retrieve it through
+your authenticated SSH session and save it in **Studio Settings → Desktop Backend → Backend Access
+Security**. Keep Ollama private. Put the backend behind an HTTPS reverse proxy or authenticated
+tunnel before using it across the public internet; direct-IP HTTP is for restricted private-network
+validation only.
 
 ## Phase 5: install the VM runtime with the repo bootstrap
 
@@ -206,6 +216,10 @@ config:
 cd studio\edmg-studio
 .\set_studio_gcp_backend.ps1 -BackendUrl http://YOUR_VM_IP:7863
 ```
+
+For production, replace the direct-IP URL with the HTTPS URL from your reverse proxy or tunnel.
+After switching targets, paste the VM backend token into Studio's Backend Access Security panel and
+run **Test authenticated connection**.
 
 On Linux or macOS, use the cross-platform helper instead:
 

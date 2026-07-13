@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, normalizeBackendUrl, setBrowserBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
+import BackendSecurityPanel from "../components/BackendSecurityPanel";
 import { STUDIO_THEME_OPTIONS, useStudioAppearance } from "../components/studioAppearance";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
@@ -1031,6 +1032,7 @@ export default function Settings(props: PageProps) {
             ) : null}
             {backendNotice ? <div className="small" style={{ opacity: 0.84 }}>{backendNotice}</div> : null}
           </div>
+          <BackendSecurityPanel backendUrl={liveBackendUrl || props.backendUrl || buildBackendUrl(backendDraft)} />
         </div>
       </div>
     ),
