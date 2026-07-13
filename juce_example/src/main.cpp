@@ -32,7 +32,7 @@ int main (int argc, char* argv[])
 {
     ConsoleApplication app;
 
-    String baseUrl = "http://127.0.0.1:5173";
+    String baseUrl = "http://127.0.0.1:7863";
     if (argc >= 2)
         baseUrl = argv[1];
 

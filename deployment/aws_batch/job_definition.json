@@ -9,7 +9,8 @@
       {"name": "EDMG_S3_BUCKET_IN", "value": "<bucket>"},
       {"name": "EDMG_S3_KEY_IN", "value": "<key/to/bundle.zip>"},
       {"name": "EDMG_S3_BUCKET_OUT", "value": "<bucket>"},
-      {"name": "EDMG_S3_PREFIX_OUT", "value": "outputs/<job-id>/"}
+      {"name": "EDMG_S3_PREFIX_OUT", "value": "outputs/<job-id>/"},
+      {"name": "EDMG_BACKEND_URL", "value": "https://<reachable-studio-backend>"}
     ]
   }
 }

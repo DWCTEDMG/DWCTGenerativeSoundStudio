@@ -127,6 +127,8 @@ async function copyFileWithRetry(from, to) {
   await fsp.mkdir(path.dirname(to), { recursive: true });
   await withFsRetries(`copy ${from} -> ${to}`, async () => {
     await fsp.copyFile(from, to);
+    const sourceStat = await fsp.stat(from);
+    await fsp.chmod(to, sourceStat.mode);
   });
 }
 

@@ -1,32 +1,47 @@
-# JUCE Client Example
+# JUCE Backend Client Example
 
-This is a **JUCE-based** (C++) example that calls the EDMG API over HTTP.
+This small C++ console application uses JUCE networking to call the canonical
+EDMG Studio backend over HTTP. Keeping Python and ML work behind HTTP avoids
+running it on a real-time audio thread and makes the client portable across
+Windows, macOS, and Linux.
 
-Why HTTP?
-- Keeps heavy Python/ML off real-time audio threads
-- Works for apps and plugins
-- Portable across Windows/macOS/Linux
+The example currently performs `GET /health`; it is a connectivity example, not
+a complete audio plugin.
+
+## Requirements
+
+- CMake 3.20 or newer
+- A C++ toolchain: MSVC, Xcode, GCC, or Clang
+- Internet access during configure because CMake FetchContent downloads JUCE
 
 ## Build
 
-Requires:
-- CMake 3.20+
-- A C++ toolchain (MSVC/Xcode/clang)
-- Internet access (FetchContent downloads JUCE)
+From this directory:
 
 ```bash
 cmake -S . -B build
-cmake --build build -j
+cmake --build build --config Release -j
 ```
 
 ## Run
 
-Start EDMG API:
+Start the Studio backend from `studio/edmg-studio/python_backend/`:
+
 ```bash
-PYTHONPATH=./src python -m uvicorn enhanced_deforum_music_generator.api.main:app --host 127.0.0.1 --port 8000
+python3 -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
 
-Then run the example:
+Then run the client on Linux/macOS:
+
 ```bash
-./build/edmg_juce_client http://127.0.0.1:8000
+./build/edmg_juce_client http://127.0.0.1:7863
 ```
+
+For a multi-config Windows generator, the executable is commonly under
+`build\Release\edmg_juce_client.exe`:
+
+```powershell
+.\build\Release\edmg_juce_client.exe http://127.0.0.1:7863
+```
+
+If no URL is passed, the client defaults to `http://127.0.0.1:7863`.
