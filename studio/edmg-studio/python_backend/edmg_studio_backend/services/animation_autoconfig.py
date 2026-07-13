@@ -445,6 +445,7 @@ def build_autoconfig(
             "video_model_anchor_mode": "start",
             "video_model_prompt_refine": True,
             "video_model_scene_motion": str(preset.scene_motion or "subject"),
+            "video_model_apply_timeline_camera": True,
             "video_model_noise_aug_strength": max(float(td.get("video_model_noise_aug_strength", 0.02)), 0.06),
         }
         if tensorrt_sd15_available:

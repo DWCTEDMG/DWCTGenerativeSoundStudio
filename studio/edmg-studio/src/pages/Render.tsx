@@ -204,6 +204,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalVideoAnchorMode, setInternalVideoAnchorMode] = useState<"start"|"end"|"loop">("start");
   const [internalVideoPromptRefine, setInternalVideoPromptRefine] = useState<boolean>(true);
   const [internalVideoSceneMotion, setInternalVideoSceneMotion] = useState<"camera"|"subject"|"scene">("subject");
+  const [internalVideoApplyTimelineCamera, setInternalVideoApplyTimelineCamera] = useState<boolean>(savedRenderDefaults.internalVideoApplyTimelineCamera ?? true);
   const [internalVideoKeyframeRenderer, setInternalVideoKeyframeRenderer] = useState<"internal"|"tensorrt_sd15">("internal");
 
   const [timeline, setTimeline] = useState<any>({ layers: [], camera: { keyframes: [] } });
@@ -539,6 +540,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       video_model_anchor_mode: internalVideoAnchorMode,
       video_model_prompt_refine: internalVideoPromptRefine,
       video_model_scene_motion: internalVideoSceneMotion,
+      video_model_apply_timeline_camera: internalVideoApplyTimelineCamera,
       video_model_keyframe_renderer: internalVideoKeyframeRenderer,
       video_model_keyframe_model_id: internalVideoKeyframeRenderer === "tensorrt_sd15"
         ? (tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle")
@@ -793,8 +795,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       refinerSteps: refiner.steps,
       internalMotionStrategy,
       internalStoryboardShotMaxS: internalStoryboardShotMax,
+      internalVideoApplyTimelineCamera,
     });
-  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed, hiresFix, refiner, internalMotionStrategy, internalStoryboardShotMax]);
+  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed, hiresFix, refiner, internalMotionStrategy, internalStoryboardShotMax, internalVideoApplyTimelineCamera]);
 
   useEffect(() => {
     if (!loraToAdd && loraModels.length) setLoraToAdd(loraModels[0].id);
@@ -943,6 +946,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalVideoAnchorMode,
     internalVideoPromptRefine,
     internalVideoSceneMotion,
+    internalVideoApplyTimelineCamera,
     internalVideoKeyframeRenderer,
     motionSequencerEnabled,
     tensorRtInternalModel,
@@ -1249,6 +1253,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (p.video_model_anchor_mode) setInternalVideoAnchorMode(String(p.video_model_anchor_mode) as any);
     if (p.video_model_prompt_refine != null) setInternalVideoPromptRefine(Boolean(p.video_model_prompt_refine));
     if (p.video_model_scene_motion) setInternalVideoSceneMotion(String(p.video_model_scene_motion) as any);
+    if (p.video_model_apply_timeline_camera != null) setInternalVideoApplyTimelineCamera(Boolean(p.video_model_apply_timeline_camera));
     if (p.video_model_keyframe_renderer) setInternalVideoKeyframeRenderer(String(p.video_model_keyframe_renderer) as any);
   };
 
@@ -2138,6 +2143,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                           {" "}• score <b>{internalPreflight?.internal_video_model_preflight?.motion_score_mode || internalPreflight?.settings?.video_model_motion_score_mode || internalVideoMotionScoreMode}</b>
                           {" "}• anchor <b>{internalPreflight?.internal_video_model_preflight?.anchor_mode || internalPreflight?.settings?.video_model_anchor_mode || internalVideoAnchorMode}</b>
                           {" "}• scene <b>{internalPreflight?.internal_video_model_preflight?.scene_motion || internalPreflight?.settings?.video_model_scene_motion || internalVideoSceneMotion}</b>
+                          {" "}• Timeline camera <b>{(internalPreflight?.settings?.video_model_apply_timeline_camera ?? internalVideoApplyTimelineCamera) ? "on" : "off"}</b>
                           {" "}• keyframes <b>{internalPreflight?.internal_video_model_preflight?.keyframe_renderer || internalPreflight?.settings?.video_model_keyframe_renderer || internalVideoKeyframeRenderer}</b>
                         </div>
                       ) : null}
@@ -2531,14 +2537,23 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                              <option value="scene">Animate whole scene</option>
                            </select>
                          </div>
-                         <label className="row small" style={{ gap: 6, alignItems: "center" }}>
-                           <input type="checkbox" checked={internalVideoPromptRefine} onChange={(e) => setInternalVideoPromptRefine(e.target.checked)} />
-                           Prompt refine
-                         </label>
-                      </div>
-                      <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
-                        SVD animates from generated keyframes. TensorRT SD1.5 can generate fast storyboard anchors for SVD. AnimateDiff follows scene text directly; TensorRT anchors only guide start/end/loop blending and do not replace the SD1.5 Diffusers base.
-                      </div>
+                          <label className="row small" style={{ gap: 6, alignItems: "center" }}>
+                            <input type="checkbox" checked={internalVideoPromptRefine} onChange={(e) => setInternalVideoPromptRefine(e.target.checked)} />
+                            Prompt refine
+                          </label>
+                          <label className="row small" style={{ gap: 6, alignItems: "center" }} title="Apply the Timeline zoom, pan, rotation, depth, pitch, yaw, and roll after SVD or AnimateDiff generates each frame.">
+                            <input
+                              aria-label="Apply Timeline camera motion"
+                              type="checkbox"
+                              checked={internalVideoApplyTimelineCamera}
+                              onChange={(e) => setInternalVideoApplyTimelineCamera(e.target.checked)}
+                            />
+                            Apply Timeline camera motion
+                          </label>
+                       </div>
+                       <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
+                         SVD animates from generated keyframes. Timeline camera motion is layered over those frames when enabled; turn it off if model-generated camera movement feels doubled. TensorRT SD1.5 can generate fast storyboard anchors for SVD. AnimateDiff follows scene text directly; TensorRT anchors only guide start/end/loop blending and do not replace the SD1.5 Diffusers base.
+                       </div>
                      </div>
                    ) : null}
 

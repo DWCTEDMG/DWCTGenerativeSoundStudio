@@ -300,6 +300,10 @@ describe("Render page", () => {
     fireEvent.change(temporalSelect!, { target: { value: "video_model" } });
 
     expect(await screen.findByText("Motion score")).toBeTruthy();
+    const timelineCameraToggle = await screen.findByLabelText("Apply Timeline camera motion") as HTMLInputElement;
+    expect(timelineCameraToggle.checked).toBe(true);
+    fireEvent.click(timelineCameraToggle);
+    expect(timelineCameraToggle.checked).toBe(false);
     fireEvent.change(await screen.findByDisplayValue("Start anchor"), { target: { value: "loop" } });
 
     await waitFor(() => {
@@ -312,7 +316,8 @@ describe("Render page", () => {
             && body.includes('"video_model_manual_motion_score":4')
             && body.includes('"video_model_anchor_mode":"loop"')
             && body.includes('"video_model_scene_motion":"subject"')
-            && body.includes('"video_model_prompt_refine":true');
+            && body.includes('"video_model_prompt_refine":true')
+            && body.includes('"video_model_apply_timeline_camera":false');
         }),
       ).toBe(true);
     });
@@ -341,7 +346,8 @@ describe("Render page", () => {
             && body.includes('"temporal_mode":"video_model"')
             && body.includes('"video_model_motion_score_mode":"auto"')
             && body.includes('"video_model_scene_motion":"scene"')
-            && body.includes('"video_model_prompt_refine":true');
+            && body.includes('"video_model_prompt_refine":true')
+            && body.includes('"video_model_apply_timeline_camera":true');
         }),
       ).toBe(true);
     });

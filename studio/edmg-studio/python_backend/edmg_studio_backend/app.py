@@ -7858,6 +7858,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         "video_model_engine": settings_obj.video_model_engine,
         "video_model_id": settings_obj.video_model_id,
         "video_model_scene_motion": normalize_video_model_scene_motion(settings_obj.video_model_scene_motion),
+        "video_model_apply_timeline_camera": settings_obj.video_model_apply_timeline_camera,
         "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings_obj.video_model_keyframe_renderer),
         "video_model_keyframe_model_id": settings_obj.video_model_keyframe_model_id,
         "resume_existing_frames": settings_obj.resume_existing_frames,
@@ -8910,6 +8911,12 @@ def _internal_settings_from_payload(
         if isinstance(prompt_refine_raw, str)
         else bool(prompt_refine_raw)
     )
+    timeline_camera_raw = payload.get("video_model_apply_timeline_camera", True)
+    video_apply_timeline_camera = (
+        str(timeline_camera_raw).strip().lower() not in {"0", "false", "no", "off"}
+        if isinstance(timeline_camera_raw, str)
+        else bool(timeline_camera_raw)
+    )
     deforum_override_keys = (
         "deforum_prompts",
         "deforum_negative_prompts",
@@ -8980,6 +8987,7 @@ def _internal_settings_from_payload(
         video_model_anchor_mode=video_anchor_mode,
         video_model_prompt_refine=video_prompt_refine,
         video_model_scene_motion=video_scene_motion,
+        video_model_apply_timeline_camera=video_apply_timeline_camera,
         video_model_keyframe_renderer=video_keyframe_renderer,
         video_model_keyframe_model_id=(str(payload.get("video_model_keyframe_model_id")).strip() or None) if payload.get("video_model_keyframe_model_id") is not None else None,
         video_model_motion_score_schedule=payload.get("video_model_motion_score_schedule"),
@@ -10024,6 +10032,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "video_model_anchor_mode": settings_obj.video_model_anchor_mode,
             "video_model_prompt_refine": settings_obj.video_model_prompt_refine,
             "video_model_scene_motion": normalize_video_model_scene_motion(settings_obj.video_model_scene_motion),
+            "video_model_apply_timeline_camera": settings_obj.video_model_apply_timeline_camera,
             "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings_obj.video_model_keyframe_renderer),
             "video_model_keyframe_model_id": settings_obj.video_model_keyframe_model_id,
             "video_model_motion_score_schedule": settings_obj.video_model_motion_score_schedule,

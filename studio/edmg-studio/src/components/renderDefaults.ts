@@ -7,6 +7,7 @@ export type StudioRenderDefaults = {
   internalResumeExisting?: boolean;
   internalMotionStrategy?: "manual" | "storyboard_full_motion";
   internalStoryboardShotMaxS?: number;
+  internalVideoApplyTimelineCamera?: boolean;
   stillWidth?: number;
   stillHeight?: number;
   stillSteps?: number;

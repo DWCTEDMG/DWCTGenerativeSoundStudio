@@ -11,6 +11,21 @@ from edmg_studio_backend.services import tensorrt_standalone
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 
 
+def test_internal_settings_parse_video_model_timeline_camera_toggle() -> None:
+    default_settings = app_module._internal_settings_from_payload(
+        {}, model_id="hf_sd15_internal", render_tier="balanced", device_preference="cuda"
+    )
+    disabled_settings = app_module._internal_settings_from_payload(
+        {"video_model_apply_timeline_camera": "false"},
+        model_id="hf_sd15_internal",
+        render_tier="balanced",
+        device_preference="cuda",
+    )
+
+    assert default_settings.video_model_apply_timeline_camera is True
+    assert disabled_settings.video_model_apply_timeline_camera is False
+
+
 def test_stale_tensorrt_runtime_bundle_selection_maps_to_supported_video_bundle() -> None:
     payload = {"model_id": "hf_svd_xt_1_1_tensorrt_bundle"}
 

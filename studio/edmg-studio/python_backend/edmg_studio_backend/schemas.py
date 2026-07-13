@@ -210,6 +210,7 @@ class InternalVideoRenderRequest(BaseModel):
     video_model_anchor_mode: Literal["start","end","loop"] = "start"
     video_model_prompt_refine: bool = True
     video_model_scene_motion: Literal["camera","subject","scene"] = "subject"
+    video_model_apply_timeline_camera: bool = True
     video_model_keyframe_renderer: Literal["internal","tensorrt_sd15"] = "internal"
     video_model_keyframe_model_id: str | None = None
     video_model_motion_score_schedule: str | dict[str, float] | None = None

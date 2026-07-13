@@ -256,6 +256,72 @@ def test_apply_camera_3d_with_yaw_changes_pixels():
     assert out_3d.tobytes() != img.tobytes()
 
 
+def test_pan_at_unit_zoom_adds_overscan_and_changes_pixels():
+    img = _gradient_image()
+    moved = iv._ken_burns_frame(
+        img,
+        img.width,
+        img.height,
+        zoom=1.0,
+        pan_x=8.0,
+        pan_y=0.0,
+    )
+    assert moved.size == img.size
+    assert moved.tobytes() != img.tobytes()
+
+
+def test_video_model_timeline_camera_overlay_applies_and_can_be_disabled():
+    img = _gradient_image()
+    timeline = {
+        "camera": {
+            "keyframes": [
+                {"t": 0.0, "zoom": 1.0, "pan_x": 0.0, "rotation_3d_y": 0.0},
+                {"t": 1.0, "zoom": 1.08, "pan_x": 8.0, "rotation_3d_y": 10.0},
+            ]
+        }
+    }
+    bypassed = iv._apply_video_model_timeline_camera(
+        img,
+        img.width,
+        img.height,
+        t=1.0,
+        timeline=timeline,
+        fallback_interval_s=5.0,
+        deforum_motion=None,
+        fps=24,
+        enabled=False,
+    )
+    applied = iv._apply_video_model_timeline_camera(
+        img,
+        img.width,
+        img.height,
+        t=1.0,
+        timeline=timeline,
+        fallback_interval_s=5.0,
+        deforum_motion=None,
+        fps=24,
+        enabled=True,
+    )
+    assert bypassed.tobytes() == img.tobytes()
+    assert applied.tobytes() != bypassed.tobytes()
+
+
+def test_video_model_timeline_camera_overlay_skips_unauthored_fallback():
+    img = _gradient_image()
+    applied = iv._apply_video_model_timeline_camera(
+        img,
+        img.width,
+        img.height,
+        t=1.0,
+        timeline={},
+        fallback_interval_s=5.0,
+        deforum_motion=None,
+        fps=24,
+        enabled=True,
+    )
+    assert applied.tobytes() == img.tobytes()
+
+
 def test_camera_components_delta_neutral_is_identity():
     img = _gradient_image()
     comp = iv._CameraComponents(rotation_3d_y=12.0, translation_z=30.0)

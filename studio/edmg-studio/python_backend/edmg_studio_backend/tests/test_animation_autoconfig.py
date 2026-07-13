@@ -118,6 +118,7 @@ def test_build_autoconfig_full_motion_uses_storyboard_video_model():
     assert req["video_model_engine"] == "auto"
     assert req["video_model_motion_score_mode"] == "auto"
     assert req["video_model_scene_motion"] == "scene"
+    assert req["video_model_apply_timeline_camera"] is True
     assert req["video_model_noise_aug_strength"] >= 0.06
     assert any("storyboard full motion" in note.lower() for note in cfg.notes)
 

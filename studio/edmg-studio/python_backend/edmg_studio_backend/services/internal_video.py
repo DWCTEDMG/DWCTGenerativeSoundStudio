@@ -88,6 +88,7 @@ class InternalVideoSettings:
     video_model_anchor_mode: str = "start"  # start|end|loop
     video_model_prompt_refine: bool = True
     video_model_scene_motion: str = "subject"  # camera|subject|scene
+    video_model_apply_timeline_camera: bool = True
     video_model_keyframe_renderer: str = "internal"  # internal|tensorrt_sd15
     video_model_keyframe_model_id: str | None = None
     video_model_motion_score_schedule: Any = None
@@ -487,6 +488,7 @@ def _render_signature(
         "video_model_anchor_mode": str(settings.video_model_anchor_mode),
         "video_model_prompt_refine": bool(settings.video_model_prompt_refine),
         "video_model_scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
+        "video_model_apply_timeline_camera": bool(settings.video_model_apply_timeline_camera),
         "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer),
         "video_model_keyframe_model_id": str(settings.video_model_keyframe_model_id or ""),
         "video_model_motion_score_schedule": settings.video_model_motion_score_schedule,
@@ -923,7 +925,18 @@ def _ken_burns_frame(
         img = img.rotate(float(rotation_deg), resample=Image.BICUBIC, expand=True, fillcolor=_fill)
         w, h = img.size
 
-    zw, zh = int(round(w * zoom)), int(round(h * zoom))
+    # A centered 1.0x crop has no pixels available for lateral travel. Add only
+    # the overscan needed by the requested pan so custom pan remains visible
+    # without forcing every caller to author a matching zoom schedule.
+    effective_zoom = float(zoom)
+    if abs(float(pan_x)) > 1e-4:
+        min_zoom_x = (float(out_w) + 2.0 * abs(float(pan_x))) / max(1.0, float(w))
+        effective_zoom = max(effective_zoom, min_zoom_x)
+    if abs(float(pan_y)) > 1e-4:
+        min_zoom_y = (float(out_h) + 2.0 * abs(float(pan_y))) / max(1.0, float(h))
+        effective_zoom = max(effective_zoom, min_zoom_y)
+
+    zw, zh = int(round(w * effective_zoom)), int(round(h * effective_zoom))
     imz = img.resize((max(1, zw), max(1, zh)), resample=Image.BICUBIC)
 
     cx, cy = imz.width // 2, imz.height // 2
@@ -2530,6 +2543,23 @@ def render_internal_video_variant(
                 f"Internal video model adapter: engine={engine} model_id={settings.video_model_id} "
                 f"path={video_model_path}"
             )
+            log_fn(
+                "Timeline camera overlay on video-model frames: "
+                + ("enabled" if settings.video_model_apply_timeline_camera else "disabled")
+            )
+
+        def _finish_video_model_frame(frame: "Image.Image", t: float) -> "Image.Image":
+            return _apply_video_model_timeline_camera(
+                frame,
+                out_w,
+                out_h,
+                t=t,
+                timeline=timeline,
+                fallback_interval_s=settings.keyframe_interval_s,
+                deforum_motion=deforum_context.motion,
+                fps=fps_schedule,
+                enabled=bool(settings.video_model_apply_timeline_camera),
+            )
 
         source_scenes = [sc for sc in scenes if isinstance(sc, dict)] or [{"start_s": 0.0, "end_s": duration_s, "prompt": DEFAULT_RENDER_PROMPT}]
         sorted_scenes = _storyboard_scene_windows(scenes=source_scenes, duration_s=duration_s, settings=settings)
@@ -2572,7 +2602,7 @@ def render_internal_video_variant(
                 filler = key_imgs[a_t].convert("RGB")
                 if a_t != b_t:
                     filler = Image.blend(filler, key_imgs[b_t].convert("RGB"), float(w))
-                frame_paths.append(_save_frame(filler.resize((out_w, out_h), resample=Image.LANCZOS), fi_cursor, t))
+                frame_paths.append(_save_frame(_finish_video_model_frame(filler, t), fi_cursor, t))
                 fi_cursor += 1
 
             scene_frame_count = max(1, end_f - start_f)
@@ -2737,8 +2767,8 @@ def render_internal_video_variant(
                     emit_checkpoint(stage="frames", status="running", message=f"Reusing video-model frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
                     continue
                 src_i = int(round((local_i / max(1, scene_frame_count - 1)) * max(0, len(generated) - 1)))
-                fr = generated[max(0, min(len(generated) - 1, src_i))].resize((out_w, out_h), resample=Image.LANCZOS)
                 t = fi / fps_r
+                fr = _finish_video_model_frame(generated[max(0, min(len(generated) - 1, src_i))], t)
                 frame_paths.append(_save_frame(fr, fi, t))
                 fi_cursor = fi + 1
                 if progress_fn:
@@ -2751,7 +2781,7 @@ def render_internal_video_variant(
             filler = key_imgs[a_t].convert("RGB")
             if a_t != b_t:
                 filler = Image.blend(filler, key_imgs[b_t].convert("RGB"), float(w))
-            frame_paths.append(_save_frame(filler.resize((out_w, out_h), resample=Image.LANCZOS), fi_cursor, t))
+            frame_paths.append(_save_frame(_finish_video_model_frame(filler, t), fi_cursor, t))
             fi_cursor += 1
 
     elif settings.temporal_mode != "frame_img2img":
@@ -3011,6 +3041,7 @@ def render_internal_video_variant(
             "video_model_anchor_mode": str(settings.video_model_anchor_mode),
             "video_model_prompt_refine": bool(settings.video_model_prompt_refine),
             "video_model_scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
+            "video_model_apply_timeline_camera": bool(settings.video_model_apply_timeline_camera),
             "video_model_keyframe_renderer": normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer),
             "video_model_keyframe_model_id": str(settings.video_model_keyframe_model_id or ""),
             "video_model_motion_score_schedule": settings.video_model_motion_score_schedule,
@@ -3758,6 +3789,45 @@ def _motion_intent_for_score(score: Any) -> dict[str, str]:
         "camera_motion": "smooth forward glide",
         "environment_motion": "moderate atmospheric motion",
     }
+
+
+def _apply_video_model_timeline_camera(
+    frame: "Image.Image",
+    out_w: int,
+    out_h: int,
+    *,
+    t: float,
+    timeline: dict[str, Any] | None,
+    fallback_interval_s: float,
+    deforum_motion: DeforumMotionScheduleBundle | None,
+    fps: int,
+    enabled: bool,
+) -> "Image.Image":
+    """Optionally layer authored Timeline/Deforum camera motion over I2V output."""
+    resized = frame.convert("RGB").resize((out_w, out_h), resample=Image.LANCZOS)
+    if not enabled:
+        return resized
+
+    points: list[dict[str, Any]] = []
+    if isinstance(timeline, dict):
+        camera = timeline.get("camera")
+        keyframes = camera.get("keyframes") if isinstance(camera, dict) else None
+        if isinstance(keyframes, list):
+            points = [point for point in keyframes if isinstance(point, dict) and "t" in point]
+
+    has_authored_camera = _camera_keyframes_are_actionable(points)
+    has_scheduled_camera = bool(deforum_motion and deforum_motion.has_camera_motion())
+    if not has_authored_camera and not has_scheduled_camera:
+        return resized
+
+    comp = _camera_components_at_time(
+        t,
+        timeline=timeline,
+        fallback_interval_s=fallback_interval_s,
+        deforum_motion=deforum_motion,
+        fps=fps,
+    )
+    return _apply_camera_components_absolute(resized, out_w, out_h, comp)
 
 
 def describe_storyboard_motion_plan(
