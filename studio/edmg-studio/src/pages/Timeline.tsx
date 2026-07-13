@@ -1,5 +1,22 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
+import {
+  AudioLines,
+  Clock3,
+  Lock,
+  Magnet,
+  Music2,
+  Pause,
+  Play,
+  Plus,
+  Repeat,
+  SkipBack,
+  SkipForward,
+  StepBack,
+  StepForward,
+  Unlock,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { apiFetch, apiGet, apiPost, getBackendUrl } from "../components/api";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
@@ -20,6 +37,7 @@ type Selected =
 
 type DockSection = "handoffs" | "inspector" | "proxy" | "diffusion" | "curves";
 type TimelineDensity = "compact" | "comfortable";
+type TimelineTimebase = "bars" | "time";
 
 const TIMELINE_MIN_ZOOM = 4;
 const TIMELINE_MAX_ZOOM = 360;
@@ -257,14 +275,19 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const [quantizeBeats, setQuantizeBeats] = useState<number>(1);
   const [bpmOverride, setBpmOverride] = useState<number | null>(null);
+  const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
+  const [timelineTimebase, setTimelineTimebase] = useState<TimelineTimebase>("bars");
   const [loopEnabled, setLoopEnabled] = useState<boolean>(false);
   const [locatorInS, setLocatorInS] = useState<number>(0);
   const [locatorOutS, setLocatorOutS] = useState<number>(5);
+  const [lockedLaneIds, setLockedLaneIds] = useState<string[]>([]);
 
   const [selected, setSelected] = useState<Selected>(null);
 
   const [audioUrl, setAudioUrl] = useState<string>("");
   const [isPlaying, setIsPlaying] = useState(false);
+  const [masterVolume, setMasterVolume] = useState(0.85);
+  const [masterMuted, setMasterMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -370,6 +393,17 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   }, [audioUrl]);
 
   useEffect(() => {
+    setLockedLaneIds([]);
+  }, [projectId]);
+
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+    audioEl.volume = clamp(masterVolume, 0, 1);
+    audioEl.muted = masterMuted;
+  }, [audioUrl, masterMuted, masterVolume]);
+
+  useEffect(() => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
 
@@ -409,13 +443,20 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const w = c.width,
       h = c.height;
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, "rgba(122, 211, 255, 0.9)");
+    gradient.addColorStop(0.5, "rgba(67, 167, 219, 0.72)");
+    gradient.addColorStop(1, "rgba(34, 105, 148, 0.42)");
+    ctx.fillStyle = gradient;
     const n = peaks.length;
     for (let i = 0; i < n; i++) {
       const x = Math.floor((i / n) * w);
-      const ph = Math.max(1, Math.floor(peaks[i] * h));
-      ctx.fillRect(x, Math.floor((h - ph) / 2), 1, ph);
+      const nextX = Math.ceil(((i + 1) / n) * w);
+      const ph = Math.max(1, Math.floor(peaks[i] * (h - 12)));
+      ctx.fillRect(x, Math.floor((h - ph) / 2), Math.max(1, nextX - x), ph);
     }
+    ctx.fillStyle = "rgba(177, 229, 255, 0.34)";
+    ctx.fillRect(0, Math.floor(h / 2), w, 1);
   }, [peaks, durationS, pxPerSecond]);
 
   // scrub preview frame
@@ -443,13 +484,23 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     ? timeline.camera.keyframes
     : [];
 
+  const laneIdForTrack = (track: Track, trackIdx: number) =>
+    `track:${String(track.id || trackIdx)}`;
+  const isLaneLocked = (laneId: string) => lockedLaneIds.includes(laneId);
+  const toggleLaneLock = (laneId: string) => {
+    setLockedLaneIds((current) =>
+      current.includes(laneId)
+        ? current.filter((id) => id !== laneId)
+        : [...current, laneId],
+    );
+  };
+
   const onWaveformClick = (e: React.MouseEvent) => {
     const c = canvasRef.current;
     if (!c) return;
     const rect = c.getBoundingClientRect();
-    const u = clamp((e.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-    const t = u * durationS;
-    seekTo(t);
+    const raw = (e.clientX - rect.left) / Math.max(1, pxPerSecond);
+    seekTo(snapEnabled && !e.altKey ? _snap(raw) : raw);
   };
 
   const clipPx = (t: number) => Math.round(t * pxPerSecond);
@@ -535,6 +586,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const tr = tracks[trackIdx];
       const cl = tr?.clips?.[clipIdx];
       if (!cl) return;
+      if (isLaneLocked(laneIdForTrack(tr, trackIdx))) return;
       (e.currentTarget as any).setPointerCapture?.(e.pointerId);
       dragRef.current = {
         kind: "track",
@@ -556,6 +608,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       e.stopPropagation();
       const l = layers[layerIdx];
       if (!l) return;
+      if (isLaneLocked("overlays")) return;
       (e.currentTarget as any).setPointerCapture?.(e.pointerId);
       const s0 = Number(l.start_s ?? 0);
       const e0 = Number(l.end_s ?? durationS);
@@ -570,6 +623,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     e.stopPropagation();
     const k = camKeyframes[kfIdx];
     if (!k) return;
+    if (isLaneLocked("camera")) return;
     (e.currentTarget as any).setPointerCapture?.(e.pointerId);
     dragRef.current = { kind: "camera", kfIdx, x0: e.clientX, t0: Number(k.t || 0) };
     setSelected({ kind: "camera", kfIdx });
@@ -580,23 +634,39 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const onTimelinePointerMove = (e: React.PointerEvent) => {
     const st = dragRef.current;
     if (!st) return;
+
+    if (st.kind === "playhead") {
+      const raw = (e.clientX - st.canvasLeft) / Math.max(1, pxPerSecond);
+      const t = snapEnabled && !e.altKey ? _snap(raw) : raw;
+      seekTo(t);
+      return;
+    }
+
     const dx = (e.clientX - st.x0) / pxPerSecond;
+    const snapDragTime = (value: number) =>
+      snapEnabled && !e.altKey ? _snap(value) : value;
 
     if (st.kind === "track") {
       const tr = tracks[st.trackIdx];
       const cl = tr?.clips?.[st.clipIdx];
       if (!tr || !cl) return;
+      if (isLaneLocked(laneIdForTrack(tr, st.trackIdx))) return;
       let start = st.start0,
         end = st.end0;
       if (st.mode === "move") {
-        start = st.start0 + dx;
-        end = st.end0 + dx;
+        const clipDuration = Math.max(TIMELINE_MIN_RANGE_S, st.end0 - st.start0);
+        start = clamp(
+          snapDragTime(st.start0 + dx),
+          0,
+          Math.max(0, durationS - clipDuration),
+        );
+        end = start + clipDuration;
       }
       if (st.mode === "left") {
-        start = st.start0 + dx;
+        start = snapDragTime(st.start0 + dx);
       }
       if (st.mode === "right") {
-        end = st.end0 + dx;
+        end = snapDragTime(st.end0 + dx);
       }
       start = clamp(start, 0, durationS - 0.05);
       end = clamp(end, start + 0.05, durationS);
@@ -617,17 +687,23 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (st.kind === "overlay") {
       const l = layers[st.layerIdx];
       if (!l) return;
+      if (isLaneLocked("overlays")) return;
       let start = st.start0,
         end = st.end0;
       if (st.mode === "move") {
-        start = st.start0 + dx;
-        end = st.end0 + dx;
+        const clipDuration = Math.max(TIMELINE_MIN_RANGE_S, st.end0 - st.start0);
+        start = clamp(
+          snapDragTime(st.start0 + dx),
+          0,
+          Math.max(0, durationS - clipDuration),
+        );
+        end = start + clipDuration;
       }
       if (st.mode === "left") {
-        start = st.start0 + dx;
+        start = snapDragTime(st.start0 + dx);
       }
       if (st.mode === "right") {
-        end = st.end0 + dx;
+        end = snapDragTime(st.end0 + dx);
       }
       start = clamp(start, 0, durationS - 0.05);
       end = clamp(end, start + 0.05, durationS);
@@ -643,7 +719,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (st.kind === "camera") {
       const k = camKeyframes[st.kfIdx];
       if (!k) return;
-      let t = clamp(st.t0 + dx, 0, durationS);
+      if (isLaneLocked("camera")) return;
+      const t = clamp(snapDragTime(st.t0 + dx), 0, durationS);
       const next = camKeyframes.map((x, i) => (i === st.kfIdx ? { ...x, t } : x));
       next.sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
       setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
@@ -653,6 +730,23 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const onTimelinePointerUp = () => {
     dragRef.current = null;
+  };
+
+  const onRulerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+    dragRef.current = { kind: "playhead", canvasLeft: rect.left };
+    const raw = (e.clientX - rect.left) / Math.max(1, pxPerSecond);
+    seekTo(snapEnabled && !e.altKey ? _snap(raw) : raw);
+  };
+
+  const onLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const raw = (e.clientX - rect.left) / Math.max(1, pxPerSecond);
+    seekTo(snapEnabled && !e.altKey ? _snap(raw) : raw);
   };
 
   const saveTimeline = async () => {
@@ -682,6 +776,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (selected.kind === "track") {
       const tr = tracks[selected.trackIdx];
       if (!tr) return;
+      if (isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
       const nextTracks = tracks.map((t, i) =>
         i === selected.trackIdx
           ? { ...t, clips: (t.clips || []).filter((_, j) => j !== selected.clipIdx) }
@@ -693,6 +788,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       return;
     }
     if (selected.kind === "overlay") {
+      if (isLaneLocked("overlays")) return;
       const nextLayers = layers.filter((_, i) => i !== selected.layerIdx);
       setTimeline({ ...timeline, layers: nextLayers });
       setTimelineDirty(true);
@@ -700,6 +796,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       return;
     }
     if (selected.kind === "camera") {
+      if (isLaneLocked("camera")) return;
       const next = camKeyframes.filter((_, i) => i !== selected.kfIdx);
       setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
       setTimelineDirty(true);
@@ -713,6 +810,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (selected.kind === "track") {
       const picked = selectedTrackClip(selected);
       if (!picked) return;
+      if (isLaneLocked(laneIdForTrack(picked.tr, selected.trackIdx))) return;
       const dur = Math.max(_minLen, Number(picked.cl.end_s) - Number(picked.cl.start_s));
       const s = clamp(target, 0, Math.max(0, durationS - dur));
       const e = clamp(s + dur, s + _minLen, durationS);
@@ -730,6 +828,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (selected.kind === "overlay") {
       const l = layers[selected.layerIdx];
       if (!l) return;
+      if (isLaneLocked("overlays")) return;
       const dur = Math.max(_minLen, Number(l.end_s ?? durationS) - Number(l.start_s ?? 0));
       const s = clamp(target, 0, Math.max(0, durationS - dur));
       const e = clamp(s + dur, s + _minLen, durationS);
@@ -737,6 +836,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       return;
     }
     if (selected.kind === "camera") {
+      if (isLaneLocked("camera")) return;
       updateSelectedCamera({ t: target });
     }
   };
@@ -766,6 +866,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const addClip = (type: "prompt" | "motion") => {
     const idx = tracks.findIndex((t) => String(t.type).toLowerCase() === type);
     if (idx < 0) return;
+    if (isLaneLocked(laneIdForTrack(tracks[idx], idx))) return;
     const s = clamp(playheadS, 0, Math.max(0, durationS - 0.5));
     const e = clamp(s + 5, s + 0.2, durationS);
     const id = `${type}_${Date.now()}`;
@@ -794,6 +895,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   };
 
   const addCameraKeyframe = () => {
+    if (isLaneLocked("camera")) return;
     const s = clamp(playheadS, 0, durationS);
     const k = { t: s, zoom: 1.0, pan_x: 0.0, pan_y: 0.0, rotation_deg: 0.0 };
     const next = [...camKeyframes, k].sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
@@ -858,7 +960,22 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const _beatGrid = (): number[] | null => {
     const beats = _beatTimes();
     if (beats.length < 2) return null;
-    const n = Math.max(1, Math.floor(Number(quantizeBeats) || 1));
+    const quantize = Math.max(0.25, Number(quantizeBeats) || 1);
+    if (quantize < 1) {
+      const divisions = Math.max(1, Math.round(1 / quantize));
+      const subdivided: number[] = [];
+      for (let i = 0; i < beats.length - 1; i++) {
+        const start = beats[i];
+        const end = beats[i + 1];
+        for (let part = 0; part < divisions; part++) {
+          subdivided.push(Number((start + ((end - start) * part) / divisions).toFixed(4)));
+        }
+      }
+      subdivided.push(beats[beats.length - 1]);
+      return subdivided;
+    }
+
+    const n = Math.max(1, Math.round(quantize));
     if (n === 1) return beats;
     const grid: number[] = [];
     for (let i = 0; i < beats.length; i++) if (i % n === 0) grid.push(beats[i]);
@@ -912,6 +1029,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const tr = tracks[selected.trackIdx];
       const cl = tr?.clips?.[selected.clipIdx];
       if (!tr || !cl) return;
+      if (isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
       const dur = Math.max(_minLen, Number(cl.end_s) - Number(cl.start_s));
       const s = clamp(playheadS, 0, Math.max(0, durationS - dur));
       const e = clamp(s + dur, s + _minLen, durationS);
@@ -927,6 +1045,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (selected.kind === "overlay") {
       const l = layers[selected.layerIdx];
       if (!l) return;
+      if (isLaneLocked("overlays")) return;
       const dur = Math.max(_minLen, Number(l.end_s ?? durationS) - Number(l.start_s ?? 0));
       const s = clamp(playheadS, 0, Math.max(0, durationS - dur));
       const e = clamp(s + dur, s + _minLen, durationS);
@@ -939,6 +1058,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (selected.kind === "camera") {
       const k = camKeyframes[selected.kfIdx];
       if (!k) return;
+      if (isLaneLocked("camera")) return;
       const t = clamp(playheadS, 0, durationS);
       const next = [...camKeyframes, { ...k, t }].sort(
         (a, b) => Number(a.t || 0) - Number(b.t || 0),
@@ -955,6 +1075,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const tr = tracks[selected.trackIdx];
       const cl = tr?.clips?.[selected.clipIdx];
       if (!tr || !cl) return;
+      if (isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
       if (!(cl.start_s + _minLen < tSplit && tSplit < cl.end_s - _minLen)) return;
       const left = { ...cl, end_s: tSplit };
       const right = { ...cl, id: `${String(tr.type)}_${Date.now()}`, start_s: tSplit };
@@ -972,6 +1093,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (selected.kind === "overlay") {
       const l = layers[selected.layerIdx];
       if (!l) return;
+      if (isLaneLocked("overlays")) return;
       const s0 = Number(l.start_s ?? 0),
         e0 = Number(l.end_s ?? durationS);
       if (!(s0 + _minLen < tSplit && tSplit < e0 - _minLen)) return;
@@ -1013,6 +1135,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const tr = tracks[selected.trackIdx];
       const cl = tr?.clips?.[selected.clipIdx];
       if (!tr || !cl) return;
+      if (isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
       const [ss, ee] = snapRange(Number(cl.start_s), Number(cl.end_s));
       const nextTracks = tracks.map((t, i) => {
         if (i !== selected.trackIdx) return t;
@@ -1029,6 +1152,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (selected.kind === "overlay") {
       const l = layers[selected.layerIdx];
       if (!l) return;
+      if (isLaneLocked("overlays")) return;
       const [ss, ee] = snapRange(Number(l.start_s ?? 0), Number(l.end_s ?? durationS));
       updateSelectedOverlayTimes(ss, ee);
       return;
@@ -1037,13 +1161,14 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (selected.kind === "camera") {
       const k = camKeyframes[selected.kfIdx];
       if (!k) return;
+      if (isLaneLocked("camera")) return;
       const tt = clamp(_snap(Number(k.t || 0)), 0, durationS);
       updateSelectedCamera({ t: tt });
     }
   };
 
   // Hotkeys (Timeline page)
-  // S = split @ playhead, D = duplicate @ playhead, Q = quantize selection
+  // S = split, D = duplicate, Q = quantize, L = loop, arrows = grid navigation.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey) return;
@@ -1066,6 +1191,31 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       if (k === "q" || k === "Q") {
         e.preventDefault();
         quantizeSelection();
+        return;
+      }
+      if (k === "l" || k === "L") {
+        e.preventDefault();
+        setLoopEnabled((value) => !value);
+        return;
+      }
+      if (k === "ArrowLeft") {
+        e.preventDefault();
+        jumpToPreviousGrid();
+        return;
+      }
+      if (k === "ArrowRight") {
+        e.preventDefault();
+        jumpToNextGrid();
+        return;
+      }
+      if (k === "Home") {
+        e.preventDefault();
+        seekTo(0);
+        return;
+      }
+      if (k === "End") {
+        e.preventDefault();
+        seekTo(durationS);
         return;
       }
       if (k === "Delete" || k === "Backspace") {
@@ -1144,6 +1294,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const tr = tracks[selected.trackIdx];
     const cl = tr?.clips?.[selected.clipIdx];
     if (!tr || !cl) return;
+    if (isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
     const nextTracks = tracks.map((t, i) => {
       if (i !== selected.trackIdx) return t;
       const nextClips = (t.clips || []).map((c, j) =>
@@ -1157,6 +1308,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const updateSelectedOverlayTimes = (start_s: number, end_s: number) => {
     if (!selected || selected.kind !== "overlay") return;
+    if (isLaneLocked("overlays")) return;
     const idx = selected.layerIdx;
     const nextLayers = layers.map((x, i) => (i === idx ? { ...x, start_s, end_s } : x));
     setTimeline({ ...timeline, layers: nextLayers });
@@ -1165,11 +1317,32 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const updateSelectedCamera = (patch: AnyDict) => {
     if (!selected || selected.kind !== "camera") return;
+    if (isLaneLocked("camera")) return;
     const idx = selected.kfIdx;
     const next = camKeyframes
       .map((x, i) => (i === idx ? { ...x, ...patch } : x))
       .sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
     setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
+    setTimelineDirty(true);
+  };
+
+  const updateSelectedClipTimes = (start_s: number, end_s: number) => {
+    if (!selected || selected.kind !== "track") return;
+    const tr = tracks[selected.trackIdx];
+    const cl = tr?.clips?.[selected.clipIdx];
+    if (!tr || !cl || isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
+    const start = clamp(Number(start_s) || 0, 0, Math.max(0, durationS - _minLen));
+    const end = clamp(Number(end_s) || start + _minLen, start + _minLen, durationS);
+    const nextTracks = tracks.map((track, trackIdx) => {
+      if (trackIdx !== selected.trackIdx) return track;
+      return {
+        ...track,
+        clips: (track.clips || []).map((clip, clipIdx) =>
+          clipIdx === selected.clipIdx ? { ...clip, start_s: start, end_s: end } : clip,
+        ),
+      };
+    });
+    setTimeline({ ...timeline, tracks: nextTracks });
     setTimelineDirty(true);
   };
 
@@ -1273,6 +1446,34 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const bpm = _bpm();
   const beatGrid = _beatGrid();
+  const detectedBeatTimes = _beatTimes().filter((time) => time <= durationS);
+  const fallbackBeatStep = bpm ? 60 / bpm : 0.5;
+  const musicalPositionAt = (seconds: number) => {
+    const time = clamp(seconds, 0, durationS);
+    let beatFloat = 0;
+    if (detectedBeatTimes.length >= 2) {
+      const nextIndex = detectedBeatTimes.findIndex((beatTime) => beatTime > time);
+      if (nextIndex > 0) {
+        const previous = detectedBeatTimes[nextIndex - 1];
+        const next = detectedBeatTimes[nextIndex];
+        beatFloat = nextIndex - 1 + (time - previous) / Math.max(1e-6, next - previous);
+      } else if (nextIndex === 0) {
+        beatFloat = 0;
+      } else {
+        const lastIndex = detectedBeatTimes.length - 1;
+        beatFloat =
+          lastIndex +
+          (time - detectedBeatTimes[lastIndex]) / Math.max(1e-6, fallbackBeatStep);
+      }
+    } else {
+      beatFloat = time / Math.max(1e-6, fallbackBeatStep);
+    }
+    const wholeBeat = Math.max(0, Math.floor(beatFloat));
+    const bar = Math.floor(wholeBeat / 4) + 1;
+    const beat = (wholeBeat % 4) + 1;
+    const tick = Math.min(959, Math.max(0, Math.floor((beatFloat - wholeBeat) * 960)));
+    return `${String(bar).padStart(3, "0")}.${String(beat).padStart(2, "0")}.${String(tick).padStart(3, "0")}`;
+  };
   const timelineViewportWidth = timelineScrollRef.current?.clientWidth ?? 0;
   const timelineCanvasWidth = Math.max(
     720,
@@ -1285,12 +1486,29 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     { length: Math.floor(rulerEnd / Math.max(1, rulerStepS)) + 1 },
     (_, i) => Number((i * rulerStepS).toFixed(3)),
   );
+  const musicalRulerTimes = (() => {
+    if (detectedBeatTimes.length >= 2) return detectedBeatTimes;
+    if (!bpm) return [];
+    const count = Math.min(700, Math.floor(durationS / fallbackBeatStep) + 1);
+    return Array.from({ length: count }, (_, index) =>
+      Number((index * fallbackBeatStep).toFixed(4)),
+    );
+  })();
+  const musicalRulerTicks = musicalRulerTimes.map((time, index) => ({
+    time,
+    isBar: index % 4 === 0,
+    label: index % 4 === 0 ? String(Math.floor(index / 4) + 1) : `${Math.floor(index / 4) + 1}.${(index % 4) + 1}`,
+  }));
+  const barMarkerTimes = new Set(
+    musicalRulerTicks.filter((tick) => tick.isBar).map((tick) => tick.time.toFixed(4)),
+  );
   const quantizeStatus =
     beatGrid && beatGrid.length >= 2
       ? `${beatGrid.length} detected beat markers`
       : bpm
         ? `BPM fallback ${bpm.toFixed(1)}`
         : "Run Analyze or set BPM to enable quantize";
+  const musicalClock = detectedBeatTimes.length >= 2 || bpm ? musicalPositionAt(playheadS) : "---.--.---";
   const plannerLabMeta = project?.meta?.last_planner_lab || null;
   const reactiveLabMeta = project?.meta?.last_reactive_lab || null;
   const plannerImportedAt = Number(plannerLabMeta?.imported_at || 0);
@@ -1316,6 +1534,14 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         : selected?.kind === "camera"
           ? `Camera keyframe ${selected.kfIdx + 1}`
           : "No selection";
+  const selectedLaneLocked =
+    selected?.kind === "track" && tracks[selected.trackIdx]
+      ? isLaneLocked(laneIdForTrack(tracks[selected.trackIdx], selected.trackIdx))
+      : selected?.kind === "overlay"
+        ? isLaneLocked("overlays")
+        : selected?.kind === "camera"
+          ? isLaneLocked("camera")
+          : false;
   const timelineSurfaceStyle = {
     width: timelineCanvasWidth,
     ["--timeline-rail-width" as any]: `${densityConfig.rail}px`,
@@ -1337,8 +1563,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           <span className="badge">{timelineDirty ? "Unsaved edits" : "Saved"}</span>
         </div>
         <div className="small timeline-headerCopy">
-          Console-style top bar, shared session state, fit-all overview zoom, and a utility dock
-          that keeps planning and reactive handoffs visible without flooding the screen.
+          Arrange prompts, motion, overlays, and camera automation against the music with a
+          beat-aware grid and a renderer-ready edit workflow.
         </div>
       </div>
       <div className="timeline-statusStrip">
@@ -1403,10 +1629,15 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         <div className="timeline-toolbarGroup">
           <div className="timeline-toolbarLabel">Transport</div>
           <div className="timeline-toolbarFields">
-            <div className="timeline-miniField">
-              <span className="timeline-miniLabel">Playhead</span>
+            <div className="timeline-miniField timeline-miniField--clock">
+              <span className="timeline-miniLabel">Position</span>
+              <div className="timeline-transportClock" aria-label="Musical position">
+                <strong>{musicalClock}</strong>
+                <span>{fmtTime(playheadS)}</span>
+              </div>
               <input
                 aria-label="Playhead time"
+                className="timeline-playheadInput"
                 type="number"
                 step={0.1}
                 value={playheadS}
@@ -1443,6 +1674,30 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 </button>
               </div>
             </div>
+            <div className="timeline-miniField timeline-miniField--master">
+              <span className="timeline-miniLabel">Master</span>
+              <div className="timeline-masterControl">
+                <button
+                  className={`secondary timeline-iconButton${masterMuted ? " is-active" : ""}`}
+                  type="button"
+                  aria-label={masterMuted ? "Unmute master" : "Mute master"}
+                  title={masterMuted ? "Unmute master" : "Mute master"}
+                  onClick={() => setMasterMuted((value) => !value)}
+                >
+                  {masterMuted ? <VolumeX size={16} aria-hidden="true" /> : <Volume2 size={16} aria-hidden="true" />}
+                </button>
+                <input
+                  aria-label="Master volume"
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={masterVolume}
+                  onChange={(e) => setMasterVolume(Number(e.target.value))}
+                />
+                <span>{Math.round(masterVolume * 100)}</span>
+              </div>
+            </div>
             <div className="timeline-miniField">
               <span className="timeline-miniLabel">Zoom</span>
               <div className="timeline-zoomControls">
@@ -1450,6 +1705,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   -
                 </button>
                 <input
+                  aria-label="Timeline zoom"
                   type="range"
                   min={TIMELINE_MIN_ZOOM}
                   max={TIMELINE_MAX_ZOOM}
@@ -1465,9 +1721,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               </div>
               <div className="timeline-zoomMeta">
                 <input
+                  aria-label="Timeline zoom pixels per second"
                   type="number"
                   step={5}
-                  value={pxPerSecond}
+                  value={Number(pxPerSecond.toFixed(1))}
                   onChange={(e) => setTimelineZoomWithFocus(Number(e.target.value))}
                 />
                 <span className="small">Ctrl/Cmd + wheel zoom</span>
@@ -1505,6 +1762,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             <div className="timeline-miniField">
               <span className="timeline-miniLabel">Quantize</span>
               <select
+                aria-label="Quantize grid"
                 value={String(quantizeBeats)}
                 onChange={(e) => setQuantizeBeats(Number(e.target.value))}
               >
@@ -1519,6 +1777,30 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <option value="compact">Compact</option>
                 <option value="comfortable">Comfortable</option>
               </select>
+            </div>
+            <div className="timeline-miniField">
+              <span className="timeline-miniLabel">Editor</span>
+              <div className="timeline-editorToggles">
+                <button
+                  className={`secondary timeline-toggleButton${snapEnabled ? " is-active" : ""}`}
+                  type="button"
+                  aria-label={snapEnabled ? "Disable snap" : "Enable snap"}
+                  title="Snap clip moves, trims, and playhead parking to the active grid. Hold Alt to bypass."
+                  onClick={() => setSnapEnabled((value) => !value)}
+                >
+                  <Magnet size={15} aria-hidden="true" />
+                  Snap
+                </button>
+                <button
+                  className="secondary timeline-toggleButton"
+                  type="button"
+                  aria-label={timelineTimebase === "bars" ? "Show time ruler" : "Show bars and beats ruler"}
+                  onClick={() => setTimelineTimebase((value) => (value === "bars" ? "time" : "bars"))}
+                >
+                  {timelineTimebase === "bars" ? <Music2 size={15} aria-hidden="true" /> : <Clock3 size={15} aria-hidden="true" />}
+                  {timelineTimebase === "bars" ? "Bars" : "Time"}
+                </button>
+              </div>
             </div>
             <div className="timeline-miniField timeline-miniField--locator">
               <span className="timeline-miniLabel">Loop range</span>
@@ -1560,19 +1842,19 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               </div>
             </div>
             <div className="timeline-toolbarActions timeline-toolbarActions--wide">
-              <button className="secondary" disabled={!selected} onClick={quantizeSelection}>
+              <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={quantizeSelection}>
                 Quantize
               </button>
-              <button className="secondary" disabled={!selected} onClick={splitSelection}>
+              <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={splitSelection}>
                 Split
               </button>
-              <button className="secondary" disabled={!selected} onClick={duplicateSelection}>
+              <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={duplicateSelection}>
                 Duplicate
               </button>
-              <button className="secondary" disabled={!selected} onClick={nudgeSelectionToPlayhead}>
+              <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={nudgeSelectionToPlayhead}>
                 Nudge to playhead
               </button>
-              <button className="secondary" disabled={!selected} onClick={deleteSelection}>
+              <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={deleteSelection}>
                 Delete
               </button>
               <button className={timelineDirty ? "primary" : "secondary"} onClick={saveTimeline}>
@@ -1585,17 +1867,17 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
       <div className="timeline-toolbarFooter">
         <div className="small">
-          Keyboard: `Space` play/pause, `S` split, `D` duplicate, `Q` quantize, `Delete` remove selection.
+          Space play/pause · S split · D duplicate · Q quantize · L loop · ←/→ grid · Alt bypasses snap
         </div>
-        <div className="small">Grid source: {quantizeStatus}</div>
+        <div className="small timeline-gridSource"><Magnet size={13} aria-hidden="true" /> {snapEnabled ? "Snap on" : "Snap off"} · {quantizeStatus}</div>
       </div>
 
       {audioUrl ? (
         <audio
           ref={audioRef}
           src={audioUrl}
-          controls
-          className="timeline-audioControl"
+          preload="metadata"
+          className="timeline-audioElement"
         />
       ) : (
         <div className="small timeline-audioEmpty">No audio uploaded for this project.</div>
@@ -1612,10 +1894,12 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     >
       <div className="timeline-panelHeader">
         <div>
-          <div className="timeline-panelTitle">Arrangement</div>
+          <div className="timeline-panelTitle timeline-panelTitle--arrangement">
+            <AudioLines size={17} aria-hidden="true" />
+            Arrangement
+          </div>
           <div className="small">
-            Tracks stay full-height and scroll horizontally instead of collapsing when the window
-            gets tighter.
+            Drag clips to arrange, pull their edges to trim, and click empty lane space to park the playhead.
           </div>
         </div>
         <div className="timeline-panelMeta">
@@ -1628,127 +1912,114 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       <div className="timeline-board">
         <div className="timeline-boardRail">
           <div className="timeline-railCell timeline-railCell--header">
-            <div className="timeline-railTitle">Timeline ruler</div>
-            <div className="timeline-railMeta">Seconds and grid divisions</div>
+            <div className="timeline-trackIdentity">
+              <span className="timeline-trackNumber">#</span>
+              <div>
+                <div className="timeline-railTitle">Tracks</div>
+                <div className="timeline-railMeta">{timelineTimebase === "bars" ? "Bars + beats" : "Minutes + seconds"}</div>
+              </div>
+            </div>
           </div>
 
           <div className="timeline-railCell timeline-railCell--wave">
-            <div className="timeline-railTitle">Waveform</div>
-            <div className="timeline-railMeta">Click to park the playhead</div>
-          </div>
-
-          {tracks.map((tr, trackIdx) => (
-            <div key={tr.id || trackIdx} className="timeline-railCell">
-              <div className="timeline-railTitle">{tr.name}</div>
-              <div className="timeline-railMeta">
-                {String(tr.type).toUpperCase()} • {(tr.clips || []).length} clips
-              </div>
-              <div className="timeline-railActions">
-                {String(tr.type).toLowerCase() === "prompt" ? (
-                  <button className="secondary" onClick={() => addClip("prompt")}>
-                    Add prompt
-                  </button>
-                ) : null}
-                {String(tr.type).toLowerCase() === "motion" ? (
-                  <button className="secondary" onClick={() => addClip("motion")}>
-                    Add motion
-                  </button>
-                ) : null}
-                <button
-                  className="secondary"
-                  disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)}
-                  onClick={duplicateSelection}
-                >
-                  Dup
-                </button>
-                <button
-                  className="secondary"
-                  disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)}
-                  onClick={splitSelection}
-                >
-                  Split
-                </button>
-                <button
-                  className="secondary"
-                  disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)}
-                  onClick={quantizeSelection}
-                >
-                  Quant
-                </button>
-                <button
-                  className="secondary"
-                  disabled={!(selected?.kind === "track" && selected.trackIdx === trackIdx)}
-                  onClick={deleteSelection}
-                >
-                  Del
-                </button>
+            <div className="timeline-trackIdentity">
+              <span className="timeline-trackNumber timeline-trackNumber--audio"><AudioLines size={14} aria-hidden="true" /></span>
+              <div>
+                <div className="timeline-railTitle">Audio master</div>
+                <div className="timeline-railMeta">Reference waveform</div>
               </div>
             </div>
-          ))}
+            <span className="timeline-railState">REF</span>
+          </div>
 
-          <div className="timeline-railCell">
-            <div className="timeline-railTitle">Overlays</div>
-            <div className="timeline-railMeta">timeline.layers</div>
-            <div className="timeline-railHint">Edit visual placement in Render.</div>
+          {tracks.map((tr, trackIdx) => {
+            const laneId = laneIdForTrack(tr, trackIdx);
+            const locked = isLaneLocked(laneId);
+            const type = String(tr.type).toLowerCase();
+            return (
+              <div key={tr.id || trackIdx} className={`timeline-railCell timeline-railCell--${type}${locked ? " is-locked" : ""}`}>
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber">{String(trackIdx + 1).padStart(2, "0")}</span>
+                  <div className="timeline-trackCopy">
+                    <div className="timeline-railTitle">{tr.name}</div>
+                    <div className="timeline-railMeta">{type.toUpperCase()} · {(tr.clips || []).length} clips</div>
+                  </div>
+                </div>
+                <div className="timeline-railActions">
+                  {type === "prompt" || type === "motion" ? (
+                    <button
+                      className="secondary timeline-trackButton"
+                      type="button"
+                      aria-label={`Add ${type} clip`}
+                      title={`Add ${type} clip at playhead`}
+                      disabled={locked}
+                      onClick={() => addClip(type as "prompt" | "motion")}
+                    >
+                      <Plus size={14} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  <button
+                    className={`secondary timeline-trackButton${locked ? " is-active" : ""}`}
+                    type="button"
+                    aria-label={`${locked ? "Unlock" : "Lock"} ${tr.name} track`}
+                    title={`${locked ? "Unlock" : "Lock"} ${tr.name} editing`}
+                    onClick={() => toggleLaneLock(laneId)}
+                  >
+                    {locked ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
+          <div className={`timeline-railCell timeline-railCell--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`}>
+            <div className="timeline-trackIdentity">
+              <span className="timeline-trackNumber">{String(tracks.length + 1).padStart(2, "0")}</span>
+              <div className="timeline-trackCopy">
+                <div className="timeline-railTitle">Overlays</div>
+                <div className="timeline-railMeta">VISUAL · {layers.length} clips</div>
+              </div>
+            </div>
             <div className="timeline-railActions">
               <button
-                className="secondary"
-                disabled={selected?.kind !== "overlay"}
-                onClick={duplicateSelection}
+                className={`secondary timeline-trackButton${isLaneLocked("overlays") ? " is-active" : ""}`}
+                type="button"
+                aria-label={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays track`}
+                title={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays editing`}
+                onClick={() => toggleLaneLock("overlays")}
               >
-                Dup
-              </button>
-              <button
-                className="secondary"
-                disabled={selected?.kind !== "overlay"}
-                onClick={splitSelection}
-              >
-                Split
-              </button>
-              <button
-                className="secondary"
-                disabled={selected?.kind !== "overlay"}
-                onClick={quantizeSelection}
-              >
-                Quant
-              </button>
-              <button
-                className="secondary"
-                disabled={selected?.kind !== "overlay"}
-                onClick={deleteSelection}
-              >
-                Del
+                {isLaneLocked("overlays") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
               </button>
             </div>
           </div>
 
-          <div className="timeline-railCell">
-            <div className="timeline-railTitle">Camera</div>
-            <div className="timeline-railMeta">Automation keyframes</div>
+          <div className={`timeline-railCell timeline-railCell--camera${isLaneLocked("camera") ? " is-locked" : ""}`}>
+            <div className="timeline-trackIdentity">
+              <span className="timeline-trackNumber">{String(tracks.length + 2).padStart(2, "0")}</span>
+              <div className="timeline-trackCopy">
+                <div className="timeline-railTitle">Camera</div>
+                <div className="timeline-railMeta">AUTOMATION · {camKeyframes.length} points</div>
+              </div>
+            </div>
             <div className="timeline-railActions">
-              <button className="secondary" onClick={addCameraKeyframe}>
-                Add keyframe
+              <button
+                className="secondary timeline-trackButton"
+                type="button"
+                aria-label="Add camera keyframe"
+                title="Add camera keyframe at playhead"
+                disabled={isLaneLocked("camera")}
+                onClick={addCameraKeyframe}
+              >
+                <Plus size={14} aria-hidden="true" />
               </button>
               <button
-                className="secondary"
-                disabled={selected?.kind !== "camera"}
-                onClick={duplicateSelection}
+                className={`secondary timeline-trackButton${isLaneLocked("camera") ? " is-active" : ""}`}
+                type="button"
+                aria-label={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera track`}
+                title={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera editing`}
+                onClick={() => toggleLaneLock("camera")}
               >
-                Dup
-              </button>
-              <button
-                className="secondary"
-                disabled={selected?.kind !== "camera"}
-                onClick={quantizeSelection}
-              >
-                Quant
-              </button>
-              <button
-                className="secondary"
-                disabled={selected?.kind !== "camera"}
-                onClick={deleteSelection}
-              >
-                Del
+                {isLaneLocked("camera") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
               </button>
             </div>
           </div>
@@ -1768,22 +2039,32 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               }}
               aria-hidden="true"
             />
+            <div className="timeline-locatorFlag timeline-locatorFlag--in" style={{ left: clipPx(locatorInS) }} aria-hidden="true">IN</div>
+            <div className="timeline-locatorFlag timeline-locatorFlag--out" style={{ left: clipPx(locatorOutS) }} aria-hidden="true">OUT</div>
             {timelineGridMarkers.map((marker) => (
               <div
                 key={marker}
-                className="timeline-gridMarker"
+                className={`timeline-gridMarker${barMarkerTimes.has(marker.toFixed(4)) ? " is-bar" : ""}`}
                 style={{ left: clipPx(marker) }}
                 aria-hidden="true"
               />
             ))}
-            <div className="timeline-rulerRow">
-              {rulerTicks.map((tick) => (
-                <div key={tick} className="timeline-rulerTick" style={{ left: clipPx(tick) }}>
-                  <div className="timeline-rulerTickLine" />
-                  <div className="timeline-rulerTickLabel">{fmtTime(tick)}</div>
-                </div>
-              ))}
-              <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
+            <div className="timeline-rulerRow" onPointerDown={onRulerPointerDown}>
+              {timelineTimebase === "bars" && musicalRulerTicks.length ? (
+                musicalRulerTicks.map((tick) => (
+                  <div key={tick.time} className={`timeline-rulerTick timeline-rulerTick--beat${tick.isBar ? " is-bar" : ""}`} style={{ left: clipPx(tick.time) }}>
+                    <div className="timeline-rulerTickLine" />
+                    {(tick.isBar || pxPerSecond >= 84) ? <div className="timeline-rulerTickLabel">{tick.label}</div> : null}
+                  </div>
+                ))
+              ) : (
+                rulerTicks.map((tick) => (
+                  <div key={tick} className="timeline-rulerTick" style={{ left: clipPx(tick) }}>
+                    <div className="timeline-rulerTickLine" />
+                    <div className="timeline-rulerTickLabel">{fmtTime(tick)}</div>
+                  </div>
+                ))
+              )}
             </div>
 
             <div className="timeline-waveformRow" onClick={onWaveformClick}>
@@ -1793,11 +2074,14 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 height={92}
                 className="timeline-waveformCanvas"
               />
-              <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
             </div>
 
             {tracks.map((tr, trackIdx) => (
-              <div key={tr.id || trackIdx} className="timeline-laneRow">
+              <div
+                key={tr.id || trackIdx}
+                className={`timeline-laneRow timeline-laneRow--${String(tr.type).toLowerCase()}${isLaneLocked(laneIdForTrack(tr, trackIdx)) ? " is-locked" : ""}`}
+                onPointerDown={onLanePointerDown}
+              >
                 {(tr.clips || []).map((cl, i) => {
                   const left = clipPx(cl.start_s);
                   const width = Math.max(16, clipPx(cl.end_s) - clipPx(cl.start_s));
@@ -1808,12 +2092,15 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   return (
                     <div
                       key={cl.id || i}
-                      className={`timeline-laneClip timeline-laneClip--${String(tr.type).toLowerCase()}${isSel ? " is-selected" : ""}`}
+                      className={`timeline-laneClip timeline-laneClip--${String(tr.type).toLowerCase()}${isSel ? " is-selected" : ""}${isLaneLocked(laneIdForTrack(tr, trackIdx)) ? " is-locked" : ""}`}
                       onPointerDown={onTrackClipPointerDown(trackIdx, i, "move")}
                       style={{ left, width }}
                       title={fmtLabel(tr.type, cl)}
                     >
-                      <div className="timeline-laneClipLabel">{fmtLabel(tr.type, cl)}</div>
+                      <div className="timeline-laneClipBody">
+                        <div className="timeline-laneClipLabel">{fmtLabel(tr.type, cl)}</div>
+                        <div className="timeline-laneClipTime">{fmtTime(cl.end_s - cl.start_s)}</div>
+                      </div>
                       <div
                         className="timeline-laneClipHandle timeline-laneClipHandle--left"
                         onPointerDown={onTrackClipPointerDown(trackIdx, i, "left")}
@@ -1825,11 +2112,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     </div>
                   );
                 })}
-                <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
               </div>
             ))}
 
-            <div className="timeline-laneRow timeline-laneRow--overlay">
+            <div className={`timeline-laneRow timeline-laneRow--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown}>
               {layers.map((l, i) => {
                 const s = Number(l.start_s ?? 0);
                 const e = Number(l.end_s ?? durationS);
@@ -1846,12 +2132,15 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 return (
                   <div
                     key={i}
-                    className={`timeline-laneClip timeline-laneClip--overlay${isSel ? " is-selected" : ""}`}
+                    className={`timeline-laneClip timeline-laneClip--overlay${isSel ? " is-selected" : ""}${isLaneLocked("overlays") ? " is-locked" : ""}`}
                     onPointerDown={onOverlayPointerDown(i, "move")}
                     style={{ left, width }}
                     title={label}
                   >
-                    <div className="timeline-laneClipLabel">{label}</div>
+                    <div className="timeline-laneClipBody">
+                      <div className="timeline-laneClipLabel">{label}</div>
+                      <div className="timeline-laneClipTime">{fmtTime(e - s)}</div>
+                    </div>
                     <div
                       className="timeline-laneClipHandle timeline-laneClipHandle--left"
                       onPointerDown={onOverlayPointerDown(i, "left")}
@@ -1863,10 +2152,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   </div>
                 );
               })}
-              <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
             </div>
 
-            <div className="timeline-laneRow timeline-laneRow--camera">
+            <div className={`timeline-laneRow timeline-laneRow--camera${isLaneLocked("camera") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown}>
               {camKeyframes.map((k, i) => {
                 const x = clipPx(Number(k.t || 0));
                 const isSel = selected?.kind === "camera" && selected.kfIdx === i;
@@ -1880,7 +2168,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   />
                 );
               })}
-              <div className="timeline-playhead" style={{ left: clipPx(playheadS) }} />
+            </div>
+            <div className="timeline-globalPlayhead" style={{ left: clipPx(playheadS) }} aria-hidden="true">
+              <span />
             </div>
           </div>
         </div>
@@ -1901,10 +2191,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       </div>
 
       <div className="timeline-inlineActions">
-        <button className="secondary" disabled={!selected} onClick={nudgeSelectionToPlayhead}>
+        <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={nudgeSelectionToPlayhead}>
           Nudge to playhead
         </button>
-        <button className="secondary" disabled={!selected} onClick={deleteSelection}>
+        <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={deleteSelection}>
           Delete selection
         </button>
       </div>
@@ -1920,10 +2210,46 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               <div className="small timeline-inspectorMeta">
                 {tr.name}: {fmtTime(cl.start_s)} → {fmtTime(cl.end_s)}
               </div>
+              <div className="timeline-clipTiming" aria-label="Clip timing">
+                <label>
+                  <span>Start</span>
+                  <input
+                    aria-label="Clip start"
+                    type="number"
+                    disabled={selectedLaneLocked}
+                    step={0.1}
+                    value={cl.start_s}
+                    onChange={(e) => updateSelectedClipTimes(Number(e.target.value), cl.end_s)}
+                  />
+                </label>
+                <label>
+                  <span>End</span>
+                  <input
+                    aria-label="Clip end"
+                    type="number"
+                    disabled={selectedLaneLocked}
+                    step={0.1}
+                    value={cl.end_s}
+                    onChange={(e) => updateSelectedClipTimes(cl.start_s, Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Length</span>
+                  <input
+                    aria-label="Clip length"
+                    type="number"
+                    disabled={selectedLaneLocked}
+                    step={0.1}
+                    value={Number((cl.end_s - cl.start_s).toFixed(3))}
+                    onChange={(e) => updateSelectedClipTimes(cl.start_s, cl.start_s + Number(e.target.value))}
+                  />
+                </label>
+              </div>
               {tt === "prompt" ? (
                 <>
                   <textarea
                     className="timeline-inspectorTextarea"
+                    disabled={selectedLaneLocked}
                     value={String(cl.data?.prompt || "")}
                     onChange={(e) => updateSelectedClipData({ prompt: e.target.value })}
                   />
@@ -1942,6 +2268,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     <input
                       type="number"
                       step={0.01}
+                      disabled={selectedLaneLocked}
                       value={Number(cl.data?.zoom_start ?? 1)}
                       onChange={(e) =>
                         updateSelectedClipData({ zoom_start: Number(e.target.value) })
@@ -1951,6 +2278,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     <input
                       type="number"
                       step={0.01}
+                      disabled={selectedLaneLocked}
                       value={Number(cl.data?.zoom_end ?? 1)}
                       onChange={(e) => updateSelectedClipData({ zoom_end: Number(e.target.value) })}
                     />
@@ -1958,6 +2286,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     <input
                       type="number"
                       step={0.01}
+                      disabled={selectedLaneLocked}
                       value={Number(cl.data?.strength ?? 0.35)}
                       onChange={(e) => updateSelectedClipData({ strength: Number(e.target.value) })}
                     />
@@ -1965,6 +2294,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     <input
                       type="number"
                       step={0.1}
+                      disabled={selectedLaneLocked}
                       value={Number(cl.data?.cfg ?? 7)}
                       onChange={(e) => updateSelectedClipData({ cfg: Number(e.target.value) })}
                     />
@@ -1972,6 +2302,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     <input
                       type="number"
                       step={1}
+                      disabled={selectedLaneLocked}
                       value={Number(cl.data?.steps ?? 12)}
                       onChange={(e) => updateSelectedClipData({ steps: Number(e.target.value) })}
                     />
@@ -1979,6 +2310,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     <input
                       type="number"
                       step={0.1}
+                      disabled={selectedLaneLocked}
                       value={Number(cl.data?.rotation_end ?? 0)}
                       onChange={(e) =>
                         updateSelectedClipData({ rotation_end: Number(e.target.value) })
@@ -2012,6 +2344,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <input
                   type="number"
                   step={0.1}
+                  disabled={selectedLaneLocked}
                   value={s0}
                   onChange={(e) => updateSelectedOverlayTimes(Number(e.target.value), e0)}
                 />
@@ -2019,6 +2352,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <input
                   type="number"
                   step={0.1}
+                  disabled={selectedLaneLocked}
                   value={e0}
                   onChange={(e) => updateSelectedOverlayTimes(s0, Number(e.target.value))}
                 />
@@ -2041,6 +2375,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <input
                   type="number"
                   step={0.1}
+                  disabled={selectedLaneLocked}
                   value={Number(k.t || 0)}
                   onChange={(e) => updateSelectedCamera({ t: Number(e.target.value) })}
                 />
@@ -2048,6 +2383,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <input
                   type="number"
                   step={0.01}
+                  disabled={selectedLaneLocked}
                   value={Number(k.zoom || 1)}
                   onChange={(e) => updateSelectedCamera({ zoom: Number(e.target.value) })}
                 />
@@ -2055,6 +2391,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <input
                   type="number"
                   step={0.1}
+                  disabled={selectedLaneLocked}
                   value={Number(k.pan_x || 0)}
                   onChange={(e) => updateSelectedCamera({ pan_x: Number(e.target.value) })}
                 />
@@ -2062,6 +2399,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <input
                   type="number"
                   step={0.1}
+                  disabled={selectedLaneLocked}
                   value={Number(k.pan_y || 0)}
                   onChange={(e) => updateSelectedCamera({ pan_y: Number(e.target.value) })}
                 />
@@ -2069,6 +2407,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <input
                   type="number"
                   step={0.1}
+                  disabled={selectedLaneLocked}
                   value={Number(k.rotation_deg || 0)}
                   onChange={(e) => updateSelectedCamera({ rotation_deg: Number(e.target.value) })}
                 />
