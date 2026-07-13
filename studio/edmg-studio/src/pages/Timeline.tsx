@@ -9,6 +9,7 @@ import {
   Play,
   Plus,
   Repeat,
+  Sparkles,
   SkipBack,
   SkipForward,
   StepBack,
@@ -39,12 +40,338 @@ type DockSection = "handoffs" | "inspector" | "proxy" | "diffusion" | "curves";
 type TimelineDensity = "compact" | "comfortable";
 type TimelineTimebase = "bars" | "time";
 
+type MotionPreset = {
+  id: string;
+  label: string;
+  description: string;
+  data: AnyDict;
+};
+
 const TIMELINE_MIN_ZOOM = 4;
 const TIMELINE_MAX_ZOOM = 360;
 const TIMELINE_MIN_RANGE_S = 0.1;
 
+const MOTION_NEUTRAL_DATA: AnyDict = {
+  zoom_start: 1,
+  zoom_end: 1,
+  pan_x_start: 0,
+  pan_x_end: 0,
+  pan_y_start: 0,
+  pan_y_end: 0,
+  rotation_start: 0,
+  rotation_end: 0,
+  pan_z_start: 0,
+  pan_z_end: 0,
+  pitch_start: 0,
+  pitch_end: 0,
+  yaw_start: 0,
+  yaw_end: 0,
+  roll_start: 0,
+  roll_end: 0,
+  strength: 0.35,
+  cfg: 7,
+  steps: 12,
+};
+
+const MOTION_PRESETS: MotionPreset[] = [
+  {
+    id: "gentle_push",
+    label: "Gentle push",
+    description: "A slow push-in with a subtle upward drift.",
+    data: { ...MOTION_NEUTRAL_DATA, zoom_end: 1.08, pan_y_start: 2, pan_y_end: -2 },
+  },
+  {
+    id: "pull_back",
+    label: "Pull back",
+    description: "Ease away from the subject while the frame settles downward.",
+    data: { ...MOTION_NEUTRAL_DATA, zoom_start: 1.08, pan_y_start: -2, pan_y_end: 2 },
+  },
+  {
+    id: "pan_left",
+    label: "Pan left",
+    description: "Travel laterally from right to left with a restrained push.",
+    data: { ...MOTION_NEUTRAL_DATA, zoom_start: 1.02, zoom_end: 1.05, pan_x_start: 12, pan_x_end: -12 },
+  },
+  {
+    id: "pan_right",
+    label: "Pan right",
+    description: "Travel laterally from left to right with a restrained push.",
+    data: { ...MOTION_NEUTRAL_DATA, zoom_start: 1.02, zoom_end: 1.05, pan_x_start: -12, pan_x_end: 12 },
+  },
+  {
+    id: "crane_rise",
+    label: "Crane rise",
+    description: "Lift through the composition with depth and a slight pitch change.",
+    data: {
+      ...MOTION_NEUTRAL_DATA,
+      zoom_start: 1.02,
+      zoom_end: 1.07,
+      pan_y_start: 10,
+      pan_y_end: -10,
+      pan_z_end: 8,
+      pitch_start: 1.5,
+      pitch_end: -1.5,
+    },
+  },
+  {
+    id: "orbit_left",
+    label: "Orbit left",
+    description: "Arc left around the subject using pan, depth, yaw, and roll.",
+    data: {
+      ...MOTION_NEUTRAL_DATA,
+      zoom_start: 1.02,
+      zoom_end: 1.08,
+      pan_x_start: 8,
+      pan_x_end: -8,
+      pan_y_start: 3,
+      pan_y_end: -3,
+      rotation_start: 1.5,
+      rotation_end: -1.5,
+      pan_z_start: -6,
+      pan_z_end: 10,
+      yaw_start: -5,
+      yaw_end: 5,
+      roll_start: 1,
+      roll_end: -1,
+    },
+  },
+  {
+    id: "orbit_right",
+    label: "Orbit right",
+    description: "Arc right around the subject using pan, depth, yaw, and roll.",
+    data: {
+      ...MOTION_NEUTRAL_DATA,
+      zoom_start: 1.02,
+      zoom_end: 1.08,
+      pan_x_start: -8,
+      pan_x_end: 8,
+      pan_y_start: -3,
+      pan_y_end: 3,
+      rotation_start: -1.5,
+      rotation_end: 1.5,
+      pan_z_start: -6,
+      pan_z_end: 10,
+      yaw_start: 5,
+      yaw_end: -5,
+      roll_start: -1,
+      roll_end: 1,
+    },
+  },
+  {
+    id: "parallax_drift",
+    label: "Parallax drift",
+    description: "Cross the frame while changing depth for a layered parallax feel.",
+    data: {
+      ...MOTION_NEUTRAL_DATA,
+      zoom_start: 1.01,
+      zoom_end: 1.06,
+      pan_x_start: -10,
+      pan_x_end: 10,
+      pan_y_start: 5,
+      pan_y_end: -5,
+      pan_z_start: -12,
+      pan_z_end: 14,
+      pitch_start: 1,
+      pitch_end: -1,
+      yaw_start: -2.5,
+      yaw_end: 2.5,
+    },
+  },
+  {
+    id: "dutch_sweep",
+    label: "Dutch sweep",
+    description: "Sweep across the frame while rolling through a controlled Dutch angle.",
+    data: {
+      ...MOTION_NEUTRAL_DATA,
+      zoom_start: 1.01,
+      zoom_end: 1.05,
+      pan_x_start: -4,
+      pan_x_end: 4,
+      rotation_start: -3,
+      rotation_end: 3,
+      roll_start: -1.5,
+      roll_end: 1.5,
+    },
+  },
+];
+
+const MOTION_PRESET_BY_ID = new Map(MOTION_PRESETS.map((preset) => [preset.id, preset]));
+const MOTION_VARIETY_PRESETS = ["pan_right", "orbit_left", "crane_rise", "pan_left", "orbit_right", "parallax_drift"];
+
+const MOTION_CAMERA_ENDPOINT_FIELDS = new Set([
+  "zoom_start",
+  "zoom_end",
+  "pan_x_start",
+  "pan_x_end",
+  "pan_y_start",
+  "pan_y_end",
+  "rotation_start",
+  "rotation_end",
+  "pan_z_start",
+  "pan_z_end",
+  "pitch_start",
+  "pitch_end",
+  "yaw_start",
+  "yaw_end",
+  "roll_start",
+  "roll_end",
+]);
+
+const MOTION_SCHEDULE_GROUPS: Record<string, string[]> = {
+  zoom: ["zoom", "zoom_schedule"],
+  pan_x: ["translation_x", "pan_x", "pan_x_schedule"],
+  pan_y: ["translation_y", "pan_y", "pan_y_schedule"],
+  pan_z: ["translation_z", "pan_z", "pan_z_schedule"],
+  rotation: ["angle", "rotation_deg", "rotation_schedule", "rotation_z_schedule"],
+  pitch: ["rotation_3d_x", "pitch", "rotation_x_schedule"],
+  yaw: ["rotation_3d_y", "yaw", "rotation_y_schedule"],
+  roll: ["rotation_3d_z", "roll", "rotation_3d_z_schedule"],
+};
+
+const ALL_MOTION_CAMERA_SCHEDULE_KEYS = Array.from(new Set(Object.values(MOTION_SCHEDULE_GROUPS).flat()));
+
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
+}
+
+function hasScheduleValue(data: AnyDict, keys: string[]): boolean {
+  return keys.some((key) => {
+    const value = data?.[key];
+    return (typeof value === "string" && value.trim().length > 0) || (value && typeof value === "object");
+  });
+}
+
+function hasMotionSchedules(data: AnyDict): boolean {
+  if (hasScheduleValue(data, ALL_MOTION_CAMERA_SCHEDULE_KEYS)) return true;
+  const nested = data?.motion_schedules;
+  return Boolean(nested && typeof nested === "object" && hasScheduleValue(nested, ALL_MOTION_CAMERA_SCHEDULE_KEYS));
+}
+
+function hasAxisSchedule(data: AnyDict, keys: string[]): boolean {
+  if (hasScheduleValue(data, keys)) return true;
+  const nested = data?.motion_schedules;
+  return Boolean(nested && typeof nested === "object" && hasScheduleValue(nested, keys));
+}
+
+function endpointMoves(data: AnyDict, startKey: string, endKey: string, fallback: number): boolean {
+  const start = Number(data?.[startKey] ?? fallback);
+  const end = Number(data?.[endKey] ?? start);
+  return Number.isFinite(start) && Number.isFinite(end) && Math.abs(end - start) > 0.001;
+}
+
+function motionAxes(data: AnyDict): string[] {
+  const axes: string[] = [];
+  if (endpointMoves(data, "zoom_start", "zoom_end", 1) || hasAxisSchedule(data, MOTION_SCHEDULE_GROUPS.zoom)) {
+    axes.push("zoom");
+  }
+  if (
+    endpointMoves(data, "pan_x_start", "pan_x_end", 0) ||
+    endpointMoves(data, "pan_y_start", "pan_y_end", 0) ||
+    hasAxisSchedule(data, [...MOTION_SCHEDULE_GROUPS.pan_x, ...MOTION_SCHEDULE_GROUPS.pan_y])
+  ) {
+    axes.push("pan");
+  }
+  if (endpointMoves(data, "rotation_start", "rotation_end", 0) || hasAxisSchedule(data, MOTION_SCHEDULE_GROUPS.rotation)) {
+    axes.push("rotate");
+  }
+  if (endpointMoves(data, "pan_z_start", "pan_z_end", 0) || hasAxisSchedule(data, MOTION_SCHEDULE_GROUPS.pan_z)) {
+    axes.push("depth");
+  }
+  if (
+    endpointMoves(data, "pitch_start", "pitch_end", 0) ||
+    endpointMoves(data, "yaw_start", "yaw_end", 0) ||
+    endpointMoves(data, "roll_start", "roll_end", 0) ||
+    hasAxisSchedule(data, [
+      ...MOTION_SCHEDULE_GROUPS.pitch,
+      ...MOTION_SCHEDULE_GROUPS.yaw,
+      ...MOTION_SCHEDULE_GROUPS.roll,
+    ])
+  ) {
+    axes.push("3D orbit");
+  }
+  return axes;
+}
+
+function motionPresetSelection(data: AnyDict): string {
+  const id = String(data?.motion_preset || "");
+  if (MOTION_PRESET_BY_ID.has(id)) return id;
+  return hasMotionSchedules(data) ? "reactive" : "custom";
+}
+
+function fmtMotionLabel(data: AnyDict): string {
+  const axes = motionAxes(data);
+  const preset = MOTION_PRESET_BY_ID.get(String(data?.motion_preset || ""));
+  let name = String(data?.motion_label || preset?.label || "").trim();
+  if (!name && hasMotionSchedules(data)) name = "Audio reactive";
+  if (!name && axes.includes("3D orbit")) name = "3D orbit";
+  if (!name && axes.includes("pan")) {
+    const dx = Number(data?.pan_x_end ?? 0) - Number(data?.pan_x_start ?? 0);
+    const dy = Number(data?.pan_y_end ?? 0) - Number(data?.pan_y_start ?? 0);
+    name = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? "Pan right" : "Pan left") : dy < 0 ? "Crane rise" : "Crane drop";
+  }
+  if (!name && axes.includes("zoom")) {
+    name = Number(data?.zoom_end ?? 1) >= Number(data?.zoom_start ?? 1) ? "Push in" : "Pull back";
+  }
+  if (!name && axes.includes("rotate")) name = "Rotation sweep";
+  if (!name && axes.includes("depth")) name = "Depth move";
+  if (!name) name = "Static hold";
+  return axes.length ? `${name} · ${axes.join(" + ")}` : name;
+}
+
+function clearMotionSchedules(data: AnyDict, field?: string): AnyDict {
+  const group = field ? Object.keys(MOTION_SCHEDULE_GROUPS).find((key) => field.startsWith(key)) : null;
+  const keys = group ? MOTION_SCHEDULE_GROUPS[group] : ALL_MOTION_CAMERA_SCHEDULE_KEYS;
+  const patch: AnyDict = {};
+  for (const key of keys) patch[key] = null;
+  if (data?.motion_schedules && typeof data.motion_schedules === "object") {
+    const nested = { ...data.motion_schedules };
+    for (const key of keys) delete nested[key];
+    patch.motion_schedules = nested;
+  }
+  return patch;
+}
+
+function motionCameraValuesAt(data: AnyDict, progress: number): AnyDict {
+  const mappings: Array<[string, string, string]> = [
+    ["zoom", "zoom_start", "zoom_end"],
+    ["pan_x", "pan_x_start", "pan_x_end"],
+    ["pan_y", "pan_y_start", "pan_y_end"],
+    ["rotation_deg", "rotation_start", "rotation_end"],
+    ["translation_z", "pan_z_start", "pan_z_end"],
+    ["rotation_3d_x", "pitch_start", "pitch_end"],
+    ["rotation_3d_y", "yaw_start", "yaw_end"],
+    ["rotation_3d_z", "roll_start", "roll_end"],
+  ];
+  const out: AnyDict = {};
+  const u = clamp(progress, 0, 1);
+  for (const [cameraField, startField, endField] of mappings) {
+    const rawStart = data?.[startField];
+    const rawEnd = data?.[endField];
+    if ((rawStart == null || rawStart === "") && (rawEnd == null || rawEnd === "")) continue;
+    const start = Number(rawStart ?? rawEnd);
+    const end = Number(rawEnd ?? rawStart);
+    if (Number.isFinite(start) && Number.isFinite(end)) out[cameraField] = start + (end - start) * u;
+  }
+  return out;
+}
+
+function syncMotionClipCameraKeyframes(keyframes: AnyDict[], clip: Clip, data: AnyDict): AnyDict[] {
+  const start = Number(clip.start_s || 0);
+  const end = Math.max(start, Number(clip.end_s || start));
+  const duration = Math.max(0.001, end - start);
+  const next = (Array.isArray(keyframes) ? keyframes : []).map((point) => {
+    const time = Number(point?.t || 0);
+    if (time < start - 0.001 || time > end + 0.001) return { ...point };
+    return { ...point, ...motionCameraValuesAt(data, (time - start) / duration) };
+  });
+  for (const [time, progress] of [[start, 0], [end, 1]] as Array<[number, number]>) {
+    const values = motionCameraValuesAt(data, progress);
+    if (!Object.keys(values).length) continue;
+    const index = next.findIndex((point) => Math.abs(Number(point?.t || 0) - time) < 0.001);
+    if (index >= 0) next[index] = { ...next[index], ...values, t: time };
+    else next.push({ t: time, ...values });
+  }
+  return next.sort((a, b) => Number(a?.t || 0) - Number(b?.t || 0));
 }
 
 function fmtTime(seconds: number): string {
@@ -192,17 +519,9 @@ function ensureTimelineShape(timeline: AnyDict, planVariant: AnyDict | null): An
     start_s: Number(s.start_s || i * 5),
     end_s: Number(s.end_s || Number(s.start_s || i * 5) + 5),
     data: {
-      zoom_start: 1.0,
-      zoom_end: 1.06,
-      pan_x_start: 0.0,
-      pan_x_end: 0.0,
-      pan_y_start: 0.0,
-      pan_y_end: 0.0,
-      rotation_start: 0.0,
-      rotation_end: 0.0,
-      strength: 0.35,
-      cfg: 7.0,
-      steps: 12,
+      ...MOTION_PRESETS[0].data,
+      motion_preset: MOTION_PRESETS[0].id,
+      motion_label: MOTION_PRESETS[0].label,
     },
   }));
   ensureTrack("track_motion", "Motion", "motion", motionClips);
@@ -241,11 +560,7 @@ async function fetchAudioPeaks(audioUrl: string, targetPoints: number): Promise<
 function fmtLabel(trackType: string, clip: Clip): string {
   const t = String(trackType || "").toLowerCase();
   if (t === "prompt") return String(clip?.data?.prompt || "prompt").slice(0, 34);
-  if (t === "motion") {
-    const z0 = Number(clip?.data?.zoom_start ?? 1).toFixed(2);
-    const z1 = Number(clip?.data?.zoom_end ?? z0).toFixed(2);
-    return `zoom ${z0}→${z1}`;
-  }
+  if (t === "motion") return fmtMotionLabel(clip?.data || {});
   return String(clip?.id || "clip");
 }
 
@@ -874,17 +1189,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       type === "prompt"
         ? { prompt: "cinematic" }
         : {
-            zoom_start: 1.0,
-            zoom_end: 1.06,
-            pan_x_start: 0,
-            pan_x_end: 0,
-            pan_y_start: 0,
-            pan_y_end: 0,
-            rotation_start: 0,
-            rotation_end: 0,
-            strength: 0.35,
-            cfg: 7.0,
-            steps: 12,
+            ...MOTION_PRESETS[0].data,
+            motion_preset: MOTION_PRESETS[0].id,
+            motion_label: MOTION_PRESETS[0].label,
           };
 
     const nextTracks = tracks.map((t, i) =>
@@ -1302,7 +1609,88 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       );
       return { ...t, clips: nextClips };
     });
-    setTimeline({ ...timeline, tracks: nextTracks });
+    const isMotion = String(tr.type || "").toLowerCase() === "motion";
+    const syncCamera = isMotion && Object.keys(patch).some((field) => MOTION_CAMERA_ENDPOINT_FIELDS.has(field));
+    const nextTimeline: AnyDict = { ...timeline, tracks: nextTracks };
+    if (syncCamera) {
+      const nextData = { ...(cl.data || {}), ...patch };
+      nextTimeline.camera = {
+        ...(timeline.camera || {}),
+        keyframes: syncMotionClipCameraKeyframes(camKeyframes, cl, nextData),
+      };
+    }
+    setTimeline(nextTimeline);
+    setTimelineDirty(true);
+  };
+
+  const applySelectedMotionPreset = (presetId: string) => {
+    const picked = selectedTrackClip(selected);
+    if (!picked || String(picked.tr.type || "").toLowerCase() !== "motion") return;
+    if (presetId === "custom" || presetId === "reactive") {
+      updateSelectedClipData({ motion_preset: "custom", motion_label: "Custom motion" });
+      return;
+    }
+    const preset = MOTION_PRESET_BY_ID.get(presetId);
+    if (!preset) return;
+    updateSelectedClipData({
+      ...clearMotionSchedules(picked.cl.data || {}),
+      ...preset.data,
+      motion_preset: preset.id,
+      motion_label: preset.label,
+    });
+  };
+
+  const updateSelectedMotionField = (field: string, value: number) => {
+    const picked = selectedTrackClip(selected);
+    if (!picked || String(picked.tr.type || "").toLowerCase() !== "motion") return;
+    let schedulePatch: AnyDict = {};
+    if (MOTION_CAMERA_ENDPOINT_FIELDS.has(field)) {
+      schedulePatch = clearMotionSchedules(picked.cl.data || {}, field);
+    } else if (field === "strength") {
+      schedulePatch = { strength_schedule: null };
+    } else if (field === "cfg") {
+      schedulePatch = { cfg_scale_schedule: null };
+    } else if (field === "steps") {
+      schedulePatch = { steps_schedule: null };
+    }
+    updateSelectedClipData({
+      ...schedulePatch,
+      [field]: value,
+      motion_preset: "custom",
+      motion_label: "Custom motion",
+    });
+  };
+
+  const applyMotionVariety = (trackIdx: number) => {
+    const tr = tracks[trackIdx];
+    if (!tr || String(tr.type || "").toLowerCase() !== "motion") return;
+    if (isLaneLocked(laneIdForTrack(tr, trackIdx))) return;
+    let variedCount = 0;
+    let nextKeyframes = camKeyframes;
+    const nextClips = (tr.clips || []).map((clip) => {
+      const currentData = clip.data || {};
+      if (hasMotionSchedules(currentData)) return clip;
+      const presetId = MOTION_VARIETY_PRESETS[variedCount % MOTION_VARIETY_PRESETS.length];
+      const preset = MOTION_PRESET_BY_ID.get(presetId);
+      if (!preset) return clip;
+      variedCount += 1;
+      const nextData = {
+        ...currentData,
+        ...clearMotionSchedules(currentData),
+        ...preset.data,
+        motion_preset: preset.id,
+        motion_label: preset.label,
+      };
+      nextKeyframes = syncMotionClipCameraKeyframes(nextKeyframes, clip, nextData);
+      return { ...clip, data: nextData };
+    });
+    if (!variedCount) return;
+    const nextTracks = tracks.map((track, index) => index === trackIdx ? { ...track, clips: nextClips } : track);
+    setTimeline({
+      ...timeline,
+      tracks: nextTracks,
+      camera: { ...(timeline.camera || {}), keyframes: nextKeyframes },
+    });
     setTimelineDirty(true);
   };
 
@@ -1940,13 +2328,27 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               <div key={tr.id || trackIdx} className={`timeline-railCell timeline-railCell--${type}${locked ? " is-locked" : ""}`}>
                 <div className="timeline-trackIdentity">
                   <span className="timeline-trackNumber">{String(trackIdx + 1).padStart(2, "0")}</span>
-                  <div className="timeline-trackCopy">
-                    <div className="timeline-railTitle">{tr.name}</div>
-                    <div className="timeline-railMeta">{type.toUpperCase()} · {(tr.clips || []).length} clips</div>
+                    <div className="timeline-trackCopy">
+                      <div className="timeline-railTitle">{tr.name}</div>
+                      <div className="timeline-railMeta">
+                        {type === "motion" ? "MOTION · 2D/3D" : type.toUpperCase()} · {(tr.clips || []).length} clips
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="timeline-railActions">
-                  {type === "prompt" || type === "motion" ? (
+                  <div className="timeline-railActions">
+                    {type === "motion" ? (
+                      <button
+                        className="secondary timeline-trackButton"
+                        type="button"
+                        aria-label="Add motion variety"
+                        title="Apply varied pan, crane, orbit, and parallax presets to simple motion clips"
+                        disabled={locked}
+                        onClick={() => applyMotionVariety(trackIdx)}
+                      >
+                        <Sparkles size={14} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                    {type === "prompt" || type === "motion" ? (
                     <button
                       className="secondary timeline-trackButton"
                       type="button"
@@ -2258,66 +2660,142 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   </div>
                 </>
               ) : tt === "motion" ? (
-                <>
-                  <div className="small timeline-inspectorHint">
-                    Motion clips can drive camera movement and diffusion parameters when they are
-                    active.
-                  </div>
-                  <div className="timeline-fieldGrid timeline-fieldGrid--compact">
-                    <label className="small">zoom start</label>
-                    <input
-                      type="number"
-                      step={0.01}
-                      disabled={selectedLaneLocked}
-                      value={Number(cl.data?.zoom_start ?? 1)}
-                      onChange={(e) =>
-                        updateSelectedClipData({ zoom_start: Number(e.target.value) })
-                      }
-                    />
-                    <label className="small">zoom end</label>
-                    <input
-                      type="number"
-                      step={0.01}
-                      disabled={selectedLaneLocked}
-                      value={Number(cl.data?.zoom_end ?? 1)}
-                      onChange={(e) => updateSelectedClipData({ zoom_end: Number(e.target.value) })}
-                    />
-                    <label className="small">strength</label>
-                    <input
-                      type="number"
-                      step={0.01}
-                      disabled={selectedLaneLocked}
-                      value={Number(cl.data?.strength ?? 0.35)}
-                      onChange={(e) => updateSelectedClipData({ strength: Number(e.target.value) })}
-                    />
-                    <label className="small">cfg</label>
-                    <input
-                      type="number"
-                      step={0.1}
-                      disabled={selectedLaneLocked}
-                      value={Number(cl.data?.cfg ?? 7)}
-                      onChange={(e) => updateSelectedClipData({ cfg: Number(e.target.value) })}
-                    />
-                    <label className="small">steps</label>
-                    <input
-                      type="number"
-                      step={1}
-                      disabled={selectedLaneLocked}
-                      value={Number(cl.data?.steps ?? 12)}
-                      onChange={(e) => updateSelectedClipData({ steps: Number(e.target.value) })}
-                    />
-                    <label className="small">rot end</label>
-                    <input
-                      type="number"
-                      step={0.1}
-                      disabled={selectedLaneLocked}
-                      value={Number(cl.data?.rotation_end ?? 0)}
-                      onChange={(e) =>
-                        updateSelectedClipData({ rotation_end: Number(e.target.value) })
-                      }
-                    />
-                  </div>
-                </>
+                (() => {
+                  const presetId = motionPresetSelection(cl.data || {});
+                  const preset = MOTION_PRESET_BY_ID.get(presetId);
+                  const presetDescription =
+                    presetId === "reactive"
+                      ? "Audio-reactive schedules are already driving one or more motion axes. Choose a preset to replace those camera schedules for this clip."
+                      : preset?.description || "Fine-tune any axis below to create a custom camera move.";
+                  return (
+                    <>
+                      <div className="small timeline-inspectorHint">
+                        Motion clips drive real 2D and 3D camera movement as well as diffusion controls.
+                      </div>
+                      <div className="timeline-motionPreset">
+                        <label className="small" htmlFor="timeline-motion-preset">Motion preset</label>
+                        <select
+                          id="timeline-motion-preset"
+                          aria-label="Motion preset"
+                          disabled={selectedLaneLocked}
+                          value={presetId}
+                          onChange={(e) => applySelectedMotionPreset(e.target.value)}
+                        >
+                          {presetId === "reactive" ? <option value="reactive">Audio reactive schedules</option> : null}
+                          <option value="custom">Custom motion</option>
+                          {MOTION_PRESETS.map((option) => (
+                            <option key={option.id} value={option.id}>{option.label}</option>
+                          ))}
+                        </select>
+                        <div className="small timeline-motionPresetDescription">{presetDescription}</div>
+                      </div>
+                      <div className="timeline-fieldGrid timeline-fieldGrid--compact timeline-motionAxisGrid">
+                        <label className="small">Zoom start</label>
+                        <input
+                          aria-label="Motion zoom start"
+                          type="number"
+                          step={0.01}
+                          disabled={selectedLaneLocked}
+                          value={Number(cl.data?.zoom_start ?? 1)}
+                          onChange={(e) => updateSelectedMotionField("zoom_start", Number(e.target.value))}
+                        />
+                        <label className="small">Zoom end</label>
+                        <input
+                          aria-label="Motion zoom end"
+                          type="number"
+                          step={0.01}
+                          disabled={selectedLaneLocked}
+                          value={Number(cl.data?.zoom_end ?? 1)}
+                          onChange={(e) => updateSelectedMotionField("zoom_end", Number(e.target.value))}
+                        />
+                        <label className="small">Pan X start</label>
+                        <input
+                          aria-label="Motion pan X start"
+                          type="number"
+                          step={0.5}
+                          disabled={selectedLaneLocked}
+                          value={Number(cl.data?.pan_x_start ?? 0)}
+                          onChange={(e) => updateSelectedMotionField("pan_x_start", Number(e.target.value))}
+                        />
+                        <label className="small">Pan X end</label>
+                        <input
+                          aria-label="Motion pan X end"
+                          type="number"
+                          step={0.5}
+                          disabled={selectedLaneLocked}
+                          value={Number(cl.data?.pan_x_end ?? 0)}
+                          onChange={(e) => updateSelectedMotionField("pan_x_end", Number(e.target.value))}
+                        />
+                        <label className="small">Pan Y start</label>
+                        <input
+                          aria-label="Motion pan Y start"
+                          type="number"
+                          step={0.5}
+                          disabled={selectedLaneLocked}
+                          value={Number(cl.data?.pan_y_start ?? 0)}
+                          onChange={(e) => updateSelectedMotionField("pan_y_start", Number(e.target.value))}
+                        />
+                        <label className="small">Pan Y end</label>
+                        <input
+                          aria-label="Motion pan Y end"
+                          type="number"
+                          step={0.5}
+                          disabled={selectedLaneLocked}
+                          value={Number(cl.data?.pan_y_end ?? 0)}
+                          onChange={(e) => updateSelectedMotionField("pan_y_end", Number(e.target.value))}
+                        />
+                        <label className="small">Rotation start</label>
+                        <input
+                          aria-label="Motion rotation start"
+                          type="number"
+                          step={0.1}
+                          disabled={selectedLaneLocked}
+                          value={Number(cl.data?.rotation_start ?? 0)}
+                          onChange={(e) => updateSelectedMotionField("rotation_start", Number(e.target.value))}
+                        />
+                        <label className="small">Rotation end</label>
+                        <input
+                          aria-label="Motion rotation end"
+                          type="number"
+                          step={0.1}
+                          disabled={selectedLaneLocked}
+                          value={Number(cl.data?.rotation_end ?? 0)}
+                          onChange={(e) => updateSelectedMotionField("rotation_end", Number(e.target.value))}
+                        />
+                      </div>
+                      <details className="timeline-motionAdvanced">
+                        <summary>3D orbit + render controls</summary>
+                        <div className="timeline-fieldGrid timeline-fieldGrid--compact">
+                          <label className="small">Depth start</label>
+                          <input aria-label="Motion depth start" type="number" step={0.5} disabled={selectedLaneLocked} value={Number(cl.data?.pan_z_start ?? 0)} onChange={(e) => updateSelectedMotionField("pan_z_start", Number(e.target.value))} />
+                          <label className="small">Depth end</label>
+                          <input aria-label="Motion depth end" type="number" step={0.5} disabled={selectedLaneLocked} value={Number(cl.data?.pan_z_end ?? 0)} onChange={(e) => updateSelectedMotionField("pan_z_end", Number(e.target.value))} />
+                          <label className="small">Pitch start</label>
+                          <input aria-label="Motion pitch start" type="number" step={0.1} disabled={selectedLaneLocked} value={Number(cl.data?.pitch_start ?? 0)} onChange={(e) => updateSelectedMotionField("pitch_start", Number(e.target.value))} />
+                          <label className="small">Pitch end</label>
+                          <input aria-label="Motion pitch end" type="number" step={0.1} disabled={selectedLaneLocked} value={Number(cl.data?.pitch_end ?? 0)} onChange={(e) => updateSelectedMotionField("pitch_end", Number(e.target.value))} />
+                          <label className="small">Yaw start</label>
+                          <input aria-label="Motion yaw start" type="number" step={0.1} disabled={selectedLaneLocked} value={Number(cl.data?.yaw_start ?? 0)} onChange={(e) => updateSelectedMotionField("yaw_start", Number(e.target.value))} />
+                          <label className="small">Yaw end</label>
+                          <input aria-label="Motion yaw end" type="number" step={0.1} disabled={selectedLaneLocked} value={Number(cl.data?.yaw_end ?? 0)} onChange={(e) => updateSelectedMotionField("yaw_end", Number(e.target.value))} />
+                          <label className="small">Roll start</label>
+                          <input aria-label="Motion roll start" type="number" step={0.1} disabled={selectedLaneLocked} value={Number(cl.data?.roll_start ?? 0)} onChange={(e) => updateSelectedMotionField("roll_start", Number(e.target.value))} />
+                          <label className="small">Roll end</label>
+                          <input aria-label="Motion roll end" type="number" step={0.1} disabled={selectedLaneLocked} value={Number(cl.data?.roll_end ?? 0)} onChange={(e) => updateSelectedMotionField("roll_end", Number(e.target.value))} />
+                          <label className="small">Strength</label>
+                          <input aria-label="Motion strength" type="number" step={0.01} disabled={selectedLaneLocked} value={Number(cl.data?.strength ?? 0.35)} onChange={(e) => updateSelectedMotionField("strength", Number(e.target.value))} />
+                          <label className="small">CFG</label>
+                          <input aria-label="Motion CFG" type="number" step={0.1} disabled={selectedLaneLocked} value={Number(cl.data?.cfg ?? 7)} onChange={(e) => updateSelectedMotionField("cfg", Number(e.target.value))} />
+                          <label className="small">Steps</label>
+                          <input aria-label="Motion steps" type="number" step={1} disabled={selectedLaneLocked} value={Number(cl.data?.steps ?? 12)} onChange={(e) => updateSelectedMotionField("steps", Number(e.target.value))} />
+                        </div>
+                      </details>
+                      <div className="small timeline-inspectorHint">
+                        Endpoint edits replace a conflicting schedule for that axis and update matching Camera-lane boundary keyframes.
+                      </div>
+                    </>
+                  );
+                })()
               ) : (
                 <div className="small timeline-emptyState">Unsupported track type.</div>
               )}

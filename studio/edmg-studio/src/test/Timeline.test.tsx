@@ -203,4 +203,104 @@ describe("Timeline page", () => {
     fireEvent.change(screen.getByLabelText("Clip length"), { target: { value: "1" } });
     expect(Number((screen.getByLabelText("Clip end") as HTMLInputElement).value)).toBe(snappedStart + 1);
   });
+
+  it("labels scheduled motion axes and applies multi-axis camera presets", async () => {
+    installEdmgBridge();
+    let savedTimeline: any = null;
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Motion Test" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Motion Test",
+          meta: {
+            audio: { filename: "track.wav", duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120 } },
+            last_plan: {
+              variants: [
+                {
+                  name: "Variant 1",
+                  scenes: [{ id: "scene_0", start_s: 0, end_s: 8, prompt: "Move through the frame." }],
+                },
+              ],
+            },
+            timeline: {
+              duration_s: 8,
+              tracks: [
+                {
+                  id: "track_prompt",
+                  name: "Prompts",
+                  type: "prompt",
+                  clips: [{ id: "prompt_0", start_s: 0, end_s: 8, data: { prompt: "Move through the frame." } }],
+                },
+                {
+                  id: "track_motion",
+                  name: "Motion",
+                  type: "motion",
+                  clips: [
+                    {
+                      id: "reactive_0",
+                      start_s: 0,
+                      end_s: 2,
+                      data: { zoom: "0:(1.0), 48:(1.08)", angle: "0:(0), 48:(2.0)" },
+                    },
+                    {
+                      id: "simple_0",
+                      start_s: 2,
+                      end_s: 8,
+                      data: {
+                        zoom_start: 1,
+                        zoom_end: 1.06,
+                        pan_x_start: 0,
+                        pan_x_end: 0,
+                        pan_y_start: 0,
+                        pan_y_end: 0,
+                        rotation_start: 0,
+                        rotation_end: 0,
+                      },
+                    },
+                  ],
+                },
+              ],
+              camera: {
+                keyframes: [{ t: 4, zoom: 1, pan_x: 0, pan_y: 0, rotation_deg: 0 }],
+              },
+            },
+          },
+        },
+      },
+      "POST /v1/projects/p1/timeline": (_path: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        savedTimeline = body.timeline;
+        return { ok: true, timeline: body.timeline || {} };
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByTitle("Audio reactive · zoom + rotate")).toBeTruthy();
+    fireEvent.pointerDown(await screen.findByTitle("Push in · zoom"));
+    fireEvent.click(screen.getByRole("tab", { name: /Inspector/ }));
+
+    const preset = await screen.findByLabelText("Motion preset") as HTMLSelectElement;
+    expect(preset.value).toBe("custom");
+    expect(screen.getByLabelText("Motion pan X end")).toBeTruthy();
+    expect(screen.getByText("3D orbit + render controls")).toBeTruthy();
+
+    fireEvent.change(preset, { target: { value: "orbit_right" } });
+    expect(await screen.findByTitle("Orbit right · zoom + pan + rotate + depth + 3D orbit")).toBeTruthy();
+    expect((screen.getByLabelText("Motion pan X end") as HTMLInputElement).value).toBe("8");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save timeline *" }));
+    await waitFor(() => expect(savedTimeline).toBeTruthy());
+    const start = savedTimeline.camera.keyframes.find((point: any) => point.t === 2);
+    const middle = savedTimeline.camera.keyframes.find((point: any) => point.t === 4);
+    const end = savedTimeline.camera.keyframes.find((point: any) => point.t === 8);
+    expect(start.pan_x).toBe(-8);
+    expect(start.rotation_3d_y).toBe(5);
+    expect(middle.pan_x).toBeCloseTo(-2.67, 1);
+    expect(middle.rotation_3d_y).toBeCloseTo(1.67, 1);
+    expect(end.pan_x).toBe(8);
+    expect(end.rotation_3d_y).toBe(-5);
+  });
 });
