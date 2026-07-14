@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "created_at": "2026-07-14T00:00:00Z",
+  "origin": "Synthetic fixtures created for DWCT Generative Sound Studio tests",
+  "license": "CC0-1.0",
+  "files": [
+    {
+      "path": "audio/tiny_pulse.wav",
+      "size_bytes": 16044,
+      "sha256": "4e0efa9959cc06dabd1fe3db9807830195b3efe9b02a39f5e1265e751008ee7e",
+      "media_type": "audio/wav",
+      "expected": {
+        "channels": 1,
+        "sample_width_bytes": 2,
+        "sample_rate": 8000,
+        "frame_count": 8000,
+        "duration_seconds": 1.0,
+        "pulse_count": 4
+      }
+    },
+    {
+      "path": "media/reference_frame.svg",
+      "size_bytes": 301,
+      "sha256": "8f7bc84f4ff0a498bd4b4c010d9d0a12a52e82cb5e17cbbedbf603b5fd7b81d3",
+      "media_type": "image/svg+xml",
+      "expected": {
+        "width": 64,
+        "height": 64,
+        "external_references": 0
+      }
+    },
+    {
+      "path": "project/project.json",
+      "size_bytes": 474,
+      "sha256": "8a4af4b127e8109773e396662981bf65a65d7d9a9ac6872a762942a41352f639",
+      "media_type": "application/vnd.edmg.project+json",
+      "expected": {
+        "legacy_project_id": "day1-fixture-project",
+        "adapted_contract_type": "edmg.project",
+        "adapted_schema_version": "1.0"
+      }
+    }
+  ]
+}

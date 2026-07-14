@@ -12,6 +12,7 @@ versioning where the product packaging supports it.
   Render Plan, Artifact, capability, job, and cue documents.
 - Modernization integration ledger and branch-policy documentation.
 - Security reporting policy, root environment example, and explicit repository license posture.
+- Small deterministic CC0 audio, project, and reference-media fixtures with SHA-256 goldens.
 
 ### Security
 
