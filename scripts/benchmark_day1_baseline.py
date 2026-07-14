@@ -123,7 +123,7 @@ def software_identity() -> dict[str, Any]:
         "python_executable": sys.executable,
         "uv": _first_line(["uv", "--version"]),
         "node": _first_line(["node", "--version"]),
-        "pnpm": _first_line(["pnpm", "--version"]),
+        "pnpm": _first_line(_pnpm_command("--version")),
         "ffmpeg": _first_line(["ffmpeg", "-version"]),
     }
 

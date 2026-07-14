@@ -56,3 +56,4 @@ def test_machine_and_software_identity_are_json_safe() -> None:
     assert machine["workspace_disk"]["total_bytes"] > 0
     assert software["git_commit"]
     assert software["python"]
+    assert software["pnpm"]
