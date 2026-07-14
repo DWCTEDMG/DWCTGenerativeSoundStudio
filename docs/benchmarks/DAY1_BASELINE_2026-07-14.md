@@ -11,18 +11,18 @@ Machine-readable evidence: [day1-baseline-windows-2026-07-14.json](day1-baseline
 - Windows 11 Pro for Workstations build 26200
 - Python 3.12.10, uv 0.11.28, Node 24.16.0, pnpm 10.33.0
 - FFmpeg 8.1.1 local developer binary
-- Clean source commit `1174727568abac9200765aea3a815b22e162ebaa`
+- Clean source commit `b004cc2397da79e27cb9beb2f980e70fd53621c7`
 
 ## Recorded timings
 
 | Probe | Result | Scope |
 |---|---:|---|
-| Backend launch to `/health` | 4,300.626 ms median, 3 runs | Source backend process, isolated Studio home |
-| Project open | 0.136 ms median, 25 runs | ProjectStore disk read plus legacy-to-v1 adapter |
-| Reactive timeline merge | 13.242 ms median, 25 runs | 240-second timeline, 240 cues, 480 camera keyframes |
-| Local audio analysis | 3,563.394 ms cold; 20.104 ms median | Full librosa pass, cache disabled, one-second WAV |
-| Electron shell launch | 1,456.747 ms | Strict instrumented shell probe with mock backend |
-| Python test scopes | 48,326.238 ms | 86 repo tests passed, 4 opt-in live-smoke skips; 193 backend tests passed |
+| Backend launch to `/health` | 13,383.724 ms median, 3 runs | Source backend process, isolated Studio home |
+| Project open | 0.149 ms median, 25 runs | ProjectStore disk read plus legacy-to-v1 adapter |
+| Reactive timeline merge | 20.390 ms median, 25 runs | 240-second timeline, 240 cues, 480 camera keyframes |
+| Local audio analysis | 7,436.471 ms cold; 78.844 ms median | Full librosa pass, cache disabled, one-second WAV |
+| Electron shell launch | 3,855.898 ms | Strict instrumented shell probe with mock backend |
+| Python test scopes | 83,133.219 ms | 87 repo tests passed, 4 opt-in live-smoke skips; 193 backend tests passed |
 
 These are evidence baselines, not approved budgets. The Electron probe is a real test-mode shell
 launch rather than an installed production build. Project and timeline probes measure backend work,
