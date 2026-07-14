@@ -32,6 +32,11 @@ function assertSourceCoverage() {
     assert.match(text, /desktopArtifacts/, `${rel} must import desktop artifact helper`);
     assert.match(text, /desktopActionLabel\(/, `${rel} must render desktop action labels`);
   }
+
+  const mockBackendEnv = buildMockBackendEnv("http://127.0.0.1:39999", 39999);
+  assert.equal(mockBackendEnv.EDMG_STUDIO_BACKEND_MODE, "external");
+  assert.equal(mockBackendEnv.EDMG_STUDIO_BACKEND_URL, "http://127.0.0.1:39999");
+  assert.equal(mockBackendEnv.EDMG_STUDIO_SPAWN_BACKEND, "0");
 }
 
 async function assertPreloadContract() {
@@ -193,6 +198,16 @@ function buildIsolatedDesktopEnv(fixtureRoot) {
   };
 }
 
+function buildMockBackendEnv(expectedBackendUrl, port) {
+  return {
+    EDMG_STUDIO_BACKEND_MODE: "external",
+    EDMG_STUDIO_BACKEND_HOST: "127.0.0.1",
+    EDMG_STUDIO_BACKEND_PORT: String(port),
+    EDMG_STUDIO_BACKEND_URL: expectedBackendUrl,
+    EDMG_STUDIO_SPAWN_BACKEND: "0",
+  };
+}
+
 async function waitForFile(filePath, timeoutMs = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -242,8 +257,7 @@ async function runElectronProbe() {
       EDMG_STUDIO_TEST_PROBE_OPEN_PATH: fixtureDir,
       EDMG_STUDIO_TEST_EXPECT_BACKEND_URL: expectedBackendUrl,
       EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
-      EDMG_STUDIO_SPAWN_BACKEND: "0",
-      EDMG_STUDIO_BACKEND_PORT: String(port),
+      ...buildMockBackendEnv(expectedBackendUrl, port),
       ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
       ...isolatedEnv,
     },

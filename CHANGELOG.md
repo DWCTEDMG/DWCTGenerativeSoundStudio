@@ -22,6 +22,11 @@ versioning where the product packaging supports it.
   zero known vulnerabilities at the recorded baseline.
 - Added weekly Dependabot coverage for both pnpm package roots.
 
+### Fixed
+
+- Isolated the strict Electron integration probe from stale launcher backend URLs by pinning the
+  spawned test shell to its ephemeral mock backend.
+
 ## [1.1.0] - 2026-07-14
 
 This section records the package-version baseline at commit `ce195b8`; no matching release tag was
