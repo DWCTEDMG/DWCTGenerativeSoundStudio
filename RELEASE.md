@@ -3,6 +3,9 @@
 This is the Windows-first release checklist for the canonical Studio product in
 `studio/edmg-studio/`.
 
+Stable and preview promotion follows [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.md). A build from
+`next` is a preview; only a protected `main` commit that passed the release gate is a stable release.
+
 ## Supported build environment
 
 - Python `>=3.10,<3.14`
