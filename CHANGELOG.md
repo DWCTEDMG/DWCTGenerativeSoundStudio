@@ -13,6 +13,8 @@ versioning where the product packaging supports it.
 - Modernization integration ledger and branch-policy documentation.
 - Security reporting policy, root environment example, and explicit repository license posture.
 - Small deterministic CC0 audio, project, and reference-media fixtures with SHA-256 goldens.
+- Named-hardware Day 1 benchmark harness for launch, project, timeline, analysis, Electron smoke,
+  and Python test-scope timings.
 
 ### Security
 
