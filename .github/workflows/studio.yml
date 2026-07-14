@@ -55,6 +55,92 @@ jobs:
           cache: pip
           cache-dependency-path: studio/edmg-studio/python_backend/pyproject.toml
 
+      - name: Provision pinned FFmpeg
+        shell: pwsh
+        env:
+          FFMPEG_LINUX_ASSET: ffmpeg-7.0.2-amd64-static.tar.xz
+          FFMPEG_LINUX_SHA256: abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67
+          FFMPEG_LINUX_URL: https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz
+          FFMPEG_LINUX_FALLBACK_URL: https://johnvansickle.com/ffmpeg/old-releases/ffmpeg-7.0.2-amd64-static.tar.xz
+          FFMPEG_WINDOWS_ASSET: ffmpeg-7.0.2-essentials_build.zip
+          FFMPEG_WINDOWS_SHA256: d5308d30872b2739cf53169df61faba8639d39a19b20b91e611c177ef676f64c
+          FFMPEG_WINDOWS_URL: https://github.com/GyanD/codexffmpeg/releases/download/7.0.2/ffmpeg-7.0.2-essentials_build.zip
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($IsWindows) {
+            $asset = $env:FFMPEG_WINDOWS_ASSET
+            $expectedSha256 = $env:FFMPEG_WINDOWS_SHA256
+            $downloadUrls = @($env:FFMPEG_WINDOWS_URL)
+            $ffmpegName = "ffmpeg.exe"
+            $ffprobeName = "ffprobe.exe"
+          } elseif ($IsLinux) {
+            $asset = $env:FFMPEG_LINUX_ASSET
+            $expectedSha256 = $env:FFMPEG_LINUX_SHA256
+            $downloadUrls = @($env:FFMPEG_LINUX_URL, $env:FFMPEG_LINUX_FALLBACK_URL)
+            $ffmpegName = "ffmpeg"
+            $ffprobeName = "ffprobe"
+          } else {
+            throw "Unsupported FFmpeg runner OS: $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription)"
+          }
+
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          $installRoot = Join-Path $env:RUNNER_TEMP "edmg-ffmpeg"
+          $downloaded = $false
+          foreach ($url in $downloadUrls) {
+            try {
+              Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+              Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRetryCount 3
+              $downloaded = $true
+              break
+            } catch {
+              Write-Host "FFmpeg download failed from $url; trying the next pinned location."
+            }
+          }
+          if (-not $downloaded) {
+            throw "Unable to download pinned FFmpeg archive from: $($downloadUrls -join ', ')"
+          }
+          $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "FFmpeg archive checksum mismatch: expected $expectedSha256, got $actualSha256"
+          }
+
+          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+          if ($IsWindows) {
+            Expand-Archive -LiteralPath $archive -DestinationPath $installRoot -Force
+          } else {
+            & tar -xJf $archive -C $installRoot
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to extract FFmpeg archive (tar exit code $LASTEXITCODE)"
+            }
+          }
+
+          $ffmpeg = Get-ChildItem -LiteralPath $installRoot -Recurse -File -Filter $ffmpegName | Select-Object -First 1
+          if (-not $ffmpeg) {
+            throw "$ffmpegName was not found after extracting $asset"
+          }
+          $ffprobe = Join-Path $ffmpeg.Directory.FullName $ffprobeName
+          if (-not (Test-Path -LiteralPath $ffprobe -PathType Leaf)) {
+            throw "$ffprobeName was not found beside $($ffmpeg.FullName)"
+          }
+
+          $ffmpeg.Directory.FullName >> $env:GITHUB_PATH
+          "EDMG_FFMPEG_PATH=$($ffmpeg.FullName)" >> $env:GITHUB_ENV
+          "EDMG_FFPROBE_PATH=$ffprobe" >> $env:GITHUB_ENV
+
+      - name: Verify FFmpeg discovery
+        working-directory: studio/edmg-studio/python_backend
+        run: >-
+          python -c "import shutil, subprocess; from pathlib import Path; from edmg_studio_backend.config import Settings;
+          from edmg_studio_backend.services.ffmpeg import ensure_ffmpeg, ensure_ffprobe;
+          configured = Settings().ffmpeg_path; ffmpeg = ensure_ffmpeg(configured); ffprobe = ensure_ffprobe(ffmpeg);
+          path_ffmpeg = ensure_ffmpeg('ffmpeg'); path_ffprobe = shutil.which('ffprobe');
+          assert path_ffprobe, 'ffprobe was not found on PATH';
+          assert Path(path_ffmpeg).samefile(ffmpeg), f'PATH FFmpeg mismatch: {path_ffmpeg} != {ffmpeg}';
+          assert Path(path_ffprobe).samefile(ffprobe), f'PATH FFprobe mismatch: {path_ffprobe} != {ffprobe}';
+          print(f'Configured FFmpeg: {configured}'); print(f'Resolved FFmpeg: {ffmpeg}'); print(f'PATH FFmpeg: {path_ffmpeg}');
+          print(f'Resolved FFprobe: {ffprobe}'); print(f'PATH FFprobe: {path_ffprobe}');
+          subprocess.run(['ffmpeg', '-version'], check=True); subprocess.run(['ffprobe', '-version'], check=True)"
+
       - name: Install Studio frontend
         working-directory: studio/edmg-studio
         run: pnpm install --frozen-lockfile
