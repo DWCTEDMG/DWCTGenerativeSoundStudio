@@ -1,0 +1,24 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /studio/edmg-studio
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      studio-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /chatgpt-apps/edmg-director
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      director-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
