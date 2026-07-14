@@ -1,8 +1,8 @@
 # DWCT Generative Sound Studio Modernization Status
 
-Last updated: 2026-07-14  
-Integration branch: `codex/one-week-modernization`  
-Local baseline: `5f7c3a7` (`fix(deps): resolve Dependabot alerts`)  
+Last updated: 2026-07-14
+Integration branch: `codex/one-week-modernization`
+Local baseline: `5f7c3a7` (`fix(deps): resolve Dependabot alerts`)
 Remote default baseline: `ce195b8` on `codex/Unified`
 
 This file is the integration ledger for the seven-day modernization blueprint. A package is
@@ -22,6 +22,8 @@ canonical internal renderer and must be integrated through adapters rather than 
   tests in 24 files, production build, and Electron bridge validation all pass.
 - Director dependency baseline after remediation: frozen pnpm install, audit, typecheck, 7 tests in
   2 files, and production build all pass.
+- Local Python baseline on Python 3.12.10: 77 repo tests passed with 4 opt-in live-smoke skips and
+  188 backend tests passed (265 passed, 4 skipped, no failures in total).
 - Both pnpm production and development audits report zero known vulnerabilities locally. GitHub's
   existing Dependabot alerts cannot clear until the approved commit reaches the default branch.
 - GitHub currently reports `codex/Unified` as the default branch. `main` exists, but
@@ -48,7 +50,7 @@ canonical internal renderer and must be integrated through adapters rather than 
 | P0-04 | In progress | W1-01 | readiness service/contracts; `/v1/system/readiness`; Studio System/Setup UI | Backend contract/failure tests; UI state tests; typecheck/lint/build | Unified typed disk, writable-path, runtime, GPU, FFmpeg, and model-completeness report still needed |
 | P0-05 | In progress | Redistribution provenance | `tests/fixtures/**`; golden manifests; fixture docs/tests | Clean-clone fixture and golden validation | Existing 73 MB WAV is not the required small fixture set; add redistributable project/audio/media fixtures and provenance |
 | P0-06 | In progress | P0-05 | baseline benchmark script; `docs/BENCHMARKING.md`; machine-readable results | Launch/open/timeline/analysis/test timing run on named hardware | Measurements must identify hardware and distinguish blocked full-app metrics from supported local probes |
-| W1-01 | In progress | None | backend versioned contracts/adapters; shared TypeScript contracts; contract fixtures | Schema-version, round-trip, legacy-adapter, and frontend parity tests | Freeze all eight required domains without replacing current stores or render paths |
+| W1-01 | Complete | None | `edmg_studio_backend/contracts/**`; `src/contracts/v1.ts`; contract tests; `docs/CONTRACTS_V1.md` | 5 Python contract tests and 2 frontend contract tests pass; Studio typecheck passes | Full gates remain part of the Day 1 integration gate; current stores/render paths are unchanged |
 | UV-01 | In progress | Toolchain inventory | `.python-version`; uv pin/config; backend `pyproject.toml`; supported setup/build/CI paths; uv docs/tests | Windows parity tests and CI/static entry-point checks | Ubuntu parity after edits requires CI; lockfile and frozen project commands are explicitly UV-02/UV-03 work |
 
 ## Day 2 - Make projects, jobs, and artifacts durable
