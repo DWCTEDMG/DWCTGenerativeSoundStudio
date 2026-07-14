@@ -20,6 +20,11 @@ The JSON result includes exact hardware/software identity, commit, methodology, 
 statistics, command results, and explicit limitations. Day 7 performance evidence should compare
 the same probes on equivalent hardware and add installed-build UI, cancel, and recovery timings.
 
+Recorded Day 1 evidence:
+
+- [Windows machine-readable result](benchmarks/day1-baseline-windows-2026-07-14.json)
+- [Windows human-readable summary](benchmarks/DAY1_BASELINE_2026-07-14.md)
+
 The Electron figure is a real shell process launch using the repository's instrumented integration
 page and mock backend; it is not presented as an installed production-build launch time. Likewise,
 project and timeline figures are backend-operation baselines rather than browser paint latency.

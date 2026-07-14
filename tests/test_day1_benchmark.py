@@ -57,3 +57,13 @@ def test_machine_and_software_identity_are_json_safe() -> None:
     assert software["git_commit"]
     assert software["python"]
     assert software["pnpm"]
+    assert str(Path.home()) not in software["python_executable"]
+
+
+def test_publishable_evidence_redacts_user_and_temp_paths() -> None:
+    source = f"{Path.home()} and {Path(benchmark.tempfile.gettempdir())}"
+    sanitized = benchmark.sanitize_text(source)
+
+    assert str(Path.home()) not in sanitized
+    assert "<USER_HOME>" in sanitized
+    assert "<TEMP>" in sanitized

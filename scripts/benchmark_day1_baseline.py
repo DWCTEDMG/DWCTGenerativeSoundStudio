@@ -53,6 +53,25 @@ def _first_line(command: list[str], *, cwd: Path = REPO_ROOT) -> str | None:
     return text.splitlines()[0].strip() if text else None
 
 
+def sanitize_text(value: object) -> str:
+    """Redact user-home and temporary roots from publishable evidence strings."""
+
+    text = str(value)
+    replacements = sorted(
+        {
+            str(Path.home()): "<USER_HOME>",
+            str(Path(tempfile.gettempdir())): "<TEMP>",
+        }.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    for original, replacement in replacements:
+        if not original:
+            continue
+        text = re.sub(re.escape(original), lambda _match: replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 def _windows_hardware() -> dict[str, Any]:
     command = (
         "$cs=Get-CimInstance Win32_ComputerSystem;"
@@ -120,7 +139,7 @@ def software_identity() -> dict[str, Any]:
         "git_commit": commit,
         "working_tree_dirty": bool(status),
         "python": platform.python_version(),
-        "python_executable": sys.executable,
+        "python_executable": sanitize_text(sys.executable),
         "uv": _first_line(["uv", "--version"]),
         "node": _first_line(["node", "--version"]),
         "pnpm": _first_line(_pnpm_command("--version")),
@@ -320,7 +339,7 @@ def benchmark_backend_launch(iterations: int) -> dict[str, Any]:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     stdout, _ = process.communicate(timeout=5)
-                output_tail = (stdout or "").splitlines()[-8:]
+                output_tail = [sanitize_text(line) for line in (stdout or "").splitlines()[-8:]]
     result = summarize(samples)
     result.update(
         {
@@ -353,7 +372,7 @@ def benchmark_command(command: list[str], *, cwd: Path, scope: str, timeout: flo
     elapsed = (time.perf_counter_ns() - started) / 1_000_000.0
     text = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
     summary_lines = [
-        line.strip()
+        sanitize_text(line.strip())
         for line in text.splitlines()
         if re.search(r"(passed|skipped|probe passed|Test Files|Tests\s+)", line, re.IGNORECASE)
     ][-12:]
@@ -362,13 +381,13 @@ def benchmark_command(command: list[str], *, cwd: Path, scope: str, timeout: flo
         {
             "status": "measured" if completed.returncode == 0 else "failed",
             "scope": scope,
-            "command": " ".join(command),
+            "command": sanitize_text(" ".join(command)),
             "exit_code": completed.returncode,
             "summary_lines": summary_lines,
         }
     )
     if completed.returncode != 0:
-        result["output_tail"] = text.splitlines()[-20:]
+        result["output_tail"] = [sanitize_text(line) for line in text.splitlines()[-20:]]
     return result
 
 
