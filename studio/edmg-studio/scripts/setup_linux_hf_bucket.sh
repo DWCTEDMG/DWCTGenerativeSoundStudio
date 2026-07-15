@@ -9,6 +9,10 @@ set -euo pipefail
 
 EDMG_STUDIO_HOME="${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}"
 HF_PYTHON_BIN="${HF_PYTHON_BIN:-python}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=uv_toolchain.sh
+source "${SCRIPT_DIR}/uv_toolchain.sh"
+UV_BIN="$(edmg_require_uv)"
 EDMG_HF_BUCKET_ID="${EDMG_HF_BUCKET_ID:-gulle1155/DWCTedmgAIStudioModels}"
 EDMG_HF_BUCKET_PREFIX="${EDMG_HF_BUCKET_PREFIX:-}"
 EDMG_MODEL_STORAGE_MODE="${EDMG_MODEL_STORAGE_MODE:-cloud_only}" # local_cache|cloud_only
@@ -49,7 +53,7 @@ mkdir -p "${EDMG_STUDIO_HOME}"
 
 if [[ "${HF_INSTALL_HUB}" == "1" ]]; then
   log "Ensuring huggingface_hub is installed"
-  "${HF_PYTHON_BIN}" -m pip install -U "huggingface_hub>=0.34,<1.0"
+  "${UV_BIN}" pip install --python "${HF_PYTHON_BIN}" -U "huggingface_hub>=0.34,<1.0"
 fi
 
 log "Validating Hugging Face auth"

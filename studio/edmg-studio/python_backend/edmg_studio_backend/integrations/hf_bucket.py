@@ -102,7 +102,7 @@ def _list_bucket_tree(
     except Exception as exc:  # pragma: no cover - import guard
         raise RuntimeError(
             "Installed huggingface_hub is too old for HF bucket listing. "
-            "Upgrade with: pip install -U 'huggingface_hub>=0.34'"
+            "Update pyproject.toml and uv.lock together, then synchronize the frozen uv environment."
         ) from exc
 
     bucket = parse_bucket_id(bucket_id)

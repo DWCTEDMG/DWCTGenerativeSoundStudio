@@ -17,16 +17,19 @@ EDMG Studio is a music-reactive AI video generation studio. The product lives un
 - **Frontend** — React/Vite app in `studio/edmg-studio/` (Vite dev server on port `5173`),
   normally wrapped by an Electron shell.
 
-The update script already installs all dependencies (frontend `pnpm install` and backend
-`pip install -e ".[studio_bundle,test]"`, which includes torch/diffusers/transformers/librosa).
+The update script already installs all dependencies (frontend `pnpm install` and a frozen
+backend `uv sync` from `studio/edmg-studio/python_backend/uv.lock`).
 The notes below are the non-obvious gotchas; standard commands live in the root `README.md`,
 `studio/edmg-studio/README.md`, and the `package.json` scripts.
 
 ### Python
-- Use `python3` (there is no `python` alias on this VM). The README uses `python`.
-- The backend console script `edmg-studio-backend` installs to `~/.local/bin`, which is **not**
-  on `PATH`. Start the backend with the module form instead:
-  `cd studio/edmg-studio/python_backend && python3 -m edmg_studio_backend serve --host 127.0.0.1 --port 7863`.
+- Python is pinned to 3.12 in the repository `.python-version`; use the pinned `uv` 0.11.28
+  project environment rather than whichever interpreter or package installer is on `PATH`.
+- From the repo root, validate and synchronize the baseline with
+  `uv lock --project studio/edmg-studio/python_backend --check` followed by
+  `uv sync --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test --group lint`.
+- Start the backend with
+  `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863`.
 - Ollama and ComfyUI are **not** installed here. Set `EDMG_AI_PROVIDER=rule_based` so planning
   uses the built-in `RuleBasedPlanner` (no LLM server needed). The create→upload→analyze→plan
   flow works fully with the rule-based provider; only actual model rendering needs GPU + model
@@ -48,16 +51,16 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
  browser-dev-only quirk, not a setup problem.
 
 ### Tests (known results on Linux)
-- Backend: `cd studio/edmg-studio/python_backend && python3 -m pytest` → 123 pass
+- Backend: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python -m pytest` → 123 pass
  (count drifts as tests are added).
 - Frontend: `pnpm run test:ui` → ~49 pass (23 files). The Windows-only
  `src/test/directorRuntime.test.ts` logs a hardcoded `C:\...` ENOENT error to stderr but still
  passes; the runner exits 0. This stderr noise is a pre-existing platform quirk, not a failure.
 - `pnpm run lint` and `pnpm run typecheck` both pass clean on this branch (exit 0).
-- Repo-level: `python3 -m pytest` from the repo root → backend package suite is the reliable green signal.
+- Repo-level: the frozen uv project environment is the reliable green signal.
   Some repo-root orchestration tests may still fail on branches with in-flight render-tier work.
-  Run both scopes with `python3 scripts/run_pytest_scopes.py`.
-  Proxy fallback coverage: `python3 -m pytest tests/test_studio_proxy_fallback.py`.
+  Run both scopes with `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`.
+  Proxy fallback coverage: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --group test python -m pytest tests/test_studio_proxy_fallback.py`.
 
 ### Storage
 - Backend project data is written to `studio/edmg-studio/python_backend/data/` (gitignored) when

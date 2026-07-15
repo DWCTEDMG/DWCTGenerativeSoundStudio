@@ -182,7 +182,9 @@ from .services.setup_wizard import (
     _find_ollama_exe,
     _find_7z_exe,
     managed_ollama_launch_script_path,
+    resolve_setup_accelerator_profile,
 )
+from .uv_toolchain import ToolchainError
 
 settings = Settings()
 
@@ -335,7 +337,10 @@ def _require_multipart() -> None:
     if not HAS_MULTIPART:
         raise UserFacingError(
             "File upload support is unavailable because python-multipart is not installed.",
-            hint="Install backend dependencies with `pip install -e .` or add `python-multipart`, then restart EDMG Studio.",
+            hint=(
+                "Run the source launcher (or a frozen uv sync for one accelerator profile) "
+                "to restore `python-multipart`, then restart EDMG Studio."
+            ),
             code="MISSING_MULTIPART",
             status_code=503,
         )
@@ -2994,8 +2999,7 @@ def setup_status():
         }
 
     ff = check_ffmpeg(settings.ffmpeg_path)
-    backend_bundle = check_backend_bundle()
-    backend_bundle_directml = check_backend_bundle("studio_bundle_directml")
+    toolchain = check_backend_bundle()
     edmg = core_status()
     if not edmg.get("available"):
         edmg.setdefault(
@@ -3022,8 +3026,9 @@ def setup_status():
     return {
             "ok": True,
             "ai_config": ai_config,
-            "backend_bundle": backend_bundle,
-            "backend_bundle_directml": backend_bundle_directml,
+            "toolchain": toolchain,
+            # Temporary response alias for desktop clients predating UV-01.
+            "backend_bundle": toolchain,
             "ollama": ollama,
             "comfyui": comfy_status,
             "ffmpeg": ff,
@@ -3092,37 +3097,53 @@ def setup_7zip_install():
 
 @app.post("/v1/setup/backend/install")
 def setup_backend_install(payload: dict[str, Any]):
-    bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
-    flavor = str((payload or {}).get("flavor") or "cpu").strip().lower() or "cpu"
-    if flavor == "nvidia" and bundle == "studio_bundle":
-        bundle = "studio_bundle"  # bundle stays the same; CUDA torch is installed separately
-    task = setup_tasks.start(f"install_backend_bundle:{bundle}:{flavor}", install_backend_bundle, bundle, flavor)
+    try:
+        profile = resolve_setup_accelerator_profile(payload)
+    except ToolchainError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    status = check_backend_bundle(accelerator_profile=profile, check_sync=False)
+    if status.get("immutable"):
+        detail = str(
+            status.get("hint")
+            or "This packaged backend is self-contained; install another application build to change profiles."
+        )
+        raise HTTPException(status_code=409, detail=detail)
+
+    task = setup_tasks.start(
+        f"sync_backend_profile:{profile}",
+        install_backend_bundle,
+        accelerator_profile=profile,
+    )
     return {"ok": True, "task": task.to_dict()}
 
 @app.post("/v1/setup/full/install")
 def setup_full_install(payload: dict[str, Any]):
-    """Run a full one-click setup: backend bundle, 7-Zip, Ollama/model, ComfyUI Portable install + start."""
+    """Run one-click setup around one locked backend accelerator profile."""
     import os
 
-    flavor = (payload or {}).get("flavor") or "cpu"
+    try:
+        profile = resolve_setup_accelerator_profile(payload)
+    except ToolchainError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    toolchain = check_backend_bundle(accelerator_profile=profile, check_sync=False)
+    if toolchain.get("immutable") and not toolchain.get("ok"):
+        raise HTTPException(
+            status_code=409,
+            detail=str(toolchain.get("hint") or "The packaged backend profile does not match this setup request."),
+        )
+
+    comfy_flavor = {"cpu": "cpu", "directml": "amd", "cuda": "nvidia"}[profile]
     port = int((payload or {}).get("comfy_port") or 8188)
-    bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
-    if flavor == "amd" and bundle == "studio_bundle":
-        bundle = "studio_bundle_directml"
     model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ai_config = _setup_ai_config()
 
     def _run(task):
-        # 1) Ensure backend runtime bundle is present for audio/ASR/internal render paths.
+        # 1) Source checkouts sync from uv.lock; packaged backends are immutable.
         SetupTaskManager.check_canceled(task, "Full setup canceled.")
-        if not check_backend_bundle(bundle).get("ok"):
-            install_backend_bundle(task, bundle, flavor)
-        elif flavor in ("nvidia", "cuda"):
-            SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` already installed; installing CUDA torch.")
-            install_backend_bundle(task, bundle, flavor)
-        else:
-            SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` already installed.")
+        install_backend_bundle(task, accelerator_profile=profile)
 
         # 2) Ensure 7-Zip for .7z extraction
         SetupTaskManager.check_canceled(task, "Full setup canceled.")
@@ -3159,7 +3180,13 @@ def setup_full_install(payload: dict[str, Any]):
         # 4) ComfyUI Portable install + start
         SetupTaskManager.check_canceled(task, "Full setup canceled.")
         if not comfy_portable_installed(settings.external_dir, settings.data_dir):
-            download_and_extract_portable(task, settings.external_dir, flavor, settings.data_dir, settings.models_dir)
+            download_and_extract_portable(
+                task,
+                settings.external_dir,
+                comfy_flavor,
+                settings.data_dir,
+                settings.models_dir,
+            )
         else:
             SetupTaskManager.log(task, "ComfyUI Portable is already installed.")
 
@@ -3173,9 +3200,17 @@ def setup_full_install(payload: dict[str, Any]):
         if comfy_ready:
             SetupTaskManager.log(task, "ComfyUI is already reachable.")
         else:
-            comfy_portable.start(task, settings.external_dir, flavor, "127.0.0.1", port, settings.data_dir, settings.models_dir)
+            comfy_portable.start(
+                task,
+                settings.external_dir,
+                comfy_flavor,
+                "127.0.0.1",
+                port,
+                settings.data_dir,
+                settings.models_dir,
+            )
 
-    task = setup_tasks.start(f"full_setup:{flavor}:{ai_config.get('provider')}", _run)
+    task = setup_tasks.start(f"full_setup:{profile}:{ai_config.get('provider')}", _run)
     return {"ok": True, "task": task.to_dict()}
 
 

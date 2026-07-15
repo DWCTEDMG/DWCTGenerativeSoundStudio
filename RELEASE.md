@@ -5,13 +5,14 @@ This is the Windows-first release checklist for the canonical Studio product in
 
 ## Supported build environment
 
-- Python `>=3.10,<3.14`
+- Python `3.12` (repository `.python-version`)
+- `uv` `0.11.28`
 - Node.js LTS
 - `pnpm@10.33.0` via `studio/edmg-studio/package.json#packageManager`
 - Windows build host for `dist:win`
 
-Packaged Studio ships its own Electron runtime. Python is only a build-time
-requirement for source builds, backend bundling, and release packaging.
+Packaged Studio ships its own Electron runtime and PyInstaller backend. Python
+and uv are build-time requirements only; customers do not install either one.
 
 ## Canonical repo hygiene
 
@@ -42,8 +43,9 @@ From the repo root:
 
 That script now:
 
-- checks the supported Python version range
-- rebuilds the packaged backend bundle
+- checks the pinned uv release and Python 3.12 project metadata
+- checks `uv.lock`, performs a frozen DirectML-profile sync, and rebuilds the
+  packaged backend bundle through uv
 - stages bundled FFmpeg
 - installs UI dependencies
 - validates pnpm/lockfile/release metadata expectations
@@ -52,6 +54,20 @@ That script now:
 Primary artifact output:
 
 - `studio/edmg-studio/dist/`
+
+The Windows default is DirectML. Explicit profile builds are also available
+from `studio/edmg-studio/`:
+
+```powershell
+pnpm run dist:win:cpu
+pnpm run dist:win:directml
+pnpm run dist:win:cuda
+```
+
+Every release profile is resolved exclusively from `pyproject.toml` and the
+committed `uv.lock`. Environment variables that inject a package source,
+requirements file, project environment, bundle extra, or Torch index are
+release blockers.
 
 ## Required proof before shipping
 
@@ -67,6 +83,9 @@ That proof covers:
 - packaged customer flow
 - packaged upgrade and storage migration proof
 - packaged zero-state setup proof with Studio-managed Ollama and 7-Zip
+- backend manifest verification for Python version, uv version, lock SHA-256,
+  accelerator profile, Torch packages/index, PyInstaller version, source
+  fingerprint, and binary hash
 
 Optional support-plane helper:
 
@@ -140,7 +159,7 @@ PyInstaller may still report optional-import noise from libraries such as:
 
 Those warnings are acceptable only when all of the following are true:
 
-- the build uses Python `>=3.10,<3.14`
+- the build uses Python 3.12, uv 0.11.28, and `uv sync --frozen`
 - `pnpm run validate:release` passes
 - the packaged app reports healthy setup status
 - the packaged customer flow and upgrade proof both pass
@@ -154,3 +173,4 @@ Use the Studio runbook for install and recovery:
 
 - [docs/STUDIO_RELEASE_RUNBOOK.md](docs/STUDIO_RELEASE_RUNBOOK.md)
 - [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md)
+- [docs/PYTHON_TOOLCHAIN.md](docs/PYTHON_TOOLCHAIN.md)

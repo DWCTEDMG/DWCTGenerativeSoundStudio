@@ -1362,13 +1362,13 @@ export default function Settings(props: PageProps) {
 
           {!transcriptionStatus?.dependencies?.parakeet_available ? (
             <div className="small" style={{ opacity: 0.82 }}>
-              Parakeet install: <code>pip install -e ".[parakeet]"</code> from <code>python_backend</code>.
+              Parakeet: <code>uv sync --frozen --extra PROFILE --extra parakeet</code> from <code>python_backend</code>.
             </div>
           ) : null}
 
           {transcriptionDraft.separate_vocals && !transcriptionStatus?.dependencies?.demucs_available ? (
             <div className="small" style={{ opacity: 0.82 }}>
-              Vocal separation install: <code>pip install -e ".[source_separation]"</code> from <code>python_backend</code>.
+              Vocal separation: <code>uv sync --frozen --extra PROFILE --extra source-separation</code> from <code>python_backend</code>.
             </div>
           ) : null}
 

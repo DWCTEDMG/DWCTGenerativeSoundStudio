@@ -61,15 +61,36 @@ def test_ensure_data_dir_env_ignores_unreachable_saved_home(monkeypatch, tmp_pat
     assert persisted["studioHome"] == str(launcher_gui.STUDIO_DIR.resolve())
 
 
-def test_choose_cuda_wheel_tag_uses_newest_supported_driver_channel():
+def test_launcher_accepts_only_python_312_for_the_locked_backend():
     launcher_gui = _load_launcher_gui()
 
-    assert launcher_gui._choose_cuda_wheel_tag(133, {"cu124", "cu130", "cu132"}) == "cu132"
-    assert launcher_gui._choose_cuda_wheel_tag(130, {"cu124", "cu130", "cu132"}) == "cu130"
-    assert launcher_gui._choose_cuda_wheel_tag(129, {"cu124", "cu128", "cu130"}) == "cu128"
+    assert launcher_gui._is_supported_python_version((3, 12, 0))
+    assert launcher_gui._is_supported_python_version((3, 12, 99))
+    assert not launcher_gui._is_supported_python_version((3, 11, 9))
+    assert not launcher_gui._is_supported_python_version((3, 13, 0))
 
 
-def test_choose_cuda_wheel_tag_defaults_to_newest_visible_channel_without_driver():
+def test_sync_locked_backend_uses_one_fixed_profile_and_capability_set(monkeypatch):
     launcher_gui = _load_launcher_gui()
+    calls = {}
 
-    assert launcher_gui._choose_cuda_wheel_tag(None, {"cu124", "cu128", "cu132"}) == "cu132"
+    def fake_sync(profile, *, capability_extras, install_uv):
+        calls["sync"] = (profile, tuple(capability_extras), install_uv)
+        return Path(r"C:\toolchain\uv.exe")
+
+    def fake_run(profile, command, *, capability_extras):
+        calls["run"] = (profile, tuple(command), tuple(capability_extras))
+        return ["uv", "run", "--frozen", "python", "-c", "verify"], {"PROFILE": profile}
+
+    monkeypatch.setattr(launcher_gui, "sync_frozen_project", fake_sync)
+    monkeypatch.setattr(launcher_gui, "frozen_run_command", fake_run)
+    monkeypatch.setattr(launcher_gui, "uv_version", lambda _uv: "0.11.28")
+    monkeypatch.setattr(launcher_gui, "lock_sha256", lambda: "a" * 64)
+    monkeypatch.setattr(launcher_gui, "_run_cmd", lambda *args, **kwargs: 0)
+
+    launcher_gui._sync_locked_backend("cuda", lambda _message: None)
+
+    assert calls["sync"] == ("cuda", tuple(launcher_gui.RUNTIME_CAPABILITY_EXTRAS), True)
+    assert calls["run"][0] == "cuda"
+    assert calls["run"][2] == tuple(launcher_gui.RUNTIME_CAPABILITY_EXTRAS)
+    assert "python" in calls["run"][1]

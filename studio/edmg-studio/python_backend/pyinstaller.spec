@@ -142,7 +142,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # An arbitrary UPX binary discovered on the build host would change the
+    # release artifact without appearing in uv.lock or its provenance.
+    upx=False,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

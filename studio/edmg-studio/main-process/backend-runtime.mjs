@@ -3,6 +3,75 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 
+export const SOURCE_RUNTIME_CAPABILITY_EXTRAS = Object.freeze([
+  "core",
+  "audio",
+  "asr",
+  "internal-video",
+  "aws",
+]);
+
+export function normalizeAcceleratorProfile(value, { isWindows = process.platform === "win32" } = {}) {
+  const aliases = { nvidia: "cuda", amd: "directml" };
+  const requested = String(value || "cpu").trim().toLowerCase();
+  const profile = aliases[requested] || requested;
+  if (!new Set(["cpu", "directml", "cuda"]).has(profile)) {
+    throw new Error(`Unsupported accelerator profile ${JSON.stringify(value)}; choose cpu, directml, or cuda.`);
+  }
+  if (profile === "directml" && !isWindows) {
+    throw new Error("The directml accelerator profile is supported only on Windows.");
+  }
+  return profile;
+}
+
+export function buildBackendLaunchSpec({
+  appIsPackaged,
+  resourcesPath,
+  rootDir,
+  isWindows,
+  backendHost,
+  backendPort,
+  env = process.env,
+}) {
+  if (appIsPackaged) {
+    const exeName = isWindows ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+    const command = path.join(resourcesPath, "backend", exeName);
+    return {
+      command,
+      args: ["serve", "--host", backendHost, "--port", String(backendPort)],
+      cwd: path.dirname(command),
+      label: "packaged-backend",
+    };
+  }
+
+  const acceleratorProfile = normalizeAcceleratorProfile(
+    env.EDMG_BACKEND_ACCELERATOR_PROFILE,
+    { isWindows },
+  );
+  const command = String(env.EDMG_UV_BIN || "uv").trim() || "uv";
+  const args = ["run", "--frozen", "--no-default-groups", "--python", "3.12"];
+  for (const extra of [acceleratorProfile, ...SOURCE_RUNTIME_CAPABILITY_EXTRAS]) {
+    args.push("--extra", extra);
+  }
+  args.push(
+    "python",
+    "-m",
+    "edmg_studio_backend",
+    "serve",
+    "--host",
+    backendHost,
+    "--port",
+    String(backendPort),
+  );
+  return {
+    command,
+    args,
+    cwd: path.join(rootDir, "python_backend"),
+    label: "uv-frozen-backend",
+    acceleratorProfile,
+  };
+}
+
 export function createBackendRuntime({
   app,
   dialog,
@@ -29,41 +98,6 @@ export function createBackendRuntime({
 
   function getCurrentBackendUrl() {
     return currentBackendUrl;
-  }
-
-  function getDevVenvPythonPath() {
-    if (isWindows) {
-      return path.join(rootDir, "python_backend", "venv", "Scripts", "python.exe");
-    }
-
-    return path.join(rootDir, "python_backend", "venv", "bin", "python");
-  }
-
-  function getDevPythonPath() {
-    const backendExplicit = String(process.env.EDMG_STUDIO_BACKEND_PYTHON ?? "").trim();
-    if (backendExplicit) return backendExplicit;
-
-    const venvPython = getDevVenvPythonPath();
-    if (pathExistsSync(venvPython)) {
-      const launcherPython = String(process.env.EDMG_STUDIO_PYTHON ?? "").trim();
-      if (launcherPython && launcherPython !== venvPython) {
-        console.log("[backend] using project venv for dev backend instead of EDMG_STUDIO_PYTHON", {
-          launcherPython,
-          venvPython,
-        });
-      }
-      return venvPython;
-    }
-
-    const launcherPython = String(process.env.EDMG_STUDIO_PYTHON ?? "").trim();
-    if (launcherPython) return launcherPython;
-
-    return venvPython;
-  }
-
-  function getPackagedBackendPath() {
-    const exeName = isWindows ? "edmg-studio-backend.exe" : "edmg-studio-backend";
-    return path.join(process.resourcesPath, "backend", exeName);
   }
 
   function resolveManagedFfmpegPath() {
@@ -95,25 +129,17 @@ export function createBackendRuntime({
   }
 
   function getBackendLaunchSpec() {
-    if (app.isPackaged) {
-      const command = getPackagedBackendPath();
-      return {
-        command,
-        args: ["serve", "--host", backendHost, "--port", String(backendPort)],
-        cwd: path.dirname(command),
-        label: "packaged-backend",
-      };
-    }
-
-    return {
-      command: getDevPythonPath(),
-      args: ["-m", "edmg_studio_backend", "serve", "--host", backendHost, "--port", String(backendPort)],
-      cwd: path.join(rootDir, "python_backend"),
-      label: "python-backend",
-    };
+    return buildBackendLaunchSpec({
+      appIsPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      rootDir,
+      isWindows,
+      backendHost,
+      backendPort,
+    });
   }
 
-  function buildBackendChildEnv(managedStudioEnv, ffmpegPath) {
+  function buildBackendChildEnv(managedStudioEnv, ffmpegPath, spec) {
     const env = {
       ...process.env,
       ...managedStudioEnv,
@@ -123,6 +149,10 @@ export function createBackendRuntime({
       EDMG_FFMPEG_PATH: ffmpegPath,
       MPLBACKEND: process.env.MPLBACKEND || "Agg",
     };
+    if (spec.acceleratorProfile) {
+      env.EDMG_BACKEND_ACCELERATOR_PROFILE = spec.acceleratorProfile;
+      env.NVIDIA_TENSORRT_DISABLE_INTERNAL_PIP = "1";
+    }
 
     for (const key of [
       "ELECTRON_RUN_AS_NODE",
@@ -285,7 +315,7 @@ export function createBackendRuntime({
     const managedStudioEnv = buildManagedStudioEnv();
     const backendDataDir = managedStudioEnv.EDMG_STUDIO_DATA_DIR;
     const ffmpegPath = resolveManagedFfmpegPath();
-    const childEnv = buildBackendChildEnv(managedStudioEnv, ffmpegPath);
+    const childEnv = buildBackendChildEnv(managedStudioEnv, ffmpegPath, spec);
     const logPaths = resolveBackendLogPaths(managedStudioEnv.EDMG_STUDIO_LOGS_DIR);
 
     if (app.isPackaged && !fs.existsSync(spec.command)) {

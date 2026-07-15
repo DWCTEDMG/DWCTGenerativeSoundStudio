@@ -208,7 +208,7 @@ export default function Cloud(props: PageProps) {
     aws: (
       <div className="card">
         <div style={{ fontWeight: 800, marginBottom: 10 }}>AWS</div>
-        <div className="small">Optional dependency. Install backend with: pip install -e ".[aws]"</div>
+        <div className="small">Optional capability: <code>uv sync --frozen --extra PROFILE --extra aws</code>.</div>
         <div style={{ marginTop: 10 }}>
           <div className="small">S3 bucket</div>
           <input value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="my-bucket" />
@@ -226,7 +226,7 @@ export default function Cloud(props: PageProps) {
     azure: (
       <div className="card">
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Azure</div>
-        <div className="small">Optional dependency. Install backend with: pip install -e ".[azure]"</div>
+        <div className="small">Optional capability: <code>uv sync --frozen --extra PROFILE --extra azure</code>.</div>
         <div style={{ marginTop: 10 }}>
           <div className="small">Blob container</div>
           <input value={azureContainer} onChange={(e) => setAzureContainer(e.target.value)} placeholder="edmg-model-cache" />

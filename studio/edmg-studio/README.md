@@ -18,7 +18,9 @@ A desktop-style "studio" application:
 
 ### Prereqs
 - Node.js `20.19+` or `22.12+` (Node 22 LTS recommended; `.node-version` is provided)
-- Python `>=3.10,<3.14`
+- Python 3.12 (pinned by the repository `.python-version`)
+- `uv` 0.11.28 for source development; packaged apps include the backend and
+  require neither Python nor uv
 - FFmpeg on PATH for dev checkouts, or the bundled Studio FFmpeg for packaged builds (used for MP4 assembly)
 - ComfyUI only if you want ComfyUI-backed still or motion workflows (default `http://127.0.0.1:8188`)
 - Planning/transcription run **in-process** by default through the selected provider; no separate AI server is required for the normal Studio path.
@@ -27,16 +29,17 @@ A desktop-style "studio" application:
 
 ### Backend
 ```bash
-cd python_backend
-python -m venv venv
-# Windows PowerShell
-venv\Scripts\Activate.ps1
-# macOS/Linux
-source venv/bin/activate
-pip install -U pip
-pip install -e ".[studio_bundle,test]"
-edmg-studio-backend serve --host 127.0.0.1 --port 7863
+uv lock --project python_backend --check
+uv sync --project python_backend --frozen \
+  --extra cpu --extra core --extra audio --group test --group lint
+uv run --project python_backend --frozen \
+  --extra cpu --extra core --extra audio \
+  python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
+
+Replace `cpu` with exactly one of `directml` (Windows) or `cuda` when that is
+the environment you are validating. PyTorch indexes are fixed in
+`pyproject.toml` and `uv.lock`; do not supply an index URL at runtime.
 
 ### Lightning backend helpers
 From `studio/edmg-studio/`:
@@ -45,18 +48,18 @@ From `studio/edmg-studio/`:
 bash scripts/start_lightning_backend.sh
 ```
 
-On managed Linux environments where virtualenv creation is unavailable, use the
-active Python/conda environment:
+On managed Linux environments that require the active Python/conda environment,
+let uv synchronize that environment from the same lock:
 
 ```bash
 EDMG_BACKEND_ENV_MODE=active bash scripts/start_lightning_backend.sh
 ```
 
-For current Blackwell CUDA machines, set an explicit PyTorch wheel index:
+For NVIDIA machines, select the locked CUDA profile:
 
 ```bash
 EDMG_BACKEND_ENV_MODE=active \
-EDMG_BACKEND_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
+EDMG_BACKEND_ACCELERATOR_PROFILE=cuda \
 bash scripts/start_lightning_backend.sh
 ```
 
@@ -145,6 +148,7 @@ OpenClaw is not part of the required Studio install path. If you use it, treat i
 Release/operator runbook:
 - [Studio release runbook](../../docs/STUDIO_RELEASE_RUNBOOK.md)
 - [Release checklist](../../RELEASE.md)
+- [Python toolchain and lock policy](../../docs/PYTHON_TOOLCHAIN.md)
 - [Linux packaging notes](./packaging/linux/README.md)
 - [GCP GPU VM deploy](../../docs/GCP_GPU_VM_DEPLOY.md)
 

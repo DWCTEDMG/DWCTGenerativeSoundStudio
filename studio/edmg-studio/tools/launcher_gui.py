@@ -14,7 +14,6 @@ import time
 STUDIO_DIR = Path(__file__).resolve().parents[1]
 ROOT = STUDIO_DIR.parents[1]
 BACKEND_DIR = STUDIO_DIR / "python_backend"
-BACKEND_VENV = BACKEND_DIR / "venv"
 BUNDLED_FFMPEG = STUDIO_DIR / "electron-resources" / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
 PACKAGE_JSON_PATH = STUDIO_DIR / "package.json"
 DEFAULT_PACKAGE_MANAGER = "pnpm"
@@ -23,12 +22,23 @@ DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_UI_PORT = 5173
 LAUNCHER_ENV_PATH = STUDIO_DIR / "launcher_env.json"
 BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json"
-SUPPORTED_PYTHON_MIN = (3, 10)
-SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 14)
-PYTORCH_CUDA_INDEX_ROOT = "https://download.pytorch.org/whl"
-PYTORCH_CUDA_TAG_FALLBACKS = ("cu132", "cu130", "cu128", "cu126", "cu124", "cu121", "cu118")
-CUDA_TORCH_PACKAGES = ("torch", "torchvision", "torchaudio")
-TENSORRT_RUNTIME_PACKAGES = ("tensorrt>=11.0.0", "cuda-python>=12.0.0")
+SUPPORTED_PYTHON_MIN = (3, 12)
+SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 13)
+
+# The source launcher is intentionally stdlib-only.  Import the backend's
+# checked-in uv policy without requiring the project environment to exist yet.
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from edmg_studio_backend.uv_toolchain import (  # noqa: E402
+    RUNTIME_CAPABILITY_EXTRAS,
+    active_accelerator_profile,
+    frozen_run_command,
+    lock_sha256,
+    resolve_uv,
+    sync_frozen_project,
+    uv_version,
+)
 
 # ── Machine optimiser ──────────────────────────────────────────────────────────
 OPTIMIZE_STATE_PATH = STUDIO_DIR / ".optimize_state.json"
@@ -233,28 +243,6 @@ def _resolve_supported_python_command() -> tuple[list[str], tuple[int, int, int]
         detail = " Unsupported candidates: " + ", ".join(unsupported)
     raise RuntimeError(f"Could not find a supported Python interpreter. Need {_format_python_requirement()}.{detail}")
 
-
-def _backend_venv_status() -> tuple[bool, str]:
-    py = _venv_python(BACKEND_VENV)
-    if not py.exists():
-        return False, "missing python executable"
-    version = _python_version_for_command([str(py)])
-    if version is None:
-        return False, "python executable is not runnable"
-    if not _is_supported_python_version(version):
-        return False, f"unsupported Python {_format_python_version(version)}"
-    return True, _format_python_version(version)
-
-
-def _reset_backend_venv(log_cb) -> None:
-    if BACKEND_VENV.exists():
-        shutil.rmtree(BACKEND_VENV, ignore_errors=True)
-    py = _venv_python(BACKEND_VENV)
-    if py.exists():
-        try:
-            py.unlink()
-        except Exception:
-            pass
 
 def _read_json(path: Path, default):
     try:
@@ -510,7 +498,7 @@ def _migrate_legacy_data_dir(new_data_dir: Path) -> str | None:
     """Migrate legacy runtime data into new_data_dir.
 
     Legacy locations we support:
-      - studio/edmg-studio/python_backend/data   (the one that breaks pip install -e)
+      - studio/edmg-studio/python_backend/data   (must never be treated as project metadata)
 
     We never delete user data:
       - We merge-copy into new_data_dir
@@ -828,11 +816,6 @@ def _find_free_port(host: str, start_port: int, *, max_tries: int = 50) -> int:
 
 LOG_MAX_CHARS = 200_000
 
-def _venv_python(venv: Path) -> Path:
-    if sys.platform.startswith("win"):
-        return venv / "Scripts" / "python.exe"
-    return venv / "bin" / "python"
-
 def _run_cmd(cmd, cwd=None, env=None, log_cb=None):
     p = subprocess.Popen(
         cmd,
@@ -870,191 +853,30 @@ def _tail_file(path: Path, max_bytes: int = 200_000) -> str:
         return ""
 
 
-def _installed_torch_version(py: str) -> str | None:
-    """Return the base version (no +cpu/+cuXXX local tag) of torch in the venv, if any."""
-    try:
-        proc = subprocess.run(
-            [py, "-c", "import torch,sys; sys.stdout.write(torch.__version__.split('+')[0])"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode == 0:
-            version = str(proc.stdout or "").strip()
-            return version or None
-    except Exception:
-        pass
-    return None
-
-
-def _cuda_tag_code(tag: str) -> int | None:
-    m = re.fullmatch(r"cu(\d+)", str(tag or "").strip().lower())
-    return int(m.group(1)) if m else None
-
-
-def _detect_driver_cuda_code() -> int | None:
-    smi = shutil.which("nvidia-smi")
-    if not smi:
-        return None
-    try:
-        proc = subprocess.run([smi], capture_output=True, text=True, timeout=15)
-        text = (proc.stdout or "") + (proc.stderr or "")
-        # nvidia-smi header shows e.g. "CUDA Version: 13.3" / "CUDA UMD Version: 13.3".
-        m = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text, re.IGNORECASE)
-        if m:
-            return int(m.group(1)) * 10 + int(m.group(2))  # 13.3 -> 133
-    except Exception:
-        pass
-    return None
-
-
-def _available_pytorch_cuda_tags() -> set[str]:
-    try:
-        with urllib.request.urlopen(PYTORCH_CUDA_INDEX_ROOT + "/", timeout=8) as resp:
-            text = resp.read().decode("utf-8", errors="ignore")
-        tags = {f"cu{m}" for m in re.findall(r"cu(\d{3})/?", text, flags=re.IGNORECASE)}
-        if tags:
-            return tags
-    except Exception:
-        pass
-    return set(PYTORCH_CUDA_TAG_FALLBACKS)
-
-
-def _choose_cuda_wheel_tag(driver_cuda_code: int | None, available_tags: set[str] | tuple[str, ...] | list[str]) -> str:
-    candidates = []
-    for tag in available_tags or PYTORCH_CUDA_TAG_FALLBACKS:
-        norm = str(tag or "").strip().lower()
-        code = _cuda_tag_code(norm)
-        if code is not None:
-            candidates.append((code, norm))
-    if not candidates:
-        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in PYTORCH_CUDA_TAG_FALLBACKS]
-    candidates = sorted(set(candidates), reverse=True)
-    if driver_cuda_code is None:
-        return candidates[0][1]
-    for code, tag in candidates:
-        if code <= driver_cuda_code:
-            return tag
-    return candidates[-1][1]
-
-
-def _cuda_wheel_tag_candidates() -> list[str]:
-    override = os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip().lower()
-    if override:
-        return [override]
-
-    driver_cuda_code = _detect_driver_cuda_code()
-    available_tags = _available_pytorch_cuda_tags()
-    candidates = []
-    for tag in available_tags or PYTORCH_CUDA_TAG_FALLBACKS:
-        norm = str(tag or "").strip().lower()
-        code = _cuda_tag_code(norm)
-        if code is not None:
-            candidates.append((code, norm))
-    if not candidates:
-        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in PYTORCH_CUDA_TAG_FALLBACKS]
-    candidates = sorted(set(candidates), reverse=True)
-    if driver_cuda_code is None:
-        return [tag for _, tag in candidates]
-    compatible = [tag for code, tag in candidates if code <= driver_cuda_code]
-    return compatible or [candidates[-1][1]]
-
-
-def _detect_cuda_wheel_tag() -> str:
-    """Pick the newest PyTorch CUDA wheel channel compatible with the NVIDIA driver."""
-    return _cuda_wheel_tag_candidates()[0]
-
-
-def _cuda_wheel_index_url(tag: str) -> str:
-    return os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip() or f"{PYTORCH_CUDA_INDEX_ROOT}/{tag}"
-
-
-def _should_auto_install_cuda_runtime() -> bool:
-    flag = os.environ.get("EDMG_INSTALL_CUDA", "").strip().lower()
-    if flag in {"0", "false", "no", "off", "cpu", "skip"}:
-        return False
-    if flag in {"1", "true", "yes", "on", "cuda", "nvidia"}:
-        return True
-    if os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip() or os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip():
-        return True
-    return shutil.which("nvidia-smi") is not None
-
-
-def _install_cuda_runtime(py: str, log_cb, *, allow_without_gpu: bool = False) -> None:
-    if not shutil.which("nvidia-smi") and not os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip():
-        msg = "nvidia-smi not found; CUDA runtime install needs an NVIDIA driver or EDMG_CUDA_WHEEL_TAG override."
-        if not allow_without_gpu:
-            raise RuntimeError(msg)
-        log_cb("Warning: " + msg)
-        log_cb("Continuing with the newest visible PyTorch CUDA wheel channel.")
-
-    rc = 1
-    index_url = ""
-    for tag in _cuda_wheel_tag_candidates():
-        index_url = _cuda_wheel_index_url(tag)
-        log_cb(f"CUDA wheel channel: {tag} ({index_url})")
-        log_cb("Installing latest CUDA-enabled PyTorch packages — this may take a few minutes…")
-        rc = _run_cmd(
-            [
-                py,
-                "-m",
-                "pip",
-                "install",
-                "--upgrade",
-                "--force-reinstall",
-                "--index-url",
-                index_url,
-                *CUDA_TORCH_PACKAGES,
-            ],
-            cwd=BACKEND_DIR,
-            log_cb=log_cb,
-        )
-        if rc != 0:
-            log_cb("Combined torch/vision/audio install failed; retrying with torch only…")
-            rc = _run_cmd(
-                [py, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--index-url", index_url, "torch"],
-                cwd=BACKEND_DIR,
-                log_cb=log_cb,
-            )
-        if rc == 0:
-            break
-        if os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip() or os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip():
-            break
-        log_cb(f"No usable PyTorch wheel found on {tag}; trying the next compatible CUDA channel…")
-
-    if rc != 0:
-        raise RuntimeError(
-            f"CUDA PyTorch install failed from {index_url}. "
-            "Check your NVIDIA driver, internet connection, or set EDMG_CUDA_WHEEL_TAG to a supported channel."
-        )
-
-    log_cb("Installing/updating TensorRT runtime packages for Studio TensorRT renders…")
-    rc = _run_cmd(
-        [py, "-m", "pip", "install", "--upgrade", *TENSORRT_RUNTIME_PACKAGES],
-        cwd=BACKEND_DIR,
-        log_cb=log_cb,
-    )
-    if rc != 0:
-        raise RuntimeError("TensorRT runtime package install failed")
-
-    log_cb("Verifying CUDA/TensorRT runtime…")
-    proc = _run_cmd(
+def _sync_locked_backend(profile: str, log_cb) -> None:
+    """Materialize and verify one lock-selected accelerator environment."""
+    capabilities = ", ".join(RUNTIME_CAPABILITY_EXTRAS)
+    log_cb(f"Checking uv.lock and syncing frozen `{profile}` profile ({capabilities})…")
+    uv = sync_frozen_project(profile, capability_extras=RUNTIME_CAPABILITY_EXTRAS, install_uv=True)
+    log_cb(f"uv {uv_version(uv)}: {uv}")
+    verify, env = frozen_run_command(
+        profile,
         [
-            py,
+            "python",
             "-c",
-            "import torch; print('torch', torch.__version__);"
-            "print('cuda build:', torch.version.cuda);"
-            "print('cuda available:', torch.cuda.is_available());"
-            "print('device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none');"
-            "import tensorrt; print('tensorrt', tensorrt.__version__)",
+            (
+                "import platform,torch,torchvision,torchaudio;"
+                "print('python', platform.python_version());"
+                "print('torch', torch.__version__);"
+                "print('torchvision', torchvision.__version__);"
+                "print('torchaudio', torchaudio.__version__)"
+            ),
         ],
-        cwd=BACKEND_DIR,
-        log_cb=log_cb,
+        capability_extras=RUNTIME_CAPABILITY_EXTRAS,
     )
-    if proc != 0:
-        log_cb("Warning: CUDA/TensorRT verification had an issue — check the log before rendering.")
-    else:
-        log_cb("CUDA/TensorRT runtime is ready for Studio renderer paths.")
+    if _run_cmd(verify, cwd=BACKEND_DIR, env=env, log_cb=log_cb) != 0:
+        raise RuntimeError(f"Frozen `{profile}` environment verification failed")
+    log_cb(f"Frozen `{profile}` backend is ready (lock {lock_sha256()[:12]}…).")
 
 
 def _parse_backend_url_from_logs(text: str) -> tuple[str, int] | None:
@@ -1733,10 +1555,14 @@ class Launcher(tk.Tk):
         try:
             py = sys.executable
             try:
-                bootstrap_cmd, bootstrap_version = _resolve_supported_python_command()
-                bootstrap_note = f" | bootstrap: {_describe_python_command(bootstrap_cmd)} ({_format_python_version(bootstrap_version)})"
+                uv = resolve_uv(install=False)
+                profile = active_accelerator_profile()
+                bootstrap_note = (
+                    f" | locked runtime: Python 3.12 | uv {uv_version(uv)} | "
+                    f"profile: {profile} | lock: {lock_sha256()[:12]}…"
+                )
             except Exception as e:
-                bootstrap_note = f" | bootstrap: NOT FOUND ({e})"
+                bootstrap_note = f" | locked runtime: NOT READY ({e})"
             node = self._which("node")
             package_manager_name = _studio_package_manager_name()
             package_manager = _resolve_package_manager_command(package_manager_name)
@@ -1948,73 +1774,19 @@ Get-ChildItem $base | ForEach-Object {
         self._run_bg("Restore Machine (OFF)", work)
 
     def install_cuda_torch(self) -> None:
-        """Install/update current CUDA PyTorch and TensorRT runtime packages."""
+        """Sync the immutable CUDA/TensorRT profile selected by uv.lock."""
         def work():
-            venv_ok, venv_detail = _backend_venv_status()
-            if not venv_ok or not BACKEND_VENV.exists():
-                raise RuntimeError(
-                    "Backend venv not found. Run 'Install/Update Backend' first, then refresh CUDA/TensorRT."
-                )
-            py = str(_venv_python(BACKEND_VENV))
-            _install_cuda_runtime(py, self._log, allow_without_gpu=True)
+            _sync_locked_backend("cuda", self._log)
+            os.environ["EDMG_BACKEND_ACCELERATOR_PROFILE"] = "cuda"
+            self._log("Active backend accelerator profile is now `cuda`.")
 
-        self._run_bg("Refresh CUDA/TensorRT Runtime", work)
+        self._run_bg("Sync locked CUDA/TensorRT profile", work)
 
     def install_backend(self) -> None:
         def work():
             BACKEND_DIR.mkdir(parents=True, exist_ok=True)
-            bootstrap_cmd, bootstrap_version = _resolve_supported_python_command()
-            self._log(
-                f"Using bootstrap Python: {_describe_python_command(bootstrap_cmd)} "
-                f"({_format_python_version(bootstrap_version)})"
-            )
-
-            venv_ok, venv_detail = _backend_venv_status()
-            if BACKEND_VENV.exists() and not venv_ok:
-                self._log(f"Backend venv is incompatible ({venv_detail}). Recreating it.")
-                _reset_backend_venv(self._log)
-
-            if not BACKEND_VENV.exists():
-                self._log(f"Creating venv: {BACKEND_VENV}")
-                rc = _run_cmd([*bootstrap_cmd, "-m", "venv", str(BACKEND_VENV)], cwd=BACKEND_DIR, log_cb=self._log)
-                if rc != 0:
-                    raise RuntimeError("venv creation failed")
-
-            py = str(_venv_python(BACKEND_VENV))
-            venv_ok, venv_detail = _backend_venv_status()
-            if not venv_ok:
-                raise RuntimeError(f"Backend venv is not usable after creation: {venv_detail}")
-
-            self._log("Upgrading pip…")
-            rc = _run_cmd([py, "-m", "pip", "install", "-U", "pip"], cwd=BACKEND_DIR, log_cb=self._log)
-            if rc != 0:
-                raise RuntimeError("pip upgrade failed")
-
-            self._log("Installing backend + bundled EDMG Core (editable)…")
-            rc = _run_cmd([py, "-m", "pip", "install", "-e", ".[studio_bundle]"], cwd=BACKEND_DIR, log_cb=self._log)
-            if rc != 0:
-                raise RuntimeError("backend install failed")
-
-            if _should_auto_install_cuda_runtime():
-                self._log("NVIDIA CUDA detected or requested; refreshing latest CUDA PyTorch + TensorRT runtime…")
-                _install_cuda_runtime(py, self._log)
-            else:
-                self._log(
-                    "CUDA/TensorRT runtime auto-install skipped (no NVIDIA GPU detected). "
-                    "Set EDMG_INSTALL_CUDA=1 or EDMG_CUDA_WHEEL_TAG to force it."
-                )
-
-            # Parakeet ASR (NVIDIA NeMo) — large/optional. Installed best-effort so a
-            # failure here never blocks the core backend install.
-            self._log("Installing Parakeet ASR extra (NVIDIA NeMo) — large download, optional…")
-            rc_parakeet = _run_cmd([py, "-m", "pip", "install", "-e", ".[parakeet]"], cwd=BACKEND_DIR, log_cb=self._log)
-            if rc_parakeet != 0:
-                self._log(
-                    "Warning: Parakeet ASR extra failed to install (optional). "
-                    "Core backend is still usable; you can retry this step later."
-                )
-            else:
-                self._log("Parakeet ASR extra installed.")
+            profile = active_accelerator_profile()
+            _sync_locked_backend(profile, self._log)
 
         self._run_bg("Install backend", work)
 
@@ -2048,22 +1820,29 @@ Get-ChildItem $base | ForEach-Object {
                 self._log("Backend already running.")
                 return
 
-            venv_ok, venv_detail = _backend_venv_status()
-            if not BACKEND_VENV.exists() or not venv_ok:
-                self._log(f"Backend venv missing or incompatible ({venv_detail}). Running backend install first.")
-                self.install_backend()
-                raise RuntimeError("Backend not installed yet. Re-run Start Backend after install completes.")
-
             self._ensure_backend_port_available()
 
-            py = str(_venv_python(BACKEND_VENV))
-            env = os.environ.copy()
+            profile = active_accelerator_profile()
+            _sync_locked_backend(profile, self._log)
+            cmd, env = frozen_run_command(
+                profile,
+                [
+                    "python",
+                    "-m",
+                    "edmg_studio_backend",
+                    "serve",
+                    "--host",
+                    self.backend_host,
+                    "--port",
+                    str(self.backend_port),
+                ],
+                capability_extras=RUNTIME_CAPABILITY_EXTRAS,
+            )
             for key, value in _default_storage_env(self.studio_home, self.data_dir).items():
                 env.setdefault(key, value)
             ffmpeg_path = _resolve_ffmpeg_path()
             env["EDMG_FFMPEG_PATH"] = ffmpeg_path
             self._log(f"Using FFmpeg: {ffmpeg_path}")
-            cmd = [py, "-m", "edmg_studio_backend", "serve", "--host", self.backend_host, "--port", str(self.backend_port)]
             self._log("Starting backend: " + " ".join(cmd))
             self.backend_proc = subprocess.Popen(cmd, cwd=str(BACKEND_DIR), env=env)
             time.sleep(0.25)

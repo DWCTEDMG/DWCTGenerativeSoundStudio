@@ -7,6 +7,7 @@ set -euo pipefail
 # because managed cloud workspaces such as Lightning may not allow creating a
 # project-local venv. Use COMFY_PYTHON_BIN to point at another interpreter.
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 COMFY_REPO_URL="${COMFY_REPO_URL:-https://github.com/Comfy-Org/ComfyUI.git}"
 COMFY_ROOT="${COMFY_ROOT:-${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}/external/ComfyUI}"
 COMFY_HOST="${COMFY_HOST:-127.0.0.1}"
@@ -14,7 +15,6 @@ COMFY_PORT="${COMFY_PORT:-8188}"
 COMFY_PYTHON_BIN="${COMFY_PYTHON_BIN:-python}"
 COMFY_LOG_DIR="${COMFY_LOG_DIR:-${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}/logs}"
 COMFY_LOG_FILE="${COMFY_LOG_FILE:-${COMFY_LOG_DIR}/comfyui.log}"
-COMFY_TORCH_INDEX_URL="${COMFY_TORCH_INDEX_URL:-${PIP_TORCH_INDEX_URL:-}}"
 COMFY_INSTALL_MODELS="${COMFY_INSTALL_MODELS:-0}"
 COMFY_START="${COMFY_START:-1}"
 COMFY_INSTALL_NODES="${COMFY_INSTALL_NODES:-1}"
@@ -52,7 +52,7 @@ install_requirements_if_present() {
   local dir="$1"
   if [[ -f "${dir}/requirements.txt" ]]; then
     log "Installing Python requirements in ${dir}"
-    "${COMFY_PYTHON_BIN}" -m pip install -r "${dir}/requirements.txt"
+    "${UV_BIN}" pip install --python "${COMFY_PYTHON_BIN}" -r "${dir}/requirements.txt"
   fi
 }
 
@@ -68,6 +68,9 @@ download_hf_file() {
 }
 
 require_cmd git
+# shellcheck source=uv_toolchain.sh
+source "${SCRIPT_DIR}/uv_toolchain.sh"
+UV_BIN="$(edmg_require_uv)"
 require_cmd "${COMFY_PYTHON_BIN}"
 
 mkdir -p "$(dirname "${COMFY_ROOT}")" "${COMFY_LOG_DIR}"
@@ -75,14 +78,6 @@ mkdir -p "$(dirname "${COMFY_ROOT}")" "${COMFY_LOG_DIR}"
 clone_or_pull "${COMFY_REPO_URL}" "${COMFY_ROOT}"
 
 cd "${COMFY_ROOT}"
-
-log "Upgrading pip tooling"
-"${COMFY_PYTHON_BIN}" -m pip install -U pip wheel
-
-if [[ -n "${COMFY_TORCH_INDEX_URL}" ]]; then
-  log "Installing CUDA PyTorch stack from ${COMFY_TORCH_INDEX_URL}"
-  "${COMFY_PYTHON_BIN}" -m pip install --upgrade torch torchvision torchaudio --index-url "${COMFY_TORCH_INDEX_URL}"
-fi
 
 install_requirements_if_present "${COMFY_ROOT}"
 
@@ -112,7 +107,7 @@ mkdir -p \
 
 if [[ "${COMFY_INSTALL_MODELS}" == "1" ]]; then
   log "Installing Hugging Face download helpers"
-  "${COMFY_PYTHON_BIN}" -m pip install -U huggingface_hub hf_transfer
+  "${UV_BIN}" pip install --python "${COMFY_PYTHON_BIN}" -U huggingface_hub hf_transfer
 
   download_hf_file "stabilityai/stable-diffusion-xl-base-1.0" "sd_xl_base_1.0.safetensors" "${COMFY_ROOT}/models/checkpoints"
   download_hf_file "stabilityai/stable-video-diffusion-img2vid-xt-1-1" "svd_xt_1_1.safetensors" "${COMFY_ROOT}/models/svd"

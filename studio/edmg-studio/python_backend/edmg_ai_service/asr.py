@@ -20,7 +20,7 @@ def _load_faster_whisper_model(model_size: str, device: str, compute_type: str):
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception as e:
-        raise RuntimeError("ASR requires optional deps: pip install -e '.[asr]'") from e
+        raise RuntimeError("ASR requires the locked `asr` capability in the active uv profile.") from e
     return WhisperModel(model_size, device=device, compute_type=compute_type)
 
 
@@ -30,7 +30,7 @@ def _load_parakeet_model(model_name: str, device: str):
         import nemo.collections.asr as nemo_asr  # type: ignore
     except Exception as e:
         raise RuntimeError(
-            'Parakeet ASR requires optional deps: pip install -e ".[parakeet]"'
+            "Parakeet ASR requires the locked `parakeet` capability in the active uv profile."
         ) from e
 
     model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_name)
@@ -484,7 +484,7 @@ def transcribe(
     """Transcribe audio to text using optional faster-whisper (CPU-friendly).
 
     Install:
-      pip install -e ".[asr]"
+      uv sync --frozen --extra cpu --extra asr
     """
     return str(
         transcribe_detailed(
