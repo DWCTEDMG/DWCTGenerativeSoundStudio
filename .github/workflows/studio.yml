@@ -55,6 +55,9 @@ jobs:
           cache: pip
           cache-dependency-path: studio/edmg-studio/python_backend/pyproject.toml
 
+      - name: Install uv
+        run: pip install uv
+
       - name: Provision pinned FFmpeg
         shell: pwsh
         env:
