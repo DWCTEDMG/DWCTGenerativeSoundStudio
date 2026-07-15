@@ -37,7 +37,11 @@ def test_profile_selection_prefers_explicit_closed_profile(monkeypatch):
 def test_profile_selection_is_deterministic_for_detected_platform(monkeypatch):
     launcher = _load_launcher()
     monkeypatch.delenv("EDMG_BACKEND_ACCELERATOR_PROFILE", raising=False)
-    monkeypatch.setattr(launcher.shutil, "which", lambda name: "nvidia-smi" if name == "nvidia-smi" else None)
+    monkeypatch.setattr(
+        launcher.shutil,
+        "which",
+        lambda name: "nvidia-smi" if name == "nvidia-smi" else None,
+    )
     assert launcher.select_profile() == "cuda"
 
     monkeypatch.setattr(launcher.shutil, "which", lambda _name: None)

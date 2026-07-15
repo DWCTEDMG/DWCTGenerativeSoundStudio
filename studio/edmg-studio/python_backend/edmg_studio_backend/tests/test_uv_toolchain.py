@@ -27,8 +27,13 @@ def test_frozen_project_args_select_exactly_one_accelerator(profile, monkeypatch
 def test_legacy_profile_inputs_are_validated_and_conflicts_are_rejected(monkeypatch):
     monkeypatch.setattr(uv_toolchain.platform, "system", lambda: "Windows")
 
-    assert uv_toolchain.profile_from_legacy_inputs(bundle="studio_bundle", flavor="nvidia") == "cuda"
-    assert uv_toolchain.profile_from_legacy_inputs(bundle="studio_bundle_directml", flavor="cpu") == "directml"
+    assert (
+        uv_toolchain.profile_from_legacy_inputs(bundle="studio_bundle", flavor="nvidia") == "cuda"
+    )
+    assert (
+        uv_toolchain.profile_from_legacy_inputs(bundle="studio_bundle_directml", flavor="cpu")
+        == "directml"
+    )
     with pytest.raises(uv_toolchain.ToolchainError, match="Conflicting backend selections"):
         uv_toolchain.profile_from_legacy_inputs(bundle="studio_bundle_directml", flavor="cuda")
     with pytest.raises(uv_toolchain.ToolchainError, match="Unsupported legacy backend bundle"):

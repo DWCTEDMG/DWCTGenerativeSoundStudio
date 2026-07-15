@@ -120,6 +120,7 @@ def test_repository_uses_one_locked_python_project() -> None:
         "directml",
         "cuda",
         "audio",
+        "clap",
         "asr",
         "source-separation",
         "parakeet",

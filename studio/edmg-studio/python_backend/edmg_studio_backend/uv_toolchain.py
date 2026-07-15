@@ -13,9 +13,9 @@ import tarfile
 import tempfile
 import urllib.request
 import zipfile
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
-
+from typing import Any
 
 UV_REQUIRED_VERSION = "0.11.28"
 PYTHON_REQUIRED_MINOR = (3, 12)
@@ -88,7 +88,9 @@ def normalize_accelerator_profile(value: str | None) -> str:
     profile = aliases.get(profile, profile)
     if profile not in ACCELERATOR_PROFILES:
         allowed = ", ".join(ACCELERATOR_PROFILES)
-        raise ToolchainError(f"Unsupported accelerator profile {value!r}. Choose exactly one of: {allowed}.")
+        raise ToolchainError(
+            f"Unsupported accelerator profile {value!r}. Choose exactly one of: {allowed}."
+        )
     if profile == "directml" and platform.system() != "Windows":
         raise ToolchainError("The directml profile is supported only on Windows.")
     return profile
@@ -110,7 +112,12 @@ def profile_from_legacy_inputs(
         )
     bundle_profile = _LEGACY_BUNDLE_PROFILES[normalized_bundle]
     normalized_flavor = str(flavor or "cpu").strip().lower()
-    flavor_profile = {"nvidia": "cuda", "cuda": "cuda", "amd": "directml", "directml": "directml"}.get(
+    flavor_profile = {
+        "nvidia": "cuda",
+        "cuda": "cuda",
+        "amd": "directml",
+        "directml": "directml",
+    }.get(
         normalized_flavor,
         "cpu" if normalized_flavor == "cpu" else None,
     )
@@ -203,7 +210,9 @@ def _validated_archive_target(root: Path, member_name: str) -> Path:
     try:
         target.relative_to(root.resolve())
     except ValueError as exc:
-        raise ToolchainError(f"Pinned uv archive contains an unsafe path: {member_name!r}.") from exc
+        raise ToolchainError(
+            f"Pinned uv archive contains an unsafe path: {member_name!r}."
+        ) from exc
     return target
 
 
@@ -215,7 +224,9 @@ def _extract_uv_archive(archive_path: Path, destination: Path) -> None:
                 _validated_archive_target(destination, member.filename)
                 # Unix symlinks can be represented in a zip's external mode.
                 if ((member.external_attr >> 16) & 0o170000) == 0o120000:
-                    raise ToolchainError(f"Pinned uv archive contains a symbolic link: {member.filename!r}.")
+                    raise ToolchainError(
+                        f"Pinned uv archive contains a symbolic link: {member.filename!r}."
+                    )
             archive.extractall(destination)
         return
 
@@ -244,7 +255,9 @@ def resolve_uv(*, install: bool = False) -> Path:
         version = uv_version(installed)
         if version == UV_REQUIRED_VERSION:
             return installed.resolve()
-        raise ToolchainError(f"Installed uv at {installed}, but it reported version {version or 'unknown'}.")
+        raise ToolchainError(
+            f"Installed uv at {installed}, but it reported version {version or 'unknown'}."
+        )
 
     detail = f" Found incompatible versions: {', '.join(wrong_versions)}." if wrong_versions else ""
     raise ToolchainError(
@@ -272,10 +285,15 @@ def install_pinned_uv() -> Path:
         temp_root = Path(raw_tmp)
         archive_path = temp_root / archive_name
         try:
-            with urllib.request.urlopen(url, timeout=120) as response, archive_path.open("wb") as output:
+            with (
+                urllib.request.urlopen(url, timeout=120) as response,
+                archive_path.open("wb") as output,
+            ):
                 shutil.copyfileobj(response, output)
         except Exception as exc:  # pragma: no cover - network failures are environment-specific
-            raise ToolchainError(f"Could not download pinned uv {UV_REQUIRED_VERSION} from {url}: {exc}") from exc
+            raise ToolchainError(
+                f"Could not download pinned uv {UV_REQUIRED_VERSION} from {url}: {exc}"
+            ) from exc
 
         actual_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
         if actual_sha256 != expected_sha256:
@@ -353,9 +371,13 @@ def run_checked(
         check=False,
     )
     if result.returncode != 0:
-        output = "\n".join(part.strip() for part in (result.stdout or "", result.stderr or "") if part.strip())
+        output = "\n".join(
+            part.strip() for part in (result.stdout or "", result.stderr or "") if part.strip()
+        )
         suffix = f"\n{output}" if output else ""
-        raise ToolchainError(f"Command failed ({result.returncode}): {' '.join(map(str, command))}{suffix}")
+        raise ToolchainError(
+            f"Command failed ({result.returncode}): {' '.join(map(str, command))}{suffix}"
+        )
     return result
 
 
@@ -376,7 +398,12 @@ def sync_frozen_project(
     env = toolchain_environment(profile=resolved_profile)
     run_checked([uv, "lock", "--check"], cwd=backend_root(), env=env)
     run_checked(
-        [uv, *frozen_project_args("sync", resolved_profile, capability_extras=capability_extras, groups=groups)],
+        [
+            uv,
+            *frozen_project_args(
+                "sync", resolved_profile, capability_extras=capability_extras, groups=groups
+            ),
+        ],
         cwd=backend_root(),
         env=env,
     )
@@ -395,7 +422,9 @@ def frozen_run_command(
     uv = resolve_uv(install=install_uv)
     args = [
         str(uv),
-        *frozen_project_args("run", resolved_profile, capability_extras=capability_extras, groups=groups),
+        *frozen_project_args(
+            "run", resolved_profile, capability_extras=capability_extras, groups=groups
+        ),
         *map(str, command),
     ]
     return args, toolchain_environment(profile=resolved_profile)
@@ -450,7 +479,9 @@ def toolchain_status(*, profile: str | None = None, check_sync: bool = True) -> 
             ),
         }
 
-    resolved_profile = normalize_accelerator_profile(profile or os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "cpu"))
+    resolved_profile = normalize_accelerator_profile(
+        profile or os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "cpu")
+    )
     status: dict[str, Any] = {
         "ok": False,
         "packaged": False,
@@ -463,7 +494,11 @@ def toolchain_status(*, profile: str | None = None, check_sync: bool = True) -> 
         "accelerator_profile": resolved_profile,
         "capability_extras": list(RUNTIME_CAPABILITY_EXTRAS),
         "torch_packages": [
-            {"name": name, "version": _installed_version(name), "index": TORCH_INDEXES[resolved_profile]}
+            {
+                "name": name,
+                "version": _installed_version(name),
+                "index": TORCH_INDEXES[resolved_profile],
+            }
             for name in ("torch", "torchvision", "torchaudio")
         ],
         "torch_index": TORCH_INDEXES[resolved_profile],
@@ -475,7 +510,9 @@ def toolchain_status(*, profile: str | None = None, check_sync: bool = True) -> 
         uv = resolve_uv(install=False)
         status["uv_version"] = uv_version(uv)
         env = toolchain_environment(profile=resolved_profile)
-        run_checked([uv, "lock", "--check"], cwd=backend_root(), env=env, capture_output=True, timeout=60)
+        run_checked(
+            [uv, "lock", "--check"], cwd=backend_root(), env=env, capture_output=True, timeout=60
+        )
         status["lock_check"] = "ok"
         if check_sync:
             sync_args = frozen_project_args("sync", resolved_profile)

@@ -61,6 +61,7 @@ audio = [
   "librosa>=0.10.2,<1",
   "soundfile>=0.12,<1",
 ]
+clap = ["laion-clap>=1.1.7,<2"]
 asr = [
   "faster-whisper>=1.1,<2",
   "openai-whisper>=20240930",

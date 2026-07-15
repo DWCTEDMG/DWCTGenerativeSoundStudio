@@ -9,21 +9,36 @@ from edmg_studio_backend.uv_toolchain import ToolchainError
 
 
 def test_setup_profile_requires_exact_public_name():
-    assert setup_wizard.resolve_setup_accelerator_profile({"accelerator_profile": "cuda"}) == "cuda"
+    assert (
+        setup_wizard.resolve_setup_accelerator_profile({"accelerator_profile": "cuda"})
+        == "cuda"
+    )
 
-    with pytest.raises(ToolchainError, match="Choose exactly one of: cpu, directml, cuda"):
-        setup_wizard.resolve_setup_accelerator_profile({"accelerator_profile": "nvidia"})
+    with pytest.raises(
+        ToolchainError, match="Choose exactly one of: cpu, directml, cuda"
+    ):
+        setup_wizard.resolve_setup_accelerator_profile(
+            {"accelerator_profile": "nvidia"}
+        )
 
 
 def test_setup_profile_preserves_validated_legacy_payloads(monkeypatch):
-    assert setup_wizard.resolve_setup_accelerator_profile(
-        {"bundle": "studio_bundle", "flavor": "nvidia"}
-    ) == "cuda"
+    assert (
+        setup_wizard.resolve_setup_accelerator_profile(
+            {"bundle": "studio_bundle", "flavor": "nvidia"}
+        )
+        == "cuda"
+    )
 
-    monkeypatch.setattr("edmg_studio_backend.uv_toolchain.platform.system", lambda: "Windows")
-    assert setup_wizard.resolve_setup_accelerator_profile(
-        {"bundle": "studio_bundle_directml", "flavor": "cpu"}
-    ) == "directml"
+    monkeypatch.setattr(
+        "edmg_studio_backend.uv_toolchain.platform.system", lambda: "Windows"
+    )
+    assert (
+        setup_wizard.resolve_setup_accelerator_profile(
+            {"bundle": "studio_bundle_directml", "flavor": "cpu"}
+        )
+        == "directml"
+    )
 
 
 def test_setup_profile_rejects_conflicting_new_and_legacy_fields():
@@ -45,7 +60,9 @@ def test_setup_profile_rejects_unknown_legacy_bundle():
 
 
 def test_source_backend_install_uses_one_frozen_profile(monkeypatch, tmp_path: Path):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='test'\n", encoding="utf-8"
+    )
     (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
     synced: list[str] = []
 

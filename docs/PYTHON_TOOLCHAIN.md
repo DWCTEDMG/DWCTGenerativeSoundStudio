@@ -19,7 +19,7 @@ Every project environment must select exactly one accelerator profile:
 
 The profiles are mutually exclusive in `[tool.uv].conflicts`. Accelerator
 choice is independent from product capability extras such as `core`, `audio`,
-`asr`, `source-separation`, `parakeet`, `aws`, `azure`, `codex`, and
+`clap`, `asr`, `source-separation`, `parakeet`, `aws`, `azure`, `codex`, and
 `internal-video`.
 
 The baseline developer environment is:

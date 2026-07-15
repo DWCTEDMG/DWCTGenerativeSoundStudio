@@ -47,11 +47,15 @@ def _locked_registry(lock: dict[str, Any], package_name: str, version: str) -> s
 def _validate_torch_index(profile: str, index: str) -> None:
     if profile in {"cpu", "directml"}:
         if index != CPU_TORCH_INDEX:
-            raise RuntimeError(f"{profile} must use {CPU_TORCH_INDEX}; lock selected {index}")
+            raise RuntimeError(
+                f"{profile} must use {CPU_TORCH_INDEX}; lock selected {index}"
+            )
         return
     if profile == "cuda":
         if not CUDA_TORCH_INDEX_PATTERN.fullmatch(index):
-            raise RuntimeError(f"cuda must use a fixed PyTorch CUDA index; lock selected {index}")
+            raise RuntimeError(
+                f"cuda must use a fixed PyTorch CUDA index; lock selected {index}"
+            )
         return
     raise RuntimeError(f"Unsupported accelerator profile: {profile}")
 
@@ -73,7 +77,9 @@ def collect_provenance(lock_path: Path, profile: str) -> dict[str, Any]:
         version = importlib.metadata.version(package_name)
         index = _locked_registry(lock, package_name, version)
         indexes.add(index)
-        torch_packages.append({"name": package_name, "version": version, "index": index})
+        torch_packages.append(
+            {"name": package_name, "version": version, "index": index}
+        )
 
     if len(indexes) != 1:
         raise RuntimeError(
@@ -96,7 +102,9 @@ def collect_provenance(lock_path: Path, profile: str) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Collect lock-backed EDMG release provenance")
+    parser = argparse.ArgumentParser(
+        description="Collect lock-backed EDMG release provenance"
+    )
     parser.add_argument("--lock", required=True, type=Path)
     parser.add_argument("--profile", required=True, choices=("cpu", "directml", "cuda"))
     args = parser.parse_args()
