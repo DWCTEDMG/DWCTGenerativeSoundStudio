@@ -18,6 +18,8 @@
     "test": "pnpm run test:ui",
     "test:ui": "vitest run",
     "test:ui:watch": "vitest",
+    "test:release-toolchain": "node --test scripts/release-python-toolchain.node-test.mjs",
+    "test:uv-runtime": "node --test main-process/backend-runtime.node-test.mjs",
     "lint": "eslint src main.mjs preload.cjs main-process scripts --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check:tooling": "node scripts/check-tooling.mjs",
