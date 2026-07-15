@@ -221,7 +221,7 @@ def test_dynamic_dependency_indexes_are_rejected_not_consumed() -> None:
 
     allowed_mentions = {
         guard,
-        STUDIO_ROOT / "scripts" / "release-python-toolchain.test.mjs",
+        STUDIO_ROOT / "scripts" / "release-python-toolchain.node-test.mjs",
     }
     violations: list[str] = []
     for path in _execution_sources():

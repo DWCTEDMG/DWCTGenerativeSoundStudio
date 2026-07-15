@@ -4,8 +4,8 @@ import hashlib
 import shutil
 import urllib.request
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 NLTK_RESOURCE_LOCATIONS: dict[str, tuple[str, ...]] = {
     "punkt": ("tokenizers/punkt",),

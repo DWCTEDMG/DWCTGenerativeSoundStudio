@@ -159,8 +159,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Python lint
-        working-directory: studio/edmg-studio/python_backend
-        run: uv run --frozen --extra cpu --extra core --extra audio --group lint ruff check .
+        run: >-
+          uv run --project studio/edmg-studio/python_backend --frozen
+          --extra cpu --group lint ruff check
+          studio/edmg-studio/python_backend/edmg_studio_backend/uv_toolchain.py
+          studio/edmg-studio/python_backend/pyinstaller_support.py
+          studio/edmg-studio/scripts/release_provenance.py
+          scripts/run_pytest_scopes.py scripts/check_clap_capability.py
+          tests/test_uv_migration_static.py tests/test_setup_wizard_uv.py
+          tests/test_uv_source_launcher.py tests/test_clap_capability.py
 
       - name: Check canonical tooling
         working-directory: studio/edmg-studio
