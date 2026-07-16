@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import time
@@ -9,7 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+logger = logging.getLogger(__name__)
+
 CURRENT_SCHEMA_VERSION = 1
+_CORRUPTED_QUARANTINE_SUFFIX = ".__corrupted_quarantine"
 
 
 @dataclass
@@ -147,9 +151,13 @@ class ProjectStore:
 
     def _load_document(self, project_id: str, *, persist_migrations: bool = True) -> dict[str, Any] | None:
         project_path = self._project_path(project_id)
-        if not project_path.exists():
+        try:
+            if not project_path.exists():
+                return None
+            raw = json.loads(project_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            logger.warning("Unreadable project document %s: %s", project_path, exc)
             return None
-        raw = json.loads(project_path.read_text(encoding="utf-8"))
         from_version = int((raw or {}).get("schema_version") or 0)
         migrated, changed, _applied = migrate_project_document(raw)
         if changed and persist_migrations:
@@ -159,14 +167,24 @@ class ProjectStore:
 
     def list(self) -> list[Project]:
         out: list[Project] = []
-        for d in sorted(self.projects_dir.iterdir()):
-            if not d.is_dir():
+        try:
+            entries = sorted(self.projects_dir.iterdir())
+        except OSError as exc:
+            logger.warning("Cannot list projects directory %s: %s", self.projects_dir, exc)
+            return out
+        for d in entries:
+            if d.name.endswith(_CORRUPTED_QUARANTINE_SUFFIX):
                 continue
             try:
+                if not d.is_dir():
+                    continue
                 data = self._load_document(d.name)
                 if data is None:
                     continue
                 out.append(self._to_project(data))
+            except OSError as exc:
+                logger.warning("Skipping unreadable project directory %s: %s", d, exc)
+                continue
             except Exception:
                 continue
         return out

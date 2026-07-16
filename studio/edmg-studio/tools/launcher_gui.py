@@ -150,18 +150,58 @@ def _load_optimize_state() -> dict:
 
 
 def _resolve_ffmpeg_path() -> str:
+    """Prefer this checkout's bundled FFmpeg over a stale user EDMG_FFMPEG_PATH."""
+    if BUNDLED_FFMPEG.exists():
+        return str(BUNDLED_FFMPEG)
+
     explicit = os.environ.get("EDMG_FFMPEG_PATH", "").strip()
     if explicit:
         if not os.path.isabs(explicit) or Path(explicit).exists():
             return explicit
 
-    if BUNDLED_FFMPEG.exists():
-        return str(BUNDLED_FFMPEG)
+    for candidate in _windows_ffmpeg_candidates():
+        if candidate.is_file():
+            return str(candidate)
+
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
 
     if explicit:
         return explicit
 
     return "ffmpeg"
+
+
+def _windows_ffmpeg_candidates() -> list[Path]:
+    if not sys.platform.startswith("win"):
+        return []
+    local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    return [
+        local / "Microsoft" / "WinGet" / "Links" / "ffmpeg.exe",
+        Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
+        Path(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
+        Path(r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe"),
+    ]
+
+
+def _resolve_7z_path() -> str | None:
+    explicit = os.environ.get("EDMG_7Z_PATH", "").strip()
+    if explicit and Path(explicit).exists():
+        return explicit
+    if sys.platform.startswith("win"):
+        for candidate in (
+            Path(r"C:\Program Files\7-Zip\7z.exe"),
+            Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
+        ):
+            if candidate.is_file():
+                return str(candidate)
+    return (
+        shutil.which("7z")
+        or shutil.which("7z.exe")
+        or shutil.which("7zz")
+        or shutil.which("7zz.exe")
+    )
 
 
 def _format_python_requirement() -> str:
@@ -307,6 +347,50 @@ def _windows_node_candidate_dirs() -> list[Path]:
     return out
 
 
+def _windows_tool_candidate_dirs() -> list[Path]:
+    """Extra dirs for tools the launcher may need when PATH is incomplete."""
+    dirs = list(_windows_node_candidate_dirs())
+    if not sys.platform.startswith("win"):
+        return dirs
+    local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    extra = [
+        Path(r"C:\Program Files\7-Zip"),
+        Path(r"C:\Program Files (x86)\7-Zip"),
+        local / "Microsoft" / "WinGet" / "Links",
+        Path(r"C:\ffmpeg\bin"),
+        Path(r"C:\Program Files\ffmpeg\bin"),
+        BUNDLED_FFMPEG.parent if BUNDLED_FFMPEG.exists() else None,
+    ]
+    ffmpeg = _resolve_ffmpeg_path()
+    try:
+        ff_path = Path(ffmpeg)
+        if ff_path.is_file():
+            extra.append(ff_path.parent)
+    except OSError:
+        pass
+    seven = _resolve_7z_path()
+    if seven:
+        try:
+            extra.append(Path(seven).parent)
+        except OSError:
+            pass
+    seen = {str(d.resolve()).lower() for d in dirs if d.is_dir()}
+    for d in extra:
+        if d is None:
+            continue
+        try:
+            if not d.is_dir():
+                continue
+            key = str(d.resolve()).lower()
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        dirs.append(d)
+    return dirs
+
+
 def _which_on_path_or_node_dirs(exe: str) -> str | None:
     found = shutil.which(exe)
     if found:
@@ -316,7 +400,7 @@ def _which_on_path_or_node_dirs(exe: str) -> str | None:
         lower = exe.lower()
         if not lower.endswith((".exe", ".cmd", ".bat", ".com")):
             names = [f"{exe}.cmd", f"{exe}.exe", f"{exe}.bat", exe]
-    for directory in _windows_node_candidate_dirs():
+    for directory in _windows_tool_candidate_dirs():
         for name in names:
             candidate = directory / name
             if candidate.is_file():
@@ -336,13 +420,13 @@ def _resolve_package_manager_command(name: str) -> tuple[list[str], str] | None:
 
 
 def _env_with_node_bin_dirs(env: dict[str, str] | None = None) -> dict[str, str]:
-    """Ensure Node/pnpm dirs are on PATH for child processes (Electron/Vite)."""
+    """Ensure Node/pnpm/FFmpeg/7-Zip dirs are on PATH for child processes."""
     out = dict(env if env is not None else os.environ)
     path_key = "Path" if sys.platform.startswith("win") and "Path" in out and "PATH" not in out else "PATH"
     current = out.get(path_key) or out.get("PATH") or ""
     parts = [p for p in current.split(os.pathsep) if p]
     prepend: list[str] = []
-    for directory in _windows_node_candidate_dirs():
+    for directory in _windows_tool_candidate_dirs():
         s = str(directory)
         if s and s not in parts and s not in prepend:
             prepend.append(s)
@@ -350,6 +434,11 @@ def _env_with_node_bin_dirs(env: dict[str, str] | None = None) -> dict[str, str]
         out[path_key] = os.pathsep.join([*prepend, *parts]) if parts else os.pathsep.join(prepend)
         if path_key == "Path":
             out["PATH"] = out[path_key]
+    ffmpeg_path = _resolve_ffmpeg_path()
+    out["EDMG_FFMPEG_PATH"] = ffmpeg_path
+    seven = _resolve_7z_path()
+    if seven:
+        out["EDMG_7Z_PATH"] = seven
     return out
 
 def _user_appdata_dir() -> Path:
@@ -1917,11 +2006,14 @@ Get-ChildItem $base | ForEach-Object {
                 ],
                 capability_extras=RUNTIME_CAPABILITY_EXTRAS,
             )
+            env = _env_with_node_bin_dirs(env)
             for key, value in _default_storage_env(self.studio_home, self.data_dir).items():
                 env.setdefault(key, value)
-            ffmpeg_path = _resolve_ffmpeg_path()
+            ffmpeg_path = env.get("EDMG_FFMPEG_PATH") or _resolve_ffmpeg_path()
             env["EDMG_FFMPEG_PATH"] = ffmpeg_path
             self._log(f"Using FFmpeg: {ffmpeg_path}")
+            if env.get("EDMG_7Z_PATH"):
+                self._log(f"Using 7-Zip: {env['EDMG_7Z_PATH']}")
             self._log("Starting backend: " + " ".join(cmd))
             self.backend_proc = subprocess.Popen(cmd, cwd=str(BACKEND_DIR), env=env)
             time.sleep(0.25)

@@ -18,12 +18,14 @@ def get_history(comfyui_url: str, prompt_id: str) -> dict[str, Any]:
     r.raise_for_status()
     return r.json()
 
-def get_object_info(comfyui_url: str) -> dict[str, Any]:
+def get_object_info(comfyui_url: str, *, timeout: float = 60.0) -> dict[str, Any]:
     """Returns ComfyUI node catalog (keys are node class names).
 
     This is the most reliable way to detect which custom nodes are installed.
+    Health/setup probes should pass a short ``timeout`` so a down ComfyUI
+    cannot stall the Studio UI for a full minute.
     """
-    r = requests.get(f"{comfyui_url}/object_info", timeout=60)
+    r = requests.get(f"{comfyui_url}/object_info", timeout=timeout)
     r.raise_for_status()
     return r.json()
 

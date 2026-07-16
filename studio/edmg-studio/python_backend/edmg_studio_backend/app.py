@@ -761,7 +761,7 @@ def _resolve_comfy_checkpoint_name(
     available: list[str] = []
     for url in settings.resolved_comfyui_urls():
         try:
-            names = _extract_comfy_checkpoint_names(comfy.get_object_info(url))
+            names = _extract_comfy_checkpoint_names(comfy.get_object_info(url, timeout=2.0))
         except Exception:
             continue
         for name in names:

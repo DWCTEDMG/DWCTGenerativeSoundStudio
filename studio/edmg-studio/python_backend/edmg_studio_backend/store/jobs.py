@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -9,7 +10,32 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+logger = logging.getLogger(__name__)
+
 Status = Literal["queued", "running", "succeeded", "failed", "canceled"]
+
+# Renamed aside when a project tree is unreadable (e.g. WinError 1392 on USB).
+_CORRUPTED_QUARANTINE_SUFFIX = ".__corrupted_quarantine"
+
+
+def _quarantine_unreadable_project(proj_dir: Path) -> Path | None:
+    """Best-effort rename of a corrupted project folder so later scans skip it."""
+    name = proj_dir.name
+    if name.endswith(_CORRUPTED_QUARANTINE_SUFFIX):
+        return None
+    target = proj_dir.with_name(f"{name}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    try:
+        if target.exists():
+            target = proj_dir.with_name(f"{name}.{int(time.time())}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    except OSError:
+        target = proj_dir.with_name(f"{name}.{int(time.time())}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    try:
+        proj_dir.rename(target)
+        logger.warning("Quarantined unreadable project directory: %s -> %s", proj_dir, target)
+        return target
+    except OSError as exc:
+        logger.warning("Could not quarantine unreadable project %s: %s", proj_dir, exc)
+        return None
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -150,15 +176,40 @@ class JobStore:
         )
 
     def _migrate_json_jobs(self) -> None:
-        if not self.projects_dir.exists():
+        try:
+            if not self.projects_dir.exists():
+                return
+            proj_dirs = list(self.projects_dir.iterdir())
+        except OSError as exc:
+            logger.warning(
+                "Cannot scan projects directory for job migration: %s (%s)",
+                self.projects_dir,
+                exc,
+            )
             return
-        for proj_dir in self.projects_dir.iterdir():
-            if not proj_dir.is_dir():
+
+        for proj_dir in proj_dirs:
+            if proj_dir.name.endswith(_CORRUPTED_QUARANTINE_SUFFIX):
                 continue
-            jobs_dir = proj_dir / "jobs"
-            if not jobs_dir.exists():
+            try:
+                # WinError 1392 (corrupt/unreadable) can raise from is_dir/exists/glob
+                # on flaky USB/external volumes — never abort backend startup for one project.
+                if not proj_dir.is_dir():
+                    continue
+                jobs_dir = proj_dir / "jobs"
+                if not jobs_dir.exists():
+                    continue
+                job_paths = list(jobs_dir.glob("*.json"))
+            except OSError as exc:
+                logger.warning(
+                    "Skipping corrupted project during job migration: %s (%s)",
+                    proj_dir,
+                    exc,
+                )
+                _quarantine_unreadable_project(proj_dir)
                 continue
-            for jpath in jobs_dir.glob("*.json"):
+
+            for jpath in job_paths:
                 try:
                     data = json.loads(jpath.read_text(encoding="utf-8"))
                     job = Job(

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from unittest.mock import patch
 
-from edmg_studio_backend.store.jobs import JobStore
+from edmg_studio_backend.store.jobs import JobStore, _CORRUPTED_QUARANTINE_SUFFIX
 
 
 def test_job_store_create_claim_and_idempotency(tmp_path: Path) -> None:
@@ -66,3 +67,53 @@ def test_job_store_cancel_retry_and_progress(tmp_path: Path) -> None:
     assert retried.status == "queued"
     assert retried.attempt == 1
     store.close()
+
+
+def test_job_store_migrate_skips_unreadable_project_dirs(tmp_path: Path) -> None:
+    """WinError 1392-style OSError on jobs_dir.exists() must not crash JobStore init."""
+    projects = tmp_path / "projects"
+    good = projects / "goodproj" / "jobs"
+    good.mkdir(parents=True)
+    legacy_id = "legacyjob00000000000000000002"
+    (good / f"{legacy_id}.json").write_text(
+        '{"id":"%s","project_id":"goodproj","type":"analyze","status":"queued",'
+        '"created_at":"2026-07-15 00:00:00","updated_at":"2026-07-15 00:00:00",'
+        '"payload":{}}' % legacy_id,
+        encoding="utf-8",
+    )
+    bad = projects / "badproj"
+    bad.mkdir()
+
+    real_exists = Path.exists
+
+    def exists_side_effect(self: Path) -> bool:
+        # Simulate corrupt volume: listing yields the project, but jobs/ is unreadable.
+        if self == bad / "jobs":
+            raise OSError(1392, "The file or directory is corrupted and unreadable")
+        return real_exists(self)
+
+    with patch.object(Path, "exists", exists_side_effect):
+        store = JobStore(projects, db_path=tmp_path / "jobs.sqlite")
+    try:
+        migrated = store.get("goodproj", legacy_id)
+        assert migrated is not None
+        quarantined = projects / f"badproj{_CORRUPTED_QUARANTINE_SUFFIX}"
+        assert quarantined.is_dir()
+        assert not (projects / "badproj").exists()
+    finally:
+        store.close()
+
+
+def test_job_store_migrate_skips_already_quarantined_dirs(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    quarantined = projects / f"deadproj{_CORRUPTED_QUARANTINE_SUFFIX}"
+    (quarantined / "jobs").mkdir(parents=True)
+    (quarantined / "jobs" / "ignored.json").write_text("{}", encoding="utf-8")
+
+    store = JobStore(projects, db_path=tmp_path / "jobs.sqlite")
+    try:
+        # Quarantined trees are skipped entirely (not double-renamed, not migrated).
+        assert quarantined.is_dir()
+        assert store.list_all() == []
+    finally:
+        store.close()
