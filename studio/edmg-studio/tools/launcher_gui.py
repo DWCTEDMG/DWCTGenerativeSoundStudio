@@ -452,29 +452,155 @@ def _user_appdata_dir() -> Path:
 def _bootstrap_config_path() -> Path:
     return _user_appdata_dir() / "EDMG Studio" / BOOTSTRAP_CONFIG_BASENAME
 
+# Populated while resolving Studio storage paths; consumed by Launcher.__init__ for UI logs.
+_PATH_RESOLUTION_NOTES: list[str] = []
+
+
+def _note_path_resolution(message: str) -> None:
+    text = str(message).strip()
+    if text:
+        _PATH_RESOLUTION_NOTES.append(text)
+
+
+def _windows_drive_usable(path: Path) -> bool:
+    """Return False when path is on a missing/unmounted Windows drive letter."""
+    if os.name != "nt":
+        return True
+    anchor = path.anchor
+    if not anchor:
+        return True
+    try:
+        return bool(Path(anchor).exists())
+    except Exception:
+        return False
+
+
+def _available_windows_drive_letters() -> list[str]:
+    """Mounted Windows drive letters (A-Z) that currently exist."""
+    if os.name != "nt":
+        return []
+    letters: list[str] = []
+    for code in range(ord("A"), ord("Z") + 1):
+        letter = chr(code)
+        root = Path(f"{letter}:\\")
+        try:
+            if root.exists():
+                letters.append(letter)
+        except OSError:
+            continue
+    return letters
+
+
+def _discover_missing_drive_remaps(path: Path) -> list[Path]:
+    """Discover ``{host}:\\{letter}\\rest`` when ``{letter}:`` is missing.
+
+    Scans mounted drives for a folder named like the missing letter (common when
+    a volume is remounted under another drive). Prefer remaps whose full path
+    exists; otherwise return letter-root hits so callers can still choose.
+    """
+    if os.name != "nt":
+        return []
+    match = re.match(r"^([A-Za-z]):[\\/]*(.*)$", str(path))
+    if not match:
+        return []
+    letter = match.group(1).upper()
+    rest = match.group(2).replace("/", "\\").strip("\\")
+
+    existing: list[Path] = []
+    letter_root_hits: list[Path] = []
+    for host in _available_windows_drive_letters():
+        if host == letter:
+            continue
+        letter_root = Path(f"{host}:\\{letter}")
+        try:
+            if not letter_root.exists():
+                continue
+        except OSError:
+            continue
+        remapped = letter_root / rest if rest else letter_root
+        letter_root_hits.append(remapped)
+        try:
+            if remapped.exists():
+                existing.append(remapped)
+        except OSError:
+            continue
+    return existing or letter_root_hits
+
+
+def _host_letter_root(remapped: Path) -> Path | None:
+    """``E:\\G\\Users\\...`` -> ``E:\\G`` (the former drive letter mount root)."""
+    parts = remapped.parts
+    if len(parts) < 2:
+        return None
+    return Path(remapped.anchor) / parts[1]
+
+
+def _coerce_usable_path(path: Path) -> Path | None:
+    """Return path if usable, or a discovered remount under another drive letter."""
+    try:
+        resolved = path.expanduser().resolve()
+    except Exception:
+        try:
+            resolved = path.expanduser().absolute()
+        except Exception:
+            return None
+
+    if _windows_drive_usable(resolved):
+        return resolved
+
+    candidates = _discover_missing_drive_remaps(resolved)
+    if not candidates:
+        _note_path_resolution(
+            f"Ignoring unusable Studio path (missing drive, no remount discovered): {resolved}"
+        )
+        return None
+
+    # Prefer a remap whose full path exists; otherwise first discovered candidate.
+    chosen: Path | None = None
+    for remapped in candidates:
+        try:
+            remapped_resolved = remapped.resolve()
+        except Exception:
+            remapped_resolved = remapped
+
+        if not _windows_drive_usable(remapped_resolved):
+            continue
+
+        try:
+            path_exists = bool(remapped_resolved.exists())
+        except Exception:
+            path_exists = False
+
+        if path_exists:
+            chosen = remapped_resolved
+            break
+        if chosen is None:
+            chosen = remapped_resolved
+
+    if chosen is None:
+        _note_path_resolution(
+            f"Ignoring unusable Studio path (missing drive, remount candidates unusable): {resolved}"
+        )
+        return None
+
+    _note_path_resolution(f"Remapped missing-drive Studio path {resolved} -> {chosen}")
+    return chosen
+
+
 def _saved_path_if_usable(raw_value: str | None) -> Path | None:
     value = str(raw_value or "").strip()
     if not value:
         return None
-    candidate = Path(value).expanduser()
-    try:
-        resolved = candidate.resolve()
-    except Exception:
-        try:
-            resolved = candidate.absolute()
-        except Exception:
-            return None
+    return _coerce_usable_path(Path(value))
 
+
+def _local_fallback_studio_home() -> Path:
+    """Usable default when configured Studio home is on a missing drive."""
     if os.name == "nt":
-        anchor = resolved.anchor
-        if anchor:
-            try:
-                if not Path(anchor).exists():
-                    return None
-            except Exception:
-                return None
-
-    return resolved
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        return (base / "EDMG Studio" / "home").resolve()
+    xdg = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+    return (xdg / "edmg-studio" / "home").resolve()
 
 def _derive_studio_home(data_dir: Path) -> Path:
     return data_dir.expanduser().resolve().parent
@@ -567,11 +693,15 @@ def _default_data_dir() -> Path:
     # Keep runtime data OUTSIDE python_backend/ to avoid packaging issues.
     env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
     if env_home:
-        return (Path(env_home).expanduser().resolve() / "data")
+        usable_home = _saved_path_if_usable(env_home)
+        if usable_home is not None:
+            return (usable_home / "data")
 
     cur = os.environ.get("EDMG_STUDIO_DATA_DIR", "").strip()
     if cur:
-        return Path(cur).expanduser().resolve()
+        usable_data = _saved_path_if_usable(cur)
+        if usable_data is not None:
+            return usable_data
 
     bootstrap = _read_json(_bootstrap_config_path(), default={})
     if isinstance(bootstrap, dict):
@@ -592,15 +722,23 @@ def _default_data_dir() -> Path:
 
 def _ensure_data_dir_env() -> Path:
     # Priority: explicit env -> Studio bootstrap -> launcher config -> default.
+    # Env often comes from launcher_env.json via edmg_studio_backend.__init__;
+    # never trust those paths blindly on a missing Windows drive letter.
     env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
     if env_home:
-        _, p = _persist_studio_location(studio_home=Path(env_home))
-        return p
+        usable_home = _saved_path_if_usable(env_home)
+        if usable_home is not None:
+            _, p = _persist_studio_location(studio_home=usable_home)
+            return p
+        _note_path_resolution(f"Ignoring unusable EDMG_STUDIO_HOME from environment: {env_home}")
 
     cur = os.environ.get("EDMG_STUDIO_DATA_DIR", "").strip()
     if cur:
-        _, p = _persist_studio_location(data_dir=Path(cur))
-        return p
+        usable_data = _saved_path_if_usable(cur)
+        if usable_data is not None:
+            _, p = _persist_studio_location(data_dir=usable_data)
+            return p
+        _note_path_resolution(f"Ignoring unusable EDMG_STUDIO_DATA_DIR from environment: {cur}")
 
     bootstrap = _read_json(_bootstrap_config_path(), default={})
     if isinstance(bootstrap, dict):
@@ -620,8 +758,36 @@ def _ensure_data_dir_env() -> Path:
             _, p = _persist_studio_location(data_dir=saved)
             return p
 
-    _, p = _persist_studio_location(data_dir=_default_data_dir())
+    default_data = _default_data_dir()
+    _note_path_resolution(
+        f"No usable configured Studio home; using default data dir: {default_data}"
+    )
+    _, p = _persist_studio_location(data_dir=default_data)
     return p
+
+
+def _mkdir_or_fallback(path: Path, *, label: str) -> Path:
+    """Create path, or switch to a local fallback home if the drive is missing."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError as exc:
+        winerror = getattr(exc, "winerror", None)
+        _note_path_resolution(
+            f"Failed to create {label} at {path} ({exc}); "
+            f"falling back to a local Studio home"
+            + (f" [winerror={winerror}]" if winerror is not None else "")
+        )
+        fallback_home = _local_fallback_studio_home()
+        _, fallback_data = _persist_studio_location(studio_home=fallback_home)
+        if label == "studio home":
+            target = fallback_home
+        elif label == "studio log dir":
+            target = (fallback_data / "logs").resolve()
+        else:
+            target = fallback_data
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
 def _safe_merge_copy(src: Path, dst: Path) -> tuple[int, int]:
     """Copy src -> dst, merging directories.
@@ -1080,11 +1246,24 @@ class Launcher(tk.Tk):
 
         self._refresh_in_progress = False
 
+        _PATH_RESOLUTION_NOTES.clear()
         self.data_dir = _ensure_data_dir_env()
-        self.studio_home = Path(os.environ.get("EDMG_STUDIO_HOME", str(_derive_studio_home(self.data_dir)))).expanduser().resolve()
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+        usable_home = _saved_path_if_usable(env_home) if env_home else None
+        self.studio_home = usable_home or _derive_studio_home(self.data_dir)
+        self.data_dir = _mkdir_or_fallback(self.data_dir, label="data dir")
+        # mkdir fallback may have rewritten studio_home via persist
+        env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+        usable_home = _saved_path_if_usable(env_home) if env_home else None
+        self.studio_home = usable_home or _derive_studio_home(self.data_dir)
         self.studio_log_path = (self.data_dir / "logs" / "studio_dev.log").resolve()
-        self.studio_log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_parent = _mkdir_or_fallback(self.studio_log_path.parent, label="studio log dir")
+        self.studio_log_path = (log_parent / "studio_dev.log").resolve()
+        if log_parent != self.data_dir / "logs":
+            self.data_dir = log_parent.parent
+            env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+            usable_home = _saved_path_if_usable(env_home) if env_home else None
+            self.studio_home = usable_home or _derive_studio_home(self.data_dir)
 
         self._studio_log_pos = 0
         self._studio_log_poll_ms = 400
@@ -1093,6 +1272,7 @@ class Launcher(tk.Tk):
         self.backend_host, self.backend_port = _ensure_backend_env()
 
         self._startup_migration_msg = _migrate_legacy_data_dirs(self.data_dir)
+        self._startup_path_notes = list(_PATH_RESOLUTION_NOTES)
 
         self._build_ui()
         self._refresh_status()
@@ -1100,6 +1280,9 @@ class Launcher(tk.Tk):
         self.after(500, self._poll_studio_log)
 
         self.after(250, self._auto_attach_backend_if_found)
+        if self._startup_path_notes:
+            notes = list(self._startup_path_notes)
+            self.after(350, lambda: [self._log(n) for n in notes])
         if self._startup_migration_msg:
             self.after(400, lambda: self._log(self._startup_migration_msg))
 
@@ -1191,10 +1374,19 @@ class Launcher(tk.Tk):
         migration_queued = _queue_studio_migration(self.studio_home, self.data_dir, studio_home)
         studio_home, data_dir = _persist_studio_location(studio_home=studio_home)
         self.studio_home = studio_home
-        self.data_dir = data_dir
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir = _mkdir_or_fallback(data_dir, label="data dir")
+        # mkdir fallback may have rewritten studio_home via persist
+        env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+        usable_home = _saved_path_if_usable(env_home) if env_home else None
+        self.studio_home = usable_home or _derive_studio_home(self.data_dir)
         self.studio_log_path = (self.data_dir / "logs" / "studio_dev.log").resolve()
-        self.studio_log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_parent = _mkdir_or_fallback(self.studio_log_path.parent, label="studio log dir")
+        self.studio_log_path = (log_parent / "studio_dev.log").resolve()
+        if log_parent != self.data_dir / "logs":
+            self.data_dir = log_parent.parent
+            env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+            usable_home = _saved_path_if_usable(env_home) if env_home else None
+            self.studio_home = usable_home or _derive_studio_home(self.data_dir)
         self._studio_log_pos = 0
 
         if hasattr(self, "var_studio_home"):

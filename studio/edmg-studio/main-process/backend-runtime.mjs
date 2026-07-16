@@ -72,6 +72,20 @@ export function buildBackendLaunchSpec({
   };
 }
 
+export function resolveStudioUiOrigin(devServerUrl, { isDev = true } = {}) {
+  if (!isDev) {
+    // Packaged Electron uses loadFile → browser Origin "null".
+    return "null";
+  }
+  const raw = String(devServerUrl || "").trim();
+  if (!raw) return "null";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "null";
+  }
+}
+
 export function createBackendRuntime({
   app,
   dialog,
@@ -88,9 +102,14 @@ export function createBackendRuntime({
   getStudioPaths,
   buildManagedStudioEnv,
   buildManagedAiEnv,
+  isDev = !app?.isPackaged,
+  devServerUrl = "",
+  studioUiOrigin = "",
 }) {
   let currentBackendUrl = backendUrl || `http://${backendHost}:${backendPort}`;
   let backendProc = null;
+  const uiOrigin =
+    String(studioUiOrigin || "").trim() || resolveStudioUiOrigin(devServerUrl, { isDev });
 
   function logBackendUrlMarker() {
     console.log(`EDMG_BACKEND_URL=${currentBackendUrl}`);
@@ -210,6 +229,59 @@ export function createBackendRuntime({
     } catch {}
   }
 
+  function findListeningPid(port) {
+    const target = Number(port);
+    if (!Number.isFinite(target) || target <= 0) return null;
+
+    if (isWindows) {
+      const result = spawnSync("netstat", ["-ano", "-p", "TCP"], {
+        windowsHide: true,
+        encoding: "utf8",
+        shell: false,
+      });
+      if (result.status !== 0) return null;
+      const pat = new RegExp(`:${target}\\s+LISTENING\\s+(\\d+)\\s*$`, "i");
+      const pat6 = new RegExp(`\\]:${target}\\s+LISTENING\\s+(\\d+)\\s*$`, "i");
+      for (const line of String(result.stdout || "").split(/\r?\n/)) {
+        const match = pat.exec(line.trim()) || pat6.exec(line.trim());
+        if (match) {
+          const pid = Number(match[1]);
+          return Number.isFinite(pid) && pid > 0 ? pid : null;
+        }
+      }
+      return null;
+    }
+
+    const result = spawnSync("lsof", ["-nP", `-iTCP:${target}`, "-sTCP:LISTEN", "-t"], {
+      encoding: "utf8",
+      shell: false,
+    });
+    if (result.status !== 0) return null;
+    const pid = Number(String(result.stdout || "").trim().split(/\r?\n/)[0]);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  }
+
+  async function reclaimStaleBackendPort(reason) {
+    const pid = findListeningPid(backendPort);
+    if (!pid) {
+      console.warn(`[backend] ${reason}; port ${backendPort} has no listener to reclaim`);
+      return false;
+    }
+
+    console.warn(
+      `[backend] ${reason}; terminating PID ${pid} on :${backendPort} so Desktop can spawn a fresh backend`,
+    );
+    terminateProcessTree(pid);
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (!(await probeBackend())) return true;
+      await delay(200);
+    }
+
+    return !(await probeBackend());
+  }
+
   function quotePowerShell(value) {
     return `'${String(value ?? "").replace(/'/g, "''")}'`;
   }
@@ -285,11 +357,28 @@ export function createBackendRuntime({
     });
   }
 
+  async function probeBackendAllowsStudioOrigin(url = currentBackendUrl) {
+    const origin = uiOrigin || "null";
+    return new Promise((resolve) => {
+      const req = http.get(`${url}/health`, { headers: { Origin: origin } }, (res) => {
+        const allow = String(res.headers["access-control-allow-origin"] || "").trim();
+        res.resume();
+        resolve(allow === "*" || allow === origin);
+      });
+
+      req.on("error", () => resolve(false));
+      req.setTimeout(1500, () => {
+        req.destroy();
+        resolve(false);
+      });
+    });
+  }
+
   async function waitForBackendReady(timeoutMs = backendReadyTimeoutMs) {
     const started = Date.now();
 
     while (Date.now() - started < timeoutMs) {
-      if (await probeBackend()) {
+      if ((await probeBackend()) && (await probeBackendAllowsStudioOrigin())) {
         return true;
       }
       await delay(300);
@@ -306,9 +395,30 @@ export function createBackendRuntime({
     }
 
     if (await probeBackend()) {
-      console.log("[backend] already reachable:", currentBackendUrl);
-      logBackendUrlMarker();
-      return true;
+      if (await probeBackendAllowsStudioOrigin()) {
+        console.log("[backend] already reachable:", currentBackendUrl);
+        logBackendUrlMarker();
+        return true;
+      }
+
+      // Desktop cannot use a backend that rejects the Studio UI Origin.
+      // Reclaim the port and fall through to spawn instead of blocking the UI.
+      const reclaimed = await reclaimStaleBackendPort(
+        `${currentBackendUrl} answers /health but does not allow Origin ${uiOrigin} (CORS)`,
+      );
+      if (!reclaimed) {
+        const message =
+          `${currentBackendUrl} answers /health but does not allow Origin ${uiOrigin} (CORS),\n` +
+          `and Studio could not free port ${backendPort} automatically.\n\n` +
+          "1. In the launcher, click Stop Backend\n" +
+          "2. Or run: netstat -ano | findstr :7863  then  taskkill /PID <pid> /F\n" +
+          "3. Start Studio again so a fresh backend is spawned";
+        console.warn("[backend] refusing attach (missing Studio UI CORS):\n" + message);
+        if (!testMode) {
+          dialog.showErrorBox("Stale Studio backend (CORS)", message);
+        }
+        return false;
+      }
     }
 
     const spec = getBackendLaunchSpec();

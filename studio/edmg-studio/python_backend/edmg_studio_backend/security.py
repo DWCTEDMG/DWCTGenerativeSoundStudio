@@ -17,10 +17,14 @@ _PROJECT_MEDIA_PATH = re.compile(
     r"^/v1/projects/[0-9a-f]{32}/(?:file|audio|preview(?:/.*)?)$",
     re.IGNORECASE,
 )
-_DEFAULT_CORS_ORIGINS = (
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
-    "null",
+# Electron loadFile / file:// sends Origin "null". Loopback Studio UI origins
+# (any port) are covered by _LOCAL_DEV_CORS_ORIGIN_REGEX — do not pin Vite ports.
+_DEFAULT_CORS_ORIGINS = ("null",)
+
+# Always keep loopback Studio UI origins working even when cloud deploy
+# scripts set EDMG_BACKEND_CORS_ORIGINS / EDMG_BACKEND_CORS_ORIGIN_REGEX.
+_LOCAL_DEV_CORS_ORIGIN_REGEX = (
+    r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 )
 
 
@@ -30,6 +34,27 @@ def _truthy(value: str | None) -> bool:
 
 def _split_csv(value: str | None) -> tuple[str, ...]:
     return tuple(part.strip().rstrip("/") for part in str(value or "").split(",") if part.strip())
+
+
+def _merge_cors_origins(env_value: str | None) -> tuple[str, ...]:
+    """Union env allowlist with local defaults (file:// null + loopback via regex)."""
+    merged: list[str] = list(_DEFAULT_CORS_ORIGINS)
+    seen = set(merged)
+    for origin in _split_csv(env_value):
+        if origin not in seen:
+            merged.append(origin)
+            seen.add(origin)
+    return tuple(merged)
+
+
+def _merge_cors_origin_regex(env_value: str | None) -> str:
+    """Keep local-dev regex active; OR in any configured cloud regex."""
+    configured = str(env_value or "").strip()
+    if not configured:
+        return _LOCAL_DEV_CORS_ORIGIN_REGEX
+    if configured == _LOCAL_DEV_CORS_ORIGIN_REGEX:
+        return configured
+    return f"(?:{_LOCAL_DEV_CORS_ORIGIN_REGEX})|(?:{configured})"
 
 
 def is_loopback_host(host: str | None) -> bool:
@@ -50,7 +75,7 @@ class BackendSecuritySettings:
     configured_host: str
     allow_insecure_remote: bool
     cors_origins: tuple[str, ...]
-    cors_origin_regex: str | None
+    cors_origin_regex: str
     public_media_gets: bool
 
     @classmethod
@@ -58,8 +83,8 @@ class BackendSecuritySettings:
         mode = os.getenv("EDMG_BACKEND_AUTH_MODE", "auto").strip().lower()
         if mode not in {"auto", "required", "disabled"}:
             mode = "auto"
-        origins = _split_csv(os.getenv("EDMG_BACKEND_CORS_ORIGINS")) or _DEFAULT_CORS_ORIGINS
-        regex = os.getenv("EDMG_BACKEND_CORS_ORIGIN_REGEX", "").strip() or None
+        origins = _merge_cors_origins(os.getenv("EDMG_BACKEND_CORS_ORIGINS"))
+        regex = _merge_cors_origin_regex(os.getenv("EDMG_BACKEND_CORS_ORIGIN_REGEX"))
         return cls(
             auth_mode=mode,
             auth_token=configured_backend_token(),

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 from edmg_studio_backend.security import (
     BackendSecurityMiddleware,
     BackendSecuritySettings,
+    _DEFAULT_CORS_ORIGINS,
+    _LOCAL_DEV_CORS_ORIGIN_REGEX,
     validate_remote_bind_security,
 )
 
@@ -17,7 +20,7 @@ def _settings(**overrides):
         "configured_host": "0.0.0.0",
         "allow_insecure_remote": False,
         "cors_origins": ("http://127.0.0.1:5173",),
-        "cors_origin_regex": None,
+        "cors_origin_regex": _LOCAL_DEV_CORS_ORIGIN_REGEX,
         "public_media_gets": True,
     }
     values.update(overrides)
@@ -125,3 +128,68 @@ def test_security_headers_are_added_to_success_and_error_responses():
             headers={"Authorization": "Bearer test-backend-token"},
         )
         assert ok.headers["referrer-policy"] == "no-referrer"
+
+
+def test_cors_defaults_survive_env_origin_override(monkeypatch):
+    monkeypatch.setenv("EDMG_BACKEND_CORS_ORIGINS", "https://app.example.com")
+    monkeypatch.delenv("EDMG_BACKEND_CORS_ORIGIN_REGEX", raising=False)
+    settings = BackendSecuritySettings.from_env()
+    assert "null" in settings.cors_origins
+    assert "https://app.example.com" in settings.cors_origins
+    # Loopback Studio UI is regex-covered (any port), not a pinned origin list.
+    assert "http://127.0.0.1:5173" not in settings.cors_origins
+    assert settings.cors_origin_regex == _LOCAL_DEV_CORS_ORIGIN_REGEX
+
+
+def test_cors_origin_regex_keeps_local_dev_when_cloud_regex_set(monkeypatch):
+    monkeypatch.delenv("EDMG_BACKEND_CORS_ORIGINS", raising=False)
+    monkeypatch.setenv(
+        "EDMG_BACKEND_CORS_ORIGIN_REGEX",
+        r"^https://[A-Za-z0-9.-]+\.example\.com$",
+    )
+    settings = BackendSecuritySettings.from_env()
+    assert _LOCAL_DEV_CORS_ORIGIN_REGEX in (settings.cors_origin_regex or "")
+    assert r"example\.com" in (settings.cors_origin_regex or "")
+    for origin in _DEFAULT_CORS_ORIGINS:
+        assert origin in settings.cors_origins
+
+
+def test_cors_middleware_allows_any_loopback_studio_origin():
+    settings = _settings(
+        auth_mode="disabled",
+        auth_token="",
+        configured_host="127.0.0.1",
+        cors_origins=_DEFAULT_CORS_ORIGINS,
+        cors_origin_regex=_LOCAL_DEV_CORS_ORIGIN_REGEX,
+    )
+    app = FastAPI()
+    app.add_middleware(BackendSecurityMiddleware, settings=settings)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_origin_regex=settings.cors_origin_regex,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/v1/models/catalog")
+    def catalog():
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        for origin in ("http://127.0.0.1:5173", "http://localhost:5199", "http://127.0.0.1:4173"):
+            get_res = client.get("/v1/models/catalog", headers={"Origin": origin})
+            assert get_res.status_code == 200
+            assert get_res.headers.get("access-control-allow-origin") == origin
+
+        options_res = client.options(
+            "/v1/models/catalog",
+            headers={
+                "Origin": "http://127.0.0.1:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert options_res.status_code == 200
+        assert options_res.headers.get("access-control-allow-origin") == "http://127.0.0.1:5173"

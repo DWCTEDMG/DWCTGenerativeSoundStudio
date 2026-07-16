@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     from huggingface_hub import snapshot_download  # type: ignore
@@ -75,6 +78,60 @@ def _normalize_path(path: Path | str) -> str:
 
 def _same_path(left: Path | str, right: Path | str) -> bool:
     return _normalize_path(left) == _normalize_path(right)
+
+
+# Renamed aside when a model tree is unreadable (e.g. WinError 1392 on USB).
+_CORRUPTED_QUARANTINE_SUFFIX = ".__corrupted_quarantine"
+
+
+def _path_exists_safe(path: Path) -> bool:
+    """Return whether *path* exists; treat unreadable volumes as missing.
+
+    On Windows, corrupt/unreadable paths (e.g. WinError 1392 on USB/external
+    mounts) can raise OSError from ``Path.exists()`` / ``stat()`` instead of
+    returning False. Catalog and install probes must never crash on that.
+    """
+    try:
+        return path.exists()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as missing: %s (%s)", path, exc)
+        return False
+
+
+def _path_is_dir_safe(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as non-directory: %s (%s)", path, exc)
+        return False
+
+
+def _path_is_file_safe(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as non-file: %s (%s)", path, exc)
+        return False
+
+
+def _quarantine_unreadable_model_dir(model_dir: Path) -> Path | None:
+    """Best-effort rename of a corrupted model folder so later scans skip it."""
+    name = model_dir.name
+    if not name or name.endswith(_CORRUPTED_QUARANTINE_SUFFIX):
+        return None
+    target = model_dir.with_name(f"{name}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    try:
+        if target.exists():
+            target = model_dir.with_name(f"{name}.{int(time.time())}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    except OSError:
+        target = model_dir.with_name(f"{name}.{int(time.time())}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    try:
+        model_dir.rename(target)
+        logger.warning("Quarantined unreadable model directory: %s -> %s", model_dir, target)
+        return target
+    except OSError as exc:
+        logger.warning("Could not quarantine unreadable model dir %s: %s", model_dir, exc)
+        return None
 
 
 def _read_reparse_target(path: Path) -> Path | None:
@@ -763,10 +820,10 @@ class ModelManager:
         if comfy_portable_installed(self.external_dir, self.data_dir):
             root = Path(os.path.abspath(os.fspath(comfy_portable_root(self.external_dir, self.data_dir) / "ComfyUI" / "models" / folder)))
             try:
-                if root.exists():
+                if _path_exists_safe(root):
                     return root
             except (OSError, RuntimeError):
-                if _repair_mutual_junction_chain(root) and root.exists():
+                if _repair_mutual_junction_chain(root) and _path_exists_safe(root):
                     return root
         return None
 
@@ -788,28 +845,40 @@ class ModelManager:
             mid = str(e.get("id") or "")
             if not mid:
                 continue
-            src = (e.get("source") or "").lower()
-            if src == "ollama":
-                out[mid] = str(e.get("ollama_model") or "") in ollama_models
-                continue
+            try:
+                src = (e.get("source") or "").lower()
+                if src == "ollama":
+                    out[mid] = str(e.get("ollama_model") or "") in ollama_models
+                    continue
 
-            target = e.get("target") or {}
-            engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
-            folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
-            fname = str(e.get("filename") or "")
+                target = e.get("target") or {}
+                engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+                folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+                fname = str(e.get("filename") or "")
 
-            if engine == "internal":
-                out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
-                continue
-            if engine == "runtime_bundle":
-                out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
-                continue
+                if engine == "internal":
+                    out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
+                    continue
+                if engine == "runtime_bundle":
+                    out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
+                    continue
 
-            if fname:
-                primary = self._comfy_models_dir(folder) / fname
-                legacy_root = self._legacy_comfy_models_dir(folder)
-                out[mid] = primary.exists() or bool(legacy_root and (legacy_root / fname).exists())
-            else:
+                if fname:
+                    primary = self._comfy_models_dir(folder) / fname
+                    legacy_root = self._legacy_comfy_models_dir(folder)
+                    out[mid] = _path_exists_safe(primary) or bool(
+                        legacy_root and _path_exists_safe(legacy_root / fname)
+                    )
+                else:
+                    out[mid] = False
+            except OSError as exc:
+                # Belt-and-suspenders: corrupt volumes can raise from exists/stat/listdir
+                # deep in install probes (WinError 1392). Never fail the whole catalog.
+                logger.warning(
+                    "Skipping unreadable model install probe for %s: %s",
+                    mid,
+                    exc,
+                )
                 out[mid] = False
         return out
 
@@ -822,7 +891,7 @@ class ModelManager:
 
     def _is_model_weight_file(self, candidate: Path) -> bool:
         try:
-            if not candidate.exists() or not candidate.is_file():
+            if not _path_exists_safe(candidate) or not _path_is_file_safe(candidate):
                 return False
             if candidate.stat().st_size <= 0:
                 return False
@@ -836,7 +905,7 @@ class ModelManager:
         return True
 
     def _internal_component_has_weights(self, component_dir: Path) -> bool:
-        if not component_dir.exists() or not component_dir.is_dir():
+        if not _path_exists_safe(component_dir) or not _path_is_dir_safe(component_dir):
             return False
         patterns = (
             "diffusion_pytorch_model*.safetensors",
@@ -850,18 +919,37 @@ class ModelManager:
             "openvino_model.bin",
             "flax_model.msgpack",
         )
-        return any(
-            self._is_model_weight_file(candidate)
-            for pattern in patterns
-            for candidate in component_dir.glob(pattern)
-        )
+        try:
+            return any(
+                self._is_model_weight_file(candidate)
+                for pattern in patterns
+                for candidate in component_dir.glob(pattern)
+            )
+        except OSError as exc:
+            logger.warning(
+                "Treating unreadable component directory as missing weights: %s (%s)",
+                component_dir,
+                exc,
+            )
+            return False
 
     def _diffusers_snapshot_complete(self, path: Path) -> bool:
         model_index = path / "model_index.json"
-        if not model_index.exists():
+        try:
+            index_exists = model_index.exists()
+        except OSError as exc:
+            # WinError 1392 etc.: treat as not installed and quarantine when possible.
+            logger.warning("Treating unreadable path as missing: %s (%s)", model_index, exc)
+            _quarantine_unreadable_model_dir(path)
+            return False
+        if not index_exists:
             return False
         try:
             data = json.loads(model_index.read_text(encoding="utf-8"))
+        except OSError as exc:
+            logger.warning("Treating unreadable model_index as missing: %s (%s)", model_index, exc)
+            _quarantine_unreadable_model_dir(path)
+            return False
         except Exception:
             return False
         if not isinstance(data, dict):
@@ -887,7 +975,18 @@ class ModelManager:
         if not required_components:
             return False
 
-        return all(self._internal_component_has_weights(path / component) for component in required_components)
+        try:
+            return all(
+                self._internal_component_has_weights(path / component) for component in required_components
+            )
+        except OSError as exc:
+            logger.warning(
+                "Treating unreadable diffusers snapshot as incomplete: %s (%s)",
+                path,
+                exc,
+            )
+            _quarantine_unreadable_model_dir(path)
+            return False
 
     def missing_diffusers_components(self, model_id: str) -> list[str]:
         entry = self._find_entry(model_id)
@@ -899,10 +998,10 @@ class ModelManager:
             return []
         folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
         path = self._internal_models_dir(folder) / str(model_id or "")
-        if not path.exists():
+        if not _path_exists_safe(path):
             return ["snapshot"]
         model_index = path / "model_index.json"
-        if not model_index.exists():
+        if not _path_exists_safe(model_index):
             return ["model_index.json"]
         try:
             data = json.loads(model_index.read_text(encoding="utf-8"))
@@ -931,7 +1030,7 @@ class ModelManager:
         return missing
 
     def _clear_incomplete_snapshot(self, dest: Path) -> None:
-        if not dest.exists():
+        if not _path_exists_safe(dest):
             return
         import shutil
 
@@ -941,35 +1040,53 @@ class ModelManager:
             pass
 
     def _internal_asset_installed(self, entry: dict[str, Any], path: Path) -> bool:
-        if not path.exists():
+        if not _path_exists_safe(path):
             return False
 
         kind = str(entry.get("kind") or "").strip().lower()
         if kind in {"diffusers", "video_diffusers"}:
             return self._diffusers_snapshot_complete(path)
         if kind == "motion_adapter":
-            has_config = (path / "config.json").exists() or (path / "adapter_config.json").exists()
-            has_weights = any(
-                self._is_model_weight_file(candidate)
-                for pattern in (
-                    "diffusion_pytorch_model*.safetensors",
-                    "diffusion_pytorch_model*.bin",
-                    "pytorch_model*.safetensors",
-                    "pytorch_model*.bin",
-                    "model*.safetensors",
-                    "model*.bin",
+            try:
+                has_config = _path_exists_safe(path / "config.json") or _path_exists_safe(
+                    path / "adapter_config.json"
                 )
-                for candidate in path.glob(pattern)
-            )
+                has_weights = any(
+                    self._is_model_weight_file(candidate)
+                    for pattern in (
+                        "diffusion_pytorch_model*.safetensors",
+                        "diffusion_pytorch_model*.bin",
+                        "pytorch_model*.safetensors",
+                        "pytorch_model*.bin",
+                        "model*.safetensors",
+                        "model*.bin",
+                    )
+                    for candidate in path.glob(pattern)
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Treating unreadable motion adapter as not installed: %s (%s)",
+                    path,
+                    exc,
+                )
+                return False
             return bool(has_config and has_weights)
         if kind == "controlnet":
-            if not (path / "config.json").exists():
+            if not _path_exists_safe(path / "config.json"):
                 return False
-            return any(
-                self._is_model_weight_file(candidate)
-                for pattern in ("diffusion_pytorch_model*.safetensors", "diffusion_pytorch_model*.bin")
-                for candidate in path.glob(pattern)
-            )
+            try:
+                return any(
+                    self._is_model_weight_file(candidate)
+                    for pattern in ("diffusion_pytorch_model*.safetensors", "diffusion_pytorch_model*.bin")
+                    for candidate in path.glob(pattern)
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Treating unreadable controlnet as not installed: %s (%s)",
+                    path,
+                    exc,
+                )
+                return False
         return True
 
     def _local_installed_path(self, entry: dict[str, Any]) -> Path | None:
@@ -988,24 +1105,24 @@ class ModelManager:
             if source_path:
                 try:
                     path = Path(source_path).expanduser()
-                    if path.exists():
+                    if _path_exists_safe(path):
                         return path
                 except (OSError, RuntimeError):
                     pass
             path = self._internal_models_dir(folder) / model_id
-            return path if path.exists() else None
+            return path if _path_exists_safe(path) else None
 
         filename = str(entry.get("filename") or "")
         if not filename:
             return None
 
         primary = self._comfy_models_dir(folder) / filename
-        if primary.exists():
+        if _path_exists_safe(primary):
             return primary
         legacy_root = self._legacy_comfy_models_dir(folder)
         if legacy_root is not None:
             legacy = legacy_root / filename
-            if legacy.exists():
+            if _path_exists_safe(legacy):
                 return legacy
         return None
 
@@ -1119,7 +1236,7 @@ class ModelManager:
         path = self._internal_models_dir(folder) / model_id
         if self._local_installed_path(entry) is not None:
             return None
-        if path.exists():
+        if _path_exists_safe(path):
             if self._internal_asset_installed(entry, path):
                 return None
             return "incomplete"
@@ -1135,14 +1252,28 @@ class ModelManager:
         candidates = {raw, Path(raw).name}
         stem = Path(raw).stem
         for model_dir in self._iter_comfy_model_dirs(folder):
-            for candidate in candidates:
-                match = model_dir / candidate
-                if match.exists() and match.is_file():
-                    return match
-            if stem:
-                for match in model_dir.glob("*"):
-                    if match.is_file() and match.stem == stem:
+            try:
+                for candidate in candidates:
+                    match = model_dir / candidate
+                    if _path_exists_safe(match) and _path_is_file_safe(match):
                         return match
+                if stem:
+                    for match in model_dir.glob("*"):
+                        try:
+                            if _path_is_file_safe(match) and match.stem == stem:
+                                return match
+                        except OSError as exc:
+                            logger.warning(
+                                "Skipping unreadable Comfy file candidate %s: %s",
+                                match,
+                                exc,
+                            )
+            except OSError as exc:
+                logger.warning(
+                    "Skipping unreadable Comfy model dir %s: %s",
+                    model_dir,
+                    exc,
+                )
         return None
 
     def resolve_comfy_asset(
