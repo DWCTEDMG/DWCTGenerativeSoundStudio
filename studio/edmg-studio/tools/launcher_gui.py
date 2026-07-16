@@ -268,15 +268,89 @@ def _studio_package_manager_name() -> str:
     return DEFAULT_PACKAGE_MANAGER
 
 
+def _windows_node_candidate_dirs() -> list[Path]:
+    """Common Node install locations when the launcher was started without PATH."""
+    if not sys.platform.startswith("win"):
+        return []
+    home = Path.home()
+    local = Path(os.environ.get("LOCALAPPDATA") or (home / "AppData" / "Local"))
+    candidates = [
+        Path(r"C:\Program Files\nodejs"),
+        Path(r"C:\Program Files (x86)\nodejs"),
+        local / "Programs" / "nodejs",
+        Path(r"C:\nvm4w\nodejs"),
+        local / "nvm",
+    ]
+    nvm_root = Path(os.environ.get("NVM_HOME") or (local / "nvm"))
+    if nvm_root.is_dir():
+        try:
+            versions = sorted(
+                (p for p in nvm_root.iterdir() if p.is_dir() and (p / "node.exe").exists()),
+                key=lambda p: p.name,
+                reverse=True,
+            )
+            candidates.extend(versions[:5])
+        except OSError:
+            pass
+    seen: set[str] = set()
+    out: list[Path] = []
+    for d in candidates:
+        try:
+            key = str(d.resolve()).lower()
+        except OSError:
+            key = str(d).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if d.is_dir():
+            out.append(d)
+    return out
+
+
+def _which_on_path_or_node_dirs(exe: str) -> str | None:
+    found = shutil.which(exe)
+    if found:
+        return found
+    names = [exe]
+    if sys.platform.startswith("win"):
+        lower = exe.lower()
+        if not lower.endswith((".exe", ".cmd", ".bat", ".com")):
+            names = [f"{exe}.cmd", f"{exe}.exe", f"{exe}.bat", exe]
+    for directory in _windows_node_candidate_dirs():
+        for name in names:
+            candidate = directory / name
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
 def _resolve_package_manager_command(name: str) -> tuple[list[str], str] | None:
-    direct = shutil.which(name)
+    direct = _which_on_path_or_node_dirs(name)
     if direct:
         return [direct], direct
     if name == "pnpm":
-        corepack = shutil.which("corepack")
+        corepack = _which_on_path_or_node_dirs("corepack")
         if corepack:
             return [corepack, "pnpm"], f"{corepack} pnpm"
     return None
+
+
+def _env_with_node_bin_dirs(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Ensure Node/pnpm dirs are on PATH for child processes (Electron/Vite)."""
+    out = dict(env if env is not None else os.environ)
+    path_key = "Path" if sys.platform.startswith("win") and "Path" in out and "PATH" not in out else "PATH"
+    current = out.get(path_key) or out.get("PATH") or ""
+    parts = [p for p in current.split(os.pathsep) if p]
+    prepend: list[str] = []
+    for directory in _windows_node_candidate_dirs():
+        s = str(directory)
+        if s and s not in parts and s not in prepend:
+            prepend.append(s)
+    if prepend:
+        out[path_key] = os.pathsep.join([*prepend, *parts]) if parts else os.pathsep.join(prepend)
+        if path_key == "Path":
+            out["PATH"] = out[path_key]
+    return out
 
 def _user_appdata_dir() -> Path:
     if sys.platform.startswith("win"):
@@ -1022,7 +1096,7 @@ class Launcher(tk.Tk):
         threading.Thread(target=runner, daemon=True).start()
 
     def _which(self, exe: str) -> str | None:
-        return shutil.which(exe)
+        return _which_on_path_or_node_dirs(exe)
 
     def _apply_studio_home(self, studio_home: Path, *, reason: str) -> None:
         migration_queued = _queue_studio_migration(self.studio_home, self.data_dir, studio_home)
@@ -1798,7 +1872,12 @@ Get-ChildItem $base | ForEach-Object {
                 raise RuntimeError(f"{package_manager_name} not found. Install Node.js LTS, enable Corepack if needed, then retry.")
             if not PACKAGE_JSON_PATH.exists():
                 raise RuntimeError(f"package.json not found at {STUDIO_DIR}")
-            rc = _run_cmd([*package_manager[0], "install"], cwd=STUDIO_DIR, log_cb=self._log)
+            rc = _run_cmd(
+                [*package_manager[0], "install"],
+                cwd=STUDIO_DIR,
+                log_cb=self._log,
+                env=_env_with_node_bin_dirs(),
+            )
             if rc != 0:
                 raise RuntimeError(f"{package_manager_name} install failed")
 
@@ -1974,7 +2053,7 @@ Get-ChildItem $base | ForEach-Object {
         self._auto_attach_backend_if_found()
         self._ensure_backend_port_available()
 
-        env = os.environ.copy()
+        env = _env_with_node_bin_dirs()
         env.setdefault("EDMG_STUDIO_SPAWN_BACKEND", "1")
         env.setdefault("EDMG_STUDIO_BACKEND_HOST", self.backend_host)
         env.setdefault("EDMG_STUDIO_BACKEND_PORT", str(self.backend_port))

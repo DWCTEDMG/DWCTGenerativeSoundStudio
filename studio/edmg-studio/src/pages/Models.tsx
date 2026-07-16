@@ -433,23 +433,55 @@ export default function Models(props: PageProps) {
   }, [hubCollection, hubQuery]);
 
   async function accept(m: CatalogEntry) {
-    await apiPost("/v1/models/accept", { model_id: m.id, license_id: m.license_id ?? "unknown" });
-    await refresh();
+    setErr("");
+    try {
+      await apiPost("/v1/models/accept", { model_id: m.id, license_id: m.license_id ?? "unknown" });
+      await refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    }
   }
 
   async function install(m: CatalogEntry) {
-    await apiPost("/v1/models/install", { model_id: m.id });
-    await refresh();
+    setErr("");
+    try {
+      // Match Setup: accept license before install so one-click Install works.
+      if (m.source !== "ollama" && !(data?.accepted || {})[m.id]) {
+        await apiPost("/v1/models/accept", { model_id: m.id, license_id: m.license_id ?? "unknown" });
+      }
+      await apiPost("/v1/models/install", { model_id: m.id });
+      await refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    }
   }
 
   async function restoreLocal(m: CatalogEntry) {
-    await apiPost("/v1/models/restore_local", { model_id: m.id });
-    await refresh();
+    setErr("");
+    try {
+      await apiPost("/v1/models/restore_local", { model_id: m.id });
+      await refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    }
   }
 
   async function installPack(packId: string) {
-    await apiPost("/v1/models/install_pack", { pack_id: packId });
-    await refresh();
+    setErr("");
+    try {
+      const pack = (data?.packs ?? []).find((p: any) => p.id === packId);
+      const all = [...(data?.catalog ?? []), ...(data?.user ?? [])];
+      const accepted = data?.accepted ?? {};
+      for (const mid of (pack?.models ?? [])) {
+        const m = all.find((x: any) => x.id === mid);
+        if (!m || m.source === "ollama" || accepted[mid]) continue;
+        await apiPost("/v1/models/accept", { model_id: mid, license_id: m.license_id ?? "unknown" });
+      }
+      await apiPost("/v1/models/install_pack", { pack_id: packId });
+      await refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    }
   }
 
   async function importCivitai() {
