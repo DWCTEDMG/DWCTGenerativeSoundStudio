@@ -306,6 +306,31 @@ class LayeredAnimateRequest(BaseModel):
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
 
+
+class AutosaveRequest(BaseModel):
+    timeline: dict[str, Any] | None = None
+    meta: dict[str, Any] | None = None
+    reason: str = "autosave"
+
+
+class RecoveryApplyRequest(BaseModel):
+    source: str = "journal"
+    snapshot_name: str | None = None
+
+
+class MotionPhrasesApplyRequest(BaseModel):
+    phrases: list[dict[str, Any]] = Field(default_factory=list)
+    overwrite_motion_track: bool = False
+
+
+class StemModulationUpdateRequest(BaseModel):
+    matrix: dict[str, Any] = Field(default_factory=dict)
+    mute_lane_id: str | None = None
+    muted: bool | None = None
+    scale_lane_id: str | None = None
+    scale: float | None = Field(default=None, ge=0.0, le=3.0)
+
+
 class CreativeDirectionApplyRequest(BaseModel):
     variant_index: int = 0
     preset: CreativePreset = "cinematic"

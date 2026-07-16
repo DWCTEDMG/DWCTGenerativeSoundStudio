@@ -51,7 +51,7 @@ except Exception:
 from .config import Settings
 from .schemas import (
     HealthResponse, ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
-    RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest,
+    RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest,
     CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest, ExportUnrealBridgeRequest,
     ImportUnrealBridgeReturnRequest,
     BuildUnrealImportPlanRequest,
@@ -69,6 +69,7 @@ from .services import layer_animation as layeranim
 from .services import parseq_adapter
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
+from .api import create_project_router, create_system_router
 from .services.ai_client import build_ai_client
 from .services.edmg_core import (
     core_status,
@@ -184,6 +185,8 @@ from .services.setup_wizard import (
     managed_ollama_launch_script_path,
     resolve_setup_accelerator_profile,
 )
+from .services.system_readiness import assess_system_readiness
+from .services.project_health import assess_project_health, collect_project_bundle, suggest_relinks
 from .uv_toolchain import ToolchainError
 
 settings = Settings()
@@ -2328,6 +2331,21 @@ def hardware():
     return {"ok": True, "hardware": hw, "render_tier_plan": _build_internal_render_plan(hw, requested_tier="auto")}
 
 
+def _system_readiness_report() -> dict[str, Any]:
+    """Shared Studio readiness report used by Settings and Setup."""
+    return assess_system_readiness(
+        ffmpeg_path=settings.ffmpeg_path,
+        data_dir=settings.data_dir,
+        models_dir=settings.models_dir,
+        cache_dir=settings.cache_dir,
+        logs_dir=settings.logs_dir,
+        external_dir=settings.external_dir,
+        check_ffmpeg=check_ffmpeg,
+        check_runtime=check_backend_bundle,
+        hardware_profile=_hardware_profile,
+    )
+
+
 def _proxy_renders_enabled(payload: dict[str, Any] | None = None) -> bool:
     video_cfg = dict((render_settings.get().get("video") or {}))
     if bool(video_cfg.get("allow_proxy_renders", True)):
@@ -2998,7 +3016,8 @@ def setup_status():
             ),
         }
 
-    ff = check_ffmpeg(settings.ffmpeg_path)
+    readiness = _system_readiness_report()
+    ff = dict((readiness.get("checks") or {}).get("ffmpeg") or check_ffmpeg(settings.ffmpeg_path))
     toolchain = check_backend_bundle()
     edmg = core_status()
     if not edmg.get("available"):
@@ -3035,6 +3054,7 @@ def setup_status():
             "edmg": edmg,
             "sevenzip": seven,
             "hardware": hw,
+            "system_readiness": readiness,
             "tasks": [t.to_dict() for t in setup_tasks.list()[:10]],
         }
 
@@ -3331,21 +3351,8 @@ def edmg_template():
         # Not fatal; return minimal template so UI doesn't crash
         return {"note": "EDMG Core not installed or template unavailable."}
 
-@app.get("/v1/projects")
-def list_projects():
-    return {"projects": [p.__dict__ for p in store.list()]}
-
-@app.post("/v1/projects")
-def create_project(req: ProjectCreateRequest):
-    proj = store.create(req.name)
-    return _project_response_payload(proj)
-
-@app.get("/v1/projects/{project_id}")
-def get_project(project_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    return _project_response_payload(proj)
+# Core project list/create/get/health/timeline/autosave/recovery routes are registered
+# via create_project_router() after _project_response_payload is defined.
 
 
 @app.get("/v1/projects/{project_id}/visual_dna")
@@ -3359,6 +3366,24 @@ def get_project_visual_dna(project_id: str):
         "visual_dna": dna.model_dump(mode="json"),
         "prompt_hints": build_visual_dna_prompt_hints(dna),
     }
+
+
+@app.get("/v1/projects/{project_id}/health/relink")
+def get_project_relink_suggestions(project_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    return suggest_relinks(store.project_dir(project_id), proj.meta)
+
+
+@app.post("/v1/projects/{project_id}/health/collect")
+def post_collect_project(project_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    pdir = store.project_dir(project_id)
+    dest = pdir.parent / f"{project_id}_collect_{time.strftime('%Y%m%d-%H%M%S')}"
+    return collect_project_bundle(pdir, dest)
 
 
 @app.post("/v1/projects/{project_id}/visual_dna/feedback")
@@ -3375,21 +3400,7 @@ def post_project_visual_dna_feedback(project_id: str, req: VisualDNAFeedbackRequ
         "prompt_hints": build_visual_dna_prompt_hints(saved),
     }
 
-@app.get("/v1/projects/{project_id}/timeline")
-def get_timeline(project_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    return {"ok": True, "timeline": proj.meta.get("timeline") or {"layers": []}}
 
-@app.post("/v1/projects/{project_id}/timeline")
-def set_timeline(project_id: str, req: TimelineUpdateRequest):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    proj.meta["timeline"] = req.timeline or {"layers": []}
-    store.save(proj)
-    return {"ok": True, "timeline": proj.meta["timeline"]}
 @app.get("/v1/projects/{project_id}/preview/frame")
 def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, force: int = 0):
     """Render a low-res cached preview frame for timeline scrubbing (no diffusion)."""
@@ -5750,6 +5761,16 @@ def _project_response_payload(proj: Any) -> dict[str, Any]:
     }
 
 
+app.include_router(create_system_router(readiness_report=_system_readiness_report))
+app.include_router(
+    create_project_router(
+        store=store,
+        project_response=_project_response_payload,
+        assess_health=assess_project_health,
+    )
+)
+
+
 def _render_quality_tier_from_preset(preset: str | None) -> str:
     preset_l = str(preset or "balanced").strip().lower()
     if preset_l == "fast":
@@ -6373,6 +6394,18 @@ def get_job_log(project_id: str, job_id: str):
     if not lp.exists():
         return {"ok": True, "log": ""}
     return {"ok": True, "log": lp.read_text(encoding="utf-8", errors="ignore")}
+
+
+@app.get("/v1/projects/{project_id}/jobs/{job_id}/events")
+def get_job_events(project_id: str, job_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    job = jobs.get(project_id, job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return {"ok": True, "events": jobs.list_events(project_id, job_id)}
+
 
 @app.post("/v1/jobs/tick")
 def tick_worker():

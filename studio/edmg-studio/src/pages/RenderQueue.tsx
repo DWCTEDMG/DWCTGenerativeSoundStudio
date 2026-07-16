@@ -3,6 +3,8 @@ import { apiGet, apiPost, getBackendUrl } from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
+import { JobStatusChip } from "../shared/jobs/JobStatusChip";
+import { canCancelJob, canRetryJob, jobRecoveryHint, type StudioJob } from "../shared/jobs/jobStatus";
 import type { PageProps } from "../types/pageProps";
 
 type RenderQueuePanelId = "controls" | "jobLog" | "jobsTable";
@@ -250,12 +252,15 @@ export default function RenderQueue(props: PageProps) {
                   <tr key={j.id}>
                     <td className="small">{j.created_at}</td>
                     <td className="small">{j.type}</td>
-                    <td className="small">{j.status}</td>
+                    <td className="small"><JobStatusChip status={j.status} /></td>
                     <td className="small">
                       {j.progress ? (
                         <>
                           <div>{j.progress.percent ?? 0}% • {j.progress.stage || "running"}</div>
                           {j.progress.message ? <div style={{ opacity: 0.8 }}>{j.progress.message}</div> : null}
+                          {jobRecoveryHint(j as StudioJob) ? (
+                            <div style={{ opacity: 0.8, marginTop: 4 }}>{jobRecoveryHint(j as StudioJob)}</div>
+                          ) : null}
                           {runtimeSummary(j) ? (
                             <>
                               <div style={{ opacity: 0.85, marginTop: 4 }}>
@@ -268,7 +273,9 @@ export default function RenderQueue(props: PageProps) {
                             </>
                           ) : null}
                         </>
-                      ) : "—"}
+                      ) : (
+                        jobRecoveryHint(j as StudioJob) || "—"
+                      )}
                     </td>
                     <td>
                       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -286,8 +293,8 @@ export default function RenderQueue(props: PageProps) {
                             <button className="secondary" onClick={() => restartClean(j)} disabled={j.status === "queued" || j.status === "running"}>Restart clean</button>
                           </>
                         ) : null}
-                        <button className="secondary" onClick={() => retry(j)} disabled={j.status === "running"}>Retry</button>
-                        <button className="secondary" onClick={() => cancel(j)} disabled={j.status !== "queued" && j.status !== "running"}>Cancel</button>
+                        <button className="secondary" onClick={() => retry(j)} disabled={!canRetryJob(j.status)}>Retry</button>
+                        <button className="secondary" onClick={() => cancel(j)} disabled={!canCancelJob(j.status)}>Cancel</button>
                       </div>
                     </td>
                   </tr>

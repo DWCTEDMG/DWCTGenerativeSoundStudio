@@ -3072,6 +3072,49 @@ def render_internal_video_variant(
         meta_json.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+    try:
+        from ..store.artifacts import write_artifact_manifest
+
+        source_assets: list[dict[str, Any]] = []
+        if audio_path and Path(audio_path).exists():
+            source_assets.append(
+                {
+                    "role": "audio",
+                    "path": str(Path(audio_path)),
+                    "sha256": None,
+                }
+            )
+        if source_image_path and Path(source_image_path).exists():
+            source_assets.append(
+                {
+                    "role": "source_image",
+                    "path": str(Path(source_image_path)),
+                    "sha256": None,
+                }
+            )
+        write_artifact_manifest(
+            final_mp4,
+            project_dir=project_dir,
+            project_id=project_id,
+            kind="video",
+            engine="internal_video",
+            model_id=str(settings.model_id or ""),
+            model_revision=None,
+            seed=int(settings.seed) if settings.seed is not None else None,
+            params={
+                "width": int(settings.width),
+                "height": int(settings.height),
+                "fps_render": int(settings.fps_render),
+                "fps_output": int(settings.fps_output),
+                "temporal_mode": str(settings.temporal_mode),
+                "work_tag": work_tag,
+            },
+            source_assets=source_assets,
+            parents=[str(meta_json.name)] if meta_json.exists() else [],
+            extra={"render_meta": str(meta_json.name), "variant_index": int(variant.get("index", 0))},
+        )
+    except Exception:
+        pass
     emit_checkpoint(stage="complete", status="complete", force=True, final=True, message=f"Internal render complete: {final_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": interp_mp4.exists(), "final_exists": final_mp4.exists()})
     if log_fn:
         log_fn(f"Internal render complete: {final_mp4.name}")

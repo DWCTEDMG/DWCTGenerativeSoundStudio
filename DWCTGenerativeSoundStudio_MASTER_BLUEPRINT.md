@@ -38,15 +38,15 @@ This is deliberately not a rewrite. It is a staged conversion of the current mod
 
 ### Immediate constraints
 
-- The default-branch Studio workflow is red. In the latest inspected run, repository tests passed, while four backend layer-animation tests failed because FFmpeg was unavailable in the test environment: [Actions run](https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio/actions/runs/29268169466).
-- `app.py` is about 12,000 lines and contains roughly 119 routes. `Render.tsx` and `Timeline.tsx` are both above 3,400 lines. These are change-risk and ownership bottlenecks.
-- The current JSON job store is not a durable queue: timestamps have low precision, selection behaves like LIFO, writes are not transactional, and claims are protected only inside one process.
-- Timeline state is broad and local. Undo/redo, autosave, crash recovery, and a consistent command model are incomplete.
+- ~~The default-branch Studio workflow is red~~ — FFmpeg CI provisioning addressed (WP-01); re-verify on current Actions.
+- `app.py` remains large, but System readiness and Project durability routes are extracted to `api/routers.py` (WP-09 started).
+- ~~The current JSON job store is not a durable queue~~ — SQLite `JobStore` with leases/events/idempotency is in place (WP-05); JSON mirrors remain for compatibility.
+- Timeline undo/redo and crash recovery foundations landed (WP-06 / WP-10 partial); full command coverage for move/trim/split still incomplete.
 - The model catalog mixes recommended, fallback, optional, and community entries without a sufficiently strong promotion policy, pinned provenance, or hardware benchmark evidence.
-- Python dependencies are mostly expressed as broad minimums—for example `torch>=2.2.0`, `diffusers>=0.30.0`, and `transformers>=4.42.0`—without a committed lockfile. Two installations made at different times can therefore resolve meaningfully different AI stacks.
-- `prepare-release-bundle.mjs` currently creates its own `venv`, upgrades pip/wheel/setuptools, optionally installs Torch from a dynamically selected CUDA index, installs a Studio extra, and then installs PyInstaller separately. Unless this path migrates with development and CI, packaged builds will continue resolving differently.
+- ~~Python dependencies without a committed lockfile~~ — uv + `uv.lock` on this branch (UV-01–04 largely done).
+- `prepare-release-bundle.mjs` should continue to prove frozen packaging on release builds (UV-04).
 - The default branch is a development branch and there is no visible PR history. A stable release lane and required review/check policy are needed.
-- The root contains a committed placeholder `.env`; there is no repository `LICENSE`, `SECURITY.md`, or `CHANGELOG` at the inspected baseline.
+- ~~Root hygiene gaps~~ — `LICENSE`, `SECURITY.md`, `CHANGELOG.md`, and `.env.example` added (P0-03).
 
 ### Working interpretation
 
@@ -1111,12 +1111,12 @@ This plan assumes:
 
 | ID | Deliverable | Acceptance criteria |
 |---|---|---|
-| P1-01 | Versioned project manifest | Validation, atomic save, migration registry, and backup before migration |
-| P1-02 | SQLite job/event store | FIFO priority, atomic claims, leases, retries, idempotency, and restart recovery |
-| P1-03 | Artifact manifests | Every new render records provenance, hashes, lineage, model revision, and review state |
-| P1-04 | Asset index and Project Health | Missing/changed media, disk estimate, relink, cleanup, and collect-project operations |
-| P1-05 | Autosave and crash recovery | Forced process termination recovers the latest valid journal without silent loss |
-| P1-06 | Typed contracts | Generated frontend API client and validated Electron IPC boundaries |
+| P1-01 | Versioned project manifest | **Done** — validation, atomic save, migration registry, backup before migration |
+| P1-02 | SQLite job/event store | **Done** — FIFO claims, leases, retries, idempotency, restart recovery |
+| P1-03 | Artifact manifests | **Done** on internal render path — provenance, hashes, lineage, review state |
+| P1-04 | Asset index and Project Health | **Done** — index, health, relink suggestions, collect-project bundle |
+| P1-05 | Autosave and crash recovery | **Done** — journal, snapshots, Timeline restore/discard |
+| P1-06 | Typed contracts | **Partial** — TS contracts for readiness/health/recovery; full generated client still open |
 | UV-02 | Stage 2 locked project | Commit `uv.lock`; add CPU/DirectML/CUDA conflicts, explicit Torch indexes/sources, and test/lint/build groups |
 | UV-03 | Unified execution paths | Launchers, setup wizard, pytest runner, CI, and backend scripts use frozen uv project commands |
 
@@ -1327,6 +1327,25 @@ Codex should create or update an ADR when a task changes:
 ## 20. First twelve critical-path Codex work packages
 
 These form the dependency-critical queue for the integration captain. They are not a scope boundary: the creative-intelligence, model, live/world, quality, documentation, and release lanes begin in parallel according to the seven-day schedule.
+
+**Execution status on `codex/uv-integration` (2026-07-15):**
+
+| WP | Status | Notes |
+|---|---|---|
+| WP-01 / P0-01 | Done | FFmpeg CI provisioning + diagnostic absences |
+| WP-02 / P0-04 | Done | `GET /v1/system/readiness` + Settings panel |
+| WP-03 / P0-05 | Done | `tests/fixtures/` + `tests/test_fixture_inventory.py` |
+| WP-04 / P1-01 | Done | Versioned `project.json`, migrations, atomic save |
+| WP-05 / P1-02 | Done | SQLite `JobStore` with leases, events, JSON migrate |
+| WP-06 / P1-05 | Done | Autosave journal + Timeline recovery UI |
+| WP-07 / P1-03 | Done | `.mp4.artifact.json` on internal render completion |
+| WP-08 / P1-06 | Partial | Typed contracts for readiness/health/recovery in `src/shared/api/contracts.ts` |
+| WP-09 / P2-01 | Partial | System + Project durability routers extracted to `api/routers.py` |
+| WP-10 / P2-02 | Partial | Command stack + Timeline Undo/Redo for deletes; motion grammar apply API |
+| WP-11 / P2-04 | Partial | Shared job status helpers + chip on Render Queue; job events API |
+| WP-12 / P3-01 | Partial | Music Graph v1 compatibility adapter + `GET /v1/projects/{id}/music_graph` |
+
+Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`, `.env.example`); P0-02 branch policy (`docs/BRANCH_POLICY.md`); P1-04 Project Health (`GET /v1/projects/{id}/health` + Workspace panel); P3-05/P3-06 foundations (motion grammar + stem modulation APIs).
 
 1. **WP-01 / P0-01:** repair FFmpeg provisioning in CI and make the four failing tests diagnostic when FFmpeg is absent.
 2. **WP-02 / P0-04:** add one shared system-readiness service and surface its result in Settings/System.

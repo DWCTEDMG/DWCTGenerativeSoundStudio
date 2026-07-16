@@ -23,6 +23,7 @@ import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
 import { useStudioSession } from "../components/studioSession";
+import { useTimelineHistory } from "../shared/commands/useTimelineHistory";
 import type { PageProps } from "../types/pageProps";
 
 type AnyDict = Record<string, any>;
@@ -583,6 +584,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const [timeline, setTimeline] = useState<AnyDict>({});
   const [timelineDirty, setTimelineDirty] = useState(false);
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
 
   const [durationS, setDurationS] = useState<number>(60);
   const [pxPerSecond, setPxPerSecond] = useState<number>(80);
@@ -635,7 +638,14 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const [err, setErr] = useState<string | null>(null);
   const { progress, runOperation } = useOperationProgress();
+  const timelineHistory = useTimelineHistory();
   const projectId = projectsReady && hasProjectId(projects, sessionProjectId) ? sessionProjectId : "";
+
+  const commitTimeline = (next: AnyDict, label = "edit") => {
+    timelineHistory.push(timeline as AnyDict, next, label);
+    setTimeline(next);
+    setTimelineDirty(true);
+  };
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
@@ -663,6 +673,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     );
     setTimeline(tl);
     setTimelineDirty(false);
+    timelineHistory.clear();
 
     const dur = Number(
       p?.meta?.audio?.duration_s || p?.meta?.analysis?.features?.duration_s || p?.duration_s || 60,
@@ -676,6 +687,18 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     setPlan(p?.meta?.last_plan || null);
     const variantCount = Array.isArray(p?.meta?.last_plan?.variants) ? p.meta.last_plan.variants.length : 0;
     if (variantCount > 0 && selectedVariant > variantCount - 1) setSelectedVariant(0);
+
+    try {
+      const recovery = await apiGet(`/v1/projects/${pid}/recovery`);
+      if (recovery?.needs_recovery) {
+        const when = recovery?.candidates?.[0]?.saved_at || "recent session";
+        setRecoveryNotice(`Unsaved autosave found from ${when}. Restore it or discard.`);
+      } else {
+        setRecoveryNotice(null);
+      }
+    } catch {
+      setRecoveryNotice(null);
+    }
   };
 
   useEffect(() => {
@@ -710,6 +733,17 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   useEffect(() => {
     setLockedLaneIds([]);
   }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId || !timelineDirty) return;
+    const timer = window.setTimeout(() => {
+      apiPost(`/v1/projects/${projectId}/autosave`, {
+        timeline,
+        reason: "timeline_dirty",
+      }).catch(() => {});
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [projectId, timeline, timelineDirty]);
 
   useEffect(() => {
     const audioEl = audioRef.current;
@@ -1086,6 +1120,35 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     }
   };
 
+  const restoreAutosave = async () => {
+    if (!projectId) return;
+    setRecoveryBusy(true);
+    setErr(null);
+    try {
+      await apiPost(`/v1/projects/${projectId}/recovery/apply`, { source: "journal" });
+      setRecoveryNotice(null);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setRecoveryBusy(false);
+    }
+  };
+
+  const discardAutosave = async () => {
+    if (!projectId) return;
+    setRecoveryBusy(true);
+    setErr(null);
+    try {
+      await apiPost(`/v1/projects/${projectId}/recovery/discard`, {});
+      setRecoveryNotice(null);
+    } catch (e: any) {
+      setErr(String(e));
+    } finally {
+      setRecoveryBusy(false);
+    }
+  };
+
   const deleteSelection = () => {
     if (!selected) return;
     if (selected.kind === "track") {
@@ -1097,24 +1160,21 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           ? { ...t, clips: (t.clips || []).filter((_, j) => j !== selected.clipIdx) }
           : t,
       );
-      setTimeline({ ...timeline, tracks: nextTracks });
-      setTimelineDirty(true);
+      commitTimeline({ ...timeline, tracks: nextTracks }, "delete_clip");
       setSelected(null);
       return;
     }
     if (selected.kind === "overlay") {
       if (isLaneLocked("overlays")) return;
       const nextLayers = layers.filter((_, i) => i !== selected.layerIdx);
-      setTimeline({ ...timeline, layers: nextLayers });
-      setTimelineDirty(true);
+      commitTimeline({ ...timeline, layers: nextLayers }, "delete_overlay");
       setSelected(null);
       return;
     }
     if (selected.kind === "camera") {
       if (isLaneLocked("camera")) return;
       const next = camKeyframes.filter((_, i) => i !== selected.kfIdx);
-      setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
-      setTimelineDirty(true);
+      commitTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } }, "delete_camera");
       setSelected(null);
     }
   };
@@ -1478,11 +1538,32 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   // S = split, D = duplicate, Q = quantize, L = loop, arrows = grid navigation.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey) return;
-      // Allow Alt for other UI features; but prevent hotkey clashes when typing.
       const el = document.activeElement as any;
       const tag = String(el?.tagName || "").toUpperCase();
       if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+
+      if (e.ctrlKey || e.metaKey) {
+        const key = e.key.toLowerCase();
+        if (key === "z" && !e.shiftKey) {
+          e.preventDefault();
+          const prev = timelineHistory.undo();
+          if (prev) {
+            setTimeline(ensureTimelineShape(prev, null));
+            setTimelineDirty(true);
+          }
+          return;
+        }
+        if (key === "y" || (key === "z" && e.shiftKey)) {
+          e.preventDefault();
+          const next = timelineHistory.redo();
+          if (next) {
+            setTimeline(ensureTimelineShape(next, null));
+            setTimelineDirty(true);
+          }
+          return;
+        }
+        return;
+      }
 
       const k = e.key;
       if (k === "s" || k === "S") {
@@ -2230,6 +2311,24 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               </div>
             </div>
             <div className="timeline-toolbarActions timeline-toolbarActions--wide">
+              <button className="secondary" disabled={!timelineHistory.canUndo} onClick={() => {
+                const prev = timelineHistory.undo();
+                if (prev) {
+                  setTimeline(ensureTimelineShape(prev, null));
+                  setTimelineDirty(true);
+                }
+              }}>
+                Undo
+              </button>
+              <button className="secondary" disabled={!timelineHistory.canRedo} onClick={() => {
+                const next = timelineHistory.redo();
+                if (next) {
+                  setTimeline(ensureTimelineShape(next, null));
+                  setTimelineDirty(true);
+                }
+              }}>
+                Redo
+              </button>
               <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={quantizeSelection}>
                 Quantize
               </button>
@@ -3366,6 +3465,20 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   return (
     <div className="timeline-page" onKeyDown={onKeyDown} tabIndex={0} style={{ outline: "none" }}>
       {pageHeader}
+      {recoveryNotice ? (
+        <div className="card timeline-sessionCard timeline-sessionCard--accent" style={{ marginBottom: 12 }}>
+          <div className="timeline-sessionLabel">Crash recovery</div>
+          <div className="timeline-sessionValue">{recoveryNotice}</div>
+          <div className="timeline-toolbarActions" style={{ marginTop: 8 }}>
+            <button className="primary" type="button" disabled={recoveryBusy} onClick={() => void restoreAutosave()}>
+              Restore autosave
+            </button>
+            <button className="secondary" type="button" disabled={recoveryBusy} onClick={() => void discardAutosave()}>
+              Discard
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="timeline-sessionStrip">
         <div className="timeline-sessionCard">
           <div className="timeline-sessionLabel">Shared session</div>

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "fixture000000000000000000000001",
+  "name": "Starter Fixture Project",
+  "created_at": "2026-07-15 00:00:00",
+  "meta": {
+    "audio": {
+      "filename": "short_tone_1s.wav",
+      "size_bytes": 44144
+    },
+    "width": 1280,
+    "height": 720,
+    "timeline": {
+      "fps": 24,
+      "duration_s": 1.0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "kind": "video",
+          "start_s": 0.0,
+          "end_s": 1.0,
+          "prompt": "simple geometric pulse synced to a 440 Hz tone"
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          { "t": 0.0, "zoom": 1.0 },
+          { "t": 1.0, "zoom": 1.05 }
+        ]
+      }
+    },
+    "analysis": {
+      "source": "fixture",
+      "beat_grid_ref": "analysis/beat_grid.golden.json",
+      "sections_ref": "analysis/sections.golden.json"
+    }
+  }
+}

@@ -563,4 +563,79 @@ describe("Settings page", () => {
       });
     });
   });
+
+  it("shows the shared system readiness report", async () => {
+    window.localStorage.clear();
+    installEdmgBridge();
+    installFetchMock({
+      "/v1/config": {},
+      "/v1/ai/status": { ok: true },
+      "/v1/edmg/deforum_template": { ok: true },
+      "/v1/settings/secrets/status": { store: "test" },
+      "/v1/hardware": { hardware: { device_name: "Test GPU" } },
+      "/v1/system/readiness": {
+        ok: true,
+        ready: false,
+        summary: "Degraded",
+        status: "warn",
+        checked_at: "2026-07-15T12:00:00Z",
+        checks: {
+          ffmpeg: { ok: true, status: "ok", path: "ffmpeg", version: "ffmpeg version 7.0" },
+          runtime: {
+            ok: true,
+            status: "ok",
+            python_version: "3.12.0",
+            uv_version: "0.11.28",
+            accelerator_profile: "cpu",
+            sync_health: "synchronized",
+          },
+          gpu: { ok: true, status: "warn", backend: "cpu", device_name: "CPU", available_backends: ["cpu"] },
+          disk: { ok: true, status: "ok", paths: [{ free_gb: 100, total_gb: 500, volume_path: "C:\\" }] },
+          writable_paths: {
+            ok: true,
+            status: "ok",
+            paths: [{ label: "data", path: "C:\\data", writable: true }],
+          },
+          models: {
+            ok: true,
+            status: "warn",
+            models_dir: "C:\\models",
+            entry_count: 0,
+            hint: "Models directory is empty",
+          },
+        },
+      },
+      "/v1/settings/render_profiles": { recommended_profile: "balanced_auto", profiles: {} },
+      "/v1/settings/render_providers": {
+        settings: {},
+        stability: { has_api_key: false, visible: false, note: "disabled" },
+        imagineart: { has_api_key: false, visible: false, configured: false, note: "disabled" },
+        imagineart_image_styles: [],
+        imagineart_video_styles: [],
+        directml: { runtime_ready: false, available: false, active: false, device_name: "" },
+        stability_services: [],
+        stability_models: [],
+        style_presets: [],
+      },
+      "/v1/settings/transcription": {
+        settings: {
+          provider: "faster_whisper",
+          model: "turbo",
+          device: "auto",
+          compute_type: "auto",
+          fallback_to_whisper: true,
+        },
+        active: { provider: "faster_whisper", model: "turbo", device: "auto" },
+        dependencies: { parakeet_available: false, faster_whisper_available: true },
+        hardware: { device_name: "Test GPU" },
+      },
+      "/v1/render/route": { route: "local_gpu", local_ready: true },
+    });
+
+    renderWithStudio(<Settings backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByText("Degraded", {}, { timeout: 5000 })).toBeTruthy();
+    expect(screen.getAllByText("System readiness").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Models directory is empty/i)).toBeTruthy();
+  });
 });
