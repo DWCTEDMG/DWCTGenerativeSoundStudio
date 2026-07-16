@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
@@ -115,7 +116,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState<string>("");
   const [project, setProject] = useState<any>(null);
-  const [visualDna, setVisualDna] = useState<any>(null);
   const [visualDnaHints, setVisualDnaHints] = useState<any>(null);
 
   const [plan, setPlan] = useState<any>(null);
@@ -123,6 +123,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [selectedVariant, setSelectedVariant] = useState<number>(0);
   const [conductorPlan, setConductorPlan] = useState<any>(null);
   const [conductorEnvironment, setConductorEnvironment] = useState<any>(null);
+  const [conductorPromoteStatus, setConductorPromoteStatus] = useState<string>("");
+  const [promotingScenes, setPromotingScenes] = useState(false);
 
   const [renderPreset, setRenderPreset] = useState<"fast" | "balanced" | "quality" | "ultra">((savedRenderDefaults.renderPreset as any) || "balanced");
   const [checkpointName, setCheckpointName] = useState<string>("");
@@ -677,7 +679,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (!id) return;
     const d = await apiGet(`/v1/projects/${id}`);
     setProject(d.project);
-    setVisualDna(d.visual_dna || null);
     setVisualDnaHints(d.visual_dna_hints || null);
     setAnalysis(d.project?.meta?.analysis || null);
     setPlan(d.project?.meta?.last_plan || null);
@@ -719,6 +720,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (!projectId || !(plan?.variants?.length || 0)) {
       setConductorPlan(null);
       setConductorEnvironment(null);
+      setConductorPromoteStatus("");
       return;
     }
     try {
@@ -728,10 +730,37 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       });
       setConductorPlan(d?.plan || null);
       setConductorEnvironment(d?.environment || null);
+      setConductorPromoteStatus("");
       if (d?.visual_dna_hints) setVisualDnaHints(d.visual_dna_hints);
     } catch {
       setConductorPlan(null);
       setConductorEnvironment(null);
+    }
+  };
+
+  const promoteConductorScenes = async (sceneIds: string[] = []) => {
+    if (!projectId || !conductorPlan) return;
+    setPromotingScenes(true);
+    setConductorPromoteStatus("");
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/conductor/promote`, {
+        plan_id: conductorPlan.plan_id || null,
+        scene_ids: sceneIds,
+        target_engine: "internal",
+        quality_tier: renderPreset === "fast" ? "draft" : renderPreset,
+        reason: sceneIds.length ? `Promote ${sceneIds.join(", ")} to hero lane` : "Promote proxy scenes to hero lane",
+      });
+      setConductorPlan(d?.plan || conductorPlan);
+      const promoted = Array.isArray(d?.promoted_scene_ids) ? d.promoted_scene_ids : [];
+      setConductorPromoteStatus(
+        promoted.length
+          ? `Promoted ${promoted.length} scene(s) to internal/${renderPreset === "fast" ? "draft" : renderPreset}.`
+          : "No proxy scenes left to promote.",
+      );
+    } catch (error: any) {
+      setConductorPromoteStatus(`Promote failed: ${String(error)}`);
+    } finally {
+      setPromotingScenes(false);
     }
   };
 
@@ -1767,7 +1796,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               <div className="small">{conductorPlan.summary || "Advisory multi-engine plan ready."}</div>
               <div className="small" style={{ marginTop: 6 }}>
                 Route: {(Array.isArray(conductorPlan.sections) ? conductorPlan.sections : [])
-                  .slice(0, 4)
+                  .slice(0, 6)
                   .map((section: any) => `${section.scene_id}: ${section.engine}`)
                   .join(" • ") || "No scene routes yet."}
               </div>
@@ -1781,6 +1810,29 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   Project memory confidence: {Math.round(Number(visualDnaHints.confidence) * 100)}%
                 </div>
               ) : null}
+              <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                <button
+                  className="secondary"
+                  disabled={promotingScenes || !(Array.isArray(conductorPlan.sections) && conductorPlan.sections.some((s: any) => s.engine === "proxy"))}
+                  onClick={() => promoteConductorScenes()}
+                >
+                  Promote proxy → hero
+                </button>
+                {(Array.isArray(conductorPlan.sections) ? conductorPlan.sections : [])
+                  .filter((section: any) => section.engine === "proxy")
+                  .slice(0, 4)
+                  .map((section: any) => (
+                    <button
+                      key={section.scene_id}
+                      className="secondary"
+                      disabled={promotingScenes}
+                      onClick={() => promoteConductorScenes([String(section.scene_id)])}
+                    >
+                      Promote {section.scene_id}
+                    </button>
+                  ))}
+              </div>
+              {conductorPromoteStatus ? <div className="small" style={{ marginTop: 8 }}>{conductorPromoteStatus}</div> : null}
             </div>
           ) : null}
 
@@ -3712,12 +3764,9 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               <StructuredSummary value={conductorEnvironment} showJson />
             </>
           ) : null}
-          {visualDna ? (
-            <>
-              <div style={{ fontWeight: 800, margin: "14px 0 10px" }}>Visual DNA</div>
-              <StructuredSummary value={visualDna} showJson />
-            </>
-          ) : null}
+          <div style={{ marginTop: 14 }}>
+            <VisualDnaPanel projectId={projectId} compact />
+          </div>
 
           <hr />
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Last action result</div>

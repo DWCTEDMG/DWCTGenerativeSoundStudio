@@ -57,7 +57,8 @@ from .schemas import (
     BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudHfBucketSettingsRequest, CloudLightningBundleRequest,
-    ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
+    ProjectSnapshot, RenderConductorPlanRequest, RenderConductorPromoteRequest, RenderIntent, VisualDNAFeedbackRequest,
+    VisualDNAUpdateRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
     ParseqMotionApplyRequest,
@@ -70,6 +71,13 @@ from .services import parseq_adapter
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
 from .api import create_project_router, create_system_router
+from .domain.director_modes import (
+    director_mode_profile,
+    flavor_prompt,
+    list_director_modes,
+    normalize_director_mode,
+    reactive_preset_for_mode,
+)
 from .services.ai_client import build_ai_client
 from .services.edmg_core import (
     core_status,
@@ -164,8 +172,10 @@ from .services.visual_dna import (
     load_visual_dna,
     record_render_feedback as record_visual_dna_feedback,
     save_visual_dna,
+    trait_id as visual_dna_trait_id,
+    update_visual_dna,
 )
-from .render_conductor.planner import build_advisory_render_plan
+from .render_conductor.planner import build_advisory_render_plan, promote_proxy_sections
 from .services.setup_wizard import (
     SetupTaskManager,
     check_backend_bundle,
@@ -3361,9 +3371,17 @@ def get_project_visual_dna(project_id: str):
     if not proj:
         raise HTTPException(404, "Project not found")
     dna = _load_project_visual_dna(proj)
+    traits = [
+        {
+            "id": visual_dna_trait_id(str(trait.scope), trait.value),
+            **trait.model_dump(mode="json"),
+        }
+        for trait in dna.trait_memory
+    ]
     return {
         "ok": True,
         "visual_dna": dna.model_dump(mode="json"),
+        "traits": traits,
         "prompt_hints": build_visual_dna_prompt_hints(dna),
     }
 
@@ -3397,6 +3415,36 @@ def post_project_visual_dna_feedback(project_id: str, req: VisualDNAFeedbackRequ
     return {
         "ok": True,
         "visual_dna": saved.model_dump(mode="json"),
+        "prompt_hints": build_visual_dna_prompt_hints(saved),
+    }
+
+
+@app.post("/v1/projects/{project_id}/visual_dna/update")
+def post_project_visual_dna_update(project_id: str, req: VisualDNAUpdateRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    dna = _load_project_visual_dna(proj)
+    updated = update_visual_dna(
+        dna,
+        identity=req.identity,
+        continuity=req.continuity,
+        approve_trait_ids=list(req.approve_trait_ids or []),
+        deprecate_trait_ids=list(req.deprecate_trait_ids or []),
+        notes=req.notes,
+    )
+    saved = _save_project_visual_dna(proj, updated)
+    traits = [
+        {
+            "id": visual_dna_trait_id(str(trait.scope), trait.value),
+            **trait.model_dump(mode="json"),
+        }
+        for trait in saved.trait_memory
+    ]
+    return {
+        "ok": True,
+        "visual_dna": saved.model_dump(mode="json"),
+        "traits": traits,
         "prompt_hints": build_visual_dna_prompt_hints(saved),
     }
 
@@ -3860,13 +3908,29 @@ def analyze_audio(project_id: str):
     return {"ok": True, "analysis": analysis}
 
 
+@app.get("/v1/director_modes")
+def get_director_modes():
+    return {"ok": True, "modes": list_director_modes()}
+
+
 @app.get("/v1/projects/{project_id}/creative_direction")
-def get_creative_direction(project_id: str, variant_index: int = 0, preset: str = "cinematic", sensitivity: float = 1.0):
+def get_creative_direction(
+    project_id: str,
+    variant_index: int = 0,
+    preset: str = "cinematic",
+    director_mode: str | None = None,
+    sensitivity: float = 1.0,
+):
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
-    safe_preset = preset if preset in {"cinematic", "psychedelic", "ambient"} else "cinematic"
-    payload = _build_creative_direction_payload(proj, variant_index=variant_index, preset=safe_preset, sensitivity=sensitivity)
+    payload = _build_creative_direction_payload(
+        proj,
+        variant_index=variant_index,
+        preset=preset,
+        sensitivity=sensitivity,
+        director_mode=director_mode,
+    )
     return {"ok": True, "creative_direction": payload}
 
 
@@ -3881,6 +3945,7 @@ def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirect
         variant_index=int(req.variant_index or 0),
         preset=str(req.preset or "cinematic"),
         sensitivity=float(req.sensitivity or 1.0),
+        director_mode=req.director_mode,
     )
     patch_timeline = (
         payload.get("timeline_patch", {}).get("timeline")
@@ -3900,7 +3965,8 @@ def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirect
     proj.meta["timeline"] = merged
     proj.meta["last_creative_direction"] = {
         "variant_index": int(req.variant_index or 0),
-        "preset": str(req.preset or "cinematic"),
+        "preset": str(payload.get("preset") or req.preset or "cinematic"),
+        "director_mode": str(payload.get("director_mode") or req.director_mode or "narrative"),
         "sensitivity": float(req.sensitivity or 1.0),
         "applied_at": time.time(),
     }
@@ -5112,7 +5178,16 @@ def _merge_creative_timeline_patch(
     return merged
 
 
-def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str, sensitivity: float) -> dict[str, Any]:
+def _build_creative_direction_payload(
+    proj: Any,
+    variant_index: int,
+    preset: str,
+    sensitivity: float,
+    director_mode: str | None = None,
+) -> dict[str, Any]:
+    mode = normalize_director_mode(director_mode or preset)
+    mode_profile = director_mode_profile(mode)
+    reactive_preset = reactive_preset_for_mode(mode)
     analysis_raw = (proj.meta.get("analysis") or {}) if hasattr(proj, "meta") else {}
     analysis = analysis_raw if isinstance(analysis_raw, dict) else {}
     plan_raw = (proj.meta.get("last_plan") or {}) if hasattr(proj, "meta") else {}
@@ -5139,7 +5214,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         transcript_sentences,
         motifs,
         str(getattr(proj, "name", "") or "Untitled project"),
-        preset,
+        reactive_preset,
         sensitivity,
         max_sections=min(8, max(3, len(scenes) or 6)),
     )
@@ -5176,7 +5251,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             motion_hint = str(scene.get("motion_hint") or _creative_motion_hint(params))
         else:
             metrics = _scene_metrics_from_curve(index, len(source_scenes) or 1, scene, overall, duration_s, energy_curve)
-            params = _compute_reactive_params(metrics, preset, sensitivity)
+            params = _compute_reactive_params(metrics, reactive_preset, sensitivity)
             cue_index = (
                 min(len(transcript_sentences) - 1, int((index / max(1, len(source_scenes) - 1)) * len(transcript_sentences)))
                 if transcript_sentences and has_transcript else -1
@@ -5185,7 +5260,13 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             energy_label = _creative_energy_label(float(metrics["energy"]))
             camera_hint = _creative_camera_hint(float(metrics["energy"]))
             motion_hint = _creative_motion_hint(params)
-        prompt = render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
+        prompt = flavor_prompt(render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT), mode)
+        camera_bias = str(mode_profile.get("camera_bias") or "").strip()
+        if camera_bias and camera_bias.casefold() not in camera_hint.casefold():
+            camera_hint = f"{camera_hint} {camera_bias}".strip()
+        motion_bias = str(mode_profile.get("motion_bias") or "").strip()
+        if motion_bias and motion_bias.casefold() not in motion_hint.casefold():
+            motion_hint = f"{motion_hint} ({motion_bias})"
         scene_tokens = _analysis_top_keywords(" ".join([name, prompt, transcript_cue]), limit=5)
         scene_motifs = list(
             dict.fromkeys(
@@ -5220,6 +5301,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         prompt_pack = " ".join(
             [
                 prompt,
+                f"Director mode: {mode_profile.get('label') or mode}.",
                 f"Energy profile: {energy_label}.",
                 camera_hint,
                 f"Motion recipe: {motion_hint}",
@@ -5246,6 +5328,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
                 "prompt_pack": prompt_pack,
                 "reactive_params": params,
                 "scene_source": scene_source,
+                "director_mode": mode,
             }
         )
 
@@ -5281,6 +5364,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         "segment_count": len(_analysis_transcript_segments(analysis)),
         "section_count": len(fallback_sections),
         "themes": list(analysis.get("themes") or []) if isinstance(analysis, dict) else [],
+        "director_mode": mode,
     }
     llm_contract = _build_creative_contract(
         proj,
@@ -5312,7 +5396,9 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
     return {
         "ready": ready,
         "missing": missing,
-        "preset": preset,
+        "preset": reactive_preset,
+        "director_mode": mode,
+        "director_profile": mode_profile,
         "sensitivity": float(sensitivity),
         "provider_mode": provider_mode,
         "scene_source": scene_source,
@@ -5339,6 +5425,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             "Creative direction now carries audio-reactive sections, timeline patch data, and a Deforum-aligned preview in one Studio-native payload.",
             "Prompt and motion tracks stay in the canonical timeline schema, while lyric cues are translated into compositor text layers.",
             "Overview analysis remains the canonical source. Planner enriches the storyboard, and Reactive Lab adds motion schedules without replacing the saved story pass.",
+            f"Director mode `{mode}` maps reactive motion through the `{reactive_preset}` profile.",
         ],
         "status": status,
     }
@@ -10602,12 +10689,57 @@ def render_conductor_plan(project_id: str, req: RenderConductorPlanRequest):
     snapshot = _build_project_snapshot(proj, dna=visual_dna)
     environment = _build_render_conductor_environment()
     advisory_plan = build_advisory_render_plan(intent, snapshot, environment=environment)
+    plan_payload = advisory_plan.model_dump(mode="json")
+    proj.meta["last_conductor_plan"] = plan_payload
+    proj.meta["last_conductor_intent"] = intent.model_dump(mode="json")
+    store.save(proj)
     return {
         "ok": True,
         "intent": intent.model_dump(mode="json"),
-        "plan": advisory_plan.model_dump(mode="json"),
+        "plan": plan_payload,
         "environment": environment,
         "visual_dna_hints": build_visual_dna_prompt_hints(visual_dna),
+    }
+
+
+@app.post("/v1/projects/{project_id}/render/conductor/promote")
+def render_conductor_promote(project_id: str, req: RenderConductorPromoteRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    stored = proj.meta.get("last_conductor_plan") if isinstance(proj.meta.get("last_conductor_plan"), dict) else None
+    if not stored:
+        raise HTTPException(400, "No conductor plan available. Generate an advisory plan first.")
+    if req.plan_id and str(stored.get("plan_id") or "") != str(req.plan_id):
+        raise HTTPException(400, "Conductor plan_id does not match the saved plan")
+
+    updated_plan, promoted = promote_proxy_sections(
+        stored,
+        scene_ids=list(req.scene_ids or []),
+        target_engine=req.target_engine,
+        quality_tier=str(req.quality_tier or "quality"),
+        reason=req.reason,
+    )
+    plan_payload = updated_plan.model_dump(mode="json")
+    promotions = list(proj.meta.get("conductor_promotions") or []) if isinstance(proj.meta.get("conductor_promotions"), list) else []
+    promotions.append(
+        {
+            "at": time.time(),
+            "plan_id": plan_payload.get("plan_id"),
+            "scene_ids": promoted,
+            "target_engine": req.target_engine,
+            "quality_tier": req.quality_tier,
+            "reason": req.reason,
+        }
+    )
+    proj.meta["last_conductor_plan"] = plan_payload
+    proj.meta["conductor_promotions"] = promotions[-20:]
+    store.save(proj)
+    return {
+        "ok": True,
+        "plan": plan_payload,
+        "promoted_scene_ids": promoted,
+        "promotions": promotions[-5:],
     }
 
 
@@ -12289,6 +12421,19 @@ def cloud_lightning_bundle(req: CloudLightningBundleRequest):
 @app.get("/v1/models/catalog")
 def models_catalog():
     return models.catalog()
+
+@app.post("/v1/models/promote")
+def models_promote(req: dict[str, Any]):
+    model_id = str(req.get("model_id") or "")
+    target_lane = str(req.get("lane") or req.get("target_lane") or "recommended")
+    reason = req.get("reason")
+    force = bool(req.get("force") or False)
+    return models.promote_model_lane(model_id, target_lane, reason=str(reason) if reason else None, force=force)
+
+@app.post("/v1/models/benchmark")
+def models_benchmark(req: dict[str, Any]):
+    model_id = str(req.get("model_id") or "")
+    return models.record_model_benchmark(model_id, req)
 
 @app.get("/v1/models/tasks")
 def models_tasks():

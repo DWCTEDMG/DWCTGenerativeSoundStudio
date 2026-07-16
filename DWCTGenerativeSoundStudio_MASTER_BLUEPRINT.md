@@ -1345,7 +1345,7 @@ These form the dependency-critical queue for the integration captain. They are n
 | WP-11 / P2-04 | Partial | Shared job status helpers + chip on Render Queue; job events API |
 | WP-12 / P3-01 | Partial | Music Graph v1 compatibility adapter + `GET /v1/projects/{id}/music_graph` |
 
-Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`, `.env.example`); P0-02 branch policy (`docs/BRANCH_POLICY.md`); P1-04 Project Health (`GET /v1/projects/{id}/health` + Workspace panel); P3-05/P3-06 foundations (motion grammar + stem modulation APIs).
+Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`, `.env.example`); P0-02 branch policy (`docs/BRANCH_POLICY.md`); P1-04 Project Health (`GET /v1/projects/{id}/health` + Workspace panel); P3-05/P3-06 foundations (motion grammar + stem modulation APIs); **P3-03 Director modes** (six modes + Creative Direction UI); **P3-04 Visual DNA workspace** (inspect/approve/deprecate panel + update API); **P4-03/P4-04 Conductor promote** (proxy→hero promote endpoint + Render UX); **P5-02/P5-03 model lanes** (catalog lane tags, promote gates, benchmark record hooks + Models UI); **W6-01 live cue protocol preview** (`GET /v1/projects/{id}/live_cues` from Music Graph).
 
 1. **WP-01 / P0-01:** repair FFmpeg provisioning in CI and make the four failing tests diagnostic when FFmpeg is absent.
 2. **WP-02 / P0-04:** add one shared system-readiness service and surface its result in Settings/System.

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
@@ -205,6 +206,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const [err, setErr] = useState<string | null>(null);
   const [projectHealth, setProjectHealth] = useState<any>(null);
   const [musicGraph, setMusicGraph] = useState<any>(null);
+  const [liveCues, setLiveCues] = useState<any>(null);
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewAutoFitKeyRef = useRef<string>("");
   const { progress, runOperation } = useOperationProgress();
@@ -224,6 +226,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
       setPlan(null);
       setProjectHealth(null);
       setMusicGraph(null);
+      setLiveCues(null);
     }
   };
 
@@ -255,6 +258,12 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
     } catch {
       setMusicGraph(null);
     }
+    try {
+      const cues = await apiGet(`/v1/projects/${id}/live_cues`);
+      setLiveCues(cues?.live_cues || null);
+    } catch {
+      setLiveCues(null);
+    }
   };
 
   useEffect(() => { refreshProjects().catch(() => {}); }, []);
@@ -269,6 +278,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
       setPlan(null);
       setProjectHealth(null);
       setMusicGraph(null);
+      setLiveCues(null);
     }
   }, [projectId, projectsReady]);
   // Workspace stays focused on project + timeline. Rendering lives in the Render page.
@@ -713,6 +723,10 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             <span className="small">Music Graph</span>
             <strong>{musicGraph?.tempo?.bpm ? `${Math.round(Number(musicGraph.tempo.bpm))} BPM` : (projectId ? "…" : "n/a")}</strong>
           </div>
+          <div className="workspace-stat">
+            <span className="small">Live cues</span>
+            <strong>{typeof liveCues?.event_count === "number" ? liveCues.event_count : (projectId ? "…" : "n/a")}</strong>
+          </div>
         </div>
       </div>
 
@@ -1143,6 +1157,10 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
               selectedVariant={selectedVariant}
               onNavigate={onNavigate}
             />
+          </div>
+
+          <div className="card workspace-featureCard">
+            <VisualDnaPanel projectId={projectId} />
           </div>
 
           <div className="card workspace-featureCard">

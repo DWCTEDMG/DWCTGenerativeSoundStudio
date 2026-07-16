@@ -160,8 +160,9 @@ const installRenderMocks = () => {
     "POST /v1/projects/p1/render/conductor/plan": {
       ok: true,
       plan: {
-        summary: "Recommended engine mix: internal x1.",
-        sections: [{ scene_id: "scene-1", engine: "internal" }],
+        plan_id: "plan-test",
+        summary: "Recommended engine mix: proxy x1.",
+        sections: [{ scene_id: "scene-1", engine: "proxy" }],
       },
       environment: {
         diagnostics: ["test-environment"],
@@ -171,6 +172,25 @@ const installRenderMocks = () => {
         motifs: ["neon skyline", "lead silhouette"],
         confidence: 0.72,
       },
+    },
+    "POST /v1/projects/p1/render/conductor/promote": {
+      ok: true,
+      plan: {
+        plan_id: "plan-test",
+        summary: "Promoted 1 scene(s) to internal/quality.",
+        sections: [{ scene_id: "scene-1", engine: "internal" }],
+      },
+      promoted_scene_ids: ["scene-1"],
+    },
+    "/v1/projects/p1/visual_dna": {
+      ok: true,
+      visual_dna: {
+        project_id: "p1",
+        identity: { core_themes: ["future nostalgia"], motifs: ["neon skyline"] },
+        trait_memory: [],
+      },
+      traits: [],
+      prompt_hints: { confidence: 0.72, motifs: ["neon skyline"], core_themes: ["future nostalgia"] },
     },
     "/v1/projects/p1/creative_direction*": {
       creative_direction: {

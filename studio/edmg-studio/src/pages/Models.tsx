@@ -11,6 +11,9 @@ type CatalogEntry = {
   kind: string;
   source: string;
   recommended?: string;
+  lane?: string;
+  lane_gates?: { promotable_to?: string[]; stable_requires?: string[] };
+  benchmark?: { present?: boolean; summary?: string; updated_at?: number };
   notes?: string;
   license_id?: string;
   license_url?: string;
@@ -128,7 +131,9 @@ function ModelCard({
   onAccept,
   onInstall,
   onRestore,
-  onOpen
+  onOpen,
+  onPromote,
+  onBenchmark,
 }: {
   m: CatalogEntry;
   installed: boolean;
@@ -140,6 +145,8 @@ function ModelCard({
   onInstall: () => void;
   onRestore: () => void;
   onOpen: (u: string) => void;
+  onPromote?: (lane: string) => void;
+  onBenchmark?: () => void;
 }) {
   const installable = m.installable !== false;
   const needsAccept = installable && m.source !== "ollama" && !accepted;
@@ -157,6 +164,8 @@ function ModelCard({
         : cloudOnly
           ? `Store in ${cacheLabel || "cloud"}`
           : "Install";
+  const lane = String(m.lane || "experimental");
+  const promotable = Array.isArray(m.lane_gates?.promotable_to) ? m.lane_gates!.promotable_to! : [];
 
   return (
     <div className="card" style={{ marginTop: 10 }}>
@@ -167,10 +176,12 @@ function ModelCard({
             <span style={{ opacity: 0.85 }}>
               {m.kind} • {m.source}
               {m.recommended ? ` • ${m.recommended}` : ""}
+              {` • lane ${lane}`}
             </span>
           </div>
           <div className="small" style={{ marginTop: 6 }}>
             License: <b>{m.license_id ?? "unknown"}</b>
+            {m.benchmark?.present ? <> • benchmark <b>recorded</b></> : <> • benchmark <b>missing</b></>}
           </div>
           {m.tags?.length ? (
             <div className="small" style={{ marginTop: 6, opacity: 0.88 }}>
@@ -211,6 +222,15 @@ function ModelCard({
             <button disabled={!canInstall || installed || cloudStored} onClick={onInstall}>
               {installLabel}
             </button>
+            {onBenchmark ? (
+              <button className="secondary" onClick={onBenchmark}>Record benchmark</button>
+            ) : null}
+            {onPromote && promotable.includes("recommended") && lane !== "recommended" && lane !== "stable" ? (
+              <button className="secondary" onClick={() => onPromote("recommended")}>Promote → recommended</button>
+            ) : null}
+            {onPromote && promotable.includes("stable") && lane === "recommended" ? (
+              <button className="secondary" onClick={() => onPromote("stable")}>Promote → stable</button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -317,6 +337,31 @@ export default function Models(props: PageProps) {
       setTasks((t as any)?.tasks ?? []);
       const rp = await apiGet("/v1/settings/render_providers");
       setRenderProviders(rp);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    }
+  }
+
+  async function promoteModel(modelId: string, lane: string) {
+    setErr("");
+    try {
+      await apiPost("/v1/models/promote", { model_id: modelId, lane, reason: `UI promote to ${lane}` });
+      await refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    }
+  }
+
+  async function recordBenchmark(modelId: string) {
+    setErr("");
+    try {
+      await apiPost("/v1/models/benchmark", {
+        model_id: modelId,
+        summary: "manual_ui_benchmark",
+        passed: true,
+        metrics: { source: "models_page" },
+      });
+      await refresh();
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     }
@@ -773,6 +818,8 @@ export default function Models(props: PageProps) {
             onInstall={() => install(m)}
             onRestore={() => restoreLocal(m)}
             onOpen={(u) => window.edmg?.openExternal?.(u)}
+            onPromote={(lane) => promoteModel(m.id, lane)}
+            onBenchmark={() => recordBenchmark(m.id)}
           />
         ))}
       </>
@@ -792,6 +839,8 @@ export default function Models(props: PageProps) {
             onInstall={() => install(m)}
             onRestore={() => restoreLocal(m)}
             onOpen={(u) => window.edmg?.openExternal?.(u)}
+            onPromote={(lane) => promoteModel(m.id, lane)}
+            onBenchmark={() => recordBenchmark(m.id)}
           />
         ))}
 
@@ -813,6 +862,8 @@ export default function Models(props: PageProps) {
                 onInstall={() => install(m)}
                 onRestore={() => restoreLocal(m)}
                 onOpen={(u) => window.edmg?.openExternal?.(u)}
+                onPromote={(lane) => promoteModel(m.id, lane)}
+                onBenchmark={() => recordBenchmark(m.id)}
               />
             ))}
           </>
@@ -832,6 +883,8 @@ export default function Models(props: PageProps) {
                 onInstall={() => install(m)}
                 onRestore={() => restoreLocal(m)}
                 onOpen={(u) => window.edmg?.openExternal?.(u)}
+                onPromote={(lane) => promoteModel(m.id, lane)}
+                onBenchmark={() => recordBenchmark(m.id)}
               />
               <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
                 <button className="secondary" onClick={() => apiPost("/v1/models/remove_user", { model_id: m.id }).then(refresh)}>

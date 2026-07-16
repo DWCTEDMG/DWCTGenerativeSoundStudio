@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover
 from ..errors import UserFacingError
 from .setup_wizard import _ollama_base  # reuse
 from .model_catalog import built_in_catalog, built_in_packs
+from ..domain.model_lanes import annotate_entry, can_promote, infer_lane, normalize_lane, promotion_blockers
 from ..services.setup_wizard import comfy_portable_installed, comfy_portable_root
 from .hf_auth import resolve_hf_token
 from .secrets import SecretStore
@@ -205,7 +206,7 @@ def _normalize_catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
     item["engine"] = engine
     item["family"] = family
     item.update(_entry_support_flags(item))
-    return item
+    return annotate_entry(item)
 
 
 # ------------------------------ tasks ------------------------------
@@ -380,6 +381,8 @@ class ModelManager:
         self._user_models_path = cfg / "models_user.json"
         self._accept_path = cfg / "licenses_accepted.json"
         self._cloud_models_path = cfg / "models_cloud.json"
+        self._lane_overrides_path = cfg / "model_lane_overrides.json"
+        self._benchmarks_path = cfg / "model_benchmarks.json"
 
         self._lock = threading.Lock()
 
@@ -523,6 +526,28 @@ class ModelManager:
         accepted = _read_json(self._accept_path, default={})
         if not isinstance(accepted, dict):
             accepted = {}
+        overrides = _read_json(self._lane_overrides_path, default={})
+        if not isinstance(overrides, dict):
+            overrides = {}
+        benchmarks = _read_json(self._benchmarks_path, default={})
+        if not isinstance(benchmarks, dict):
+            benchmarks = {}
+
+        def _apply_lane(entry: dict[str, Any]) -> dict[str, Any]:
+            model_id = str(entry.get("id") or "")
+            override = overrides.get(model_id) if isinstance(overrides.get(model_id), dict) else None
+            lane_value = str((override or {}).get("lane") or "") or None
+            annotated = annotate_entry(entry, lane_override=lane_value)
+            bench = benchmarks.get(model_id) if isinstance(benchmarks.get(model_id), dict) else None
+            annotated["benchmark"] = {
+                "present": bool(bench),
+                "summary": (bench or {}).get("summary"),
+                "updated_at": (bench or {}).get("updated_at"),
+            }
+            return annotated
+
+        built = [_apply_lane(entry) for entry in built]
+        user = [_apply_lane(entry) for entry in user]
 
         installed = self._installed_map(built + user)
         cloud = self._cloud_models()
@@ -534,9 +559,86 @@ class ModelManager:
             "accepted": accepted,
             "installed": installed,
             "cloud": cloud,
+            "lanes": {
+                "overrides": overrides,
+                "order": ["stable", "recommended", "experimental", "research", "legacy"],
+            },
             "storage_mode": self._model_storage_mode(),
             "model_cache": self._model_cache_label() if self.model_cache is not None else None,
         }
+
+    def promote_model_lane(self, model_id: str, target_lane: str, *, reason: str | None = None, force: bool = False) -> dict[str, Any]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        target = normalize_lane(target_lane)
+        current = infer_lane(entry)
+        overrides = _read_json(self._lane_overrides_path, default={})
+        if not isinstance(overrides, dict):
+            overrides = {}
+        existing = overrides.get(model_id) if isinstance(overrides.get(model_id), dict) else {}
+        if existing.get("lane"):
+            current = normalize_lane(str(existing.get("lane")))
+        benchmarks = _read_json(self._benchmarks_path, default={})
+        has_benchmark = isinstance(benchmarks, dict) and isinstance(benchmarks.get(model_id), dict)
+        license_accepted = self._is_accepted(model_id)
+        blockers = promotion_blockers(
+            {**entry, "lane": current},
+            target_lane=target,
+            has_benchmark=has_benchmark,
+            license_accepted=license_accepted,
+        )
+        if blockers and not force:
+            raise UserFacingError(
+                f"Promotion blocked for {model_id}",
+                hint="; ".join(blockers),
+                code="MODEL_PROMOTION_BLOCKED",
+            )
+        if not can_promote(current, target) and not force:
+            raise UserFacingError(
+                f"Cannot promote from {current} to {target}",
+                hint="Choose a allowed target lane for this model.",
+                code="MODEL_LANE_GATE",
+            )
+        with self._lock:
+            overrides[model_id] = {
+                "lane": target,
+                "from_lane": current,
+                "reason": str(reason or "").strip() or None,
+                "updated_at": time.time(),
+                "force": bool(force),
+                "blockers_ignored": blockers if force else [],
+            }
+            _write_json(self._lane_overrides_path, overrides)
+        return {
+            "ok": True,
+            "model_id": model_id,
+            "lane": target,
+            "from_lane": current,
+            "blockers": blockers,
+            "override": overrides[model_id],
+        }
+
+    def record_model_benchmark(self, model_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        body = dict(payload or {})
+        record = {
+            "model_id": model_id,
+            "lane": infer_lane(entry),
+            "summary": str(body.get("summary") or "manual_benchmark_recorded"),
+            "metrics": body.get("metrics") if isinstance(body.get("metrics"), dict) else {},
+            "passed": bool(body.get("passed", True)),
+            "updated_at": time.time(),
+        }
+        with self._lock:
+            data = _read_json(self._benchmarks_path, default={})
+            if not isinstance(data, dict):
+                data = {}
+            data[model_id] = record
+            _write_json(self._benchmarks_path, data)
+        return {"ok": True, "benchmark": record}
 
     # ---- acceptance ----
     def accept_license(self, model_id: str, license_id: str) -> None:

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..domain.motion_grammar import apply_motion_phrases_to_timeline
 from ..domain.music_graph import music_graph_from_analysis
+from ..domain.live_cues import compile_live_cues
 from ..domain.stem_modulation import mute_lane, normalize_modulation_matrix, scale_lane
 from ..schemas import (
     AutosaveRequest,
@@ -78,6 +79,22 @@ def create_project_router(
             duration_s=float(audio.get("duration_s") or 0) or None,
         )
         return {"ok": True, "music_graph": graph}
+
+    @router.get("/v1/projects/{project_id}/live_cues")
+    def get_project_live_cues(project_id: str) -> dict[str, Any]:
+        proj = store.get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        meta = dict(proj.meta or {})
+        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
+        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
+        graph = music_graph_from_analysis(
+            analysis,
+            audio_filename=str(audio.get("filename") or "") or None,
+            duration_s=float(audio.get("duration_s") or 0) or None,
+        )
+        cues = compile_live_cues(graph)
+        return {"ok": True, "live_cues": cues, "music_graph": graph}
 
     @router.get("/v1/projects/{project_id}/timeline")
     def get_timeline(project_id: str) -> dict[str, Any]:
