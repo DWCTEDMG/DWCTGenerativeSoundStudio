@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_PROJECT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 @dataclass
 class Project:
@@ -21,8 +24,15 @@ class ProjectStore:
         self.projects_dir = self.base_dir / "projects"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
 
+    def _validate_project_id(self, project_id: str) -> str:
+        pid = str(project_id or "").strip()
+        if not _PROJECT_ID_RE.fullmatch(pid):
+            raise ValueError("Invalid project_id")
+        return pid
+
     def _proj_dir(self, project_id: str) -> Path:
-        d = self.projects_dir / project_id
+        pid = self._validate_project_id(project_id)
+        d = self.projects_dir / pid
         d.mkdir(parents=True, exist_ok=True)
         (d / "assets" / "audio").mkdir(parents=True, exist_ok=True)
         (d / "assets" / "overlays").mkdir(parents=True, exist_ok=True)
@@ -60,7 +70,8 @@ class ProjectStore:
         return proj
 
     def get(self, project_id: str) -> Project | None:
-        pj = self.projects_dir / project_id / "project.json"
+        pid = self._validate_project_id(project_id)
+        pj = self.projects_dir / pid / "project.json"
         if not pj.exists():
             return None
         data = json.loads(pj.read_text(encoding="utf-8"))
