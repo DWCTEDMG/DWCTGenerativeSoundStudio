@@ -18,7 +18,5 @@ interface:
 
 advanced:
   enable_preview: true
-  enable_multitrack: false
-  enable_style_transfer: false
   enable_cloud_storage: false
   cloud_provider: aws

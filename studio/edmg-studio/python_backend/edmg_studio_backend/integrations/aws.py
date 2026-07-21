@@ -16,7 +16,7 @@ def _require_boto3():
         import boto3  # type: ignore
         return boto3
     except Exception as e:
-        raise RuntimeError("AWS integration requires optional deps: pip install -e '.[aws]'") from e
+        raise RuntimeError("AWS integration requires the locked `aws` capability in the active uv profile.") from e
 
 
 def _require_client_error():
@@ -24,7 +24,7 @@ def _require_client_error():
         from botocore.exceptions import ClientError  # type: ignore
         return ClientError
     except Exception as e:
-        raise RuntimeError("AWS integration requires optional deps: pip install -e '.[aws]'") from e
+        raise RuntimeError("AWS integration requires the locked `aws` capability in the active uv profile.") from e
 
 
 def _truthy(value: str | None) -> bool:

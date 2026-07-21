@@ -5,9 +5,33 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import {
+  PINNED_UV_VERSION,
+  RELEASE_CAPABILITY_EXTRAS,
+  RELEASE_MANIFEST_SCHEMA_VERSION,
+  assertNoDynamicDependencyOverrides,
+  assertPinnedUvVersion,
+  assertPython312,
+  assertTorchIndexForProfile,
+  assertTrackedCleanDependencyStatus,
+  binaryMatchesManifest,
+  releaseProvenanceMatches,
+  resolveAcceleratorProfile,
+  sha256File,
+  uvLockCheckArgs,
+  uvRunArgs,
+  uvSyncArgs,
+} from "./release-python-toolchain.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(root, "..", "..");
 const pythonBackendDir = path.join(root, "python_backend");
+const pythonVersionPath = path.join(repoRoot, ".python-version");
+const pyprojectPath = path.join(pythonBackendDir, "pyproject.toml");
+const uvLockPath = path.join(pythonBackendDir, "uv.lock");
+const provenanceScriptPath = path.join(__dirname, "release_provenance.py");
+const toolchainScriptPath = path.join(__dirname, "release-python-toolchain.mjs");
 const electronBackendDir = path.join(root, "electron-resources", "backend");
 const directorAppDir = path.resolve(root, "..", "..", "chatgpt-apps", "edmg-director");
 const electronDirectorDir = path.join(root, "electron-resources", "director");
@@ -16,12 +40,8 @@ const backendBinaryName = process.platform === "win32" ? "edmg-studio-backend.ex
 const bundledBackendPath = path.join(electronBackendDir, backendBinaryName);
 const bundleManifestPath = path.join(electronBackendDir, "backend-bundle-manifest.json");
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const SUPPORTED_PYTHON_MIN = [3, 10];
-const SUPPORTED_PYTHON_MAX_EXCLUSIVE = [3, 14];
-// Torch 2.11.x in the bundled backend currently requires setuptools < 82.
-const backendSetuptoolsConstraint = "setuptools<82";
-const defaultBackendBundleExtra = process.platform === "win32" ? "studio_bundle_directml" : "studio_bundle";
-const backendTorchIndexUrl = String(process.env.EDMG_BACKEND_TORCH_INDEX_URL || process.env.PIP_TORCH_INDEX_URL || "").trim();
+
+const dependencyInputPaths = [pythonVersionPath, pyprojectPath, uvLockPath];
 const requiredBackendSourceFiles = [
   "edmg_studio_backend/app.py",
   "edmg_studio_backend/services/internal_video.py",
@@ -32,62 +52,33 @@ const requiredBackendSourceFiles = [
   "edmg_studio_backend/services/tensorrt_video.py",
 ];
 
-const ignoredDirNames = new Set([
-  ".git",
-  ".mypy_cache",
-  ".pytest_cache",
-  "__pycache__",
-  "build",
-  "dist",
-  "venv",
-]);
-
-const trackedRootFiles = new Set([
-  "backend_entry.py",
-  "pyinstaller.spec",
-  "pyproject.toml",
-  "README.md",
-]);
-
-function envFlagEnabled(name) {
-  const raw = String(process.env[name] || "").trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-
-function resolveBackendBundleExtra() {
-  const explicit = String(process.env.EDMG_BACKEND_BUNDLE_EXTRA || "").trim();
-  if (explicit) {
-    if (!/^[A-Za-z0-9_.-]+$/.test(explicit)) {
-      throw new Error(`Invalid EDMG_BACKEND_BUNDLE_EXTRA value: ${explicit}`);
-    }
-    return explicit;
-  }
-  if (envFlagEnabled("EDMG_BACKEND_CUDA_BUNDLE") || envFlagEnabled("EDMG_STUDIO_CUDA_BUNDLE")) {
-    return "studio_bundle_cuda";
-  }
-  return defaultBackendBundleExtra;
-}
-
-const backendBundleExtra = resolveBackendBundleExtra();
-
 function runChecked(label, command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? root,
+    env: options.env ?? process.env,
     stdio: "inherit",
     shell: false,
   });
+  if (result.error) throw new Error(`${label} failed: ${result.error.message}`);
   if (result.status !== 0) {
     throw new Error(`${label} failed with exit code ${result.status ?? "unknown"}`);
   }
 }
 
-function canRun(command, args, options = {}) {
+function runCaptured(label, command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? root,
-    stdio: "ignore",
+    env: options.env ?? process.env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
     shell: false,
   });
-  return result.status === 0;
+  if (result.error) throw new Error(`${label} failed: ${result.error.message}`);
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || "").trim();
+    throw new Error(`${label} failed with exit code ${result.status ?? "unknown"}${detail ? `: ${detail}` : ""}`);
+  }
+  return String(result.stdout || "").trim();
 }
 
 function runPnpmChecked(label, args, options = {}) {
@@ -103,148 +94,137 @@ function runPnpmChecked(label, args, options = {}) {
   runChecked(label, pnpmCommand, args, options);
 }
 
-function compareVersionTriples(left, right) {
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const delta = (left[index] ?? 0) - (right[index] ?? 0);
-    if (delta !== 0) return delta;
-  }
-  return 0;
+function repoRelative(filePath) {
+  return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
 
-function parsePythonVersion(command, args, options = {}) {
-  const result = spawnSync(command, [...args, "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"], {
-    cwd: options.cwd ?? root,
+function assertRequiredFiles() {
+  const missing = [
+    ...dependencyInputPaths,
+    provenanceScriptPath,
+    toolchainScriptPath,
+    ...requiredBackendSourceFiles.map((relativePath) => path.join(pythonBackendDir, relativePath)),
+  ].filter((filePath) => !fs.existsSync(filePath));
+  if (missing.length) {
+    throw new Error(`Release bundle is missing required inputs: ${missing.map(repoRelative).join(", ")}`);
+  }
+  const pythonPin = fs.readFileSync(pythonVersionPath, "utf8").trim();
+  if (pythonPin !== "3.12") {
+    throw new Error(`.python-version must contain exactly 3.12 for release builds; got ${JSON.stringify(pythonPin)}`);
+  }
+}
+
+function assertTrackedCleanDependencyInputs() {
+  const relativePaths = dependencyInputPaths.map(repoRelative);
+  const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", ...relativePaths], {
+    cwd: repoRoot,
+    encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     shell: false,
-    encoding: "utf8",
   });
-  if (result.status !== 0) return null;
-  const raw = String(result.stdout || "").trim();
-  const match = raw.match(/^(\d+)\.(\d+)\.(\d+)$/);
-  if (!match) return null;
-  return {
-    raw,
-    tuple: [Number(match[1]), Number(match[2]), Number(match[3])],
-  };
-}
-
-function isSupportedPythonVersion(versionTuple) {
-  return compareVersionTriples(versionTuple, SUPPORTED_PYTHON_MIN) >= 0 &&
-    compareVersionTriples(versionTuple, SUPPORTED_PYTHON_MAX_EXCLUSIVE) < 0;
-}
-
-function assertSupportedPython(command, args, label, options = {}) {
-  const version = parsePythonVersion(command, args, options);
-  if (!version) {
-    throw new Error(`Could not determine ${label} version for ${command}`);
-  }
-  if (!isSupportedPythonVersion(version.tuple)) {
-    throw new Error(
-      `${label} ${version.raw} is unsupported for Studio release builds. Use Python >= ${SUPPORTED_PYTHON_MIN.join(".")} and < ${SUPPORTED_PYTHON_MAX_EXCLUSIVE.join(".")}.`,
-    );
-  }
-  return version.raw;
-}
-
-function resolvePythonBootstrapCommand() {
-  const envPython = process.env.EDMG_STUDIO_PYTHON;
-  const candidates = [
-    envPython ? { command: envPython, prefix: [] } : null,
-    { command: "python", prefix: [] },
-    process.platform === "win32" ? { command: "py", prefix: ["-3"] } : null,
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    const version = parsePythonVersion(candidate.command, candidate.prefix, { cwd: root });
-    if (version && isSupportedPythonVersion(version.tuple)) {
-      return candidate;
-    }
-  }
-
-  throw new Error(
-    `Could not find a supported Python command. Set EDMG_STUDIO_PYTHON or install Python >= ${SUPPORTED_PYTHON_MIN.join(".")} and < ${SUPPORTED_PYTHON_MAX_EXCLUSIVE.join(".")}.`,
+  if (tracked.error) throw new Error(`Could not verify tracked dependency inputs: ${tracked.error.message}`);
+  const dirty = runCaptured(
+    "check release dependency input state",
+    "git",
+    ["status", "--porcelain=v1", "--", ...relativePaths],
+    { cwd: repoRoot },
   );
+  assertTrackedCleanDependencyStatus({
+    trackedStatus: tracked.status,
+    dirtyStatus: dirty,
+    paths: relativePaths,
+  });
 }
 
-function venvPythonPath() {
-  if (process.platform === "win32") {
-    return path.join(pythonBackendDir, "venv", "Scripts", "python.exe");
-  }
-  return path.join(pythonBackendDir, "venv", "bin", "python");
+function resolveUv() {
+  const uvCommand = String(process.env.EDMG_UV || "uv").trim();
+  if (!uvCommand) throw new Error("EDMG_UV must not be empty");
+  const versionOutput = runCaptured("query uv version", uvCommand, ["--version"], { cwd: pythonBackendDir });
+  const uvVersion = assertPinnedUvVersion(versionOutput, PINNED_UV_VERSION);
+  return { uvCommand, uvVersion };
 }
 
-function collectBackendFiles(dir, acc = []) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (ignoredDirNames.has(entry.name)) continue;
-    if (entry.name.endsWith(".egg-info")) continue;
-
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectBackendFiles(fullPath, acc);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    acc.push(fullPath);
-  }
-  return acc;
+function synchronizeReleaseEnvironment(uvCommand, profile) {
+  runChecked("validate committed uv lock", uvCommand, uvLockCheckArgs(), { cwd: pythonBackendDir });
+  runChecked("synchronize frozen release environment", uvCommand, uvSyncArgs(profile), { cwd: pythonBackendDir });
 }
 
-function assertRequiredBackendSources() {
-  const missing = [];
-  for (const rel of requiredBackendSourceFiles) {
-    const fullPath = path.join(pythonBackendDir, rel);
-    if (!fs.existsSync(fullPath)) missing.push(rel);
+function collectReleaseProvenance(uvCommand, profile) {
+  const stdout = runCaptured(
+    "collect release provenance",
+    uvCommand,
+    uvRunArgs(profile, [
+      "python",
+      provenanceScriptPath,
+      "--lock",
+      uvLockPath,
+      "--profile",
+      profile,
+    ]),
+    { cwd: pythonBackendDir },
+  );
+  let payload;
+  try {
+    payload = JSON.parse(stdout);
+  } catch {
+    throw new Error(`Release provenance helper returned invalid JSON: ${stdout}`);
   }
-  if (missing.length) {
-    throw new Error(`Backend release bundle is missing required source files: ${missing.join(", ")}`);
+  assertPython312(payload.pythonVersion);
+  assertTorchIndexForProfile(profile, payload.torchIndex);
+  if (!String(payload.pyinstallerVersion || "").trim()) throw new Error("Release provenance omitted PyInstaller version");
+  if (!Array.isArray(payload.torchPackages) || payload.torchPackages.length !== 3) {
+    throw new Error("Release provenance must include torch, torchvision, and torchaudio");
   }
-  return [...requiredBackendSourceFiles];
+  if (!Array.isArray(payload.nltkResources) || payload.nltkResources.length === 0) {
+    throw new Error("Release provenance must include pinned NLTK resources");
+  }
+  return payload;
+}
+
+function trackedBackendFiles() {
+  const stdout = runCaptured(
+    "inventory tracked backend sources",
+    "git",
+    ["ls-files", "-z", "--", "studio/edmg-studio/python_backend"],
+    { cwd: repoRoot },
+  );
+  const paths = stdout.split("\0").filter(Boolean).map((relativePath) => path.join(repoRoot, relativePath));
+  if (!paths.length) throw new Error("No tracked backend source files were found");
+  return paths;
 }
 
 async function computeBackendSourceFingerprint() {
-  const requiredSources = assertRequiredBackendSources();
-  const files = [];
-  for (const name of trackedRootFiles) {
-    const fullPath = path.join(pythonBackendDir, name);
-    if (fs.existsSync(fullPath)) files.push(fullPath);
+  const filesByRelativePath = new Map();
+  for (const filePath of [
+    ...trackedBackendFiles(),
+    pythonVersionPath,
+    fileURLToPath(import.meta.url),
+    toolchainScriptPath,
+    provenanceScriptPath,
+  ]) {
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) continue;
+    filesByRelativePath.set(repoRelative(filePath), filePath);
   }
 
-  const packageDirs = collectBackendFiles(pythonBackendDir, []);
-  for (const file of packageDirs) {
-    if (!files.includes(file)) files.push(file);
-  }
-
-  files.sort((a, b) => a.localeCompare(b));
+  const files = [...filesByRelativePath.entries()].sort(([left], [right]) => left.localeCompare(right));
   const hash = crypto.createHash("sha256");
-  let newestSourceMtimeMs = 0;
-
-  for (const file of files) {
-    const rel = path.relative(pythonBackendDir, file).split(path.sep).join("/");
-    const stat = await fsp.stat(file);
-    newestSourceMtimeMs = Math.max(newestSourceMtimeMs, stat.mtimeMs);
-    hash.update(rel);
+  for (const [relativePath, filePath] of files) {
+    hash.update(relativePath);
     hash.update("\n");
-    hash.update(await fsp.readFile(file));
+    hash.update(await fsp.readFile(filePath));
     hash.update("\n");
   }
 
+  const fingerprintInputs = [];
+  for (const filePath of dependencyInputPaths) {
+    fingerprintInputs.push({ path: repoRelative(filePath), sha256: await sha256File(filePath) });
+  }
   return {
     sourceHash: hash.digest("hex"),
     fileCount: files.length,
-    newestSourceMtimeMs,
-    requiredSources,
+    fingerprintInputs,
+    requiredSources: [...requiredBackendSourceFiles],
   };
-}
-
-async function sha256File(filePath) {
-  const hash = crypto.createHash("sha256");
-  await new Promise((resolve, reject) => {
-    const stream = fs.createReadStream(filePath);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("error", reject);
-    stream.on("end", resolve);
-  });
-  return hash.digest("hex");
 }
 
 function readBundleManifest() {
@@ -256,17 +236,6 @@ function readBundleManifest() {
   }
 }
 
-function currentBundleMatches(sourceHash) {
-  const manifest = readBundleManifest();
-  return Boolean(
-    manifest &&
-    manifest.sourceHash === sourceHash &&
-    manifest.backendBundleExtra === backendBundleExtra &&
-    (manifest.torchIndexUrl || "") === (backendTorchIndexUrl || "") &&
-    fs.existsSync(bundledBackendPath)
-  );
-}
-
 function distBackendCandidates() {
   return [
     path.join(pythonBackendDir, "dist", "edmg-studio-backend", backendBinaryName),
@@ -274,59 +243,20 @@ function distBackendCandidates() {
   ];
 }
 
-function findFreshDistBackend(newestSourceMtimeMs) {
-  for (const candidate of distBackendCandidates()) {
-    if (!fs.existsSync(candidate)) continue;
-    const stat = fs.statSync(candidate);
-    if (stat.mtimeMs >= newestSourceMtimeMs) {
-      return candidate;
-    }
-  }
-  return "";
+async function reusableBundle(expected) {
+  const manifest = readBundleManifest();
+  if (!manifest || !releaseProvenanceMatches(manifest, expected)) return null;
+  if (!(await binaryMatchesManifest(bundledBackendPath, manifest))) return null;
+  return manifest;
 }
 
-function ensureBackendBuild() {
-  const bootstrap = resolvePythonBootstrapCommand();
-  assertSupportedPython(bootstrap.command, bootstrap.prefix, "Bootstrap Python", { cwd: root });
-  const venvPython = venvPythonPath();
-
-  if (fs.existsSync(venvPython)) {
-    const venvVersion = parsePythonVersion(venvPython, [], { cwd: pythonBackendDir });
-    if (!venvVersion || !isSupportedPythonVersion(venvVersion.tuple)) {
-      fs.rmSync(path.join(pythonBackendDir, "venv"), { recursive: true, force: true });
-    }
-  }
-
-  if (fs.existsSync(venvPython) && !canRun(venvPython, ["--version"], { cwd: pythonBackendDir })) {
-    fs.rmSync(path.join(pythonBackendDir, "venv"), { recursive: true, force: true });
-  }
-
-  if (!fs.existsSync(venvPython)) {
-    runChecked("create backend virtualenv", bootstrap.command, [...bootstrap.prefix, "-m", "venv", "venv"], {
-      cwd: pythonBackendDir,
-    });
-  }
-
-  assertSupportedPython(venvPython, [], "Backend venv Python", { cwd: pythonBackendDir });
-
-  runChecked("upgrade backend packaging tools", venvPython, ["-m", "pip", "install", "-U", "pip", "wheel", backendSetuptoolsConstraint], {
-    cwd: pythonBackendDir,
-  });
-  if (backendTorchIndexUrl) {
-    runChecked("install backend CUDA torch stack", venvPython, ["-m", "pip", "install", "--upgrade", "torch", "torchvision", "torchaudio", "--index-url", backendTorchIndexUrl], {
-      cwd: pythonBackendDir,
-    });
-  }
-  runChecked("install backend studio bundle", venvPython, ["-m", "pip", "install", "-e", `.[${backendBundleExtra}]`], {
-    cwd: pythonBackendDir,
-  });
-  runChecked("install pyinstaller", venvPython, ["-m", "pip", "install", "pyinstaller"], {
-    cwd: pythonBackendDir,
-  });
-  runChecked("build backend bundle", venvPython, ["-m", "PyInstaller", ".\\pyinstaller.spec", "--clean", "--noconfirm"], {
-    cwd: pythonBackendDir,
-  });
-
+function buildBackendBundle(uvCommand, profile) {
+  runChecked(
+    "build backend bundle with frozen uv environment",
+    uvCommand,
+    uvRunArgs(profile, ["pyinstaller", "pyinstaller.spec", "--clean", "--noconfirm"]),
+    { cwd: pythonBackendDir },
+  );
   const built = distBackendCandidates().find((candidate) => fs.existsSync(candidate));
   if (!built) {
     throw new Error(`Backend build completed but ${backendBinaryName} was not found under python_backend/dist`);
@@ -334,23 +264,33 @@ function ensureBackendBuild() {
   return built;
 }
 
-async function stageBackendBundle(sourcePath, fingerprint, reusedExistingBuild) {
+async function stageBackendBundle(sourcePath, expected) {
   await fsp.mkdir(electronBackendDir, { recursive: true });
   await fsp.copyFile(sourcePath, bundledBackendPath);
-
+  const stat = await fsp.stat(bundledBackendPath);
   const manifest = {
+    schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
     ok: true,
     builder: "scripts/prepare-release-bundle.mjs",
-    sourceHash: fingerprint.sourceHash,
-    sourceFileCount: fingerprint.fileCount,
-    requiredBackendSources: fingerprint.requiredSources,
-    backendBundleExtra,
-    torchIndexUrl: backendTorchIndexUrl || "",
-    newestSourceMtimeMs: fingerprint.newestSourceMtimeMs,
+    sourceHash: expected.sourceHash,
+    sourceFileCount: expected.sourceFileCount,
+    requiredBackendSources: expected.requiredBackendSources,
+    fingerprintInputs: expected.fingerprintInputs,
+    lockSha256: expected.lockSha256,
+    acceleratorProfile: expected.acceleratorProfile,
+    capabilityExtras: expected.capabilityExtras,
+    pythonVersion: expected.pythonVersion,
+    pythonImplementation: expected.pythonImplementation,
+    uvVersion: expected.uvVersion,
+    pyinstallerVersion: expected.pyinstallerVersion,
+    torchIndex: expected.torchIndex,
+    torchPackages: expected.torchPackages,
+    nltkResources: expected.nltkResources,
     bundledBackend: path.relative(root, bundledBackendPath).split(path.sep).join("/"),
     sourceArtifact: path.relative(root, sourcePath).split(path.sep).join("/"),
     binarySha256: await sha256File(bundledBackendPath),
-    reusedExistingBuild,
+    binarySize: stat.size,
+    reusedExistingBuild: false,
     preparedAt: new Date().toISOString(),
   };
   await fsp.writeFile(bundleManifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
@@ -358,13 +298,15 @@ async function stageBackendBundle(sourcePath, fingerprint, reusedExistingBuild) 
 }
 
 async function stageDirectorBundle() {
-  if (!fs.existsSync(directorAppDir)) {
-    throw new Error(`Director app directory is missing: ${directorAppDir}`);
+  if (!fs.existsSync(directorAppDir)) throw new Error(`Director app directory is missing: ${directorAppDir}`);
+  for (const name of ["package.json", "pnpm-lock.yaml"]) {
+    if (!fs.existsSync(path.join(directorAppDir, name))) {
+      throw new Error(`Director frozen dependency input is missing: ${path.join(directorAppDir, name)}`);
+    }
   }
 
-  runPnpmChecked("build director bundle", ["run", "build"], {
-    cwd: directorAppDir,
-  });
+  runPnpmChecked("install frozen director dependencies", ["install", "--frozen-lockfile"], { cwd: directorAppDir });
+  runPnpmChecked("build director bundle", ["run", "build"], { cwd: directorAppDir });
 
   const requiredEntries = [
     path.join(directorAppDir, "dist-server", "server.js"),
@@ -373,20 +315,16 @@ async function stageDirectorBundle() {
     path.join(directorAppDir, "package.json"),
   ];
   for (const entry of requiredEntries) {
-    if (!fs.existsSync(entry)) {
-      throw new Error(`Director bundle build is missing required artifact: ${entry}`);
-    }
+    if (!fs.existsSync(entry)) throw new Error(`Director bundle build is missing required artifact: ${entry}`);
   }
 
   await fsp.rm(electronDirectorDir, { recursive: true, force: true });
   await fsp.mkdir(electronDirectorDir, { recursive: true });
-
   const copyEntries = ["assets", "dist-server", "node_modules", "package.json", "README.md"];
   for (const name of copyEntries) {
     const source = path.join(directorAppDir, name);
     if (!fs.existsSync(source)) continue;
-    const target = path.join(electronDirectorDir, name);
-    await fsp.cp(source, target, {
+    await fsp.cp(source, path.join(electronDirectorDir, name), {
       recursive: true,
       force: true,
       dereference: false,
@@ -399,6 +337,7 @@ async function stageDirectorBundle() {
     directorAppDir: path.relative(root, directorAppDir).split(path.sep).join("/"),
     bundledDirectorDir: path.relative(root, electronDirectorDir).split(path.sep).join("/"),
     included: copyEntries.filter((name) => fs.existsSync(path.join(electronDirectorDir, name))),
+    lockSha256: await sha256File(path.join(directorAppDir, "pnpm-lock.yaml")),
     preparedAt: new Date().toISOString(),
   };
   await fsp.writeFile(directorBundleManifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
@@ -406,39 +345,48 @@ async function stageDirectorBundle() {
 }
 
 async function main() {
+  assertNoDynamicDependencyOverrides(process.env);
+  const acceleratorProfile = resolveAcceleratorProfile({ argv: process.argv.slice(2), env: process.env });
+  assertRequiredFiles();
+  assertTrackedCleanDependencyInputs();
+  const { uvCommand, uvVersion } = resolveUv();
+
   runChecked("prepare electron build assets", process.execPath, [path.join(__dirname, "prepare-electron-build.mjs")], {
     cwd: root,
   });
-
+  synchronizeReleaseEnvironment(uvCommand, acceleratorProfile);
+  const provenance = collectReleaseProvenance(uvCommand, acceleratorProfile);
   const fingerprint = await computeBackendSourceFingerprint();
-  if (currentBundleMatches(fingerprint.sourceHash)) {
+  const lockSha256 = await sha256File(uvLockPath);
+  const expected = {
+    sourceHash: fingerprint.sourceHash,
+    sourceFileCount: fingerprint.fileCount,
+    requiredBackendSources: fingerprint.requiredSources,
+    fingerprintInputs: fingerprint.fingerprintInputs,
+    lockSha256,
+    acceleratorProfile,
+    capabilityExtras: [...RELEASE_CAPABILITY_EXTRAS],
+    uvVersion,
+    ...provenance,
+  };
+
+  const existing = await reusableBundle(expected);
+  if (existing) {
     const directorManifest = await stageDirectorBundle();
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          skippedRebuild: true,
-          reason: "bundled backend already matches current backend sources",
-          bundleManifestPath,
-          directorBundleManifestPath,
-          directorManifest,
-          sourceHash: fingerprint.sourceHash,
-        },
-        null,
-        2,
-      ),
-    );
+    console.log(JSON.stringify({
+      ok: true,
+      skippedRebuild: true,
+      reason: "bundled backend matches the committed lock, profile, provenance, sources, and binary hash",
+      bundleManifestPath,
+      manifest: existing,
+      directorBundleManifestPath,
+      directorManifest,
+    }, null, 2));
     return;
   }
 
-  let sourceArtifact = findFreshDistBackend(fingerprint.newestSourceMtimeMs);
-  let reusedExistingBuild = Boolean(sourceArtifact);
-  if (!sourceArtifact) {
-    sourceArtifact = ensureBackendBuild();
-    reusedExistingBuild = false;
-  }
-
-  const manifest = await stageBackendBundle(sourceArtifact, fingerprint, reusedExistingBuild);
+  const sourceArtifact = buildBackendBundle(uvCommand, acceleratorProfile);
+  const manifest = await stageBackendBundle(sourceArtifact, expected);
   const directorManifest = await stageDirectorBundle();
   console.log(JSON.stringify({ ok: true, bundleManifestPath, manifest, directorBundleManifestPath, directorManifest }, null, 2));
 }

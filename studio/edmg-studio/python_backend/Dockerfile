@@ -1,8 +1,12 @@
-FROM python:3.11-slim
+FROM ghcr.io/astral-sh/uv:0.11.28 AS uv
+FROM python:3.12-slim
+
+COPY --from=uv /uv /uvx /bin/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
     EDMG_STUDIO_HOME=/studio \
     EDMG_STUDIO_DATA_DIR=/studio/data \
     EDMG_STUDIO_MODELS_DIR=/studio/models \
@@ -25,8 +29,10 @@ WORKDIR /opt/edmg/python_backend
 
 COPY . /opt/edmg/python_backend
 
-RUN python -m pip install --upgrade pip "setuptools<82" wheel \
-    && python -m pip install -e ".[studio_bundle]"
+RUN uv lock --check \
+    && uv sync --frozen --no-dev \
+        --extra cpu --extra core --extra audio --extra asr \
+        --extra internal-video --extra aws
 
 RUN mkdir -p /studio/data /studio/models /studio/cache /studio/logs /studio/external
 
@@ -34,4 +40,4 @@ EXPOSE 7863
 
 VOLUME ["/studio/data", "/studio/models", "/studio/cache", "/studio/logs", "/studio/external"]
 
-CMD ["sh", "-lc", "edmg-studio-backend serve --host ${EDMG_STUDIO_BACKEND_HOST:-0.0.0.0} --port ${EDMG_STUDIO_BACKEND_PORT:-7863}"]
+CMD ["sh", "-lc", "uv run --frozen --no-sync edmg-studio-backend serve --host ${EDMG_STUDIO_BACKEND_HOST:-0.0.0.0} --port ${EDMG_STUDIO_BACKEND_PORT:-7863}"]

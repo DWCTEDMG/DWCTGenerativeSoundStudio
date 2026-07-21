@@ -93,7 +93,17 @@ class RenderScenesRequest(BaseModel):
     negative_prompt: str = "blurry, low quality, watermark, text, logo"
 
 MotionEngine = Literal["animatediff","svd"]
-CreativePreset = Literal["cinematic", "psychedelic", "ambient"]
+CreativePreset = Literal[
+    "cinematic",
+    "psychedelic",
+    "ambient",
+    "narrative",
+    "performance",
+    "abstract",
+    "lyric",
+    "product",
+]
+DirectorMode = Literal["narrative", "performance", "abstract", "lyric", "product", "ambient"]
 
 class RenderMotionRequest(BaseModel):
     """Render motion clips per scene via ComfyUI (AnimateDiff or SVD)."""
@@ -306,9 +316,35 @@ class LayeredAnimateRequest(BaseModel):
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
 
+
+class AutosaveRequest(BaseModel):
+    timeline: dict[str, Any] | None = None
+    meta: dict[str, Any] | None = None
+    reason: str = "autosave"
+
+
+class RecoveryApplyRequest(BaseModel):
+    source: str = "journal"
+    snapshot_name: str | None = None
+
+
+class MotionPhrasesApplyRequest(BaseModel):
+    phrases: list[dict[str, Any]] = Field(default_factory=list)
+    overwrite_motion_track: bool = False
+
+
+class StemModulationUpdateRequest(BaseModel):
+    matrix: dict[str, Any] = Field(default_factory=dict)
+    mute_lane_id: str | None = None
+    muted: bool | None = None
+    scale_lane_id: str | None = None
+    scale: float | None = Field(default=None, ge=0.0, le=3.0)
+
+
 class CreativeDirectionApplyRequest(BaseModel):
     variant_index: int = 0
     preset: CreativePreset = "cinematic"
+    director_mode: DirectorMode | None = None
     sensitivity: float = Field(default=1.0, ge=0.1, le=3.0)
     overwrite_tracks: bool = True
     overwrite_camera: bool = False
@@ -656,6 +692,22 @@ class RenderConductorPlanRequest(BaseModel):
     )
     fallback_policy: RenderFallbackPolicy = "auto"
     sections: list[RenderIntentSection] = Field(default_factory=list)
+
+
+class RenderConductorPromoteRequest(BaseModel):
+    plan_id: str | None = None
+    scene_ids: list[str] = Field(default_factory=list)
+    target_engine: EngineKind = "internal"
+    quality_tier: Literal["draft", "balanced", "quality", "ultra"] = "quality"
+    reason: str | None = Field(default=None, max_length=400)
+
+
+class VisualDNAUpdateRequest(BaseModel):
+    identity: dict[str, Any] | None = None
+    continuity: dict[str, Any] | None = None
+    approve_trait_ids: list[str] = Field(default_factory=list)
+    deprecate_trait_ids: list[str] = Field(default_factory=list)
+    notes: str | None = Field(default=None, max_length=1000)
 
 
 class UnrealBridgeMarker(BaseModel):

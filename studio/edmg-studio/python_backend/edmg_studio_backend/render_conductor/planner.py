@@ -528,3 +528,69 @@ def build_advisory_render_plan(
         fallback_branches=fallbacks,
         diagnostics=diagnostics,
     )
+
+
+def promote_proxy_sections(
+    plan: RenderPlan | dict[str, Any],
+    *,
+    scene_ids: list[str] | None = None,
+    target_engine: EngineKind = "internal",
+    quality_tier: str = "quality",
+    reason: str | None = None,
+) -> tuple[RenderPlan, list[str]]:
+    """Promote proxy (or selected) sections to a hero/quality engine lane."""
+    plan_obj = plan if isinstance(plan, RenderPlan) else RenderPlan.model_validate(plan)
+    selected = {str(item).strip() for item in (scene_ids or []) if str(item).strip()}
+    promoted: list[str] = []
+    next_sections: list[RenderSectionPlan] = []
+    reason_text = str(reason or "").strip() or f"Promoted to {target_engine} ({quality_tier})"
+
+    for section in plan_obj.sections:
+        should_promote = section.scene_id in selected if selected else section.engine == "proxy"
+        if not should_promote:
+            next_sections.append(section)
+            continue
+        if section.engine == target_engine and f"quality_tier={quality_tier}" in " ".join(section.notes):
+            next_sections.append(section)
+            continue
+        notes = [
+            *list(section.notes),
+            f"promoted_from={section.engine}",
+            f"quality_tier={quality_tier}",
+            "lane=hero",
+        ]
+        next_sections.append(
+            section.model_copy(
+                update={
+                    "engine": target_engine,
+                    "rationale": f"{section.rationale}. {reason_text}",
+                    "notes": notes,
+                }
+            )
+        )
+        promoted.append(section.scene_id)
+
+    engine_counts: dict[str, int] = {}
+    for section in next_sections:
+        engine_counts[section.engine] = engine_counts.get(section.engine, 0) + 1
+    engine_summary = ", ".join(f"{engine} x{count}" for engine, count in sorted(engine_counts.items()))
+    diagnostics = [
+        *list(plan_obj.diagnostics),
+        f"promoted_scenes={','.join(promoted) if promoted else 'none'}",
+        f"promotion_target={target_engine}",
+        f"promotion_quality={quality_tier}",
+    ]
+    summary = (
+        f"Promoted render plan for {len(next_sections)} scenes. "
+        f"Engine mix: {engine_summary or 'none'}. "
+        f"Promoted {len(promoted)} scene(s) to {target_engine}/{quality_tier}."
+    )
+    updated = plan_obj.model_copy(
+        update={
+            "summary": summary,
+            "sections": next_sections,
+            "diagnostics": diagnostics,
+            "advisory_only": True,
+        }
+    )
+    return updated, promoted

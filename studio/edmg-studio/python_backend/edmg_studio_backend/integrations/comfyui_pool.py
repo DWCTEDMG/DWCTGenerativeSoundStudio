@@ -147,7 +147,8 @@ class ComfyUINodePool:
             return
         node.last_check_ts = now
         try:
-            comfy.get_object_info(node.url)  # cheap if up
+            # Keep probes short: a refused/unreachable ComfyUI must not block setup/status.
+            comfy.get_object_info(node.url, timeout=2.0)
             node.healthy = True
             node.last_error = None
         except Exception as e:
@@ -160,7 +161,7 @@ class ComfyUINodePool:
             return
         node.last_caps_ts = now
         try:
-            info = comfy.get_object_info(node.url)
+            info = comfy.get_object_info(node.url, timeout=5.0)
             node.node_classes = set((info or {}).keys())
             ckpt_names, known = self._extract_checkpoint_names(info)
             node.detected_checkpoints = ckpt_names

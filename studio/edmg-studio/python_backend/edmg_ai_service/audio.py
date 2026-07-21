@@ -30,13 +30,13 @@ def lightweight_audio_features(path: str) -> dict[str, Any]:
     Imports are lazy so core installs stay lightweight.
 
     Install:
-      pip install -e ".[audio]"
+      uv sync --frozen --extra cpu --extra audio
     """
     try:
         import librosa  # type: ignore
         import numpy as np  # type: ignore
     except Exception as e:
-        raise RuntimeError("Audio features require optional deps: pip install -e '.[audio]'") from e
+        raise RuntimeError("Audio features require the locked `audio` capability in the active uv profile.") from e
 
     y, sr = librosa.load(path, sr=None, mono=True)
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)

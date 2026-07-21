@@ -7,9 +7,12 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
+here = Path(os.getcwd()).resolve()
+if str(here) not in sys.path:
+    sys.path.insert(0, str(here))
+
 from pyinstaller_support import ensure_installed_pycparser_compat_modules, ensure_nltk_resources
 
-here = Path(os.getcwd()).resolve()
 build_assets_dir = here / "build" / "pyinstaller-support"
 nltk_data_dir = build_assets_dir / "nltk_data"
 hooks_dir = here / "pyinstaller_hooks"
@@ -142,7 +145,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # An arbitrary UPX binary discovered on the build host would change the
+    # release artifact without appearing in uv.lock or its provenance.
+    upx=False,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

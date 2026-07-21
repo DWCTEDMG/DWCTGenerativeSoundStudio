@@ -5,9 +5,8 @@ This folder contains a **Windows-first** packaging pipeline that produces a DAW/
 ## Prereqs
 
 - Windows 10/11 x64
-- Python `>=3.10,<3.14` installed. If `python` points at an unsupported newer
-  runtime, `build_all.ps1` will try the Windows `py` launcher selectors
-  (`py -3.13`, `py -3.12`, `py -3.11`, `py -3.10`) before failing.
+- `uv` 0.11.28. The repository pins Python 3.12 and uv acquires the matching
+  interpreter for the frozen release environment.
 - Node.js 18+ on PATH
 - `pnpm@10.33.0` available via `corepack enable` or a direct pnpm install
 - Git (optional, for fetching ComfyUI)
@@ -59,15 +58,23 @@ Outputs:
 
 The packaged desktop version comes from `studio/edmg-studio/package.json#version`.
 `build_all.ps1` runs `pnpm run check:tooling` before `dist:win` so lockfile and
-version metadata drift is caught before packaging.
+version metadata drift is caught before packaging. The default Windows build
+uses the mutually exclusive `directml` profile. Use `pnpm run dist:win:cpu`,
+`pnpm run dist:win:directml`, or `pnpm run dist:win:cuda` when selecting an
+explicit release profile.
 
 ## What gets bundled
 
 - Electron UI
-- Python backend compiled into `edmg-studio-backend.exe`
+- Python backend compiled into `edmg-studio-backend.exe` from `uv.lock`
 - A place to drop runtime deps:
   - `studio/edmg-studio/electron-resources/bin/ffmpeg.exe`
   - `studio/edmg-studio/electron-resources/backend/edmg-studio-backend.exe`
+
+The staged backend manifest records Python/uv/PyInstaller versions, the lock
+SHA-256, accelerator profile, resolved Torch packages/index, source fingerprint,
+and binary hash. Installed applications run the executable directly and do not
+require Python or uv on the customer machine.
 
 ## Runtime defaults
 

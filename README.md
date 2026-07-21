@@ -73,10 +73,26 @@ Windows or `/mnt/media/EDMG-Studio` on Linux.
 - The canonical package manager is `pnpm@10.33.0`, pinned in `studio/edmg-studio/package.json`.
 - The shipped desktop app version also comes from `studio/edmg-studio/package.json#version`.
 
+## Python tooling
+
+- Python is pinned to 3.12 in `.python-version`.
+- `uv` 0.11.28 manages Python acquisition, the backend environment, locking,
+  tests, linting, and PyInstaller builds.
+- `studio/edmg-studio/python_backend/uv.lock` is committed release input.
+- Select exactly one accelerator extra: `cpu`, `directml`, or `cuda`; compose
+  it with capability extras such as `audio`, `asr`, and `internal-video`.
+- Packaged Electron applications include the PyInstaller backend and do not
+  require end users to install Python or uv.
+
+See [docs/PYTHON_TOOLCHAIN.md](./docs/PYTHON_TOOLCHAIN.md) for commands and the
+lock-update policy.
+
 ## Release, strategy, and operator docs
 
 - [studio/edmg-studio/README.md](./studio/edmg-studio/README.md)
 - [docs/TESTING_QUICKSTART.md](./docs/TESTING_QUICKSTART.md)
+- [docs/PYTHON_TOOLCHAIN.md](./docs/PYTHON_TOOLCHAIN.md)
+- [docs/UV_MIGRATION_INVENTORY.md](./docs/UV_MIGRATION_INVENTORY.md)
 - [RELEASE.md](./RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](./docs/STUDIO_RELEASE_RUNBOOK.md)
 - [docs/STUDIO_REPO_MAP.md](./docs/STUDIO_REPO_MAP.md)
@@ -92,10 +108,12 @@ Windows or `/mnt/media/EDMG-Studio` on Linux.
 
 ## Test strategy
 
-- Repo-level tests live under `tests/` and run from the repo root with `python -m pytest`.
-- Backend package tests live under `studio/edmg-studio/python_backend/` and run from that directory with `python -m pytest`.
-- To run both scopes in sequence from the repo root, use `python scripts/run_pytest_scopes.py`.
-- The root `pytest.ini` intentionally excludes the backend-local pytest scope so `python -m pytest` from the repo root stays a repo-level command.
+- Repo-level tests live under `tests/`; backend tests live under
+  `studio/edmg-studio/python_backend/`.
+- Run both scopes from the repo root with
+  `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`.
+- The runner checks the committed lock and performs a frozen CPU-profile sync
+  before executing either scope.
 
 ## Recommended Local Stack
 

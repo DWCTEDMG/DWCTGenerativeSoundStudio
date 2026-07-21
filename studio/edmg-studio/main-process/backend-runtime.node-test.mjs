@@ -5,6 +5,7 @@ import {
   SOURCE_RUNTIME_CAPABILITY_EXTRAS,
   buildBackendLaunchSpec,
   normalizeAcceleratorProfile,
+  resolveStudioUiOrigin,
 } from "./backend-runtime.mjs";
 
 const base = {
@@ -68,6 +69,15 @@ test("packaged backend ignores source Python and uv configuration", () => {
   assert.deepEqual(spec.args, ["serve", "--host", "127.0.0.1", "--port", "7863"]);
   assert.equal(spec.args.includes("uv"), false);
   assert.equal(spec.args.includes("python"), false);
+});
+
+test("studio UI origin comes from the real dev server URL, not a pinned port", () => {
+  assert.equal(
+    resolveStudioUiOrigin("http://127.0.0.1:5199/", { isDev: true }),
+    "http://127.0.0.1:5199",
+  );
+  assert.equal(resolveStudioUiOrigin("http://localhost:5173", { isDev: true }), "http://localhost:5173");
+  assert.equal(resolveStudioUiOrigin("http://127.0.0.1:5173", { isDev: false }), "null");
 });
 
 test("accelerator profile validation is closed and platform-aware", () => {

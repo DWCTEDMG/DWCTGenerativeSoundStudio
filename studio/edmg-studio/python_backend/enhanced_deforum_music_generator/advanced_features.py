@@ -925,7 +925,7 @@ if __name__ == "__main__":
         logger("Access at: http://localhost:8000/docs")
         server.run(port=8000)
     else:
-        logger("FastAPI not available. Install with: pip install fastapi uvicorn")
+        logger("FastAPI is missing. Run the frozen uv sync for the selected accelerator profile.")
         
         # Example: Test advanced features
         config = AdvancedGenerationConfig(

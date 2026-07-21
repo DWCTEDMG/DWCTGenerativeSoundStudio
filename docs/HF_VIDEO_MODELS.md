@@ -44,7 +44,9 @@ and wires into:
 Use the unified script:
 
 ```bash
-python studio/edmg-studio/scripts/run_video_diffusers.py --model-id Wan-AI/Wan2.2-TI2V-5B-Diffusers \
+uv run --project studio/edmg-studio/python_backend --frozen \
+  --extra cuda --extra core --extra internal-video \
+  python studio/edmg-studio/scripts/run_video_diffusers.py --model-id Wan-AI/Wan2.2-TI2V-5B-Diffusers \
   --prompt "Two cats boxing on a stage" --output outputs/wan.mp4 --device cuda --dtype bfloat16
 ```
 
@@ -53,7 +55,9 @@ For image-to-video models, add `--image /path/to/image.png`.
 Short fallback example:
 
 ```bash
-python studio/edmg-studio/scripts/run_video_diffusers.py --model-id stabilityai/stable-video-diffusion-img2vid-xt \
+uv run --project studio/edmg-studio/python_backend --frozen \
+  --extra cuda --extra core --extra internal-video \
+  python studio/edmg-studio/scripts/run_video_diffusers.py --model-id stabilityai/stable-video-diffusion-img2vid-xt \
   --prompt "Camera push through foggy neon ruins" --image inputs/keyframe.png --output outputs/svd.mp4 --device cuda --dtype float16
 ```
 

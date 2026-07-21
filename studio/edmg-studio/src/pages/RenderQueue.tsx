@@ -3,6 +3,10 @@ import { apiGet, apiPost, getBackendUrl } from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
+import { JobActionButtons } from "../shared/jobs/JobActionButtons";
+import { postQueueJobAction, type QueueJobAction } from "../shared/jobs/jobActions";
+import { JobStatusChip } from "../shared/jobs/JobStatusChip";
+import { jobRecoveryHint, type StudioJob } from "../shared/jobs/jobStatus";
 import type { PageProps } from "../types/pageProps";
 
 type RenderQueuePanelId = "controls" | "jobLog" | "jobsTable";
@@ -59,20 +63,10 @@ export default function RenderQueue(props: PageProps) {
     }
   };
 
-  const cancel = async (job: any) => {
+  const runQueueJobAction = async (job: StudioJob, action: QueueJobAction) => {
     setErr(null);
     try {
-      await apiPost(`/v1/projects/${job.project_id}/jobs/${job.id}/cancel`, {});
-      await refresh();
-    } catch (e: any) {
-      setErr(String(e));
-    }
-  };
-
-  const retry = async (job: any) => {
-    setErr(null);
-    try {
-      await apiPost(`/v1/projects/${job.project_id}/jobs/${job.id}/retry`, {});
+      await postQueueJobAction(job, action);
       await refresh();
     } catch (e: any) {
       setErr(String(e));
@@ -112,6 +106,7 @@ export default function RenderQueue(props: PageProps) {
   const filtered = projectId ? jobs.filter((j) => j.project_id === projectId) : jobs;
   const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
   const activeCount = filtered.filter((j) => ["queued", "running"].includes(j.status)).length;
+  const pausedCount = filtered.filter((j) => j.status === "paused").length;
   const resumableCount = filtered.filter((j) => j.type === "internal_video" && ["failed", "canceled", "succeeded"].includes(j.status)).length;
   const runtimeSummary = (job: any) => {
     const cp = job?.progress?.runtime_checkpoint;
@@ -210,8 +205,11 @@ export default function RenderQueue(props: PageProps) {
             Live poll queue every 2.5s
           </label>
           <div className="small" style={{ opacity: 0.8 }}>
-            Active <b>{activeCount}</b> • resumable <b>{resumableCount}</b>{lastRefreshAt ? <> • updated {new Date(lastRefreshAt).toLocaleTimeString()}</> : null}
+            Active <b>{activeCount}</b> • paused <b>{pausedCount}</b> • resumable <b>{resumableCount}</b>{lastRefreshAt ? <> • updated {new Date(lastRefreshAt).toLocaleTimeString()}</> : null}
           </div>
+        </div>
+        <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>
+          Pause holds queued jobs only; it never interrupts a render already in progress.
         </div>
         {err && <div style={{ marginTop: 10, color: "var(--danger)" }}>{err}</div>}
         {!err && info ? <div className="small" style={{ marginTop: 10, opacity: 0.82 }}>Last desktop action: <b>{info.action || "ok"}</b>{info.path ? <> • {String(info.path)}</> : null}</div> : null}
@@ -250,12 +248,15 @@ export default function RenderQueue(props: PageProps) {
                   <tr key={j.id}>
                     <td className="small">{j.created_at}</td>
                     <td className="small">{j.type}</td>
-                    <td className="small">{j.status}</td>
+                    <td className="small"><JobStatusChip status={j.status} /></td>
                     <td className="small">
                       {j.progress ? (
                         <>
                           <div>{j.progress.percent ?? 0}% • {j.progress.stage || "running"}</div>
                           {j.progress.message ? <div style={{ opacity: 0.8 }}>{j.progress.message}</div> : null}
+                          {jobRecoveryHint(j as StudioJob) && jobRecoveryHint(j as StudioJob) !== j.progress.message ? (
+                            <div style={{ opacity: 0.8, marginTop: 4 }}>{jobRecoveryHint(j as StudioJob)}</div>
+                          ) : null}
                           {runtimeSummary(j) ? (
                             <>
                               <div style={{ opacity: 0.85, marginTop: 4 }}>
@@ -268,7 +269,9 @@ export default function RenderQueue(props: PageProps) {
                             </>
                           ) : null}
                         </>
-                      ) : "—"}
+                      ) : (
+                        jobRecoveryHint(j as StudioJob) || "—"
+                      )}
                     </td>
                     <td>
                       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -281,13 +284,15 @@ export default function RenderQueue(props: PageProps) {
                         ) : null}
                         {runtimeSummary(j)?.checkpointPath ? <button className="secondary" onClick={() => handleArtifactPathAction("checkpoint", runtimeSummary(j)?.checkpointPath, "reveal")}>{desktopActionLabel("reveal", "checkpoint")}</button> : null}
                         {j.type === "internal_video" ? (
-                          <>
-                            <button className="secondary" onClick={() => resumeFromCheckpoint(j)} disabled={j.status === "queued" || j.status === "running"}>Resume from checkpoint</button>
-                            <button className="secondary" onClick={() => restartClean(j)} disabled={j.status === "queued" || j.status === "running"}>Restart clean</button>
-                          </>
-                        ) : null}
-                        <button className="secondary" onClick={() => retry(j)} disabled={j.status === "running"}>Retry</button>
-                        <button className="secondary" onClick={() => cancel(j)} disabled={j.status !== "queued" && j.status !== "running"}>Cancel</button>
+                          <JobActionButtons
+                            job={j as StudioJob}
+                            onAction={(action) => runQueueJobAction(j as StudioJob, action)}
+                            onResumeFromCheckpoint={() => resumeFromCheckpoint(j)}
+                            onRestartClean={() => restartClean(j)}
+                          />
+                        ) : (
+                          <JobActionButtons job={j as StudioJob} onAction={(action) => runQueueJobAction(j as StudioJob, action)} />
+                        )}
                       </div>
                     </td>
                   </tr>

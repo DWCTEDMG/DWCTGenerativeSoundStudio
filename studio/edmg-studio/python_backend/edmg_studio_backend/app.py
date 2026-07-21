@@ -51,13 +51,14 @@ except Exception:
 from .config import Settings
 from .schemas import (
     HealthResponse, ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
-    RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest, TimelineUpdateRequest,
+    RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest,
     CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest, ExportUnrealBridgeRequest,
     ImportUnrealBridgeReturnRequest,
     BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudHfBucketSettingsRequest, CloudLightningBundleRequest,
-    ProjectSnapshot, RenderConductorPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
+    ProjectSnapshot, RenderConductorPlanRequest, RenderConductorPromoteRequest, RenderIntent, VisualDNAFeedbackRequest,
+    VisualDNAUpdateRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
     ParseqMotionApplyRequest,
@@ -69,6 +70,14 @@ from .services import layer_animation as layeranim
 from .services import parseq_adapter
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
+from .api import create_project_router, create_system_router
+from .domain.director_modes import (
+    director_mode_profile,
+    flavor_prompt,
+    list_director_modes,
+    normalize_director_mode,
+    reactive_preset_for_mode,
+)
 from .services.ai_client import build_ai_client
 from .services.edmg_core import (
     core_status,
@@ -152,6 +161,11 @@ from .services.workbench_bridge import (
     planner_lab_to_canonical_plan,
     planner_lab_to_project_analysis,
 )
+from .services.core_capabilities import (
+    apply_core_style_direction,
+    development_timing,
+    enrich_with_multitrack_defaults,
+)
 from .services.unreal_bridge_consumer import (
     build_unreal_sequence_import_plan,
     write_unreal_sequence_import_plan,
@@ -163,8 +177,10 @@ from .services.visual_dna import (
     load_visual_dna,
     record_render_feedback as record_visual_dna_feedback,
     save_visual_dna,
+    trait_id as visual_dna_trait_id,
+    update_visual_dna,
 )
-from .render_conductor.planner import build_advisory_render_plan
+from .render_conductor.planner import build_advisory_render_plan, promote_proxy_sections
 from .services.setup_wizard import (
     SetupTaskManager,
     check_backend_bundle,
@@ -182,7 +198,11 @@ from .services.setup_wizard import (
     _find_ollama_exe,
     _find_7z_exe,
     managed_ollama_launch_script_path,
+    resolve_setup_accelerator_profile,
 )
+from .services.system_readiness import assess_system_readiness
+from .services.project_health import assess_project_health, collect_project_bundle, suggest_relinks
+from .uv_toolchain import ToolchainError
 
 settings = Settings()
 
@@ -306,8 +326,8 @@ app.add_middleware(
     allow_origins=list(backend_security.cors_origins),
     allow_origin_regex=backend_security.cors_origin_regex,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Range"],
+    allow_methods=["*"],
+    allow_headers=["*"],
     expose_headers=["Accept-Ranges", "Content-Length", "Content-Range"],
 )
 
@@ -335,7 +355,10 @@ def _require_multipart() -> None:
     if not HAS_MULTIPART:
         raise UserFacingError(
             "File upload support is unavailable because python-multipart is not installed.",
-            hint="Install backend dependencies with `pip install -e .` or add `python-multipart`, then restart EDMG Studio.",
+            hint=(
+                "Run the source launcher (or a frozen uv sync for one accelerator profile) "
+                "to restore `python-multipart`, then restart EDMG Studio."
+            ),
             code="MISSING_MULTIPART",
             status_code=503,
         )
@@ -743,7 +766,7 @@ def _resolve_comfy_checkpoint_name(
     available: list[str] = []
     for url in settings.resolved_comfyui_urls():
         try:
-            names = _extract_comfy_checkpoint_names(comfy.get_object_info(url))
+            names = _extract_comfy_checkpoint_names(comfy.get_object_info(url, timeout=2.0))
         except Exception:
             continue
         for name in names:
@@ -2323,6 +2346,21 @@ def hardware():
     return {"ok": True, "hardware": hw, "render_tier_plan": _build_internal_render_plan(hw, requested_tier="auto")}
 
 
+def _system_readiness_report() -> dict[str, Any]:
+    """Shared Studio readiness report used by Settings and Setup."""
+    return assess_system_readiness(
+        ffmpeg_path=settings.ffmpeg_path,
+        data_dir=settings.data_dir,
+        models_dir=settings.models_dir,
+        cache_dir=settings.cache_dir,
+        logs_dir=settings.logs_dir,
+        external_dir=settings.external_dir,
+        check_ffmpeg=check_ffmpeg,
+        check_runtime=check_backend_bundle,
+        hardware_profile=_hardware_profile,
+    )
+
+
 def _proxy_renders_enabled(payload: dict[str, Any] | None = None) -> bool:
     video_cfg = dict((render_settings.get().get("video") or {}))
     if bool(video_cfg.get("allow_proxy_renders", True)):
@@ -2993,9 +3031,9 @@ def setup_status():
             ),
         }
 
-    ff = check_ffmpeg(settings.ffmpeg_path)
-    backend_bundle = check_backend_bundle()
-    backend_bundle_directml = check_backend_bundle("studio_bundle_directml")
+    readiness = _system_readiness_report()
+    ff = dict((readiness.get("checks") or {}).get("ffmpeg") or check_ffmpeg(settings.ffmpeg_path))
+    toolchain = check_backend_bundle()
     edmg = core_status()
     if not edmg.get("available"):
         edmg.setdefault(
@@ -3022,14 +3060,16 @@ def setup_status():
     return {
             "ok": True,
             "ai_config": ai_config,
-            "backend_bundle": backend_bundle,
-            "backend_bundle_directml": backend_bundle_directml,
+            "toolchain": toolchain,
+            # Temporary response alias for desktop clients predating UV-01.
+            "backend_bundle": toolchain,
             "ollama": ollama,
             "comfyui": comfy_status,
             "ffmpeg": ff,
             "edmg": edmg,
             "sevenzip": seven,
             "hardware": hw,
+            "system_readiness": readiness,
             "tasks": [t.to_dict() for t in setup_tasks.list()[:10]],
         }
 
@@ -3092,37 +3132,53 @@ def setup_7zip_install():
 
 @app.post("/v1/setup/backend/install")
 def setup_backend_install(payload: dict[str, Any]):
-    bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
-    flavor = str((payload or {}).get("flavor") or "cpu").strip().lower() or "cpu"
-    if flavor == "nvidia" and bundle == "studio_bundle":
-        bundle = "studio_bundle"  # bundle stays the same; CUDA torch is installed separately
-    task = setup_tasks.start(f"install_backend_bundle:{bundle}:{flavor}", install_backend_bundle, bundle, flavor)
+    try:
+        profile = resolve_setup_accelerator_profile(payload)
+    except ToolchainError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    status = check_backend_bundle(accelerator_profile=profile, check_sync=False)
+    if status.get("immutable"):
+        detail = str(
+            status.get("hint")
+            or "This packaged backend is self-contained; install another application build to change profiles."
+        )
+        raise HTTPException(status_code=409, detail=detail)
+
+    task = setup_tasks.start(
+        f"sync_backend_profile:{profile}",
+        install_backend_bundle,
+        accelerator_profile=profile,
+    )
     return {"ok": True, "task": task.to_dict()}
 
 @app.post("/v1/setup/full/install")
 def setup_full_install(payload: dict[str, Any]):
-    """Run a full one-click setup: backend bundle, 7-Zip, Ollama/model, ComfyUI Portable install + start."""
+    """Run one-click setup around one locked backend accelerator profile."""
     import os
 
-    flavor = (payload or {}).get("flavor") or "cpu"
+    try:
+        profile = resolve_setup_accelerator_profile(payload)
+    except ToolchainError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    toolchain = check_backend_bundle(accelerator_profile=profile, check_sync=False)
+    if toolchain.get("immutable") and not toolchain.get("ok"):
+        raise HTTPException(
+            status_code=409,
+            detail=str(toolchain.get("hint") or "The packaged backend profile does not match this setup request."),
+        )
+
+    comfy_flavor = {"cpu": "cpu", "directml": "amd", "cuda": "nvidia"}[profile]
     port = int((payload or {}).get("comfy_port") or 8188)
-    bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
-    if flavor == "amd" and bundle == "studio_bundle":
-        bundle = "studio_bundle_directml"
     model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ai_config = _setup_ai_config()
 
     def _run(task):
-        # 1) Ensure backend runtime bundle is present for audio/ASR/internal render paths.
+        # 1) Source checkouts sync from uv.lock; packaged backends are immutable.
         SetupTaskManager.check_canceled(task, "Full setup canceled.")
-        if not check_backend_bundle(bundle).get("ok"):
-            install_backend_bundle(task, bundle, flavor)
-        elif flavor in ("nvidia", "cuda"):
-            SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` already installed; installing CUDA torch.")
-            install_backend_bundle(task, bundle, flavor)
-        else:
-            SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` already installed.")
+        install_backend_bundle(task, accelerator_profile=profile)
 
         # 2) Ensure 7-Zip for .7z extraction
         SetupTaskManager.check_canceled(task, "Full setup canceled.")
@@ -3159,7 +3215,13 @@ def setup_full_install(payload: dict[str, Any]):
         # 4) ComfyUI Portable install + start
         SetupTaskManager.check_canceled(task, "Full setup canceled.")
         if not comfy_portable_installed(settings.external_dir, settings.data_dir):
-            download_and_extract_portable(task, settings.external_dir, flavor, settings.data_dir, settings.models_dir)
+            download_and_extract_portable(
+                task,
+                settings.external_dir,
+                comfy_flavor,
+                settings.data_dir,
+                settings.models_dir,
+            )
         else:
             SetupTaskManager.log(task, "ComfyUI Portable is already installed.")
 
@@ -3173,9 +3235,17 @@ def setup_full_install(payload: dict[str, Any]):
         if comfy_ready:
             SetupTaskManager.log(task, "ComfyUI is already reachable.")
         else:
-            comfy_portable.start(task, settings.external_dir, flavor, "127.0.0.1", port, settings.data_dir, settings.models_dir)
+            comfy_portable.start(
+                task,
+                settings.external_dir,
+                comfy_flavor,
+                "127.0.0.1",
+                port,
+                settings.data_dir,
+                settings.models_dir,
+            )
 
-    task = setup_tasks.start(f"full_setup:{flavor}:{ai_config.get('provider')}", _run)
+    task = setup_tasks.start(f"full_setup:{profile}:{ai_config.get('provider')}", _run)
     return {"ok": True, "task": task.to_dict()}
 
 
@@ -3296,21 +3366,8 @@ def edmg_template():
         # Not fatal; return minimal template so UI doesn't crash
         return {"note": "EDMG Core not installed or template unavailable."}
 
-@app.get("/v1/projects")
-def list_projects():
-    return {"projects": [p.__dict__ for p in store.list()]}
-
-@app.post("/v1/projects")
-def create_project(req: ProjectCreateRequest):
-    proj = store.create(req.name)
-    return _project_response_payload(proj)
-
-@app.get("/v1/projects/{project_id}")
-def get_project(project_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    return _project_response_payload(proj)
+# Core project list/create/get/health/timeline/autosave/recovery routes are registered
+# via create_project_router() after _project_response_payload is defined.
 
 
 @app.get("/v1/projects/{project_id}/visual_dna")
@@ -3319,11 +3376,37 @@ def get_project_visual_dna(project_id: str):
     if not proj:
         raise HTTPException(404, "Project not found")
     dna = _load_project_visual_dna(proj)
+    traits = [
+        {
+            "id": visual_dna_trait_id(str(trait.scope), trait.value),
+            **trait.model_dump(mode="json"),
+        }
+        for trait in dna.trait_memory
+    ]
     return {
         "ok": True,
         "visual_dna": dna.model_dump(mode="json"),
+        "traits": traits,
         "prompt_hints": build_visual_dna_prompt_hints(dna),
     }
+
+
+@app.get("/v1/projects/{project_id}/health/relink")
+def get_project_relink_suggestions(project_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    return suggest_relinks(store.project_dir(project_id), proj.meta)
+
+
+@app.post("/v1/projects/{project_id}/health/collect")
+def post_collect_project(project_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    pdir = store.project_dir(project_id)
+    dest = pdir.parent / f"{project_id}_collect_{time.strftime('%Y%m%d-%H%M%S')}"
+    return collect_project_bundle(pdir, dest)
 
 
 @app.post("/v1/projects/{project_id}/visual_dna/feedback")
@@ -3340,21 +3423,37 @@ def post_project_visual_dna_feedback(project_id: str, req: VisualDNAFeedbackRequ
         "prompt_hints": build_visual_dna_prompt_hints(saved),
     }
 
-@app.get("/v1/projects/{project_id}/timeline")
-def get_timeline(project_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    return {"ok": True, "timeline": proj.meta.get("timeline") or {"layers": []}}
 
-@app.post("/v1/projects/{project_id}/timeline")
-def set_timeline(project_id: str, req: TimelineUpdateRequest):
+@app.post("/v1/projects/{project_id}/visual_dna/update")
+def post_project_visual_dna_update(project_id: str, req: VisualDNAUpdateRequest):
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
-    proj.meta["timeline"] = req.timeline or {"layers": []}
-    store.save(proj)
-    return {"ok": True, "timeline": proj.meta["timeline"]}
+    dna = _load_project_visual_dna(proj)
+    updated = update_visual_dna(
+        dna,
+        identity=req.identity,
+        continuity=req.continuity,
+        approve_trait_ids=list(req.approve_trait_ids or []),
+        deprecate_trait_ids=list(req.deprecate_trait_ids or []),
+        notes=req.notes,
+    )
+    saved = _save_project_visual_dna(proj, updated)
+    traits = [
+        {
+            "id": visual_dna_trait_id(str(trait.scope), trait.value),
+            **trait.model_dump(mode="json"),
+        }
+        for trait in saved.trait_memory
+    ]
+    return {
+        "ok": True,
+        "visual_dna": saved.model_dump(mode="json"),
+        "traits": traits,
+        "prompt_hints": build_visual_dna_prompt_hints(saved),
+    }
+
+
 @app.get("/v1/projects/{project_id}/preview/frame")
 def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, force: int = 0):
     """Render a low-res cached preview frame for timeline scrubbing (no diffusion)."""
@@ -3765,7 +3864,9 @@ def analyze_audio(project_id: str):
         raise HTTPException(400, "No audio uploaded")
     audio_path = store.project_dir(project_id) / "assets" / "audio" / audio_meta["filename"]
 
-    feats = _collect_audio_analysis_features(audio_path)
+    development_timings_ms: dict[str, float] = {}
+    with development_timing("audio_analysis", development_timings_ms):
+        feats = _collect_audio_analysis_features(audio_path)
     try:
         asr_cfg = transcription_settings.get()
         transcription_audio_path, separation_meta = _prepare_transcription_audio(
@@ -3799,10 +3900,14 @@ def analyze_audio(project_id: str):
     except Exception as e:
         trans = {"error": f"transcribe failed: {e}"}
 
-    analysis = _enrich_project_audio_analysis(
-        getattr(proj, "name", "Untitled project"),
-        {"features": feats, "transcript": trans, "timestamp": time.time()},
-    )
+    with development_timing("analysis_enrichment", development_timings_ms):
+        analysis = _enrich_project_audio_analysis(
+            getattr(proj, "name", "Untitled project"),
+            {"features": feats, "transcript": trans, "timestamp": time.time()},
+        )
+        analysis = enrich_with_multitrack_defaults(analysis)
+    if development_timings_ms:
+        analysis["development_diagnostics"] = {"stage_timings_ms": development_timings_ms}
     duration_s = _analysis_duration_s(analysis)
     if duration_s:
         analysis["duration_s"] = float(duration_s)
@@ -3814,13 +3919,29 @@ def analyze_audio(project_id: str):
     return {"ok": True, "analysis": analysis}
 
 
+@app.get("/v1/director_modes")
+def get_director_modes():
+    return {"ok": True, "modes": list_director_modes()}
+
+
 @app.get("/v1/projects/{project_id}/creative_direction")
-def get_creative_direction(project_id: str, variant_index: int = 0, preset: str = "cinematic", sensitivity: float = 1.0):
+def get_creative_direction(
+    project_id: str,
+    variant_index: int = 0,
+    preset: str = "cinematic",
+    director_mode: str | None = None,
+    sensitivity: float = 1.0,
+):
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
-    safe_preset = preset if preset in {"cinematic", "psychedelic", "ambient"} else "cinematic"
-    payload = _build_creative_direction_payload(proj, variant_index=variant_index, preset=safe_preset, sensitivity=sensitivity)
+    payload = _build_creative_direction_payload(
+        proj,
+        variant_index=variant_index,
+        preset=preset,
+        sensitivity=sensitivity,
+        director_mode=director_mode,
+    )
     return {"ok": True, "creative_direction": payload}
 
 
@@ -3835,6 +3956,7 @@ def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirect
         variant_index=int(req.variant_index or 0),
         preset=str(req.preset or "cinematic"),
         sensitivity=float(req.sensitivity or 1.0),
+        director_mode=req.director_mode,
     )
     patch_timeline = (
         payload.get("timeline_patch", {}).get("timeline")
@@ -3854,7 +3976,8 @@ def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirect
     proj.meta["timeline"] = merged
     proj.meta["last_creative_direction"] = {
         "variant_index": int(req.variant_index or 0),
-        "preset": str(req.preset or "cinematic"),
+        "preset": str(payload.get("preset") or req.preset or "cinematic"),
+        "director_mode": str(payload.get("director_mode") or req.director_mode or "narrative"),
         "sensitivity": float(req.sensitivity or 1.0),
         "applied_at": time.time(),
     }
@@ -5066,7 +5189,16 @@ def _merge_creative_timeline_patch(
     return merged
 
 
-def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str, sensitivity: float) -> dict[str, Any]:
+def _build_creative_direction_payload(
+    proj: Any,
+    variant_index: int,
+    preset: str,
+    sensitivity: float,
+    director_mode: str | None = None,
+) -> dict[str, Any]:
+    mode = normalize_director_mode(director_mode or preset)
+    mode_profile = director_mode_profile(mode)
+    reactive_preset = reactive_preset_for_mode(mode)
     analysis_raw = (proj.meta.get("analysis") or {}) if hasattr(proj, "meta") else {}
     analysis = analysis_raw if isinstance(analysis_raw, dict) else {}
     plan_raw = (proj.meta.get("last_plan") or {}) if hasattr(proj, "meta") else {}
@@ -5093,7 +5225,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         transcript_sentences,
         motifs,
         str(getattr(proj, "name", "") or "Untitled project"),
-        preset,
+        reactive_preset,
         sensitivity,
         max_sections=min(8, max(3, len(scenes) or 6)),
     )
@@ -5130,7 +5262,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             motion_hint = str(scene.get("motion_hint") or _creative_motion_hint(params))
         else:
             metrics = _scene_metrics_from_curve(index, len(source_scenes) or 1, scene, overall, duration_s, energy_curve)
-            params = _compute_reactive_params(metrics, preset, sensitivity)
+            params = _compute_reactive_params(metrics, reactive_preset, sensitivity)
             cue_index = (
                 min(len(transcript_sentences) - 1, int((index / max(1, len(source_scenes) - 1)) * len(transcript_sentences)))
                 if transcript_sentences and has_transcript else -1
@@ -5139,7 +5271,13 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             energy_label = _creative_energy_label(float(metrics["energy"]))
             camera_hint = _creative_camera_hint(float(metrics["energy"]))
             motion_hint = _creative_motion_hint(params)
-        prompt = render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
+        prompt = flavor_prompt(render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT), mode)
+        camera_bias = str(mode_profile.get("camera_bias") or "").strip()
+        if camera_bias and camera_bias.casefold() not in camera_hint.casefold():
+            camera_hint = f"{camera_hint} {camera_bias}".strip()
+        motion_bias = str(mode_profile.get("motion_bias") or "").strip()
+        if motion_bias and motion_bias.casefold() not in motion_hint.casefold():
+            motion_hint = f"{motion_hint} ({motion_bias})"
         scene_tokens = _analysis_top_keywords(" ".join([name, prompt, transcript_cue]), limit=5)
         scene_motifs = list(
             dict.fromkeys(
@@ -5174,6 +5312,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         prompt_pack = " ".join(
             [
                 prompt,
+                f"Director mode: {mode_profile.get('label') or mode}.",
                 f"Energy profile: {energy_label}.",
                 camera_hint,
                 f"Motion recipe: {motion_hint}",
@@ -5200,6 +5339,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
                 "prompt_pack": prompt_pack,
                 "reactive_params": params,
                 "scene_source": scene_source,
+                "director_mode": mode,
             }
         )
 
@@ -5235,6 +5375,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
         "segment_count": len(_analysis_transcript_segments(analysis)),
         "section_count": len(fallback_sections),
         "themes": list(analysis.get("themes") or []) if isinstance(analysis, dict) else [],
+        "director_mode": mode,
     }
     llm_contract = _build_creative_contract(
         proj,
@@ -5266,7 +5407,9 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
     return {
         "ready": ready,
         "missing": missing,
-        "preset": preset,
+        "preset": reactive_preset,
+        "director_mode": mode,
+        "director_profile": mode_profile,
         "sensitivity": float(sensitivity),
         "provider_mode": provider_mode,
         "scene_source": scene_source,
@@ -5293,6 +5436,7 @@ def _build_creative_direction_payload(proj: Any, variant_index: int, preset: str
             "Creative direction now carries audio-reactive sections, timeline patch data, and a Deforum-aligned preview in one Studio-native payload.",
             "Prompt and motion tracks stay in the canonical timeline schema, while lyric cues are translated into compositor text layers.",
             "Overview analysis remains the canonical source. Planner enriches the storyboard, and Reactive Lab adds motion schedules without replacing the saved story pass.",
+            f"Director mode `{mode}` maps reactive motion through the `{reactive_preset}` profile.",
         ],
         "status": status,
     }
@@ -5715,6 +5859,16 @@ def _project_response_payload(proj: Any) -> dict[str, Any]:
     }
 
 
+app.include_router(create_system_router(readiness_report=_system_readiness_report))
+app.include_router(
+    create_project_router(
+        get_store=lambda: store,
+        project_response=_project_response_payload,
+        assess_health=assess_project_health,
+    )
+)
+
+
 def _render_quality_tier_from_preset(preset: str | None) -> str:
     preset_l = str(preset or "balanced").strip().lower()
     if preset_l == "fast":
@@ -6060,6 +6214,7 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
             duration_s_hint=duration_hint,
         )
         plan = _enrich_normalized_plan(plan, analysis if isinstance(analysis, dict) else {})
+        plan = apply_core_style_direction(plan, req.style_prefs)
 
     proj.meta["last_plan"] = plan
     store.save(proj)
@@ -6147,7 +6302,9 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
 
     imported_analysis = planner_lab_to_project_analysis(req.analysis)
     if imported_analysis:
-        proj.meta["analysis"] = _merge_imported_analysis(proj.meta.get("analysis"), imported_analysis)
+        proj.meta["analysis"] = enrich_with_multitrack_defaults(
+            _merge_imported_analysis(proj.meta.get("analysis"), imported_analysis)
+        )
 
     imported_plan = planner_lab_to_canonical_plan(req.analysis, req.plan, req.settings)
     scene_counts = [
@@ -6160,6 +6317,10 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
         requested_variants=max(1, len(imported_plan.get("variants") or [])),
         requested_max_scenes=max(scene_counts or [1]),
         duration_s_hint=_project_duration_hint_s(proj, analysis=proj.meta.get("analysis") or imported_analysis),
+    )
+    normalized_plan = apply_core_style_direction(
+        normalized_plan,
+        str((req.settings or {}).get("promptStyle") or ""),
     )
     proj.meta["last_plan"] = normalized_plan
     proj.meta["last_planner_lab"] = {
@@ -6266,6 +6427,39 @@ def cancel_job(project_id: str, job_id: str):
         raise HTTPException(404, "Job not found")
     return {"ok": True, "job": job.__dict__}
 
+
+@app.post("/v1/projects/{project_id}/jobs/{job_id}/pause")
+def pause_job(project_id: str, job_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    current = jobs.get(project_id, job_id)
+    if not current:
+        raise HTTPException(404, "Job not found")
+    if current.status != "queued":
+        raise HTTPException(409, "Only queued jobs can be paused")
+    job = jobs.pause(project_id, job_id)
+    if not job or job.status != "paused":
+        raise HTTPException(409, "Job could not be paused because its state changed")
+    return {"ok": True, "job": job.__dict__}
+
+
+@app.post("/v1/projects/{project_id}/jobs/{job_id}/resume")
+def resume_job(project_id: str, job_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    current = jobs.get(project_id, job_id)
+    if not current:
+        raise HTTPException(404, "Job not found")
+    if current.status != "paused":
+        raise HTTPException(409, "Only paused jobs can be resumed")
+    job = jobs.resume(project_id, job_id)
+    if not job or job.status != "queued":
+        raise HTTPException(409, "Job could not be resumed because its state changed")
+    return {"ok": True, "job": job.__dict__}
+
+
 @app.post("/v1/projects/{project_id}/jobs/{job_id}/retry")
 def retry_job(project_id: str, job_id: str):
     proj = store.get(project_id)
@@ -6287,8 +6481,8 @@ def resume_internal_job(project_id: str, job_id: str):
         raise HTTPException(404, "Job not found")
     if source_job.type != "internal_video":
         raise HTTPException(400, "Resume from checkpoint is only available for internal render jobs")
-    if source_job.status in ("queued", "running"):
-        raise HTTPException(409, "Job is still active. Cancel it before resuming from checkpoint.")
+    if source_job.status in ("queued", "paused", "running"):
+        raise HTTPException(409, "Job is still active. Resume or cancel it before resuming from checkpoint.")
     return _enqueue_internal_job_from_source(project_id, source_job, resume_existing_frames=True, queue_action="resume_from_checkpoint")
 
 
@@ -6302,8 +6496,8 @@ def restart_internal_job_clean(project_id: str, job_id: str):
         raise HTTPException(404, "Job not found")
     if source_job.type != "internal_video":
         raise HTTPException(400, "Clean restart is only available for internal render jobs")
-    if source_job.status in ("queued", "running"):
-        raise HTTPException(409, "Job is still active. Cancel it before starting a clean restart.")
+    if source_job.status in ("queued", "paused", "running"):
+        raise HTTPException(409, "Job is still active. Resume or cancel it before starting a clean restart.")
     return _enqueue_internal_job_from_source(project_id, source_job, resume_existing_frames=False, queue_action="restart_clean")
 
 
@@ -6338,6 +6532,18 @@ def get_job_log(project_id: str, job_id: str):
     if not lp.exists():
         return {"ok": True, "log": ""}
     return {"ok": True, "log": lp.read_text(encoding="utf-8", errors="ignore")}
+
+
+@app.get("/v1/projects/{project_id}/jobs/{job_id}/events")
+def get_job_events(project_id: str, job_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    job = jobs.get(project_id, job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return {"ok": True, "events": jobs.list_events(project_id, job_id)}
+
 
 @app.post("/v1/jobs/tick")
 def tick_worker():
@@ -10534,12 +10740,57 @@ def render_conductor_plan(project_id: str, req: RenderConductorPlanRequest):
     snapshot = _build_project_snapshot(proj, dna=visual_dna)
     environment = _build_render_conductor_environment()
     advisory_plan = build_advisory_render_plan(intent, snapshot, environment=environment)
+    plan_payload = advisory_plan.model_dump(mode="json")
+    proj.meta["last_conductor_plan"] = plan_payload
+    proj.meta["last_conductor_intent"] = intent.model_dump(mode="json")
+    store.save(proj)
     return {
         "ok": True,
         "intent": intent.model_dump(mode="json"),
-        "plan": advisory_plan.model_dump(mode="json"),
+        "plan": plan_payload,
         "environment": environment,
         "visual_dna_hints": build_visual_dna_prompt_hints(visual_dna),
+    }
+
+
+@app.post("/v1/projects/{project_id}/render/conductor/promote")
+def render_conductor_promote(project_id: str, req: RenderConductorPromoteRequest):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    stored = proj.meta.get("last_conductor_plan") if isinstance(proj.meta.get("last_conductor_plan"), dict) else None
+    if not stored:
+        raise HTTPException(400, "No conductor plan available. Generate an advisory plan first.")
+    if req.plan_id and str(stored.get("plan_id") or "") != str(req.plan_id):
+        raise HTTPException(400, "Conductor plan_id does not match the saved plan")
+
+    updated_plan, promoted = promote_proxy_sections(
+        stored,
+        scene_ids=list(req.scene_ids or []),
+        target_engine=req.target_engine,
+        quality_tier=str(req.quality_tier or "quality"),
+        reason=req.reason,
+    )
+    plan_payload = updated_plan.model_dump(mode="json")
+    promotions = list(proj.meta.get("conductor_promotions") or []) if isinstance(proj.meta.get("conductor_promotions"), list) else []
+    promotions.append(
+        {
+            "at": time.time(),
+            "plan_id": plan_payload.get("plan_id"),
+            "scene_ids": promoted,
+            "target_engine": req.target_engine,
+            "quality_tier": req.quality_tier,
+            "reason": req.reason,
+        }
+    )
+    proj.meta["last_conductor_plan"] = plan_payload
+    proj.meta["conductor_promotions"] = promotions[-20:]
+    store.save(proj)
+    return {
+        "ok": True,
+        "plan": plan_payload,
+        "promoted_scene_ids": promoted,
+        "promotions": promotions[-5:],
     }
 
 
@@ -12069,7 +12320,7 @@ def list_outputs(project_id: str):
     active_internal_jobs = [
         j.__dict__
         for j in project_jobs
-        if j.type == "internal_video" and j.status in ("queued", "running", "canceled", "failed")
+        if j.type == "internal_video" and j.status in ("queued", "paused", "running", "canceled", "failed")
     ][:8]
     return {
         "images": imgs,
@@ -12221,6 +12472,19 @@ def cloud_lightning_bundle(req: CloudLightningBundleRequest):
 @app.get("/v1/models/catalog")
 def models_catalog():
     return models.catalog()
+
+@app.post("/v1/models/promote")
+def models_promote(req: dict[str, Any]):
+    model_id = str(req.get("model_id") or "")
+    target_lane = str(req.get("lane") or req.get("target_lane") or "recommended")
+    reason = req.get("reason")
+    force = bool(req.get("force") or False)
+    return models.promote_model_lane(model_id, target_lane, reason=str(reason) if reason else None, force=force)
+
+@app.post("/v1/models/benchmark")
+def models_benchmark(req: dict[str, Any]):
+    model_id = str(req.get("model_id") or "")
+    return models.record_model_benchmark(model_id, req)
 
 @app.get("/v1/models/tasks")
 def models_tasks():

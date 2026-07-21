@@ -1,14 +1,11 @@
 param(
-  [string]$PythonExe = "python",
-  [string[]]$PythonArgs = @(),
+  [string]$UvExe = "uv",
   [string]$NodeExe = "node",
   [string]$PnpmExe = "pnpm"
 )
 
 $ErrorActionPreference = "Stop"
-$SupportedPythonMin = [Version]"3.10"
-$SupportedPythonMaxExclusive = [Version]"3.14"
-$BackendSetuptoolsConstraint = "setuptools<82"
+$PinnedUvVersion = "0.11.28"
 
 function Assert-Command($name) {
   if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
@@ -16,72 +13,18 @@ function Assert-Command($name) {
   }
 }
 
-function Get-PythonVersion($PythonCommand, [string[]]$ExtraArgs = @()) {
-  $versionOutput = & $PythonCommand @ExtraArgs -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>$null
+function Assert-PinnedUv($UvCommand) {
+  $output = & $UvCommand --version
   if ($LASTEXITCODE -ne 0) {
-    throw "Failed to query Python version using: $PythonCommand"
+    throw "Failed to query uv version using: $UvCommand"
   }
-  try {
-    return [Version]($versionOutput.Trim())
-  } catch {
-    throw "Could not parse Python version output '$versionOutput' from $PythonCommand"
+  if ($output -notmatch '^uv\s+(\d+\.\d+\.\d+)') {
+    throw "Could not parse uv version output: $output"
   }
-}
-
-function Assert-SupportedPythonVersion($PythonCommand, [string[]]$ExtraArgs = @(), [string]$Label = "Python") {
-  $version = Get-PythonVersion $PythonCommand $ExtraArgs
-  if ($version -lt $SupportedPythonMin -or $version -ge $SupportedPythonMaxExclusive) {
-    throw ($Label + " " + $version + " is unsupported for Studio release builds. Use Python >= " + $SupportedPythonMin + " and < " + $SupportedPythonMaxExclusive + ".")
+  if ($Matches[1] -ne $PinnedUvVersion) {
+    throw "Studio release builds require uv $PinnedUvVersion; found $($Matches[1])."
   }
-  Write-Host ("[info] " + $Label + " version OK: " + $version) -ForegroundColor Cyan
-  return $version
-}
-
-function Test-SupportedPythonVersion($PythonCommand, [string[]]$ExtraArgs = @()) {
-  try {
-    $version = Get-PythonVersion $PythonCommand $ExtraArgs
-    return ($version -ge $SupportedPythonMin -and $version -lt $SupportedPythonMaxExclusive)
-  } catch {
-    return $false
-  }
-}
-
-function Format-PythonCommand($PythonCommand, [string[]]$ExtraArgs = @()) {
-  $parts = @($PythonCommand) + $ExtraArgs
-  return ($parts -join " ")
-}
-
-function Resolve-PythonBootstrapCommand() {
-  $candidates = @()
-
-  if ($env:EDMG_STUDIO_PYTHON) {
-    $candidates += [pscustomobject]@{ Command = $env:EDMG_STUDIO_PYTHON; Args = @(); Label = "EDMG_STUDIO_PYTHON" }
-  }
-
-  if ($PSBoundParameters.ContainsKey("PythonExe") -or $PSBoundParameters.ContainsKey("PythonArgs")) {
-    $candidates += [pscustomobject]@{ Command = $PythonExe; Args = $PythonArgs; Label = "PythonExe" }
-  } else {
-    $candidates += [pscustomobject]@{ Command = "python"; Args = @(); Label = "python" }
-    if ($IsWindows -or $env:OS -eq "Windows_NT") {
-      foreach ($minor in @("3.13", "3.12", "3.11", "3.10")) {
-        $candidates += [pscustomobject]@{ Command = "py"; Args = @("-$minor"); Label = "py -$minor" }
-      }
-      $candidates += [pscustomobject]@{ Command = "py"; Args = @("-3"); Label = "py -3" }
-    }
-  }
-
-  foreach ($candidate in $candidates) {
-    if (-not (Get-Command $candidate.Command -ErrorAction SilentlyContinue)) {
-      continue
-    }
-    if (Test-SupportedPythonVersion $candidate.Command $candidate.Args) {
-      $version = Get-PythonVersion $candidate.Command $candidate.Args
-      Write-Host ("[info] Selected bootstrap Python: " + (Format-PythonCommand $candidate.Command $candidate.Args) + " (" + $version + ")") -ForegroundColor Cyan
-      return $candidate
-    }
-  }
-
-  throw ("Could not find a supported Python command. Set EDMG_STUDIO_PYTHON or install Python >= " + $SupportedPythonMin + " and < " + $SupportedPythonMaxExclusive + ".")
+  Write-Host ("[info] uv version OK: " + $Matches[1]) -ForegroundColor Cyan
 }
 
 function Invoke-Checked($label, [scriptblock]$action) {
@@ -188,16 +131,12 @@ function Doctor($RepoRoot, $StudioDir, $PyBackendDir, $BackendPkgDir, $BundledFf
   }
 
   try {
-    $pyv = & $PythonExe @PythonArgs -c "import sys; print(sys.version)"
-    Write-Host ("Python: " + $pyv.Trim())
+    $uvv = & $UvExe --version
+    Write-Host ("uv: " + $uvv.Trim())
+    Write-Host "Python: pinned by repository .python-version and acquired by uv during the frozen release sync"
   } catch {
-    Write-Host "[fail] Python not runnable." -ForegroundColor Red
+    Write-Host "[fail] pinned uv is not runnable." -ForegroundColor Red
   }
-
-  try {
-    $pipv = & $PythonExe @PythonArgs -m pip --version
-    Write-Host ("pip: " + $pipv.Trim())
-  } catch {}
 
   try {
     $nv = & $NodeExe --version
@@ -293,11 +232,9 @@ function Migrate-LegacyData($RepoRoot, $StudioDir, $PyBackendDir) {
 }
 
 Assert-Command $PnpmExe
-$PythonBootstrap = Resolve-PythonBootstrapCommand
-$PythonExe = $PythonBootstrap.Command
-$PythonArgs = $PythonBootstrap.Args
-Assert-Command $PythonExe
-Assert-SupportedPythonVersion $PythonExe $PythonArgs "Bootstrap Python" | Out-Null
+Assert-Command $UvExe
+Assert-PinnedUv $UvExe
+$env:EDMG_UV = (Get-Command $UvExe).Source
 
 $StudioDir = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $RepoRoot = Resolve-Path (Join-Path $StudioDir "../..")
@@ -316,77 +253,16 @@ Doctor $RepoRoot $StudioDir $PyBackendDir $BackendPkgDir $BundledFfmpegPath
 Migrate-LegacyData $RepoRoot $StudioDir $PyBackendDir
 $BundledFfmpegPath = Ensure-BundledFfmpeg $StudioDir
 
-Write-Host "[1/4] Building Python backend (PyInstaller)..."
-Push-Location $PyBackendDir
-
-if (-not (Test-Path "venv")) {
-  & $PythonExe @PythonArgs -m venv venv
-}
-
-$VenvPython = Join-Path $PyBackendDir "venv\Scripts\python.exe"
-if (Test-Path $VenvPython) {
-  if (-not (Test-SupportedPythonVersion $VenvPython @())) {
-    Write-Host "[warn] Existing backend venv uses an unsupported Python; recreating it." -ForegroundColor Yellow
-    Pop-Location
-    Remove-Item -Recurse -Force (Join-Path $PyBackendDir "venv")
-    Push-Location $PyBackendDir
-    & $PythonExe @PythonArgs -m venv venv
-  }
-}
-
-if (-not (Test-Path $VenvPython)) {
-  throw "Virtual environment python not found: $VenvPython"
-}
-Assert-SupportedPythonVersion $VenvPython @() "Backend venv Python" | Out-Null
-
-Invoke-Checked "upgrade backend packaging tools" {
-  & $VenvPython -m pip install -U pip wheel $BackendSetuptoolsConstraint
-}
-Invoke-Checked "install backend bundle" {
-  & $VenvPython -m pip install -e ".[studio_bundle]"
-}
-Invoke-Checked "install pyinstaller" {
-  & $VenvPython -m pip install pyinstaller
-}
-Invoke-Checked "build backend via pyinstaller" {
-  & $VenvPython -m PyInstaller .\pyinstaller.spec --clean --noconfirm
-}
-
-$BackendExe = Join-Path $PyBackendDir "dist\edmg-studio-backend\edmg-studio-backend.exe"
-if (-not (Test-Path $BackendExe)) {
-  $BackendExe = Join-Path $PyBackendDir "dist\edmg-studio-backend.exe"
-}
-if (-not (Test-Path $BackendExe)) {
-  throw "Backend build failed: cannot find edmg-studio-backend.exe"
-}
-
-Pop-Location
-
-Write-Host "[2/4] Staging backend into Electron resources..."
-$BackendDstDir = Join-Path $StudioDir "electron-resources\backend"
-New-Item -ItemType Directory -Force -Path $BackendDstDir | Out-Null
-Copy-Item -Force $BackendExe (Join-Path $BackendDstDir "edmg-studio-backend.exe")
-
-Write-Host "[3/4] Installing UI dependencies..."
+Write-Host "[1/2] Installing UI dependencies from the frozen pnpm lock..."
 Push-Location $StudioDir
-if (Test-Path "pnpm-lock.yaml") {
-  try {
-    Invoke-Checked "pnpm install --frozen-lockfile" {
-      & $PnpmExe install --frozen-lockfile
-    }
-  } catch {
-    Write-Host ("[warn] pnpm install --frozen-lockfile failed; retrying with pnpm install. " + $_.Exception.Message) -ForegroundColor Yellow
-    Invoke-Checked "pnpm install fallback" {
-      & $PnpmExe install
-    }
-  }
-} else {
-  Invoke-Checked "pnpm install" {
-    & $PnpmExe install
-  }
+if (-not (Test-Path "pnpm-lock.yaml")) {
+  throw "pnpm-lock.yaml is required for release builds."
+}
+Invoke-Checked "pnpm install --frozen-lockfile" {
+  & $PnpmExe install --frozen-lockfile
 }
 
-Write-Host "[4/4] Building installer (electron-builder)..."
+Write-Host "[2/2] Building locked DirectML backend and Windows installer..."
 Invoke-Checked "pnpm run check:tooling" {
   & $PnpmExe run check:tooling
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
@@ -203,6 +204,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
 
   const [info, setInfo] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [projectHealth, setProjectHealth] = useState<any>(null);
+  const [musicGraph, setMusicGraph] = useState<any>(null);
+  const [liveCues, setLiveCues] = useState<any>(null);
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewAutoFitKeyRef = useRef<string>("");
   const { progress, runOperation } = useOperationProgress();
@@ -220,6 +224,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
       setAssets(null);
       setAnalysis(null);
       setPlan(null);
+      setProjectHealth(null);
+      setMusicGraph(null);
+      setLiveCues(null);
     }
   };
 
@@ -239,6 +246,24 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
     } catch {
       setAssets(null);
     }
+    try {
+      const health = await apiGet(`/v1/projects/${id}/health`);
+      setProjectHealth(health?.health || null);
+    } catch {
+      setProjectHealth(null);
+    }
+    try {
+      const graph = await apiGet(`/v1/projects/${id}/music_graph`);
+      setMusicGraph(graph?.music_graph || null);
+    } catch {
+      setMusicGraph(null);
+    }
+    try {
+      const cues = await apiGet(`/v1/projects/${id}/live_cues`);
+      setLiveCues(cues?.live_cues || null);
+    } catch {
+      setLiveCues(null);
+    }
   };
 
   useEffect(() => { refreshProjects().catch(() => {}); }, []);
@@ -251,6 +276,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
       setAssets(null);
       setAnalysis(null);
       setPlan(null);
+      setProjectHealth(null);
+      setMusicGraph(null);
+      setLiveCues(null);
     }
   }, [projectId, projectsReady]);
   // Workspace stays focused on project + timeline. Rendering lives in the Render page.
@@ -687,6 +715,18 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             <span className="small">Variant</span>
             <strong>{selectedVariantName}</strong>
           </div>
+          <div className="workspace-stat">
+            <span className="small">Health</span>
+            <strong>{projectHealth?.status || (projectId ? "…" : "n/a")}</strong>
+          </div>
+          <div className="workspace-stat">
+            <span className="small">Music Graph</span>
+            <strong>{musicGraph?.tempo?.bpm ? `${Math.round(Number(musicGraph.tempo.bpm))} BPM` : (projectId ? "…" : "n/a")}</strong>
+          </div>
+          <div className="workspace-stat">
+            <span className="small">Live cues</span>
+            <strong>{typeof liveCues?.event_count === "number" ? liveCues.event_count : (projectId ? "…" : "n/a")}</strong>
+          </div>
         </div>
       </div>
 
@@ -716,6 +756,49 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             Overview remains the canonical source. Use the Overview to Reactive path for a fast motion-only pass, or the Overview to Planner to Reactive path when you want a richer story pass first. Timeline and Render consume the same saved session either way.
           </div>
         </div>
+        {projectHealth ? (
+          <div className="workspace-sessionCard">
+            <div className="workspace-sessionLabel">Project health</div>
+            <div className="workspace-sessionValue">
+              {projectHealth.status}
+              {projectHealth.asset_index?.missing_count
+                ? ` · ${projectHealth.asset_index.missing_count} missing`
+                : " · assets ok"}
+            </div>
+            <div className="small">
+              {(projectHealth.issues || []).slice(0, 2).map((issue: any) => issue.message).join(" · ")
+                || `${projectHealth.asset_index?.asset_count || 0} indexed assets · ~${projectHealth.asset_index?.disk_estimate_gb || 0} GB`}
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <button
+                className="secondary"
+                type="button"
+                disabled={!projectId}
+                onClick={() => {
+                  if (!projectId) return;
+                  apiGet(`/v1/projects/${projectId}/health/relink`)
+                    .then((d) => setInfo({ relink: d }))
+                    .catch((e) => setErr(String(e)));
+                }}
+              >
+                Suggest relinks
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                disabled={!projectId}
+                onClick={() => {
+                  if (!projectId) return;
+                  apiPost(`/v1/projects/${projectId}/health/collect`, {})
+                    .then((d) => setInfo({ collect: d }))
+                    .catch((e) => setErr(String(e)));
+                }}
+              >
+                Collect project
+              </button>
+            </div>
+          </div>
+        ) : null}
         {lastHandoff ? (
           <div className="workspace-sessionCard workspace-sessionCard--accent">
             <div className="workspace-sessionLabel">Last handoff</div>
@@ -1074,6 +1157,10 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
               selectedVariant={selectedVariant}
               onNavigate={onNavigate}
             />
+          </div>
+
+          <div className="card workspace-featureCard">
+            <VisualDnaPanel projectId={projectId} />
           </div>
 
           <div className="card workspace-featureCard">

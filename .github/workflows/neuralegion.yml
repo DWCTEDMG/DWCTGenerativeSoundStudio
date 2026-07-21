@@ -157,9 +157,12 @@ on:
   schedule:
     - cron: '40 20 * * 6'
 
+permissions:
+  contents: read
+
 jobs:
   neuralegion_scan:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     name: A job to run a Nexploit scan
     steps:
       - uses: actions/checkout@v4

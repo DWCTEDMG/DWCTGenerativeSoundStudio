@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import zipfile
 
 import pytest
@@ -45,6 +46,24 @@ def test_packaged_backend_cannot_sync_or_resolve_source_dependencies(monkeypatch
 
     with pytest.raises(uv_toolchain.ToolchainError, match="self-contained"):
         uv_toolchain.sync_frozen_project("cpu")
+
+
+def test_sync_frozen_project_can_force_a_reinstall(monkeypatch):
+    commands: list[list[object]] = []
+    monkeypatch.setattr(uv_toolchain, "is_packaged_backend", lambda: False)
+    monkeypatch.setattr(uv_toolchain, "resolve_uv", lambda **_kwargs: Path("uv"))
+    monkeypatch.setattr(uv_toolchain, "toolchain_environment", lambda **_kwargs: {})
+    monkeypatch.setattr(uv_toolchain, "backend_root", lambda: Path("backend"))
+    monkeypatch.setattr(
+        uv_toolchain,
+        "run_checked",
+        lambda args, **_kwargs: commands.append(list(args)),
+    )
+
+    uv_toolchain.sync_frozen_project("cuda", reinstall=True)
+
+    assert commands[0] == [Path("uv"), "lock", "--check"]
+    assert commands[1][-1] == "--reinstall"
 
 
 def test_packaged_status_uses_build_manifest_without_requiring_uv(monkeypatch):

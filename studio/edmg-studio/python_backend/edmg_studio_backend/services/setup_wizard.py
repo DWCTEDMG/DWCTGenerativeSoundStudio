@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import importlib.util
 import json
-import re
 import os
 import platform
-import subprocess
+import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -19,12 +18,21 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+from ..uv_toolchain import (
+    ACCELERATOR_PROFILES,
+    ToolchainError,
+    active_accelerator_profile,
+    is_packaged_backend,
+    normalize_accelerator_profile,
+    profile_from_legacy_inputs,
+    sync_frozen_project,
+    toolchain_status,
+)
+
 try:
     import py7zr  # type: ignore
 except Exception:  # pragma: no cover
     py7zr = None
-
-BACKEND_SETUPTOOLS_CONSTRAINT = "setuptools<82"
 
 
 @dataclass
@@ -1064,34 +1072,6 @@ def check_ffmpeg(ffmpeg_path: str) -> dict[str, Any]:
         }
 
 
-BACKEND_BUNDLE_MODULES: dict[str, dict[str, str]] = {
-    "audio": {
-        "librosa": "librosa",
-        "soundfile": "soundfile",
-    },
-    "asr": {
-        "faster-whisper": "faster_whisper",
-    },
-    "internal": {
-        "diffusers": "diffusers",
-        "transformers": "transformers",
-        "accelerate": "accelerate",
-        "safetensors": "safetensors",
-        "torch": "torch",
-    },
-    "directml": {
-        "onnxruntime-directml": "onnxruntime",
-        "optimum": "optimum",
-    },
-}
-
-BACKEND_BUNDLE_ALIASES: dict[str, tuple[str, ...]] = {
-    "full": ("audio", "asr", "internal"),
-    "studio_bundle": ("audio", "asr", "internal"),
-    "studio_bundle_directml": ("audio", "asr", "internal", "directml"),
-}
-
-
 def _backend_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -1133,245 +1113,144 @@ def _run_linux_setup_script(
     _run_subprocess(task, [bash, str(script)], cwd=str(_studio_root()), env=env)
 
 
-def _bundle_module_map(bundle: str) -> dict[str, str]:
-    keys = BACKEND_BUNDLE_ALIASES.get(bundle, (bundle,))
-    modules: dict[str, str] = {}
-    for key in keys:
-        if key == "directml" and platform.system() != "Windows":
-            continue
-        modules.update(BACKEND_BUNDLE_MODULES.get(key, {}))
-    return modules
+def resolve_setup_accelerator_profile(payload: dict[str, Any] | None = None) -> str:
+    """Resolve the new exact profile field or a validated legacy Setup payload.
+
+    ``accelerator_profile`` intentionally accepts only the public profile names.
+    The old bundle/flavor fields remain as a migration bridge, but mixed payloads
+    must resolve to the same profile so stale clients cannot silently override a
+    user's explicit selection.
+    """
+
+    data = payload or {}
+    raw_profile = str(data.get("accelerator_profile") or "").strip().lower()
+    bundle = str(data.get("bundle") or "").strip() or None
+    flavor = str(data.get("flavor") or "").strip() or None
+
+    if raw_profile:
+        if raw_profile not in ACCELERATOR_PROFILES:
+            allowed = ", ".join(ACCELERATOR_PROFILES)
+            raise ToolchainError(
+                f"Unsupported accelerator_profile {data.get('accelerator_profile')!r}. "
+                f"Choose exactly one of: {allowed}."
+            )
+        resolved = normalize_accelerator_profile(raw_profile)
+        if bundle is not None or flavor is not None:
+            legacy = profile_from_legacy_inputs(bundle=bundle, flavor=flavor)
+            if legacy != resolved:
+                raise ToolchainError(
+                    f"Conflicting accelerator selections: accelerator_profile={resolved!r}, "
+                    f"but legacy bundle/flavor fields resolve to {legacy!r}."
+                )
+        return resolved
+
+    return profile_from_legacy_inputs(bundle=bundle, flavor=flavor)
 
 
-def check_backend_bundle(bundle: str = "studio_bundle") -> dict[str, Any]:
-    modules = _bundle_module_map(bundle)
-    missing = sorted(
-        package_name
-        for package_name, module_name in modules.items()
-        if importlib.util.find_spec(module_name) is None
+def check_backend_bundle(
+    bundle: str | None = None,
+    flavor: str | None = None,
+    *,
+    accelerator_profile: str | None = None,
+    check_sync: bool = True,
+) -> dict[str, Any]:
+    """Compatibility wrapper around the locked uv project health report."""
+
+    profile_requested = not (accelerator_profile is None and bundle is None and flavor is None)
+    if profile_requested:
+        resolved_profile = resolve_setup_accelerator_profile(
+            {
+                "accelerator_profile": accelerator_profile,
+                "bundle": bundle,
+                "flavor": flavor,
+            }
+        )
+        status = dict(toolchain_status(profile=resolved_profile, check_sync=check_sync))
+    elif is_packaged_backend():
+        # The packaged profile is a build property recorded in its signed-off
+        # release manifest; it must not fall back to the source default (CPU).
+        status = dict(toolchain_status(profile=None, check_sync=check_sync))
+        resolved_profile = str(status.get("accelerator_profile") or "unknown").strip().lower()
+    else:
+        resolved_profile = active_accelerator_profile()
+        status = dict(toolchain_status(profile=resolved_profile, check_sync=check_sync))
+
+    installed_profile = str(status.get("accelerator_profile") or "").strip().lower()
+    if profile_requested and status.get("immutable") and installed_profile != resolved_profile:
+        status.update(
+            {
+                "ok": False,
+                "sync_health": "profile-mismatch",
+                "hint": (
+                    f"This application contains the {installed_profile or 'unknown'} backend profile. "
+                    f"Install the EDMG Studio build produced for {resolved_profile}."
+                ),
+            }
+        )
+
+    # Preserve the legacy response keys for older desktop clients while the UI
+    # migrates to the richer top-level `toolchain` object.
+    status.update(
+        {
+            "bundle": "locked-project",
+            "profile": resolved_profile,
+            "python": sys.executable if not status.get("packaged") else "bundled",
+            "backend_root": str(_backend_root()),
+            "missing": [] if status.get("ok") else ["frozen environment out of sync"],
+        }
     )
-    return {
-        "ok": not missing,
-        "bundle": bundle,
-        "python": sys.executable,
-        "backend_root": str(_backend_root()),
-        "missing": missing,
-        "hint": None if not missing else (
-            f"Install backend runtime deps with `pip install -e .[{bundle}]` from python_backend, "
-            "or run Setup -> Full Setup."
-        ),
-    }
+    return status
 
 
-_PYTORCH_CUDA_INDEX_ROOT = "https://download.pytorch.org/whl"
-_PYTORCH_CUDA_TAG_FALLBACKS = ("cu132", "cu130", "cu128", "cu126", "cu124", "cu121", "cu118")
-_CUDA_TORCH_PACKAGES = ["torch", "torchvision", "torchaudio"]
-_TENSORRT_RUNTIME_PACKAGES = ["tensorrt>=11.0.0", "cuda-python>=12.0.0"]
+def install_backend_bundle(
+    task: SetupTask,
+    bundle: str | None = None,
+    flavor: str | None = None,
+    *,
+    accelerator_profile: str | None = None,
+) -> None:
+    """Synchronize one exact accelerator profile from the committed uv lock."""
 
+    resolved_profile = resolve_setup_accelerator_profile(
+        {
+            "accelerator_profile": accelerator_profile,
+            "bundle": bundle,
+            "flavor": flavor,
+        }
+    )
 
-def _cuda_tag_code(tag: str) -> int | None:
-    match = re.fullmatch(r"cu(\d+)", str(tag or "").strip().lower())
-    return int(match.group(1)) if match else None
-
-
-def _detect_driver_cuda_code() -> int | None:
-    smi = shutil.which("nvidia-smi")
-    if not smi:
-        return None
-    try:
-        proc = subprocess.run([smi], capture_output=True, text=True, timeout=15)
-        text = (proc.stdout or "") + (proc.stderr or "")
-        match = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text, re.IGNORECASE)
-        if match:
-            return int(match.group(1)) * 10 + int(match.group(2))
-    except Exception:
-        pass
-    return None
-
-
-def _available_pytorch_cuda_tags() -> set[str]:
-    try:
-        response = requests.get(f"{_PYTORCH_CUDA_INDEX_ROOT}/", timeout=8)
-        if response.ok:
-            tags = {f"cu{m}" for m in re.findall(r"cu(\d{3})/?", response.text, flags=re.IGNORECASE)}
-            if tags:
-                return tags
-    except Exception:
-        pass
-    return set(_PYTORCH_CUDA_TAG_FALLBACKS)
-
-
-def _choose_cuda_wheel_tag(driver_cuda_code: int | None, available_tags: set[str] | tuple[str, ...] | list[str]) -> str:
-    candidates: list[tuple[int, str]] = []
-    for raw in available_tags or _PYTORCH_CUDA_TAG_FALLBACKS:
-        tag = str(raw or "").strip().lower()
-        code = _cuda_tag_code(tag)
-        if code is not None:
-            candidates.append((code, tag))
-    if not candidates:
-        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in _PYTORCH_CUDA_TAG_FALLBACKS]
-    candidates = sorted(set(candidates), reverse=True)
-    if driver_cuda_code is None:
-        return candidates[0][1]
-    for code, tag in candidates:
-        if code <= driver_cuda_code:
-            return tag
-    return candidates[-1][1]
-
-
-def _cuda_wheel_tag_candidates() -> list[str]:
-    override = os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip().lower()
-    if override:
-        return [override]
-
-    driver_cuda_code = _detect_driver_cuda_code()
-    available_tags = _available_pytorch_cuda_tags()
-    candidates: list[tuple[int, str]] = []
-    for raw in available_tags or _PYTORCH_CUDA_TAG_FALLBACKS:
-        tag = str(raw or "").strip().lower()
-        code = _cuda_tag_code(tag)
-        if code is not None:
-            candidates.append((code, tag))
-    if not candidates:
-        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in _PYTORCH_CUDA_TAG_FALLBACKS]
-    candidates = sorted(set(candidates), reverse=True)
-    if driver_cuda_code is None:
-        return [tag for _, tag in candidates]
-    compatible = [tag for code, tag in candidates if code <= driver_cuda_code]
-    return compatible or [candidates[-1][1]]
-
-
-def _detect_cuda_wheel_tag() -> str:
-    return _cuda_wheel_tag_candidates()[0]
-
-
-def _cuda_torch_index_url(tag: str) -> str:
-    return os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip() or f"{_PYTORCH_CUDA_INDEX_ROOT}/{tag}"
-
-
-def _install_cuda_torch(task: SetupTask) -> None:
-    """Install the newest compatible CUDA-enabled PyTorch wheel set."""
-    if not shutil.which("nvidia-smi") and not os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip():
+    if is_packaged_backend():
+        status = check_backend_bundle(accelerator_profile=resolved_profile, check_sync=False)
+        if not status.get("ok"):
+            raise ToolchainError(str(status.get("hint") or "Packaged backend profile mismatch."))
+        SetupTaskManager.set_progress(task, 1.0)
         SetupTaskManager.log(
             task,
-            "Warning: nvidia-smi not found. Continuing with the newest visible PyTorch CUDA wheel channel.",
+            f"The packaged {resolved_profile} backend is self-contained; no Python dependency changes are needed.",
         )
-    last_error: subprocess.CalledProcessError | None = None
-    for tag in _cuda_wheel_tag_candidates():
-        index_url = _cuda_torch_index_url(tag)
-        SetupTaskManager.log(task, f"Installing latest CUDA-enabled PyTorch ({tag}) from {index_url}...")
-        try:
-            _run_subprocess(
-                task,
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--upgrade",
-                    "--force-reinstall",
-                    "--index-url",
-                    index_url,
-                    *_CUDA_TORCH_PACKAGES,
-                    "--timeout",
-                    "300",
-                ],
-                cwd=str(_backend_root()),
-            )
-            last_error = None
-            break
-        except subprocess.CalledProcessError:
-            SetupTaskManager.log(task, "Combined torch/vision/audio install failed; retrying with torch only...")
-            try:
-                _run_subprocess(
-                    task,
-                    [
-                        sys.executable,
-                        "-m",
-                        "pip",
-                        "install",
-                        "--upgrade",
-                        "--force-reinstall",
-                        "--index-url",
-                        index_url,
-                        "torch",
-                        "--timeout",
-                        "300",
-                    ],
-                    cwd=str(_backend_root()),
-                )
-                last_error = None
-                break
-            except subprocess.CalledProcessError as torch_exc:
-                last_error = torch_exc
-                if os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip() or os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip():
-                    break
-                SetupTaskManager.log(task, f"No usable PyTorch wheel found on {tag}; trying the next compatible CUDA channel...")
-    if last_error is not None:
-        raise last_error
-    SetupTaskManager.log(task, "CUDA PyTorch installed successfully.")
+        return
 
-
-def _install_tensorrt_runtime(task: SetupTask) -> None:
-    """Install TensorRT runtime packages used by Studio's standalone TensorRT renderer."""
-    SetupTaskManager.log(task, "Installing/updating TensorRT runtime packages...")
-    _run_subprocess(
-        task,
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            *_TENSORRT_RUNTIME_PACKAGES,
-        ],
-        cwd=str(_backend_root()),
-    )
-    SetupTaskManager.log(task, "TensorRT runtime packages installed successfully.")
-
-
-def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle", flavor: str = "cpu") -> None:
     root = _backend_root()
-    pyproject = root / "pyproject.toml"
-    if not pyproject.exists():
-        raise RuntimeError(f"Backend pyproject.toml not found at {pyproject}")
+    if not (root / "pyproject.toml").is_file() or not (root / "uv.lock").is_file():
+        raise ToolchainError(f"The locked backend project is incomplete under {root}.")
 
-    SetupTaskManager.log(task, f"Installing backend runtime bundle `{bundle}` (flavor: {flavor})...")
     SetupTaskManager.set_progress(task, 0.1)
-
-    _run_subprocess(
+    SetupTaskManager.log(
         task,
-        [sys.executable, "-m", "pip", "install", "--upgrade", "pip", BACKEND_SETUPTOOLS_CONSTRAINT, "wheel"],
-        cwd=str(root),
+        f"Checking uv.lock and synchronizing the frozen {resolved_profile} backend profile…",
     )
-
-    if flavor in ("nvidia", "cuda"):
-        SetupTaskManager.set_progress(task, 0.2)
-        _install_cuda_torch(task)
-
-    SetupTaskManager.set_progress(task, 0.35)
-    SetupTaskManager.log(task, f"Running pip install -e .[{bundle}]")
-
-    _run_subprocess(
-        task,
-        [sys.executable, "-m", "pip", "install", "-e", f".[{bundle}]"],
-        cwd=str(root),
-    )
-
-    if flavor in ("nvidia", "cuda"):
-        SetupTaskManager.set_progress(task, 0.75)
-        _install_tensorrt_runtime(task)
+    sync_frozen_project(resolved_profile)
 
     SetupTaskManager.set_progress(task, 0.9)
-    status = check_backend_bundle(bundle)
-    if not status["ok"]:
-        missing = ", ".join(status["missing"]) or "unknown modules"
-        raise RuntimeError(
-            f"Backend runtime bundle `{bundle}` installed, but imports are still missing: {missing}"
-        )
+    status = check_backend_bundle(accelerator_profile=resolved_profile)
+    if not status.get("ok"):
+        raise ToolchainError(str(status.get("hint") or "The frozen backend environment is not healthy."))
 
     SetupTaskManager.set_progress(task, 1.0)
-    SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` is ready.")
+    SetupTaskManager.log(
+        task,
+        f"Locked backend profile {resolved_profile} is synchronized and healthy.",
+    )
 
 
 def _resolve_7zip_cli_download(page_url: str, html: str) -> tuple[str, str]:

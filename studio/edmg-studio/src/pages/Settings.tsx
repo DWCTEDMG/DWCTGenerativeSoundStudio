@@ -46,6 +46,7 @@ type SettingsPanelId =
   | "uiMode"
   | "appearance"
   | "renderDefaults"
+  | "systemReadiness"
   | "desktopBackend"
   | "aiProvider"
   | "transcription"
@@ -353,6 +354,7 @@ export default function Settings(props: PageProps) {
   const [edmgTemplate, setEdmgTemplate] = useState<any>(null);
   const [secrets, setSecrets] = useState<any>(null);
   const [hardware, setHardware] = useState<any>(null);
+  const [systemReadiness, setSystemReadiness] = useState<any>(null);
   const [renderProfiles, setRenderProfiles] = useState<any>(null);
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [renderProviderDraft, setRenderProviderDraft] = useState<any>(null);
@@ -433,6 +435,7 @@ export default function Settings(props: PageProps) {
     apiGet("/v1/edmg/deforum_template").then(setEdmgTemplate).catch(() => {});
     apiGet("/v1/settings/secrets/status").then(setSecrets).catch(() => {});
     apiGet("/v1/hardware").then(setHardware).catch(() => {});
+    apiGet("/v1/system/readiness").then(setSystemReadiness).catch(() => {});
     apiGet("/v1/settings/render_profiles").then(setRenderProfiles).catch(() => {});
     apiGet("/v1/settings/render_providers").then((d) => {
       setRenderProviders(d);
@@ -796,6 +799,11 @@ export default function Settings(props: PageProps) {
         description: "Saved profiles that the Render page can pick up automatically.",
       },
       {
+        id: "systemReadiness" as const,
+        label: "System readiness",
+        description: "FFmpeg, Python runtime, GPU, disk, writable paths, and models health.",
+      },
+      {
         id: "desktopBackend" as const,
         label: "Desktop backend",
         description: "Startup mode and managed vs external backend target.",
@@ -949,6 +957,99 @@ export default function Settings(props: PageProps) {
           </div>
         ) : (
           <div className="small" style={{ opacity: 0.75 }}>Loading render profiles…</div>
+        )}
+      </div>
+    ),
+    systemReadiness: (
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ fontWeight: 800 }}>System readiness</div>
+          <button
+            className="secondary"
+            onClick={() => {
+              apiGet("/v1/system/readiness").then(setSystemReadiness).catch(() => {});
+            }}
+          >
+            Refresh
+          </button>
+        </div>
+        <div className="small" style={{ marginBottom: 12, opacity: 0.9 }}>
+          Shared health check for FFmpeg, the locked Python runtime, GPU acceleration, disk space, writable Studio paths, and the models directory.
+        </div>
+        {systemReadiness ? (
+          <div style={{ display: "grid", gap: 10 }}>
+            <div className="small">
+              Overall:{" "}
+              <b style={{ color: systemReadiness.status === "blocked" ? "#c44" : systemReadiness.status === "warn" ? "#c90" : "green" }}>
+                {systemReadiness.summary || systemReadiness.status || "unknown"}
+              </b>
+              {systemReadiness.checked_at ? <span style={{ opacity: 0.75 }}> • checked {systemReadiness.checked_at}</span> : null}
+            </div>
+            {Object.entries(systemReadiness.checks || {}).map(([id, check]: any) => (
+              <div key={id} style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 800, textTransform: "capitalize" }}>{id.replaceAll("_", " ")}</div>
+                  <b style={{ color: check?.status === "blocked" ? "#c44" : check?.status === "warn" ? "#c90" : "green" }}>
+                    {String(check?.status || "unknown")}
+                  </b>
+                </div>
+                <div className="small" style={{ marginTop: 6, opacity: 0.88 }}>
+                  {id === "ffmpeg" ? (
+                    <>
+                      Path <code>{check?.path || "ffmpeg"}</code>
+                      {check?.version ? <> • {check.version}</> : null}
+                    </>
+                  ) : null}
+                  {id === "runtime" ? (
+                    <>
+                      Python <code>{check?.python_version || "unknown"}</code>
+                      {check?.uv_version ? <> • uv <code>{check.uv_version}</code></> : null}
+                      {check?.accelerator_profile ? <> • profile <b>{check.accelerator_profile}</b></> : null}
+                      {check?.sync_health ? <> • sync <b>{check.sync_health}</b></> : null}
+                    </>
+                  ) : null}
+                  {id === "gpu" ? (
+                    <>
+                      {check?.device_name || "CPU"} • backend <b>{check?.backend || "cpu"}</b>
+                      {typeof check?.vram_gb === "number" ? <> • VRAM {check.vram_gb} GB</> : null}
+                      {Array.isArray(check?.available_backends) ? <> • [{check.available_backends.join(", ")}]</> : null}
+                    </>
+                  ) : null}
+                  {id === "disk" && Array.isArray(check?.paths) ? (
+                    <>
+                      {check.paths.map((entry: any) => (
+                        <div key={`${entry.path}-${entry.volume_path}`}>
+                          {entry.free_gb} GB free / {entry.total_gb} GB on <code>{entry.volume_path || entry.path}</code>
+                        </div>
+                      ))}
+                    </>
+                  ) : null}
+                  {id === "writable_paths" && Array.isArray(check?.paths) ? (
+                    <>
+                      {check.paths.map((entry: any) => (
+                        <div key={entry.path}>
+                          <b>{entry.label}</b>: {entry.writable ? "writable" : "not writable"} • <code>{entry.path}</code>
+                        </div>
+                      ))}
+                    </>
+                  ) : null}
+                  {id === "models" ? (
+                    <>
+                      <code>{check?.models_dir || "unknown"}</code>
+                      {typeof check?.entry_count === "number" ? <> • {check.entry_count} entries</> : null}
+                    </>
+                  ) : null}
+                </div>
+                {check?.hint ? (
+                  <div className="small" style={{ marginTop: 6, color: check?.status === "blocked" ? "#c44" : "#c90" }}>
+                    Fix: {check.hint}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="small" style={{ opacity: 0.75 }}>Loading system readiness…</div>
         )}
       </div>
     ),
@@ -1362,13 +1463,13 @@ export default function Settings(props: PageProps) {
 
           {!transcriptionStatus?.dependencies?.parakeet_available ? (
             <div className="small" style={{ opacity: 0.82 }}>
-              Parakeet install: <code>pip install -e ".[parakeet]"</code> from <code>python_backend</code>.
+              Parakeet: <code>uv sync --frozen --extra PROFILE --extra parakeet</code> from <code>python_backend</code>.
             </div>
           ) : null}
 
           {transcriptionDraft.separate_vocals && !transcriptionStatus?.dependencies?.demucs_available ? (
             <div className="small" style={{ opacity: 0.82 }}>
-              Vocal separation install: <code>pip install -e ".[source_separation]"</code> from <code>python_backend</code>.
+              Vocal separation: <code>uv sync --frozen --extra PROFILE --extra source-separation</code> from <code>python_backend</code>.
             </div>
           ) : null}
 

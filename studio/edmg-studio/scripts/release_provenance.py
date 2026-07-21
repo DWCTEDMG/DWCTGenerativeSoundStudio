@@ -14,6 +14,7 @@ from typing import Any
 TORCH_PACKAGES = ("torch", "torchaudio", "torchvision")
 CPU_TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 CUDA_TORCH_INDEX_PATTERN = re.compile(r"^https://download\.pytorch\.org/whl/cu\d+$")
+BACKEND_ROOT = Path(__file__).resolve().parents[1] / "python_backend"
 
 
 def _normalized_name(value: str) -> str:
@@ -89,6 +90,11 @@ def collect_provenance(lock_path: Path, profile: str) -> dict[str, Any]:
     torch_index = next(iter(indexes))
     _validate_torch_index(profile, torch_index)
 
+    # The helper is launched by absolute path from the frozen project, so
+    # Python places this script directory (not python_backend) on sys.path.
+    backend_root = str(BACKEND_ROOT)
+    if backend_root not in sys.path:
+        sys.path.insert(0, backend_root)
     from pyinstaller_support import pinned_nltk_resource_manifest
 
     return {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -9,9 +10,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     from huggingface_hub import snapshot_download  # type: ignore
@@ -21,8 +24,9 @@ except Exception:  # pragma: no cover
 from ..errors import UserFacingError
 from .setup_wizard import _ollama_base  # reuse
 from .model_catalog import built_in_catalog, built_in_packs
+from ..domain.model_lanes import annotate_entry, can_promote, infer_lane, normalize_lane, promotion_blockers
 from ..services.setup_wizard import comfy_portable_installed, comfy_portable_root
-from .hf_auth import resolve_hf_token
+from .hf_auth import HfTokenCandidate, hf_token_candidates
 from .secrets import SecretStore
 
 try:
@@ -65,6 +69,24 @@ def _write_json(path: Path, obj: Any) -> None:
     tmp.replace(path)
 
 
+def _is_hf_auth_failure(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) in (401, 403):
+        return True
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "401",
+            "403",
+            "unauthorized",
+            "forbidden",
+            "invalid user token",
+            "oauth token signature verification failed",
+        )
+    )
+
+
 def _normalize_path(path: Path | str) -> str:
     raw = os.fspath(path)
     if raw.startswith("\\\\?\\"):
@@ -74,6 +96,60 @@ def _normalize_path(path: Path | str) -> str:
 
 def _same_path(left: Path | str, right: Path | str) -> bool:
     return _normalize_path(left) == _normalize_path(right)
+
+
+# Renamed aside when a model tree is unreadable (e.g. WinError 1392 on USB).
+_CORRUPTED_QUARANTINE_SUFFIX = ".__corrupted_quarantine"
+
+
+def _path_exists_safe(path: Path) -> bool:
+    """Return whether *path* exists; treat unreadable volumes as missing.
+
+    On Windows, corrupt/unreadable paths (e.g. WinError 1392 on USB/external
+    mounts) can raise OSError from ``Path.exists()`` / ``stat()`` instead of
+    returning False. Catalog and install probes must never crash on that.
+    """
+    try:
+        return path.exists()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as missing: %s (%s)", path, exc)
+        return False
+
+
+def _path_is_dir_safe(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as non-directory: %s (%s)", path, exc)
+        return False
+
+
+def _path_is_file_safe(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as non-file: %s (%s)", path, exc)
+        return False
+
+
+def _quarantine_unreadable_model_dir(model_dir: Path) -> Path | None:
+    """Best-effort rename of a corrupted model folder so later scans skip it."""
+    name = model_dir.name
+    if not name or name.endswith(_CORRUPTED_QUARANTINE_SUFFIX):
+        return None
+    target = model_dir.with_name(f"{name}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    try:
+        if target.exists():
+            target = model_dir.with_name(f"{name}.{int(time.time())}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    except OSError:
+        target = model_dir.with_name(f"{name}.{int(time.time())}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    try:
+        model_dir.rename(target)
+        logger.warning("Quarantined unreadable model directory: %s -> %s", model_dir, target)
+        return target
+    except OSError as exc:
+        logger.warning("Could not quarantine unreadable model dir %s: %s", model_dir, exc)
+        return None
 
 
 def _read_reparse_target(path: Path) -> Path | None:
@@ -205,7 +281,7 @@ def _normalize_catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
     item["engine"] = engine
     item["family"] = family
     item.update(_entry_support_flags(item))
-    return item
+    return annotate_entry(item)
 
 
 # ------------------------------ tasks ------------------------------
@@ -380,6 +456,8 @@ class ModelManager:
         self._user_models_path = cfg / "models_user.json"
         self._accept_path = cfg / "licenses_accepted.json"
         self._cloud_models_path = cfg / "models_cloud.json"
+        self._lane_overrides_path = cfg / "model_lane_overrides.json"
+        self._benchmarks_path = cfg / "model_benchmarks.json"
 
         self._lock = threading.Lock()
 
@@ -523,6 +601,28 @@ class ModelManager:
         accepted = _read_json(self._accept_path, default={})
         if not isinstance(accepted, dict):
             accepted = {}
+        overrides = _read_json(self._lane_overrides_path, default={})
+        if not isinstance(overrides, dict):
+            overrides = {}
+        benchmarks = _read_json(self._benchmarks_path, default={})
+        if not isinstance(benchmarks, dict):
+            benchmarks = {}
+
+        def _apply_lane(entry: dict[str, Any]) -> dict[str, Any]:
+            model_id = str(entry.get("id") or "")
+            override = overrides.get(model_id) if isinstance(overrides.get(model_id), dict) else None
+            lane_value = str((override or {}).get("lane") or "") or None
+            annotated = annotate_entry(entry, lane_override=lane_value)
+            bench = benchmarks.get(model_id) if isinstance(benchmarks.get(model_id), dict) else None
+            annotated["benchmark"] = {
+                "present": bool(bench),
+                "summary": (bench or {}).get("summary"),
+                "updated_at": (bench or {}).get("updated_at"),
+            }
+            return annotated
+
+        built = [_apply_lane(entry) for entry in built]
+        user = [_apply_lane(entry) for entry in user]
 
         installed = self._installed_map(built + user)
         cloud = self._cloud_models()
@@ -534,9 +634,86 @@ class ModelManager:
             "accepted": accepted,
             "installed": installed,
             "cloud": cloud,
+            "lanes": {
+                "overrides": overrides,
+                "order": ["stable", "recommended", "experimental", "research", "legacy"],
+            },
             "storage_mode": self._model_storage_mode(),
             "model_cache": self._model_cache_label() if self.model_cache is not None else None,
         }
+
+    def promote_model_lane(self, model_id: str, target_lane: str, *, reason: str | None = None, force: bool = False) -> dict[str, Any]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        target = normalize_lane(target_lane)
+        current = infer_lane(entry)
+        overrides = _read_json(self._lane_overrides_path, default={})
+        if not isinstance(overrides, dict):
+            overrides = {}
+        existing = overrides.get(model_id) if isinstance(overrides.get(model_id), dict) else {}
+        if existing.get("lane"):
+            current = normalize_lane(str(existing.get("lane")))
+        benchmarks = _read_json(self._benchmarks_path, default={})
+        has_benchmark = isinstance(benchmarks, dict) and isinstance(benchmarks.get(model_id), dict)
+        license_accepted = self._is_accepted(model_id)
+        blockers = promotion_blockers(
+            {**entry, "lane": current},
+            target_lane=target,
+            has_benchmark=has_benchmark,
+            license_accepted=license_accepted,
+        )
+        if blockers and not force:
+            raise UserFacingError(
+                f"Promotion blocked for {model_id}",
+                hint="; ".join(blockers),
+                code="MODEL_PROMOTION_BLOCKED",
+            )
+        if not can_promote(current, target) and not force:
+            raise UserFacingError(
+                f"Cannot promote from {current} to {target}",
+                hint="Choose a allowed target lane for this model.",
+                code="MODEL_LANE_GATE",
+            )
+        with self._lock:
+            overrides[model_id] = {
+                "lane": target,
+                "from_lane": current,
+                "reason": str(reason or "").strip() or None,
+                "updated_at": time.time(),
+                "force": bool(force),
+                "blockers_ignored": blockers if force else [],
+            }
+            _write_json(self._lane_overrides_path, overrides)
+        return {
+            "ok": True,
+            "model_id": model_id,
+            "lane": target,
+            "from_lane": current,
+            "blockers": blockers,
+            "override": overrides[model_id],
+        }
+
+    def record_model_benchmark(self, model_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        body = dict(payload or {})
+        record = {
+            "model_id": model_id,
+            "lane": infer_lane(entry),
+            "summary": str(body.get("summary") or "manual_benchmark_recorded"),
+            "metrics": body.get("metrics") if isinstance(body.get("metrics"), dict) else {},
+            "passed": bool(body.get("passed", True)),
+            "updated_at": time.time(),
+        }
+        with self._lock:
+            data = _read_json(self._benchmarks_path, default={})
+            if not isinstance(data, dict):
+                data = {}
+            data[model_id] = record
+            _write_json(self._benchmarks_path, data)
+        return {"ok": True, "benchmark": record}
 
     # ---- acceptance ----
     def accept_license(self, model_id: str, license_id: str) -> None:
@@ -661,10 +838,10 @@ class ModelManager:
         if comfy_portable_installed(self.external_dir, self.data_dir):
             root = Path(os.path.abspath(os.fspath(comfy_portable_root(self.external_dir, self.data_dir) / "ComfyUI" / "models" / folder)))
             try:
-                if root.exists():
+                if _path_exists_safe(root):
                     return root
             except (OSError, RuntimeError):
-                if _repair_mutual_junction_chain(root) and root.exists():
+                if _repair_mutual_junction_chain(root) and _path_exists_safe(root):
                     return root
         return None
 
@@ -686,28 +863,40 @@ class ModelManager:
             mid = str(e.get("id") or "")
             if not mid:
                 continue
-            src = (e.get("source") or "").lower()
-            if src == "ollama":
-                out[mid] = str(e.get("ollama_model") or "") in ollama_models
-                continue
+            try:
+                src = (e.get("source") or "").lower()
+                if src == "ollama":
+                    out[mid] = str(e.get("ollama_model") or "") in ollama_models
+                    continue
 
-            target = e.get("target") or {}
-            engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
-            folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
-            fname = str(e.get("filename") or "")
+                target = e.get("target") or {}
+                engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+                folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+                fname = str(e.get("filename") or "")
 
-            if engine == "internal":
-                out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
-                continue
-            if engine == "runtime_bundle":
-                out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
-                continue
+                if engine == "internal":
+                    out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
+                    continue
+                if engine == "runtime_bundle":
+                    out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
+                    continue
 
-            if fname:
-                primary = self._comfy_models_dir(folder) / fname
-                legacy_root = self._legacy_comfy_models_dir(folder)
-                out[mid] = primary.exists() or bool(legacy_root and (legacy_root / fname).exists())
-            else:
+                if fname:
+                    primary = self._comfy_models_dir(folder) / fname
+                    legacy_root = self._legacy_comfy_models_dir(folder)
+                    out[mid] = _path_exists_safe(primary) or bool(
+                        legacy_root and _path_exists_safe(legacy_root / fname)
+                    )
+                else:
+                    out[mid] = False
+            except OSError as exc:
+                # Belt-and-suspenders: corrupt volumes can raise from exists/stat/listdir
+                # deep in install probes (WinError 1392). Never fail the whole catalog.
+                logger.warning(
+                    "Skipping unreadable model install probe for %s: %s",
+                    mid,
+                    exc,
+                )
                 out[mid] = False
         return out
 
@@ -720,7 +909,7 @@ class ModelManager:
 
     def _is_model_weight_file(self, candidate: Path) -> bool:
         try:
-            if not candidate.exists() or not candidate.is_file():
+            if not _path_exists_safe(candidate) or not _path_is_file_safe(candidate):
                 return False
             if candidate.stat().st_size <= 0:
                 return False
@@ -734,7 +923,7 @@ class ModelManager:
         return True
 
     def _internal_component_has_weights(self, component_dir: Path) -> bool:
-        if not component_dir.exists() or not component_dir.is_dir():
+        if not _path_exists_safe(component_dir) or not _path_is_dir_safe(component_dir):
             return False
         patterns = (
             "diffusion_pytorch_model*.safetensors",
@@ -748,18 +937,37 @@ class ModelManager:
             "openvino_model.bin",
             "flax_model.msgpack",
         )
-        return any(
-            self._is_model_weight_file(candidate)
-            for pattern in patterns
-            for candidate in component_dir.glob(pattern)
-        )
+        try:
+            return any(
+                self._is_model_weight_file(candidate)
+                for pattern in patterns
+                for candidate in component_dir.glob(pattern)
+            )
+        except OSError as exc:
+            logger.warning(
+                "Treating unreadable component directory as missing weights: %s (%s)",
+                component_dir,
+                exc,
+            )
+            return False
 
     def _diffusers_snapshot_complete(self, path: Path) -> bool:
         model_index = path / "model_index.json"
-        if not model_index.exists():
+        try:
+            index_exists = model_index.exists()
+        except OSError as exc:
+            # WinError 1392 etc.: treat as not installed and quarantine when possible.
+            logger.warning("Treating unreadable path as missing: %s (%s)", model_index, exc)
+            _quarantine_unreadable_model_dir(path)
+            return False
+        if not index_exists:
             return False
         try:
             data = json.loads(model_index.read_text(encoding="utf-8"))
+        except OSError as exc:
+            logger.warning("Treating unreadable model_index as missing: %s (%s)", model_index, exc)
+            _quarantine_unreadable_model_dir(path)
+            return False
         except Exception:
             return False
         if not isinstance(data, dict):
@@ -785,7 +993,18 @@ class ModelManager:
         if not required_components:
             return False
 
-        return all(self._internal_component_has_weights(path / component) for component in required_components)
+        try:
+            return all(
+                self._internal_component_has_weights(path / component) for component in required_components
+            )
+        except OSError as exc:
+            logger.warning(
+                "Treating unreadable diffusers snapshot as incomplete: %s (%s)",
+                path,
+                exc,
+            )
+            _quarantine_unreadable_model_dir(path)
+            return False
 
     def missing_diffusers_components(self, model_id: str) -> list[str]:
         entry = self._find_entry(model_id)
@@ -797,10 +1016,10 @@ class ModelManager:
             return []
         folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
         path = self._internal_models_dir(folder) / str(model_id or "")
-        if not path.exists():
+        if not _path_exists_safe(path):
             return ["snapshot"]
         model_index = path / "model_index.json"
-        if not model_index.exists():
+        if not _path_exists_safe(model_index):
             return ["model_index.json"]
         try:
             data = json.loads(model_index.read_text(encoding="utf-8"))
@@ -829,7 +1048,7 @@ class ModelManager:
         return missing
 
     def _clear_incomplete_snapshot(self, dest: Path) -> None:
-        if not dest.exists():
+        if not _path_exists_safe(dest):
             return
         import shutil
 
@@ -839,35 +1058,53 @@ class ModelManager:
             pass
 
     def _internal_asset_installed(self, entry: dict[str, Any], path: Path) -> bool:
-        if not path.exists():
+        if not _path_exists_safe(path):
             return False
 
         kind = str(entry.get("kind") or "").strip().lower()
         if kind in {"diffusers", "video_diffusers"}:
             return self._diffusers_snapshot_complete(path)
         if kind == "motion_adapter":
-            has_config = (path / "config.json").exists() or (path / "adapter_config.json").exists()
-            has_weights = any(
-                self._is_model_weight_file(candidate)
-                for pattern in (
-                    "diffusion_pytorch_model*.safetensors",
-                    "diffusion_pytorch_model*.bin",
-                    "pytorch_model*.safetensors",
-                    "pytorch_model*.bin",
-                    "model*.safetensors",
-                    "model*.bin",
+            try:
+                has_config = _path_exists_safe(path / "config.json") or _path_exists_safe(
+                    path / "adapter_config.json"
                 )
-                for candidate in path.glob(pattern)
-            )
+                has_weights = any(
+                    self._is_model_weight_file(candidate)
+                    for pattern in (
+                        "diffusion_pytorch_model*.safetensors",
+                        "diffusion_pytorch_model*.bin",
+                        "pytorch_model*.safetensors",
+                        "pytorch_model*.bin",
+                        "model*.safetensors",
+                        "model*.bin",
+                    )
+                    for candidate in path.glob(pattern)
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Treating unreadable motion adapter as not installed: %s (%s)",
+                    path,
+                    exc,
+                )
+                return False
             return bool(has_config and has_weights)
         if kind == "controlnet":
-            if not (path / "config.json").exists():
+            if not _path_exists_safe(path / "config.json"):
                 return False
-            return any(
-                self._is_model_weight_file(candidate)
-                for pattern in ("diffusion_pytorch_model*.safetensors", "diffusion_pytorch_model*.bin")
-                for candidate in path.glob(pattern)
-            )
+            try:
+                return any(
+                    self._is_model_weight_file(candidate)
+                    for pattern in ("diffusion_pytorch_model*.safetensors", "diffusion_pytorch_model*.bin")
+                    for candidate in path.glob(pattern)
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Treating unreadable controlnet as not installed: %s (%s)",
+                    path,
+                    exc,
+                )
+                return False
         return True
 
     def _local_installed_path(self, entry: dict[str, Any]) -> Path | None:
@@ -886,24 +1123,24 @@ class ModelManager:
             if source_path:
                 try:
                     path = Path(source_path).expanduser()
-                    if path.exists():
+                    if _path_exists_safe(path):
                         return path
                 except (OSError, RuntimeError):
                     pass
             path = self._internal_models_dir(folder) / model_id
-            return path if path.exists() else None
+            return path if _path_exists_safe(path) else None
 
         filename = str(entry.get("filename") or "")
         if not filename:
             return None
 
         primary = self._comfy_models_dir(folder) / filename
-        if primary.exists():
+        if _path_exists_safe(primary):
             return primary
         legacy_root = self._legacy_comfy_models_dir(folder)
         if legacy_root is not None:
             legacy = legacy_root / filename
-            if legacy.exists():
+            if _path_exists_safe(legacy):
                 return legacy
         return None
 
@@ -1017,7 +1254,7 @@ class ModelManager:
         path = self._internal_models_dir(folder) / model_id
         if self._local_installed_path(entry) is not None:
             return None
-        if path.exists():
+        if _path_exists_safe(path):
             if self._internal_asset_installed(entry, path):
                 return None
             return "incomplete"
@@ -1033,14 +1270,28 @@ class ModelManager:
         candidates = {raw, Path(raw).name}
         stem = Path(raw).stem
         for model_dir in self._iter_comfy_model_dirs(folder):
-            for candidate in candidates:
-                match = model_dir / candidate
-                if match.exists() and match.is_file():
-                    return match
-            if stem:
-                for match in model_dir.glob("*"):
-                    if match.is_file() and match.stem == stem:
+            try:
+                for candidate in candidates:
+                    match = model_dir / candidate
+                    if _path_exists_safe(match) and _path_is_file_safe(match):
                         return match
+                if stem:
+                    for match in model_dir.glob("*"):
+                        try:
+                            if _path_is_file_safe(match) and match.stem == stem:
+                                return match
+                        except OSError as exc:
+                            logger.warning(
+                                "Skipping unreadable Comfy file candidate %s: %s",
+                                match,
+                                exc,
+                            )
+            except OSError as exc:
+                logger.warning(
+                    "Skipping unreadable Comfy model dir %s: %s",
+                    model_dir,
+                    exc,
+                )
         return None
 
     def resolve_comfy_asset(
@@ -1306,6 +1557,58 @@ class ModelManager:
         ModelTaskManager.set_progress(task, 1.0)
         ModelTaskManager.log(task, f"Saved: {dest.name}")
 
+    def _run_hf_download_with_auth_fallback(
+        self,
+        task: ModelTask,
+        *,
+        resource: str,
+        candidates: list[HfTokenCandidate],
+        download: Callable[[str | bool], None],
+    ) -> None:
+        rejected_sources: list[str] = []
+        for candidate in candidates:
+            self._append_task_log(task, f"Using Hugging Face auth from {candidate.source}")
+            try:
+                download(candidate.token)
+                return
+            except Exception as exc:
+                if not _is_hf_auth_failure(exc):
+                    raise
+                rejected_sources.append(candidate.source)
+                self._append_task_log(
+                    task,
+                    f"Hugging Face auth from {candidate.source} was rejected; trying another credential.",
+                )
+
+        try:
+            # False prevents huggingface_hub from silently reusing a rejected cached token.
+            download(False)
+        except Exception as exc:
+            if not _is_hf_auth_failure(exc):
+                raise
+            if rejected_sources:
+                hint = (
+                    "Run `hf auth logout` followed by `hf auth login`, or replace the Hugging Face "
+                    "token in Settings → Tokens. If this model is gated, accept its license on "
+                    "Hugging Face before retrying."
+                )
+            else:
+                hint = (
+                    "Set a valid Hugging Face token in Settings → Tokens, or run `hf auth login`. "
+                    "If this model is gated, accept its license on Hugging Face before retrying."
+                )
+            raise UserFacingError(
+                f"Hugging Face denied access to {resource}",
+                hint=hint,
+                code="HF_AUTH_REQUIRED",
+            ) from exc
+
+        if rejected_sources:
+            self._append_task_log(
+                task,
+                "Downloaded without Hugging Face authentication after stored credentials were rejected.",
+            )
+
     def _append_task_log(self, task: ModelTask, msg: str) -> None:
         current = str(task.last_log or "").strip()
         ModelTaskManager.log(task, f"{current}\n{msg}" if current else msg)
@@ -1458,12 +1761,10 @@ class ModelManager:
             elif src != "s3" and self._restore_snapshot_from_model_cache(task, entry, dest):
                 return
 
-        headers: dict[str, str] = {}
         # Optional HF token support. Prefer explicit env vars, then the modern
         # `hf auth login` / Hub token cache, then Studio Settings.
-        hf_token, hf_token_source = resolve_hf_token(secrets_store=self.secrets)
-        if hf_token:
-            headers["Authorization"] = f"Bearer {hf_token}"
+        hf_candidates = hf_token_candidates(secrets_store=self.secrets)
+        hf_token = hf_candidates[0].token if hf_candidates else ""
 
         civitai_key = ""
         if self.secrets is not None:
@@ -1482,16 +1783,19 @@ class ModelManager:
                 target_path = self._cloud_temp_path(dest) if cloud_only else dest
                 target_path.mkdir(parents=True, exist_ok=True)
                 ModelTaskManager.log(task, f"Downloading HF snapshot: {repo_id}")
-                if hf_token_source:
-                    ModelTaskManager.log(task, f"Using Hugging Face auth from {hf_token_source}")
                 try:
-                    snapshot_download(
-                        repo_id=repo_id,
-                        local_dir=str(target_path),
-                        local_dir_use_symlinks=False,
-                        revision=str(entry.get("hf_revision") or "") or None,
-                        token=(hf_token or None),
-                        resume_download=True,
+                    self._run_hf_download_with_auth_fallback(
+                        task,
+                        resource=repo_id,
+                        candidates=hf_candidates,
+                        download=lambda token: snapshot_download(
+                            repo_id=repo_id,
+                            local_dir=str(target_path),
+                            local_dir_use_symlinks=False,
+                            revision=str(entry.get("hf_revision") or "") or None,
+                            token=token,
+                            resume_download=True,
+                        ),
                     )
                     if cloud_only:
                         object_name = self._upload_snapshot_to_model_cache(task, entry, target_path, mode="cloud_only")
@@ -1511,7 +1815,17 @@ class ModelManager:
                 raise RuntimeError("Missing hf_url")
             target_path = self._cloud_temp_path(dest) if cloud_only else dest
             try:
-                self._download_stream(task, url, target_path, headers=headers)
+                self._run_hf_download_with_auth_fallback(
+                    task,
+                    resource=url,
+                    candidates=hf_candidates,
+                    download=lambda token: self._download_stream(
+                        task,
+                        url,
+                        target_path,
+                        headers={"Authorization": f"Bearer {token}"} if token else {},
+                    ),
+                )
                 if cloud_only:
                     object_name = self._upload_to_model_cache(task, entry, target_path, mode="cloud_only")
                     if not object_name:
@@ -1678,6 +1992,7 @@ class ModelManager:
             dl = str(entry.get("civitai_download_url") or "")
             if not dl:
                 raise RuntimeError("Missing civitai_download_url")
+            headers: dict[str, str] = {}
             if civitai_key:
                 headers["Authorization"] = f"Bearer {civitai_key}"
             target_path = self._cloud_temp_path(dest) if cloud_only else dest

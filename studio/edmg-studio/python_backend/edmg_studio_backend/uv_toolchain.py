@@ -387,6 +387,7 @@ def sync_frozen_project(
     capability_extras: Iterable[str] = RUNTIME_CAPABILITY_EXTRAS,
     groups: Iterable[str] = (),
     install_uv: bool = True,
+    reinstall: bool = False,
 ) -> Path:
     if is_packaged_backend():
         raise ToolchainError(
@@ -397,13 +398,16 @@ def sync_frozen_project(
     uv = resolve_uv(install=install_uv)
     env = toolchain_environment(profile=resolved_profile)
     run_checked([uv, "lock", "--check"], cwd=backend_root(), env=env)
+    sync_args = [
+        uv,
+        *frozen_project_args(
+            "sync", resolved_profile, capability_extras=capability_extras, groups=groups
+        ),
+    ]
+    if reinstall:
+        sync_args.append("--reinstall")
     run_checked(
-        [
-            uv,
-            *frozen_project_args(
-                "sync", resolved_profile, capability_extras=capability_extras, groups=groups
-            ),
-        ],
+        sync_args,
         cwd=backend_root(),
         env=env,
     )
