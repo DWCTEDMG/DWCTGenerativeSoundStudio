@@ -12,6 +12,10 @@ function cloneTimeline(value: TimelineSnapshot): TimelineSnapshot {
   return JSON.parse(JSON.stringify(value || {})) as TimelineSnapshot;
 }
 
+function timelineSnapshotsMatch(left: TimelineSnapshot, right: TimelineSnapshot): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export function useTimelineHistory(limit = 100) {
   const undoRef = useRef<HistoryEntry[]>([]);
   const redoRef = useRef<HistoryEntry[]>([]);
@@ -20,12 +24,17 @@ export function useTimelineHistory(limit = 100) {
   const bump = () => setVersion((v) => v + 1);
 
   const push = (before: TimelineSnapshot, after: TimelineSnapshot, label = "edit") => {
+    const beforeSnapshot = cloneTimeline(before);
+    const afterSnapshot = cloneTimeline(after);
+    if (timelineSnapshotsMatch(beforeSnapshot, afterSnapshot)) return false;
+
     undoRef.current = [
       ...undoRef.current.slice(-(Math.max(1, limit) - 1)),
-      { before: cloneTimeline(before), after: cloneTimeline(after), label },
+      { before: beforeSnapshot, after: afterSnapshot, label },
     ];
     redoRef.current = [];
     bump();
+    return true;
   };
 
   const canUndo = undoRef.current.length > 0;

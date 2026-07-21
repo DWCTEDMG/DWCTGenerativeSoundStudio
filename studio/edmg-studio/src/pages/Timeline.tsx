@@ -31,11 +31,47 @@ type AnyDict = Record<string, any>;
 type Clip = { id: string; start_s: number; end_s: number; data: AnyDict };
 type Track = { id: string; name: string; type: string; clips: Clip[] };
 
+function snapshotTimeline(timeline: AnyDict): AnyDict {
+  return JSON.parse(JSON.stringify(timeline || {})) as AnyDict;
+}
+
 type Selected =
   | { kind: "track"; trackIdx: number; clipIdx: number }
   | { kind: "overlay"; layerIdx: number }
   | { kind: "camera"; kfIdx: number }
   | null;
+
+type TimelineDrag =
+  | { kind: "playhead"; canvasLeft: number }
+  | {
+      kind: "track";
+      trackIdx: number;
+      clipIdx: number;
+      mode: "move" | "left" | "right";
+      x0: number;
+      start0: number;
+      end0: number;
+      historyBefore: AnyDict;
+      historyLabel: string;
+    }
+  | {
+      kind: "overlay";
+      layerIdx: number;
+      mode: "move" | "left" | "right";
+      x0: number;
+      start0: number;
+      end0: number;
+      historyBefore: AnyDict;
+      historyLabel: string;
+    }
+  | {
+      kind: "camera";
+      kfIdx: number;
+      x0: number;
+      t0: number;
+      historyBefore: AnyDict;
+      historyLabel: string;
+    };
 
 type DockSection = "handoffs" | "inspector" | "proxy" | "diffusion" | "curves";
 type TimelineDensity = "compact" | "comfortable";
@@ -586,6 +622,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const [timelineDirty, setTimelineDirty] = useState(false);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const timelineRef = useRef<AnyDict>(timeline);
 
   const [durationS, setDurationS] = useState<number>(60);
   const [pxPerSecond, setPxPerSecond] = useState<number>(80);
@@ -641,10 +678,25 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const timelineHistory = useTimelineHistory();
   const projectId = projectsReady && hasProjectId(projects, sessionProjectId) ? sessionProjectId : "";
 
-  const commitTimeline = (next: AnyDict, label = "edit") => {
-    timelineHistory.push(timeline as AnyDict, next, label);
+  const replaceTimelineState = (next: AnyDict, dirty: boolean) => {
+    timelineRef.current = next;
     setTimeline(next);
-    setTimelineDirty(true);
+    setTimelineDirty(dirty);
+  };
+
+  const commitTimeline = (next: AnyDict, label = "edit") => {
+    timelineHistory.push(timelineRef.current, next, label);
+    replaceTimelineState(next, true);
+  };
+
+  const undoTimeline = () => {
+    const previous = timelineHistory.undo();
+    if (previous) replaceTimelineState(ensureTimelineShape(previous, null), true);
+  };
+
+  const redoTimeline = () => {
+    const next = timelineHistory.redo();
+    if (next) replaceTimelineState(ensureTimelineShape(next, null), true);
   };
 
   const refreshProjects = async () => {
@@ -657,8 +709,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (!nextProjectId) {
       setProject(null);
       setPlan(null);
-      setTimeline(ensureTimelineShape({}, null));
-      setTimelineDirty(false);
+      replaceTimelineState(ensureTimelineShape({}, null), false);
       setAudioUrl("");
     }
   };
@@ -671,8 +722,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       p?.meta?.timeline || {},
       (p?.meta?.last_plan?.variants || [])[selectedVariant] || null,
     );
-    setTimeline(tl);
-    setTimelineDirty(false);
+    replaceTimelineState(tl, false);
     timelineHistory.clear();
 
     const dur = Number(
@@ -710,8 +760,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     else {
       setProject(null);
       setPlan(null);
-      setTimeline(ensureTimelineShape({}, null));
-      setTimelineDirty(false);
+      replaceTimelineState(ensureTimelineShape({}, null), false);
       setAudioUrl("");
     }
   }, [projectId, projectsReady, selectedVariant]);
@@ -925,7 +974,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     setTimelineZoomWithFocus(nextZoom, focusSeconds);
   };
 
-  const dragRef = useRef<any>(null);
+  const dragRef = useRef<TimelineDrag | null>(null);
 
   const onTrackClipPointerDown =
     (trackIdx: number, clipIdx: number, mode: "move" | "left" | "right") =>
@@ -945,6 +994,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         x0: e.clientX,
         start0: cl.start_s,
         end0: cl.end_s,
+        historyBefore: snapshotTimeline(timelineRef.current),
+        historyLabel: mode === "move" ? "move_clip" : "trim_clip",
       };
       setSelected({ kind: "track", trackIdx, clipIdx });
       setProxyStart(cl.start_s);
@@ -961,7 +1012,16 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       (e.currentTarget as any).setPointerCapture?.(e.pointerId);
       const s0 = Number(l.start_s ?? 0);
       const e0 = Number(l.end_s ?? durationS);
-      dragRef.current = { kind: "overlay", layerIdx, mode, x0: e.clientX, start0: s0, end0: e0 };
+      dragRef.current = {
+        kind: "overlay",
+        layerIdx,
+        mode,
+        x0: e.clientX,
+        start0: s0,
+        end0: e0,
+        historyBefore: snapshotTimeline(timelineRef.current),
+        historyLabel: mode === "move" ? "move_overlay" : "trim_overlay",
+      };
       setSelected({ kind: "overlay", layerIdx });
       setProxyStart(s0);
       setProxyEnd(e0);
@@ -974,7 +1034,14 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (!k) return;
     if (isLaneLocked("camera")) return;
     (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-    dragRef.current = { kind: "camera", kfIdx, x0: e.clientX, t0: Number(k.t || 0) };
+    dragRef.current = {
+      kind: "camera",
+      kfIdx,
+      x0: e.clientX,
+      t0: Number(k.t || 0),
+      historyBefore: snapshotTimeline(timelineRef.current),
+      historyLabel: "move_camera",
+    };
     setSelected({ kind: "camera", kfIdx });
     setProxyStart(Math.max(0, Number(k.t || 0) - 1));
     setProxyEnd(Math.min(durationS, Number(k.t || 0) + 2));
@@ -996,7 +1063,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       snapEnabled && !e.altKey ? _snap(value) : value;
 
     if (st.kind === "track") {
-      const tr = tracks[st.trackIdx];
+      const currentTimeline = timelineRef.current;
+      const currentTracks = Array.isArray(currentTimeline.tracks) ? currentTimeline.tracks : [];
+      const tr = currentTracks[st.trackIdx];
       const cl = tr?.clips?.[st.clipIdx];
       if (!tr || !cl) return;
       if (isLaneLocked(laneIdForTrack(tr, st.trackIdx))) return;
@@ -1020,7 +1089,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       start = clamp(start, 0, durationS - 0.05);
       end = clamp(end, start + 0.05, durationS);
 
-      const nextTracks = tracks.map((t, i) => {
+      const nextTracks = currentTracks.map((t, i) => {
         if (i !== st.trackIdx) return t;
         const nextClips = (t.clips || []).map((c, j) =>
           j === st.clipIdx ? { ...c, start_s: start, end_s: end } : c,
@@ -1028,13 +1097,14 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         return { ...t, clips: nextClips };
       });
 
-      setTimeline({ ...timeline, tracks: nextTracks });
-      setTimelineDirty(true);
+      replaceTimelineState({ ...currentTimeline, tracks: nextTracks }, true);
       return;
     }
 
     if (st.kind === "overlay") {
-      const l = layers[st.layerIdx];
+      const currentTimeline = timelineRef.current;
+      const currentLayers = Array.isArray(currentTimeline.layers) ? currentTimeline.layers : [];
+      const l = currentLayers[st.layerIdx];
       if (!l) return;
       if (isLaneLocked("overlays")) return;
       let start = st.start0,
@@ -1057,28 +1127,36 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       start = clamp(start, 0, durationS - 0.05);
       end = clamp(end, start + 0.05, durationS);
 
-      const nextLayers = layers.map((x, i) =>
+      const nextLayers = currentLayers.map((x, i) =>
         i === st.layerIdx ? { ...x, start_s: start, end_s: end } : x,
       );
-      setTimeline({ ...timeline, layers: nextLayers });
-      setTimelineDirty(true);
+      replaceTimelineState({ ...currentTimeline, layers: nextLayers }, true);
       return;
     }
 
     if (st.kind === "camera") {
-      const k = camKeyframes[st.kfIdx];
+      const currentTimeline = timelineRef.current;
+      const currentKeyframes = Array.isArray(currentTimeline.camera?.keyframes)
+        ? currentTimeline.camera.keyframes
+        : [];
+      const k = currentKeyframes[st.kfIdx];
       if (!k) return;
       if (isLaneLocked("camera")) return;
       const t = clamp(snapDragTime(st.t0 + dx), 0, durationS);
-      const next = camKeyframes.map((x, i) => (i === st.kfIdx ? { ...x, t } : x));
+      const next = currentKeyframes.map((x, i) => (i === st.kfIdx ? { ...x, t } : x));
       next.sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
-      setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
-      setTimelineDirty(true);
+      replaceTimelineState(
+        { ...currentTimeline, camera: { ...(currentTimeline.camera || {}), keyframes: next } },
+        true,
+      );
     }
   };
 
   const onTimelinePointerUp = () => {
+    const drag = dragRef.current;
     dragRef.current = null;
+    if (!drag || drag.kind === "playhead") return;
+    timelineHistory.push(drag.historyBefore, timelineRef.current, drag.historyLabel);
   };
 
   const onRulerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1110,8 +1188,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         },
         () => apiPost(`/v1/projects/${projectId}/timeline`, { timeline }),
       );
-      setTimeline(saved?.timeline || timeline);
-      setTimelineDirty(false);
+      replaceTimelineState(saved?.timeline || timelineRef.current, false);
       // invalidate proxy preview on save
       setProxyUrl("");
       setProxyBusy(false);
@@ -1196,8 +1273,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         );
         return { ...t, clips: nextClips };
       });
-      setTimeline({ ...timeline, tracks: nextTracks });
-      setTimelineDirty(true);
+      commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "move_clip");
       return;
     }
     if (selected.kind === "overlay") {
@@ -1207,12 +1283,12 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const dur = Math.max(_minLen, Number(l.end_s ?? durationS) - Number(l.start_s ?? 0));
       const s = clamp(target, 0, Math.max(0, durationS - dur));
       const e = clamp(s + dur, s + _minLen, durationS);
-      updateSelectedOverlayTimes(s, e);
+      updateSelectedOverlayTimes(s, e, "move_overlay");
       return;
     }
     if (selected.kind === "camera") {
       if (isLaneLocked("camera")) return;
-      updateSelectedCamera({ t: target });
+      updateSelectedCamera({ t: target }, "move_camera");
     }
   };
 
@@ -1228,8 +1304,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         },
         () => apiPost(`/v1/projects/${projectId}/timeline`, { timeline }),
       );
-      setTimeline(saved?.timeline || timeline);
-      setTimelineDirty(false);
+      replaceTimelineState(saved?.timeline || timelineRef.current, false);
       setProxyUrl("");
       setProxyBusy(false);
       onNavigate?.("render");
@@ -1257,8 +1332,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const nextTracks = tracks.map((t, i) =>
       i === idx ? { ...t, clips: [...(t.clips || []), { id, start_s: s, end_s: e, data }] } : t,
     );
-    setTimeline({ ...timeline, tracks: nextTracks });
-    setTimelineDirty(true);
+    commitTimeline({ ...timelineRef.current, tracks: nextTracks }, `add_${type}_clip`);
   };
 
   const addCameraKeyframe = () => {
@@ -1266,8 +1340,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const s = clamp(playheadS, 0, durationS);
     const k = { t: s, zoom: 1.0, pan_x: 0.0, pan_y: 0.0, rotation_deg: 0.0 };
     const next = [...camKeyframes, k].sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
-    setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
-    setTimelineDirty(true);
+    commitTimeline(
+      { ...timelineRef.current, camera: { ...(timelineRef.current.camera || {}), keyframes: next } },
+      "add_camera_keyframe",
+    );
   };
 
   const _bpm = () => {
@@ -1405,8 +1481,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         if (i !== selected.trackIdx) return t;
         return { ...t, clips: [...(t.clips || []), { ...cl, id, start_s: s, end_s: e }] };
       });
-      setTimeline({ ...timeline, tracks: nextTracks });
-      setTimelineDirty(true);
+      commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "duplicate_clip");
       return;
     }
     if (selected.kind === "overlay") {
@@ -1418,8 +1493,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const e = clamp(s + dur, s + _minLen, durationS);
       const nextLayers = layers.map((x, i) => (i === selected.layerIdx ? x : x));
       nextLayers.push({ ...l, start_s: s, end_s: e });
-      setTimeline({ ...timeline, layers: nextLayers });
-      setTimelineDirty(true);
+      commitTimeline({ ...timelineRef.current, layers: nextLayers }, "duplicate_overlay");
       return;
     }
     if (selected.kind === "camera") {
@@ -1430,8 +1504,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const next = [...camKeyframes, { ...k, t }].sort(
         (a, b) => Number(a.t || 0) - Number(b.t || 0),
       );
-      setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
-      setTimelineDirty(true);
+      commitTimeline(
+        { ...timelineRef.current, camera: { ...(timelineRef.current.camera || {}), keyframes: next } },
+        "duplicate_camera",
+      );
     }
   };
 
@@ -1453,8 +1529,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         );
         return { ...t, clips: nextClips };
       });
-      setTimeline({ ...timeline, tracks: nextTracks });
-      setTimelineDirty(true);
+      commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "split_clip");
       return;
     }
     if (selected.kind === "overlay") {
@@ -1467,8 +1542,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const left = { ...l, end_s: tSplit };
       const right = { ...l, start_s: tSplit };
       const nextLayers = layers.flatMap((x, i) => (i === selected.layerIdx ? [left, right] : [x]));
-      setTimeline({ ...timeline, layers: nextLayers });
-      setTimelineDirty(true);
+      commitTimeline({ ...timelineRef.current, layers: nextLayers }, "split_overlay");
     }
   };
 
@@ -1511,8 +1585,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         );
         return { ...t, clips: nextClips };
       });
-      setTimeline({ ...timeline, tracks: nextTracks });
-      setTimelineDirty(true);
+      commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "quantize_clip");
       return;
     }
 
@@ -1521,7 +1594,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       if (!l) return;
       if (isLaneLocked("overlays")) return;
       const [ss, ee] = snapRange(Number(l.start_s ?? 0), Number(l.end_s ?? durationS));
-      updateSelectedOverlayTimes(ss, ee);
+      updateSelectedOverlayTimes(ss, ee, "quantize_overlay");
       return;
     }
 
@@ -1530,7 +1603,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       if (!k) return;
       if (isLaneLocked("camera")) return;
       const tt = clamp(_snap(Number(k.t || 0)), 0, durationS);
-      updateSelectedCamera({ t: tt });
+      updateSelectedCamera({ t: tt }, "quantize_camera");
     }
   };
 
@@ -1546,20 +1619,12 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         const key = e.key.toLowerCase();
         if (key === "z" && !e.shiftKey) {
           e.preventDefault();
-          const prev = timelineHistory.undo();
-          if (prev) {
-            setTimeline(ensureTimelineShape(prev, null));
-            setTimelineDirty(true);
-          }
+          undoTimeline();
           return;
         }
         if (key === "y" || (key === "z" && e.shiftKey)) {
           e.preventDefault();
-          const next = timelineHistory.redo();
-          if (next) {
-            setTimeline(ensureTimelineShape(next, null));
-            setTimelineDirty(true);
-          }
+          redoTimeline();
           return;
         }
         return;
@@ -1677,7 +1742,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     return { tr, cl };
   };
 
-  const updateSelectedClipData = (patch: AnyDict) => {
+  const updateSelectedClipData = (patch: AnyDict, label = "update_clip_property") => {
     if (!selected || selected.kind !== "track") return;
     const tr = tracks[selected.trackIdx];
     const cl = tr?.clips?.[selected.clipIdx];
@@ -1692,23 +1757,26 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     });
     const isMotion = String(tr.type || "").toLowerCase() === "motion";
     const syncCamera = isMotion && Object.keys(patch).some((field) => MOTION_CAMERA_ENDPOINT_FIELDS.has(field));
-    const nextTimeline: AnyDict = { ...timeline, tracks: nextTracks };
+    const currentTimeline = timelineRef.current;
+    const nextTimeline: AnyDict = { ...currentTimeline, tracks: nextTracks };
     if (syncCamera) {
       const nextData = { ...(cl.data || {}), ...patch };
       nextTimeline.camera = {
-        ...(timeline.camera || {}),
+        ...(currentTimeline.camera || {}),
         keyframes: syncMotionClipCameraKeyframes(camKeyframes, cl, nextData),
       };
     }
-    setTimeline(nextTimeline);
-    setTimelineDirty(true);
+    commitTimeline(nextTimeline, label);
   };
 
   const applySelectedMotionPreset = (presetId: string) => {
     const picked = selectedTrackClip(selected);
     if (!picked || String(picked.tr.type || "").toLowerCase() !== "motion") return;
     if (presetId === "custom" || presetId === "reactive") {
-      updateSelectedClipData({ motion_preset: "custom", motion_label: "Custom motion" });
+      updateSelectedClipData(
+        { motion_preset: "custom", motion_label: "Custom motion" },
+        "apply_motion_preset",
+      );
       return;
     }
     const preset = MOTION_PRESET_BY_ID.get(presetId);
@@ -1718,7 +1786,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       ...preset.data,
       motion_preset: preset.id,
       motion_label: preset.label,
-    });
+    }, "apply_motion_preset");
   };
 
   const updateSelectedMotionField = (field: string, value: number) => {
@@ -1739,7 +1807,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       [field]: value,
       motion_preset: "custom",
       motion_label: "Custom motion",
-    });
+    }, "update_motion_property");
   };
 
   const applyMotionVariety = (trackIdx: number) => {
@@ -1767,35 +1835,35 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     });
     if (!variedCount) return;
     const nextTracks = tracks.map((track, index) => index === trackIdx ? { ...track, clips: nextClips } : track);
-    setTimeline({
-      ...timeline,
+    commitTimeline({
+      ...timelineRef.current,
       tracks: nextTracks,
-      camera: { ...(timeline.camera || {}), keyframes: nextKeyframes },
-    });
-    setTimelineDirty(true);
+      camera: { ...(timelineRef.current.camera || {}), keyframes: nextKeyframes },
+    }, "apply_motion_variety");
   };
 
-  const updateSelectedOverlayTimes = (start_s: number, end_s: number) => {
+  const updateSelectedOverlayTimes = (start_s: number, end_s: number, label = "update_overlay") => {
     if (!selected || selected.kind !== "overlay") return;
     if (isLaneLocked("overlays")) return;
     const idx = selected.layerIdx;
     const nextLayers = layers.map((x, i) => (i === idx ? { ...x, start_s, end_s } : x));
-    setTimeline({ ...timeline, layers: nextLayers });
-    setTimelineDirty(true);
+    commitTimeline({ ...timelineRef.current, layers: nextLayers }, label);
   };
 
-  const updateSelectedCamera = (patch: AnyDict) => {
+  const updateSelectedCamera = (patch: AnyDict, label = "update_camera") => {
     if (!selected || selected.kind !== "camera") return;
     if (isLaneLocked("camera")) return;
     const idx = selected.kfIdx;
     const next = camKeyframes
       .map((x, i) => (i === idx ? { ...x, ...patch } : x))
       .sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
-    setTimeline({ ...timeline, camera: { ...(timeline.camera || {}), keyframes: next } });
-    setTimelineDirty(true);
+    commitTimeline(
+      { ...timelineRef.current, camera: { ...(timelineRef.current.camera || {}), keyframes: next } },
+      label,
+    );
   };
 
-  const updateSelectedClipTimes = (start_s: number, end_s: number) => {
+  const updateSelectedClipTimes = (start_s: number, end_s: number, label = "trim_clip") => {
     if (!selected || selected.kind !== "track") return;
     const tr = tracks[selected.trackIdx];
     const cl = tr?.clips?.[selected.clipIdx];
@@ -1811,8 +1879,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         ),
       };
     });
-    setTimeline({ ...timeline, tracks: nextTracks });
-    setTimelineDirty(true);
+    commitTimeline({ ...timelineRef.current, tracks: nextTracks }, label);
   };
 
   const selectedTimeRange = (): [number, number] | null => {
@@ -2311,22 +2378,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               </div>
             </div>
             <div className="timeline-toolbarActions timeline-toolbarActions--wide">
-              <button className="secondary" disabled={!timelineHistory.canUndo} onClick={() => {
-                const prev = timelineHistory.undo();
-                if (prev) {
-                  setTimeline(ensureTimelineShape(prev, null));
-                  setTimelineDirty(true);
-                }
-              }}>
+              <button className="secondary" disabled={!timelineHistory.canUndo} onClick={undoTimeline}>
                 Undo
               </button>
-              <button className="secondary" disabled={!timelineHistory.canRedo} onClick={() => {
-                const next = timelineHistory.redo();
-                if (next) {
-                  setTimeline(ensureTimelineShape(next, null));
-                  setTimelineDirty(true);
-                }
-              }}>
+              <button className="secondary" disabled={!timelineHistory.canRedo} onClick={redoTimeline}>
                 Redo
               </button>
               <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={quantizeSelection}>
@@ -2664,6 +2719,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     key={i}
                     className={`timeline-keyframe${isSel ? " is-selected" : ""}`}
                     onPointerDown={onCameraKfPointerDown(i)}
+                    aria-label={`Camera keyframe at ${fmtTime(Number(k.t || 0))}`}
                     title={`t=${fmtTime(Number(k.t || 0))} • zoom=${Number(k.zoom || 1).toFixed(2)}`}
                     style={{ left: x - 7 }}
                   />
@@ -2750,6 +2806,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <>
                   <textarea
                     className="timeline-inspectorTextarea"
+                    aria-label="Prompt text"
                     disabled={selectedLaneLocked}
                     value={String(cl.data?.prompt || "")}
                     onChange={(e) => updateSelectedClipData({ prompt: e.target.value })}
@@ -2919,6 +2976,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               <div className="timeline-fieldGrid timeline-fieldGrid--compact">
                 <label className="small">start</label>
                 <input
+                  aria-label="Overlay start"
                   type="number"
                   step={0.1}
                   disabled={selectedLaneLocked}
@@ -2927,6 +2985,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 />
                 <label className="small">end</label>
                 <input
+                  aria-label="Overlay end"
                   type="number"
                   step={0.1}
                   disabled={selectedLaneLocked}
@@ -2950,6 +3009,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               <div className="timeline-fieldGrid timeline-fieldGrid--compact">
                 <label className="small">t</label>
                 <input
+                  aria-label="Camera time"
                   type="number"
                   step={0.1}
                   disabled={selectedLaneLocked}
@@ -2958,6 +3018,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 />
                 <label className="small">zoom</label>
                 <input
+                  aria-label="Camera zoom"
                   type="number"
                   step={0.01}
                   disabled={selectedLaneLocked}
@@ -2966,6 +3027,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 />
                 <label className="small">pan_x</label>
                 <input
+                  aria-label="Camera pan X"
                   type="number"
                   step={0.1}
                   disabled={selectedLaneLocked}
@@ -2974,6 +3036,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 />
                 <label className="small">pan_y</label>
                 <input
+                  aria-label="Camera pan Y"
                   type="number"
                   step={0.1}
                   disabled={selectedLaneLocked}
@@ -2982,6 +3045,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 />
                 <label className="small">rot</label>
                 <input
+                  aria-label="Camera rotation"
                   type="number"
                   step={0.1}
                   disabled={selectedLaneLocked}
@@ -3283,7 +3347,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const stepsPath = svgPath(stepsCurve, duration, 4, 60, W, H);
 
     const updateMotionField = (field: string, val: string) => {
-      const next = { ...(timeline as any) };
+      const next = { ...timelineRef.current };
       next.tracks = Array.isArray(next.tracks)
         ? next.tracks.map((t: any) => {
             if (String(t?.type || "").toLowerCase() !== "motion") return t;
@@ -3295,8 +3359,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             return { ...t, clips: [{ ...c0, data: d0 }, ...clips.slice(1)] };
           })
         : next.tracks;
-      setTimeline(next);
-      setTimelineDirty(true);
+      commitTimeline(next, "update_motion_curve");
     };
 
     const insertPointAtPlayhead = (
@@ -3389,6 +3452,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           <div>
             <div className="small timeline-stackLabel">strength_schedule</div>
             <textarea
+              aria-label="Strength schedule"
               value={String(data.strength_schedule || "")}
               onChange={(e) => updateMotionField("strength_schedule", e.target.value)}
             />
@@ -3396,6 +3460,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           <div>
             <div className="small timeline-stackLabel">cfg_scale_schedule</div>
             <textarea
+              aria-label="CFG schedule"
               value={String(data.cfg_scale_schedule || "")}
               onChange={(e) => updateMotionField("cfg_scale_schedule", e.target.value)}
             />
@@ -3403,6 +3468,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           <div>
             <div className="small timeline-stackLabel">steps_schedule</div>
             <textarea
+              aria-label="Steps schedule"
               value={String(data.steps_schedule || "")}
               onChange={(e) => updateMotionField("steps_schedule", e.target.value)}
             />
@@ -3410,6 +3476,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           <div>
             <div className="small timeline-stackLabel">denoise_schedule</div>
             <textarea
+              aria-label="Denoise schedule"
               value={String(data.denoise_schedule || "")}
               onChange={(e) => updateMotionField("denoise_schedule", e.target.value)}
             />

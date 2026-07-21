@@ -194,6 +194,11 @@ describe("Timeline page", () => {
     expect(snappedEnd - snappedStart).toBe(2);
     expect((screen.getByLabelText("Clip length") as HTMLInputElement).value).toBe("2");
 
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(Number((screen.getByLabelText("Clip start") as HTMLInputElement).value)).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    expect(Number((screen.getByLabelText("Clip start") as HTMLInputElement).value)).toBe(snappedStart);
+
     fireEvent.click(screen.getByRole("button", { name: "Lock Prompts track" }));
     expect(screen.getByRole("button", { name: "Unlock Prompts track" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Clip length"), { target: { value: "1" } });
@@ -302,5 +307,95 @@ describe("Timeline page", () => {
     expect(middle.rotation_3d_y).toBeCloseTo(1.67, 1);
     expect(end.pan_x).toBe(8);
     expect(end.rotation_3d_y).toBe(-5);
+  });
+
+  it("records move, trim, split, property, camera, and curve edits in history", async () => {
+    installEdmgBridge();
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Command History Test" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Command History Test",
+          meta: {
+            audio: { filename: "track.wav", duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120, beat_times_s: [0, 0.5, 1, 1.5, 2] } },
+            last_plan: {
+              variants: [
+                {
+                  name: "Variant 1",
+                  scenes: [{ id: "scene_0", start_s: 0, end_s: 4, prompt: "Command history prompt" }],
+                },
+              ],
+            },
+            timeline: {
+              duration_s: 8,
+              tracks: [
+                {
+                  id: "track_prompt",
+                  name: "Prompts",
+                  type: "prompt",
+                  clips: [{ id: "prompt_0", start_s: 0, end_s: 4, data: { prompt: "Command history prompt" } }],
+                },
+                {
+                  id: "track_motion",
+                  name: "Motion",
+                  type: "motion",
+                  clips: [{ id: "motion_0", start_s: 0, end_s: 4, data: {} }],
+                },
+              ],
+              camera: {
+                keyframes: [{ t: 2, zoom: 1, pan_x: 0, pan_y: 0, rotation_deg: 0 }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    const clip = await screen.findByTitle("Command history prompt");
+    fireEvent.pointerDown(clip);
+    fireEvent.click(screen.getByRole("tab", { name: /Inspector/ }));
+
+    const playhead = await screen.findByLabelText("Playhead time") as HTMLInputElement;
+    fireEvent.change(playhead, { target: { value: "1" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Nudge to playhead" })[0]);
+    expect((screen.getByLabelText("Clip start") as HTMLInputElement).value).toBe("1");
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect((screen.getByLabelText("Clip start") as HTMLInputElement).value).toBe("0");
+
+    fireEvent.change(screen.getByLabelText("Clip length"), { target: { value: "2" } });
+    expect((screen.getByLabelText("Clip length") as HTMLInputElement).value).toBe("2");
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect((screen.getByLabelText("Clip length") as HTMLInputElement).value).toBe("4");
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    expect((screen.getByLabelText("Clip length") as HTMLInputElement).value).toBe("2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Split" }));
+    expect(screen.getAllByTitle("Command history prompt")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getAllByTitle("Command history prompt")).toHaveLength(1);
+
+    const prompt = screen.getByLabelText("Prompt text") as HTMLTextAreaElement;
+    fireEvent.change(prompt, { target: { value: "Updated command history prompt" } });
+    expect(prompt.value).toBe("Updated command history prompt");
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect((screen.getByLabelText("Prompt text") as HTMLTextAreaElement).value).toBe("Command history prompt");
+
+    fireEvent.pointerDown(screen.getByLabelText(/Camera keyframe at/));
+    const zoom = await screen.findByLabelText("Camera zoom") as HTMLInputElement;
+    fireEvent.change(zoom, { target: { value: "1.5" } });
+    expect(zoom.value).toBe("1.5");
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect((screen.getByLabelText("Camera zoom") as HTMLInputElement).value).toBe("1");
+
+    fireEvent.click(screen.getByRole("tab", { name: /Curves/ }));
+    const strengthSchedule = await screen.findByLabelText("Strength schedule") as HTMLTextAreaElement;
+    fireEvent.change(strengthSchedule, { target: { value: "0:(0.45)" } });
+    expect(strengthSchedule.value).toBe("0:(0.45)");
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect((screen.getByLabelText("Strength schedule") as HTMLTextAreaElement).value).toBe("");
   });
 });
