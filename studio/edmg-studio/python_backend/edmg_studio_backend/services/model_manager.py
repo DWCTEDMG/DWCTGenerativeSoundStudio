@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -26,7 +26,7 @@ from .setup_wizard import _ollama_base  # reuse
 from .model_catalog import built_in_catalog, built_in_packs
 from ..domain.model_lanes import annotate_entry, can_promote, infer_lane, normalize_lane, promotion_blockers
 from ..services.setup_wizard import comfy_portable_installed, comfy_portable_root
-from .hf_auth import resolve_hf_token
+from .hf_auth import HfTokenCandidate, hf_token_candidates
 from .secrets import SecretStore
 
 try:
@@ -67,6 +67,24 @@ def _write_json(path: Path, obj: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+
+
+def _is_hf_auth_failure(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) in (401, 403):
+        return True
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "401",
+            "403",
+            "unauthorized",
+            "forbidden",
+            "invalid user token",
+            "oauth token signature verification failed",
+        )
+    )
 
 
 def _normalize_path(path: Path | str) -> str:
@@ -1539,6 +1557,58 @@ class ModelManager:
         ModelTaskManager.set_progress(task, 1.0)
         ModelTaskManager.log(task, f"Saved: {dest.name}")
 
+    def _run_hf_download_with_auth_fallback(
+        self,
+        task: ModelTask,
+        *,
+        resource: str,
+        candidates: list[HfTokenCandidate],
+        download: Callable[[str | bool], None],
+    ) -> None:
+        rejected_sources: list[str] = []
+        for candidate in candidates:
+            self._append_task_log(task, f"Using Hugging Face auth from {candidate.source}")
+            try:
+                download(candidate.token)
+                return
+            except Exception as exc:
+                if not _is_hf_auth_failure(exc):
+                    raise
+                rejected_sources.append(candidate.source)
+                self._append_task_log(
+                    task,
+                    f"Hugging Face auth from {candidate.source} was rejected; trying another credential.",
+                )
+
+        try:
+            # False prevents huggingface_hub from silently reusing a rejected cached token.
+            download(False)
+        except Exception as exc:
+            if not _is_hf_auth_failure(exc):
+                raise
+            if rejected_sources:
+                hint = (
+                    "Run `hf auth logout` followed by `hf auth login`, or replace the Hugging Face "
+                    "token in Settings → Tokens. If this model is gated, accept its license on "
+                    "Hugging Face before retrying."
+                )
+            else:
+                hint = (
+                    "Set a valid Hugging Face token in Settings → Tokens, or run `hf auth login`. "
+                    "If this model is gated, accept its license on Hugging Face before retrying."
+                )
+            raise UserFacingError(
+                f"Hugging Face denied access to {resource}",
+                hint=hint,
+                code="HF_AUTH_REQUIRED",
+            ) from exc
+
+        if rejected_sources:
+            self._append_task_log(
+                task,
+                "Downloaded without Hugging Face authentication after stored credentials were rejected.",
+            )
+
     def _append_task_log(self, task: ModelTask, msg: str) -> None:
         current = str(task.last_log or "").strip()
         ModelTaskManager.log(task, f"{current}\n{msg}" if current else msg)
@@ -1691,12 +1761,10 @@ class ModelManager:
             elif src != "s3" and self._restore_snapshot_from_model_cache(task, entry, dest):
                 return
 
-        headers: dict[str, str] = {}
         # Optional HF token support. Prefer explicit env vars, then the modern
         # `hf auth login` / Hub token cache, then Studio Settings.
-        hf_token, hf_token_source = resolve_hf_token(secrets_store=self.secrets)
-        if hf_token:
-            headers["Authorization"] = f"Bearer {hf_token}"
+        hf_candidates = hf_token_candidates(secrets_store=self.secrets)
+        hf_token = hf_candidates[0].token if hf_candidates else ""
 
         civitai_key = ""
         if self.secrets is not None:
@@ -1715,16 +1783,19 @@ class ModelManager:
                 target_path = self._cloud_temp_path(dest) if cloud_only else dest
                 target_path.mkdir(parents=True, exist_ok=True)
                 ModelTaskManager.log(task, f"Downloading HF snapshot: {repo_id}")
-                if hf_token_source:
-                    ModelTaskManager.log(task, f"Using Hugging Face auth from {hf_token_source}")
                 try:
-                    snapshot_download(
-                        repo_id=repo_id,
-                        local_dir=str(target_path),
-                        local_dir_use_symlinks=False,
-                        revision=str(entry.get("hf_revision") or "") or None,
-                        token=(hf_token or None),
-                        resume_download=True,
+                    self._run_hf_download_with_auth_fallback(
+                        task,
+                        resource=repo_id,
+                        candidates=hf_candidates,
+                        download=lambda token: snapshot_download(
+                            repo_id=repo_id,
+                            local_dir=str(target_path),
+                            local_dir_use_symlinks=False,
+                            revision=str(entry.get("hf_revision") or "") or None,
+                            token=token,
+                            resume_download=True,
+                        ),
                     )
                     if cloud_only:
                         object_name = self._upload_snapshot_to_model_cache(task, entry, target_path, mode="cloud_only")
@@ -1744,7 +1815,17 @@ class ModelManager:
                 raise RuntimeError("Missing hf_url")
             target_path = self._cloud_temp_path(dest) if cloud_only else dest
             try:
-                self._download_stream(task, url, target_path, headers=headers)
+                self._run_hf_download_with_auth_fallback(
+                    task,
+                    resource=url,
+                    candidates=hf_candidates,
+                    download=lambda token: self._download_stream(
+                        task,
+                        url,
+                        target_path,
+                        headers={"Authorization": f"Bearer {token}"} if token else {},
+                    ),
+                )
                 if cloud_only:
                     object_name = self._upload_to_model_cache(task, entry, target_path, mode="cloud_only")
                     if not object_name:
@@ -1911,6 +1992,7 @@ class ModelManager:
             dl = str(entry.get("civitai_download_url") or "")
             if not dl:
                 raise RuntimeError("Missing civitai_download_url")
+            headers: dict[str, str] = {}
             if civitai_key:
                 headers["Authorization"] = f"Bearer {civitai_key}"
             target_path = self._cloud_temp_path(dest) if cloud_only else dest
