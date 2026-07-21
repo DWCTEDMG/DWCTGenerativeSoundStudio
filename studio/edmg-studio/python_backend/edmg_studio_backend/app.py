@@ -5862,7 +5862,7 @@ def _project_response_payload(proj: Any) -> dict[str, Any]:
 app.include_router(create_system_router(readiness_report=_system_readiness_report))
 app.include_router(
     create_project_router(
-        store=store,
+        get_store=lambda: store,
         project_response=_project_response_payload,
         assess_health=assess_project_health,
     )

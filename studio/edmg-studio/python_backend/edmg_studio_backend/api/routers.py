@@ -34,7 +34,7 @@ def create_system_router(*, readiness_report: Callable[[], dict[str, Any]]) -> A
 
 def create_project_router(
     *,
-    store: ProjectStore,
+    get_store: Callable[[], ProjectStore],
     project_response: Callable[[Any], dict[str, Any]],
     assess_health: Callable[..., dict[str, Any]],
 ) -> APIRouter:
@@ -43,15 +43,18 @@ def create_project_router(
 
     @router.get("/v1/projects")
     def list_projects() -> dict[str, Any]:
+        store = get_store()
         return {"projects": [p.__dict__ for p in store.list()]}
 
     @router.post("/v1/projects")
     def create_project(req: ProjectCreateRequest) -> dict[str, Any]:
+        store = get_store()
         proj = store.create(req.name)
         return project_response(proj)
 
     @router.get("/v1/projects/{project_id}")
     def get_project(project_id: str) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -59,6 +62,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/health")
     def get_project_health(project_id: str) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -67,6 +71,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/music_graph")
     def get_project_music_graph(project_id: str) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -82,6 +87,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/live_cues")
     def get_project_live_cues(project_id: str) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -98,6 +104,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/timeline")
     def get_timeline(project_id: str) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -105,6 +112,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/timeline")
     def set_timeline(project_id: str, req: TimelineUpdateRequest) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -123,6 +131,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/motion_grammar/apply")
     def apply_motion_grammar(project_id: str, req: MotionPhrasesApplyRequest) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -140,6 +149,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/stem_modulation")
     def get_stem_modulation(project_id: str) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -148,6 +158,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/stem_modulation")
     def update_stem_modulation(project_id: str, req: StemModulationUpdateRequest) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -162,6 +173,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/autosave")
     def autosave_project(project_id: str, req: AutosaveRequest) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -188,6 +200,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/recovery")
     def get_project_recovery(project_id: str) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -209,6 +222,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/recovery/apply")
     def apply_project_recovery(project_id: str, req: RecoveryApplyRequest) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
@@ -245,6 +259,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/recovery/discard")
     def discard_project_recovery(project_id: str) -> dict[str, Any]:
+        store = get_store()
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
