@@ -73,8 +73,18 @@ explicit release profile.
 
 The staged backend manifest records Python/uv/PyInstaller versions, the lock
 SHA-256, accelerator profile, resolved Torch packages/index, source fingerprint,
-and binary hash. Installed applications run the executable directly and do not
+and binary hash. Release evidence (SBOM + checksum manifests) is written to
+`studio/edmg-studio/release/evidence/` during `prepare-release-bundle` and after
+installer builds. Installed applications run the executable directly and do not
 require Python or uv on the customer machine.
+
+## Release evidence and smoke
+
+- SBOM: `release/evidence/python-backend-<profile>.cyclonedx.json`
+- Bundle checksums: `release/evidence/bundle-artifacts.sha256.json`
+- Installer checksums: `release/evidence/release-artifacts.sha256.json`
+- Signing hook stub: `packaging/windows/sign_release.ps1` (`EDMG_CODE_SIGN_CERT`)
+- Clean-machine smoke: `packaging/windows/smoke_clean_machine.ps1`
 
 ## Runtime defaults
 

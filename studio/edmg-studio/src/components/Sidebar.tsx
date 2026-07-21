@@ -46,6 +46,7 @@ function getNavGroups(): NavGroup[] {
       items: [
         { page: "render", label: "Render", hint: "launch outputs" },
         { page: "queue", label: "Render Queue", hint: "logs, retries, progress" },
+        { page: "review", label: "Review", hint: "compare variants, approve results" },
         { page: "outputs", label: "Outputs", hint: "browse generated media" },
       ],
     },

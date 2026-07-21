@@ -86,6 +86,52 @@ That proof covers:
 - backend manifest verification for Python version, uv version, lock SHA-256,
   accelerator profile, Torch packages/index, PyInstaller version, source
   fingerprint, and binary hash
+- CycloneDX SBOM export from the committed `uv.lock` under
+  `studio/edmg-studio/release/evidence/python-backend-<profile>.cyclonedx.json`
+- SHA-256 checksum manifests for bundled and installer artifacts under
+  `studio/edmg-studio/release/evidence/`
+
+Generate or refresh release evidence manually:
+
+```powershell
+cd studio/edmg-studio
+pnpm run generate:release-evidence
+pnpm run generate:release-evidence:dist
+```
+
+After a full Windows build:
+
+```powershell
+./studio/edmg-studio/packaging/windows/build_all.ps1
+```
+
+That script now also runs the env-gated signing hook stub and the clean-machine
+smoke checklist (`packaging/windows/smoke_clean_machine.ps1`).
+
+### Code signing (credentials required)
+
+Signing is optional and env-gated. Configure on a signing host:
+
+```powershell
+$env:EDMG_CODE_SIGN_CERT = "<thumbprint-or-pfx-path>"
+$env:EDMG_CODE_SIGN_PASSWORD = "<optional-pfx-password>"
+./studio/edmg-studio/packaging/windows/sign_release.ps1
+```
+
+The repository ships a stub hook only. Replace `sign_release.ps1` with real
+`signtool.exe` invocations once signing credentials are available.
+
+### Clean-machine smoke
+
+Automated local checklist (staged launch probe + evidence files):
+
+```powershell
+./studio/edmg-studio/packaging/windows/smoke_clean_machine.ps1
+```
+
+Use `-SkipLaunchProbe` to validate artifact/checksum presence without launching
+Electron. Full clean-VM acceptance still requires installing the packaged
+installer on a machine without dev tooling.
 
 Optional support-plane helper:
 

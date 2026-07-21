@@ -207,6 +207,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const [projectHealth, setProjectHealth] = useState<any>(null);
   const [musicGraph, setMusicGraph] = useState<any>(null);
   const [liveCues, setLiveCues] = useState<any>(null);
+  const [liveAssets, setLiveAssets] = useState<any>(null);
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewAutoFitKeyRef = useRef<string>("");
   const { progress, runOperation } = useOperationProgress();
@@ -227,6 +228,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
       setProjectHealth(null);
       setMusicGraph(null);
       setLiveCues(null);
+      setLiveAssets(null);
     }
   };
 
@@ -264,6 +266,12 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
     } catch {
       setLiveCues(null);
     }
+    try {
+      const assets = await apiGet(`/v1/projects/${id}/live_assets`);
+      setLiveAssets(assets?.live_assets || null);
+    } catch {
+      setLiveAssets(null);
+    }
   };
 
   useEffect(() => { refreshProjects().catch(() => {}); }, []);
@@ -279,6 +287,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
       setProjectHealth(null);
       setMusicGraph(null);
       setLiveCues(null);
+      setLiveAssets(null);
     }
   }, [projectId, projectsReady]);
   // Workspace stays focused on project + timeline. Rendering lives in the Render page.
@@ -368,6 +377,37 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
     } catch (e: any) { setErr(String(e)); }
   };
 
+  const [templatePackagePreview, setTemplatePackagePreview] = useState<any>(null);
+  const [templateImportText, setTemplateImportText] = useState<string>("");
+
+  const exportTemplatePackage = async () => {
+    if (!projectId) return;
+    setErr(null);
+    try {
+      const d = await apiGet(`/v1/projects/${projectId}/template_package/export`);
+      setTemplatePackagePreview(d?.package || null);
+      setInfo({ template_export: d?.package?.package_id || "exported" });
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const importTemplatePackage = async () => {
+    if (!projectId || !templateImportText.trim()) return;
+    setErr(null);
+    try {
+      const parsed = JSON.parse(templateImportText);
+      const d = await apiPost(`/v1/projects/${projectId}/template_package/import`, {
+        package: parsed,
+        merge: true,
+      });
+      setInfo(d?.applied || d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
   const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
 
   const variantScenes = plan?.variants?.[selectedVariant]?.scenes || [];
@@ -377,6 +417,13 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const analysisSummary = analysisSummaryText(analysis);
   const analysisSections = Array.isArray(analysis?.sections) ? analysis.sections : [];
   const analysisTags = Array.isArray(analysis?.tags) ? analysis.tags.map((tag: any) => String(tag || "").trim()).filter(Boolean) : [];
+  const musicGraphSections = Array.isArray(musicGraph?.sections) ? musicGraph.sections : [];
+  const musicGraphStems = Array.isArray(musicGraph?.stems) ? musicGraph.stems : [];
+  const musicGraphSemanticTags = Array.isArray(musicGraph?.semantics?.tags) ? musicGraph.semantics.tags : [];
+  const musicGraphBeatCount = Array.isArray(musicGraph?.beats) ? musicGraph.beats.length : 0;
+  const musicGraphLyricPreview = Array.isArray(musicGraph?.lyrics?.lines)
+    ? musicGraph.lyrics.lines.map((line: any) => String(line?.text || "").trim()).filter(Boolean).slice(0, 2).join(" • ")
+    : "";
   const analysisBpm = Number(analysisFeatures?.bpm || analysisFeatures?.tempo_bpm || analysisFeatures?.tempo || 0);
   const durationS = analysis?.features?.duration_s || analysis?.features?.duration || plan?.duration_s || 0;
   const refAssets = Array.isArray(assets?.refs) ? assets.refs : [];
@@ -633,6 +680,19 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
                   <div className="small workspace-timelineTickLabel">{t}s</div>
                 </div>
               ))}
+              {(musicGraphSections.length ? musicGraphSections : analysisSections).map((section: any, index: number) => {
+                const start = Number(section.start ?? section.start_s ?? 0);
+                return (
+                  <div
+                    key={`section-marker-${index}`}
+                    title={String(section.label || "section")}
+                    className="workspace-timelineTick"
+                    style={{ left: start * timelineZoom, opacity: 0.55 }}
+                  >
+                    <div className="workspace-timelineTickLine" style={{ borderColor: "var(--accent, #6ea8fe)" }} />
+                  </div>
+                );
+              })}
             </div>
             <div className="workspace-sceneStage">
               {variantScenes.map((sc: any, i: number) => {
@@ -726,6 +786,14 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
           <div className="workspace-stat">
             <span className="small">Live cues</span>
             <strong>{typeof liveCues?.event_count === "number" ? liveCues.event_count : (projectId ? "…" : "n/a")}</strong>
+          </div>
+          <div className="workspace-stat">
+            <span className="small">Live assets</span>
+            <strong>
+              {typeof liveAssets?.pack_count === "number"
+                ? `${liveAssets.pack_count} pack(s) • ${liveAssets.channel_count ?? 0} ch`
+                : (projectId ? "…" : "n/a")}
+            </strong>
           </div>
         </div>
       </div>
@@ -1005,9 +1073,69 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
               </div>
               <div className="workspace-handoffCard">
                 <div className="workspace-handoffLabel">Sections</div>
-                <strong>{analysisSections.length || 0}</strong>
+                <strong>{musicGraphSections.length || analysisSections.length || 0}</strong>
               </div>
             </div>
+            {musicGraph ? (
+              <div className="card" style={{ marginTop: 12, padding: 12 }}>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>Music Graph v1</div>
+                <div className="small" style={{ opacity: 0.85, marginBottom: 8 }}>
+                  Canonical analysis consumed by Director, Conductor, live cues, and timeline markers.
+                </div>
+                <div className="workspace-analysisGrid">
+                  <div className="workspace-handoffCard">
+                    <div className="workspace-handoffLabel">Beats</div>
+                    <strong>{musicGraphBeatCount}</strong>
+                  </div>
+                  <div className="workspace-handoffCard">
+                    <div className="workspace-handoffLabel">Stems</div>
+                    <strong>{musicGraphStems.length}</strong>
+                  </div>
+                  <div className="workspace-handoffCard">
+                    <div className="workspace-handoffLabel">Semantic tags</div>
+                    <strong>{musicGraphSemanticTags.length || analysisTags.length}</strong>
+                  </div>
+                  <div className="workspace-handoffCard">
+                    <div className="workspace-handoffLabel">ASR / lyrics</div>
+                    <strong>{musicGraph?.lyrics?.error ? "failed" : musicGraphLyricPreview ? "ready" : "optional"}</strong>
+                  </div>
+                </div>
+                {musicGraphSections.length ? (
+                  <div className="workspace-sceneList" style={{ marginTop: 10 }}>
+                    <div className="workspace-sectionTitle">Section markers</div>
+                    {musicGraphSections.slice(0, 8).map((section: any, index: number) => (
+                      <div key={`${section.label}-${index}`} className="workspace-sceneRow">
+                        <div className="row" style={{ justifyContent: "space-between" }}>
+                          <div style={{ fontWeight: 700 }}>{section.label || "section"}</div>
+                          <div className="small">
+                            {Number(section.start || 0).toFixed(1)}s → {Number(section.end || 0).toFixed(1)}s
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {musicGraphStems.length ? (
+                  <div className="workspace-chipRow" style={{ marginTop: 10 }}>
+                    {musicGraphStems.slice(0, 8).map((stem: any) => (
+                      <span key={stem.kind} className="badge">{stem.kind}</span>
+                    ))}
+                  </div>
+                ) : null}
+                {(musicGraphSemanticTags.length ? musicGraphSemanticTags : analysisTags.slice(0, 8).map((tag: string) => ({ tag, confidence: 0.55 }))).length ? (
+                  <div className="workspace-chipRow" style={{ marginTop: 10 }}>
+                    {(musicGraphSemanticTags.length ? musicGraphSemanticTags : analysisTags.slice(0, 8).map((tag: string) => ({ tag, confidence: 0.55 }))).slice(0, 8).map((item: any) => (
+                      <span key={item.tag} className="badge">
+                        {item.tag}{item.confidence ? ` (${Math.round(Number(item.confidence) * 100)}%)` : ""}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {musicGraphLyricPreview ? (
+                  <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>{musicGraphLyricPreview}</div>
+                ) : null}
+              </div>
+            ) : null}
             <details className="workspace-inlineDetails" open={analysisReady}>
               <summary>Analysis summary</summary>
               <div className="workspace-scrollPanel">
@@ -1142,6 +1270,28 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
               <button className="secondary" onClick={() => setWorkspaceView("storyboard")} disabled={!storyboardReady}>Open Storyboard</button>
               <button className="secondary" onClick={() => onNavigate?.("outputs")}>Outputs</button>
               <button className="secondary" onClick={() => onNavigate?.("queue")}>Render Queue</button>
+            </div>
+            <div className="card" style={{ marginTop: 12, padding: 12 }}>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Template packages (W6-04 preview)</div>
+              <div className="small" style={{ marginBottom: 8, opacity: 0.85 }}>
+                Export or import a versioned template manifest with Visual DNA, director mode, model references, and asset dependencies.
+              </div>
+              <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <button className="secondary" onClick={() => void exportTemplatePackage()} disabled={!projectId}>Export template</button>
+                <button className="secondary" onClick={() => void importTemplatePackage()} disabled={!projectId || !templateImportText.trim()}>Import template JSON</button>
+              </div>
+              {templatePackagePreview ? (
+                <div className="small" style={{ marginTop: 8 }}>
+                  Exported <b>{templatePackagePreview.package_id}</b> • models {Array.isArray(templatePackagePreview.models) ? templatePackagePreview.models.length : 0} • assets {Array.isArray(templatePackagePreview.assets) ? templatePackagePreview.assets.length : 0}
+                </div>
+              ) : null}
+              <textarea
+                className="small"
+                style={{ width: "100%", minHeight: 88, marginTop: 8 }}
+                placeholder='Paste template package JSON to import (schema_version=1)...'
+                value={templateImportText}
+                onChange={(event) => setTemplateImportText(event.target.value)}
+              />
             </div>
           </OverviewSection>
 

@@ -1006,6 +1006,8 @@ export default function Settings(props: PageProps) {
                       {check?.uv_version ? <> • uv <code>{check.uv_version}</code></> : null}
                       {check?.accelerator_profile ? <> • profile <b>{check.accelerator_profile}</b></> : null}
                       {check?.sync_health ? <> • sync <b>{check.sync_health}</b></> : null}
+                      {check?.lock_sha256 ? <> • lock <code>{String(check.lock_sha256).slice(0, 12)}…</code></> : null}
+                      {check?.immutable ? <> • bundled release manifest</> : null}
                     </>
                   ) : null}
                   {id === "gpu" ? (

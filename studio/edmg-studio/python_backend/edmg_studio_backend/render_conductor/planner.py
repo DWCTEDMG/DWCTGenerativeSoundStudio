@@ -5,6 +5,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ..domain.music_graph import music_graph_from_analysis, section_energy_at_time
+from ..domain.render_plan_v1 import enrich_render_plan
 from ..schemas import (
     AssemblyPlan,
     EngineKind,
@@ -97,9 +99,19 @@ def _resolve_variant(snapshot: ProjectSnapshot, variant_index: int) -> dict[str,
     return variant if isinstance(variant, dict) else {}
 
 
-def _analysis_sections(snapshot: ProjectSnapshot) -> list[dict[str, Any]]:
+def _music_graph(snapshot: ProjectSnapshot) -> dict[str, Any]:
     analysis = snapshot.analysis if isinstance(snapshot.analysis, dict) else {}
-    sections = analysis.get("sections")
+    audio = analysis.get("audio") if isinstance(analysis.get("audio"), dict) else {}
+    return music_graph_from_analysis(
+        analysis,
+        audio_filename=str(audio.get("filename") or "") or None,
+        duration_s=float(analysis.get("duration_s") or 0) or None,
+    )
+
+
+def _analysis_sections(snapshot: ProjectSnapshot) -> list[dict[str, Any]]:
+    graph = _music_graph(snapshot)
+    sections = graph.get("sections")
     if isinstance(sections, list):
         return [section for section in sections if isinstance(section, dict)]
     return []
@@ -114,10 +126,14 @@ def _scene_energy(scene: dict[str, Any], snapshot: ProjectSnapshot) -> float:
         if key in score:
             return _clamp_unit(score.get(key), 0.5)
     target_midpoint = ((float(scene.get("start_s") or 0.0) + float(scene.get("end_s") or 0.0)) / 2.0)
+    graph = _music_graph(snapshot)
+    graph_energy = section_energy_at_time(graph, target_midpoint, default=-1.0)
+    if graph_energy >= 0.0:
+        return _clamp_unit(graph_energy, 0.5)
     for section in _analysis_sections(snapshot):
         try:
-            section_start = float(section.get("start_s") or section.get("startTime") or 0.0)
-            section_end = float(section.get("end_s") or section.get("endTime") or section_start)
+            section_start = float(section.get("start") or section.get("start_s") or section.get("startTime") or 0.0)
+            section_end = float(section.get("end") or section.get("end_s") or section.get("endTime") or section_start)
         except Exception:
             continue
         if section_start <= target_midpoint <= max(section_start, section_end):
@@ -199,11 +215,17 @@ def _engine_score(
     dna: ProjectVisualDNA | None,
     engine_info: dict[str, Any],
     scene: dict[str, Any],
+    environment: dict[str, Any] | None = None,
 ) -> float:
     speed = float(intent.speed_priority)
     style_lock = float(intent.style_lock_strength)
     quality_bonus = (float(_quality_multiplier(intent)) - 1.0) * 0.12
     has_reference = bool(scene.get("reference_asset") or scene.get("source_asset"))
+    director_mode = str((environment or {}).get("director_mode") or "").strip().lower()
+    prompt = " ".join(str(scene.get(key) or "") for key in ("name", "prompt", "creative_goal")).lower()
+    performance_scene = director_mode == "performance" or any(
+        token in prompt for token in ("performer", "performance", "lip sync", "singer", "vocalist", "stage")
+    )
     base = 0.0
 
     if engine == "internal":
@@ -216,6 +238,8 @@ def _engine_score(
         base = 0.34 + hero_frame * 0.28 + style_lock * 0.12 + (0.18 if has_reference else 0.0) - motion_complexity * 0.24
     elif engine == "hosted_video":
         base = 0.3 + speed * 0.24 + motion_complexity * 0.18 + quality_bonus - style_lock * 0.08
+        if performance_scene:
+            base += 0.28
     elif engine == "proxy":
         base = 0.12 + speed * 0.1 - quality_bonus * 0.5
     elif engine == "deforum_export":
@@ -232,6 +256,12 @@ def _engine_score(
     )
     base += (float(engine_info.get("quality_score", 0.5)) - 0.5) * 0.1
     base += (float(engine_info.get("speed_score", 0.5)) - 0.5) * 0.06
+
+    if director_mode == "performance":
+        if engine == "hosted_video":
+            base += 0.22
+        elif engine == "internal":
+            base -= 0.12
 
     if not bool(engine_info.get("available", False)):
         return -1.0
@@ -400,6 +430,7 @@ def build_advisory_render_plan(
     intent_obj = intent if isinstance(intent, RenderIntent) else RenderIntent.model_validate(intent)
     snapshot_obj = snapshot if isinstance(snapshot, ProjectSnapshot) else ProjectSnapshot.model_validate(snapshot)
     dna = snapshot_obj.visual_dna
+    music_graph = _music_graph(snapshot_obj)
     variant = _resolve_variant(snapshot_obj, intent_obj.variant_index)
     scenes = [scene for scene in list(variant.get("scenes") or []) if isinstance(scene, dict)]
     engines = _environment_engines(environment, intent_obj)
@@ -433,6 +464,7 @@ def build_advisory_render_plan(
                 dna=dna,
                 engine_info=engines.get(engine, {"available": False}),
                 scene=scene,
+                environment=environment,
             )
             if score > chosen_score:
                 chosen_engine = engine
@@ -501,7 +533,15 @@ def build_advisory_render_plan(
         "advisory_only=true",
         f"allowed_engines={','.join(intent_obj.allowed_engines)}",
         f"available_engines={','.join(engine for engine, info in engines.items() if info.get('available'))}",
+        f"music_graph_schema={music_graph.get('schemaVersion') or 'unknown'}",
+        f"music_graph_sections={len(music_graph.get('sections') or [])}",
+        f"music_graph_beats={len(music_graph.get('beats') or [])}",
     ]
+    if isinstance(music_graph.get("semantics"), dict):
+        tag_count = len((music_graph.get("semantics") or {}).get("tags") or [])
+        diagnostics.append(f"music_graph_semantic_tags={tag_count}")
+    if environment and environment.get("director_mode"):
+        diagnostics.append(f"director_mode={environment.get('director_mode')}")
     if dna is not None:
         diagnostics.append(f"visual_dna_confidence={dna.learning_state.confidence:.2f}")
     assembly_path = (
@@ -513,7 +553,7 @@ def build_advisory_render_plan(
         f"Advisory render plan for {len(plans)} scenes. "
         f"Recommended engine mix: {engine_summary or 'none'}."
     )
-    return RenderPlan(
+    base_plan = RenderPlan(
         plan_id=f"plan-{uuid.uuid4().hex[:12]}",
         project_id=intent_obj.project_id,
         variant_index=int(intent_obj.variant_index),
@@ -528,6 +568,7 @@ def build_advisory_render_plan(
         fallback_branches=fallbacks,
         diagnostics=diagnostics,
     )
+    return enrich_render_plan(base_plan, intent=intent_obj, environment=environment)
 
 
 def promote_proxy_sections(
@@ -593,4 +634,13 @@ def promote_proxy_sections(
             "advisory_only": True,
         }
     )
-    return updated, promoted
+    enriched = enrich_render_plan(
+        updated,
+        intent={
+            "project_id": plan_obj.project_id,
+            "variant_index": plan_obj.variant_index,
+            "quality_tier": quality_tier,
+        },
+        environment=None,
+    )
+    return enriched, promoted

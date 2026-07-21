@@ -271,5 +271,23 @@ Invoke-Checked "pnpm run dist:win" {
 }
 Pop-Location
 
+Write-Host "[post] Optional code-signing hook (env-gated)..." -ForegroundColor Cyan
+$signScript = Join-Path $StudioDir "packaging/windows/sign_release.ps1"
+if (Test-Path $signScript) {
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $signScript -StudioDir $StudioDir
+  if ($LASTEXITCODE -ne 0) {
+    throw "sign_release.ps1 failed with exit code $LASTEXITCODE"
+  }
+}
+
+Write-Host "[post] Clean-machine smoke checklist..." -ForegroundColor Cyan
+$smokeScript = Join-Path $StudioDir "packaging/windows/smoke_clean_machine.ps1"
+if (Test-Path $smokeScript) {
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $smokeScript -StudioDir $StudioDir -SkipLaunchProbe
+  if ($LASTEXITCODE -ne 0) {
+    throw "smoke_clean_machine.ps1 failed with exit code $LASTEXITCODE"
+  }
+}
+
 Write-Host "Done. Final installer artifacts: studio/edmg-studio/dist/" -ForegroundColor Green
 Write-Host "Staged desktop app: studio/edmg-studio/release/staged-app/" -ForegroundColor Cyan

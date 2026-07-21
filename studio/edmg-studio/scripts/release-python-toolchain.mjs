@@ -118,6 +118,10 @@ export function uvRunArgs(profile, commandArgs) {
   ];
 }
 
+export function uvExportCycloneDxArgs(profile) {
+  return ["export", "--format", "cyclonedx1.5", "--frozen", "--no-default-groups", ...extraArgs(profile), "--group", "build"];
+}
+
 export function parseUvVersion(output) {
   const match = String(output ?? "").trim().match(/^uv\s+(\d+\.\d+\.\d+)(?:\s|$)/);
   if (!match) throw new Error(`Could not parse uv version output: ${JSON.stringify(String(output ?? "").trim())}`);
