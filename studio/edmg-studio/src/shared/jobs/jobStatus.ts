@@ -1,5 +1,6 @@
 export type JobStatus =
   | "queued"
+  | "paused"
   | "running"
   | "succeeded"
   | "failed"
@@ -29,6 +30,7 @@ export function normalizeJobStatus(status: unknown): JobStatus {
   const value = String(status || "queued").trim().toLowerCase();
   switch (value) {
     case "queued":
+    case "paused":
     case "running":
     case "succeeded":
     case "failed":
@@ -46,6 +48,8 @@ export function jobStatusLabel(status: unknown): string {
   switch (normalized) {
     case "queued":
       return "Queued";
+    case "paused":
+      return "Paused";
     case "running":
       return "Running";
     case "succeeded":
@@ -64,6 +68,8 @@ export function jobStatusTone(status: unknown): "neutral" | "active" | "ok" | "d
   switch (normalized) {
     case "queued":
       return "neutral";
+    case "paused":
+      return "warn";
     case "running":
       return "active";
     case "succeeded":
@@ -79,12 +85,29 @@ export function jobStatusTone(status: unknown): "neutral" | "active" | "ok" | "d
 
 export function canCancelJob(status: unknown): boolean {
   const normalized = normalizeJobStatus(status);
-  return normalized === "queued" || normalized === "running";
+  return normalized === "queued" || normalized === "paused" || normalized === "running";
+}
+
+export function canPauseJob(status: unknown): boolean {
+  return normalizeJobStatus(status) === "queued";
+}
+
+export function canResumeJob(status: unknown): boolean {
+  return normalizeJobStatus(status) === "paused";
+}
+
+export function isJobActive(status: unknown): boolean {
+  const normalized = normalizeJobStatus(status);
+  return normalized === "queued" || normalized === "paused" || normalized === "running";
 }
 
 export function canRetryJob(status: unknown): boolean {
   const normalized = normalizeJobStatus(status);
-  return normalized !== "running";
+  return normalized === "succeeded" || normalized === "failed" || normalized === "canceled";
+}
+
+export function canUseCheckpointRecovery(status: unknown): boolean {
+  return !isJobActive(status);
 }
 
 export function jobRecoveryHint(job: StudioJob): string | null {
@@ -94,6 +117,9 @@ export function jobRecoveryHint(job: StudioJob): string | null {
   }
   if (status === "canceled") {
     return "Canceled — retry to re-queue, or resume from checkpoint when available.";
+  }
+  if (status === "paused") {
+    return "Paused before execution — resume to return this job to the queue.";
   }
   if (status === "running" && job.progress?.message) {
     return String(job.progress.message);

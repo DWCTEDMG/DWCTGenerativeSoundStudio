@@ -6427,6 +6427,39 @@ def cancel_job(project_id: str, job_id: str):
         raise HTTPException(404, "Job not found")
     return {"ok": True, "job": job.__dict__}
 
+
+@app.post("/v1/projects/{project_id}/jobs/{job_id}/pause")
+def pause_job(project_id: str, job_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    current = jobs.get(project_id, job_id)
+    if not current:
+        raise HTTPException(404, "Job not found")
+    if current.status != "queued":
+        raise HTTPException(409, "Only queued jobs can be paused")
+    job = jobs.pause(project_id, job_id)
+    if not job or job.status != "paused":
+        raise HTTPException(409, "Job could not be paused because its state changed")
+    return {"ok": True, "job": job.__dict__}
+
+
+@app.post("/v1/projects/{project_id}/jobs/{job_id}/resume")
+def resume_job(project_id: str, job_id: str):
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    current = jobs.get(project_id, job_id)
+    if not current:
+        raise HTTPException(404, "Job not found")
+    if current.status != "paused":
+        raise HTTPException(409, "Only paused jobs can be resumed")
+    job = jobs.resume(project_id, job_id)
+    if not job or job.status != "queued":
+        raise HTTPException(409, "Job could not be resumed because its state changed")
+    return {"ok": True, "job": job.__dict__}
+
+
 @app.post("/v1/projects/{project_id}/jobs/{job_id}/retry")
 def retry_job(project_id: str, job_id: str):
     proj = store.get(project_id)
@@ -6448,8 +6481,8 @@ def resume_internal_job(project_id: str, job_id: str):
         raise HTTPException(404, "Job not found")
     if source_job.type != "internal_video":
         raise HTTPException(400, "Resume from checkpoint is only available for internal render jobs")
-    if source_job.status in ("queued", "running"):
-        raise HTTPException(409, "Job is still active. Cancel it before resuming from checkpoint.")
+    if source_job.status in ("queued", "paused", "running"):
+        raise HTTPException(409, "Job is still active. Resume or cancel it before resuming from checkpoint.")
     return _enqueue_internal_job_from_source(project_id, source_job, resume_existing_frames=True, queue_action="resume_from_checkpoint")
 
 
@@ -6463,8 +6496,8 @@ def restart_internal_job_clean(project_id: str, job_id: str):
         raise HTTPException(404, "Job not found")
     if source_job.type != "internal_video":
         raise HTTPException(400, "Clean restart is only available for internal render jobs")
-    if source_job.status in ("queued", "running"):
-        raise HTTPException(409, "Job is still active. Cancel it before starting a clean restart.")
+    if source_job.status in ("queued", "paused", "running"):
+        raise HTTPException(409, "Job is still active. Resume or cancel it before starting a clean restart.")
     return _enqueue_internal_job_from_source(project_id, source_job, resume_existing_frames=False, queue_action="restart_clean")
 
 
@@ -12287,7 +12320,7 @@ def list_outputs(project_id: str):
     active_internal_jobs = [
         j.__dict__
         for j in project_jobs
-        if j.type == "internal_video" and j.status in ("queued", "running", "canceled", "failed")
+        if j.type == "internal_video" and j.status in ("queued", "paused", "running", "canceled", "failed")
     ][:8]
     return {
         "images": imgs,

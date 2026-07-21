@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
-Status = Literal["queued", "running", "succeeded", "failed", "canceled"]
+Status = Literal["queued", "paused", "running", "succeeded", "failed", "canceled"]
 
 # Renamed aside when a project tree is unreadable (e.g. WinError 1392 on USB).
 _CORRUPTED_QUARANTINE_SUFFIX = ".__corrupted_quarantine"
@@ -382,6 +382,66 @@ class JobStore:
         self.save(job)
         self.append_log(project_id, job_id, "Job canceled")
         return job
+
+    def _transition_status(
+        self,
+        project_id: str,
+        job_id: str,
+        *,
+        expected_status: Status,
+        next_status: Status,
+        event_type: str,
+    ) -> Job | None:
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                UPDATE jobs
+                SET status = ?,
+                    updated_at = ?,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL
+                WHERE project_id = ? AND id = ? AND status = ?
+                """,
+                (next_status, self._now(), project_id, job_id, expected_status),
+            )
+            transitioned = cursor.rowcount == 1
+            row = self._conn.execute(
+                "SELECT * FROM jobs WHERE project_id = ? AND id = ?",
+                (project_id, job_id),
+            ).fetchone()
+            if row is None:
+                self._conn.commit()
+                return None
+            if transitioned:
+                self._record_event(
+                    project_id,
+                    job_id,
+                    event_type,
+                    {"from_status": expected_status, "to_status": next_status},
+                )
+            self._conn.commit()
+            job = self._row_to_job(row)
+        if transitioned:
+            self._mirror_json(job)
+        return job
+
+    def pause(self, project_id: str, job_id: str) -> Job | None:
+        return self._transition_status(
+            project_id,
+            job_id,
+            expected_status="queued",
+            next_status="paused",
+            event_type="paused",
+        )
+
+    def resume(self, project_id: str, job_id: str) -> Job | None:
+        return self._transition_status(
+            project_id,
+            job_id,
+            expected_status="paused",
+            next_status="queued",
+            event_type="resumed",
+        )
 
     def retry(self, project_id: str, job_id: str) -> Job | None:
         job = self.get(project_id, job_id)

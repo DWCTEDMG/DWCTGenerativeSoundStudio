@@ -7,6 +7,10 @@ import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import { copyPathValue, desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StructuredSummary } from "../components/StructuredSummary";
+import { JobActionButtons } from "../shared/jobs/JobActionButtons";
+import { postQueueJobAction, type QueueJobAction } from "../shared/jobs/jobActions";
+import { JobStatusChip } from "../shared/jobs/JobStatusChip";
+import { isJobActive, jobRecoveryHint, type StudioJob } from "../shared/jobs/jobStatus";
 import type { PageProps } from "../types/pageProps";
 
 type CatalogEntry = {
@@ -308,6 +312,12 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [latestInternalDetail, setLatestInternalDetail] = useState<any>(null);
   const [latestInternalLog, setLatestInternalLog] = useState<string>("");
   const [internalPolling, setInternalPolling] = useState<boolean>(true);
+  const latestInternalProgressMessage = latestInternalJob?.progress?.message
+    ? String(latestInternalJob.progress.message)
+    : null;
+  const latestInternalRecoveryHint = latestInternalJob
+    ? jobRecoveryHint(latestInternalJob as StudioJob)
+    : null;
   const [codexStatus, setCodexStatus] = useState<any>(null);
   const [codexReview, setCodexReview] = useState<any>(null);
   const [codexBusy, setCodexBusy] = useState<boolean>(false);
@@ -1146,23 +1156,11 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
-  const cancelLatestInternal = async () => {
+  const runLatestInternalJobAction = async (action: QueueJobAction) => {
     if (!projectId || !latestInternalJob?.id) return;
     setErr(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/cancel`, {});
-      setInfo(d);
-      await refreshInternalStatus();
-    } catch (e: any) {
-      setErr(String(e));
-    }
-  };
-
-  const retryLatestInternal = async () => {
-    if (!projectId || !latestInternalJob?.id) return;
-    setErr(null);
-    try {
-      const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/retry`, {});
+      const d = await postQueueJobAction(latestInternalJob as StudioJob, action);
       setInfo(d);
       await refreshInternalStatus();
       await refreshInternalPreflight();
@@ -1172,7 +1170,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   };
 
 
-  const resumeLatestInternal = async () => {
+  const resumeLatestInternalFromCheckpoint = async () => {
     if (!projectId || !latestInternalJob?.id) return;
     setErr(null);
     try {
@@ -2286,13 +2284,16 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   {latestInternalJob ? (
                     <div>
                       <div className="small">
-                        Status: <b>{latestInternalJob.status}</b>
+                        Status: <JobStatusChip status={latestInternalJob.status} />
                         {latestInternalJob?.progress?.percent != null ? <> • {latestInternalJob.progress.percent}%</> : null}
                         {latestInternalJob?.progress?.stage ? <> • {latestInternalJob.progress.stage}</> : null}
                         {latestInternalDetail?.job?.progress?.queue_action ? <> • action <b>{latestInternalDetail.job.progress.queue_action}</b></> : null}
                       </div>
-                      {latestInternalJob?.progress?.message ? (
-                        <div className="small" style={{ marginTop: 4 }}>{latestInternalJob.progress.message}</div>
+                      {latestInternalProgressMessage ? (
+                        <div className="small" style={{ marginTop: 4 }}>{latestInternalProgressMessage}</div>
+                      ) : null}
+                      {latestInternalRecoveryHint && latestInternalRecoveryHint !== latestInternalProgressMessage ? (
+                        <div className="small" style={{ marginTop: 4 }}>{latestInternalRecoveryHint}</div>
                       ) : null}
                       {latestInternalDetail?.runtime_checkpoint ? (
                         <>
@@ -2310,19 +2311,15 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                         </>
                       ) : null}
                       <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                        {(latestInternalJob.status === "queued" || latestInternalJob.status === "running") ? (
-                          <button className="secondary" onClick={cancelLatestInternal}>Cancel latest internal job</button>
-                        ) : null}
-                        {(latestInternalJob.status === "failed" || latestInternalJob.status === "canceled") ? (
-                          <>
-                            <button className="secondary" onClick={retryLatestInternal}>Retry latest job</button>
-                            <button className="secondary" onClick={resumeLatestInternal}>Resume from checkpoint</button>
-                            <button className="secondary" onClick={restartLatestInternalClean}>Restart clean</button>
-                          </>
-                        ) : null}
+                        <JobActionButtons
+                          job={latestInternalJob as StudioJob}
+                          onAction={runLatestInternalJobAction}
+                          onResumeFromCheckpoint={resumeLatestInternalFromCheckpoint}
+                          onRestartClean={restartLatestInternalClean}
+                        />
                         <button className="secondary" onClick={applyLatestInternalSettings}>Use latest job settings</button>
-                        <button className="secondary" onClick={clearLatestInternalCachedFrames} disabled={latestInternalJob.status === "queued" || latestInternalJob.status === "running"}>Clear cached frames</button>
-                        <button className="secondary" onClick={dropLatestInternalCheckpoint} disabled={latestInternalJob.status === "queued" || latestInternalJob.status === "running"}>Drop checkpoint</button>
+                        <button className="secondary" onClick={clearLatestInternalCachedFrames} disabled={isJobActive(latestInternalJob.status)}>Clear cached frames</button>
+                        <button className="secondary" onClick={dropLatestInternalCheckpoint} disabled={isJobActive(latestInternalJob.status)}>Drop checkpoint</button>
                         {latestInternalVideoUrl ? (
                           <a className="secondary" href={latestInternalVideoUrl} target="_blank" rel="noreferrer">Open latest video</a>
                         ) : null}

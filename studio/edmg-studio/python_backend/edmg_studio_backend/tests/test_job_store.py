@@ -69,6 +69,29 @@ def test_job_store_cancel_retry_and_progress(tmp_path: Path) -> None:
     store.close()
 
 
+def test_job_store_pauses_queued_work_without_letting_a_worker_claim_it(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "projects", db_path=tmp_path / "jobs.sqlite")
+    job = store.create("proj4", "internal_video", {})
+
+    paused = store.pause("proj4", job.id)
+    assert paused is not None
+    assert paused.status == "paused"
+    assert store.claim_next_queued() is None
+
+    resumed = store.resume("proj4", job.id)
+    assert resumed is not None
+    assert resumed.status == "queued"
+    claimed = store.claim_next_queued(owner="worker-1")
+    assert claimed is not None
+    assert claimed.id == job.id
+    assert claimed.status == "running"
+
+    event_types = [event["event_type"] for event in store.list_events("proj4", job.id)]
+    assert "paused" in event_types
+    assert "resumed" in event_types
+    store.close()
+
+
 def test_job_store_migrate_skips_unreadable_project_dirs(tmp_path: Path) -> None:
     """WinError 1392-style OSError on jobs_dir.exists() must not crash JobStore init."""
     projects = tmp_path / "projects"
