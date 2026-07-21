@@ -47,6 +47,20 @@ driver and locally installed model weights.
 - managed cloud notebooks such as Lightning may already provide a writable
   Python/conda environment and may not allow project-local virtualenv creation
 
+## Core audio and visual direction
+
+The packaged Linux backend applies the same core capability pipeline as the
+Windows desktop build:
+
+- Every audio analysis records multitrack metadata. A normal single audio file
+  uses the `mixed` track fallback, so no optional separator is required.
+- Every generated or imported plan receives Studio style direction. A recognized
+  style preference is used when supplied; otherwise Studio uses the
+  `cinematic` baseline.
+- `EDMG_DEV_PROFILING=true` records lightweight analysis-stage timings in the
+  project diagnostics. It is a development-only setting and is disabled by
+  default in the environment template.
+
 ## First-run notes
 
 1. Mark the AppImage executable if needed: `chmod +x EDMG-Studio*.AppImage`

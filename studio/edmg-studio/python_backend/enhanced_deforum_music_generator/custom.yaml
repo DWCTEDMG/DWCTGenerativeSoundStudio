@@ -47,8 +47,6 @@ cloud:
   endpoint_url: null
 
 advanced:
-  enable_multitrack: false
-  enable_style_transfer: false
   enable_preview: true
   enable_cloud_storage: false
   enable_batch_processing: false

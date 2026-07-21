@@ -161,6 +161,11 @@ from .services.workbench_bridge import (
     planner_lab_to_canonical_plan,
     planner_lab_to_project_analysis,
 )
+from .services.core_capabilities import (
+    apply_core_style_direction,
+    development_timing,
+    enrich_with_multitrack_defaults,
+)
 from .services.unreal_bridge_consumer import (
     build_unreal_sequence_import_plan,
     write_unreal_sequence_import_plan,
@@ -3859,7 +3864,9 @@ def analyze_audio(project_id: str):
         raise HTTPException(400, "No audio uploaded")
     audio_path = store.project_dir(project_id) / "assets" / "audio" / audio_meta["filename"]
 
-    feats = _collect_audio_analysis_features(audio_path)
+    development_timings_ms: dict[str, float] = {}
+    with development_timing("audio_analysis", development_timings_ms):
+        feats = _collect_audio_analysis_features(audio_path)
     try:
         asr_cfg = transcription_settings.get()
         transcription_audio_path, separation_meta = _prepare_transcription_audio(
@@ -3893,10 +3900,14 @@ def analyze_audio(project_id: str):
     except Exception as e:
         trans = {"error": f"transcribe failed: {e}"}
 
-    analysis = _enrich_project_audio_analysis(
-        getattr(proj, "name", "Untitled project"),
-        {"features": feats, "transcript": trans, "timestamp": time.time()},
-    )
+    with development_timing("analysis_enrichment", development_timings_ms):
+        analysis = _enrich_project_audio_analysis(
+            getattr(proj, "name", "Untitled project"),
+            {"features": feats, "transcript": trans, "timestamp": time.time()},
+        )
+        analysis = enrich_with_multitrack_defaults(analysis)
+    if development_timings_ms:
+        analysis["development_diagnostics"] = {"stage_timings_ms": development_timings_ms}
     duration_s = _analysis_duration_s(analysis)
     if duration_s:
         analysis["duration_s"] = float(duration_s)
@@ -6203,6 +6214,7 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
             duration_s_hint=duration_hint,
         )
         plan = _enrich_normalized_plan(plan, analysis if isinstance(analysis, dict) else {})
+        plan = apply_core_style_direction(plan, req.style_prefs)
 
     proj.meta["last_plan"] = plan
     store.save(proj)
@@ -6290,7 +6302,9 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
 
     imported_analysis = planner_lab_to_project_analysis(req.analysis)
     if imported_analysis:
-        proj.meta["analysis"] = _merge_imported_analysis(proj.meta.get("analysis"), imported_analysis)
+        proj.meta["analysis"] = enrich_with_multitrack_defaults(
+            _merge_imported_analysis(proj.meta.get("analysis"), imported_analysis)
+        )
 
     imported_plan = planner_lab_to_canonical_plan(req.analysis, req.plan, req.settings)
     scene_counts = [
@@ -6303,6 +6317,10 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
         requested_variants=max(1, len(imported_plan.get("variants") or [])),
         requested_max_scenes=max(scene_counts or [1]),
         duration_s_hint=_project_duration_hint_s(proj, analysis=proj.meta.get("analysis") or imported_analysis),
+    )
+    normalized_plan = apply_core_style_direction(
+        normalized_plan,
+        str((req.settings or {}).get("promptStyle") or ""),
     )
     proj.meta["last_plan"] = normalized_plan
     proj.meta["last_planner_lab"] = {
