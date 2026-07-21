@@ -1328,7 +1328,7 @@ Codex should create or update an ADR when a task changes:
 
 These form the dependency-critical queue for the integration captain. They are not a scope boundary: the creative-intelligence, model, live/world, quality, documentation, and release lanes begin in parallel according to the seven-day schedule.
 
-**Execution status on `codex/uv-integration` (2026-07-21):**
+**Execution status on `codex/uv-integration` (2026-07-21, re-audited):**
 
 | WP | Status | Notes |
 |---|---|---|
@@ -1353,6 +1353,8 @@ Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`
 | P2-05 Understand | Partial | Workspace `UnderstandPanel`; dedicated route + editable corrections pending |
 | P0-06 / W7-04 metrics | Stub | `/v1/metrics/baseline` + Settings UI; named-hardware timing evidence pending |
 | W7-05 beta handoff | Blocked | Signing creds, clean VM installer proof, GPU benchmark evidence, full e2e matrix |
+
+**Verification on this audit (2026-07-21):** backend pytest **240 passed**; frontend `typecheck` + `test:ui` **86 passed**. Router store lookup fixed so extracted project routes honor test/runtime `store` monkeypatches. Blueprint acceptance gates (signed installer, GPU benchmarks, full Electron e2e, named-hardware W7-04) remain open.
 
 1. **WP-01 / P0-01:** repair FFmpeg provisioning in CI and make the four failing tests diagnostic when FFmpeg is absent.
 2. **WP-02 / P0-04:** add one shared system-readiness service and surface its result in Settings/System.

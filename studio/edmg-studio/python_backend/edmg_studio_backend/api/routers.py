@@ -57,40 +57,44 @@ def create_system_router(
 
 def create_project_router(
     *,
-    store: ProjectStore,
+    get_store: Callable[[], ProjectStore],
     project_response: Callable[[Any], dict[str, Any]],
     assess_health: Callable[..., dict[str, Any]],
 ) -> APIRouter:
     """Core project + durability routes extracted from the monolith for WP-09."""
+
+    def store() -> ProjectStore:
+        return get_store()
+
     router = APIRouter(tags=["projects"])
 
     @router.get("/v1/projects")
     def list_projects() -> dict[str, Any]:
-        return {"projects": [p.__dict__ for p in store.list()]}
+        return {"projects": [p.__dict__ for p in store().list()]}
 
     @router.post("/v1/projects")
     def create_project(req: ProjectCreateRequest) -> dict[str, Any]:
-        proj = store.create(req.name)
+        proj = store().create(req.name)
         return project_response(proj)
 
     @router.get("/v1/projects/{project_id}")
     def get_project(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         return project_response(proj)
 
     @router.get("/v1/projects/{project_id}/health")
     def get_project_health(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        report = assess_health(store.project_dir(project_id), proj.meta)
+        report = assess_health(store().project_dir(project_id), proj.meta)
         return {"ok": True, "health": report}
 
     @router.get("/v1/projects/{project_id}/music_graph")
     def get_project_music_graph(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -105,7 +109,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/live_assets")
     def get_project_live_assets(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -116,7 +120,7 @@ def create_project_router(
             audio_filename=str(audio.get("filename") or "") or None,
             duration_s=float(audio.get("duration_s") or 0) or None,
         )
-        review = collect_variant_review(store.project_dir(project_id), meta)
+        review = collect_variant_review(store().project_dir(project_id), meta)
         assets = compile_live_assets(
             variant_review=review,
             stem_modulation=meta.get("stem_modulation") if isinstance(meta.get("stem_modulation"), dict) else {},
@@ -126,7 +130,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/live_assets/modulation")
     def post_project_live_asset_modulation(project_id: str, req: LiveAssetModulationRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -137,7 +141,7 @@ def create_project_router(
             audio_filename=str(audio.get("filename") or "") or None,
             duration_s=float(audio.get("duration_s") or 0) or None,
         )
-        review = collect_variant_review(store.project_dir(project_id), meta)
+        review = collect_variant_review(store().project_dir(project_id), meta)
         assets = compile_live_assets(
             variant_review=review,
             stem_modulation=meta.get("stem_modulation") if isinstance(meta.get("stem_modulation"), dict) else {},
@@ -152,7 +156,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/live_cues")
     def get_project_live_cues(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -168,7 +172,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/live_cues/publish/start")
     def start_project_live_cue_publish(project_id: str, req: LiveCuePublishRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -193,21 +197,21 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/live_cues/publish/stop")
     def stop_project_live_cue_publish(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         return {"ok": True, "publish": stop_live_publish(project_id)}
 
     @router.get("/v1/projects/{project_id}/live_cues/publish/status")
     def get_project_live_cue_publish_status(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         return {"ok": True, "publish": publish_status(project_id)}
 
     @router.post("/v1/projects/{project_id}/world_adapters/export")
     def export_project_world_adapter(project_id: str, req: WorldAdapterExportRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -231,20 +235,20 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/variant_review")
     def get_project_variant_review(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        review = collect_variant_review(store.project_dir(project_id), proj.meta)
+        review = collect_variant_review(store().project_dir(project_id), proj.meta)
         return {"ok": True, "variant_review": review}
 
     @router.post("/v1/projects/{project_id}/variant_review/decision")
     def post_project_variant_review_decision(project_id: str, req: VariantReviewDecisionRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         try:
             result = apply_variant_review_decision(
-                store.project_dir(project_id),
+                store().project_dir(project_id),
                 artifact_path=req.artifact_path,
                 decision=req.decision,
                 notes=req.notes,
@@ -253,12 +257,12 @@ def create_project_router(
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        review = collect_variant_review(store.project_dir(project_id), proj.meta)
+        review = collect_variant_review(store().project_dir(project_id), proj.meta)
         return {"ok": True, **result, "variant_review": review}
 
     @router.get("/v1/projects/{project_id}/render/conductor/plan")
     def get_project_render_conductor_plan(project_id: str, variant_index: int = 0) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -279,7 +283,7 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/template_package/export")
     def export_project_template_package(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         package = export_template_package(
@@ -291,7 +295,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/template_package/import")
     def import_project_template_package(project_id: str, req: TemplatePackageImportRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         try:
@@ -304,12 +308,12 @@ def create_project_router(
         else:
             for key, value in patch.items():
                 proj.meta[key] = value
-        store.save(proj)
+        store().save(proj)
         return {"ok": True, "applied": applied, "project": project_response(proj)}
 
     @router.get("/v1/projects/{project_id}/render/conductor/continuity")
     def get_project_render_continuity(project_id: str, variant_index: int = 0) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -325,32 +329,32 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/timeline")
     def get_timeline(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         return {"ok": True, "timeline": proj.meta.get("timeline") or {"layers": []}}
 
     @router.post("/v1/projects/{project_id}/timeline")
     def set_timeline(project_id: str, req: TimelineUpdateRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         proj.meta["timeline"] = req.timeline or {"layers": []}
-        journal = AutosaveJournal(store.project_dir(project_id))
+        journal = AutosaveJournal(store().project_dir(project_id))
         journal.write_journal(
             project_id=project_id,
             meta=proj.meta,
             reason="timeline_save",
             dirty=True,
         )
-        store.save(proj)
+        store().save(proj)
         journal.write_snapshot(project_id=project_id, meta=proj.meta, reason="timeline_save")
         journal.mark_clean()
         return {"ok": True, "timeline": proj.meta["timeline"]}
 
     @router.post("/v1/projects/{project_id}/motion_grammar/apply")
     def apply_motion_grammar(project_id: str, req: MotionPhrasesApplyRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         try:
@@ -362,12 +366,12 @@ def create_project_router(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         proj.meta["timeline"] = next_timeline
-        store.save(proj)
+        store().save(proj)
         return {"ok": True, "timeline": next_timeline}
 
     @router.get("/v1/projects/{project_id}/stem_modulation")
     def get_stem_modulation(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         matrix = normalize_modulation_matrix(proj.meta.get("stem_modulation"))
@@ -375,7 +379,7 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/stem_modulation")
     def update_stem_modulation(project_id: str, req: StemModulationUpdateRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         matrix = normalize_modulation_matrix(req.matrix or proj.meta.get("stem_modulation"))
@@ -384,12 +388,12 @@ def create_project_router(
         if req.scale_lane_id is not None and req.scale is not None:
             matrix = scale_lane(matrix, req.scale_lane_id, float(req.scale))
         proj.meta["stem_modulation"] = matrix
-        store.save(proj)
+        store().save(proj)
         return {"ok": True, "matrix": matrix}
 
     @router.post("/v1/projects/{project_id}/autosave")
     def autosave_project(project_id: str, req: AutosaveRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
@@ -397,7 +401,7 @@ def create_project_router(
             meta.update(req.meta)
         if req.timeline is not None:
             meta["timeline"] = req.timeline or {"layers": []}
-        journal = AutosaveJournal(store.project_dir(project_id))
+        journal = AutosaveJournal(store().project_dir(project_id))
         payload = journal.write_journal(
             project_id=project_id,
             meta=meta,
@@ -415,10 +419,10 @@ def create_project_router(
 
     @router.get("/v1/projects/{project_id}/recovery")
     def get_project_recovery(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        journal = AutosaveJournal(store.project_dir(project_id))
+        journal = AutosaveJournal(store().project_dir(project_id))
         candidates = journal.list_recovery_candidates()
         return {
             "ok": True,
@@ -436,10 +440,10 @@ def create_project_router(
 
     @router.post("/v1/projects/{project_id}/recovery/apply")
     def apply_project_recovery(project_id: str, req: RecoveryApplyRequest) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        journal = AutosaveJournal(store.project_dir(project_id))
+        journal = AutosaveJournal(store().project_dir(project_id))
         source = str(req.source or "journal").strip().lower()
         payload: dict[str, Any] | None = None
         if source == "journal":
@@ -465,17 +469,17 @@ def create_project_router(
         if not isinstance(payload, dict) or not isinstance(payload.get("meta"), dict):
             raise HTTPException(404, "No valid recovery payload found")
         proj.meta = dict(payload["meta"])
-        store.save(proj)
+        store().save(proj)
         journal.write_snapshot(project_id=project_id, meta=proj.meta, reason="recovery_applied")
         journal.mark_clean()
         return {"ok": True, "project": proj.__dict__, "recovered_from": source}
 
     @router.post("/v1/projects/{project_id}/recovery/discard")
     def discard_project_recovery(project_id: str) -> dict[str, Any]:
-        proj = store.get(project_id)
+        proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        journal = AutosaveJournal(store.project_dir(project_id))
+        journal = AutosaveJournal(store().project_dir(project_id))
         journal.mark_clean()
         return {"ok": True, "discarded": True}
 

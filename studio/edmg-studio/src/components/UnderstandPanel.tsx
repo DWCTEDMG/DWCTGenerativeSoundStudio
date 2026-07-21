@@ -1,10 +1,10 @@
 import React from "react";
-import type { MusicGraphV1 } from "../shared/api/contracts";
+import type { MusicGraphSection, MusicGraphV1 } from "../shared/api/contracts";
 
 type UnderstandPanelProps = {
   musicGraph: MusicGraphV1 | null;
   analysisTags?: string[];
-  analysisSections?: Array<{ label?: string; start?: number; end?: number; energy?: number }>;
+  analysisSections?: MusicGraphSection[];
   compact?: boolean;
 };
 

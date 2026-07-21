@@ -12,7 +12,7 @@ def _client_for_store(tmp_path) -> tuple[TestClient, ProjectStore]:
     app = FastAPI()
     app.include_router(
         create_project_router(
-            store=store,
+            get_store=lambda: store,
             project_response=lambda proj: {"project": proj.__dict__},
             assess_health=lambda _pdir, _meta: {"ok": True, "status": "ok"},
         )
