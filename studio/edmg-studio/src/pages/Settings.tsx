@@ -355,6 +355,7 @@ export default function Settings(props: PageProps) {
   const [secrets, setSecrets] = useState<any>(null);
   const [hardware, setHardware] = useState<any>(null);
   const [systemReadiness, setSystemReadiness] = useState<any>(null);
+  const [baselineMetrics, setBaselineMetrics] = useState<any>(null);
   const [renderProfiles, setRenderProfiles] = useState<any>(null);
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [renderProviderDraft, setRenderProviderDraft] = useState<any>(null);
@@ -436,6 +437,7 @@ export default function Settings(props: PageProps) {
     apiGet("/v1/settings/secrets/status").then(setSecrets).catch(() => {});
     apiGet("/v1/hardware").then(setHardware).catch(() => {});
     apiGet("/v1/system/readiness").then(setSystemReadiness).catch(() => {});
+    apiGet("/v1/metrics/baseline").then(setBaselineMetrics).catch(() => {});
     apiGet("/v1/settings/render_profiles").then(setRenderProfiles).catch(() => {});
     apiGet("/v1/settings/render_providers").then((d) => {
       setRenderProviders(d);
@@ -968,6 +970,7 @@ export default function Settings(props: PageProps) {
             className="secondary"
             onClick={() => {
               apiGet("/v1/system/readiness").then(setSystemReadiness).catch(() => {});
+              apiGet("/v1/metrics/baseline").then(setBaselineMetrics).catch(() => {});
             }}
           >
             Refresh
@@ -1053,6 +1056,56 @@ export default function Settings(props: PageProps) {
         ) : (
           <div className="small" style={{ opacity: 0.75 }}>Loading system readiness…</div>
         )}
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--line)" }}>
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>Baseline metrics (read-only stub)</div>
+          <div className="small" style={{ marginBottom: 10, opacity: 0.88 }}>
+            Advisory launch, project, timeline, analysis, and render-plan budgets until W7-04 named-hardware evidence lands.
+          </div>
+          {baselineMetrics ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              {baselineMetrics.note ? (
+                <div className="small" style={{ opacity: 0.82 }}>{baselineMetrics.note}</div>
+              ) : null}
+              {baselineMetrics.hardware ? (
+                <div className="small">
+                  Host <code>{String(baselineMetrics.hardware.host || "unknown")}</code>
+                  {baselineMetrics.hardware.device_name ? (
+                    <> • GPU <b>{String(baselineMetrics.hardware.device_name)}</b></>
+                  ) : null}
+                  {baselineMetrics.collected_at ? (
+                    <span style={{ opacity: 0.75 }}> • collected {baselineMetrics.collected_at}</span>
+                  ) : null}
+                </div>
+              ) : null}
+              {Object.entries(baselineMetrics.samples || {}).map(([operation, sample]: any) => (
+                <div key={operation} style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 10 }}>
+                  <div className="row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 700 }}>{operation.replaceAll("_", " ")}</div>
+                    <div className="small">
+                      {sample?.count ? (
+                        <>
+                          last <b>{sample.last_ms} ms</b>
+                          {typeof sample.budget_ms === "number" ? (
+                            <> / budget {sample.budget_ms} ms</>
+                          ) : null}
+                          {typeof sample.within_budget === "boolean" ? (
+                            <> • <b style={{ color: sample.within_budget ? "green" : "#c90" }}>
+                              {sample.within_budget ? "within budget" : "over budget"}
+                            </b></>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>no samples yet{typeof sample?.budget_ms === "number" ? ` • budget ${sample.budget_ms} ms` : ""}</>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="small" style={{ opacity: 0.75 }}>Loading baseline metrics…</div>
+          )}
+        </div>
       </div>
     ),
     desktopBackend: (

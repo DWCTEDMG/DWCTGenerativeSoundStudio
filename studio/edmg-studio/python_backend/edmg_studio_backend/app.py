@@ -203,6 +203,7 @@ from .services.setup_wizard import (
     resolve_setup_accelerator_profile,
 )
 from .services.system_readiness import assess_system_readiness
+from .services.baseline_metrics import collect_baseline_metrics
 from .services.project_health import assess_project_health, collect_project_bundle, suggest_relinks
 from .uv_toolchain import ToolchainError
 
@@ -2361,6 +2362,11 @@ def _system_readiness_report() -> dict[str, Any]:
         check_runtime=check_backend_bundle,
         hardware_profile=_hardware_profile,
     )
+
+
+def _baseline_metrics_report() -> dict[str, Any]:
+    """Read-only baseline timing counters for Settings (P0-06 stub)."""
+    return collect_baseline_metrics(hardware_probe=_hardware_profile)
 
 
 def _proxy_renders_enabled(payload: dict[str, Any] | None = None) -> bool:
@@ -5883,7 +5889,10 @@ def _project_response_payload(proj: Any) -> dict[str, Any]:
     }
 
 
-app.include_router(create_system_router(readiness_report=_system_readiness_report))
+app.include_router(create_system_router(
+    readiness_report=_system_readiness_report,
+    baseline_metrics=_baseline_metrics_report,
+))
 app.include_router(
     create_project_router(
         store=store,

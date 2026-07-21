@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import UnderstandPanel from "../components/UnderstandPanel";
 import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
@@ -418,12 +419,6 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const analysisSections = Array.isArray(analysis?.sections) ? analysis.sections : [];
   const analysisTags = Array.isArray(analysis?.tags) ? analysis.tags.map((tag: any) => String(tag || "").trim()).filter(Boolean) : [];
   const musicGraphSections = Array.isArray(musicGraph?.sections) ? musicGraph.sections : [];
-  const musicGraphStems = Array.isArray(musicGraph?.stems) ? musicGraph.stems : [];
-  const musicGraphSemanticTags = Array.isArray(musicGraph?.semantics?.tags) ? musicGraph.semantics.tags : [];
-  const musicGraphBeatCount = Array.isArray(musicGraph?.beats) ? musicGraph.beats.length : 0;
-  const musicGraphLyricPreview = Array.isArray(musicGraph?.lyrics?.lines)
-    ? musicGraph.lyrics.lines.map((line: any) => String(line?.text || "").trim()).filter(Boolean).slice(0, 2).join(" • ")
-    : "";
   const analysisBpm = Number(analysisFeatures?.bpm || analysisFeatures?.tempo_bpm || analysisFeatures?.tempo || 0);
   const durationS = analysis?.features?.duration_s || analysis?.features?.duration || plan?.duration_s || 0;
   const refAssets = Array.isArray(assets?.refs) ? assets.refs : [];
@@ -1076,66 +1071,11 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
                 <strong>{musicGraphSections.length || analysisSections.length || 0}</strong>
               </div>
             </div>
-            {musicGraph ? (
-              <div className="card" style={{ marginTop: 12, padding: 12 }}>
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>Music Graph v1</div>
-                <div className="small" style={{ opacity: 0.85, marginBottom: 8 }}>
-                  Canonical analysis consumed by Director, Conductor, live cues, and timeline markers.
-                </div>
-                <div className="workspace-analysisGrid">
-                  <div className="workspace-handoffCard">
-                    <div className="workspace-handoffLabel">Beats</div>
-                    <strong>{musicGraphBeatCount}</strong>
-                  </div>
-                  <div className="workspace-handoffCard">
-                    <div className="workspace-handoffLabel">Stems</div>
-                    <strong>{musicGraphStems.length}</strong>
-                  </div>
-                  <div className="workspace-handoffCard">
-                    <div className="workspace-handoffLabel">Semantic tags</div>
-                    <strong>{musicGraphSemanticTags.length || analysisTags.length}</strong>
-                  </div>
-                  <div className="workspace-handoffCard">
-                    <div className="workspace-handoffLabel">ASR / lyrics</div>
-                    <strong>{musicGraph?.lyrics?.error ? "failed" : musicGraphLyricPreview ? "ready" : "optional"}</strong>
-                  </div>
-                </div>
-                {musicGraphSections.length ? (
-                  <div className="workspace-sceneList" style={{ marginTop: 10 }}>
-                    <div className="workspace-sectionTitle">Section markers</div>
-                    {musicGraphSections.slice(0, 8).map((section: any, index: number) => (
-                      <div key={`${section.label}-${index}`} className="workspace-sceneRow">
-                        <div className="row" style={{ justifyContent: "space-between" }}>
-                          <div style={{ fontWeight: 700 }}>{section.label || "section"}</div>
-                          <div className="small">
-                            {Number(section.start || 0).toFixed(1)}s → {Number(section.end || 0).toFixed(1)}s
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                {musicGraphStems.length ? (
-                  <div className="workspace-chipRow" style={{ marginTop: 10 }}>
-                    {musicGraphStems.slice(0, 8).map((stem: any) => (
-                      <span key={stem.kind} className="badge">{stem.kind}</span>
-                    ))}
-                  </div>
-                ) : null}
-                {(musicGraphSemanticTags.length ? musicGraphSemanticTags : analysisTags.slice(0, 8).map((tag: string) => ({ tag, confidence: 0.55 }))).length ? (
-                  <div className="workspace-chipRow" style={{ marginTop: 10 }}>
-                    {(musicGraphSemanticTags.length ? musicGraphSemanticTags : analysisTags.slice(0, 8).map((tag: string) => ({ tag, confidence: 0.55 }))).slice(0, 8).map((item: any) => (
-                      <span key={item.tag} className="badge">
-                        {item.tag}{item.confidence ? ` (${Math.round(Number(item.confidence) * 100)}%)` : ""}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                {musicGraphLyricPreview ? (
-                  <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>{musicGraphLyricPreview}</div>
-                ) : null}
-              </div>
-            ) : null}
+            <UnderstandPanel
+              musicGraph={musicGraph}
+              analysisTags={analysisTags}
+              analysisSections={analysisSections}
+            />
             <details className="workspace-inlineDetails" open={analysisReady}>
               <summary>Analysis summary</summary>
               <div className="workspace-scrollPanel">

@@ -236,3 +236,25 @@ export type PerformerWorkflowPlanResponse = {
   environment?: Record<string, unknown>;
   stored?: boolean;
 };
+
+export type BaselineMetricSample = {
+  count: number;
+  last_ms?: number;
+  min_ms?: number;
+  max_ms?: number;
+  p50_ms?: number;
+  mean_ms?: number;
+  budget_ms?: number;
+  within_budget?: boolean;
+};
+
+export type BaselineMetricsReport = {
+  ok: boolean;
+  schema_version: number;
+  collected_at?: string;
+  stub?: boolean;
+  note?: string;
+  hardware?: Record<string, unknown>;
+  budgets_ms?: Record<string, number>;
+  samples?: Record<string, BaselineMetricSample>;
+};

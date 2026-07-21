@@ -35,12 +35,22 @@ from ..store.autosave import AutosaveJournal
 from ..store.projects import ProjectStore
 
 
-def create_system_router(*, readiness_report: Callable[[], dict[str, Any]]) -> APIRouter:
+def create_system_router(
+    *,
+    readiness_report: Callable[[], dict[str, Any]],
+    baseline_metrics: Callable[[], dict[str, Any]] | None = None,
+) -> APIRouter:
     router = APIRouter(tags=["system"])
 
     @router.get("/v1/system/readiness")
     def system_readiness() -> dict[str, Any]:
         return readiness_report()
+
+    @router.get("/v1/metrics/baseline")
+    def baseline_metrics_report() -> dict[str, Any]:
+        if baseline_metrics is None:
+            raise HTTPException(501, "Baseline metrics are not configured")
+        return baseline_metrics()
 
     return router
 

@@ -53,6 +53,18 @@ describe("typed API contracts", () => {
     expect(autosave.autosave.dirty).toBe(true);
   });
 
+  it("accepts baseline metrics payloads", () => {
+    const baseline: import("../shared/api/contracts").BaselineMetricsReport = {
+      ok: true,
+      schema_version: 1,
+      stub: true,
+      samples: {
+        launch: { count: 1, last_ms: 1200, budget_ms: 8000, within_budget: true },
+      },
+    };
+    expect(baseline.samples?.launch?.within_budget).toBe(true);
+  });
+
   it("accepts music graph, render plan, review, live assets, template, and performer payloads", () => {
     const musicGraph: MusicGraphResponse = {
       ok: true,
