@@ -37,7 +37,7 @@ def normalize_modulation_matrix(matrix: dict[str, Any] | None) -> dict[str, Any]
                     "min": float(mapping["min"]) if mapping.get("min") is not None else 0.0,
                     "max": float(mapping["max"]) if mapping.get("max") is not None else 1.0,
                     "muted": bool(mapping.get("muted")),
-                    "scale": float(mapping.get("scale") or 1.0),
+                    "scale": float(mapping["scale"]) if mapping.get("scale") is not None else 1.0,
                 },
             }
         )
