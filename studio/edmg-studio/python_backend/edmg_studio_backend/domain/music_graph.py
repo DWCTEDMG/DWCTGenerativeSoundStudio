@@ -30,7 +30,7 @@ def music_graph_from_analysis(
         if isinstance(item, (int, float)):
             beats.append({"t": float(item), "confidence": 1.0})
         elif isinstance(item, dict) and "t" in item:
-            beats.append({"t": float(item.get("t") or 0.0), "confidence": float(item.get("confidence") or 1.0)})
+            beats.append({"t": float(item.get("t") or 0.0), "confidence": float(item["confidence"]) if item.get("confidence") is not None else 1.0})
 
     sections: list[dict[str, Any]] = []
     for item in sections_raw:
