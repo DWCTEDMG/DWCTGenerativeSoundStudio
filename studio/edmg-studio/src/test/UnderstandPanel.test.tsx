@@ -1,7 +1,13 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import UnderstandPanel from "../components/UnderstandPanel";
 import type { MusicGraphV1 } from "../shared/api/contracts";
+
+vi.mock("../components/api", () => ({
+  apiPatch: vi.fn(),
+}));
+
+import { apiPatch } from "../components/api";
 
 const sampleGraph: MusicGraphV1 = {
   schemaVersion: "1.0",
@@ -35,5 +41,41 @@ describe("UnderstandPanel", () => {
     expect(screen.getByText(/hello world/i)).toBeTruthy();
     expect(screen.getByText("drums")).toBeTruthy();
     expect(screen.getByText("128 BPM")).toBeTruthy();
+  });
+
+  it("saves editable corrections through the patch route", async () => {
+    vi.mocked(apiPatch).mockResolvedValue({
+      ok: true,
+      music_graph: {
+        ...sampleGraph,
+        sections: [{ start: 0, end: 16, label: "verse", energy: 0.9 }],
+      },
+      invalidation: { changed: ["sections"], invalidated: ["last_conductor_plan"] },
+    });
+    const onSaved = vi.fn();
+
+    render(
+      <UnderstandPanel
+        musicGraph={sampleGraph}
+        projectId="proj-1"
+        onSaved={onSaved}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Edit corrections/i }));
+    fireEvent.change(screen.getByLabelText(/Section 1 label/i), { target: { value: "verse" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save corrections/i }));
+
+    await waitFor(() => {
+      expect(apiPatch).toHaveBeenCalledWith(
+        "/v1/projects/proj-1/music_graph/corrections",
+        expect.objectContaining({
+          sections: [expect.objectContaining({ label: "verse" })],
+          reason: "workspace_understand_edit",
+        }),
+      );
+    });
+    expect(onSaved).toHaveBeenCalled();
+    expect(screen.getByText(/Cleared stale derived data/i)).toBeTruthy();
   });
 });

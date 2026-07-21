@@ -15,12 +15,14 @@ from ..domain.render_plan_v1 import enrich_render_plan
 from ..domain.stem_modulation import mute_lane, normalize_modulation_matrix, scale_lane
 from ..domain.template_packages import export_template_package, import_template_package
 from ..domain.variant_review import apply_variant_review_decision, collect_variant_review
+from ..domain.understand_corrections import apply_understand_corrections
 from ..domain.world_adapters import export_touchdesigner_adapter, export_unreal_adapter, run_adapter_simulator
 from ..schemas import (
     AutosaveRequest,
     LiveCuePublishRequest,
     LiveAssetModulationRequest,
     MotionPhrasesApplyRequest,
+    MusicGraphCorrectionsRequest,
     ProjectCreateRequest,
     RecoveryApplyRequest,
     RenderPlan,
@@ -106,6 +108,34 @@ def create_project_router(
             duration_s=float(audio.get("duration_s") or 0) or None,
         )
         return {"ok": True, "music_graph": graph}
+
+    @router.patch("/v1/projects/{project_id}/music_graph/corrections")
+    def patch_project_music_graph_corrections(project_id: str, req: MusicGraphCorrectionsRequest) -> dict[str, Any]:
+        proj = store().get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        meta = dict(proj.meta or {})
+        invalidation = apply_understand_corrections(
+            meta,
+            sections=req.sections,
+            beats=req.beats,
+            lyrics_lines=req.lyrics_lines,
+            semantic_tags=req.semantic_tags,
+            tempo_bpm=req.tempo_bpm,
+            reason=req.reason,
+        )
+        if not invalidation["changed"]:
+            raise HTTPException(400, "No corrections supplied")
+        proj.meta = meta
+        store().save(proj)
+        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
+        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
+        graph = music_graph_from_analysis(
+            analysis,
+            audio_filename=str(audio.get("filename") or "") or None,
+            duration_s=float(audio.get("duration_s") or 0) or None,
+        )
+        return {"ok": True, "music_graph": graph, "invalidation": invalidation}
 
     @router.get("/v1/projects/{project_id}/live_assets")
     def get_project_live_assets(project_id: str) -> dict[str, Any]:
@@ -482,5 +512,84 @@ def create_project_router(
         journal = AutosaveJournal(store().project_dir(project_id))
         journal.mark_clean()
         return {"ok": True, "discarded": True}
+
+    return router
+
+
+def create_models_router(*, get_models: Callable[[], Any]) -> APIRouter:
+    """Model catalog and install routes extracted from app.py for WP-09."""
+
+    router = APIRouter(tags=["models"])
+
+    @router.get("/v1/models/catalog")
+    def models_catalog() -> dict[str, Any]:
+        return get_models().catalog()
+
+    @router.post("/v1/models/promote")
+    def models_promote(req: dict[str, Any]) -> dict[str, Any]:
+        model_id = str(req.get("model_id") or "")
+        target_lane = str(req.get("lane") or req.get("target_lane") or "recommended")
+        reason = req.get("reason")
+        force = bool(req.get("force") or False)
+        return get_models().promote_model_lane(
+            model_id,
+            target_lane,
+            reason=str(reason) if reason else None,
+            force=force,
+        )
+
+    @router.post("/v1/models/benchmark")
+    def models_benchmark(req: dict[str, Any]) -> dict[str, Any]:
+        model_id = str(req.get("model_id") or "")
+        return get_models().record_model_benchmark(model_id, req)
+
+    @router.get("/v1/models/tasks")
+    def models_tasks() -> dict[str, Any]:
+        return {"tasks": [t.__dict__ for t in get_models().tasks.list()]}
+
+    @router.post("/v1/models/accept")
+    def models_accept(req: dict[str, Any]) -> dict[str, Any]:
+        model_id = str(req.get("model_id") or "")
+        license_id = str(req.get("license_id") or "")
+        get_models().accept_license(model_id, license_id)
+        return {"ok": True}
+
+    @router.post("/v1/models/install")
+    def models_install(req: dict[str, Any]) -> dict[str, Any]:
+        model_id = str(req.get("model_id") or "")
+        task = get_models().install(model_id)
+        return {"task": task.__dict__}
+
+    @router.post("/v1/models/restore_local")
+    def models_restore_local(req: dict[str, Any]) -> dict[str, Any]:
+        model_id = str(req.get("model_id") or "")
+        task = get_models().restore_local(model_id)
+        return {"task": task.__dict__}
+
+    @router.post("/v1/models/install_pack")
+    def models_install_pack(req: dict[str, Any]) -> dict[str, Any]:
+        pack_id = str(req.get("pack_id") or "")
+        tasks = get_models().install_pack(pack_id)
+        return {"tasks": [t.__dict__ for t in tasks]}
+
+    @router.post("/v1/models/import/civitai")
+    def models_import_civitai(req: dict[str, Any]) -> dict[str, Any]:
+        url_or_id = str(req.get("url") or req.get("id") or "")
+        entry = get_models().civitai_import(url_or_id)
+        return {"entry": entry}
+
+    @router.post("/v1/models/import/local")
+    def models_import_local(req: dict[str, Any]) -> dict[str, Any]:
+        path = str(req.get("file_path") or "")
+        name = req.get("name")
+        folder = str(req.get("folder") or "checkpoints")
+        entry = get_models().import_local(path, name=name, folder=folder)
+        return {"entry": entry}
+
+    @router.post("/v1/models/remove_user")
+    def models_remove_user(req: dict[str, Any]) -> dict[str, Any]:
+        model_id = str(req.get("model_id") or "")
+        get_models().remove_user_model(model_id)
+        return {"ok": True}
 
     return router

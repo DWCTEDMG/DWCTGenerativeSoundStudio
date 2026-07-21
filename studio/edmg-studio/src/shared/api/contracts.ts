@@ -118,6 +118,24 @@ export type MusicGraphResponse = {
   music_graph: MusicGraphV1;
 };
 
+export type MusicGraphCorrectionsRequest = {
+  sections?: MusicGraphSection[];
+  beats?: Array<number | { t: number; confidence?: number }>;
+  lyrics_lines?: Array<{ start: number; end: number; text: string }>;
+  semantic_tags?: Array<string | WeightedTag>;
+  tempo_bpm?: number;
+  reason?: string;
+};
+
+export type MusicGraphCorrectionsResponse = {
+  ok: boolean;
+  music_graph: MusicGraphV1;
+  invalidation: {
+    changed: string[];
+    invalidated: string[];
+  };
+};
+
 export type RenderPlanEstimates = {
   seconds?: number;
   cost_units?: number;

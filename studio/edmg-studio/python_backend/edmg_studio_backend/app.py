@@ -70,7 +70,7 @@ from .services import layer_animation as layeranim
 from .services import parseq_adapter
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
-from .api import create_project_router, create_system_router
+from .api import create_models_router, create_project_router, create_system_router
 from .domain.director_modes import (
     director_mode_profile,
     flavor_prompt,
@@ -5900,6 +5900,7 @@ app.include_router(
         assess_health=assess_project_health,
     )
 )
+app.include_router(create_models_router(get_models=lambda: models))
 
 
 def _render_quality_tier_from_preset(preset: str | None) -> str:
@@ -12564,71 +12565,5 @@ def cloud_lightning_bundle(req: CloudLightningBundleRequest):
         raise HTTPException(500, str(e))
 
 # ------------------------------
-# Model Manager (GUI)
+# Model Manager (GUI) — routes live in api/routers.create_models_router
 # ------------------------------
-
-@app.get("/v1/models/catalog")
-def models_catalog():
-    return models.catalog()
-
-@app.post("/v1/models/promote")
-def models_promote(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    target_lane = str(req.get("lane") or req.get("target_lane") or "recommended")
-    reason = req.get("reason")
-    force = bool(req.get("force") or False)
-    return models.promote_model_lane(model_id, target_lane, reason=str(reason) if reason else None, force=force)
-
-@app.post("/v1/models/benchmark")
-def models_benchmark(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    return models.record_model_benchmark(model_id, req)
-
-@app.get("/v1/models/tasks")
-def models_tasks():
-    return {"tasks": [t.__dict__ for t in models.tasks.list()]}
-
-@app.post("/v1/models/accept")
-def models_accept(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    license_id = str(req.get("license_id") or "")
-    models.accept_license(model_id, license_id)
-    return {"ok": True}
-
-@app.post("/v1/models/install")
-def models_install(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    task = models.install(model_id)
-    return {"task": task.__dict__}
-
-@app.post("/v1/models/restore_local")
-def models_restore_local(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    task = models.restore_local(model_id)
-    return {"task": task.__dict__}
-
-@app.post("/v1/models/install_pack")
-def models_install_pack(req: dict[str, Any]):
-    pack_id = str(req.get("pack_id") or "")
-    tasks = models.install_pack(pack_id)
-    return {"tasks": [t.__dict__ for t in tasks]}
-
-@app.post("/v1/models/import/civitai")
-def models_import_civitai(req: dict[str, Any]):
-    url_or_id = str(req.get("url") or req.get("id") or "")
-    entry = models.civitai_import(url_or_id)
-    return {"entry": entry}
-
-@app.post("/v1/models/import/local")
-def models_import_local(req: dict[str, Any]):
-    path = str(req.get("file_path") or "")
-    name = req.get("name")
-    folder = str(req.get("folder") or "checkpoints")
-    entry = models.import_local(path, name=name, folder=folder)
-    return {"entry": entry}
-
-@app.post("/v1/models/remove_user")
-def models_remove_user(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    models.remove_user_model(model_id)
-    return {"ok": True}

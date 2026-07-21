@@ -65,6 +65,15 @@ describe("typed API contracts", () => {
     expect(baseline.samples?.launch?.within_budget).toBe(true);
   });
 
+  it("accepts music graph corrections payloads", () => {
+    const corrections: import("../shared/api/contracts").MusicGraphCorrectionsResponse = {
+      ok: true,
+      music_graph: { schemaVersion: "1.0", sections: [{ start: 0, end: 4, label: "verse" }] },
+      invalidation: { changed: ["sections"], invalidated: ["last_conductor_plan"] },
+    };
+    expect(corrections.invalidation.invalidated[0]).toBe("last_conductor_plan");
+  });
+
   it("accepts music graph, render plan, review, live assets, template, and performer payloads", () => {
     const musicGraph: MusicGraphResponse = {
       ok: true,

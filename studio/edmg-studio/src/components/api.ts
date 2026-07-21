@@ -265,6 +265,17 @@ export async function apiPost(path: string, body: any) {
   return d;
 }
 
+export async function apiPatch(path: string, body: any) {
+  const r = await apiFetch(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(formatBackendError(d, `PATCH ${path} failed`));
+  return d;
+}
+
 export async function apiDelete(path: string) {
   const r = await apiFetch(path, { method: "DELETE" });
   const d = await r.json().catch(() => ({}));

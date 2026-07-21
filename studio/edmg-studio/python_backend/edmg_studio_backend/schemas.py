@@ -313,6 +313,15 @@ class LayeredAnimateRequest(BaseModel):
     seed: int | None = None
 
 
+class MusicGraphCorrectionsRequest(BaseModel):
+    sections: list[dict[str, Any]] | None = None
+    beats: list[Any] | None = None
+    lyrics_lines: list[dict[str, Any]] | None = None
+    semantic_tags: list[Any] | None = None
+    tempo_bpm: float | None = Field(default=None, gt=0.0, le=400.0)
+    reason: str = "manual_edit"
+
+
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
 

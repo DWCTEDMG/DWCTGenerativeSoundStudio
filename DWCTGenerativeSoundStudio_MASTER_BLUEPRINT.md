@@ -1340,8 +1340,8 @@ These form the dependency-critical queue for the integration captain. They are n
 | WP-06 / P1-05 | Done | Autosave journal + Timeline recovery UI |
 | WP-07 / P1-03 | Done | `.mp4.artifact.json` on internal render completion |
 | WP-08 / P1-06 | Partial | Typed contracts extended for Music Graph, Render Plan GET, variant review, live assets, template packages, and performer plan in `src/shared/api/contracts.ts` |
-| WP-09 / P2-01 | Partial | System + Project durability routers extracted to `api/routers.py` |
-| WP-10 / P2-02 | Partial | Command stack + Timeline Undo/Redo for deletes; motion grammar apply API |
+| WP-09 / P2-01 | Partial | System + Project durability + **Models** routers extracted to `api/routers.py` |
+| WP-10 / P2-02 | Partial | Command stack + Timeline Undo/Redo for delete/move/trim (UI drag + backend helpers); split/property coverage still open |
 | WP-11 / P2-04 | Done | Shared `ProjectJobsPanel` + `useProjectJobs` on Render Queue and Review; job events in log viewer |
 | WP-12 / P3-01 | Partial | Music Graph v1 adapter enriched (stems, semantics, lyrics/ASR); consumed by Director payload, Conductor diagnostics/routing, Workspace Understand panel, and timeline section markers |
 
@@ -1350,11 +1350,11 @@ Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`
 | WP | Status | Notes |
 |---|---|---|
 | P5-06 / W7-01 docs | Partial | README + RELEASE relaunch sections; full doc set and complete test matrix pending |
-| P2-05 Understand | Partial | Workspace `UnderstandPanel`; dedicated route + editable corrections pending |
+| P2-05 Understand | Partial | Workspace `UnderstandPanel` with editable section/lyric/tag/tempo corrections + `PATCH .../music_graph/corrections` invalidates Conductor plans; beat/stem/energy editors and dedicated route still open |
 | P0-06 / W7-04 metrics | Stub | `/v1/metrics/baseline` + Settings UI; named-hardware timing evidence pending |
 | W7-05 beta handoff | Blocked | Signing creds, clean VM installer proof, GPU benchmark evidence, full e2e matrix |
 
-**Verification on this audit (2026-07-21):** backend pytest **240 passed**; frontend `typecheck` + `test:ui` **86 passed**. Router store lookup fixed so extracted project routes honor test/runtime `store` monkeypatches. Blueprint acceptance gates (signed installer, GPU benchmarks, full Electron e2e, named-hardware W7-04) remain open.
+**Verification on this audit (2026-07-21):** backend pytest **240+ passed** (includes understand corrections + timeline move/trim command tests); frontend `typecheck` + targeted vitest **pass** for Understand corrections and timeline history. Router store lookup fixed so extracted project routes honor test/runtime `store` monkeypatches. Blueprint acceptance gates (signed installer, GPU benchmarks, full Electron e2e, named-hardware W7-04) remain open.
 
 1. **WP-01 / P0-01:** repair FFmpeg provisioning in CI and make the four failing tests diagnostic when FFmpeg is absent.
 2. **WP-02 / P0-04:** add one shared system-readiness service and surface its result in Settings/System.

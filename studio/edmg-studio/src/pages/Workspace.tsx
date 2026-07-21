@@ -1073,8 +1073,13 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             </div>
             <UnderstandPanel
               musicGraph={musicGraph}
+              projectId={projectId}
               analysisTags={analysisTags}
               analysisSections={analysisSections}
+              onSaved={(graph) => {
+                setMusicGraph(graph);
+                if (projectId) refreshProject(projectId).catch(() => {});
+              }}
             />
             <details className="workspace-inlineDetails" open={analysisReady}>
               <summary>Analysis summary</summary>
