@@ -1204,7 +1204,19 @@ def _sync_locked_backend(profile: str, log_cb) -> None:
         capability_extras=RUNTIME_CAPABILITY_EXTRAS,
     )
     if _run_cmd(verify, cwd=BACKEND_DIR, env=env, log_cb=log_cb) != 0:
-        raise RuntimeError(f"Frozen `{profile}` environment verification failed")
+        log_cb(
+            f"Frozen `{profile}` verification found an incomplete package installation; "
+            "reinstalling the locked environment…"
+        )
+        uv = sync_frozen_project(
+            profile,
+            capability_extras=RUNTIME_CAPABILITY_EXTRAS,
+            install_uv=True,
+            reinstall=True,
+        )
+        log_cb(f"uv {uv_version(uv)}: {uv}")
+        if _run_cmd(verify, cwd=BACKEND_DIR, env=env, log_cb=log_cb) != 0:
+            raise RuntimeError(f"Frozen `{profile}` environment verification failed after repair")
     log_cb(f"Frozen `{profile}` backend is ready (lock {lock_sha256()[:12]}…).")
 
 
