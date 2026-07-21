@@ -41,7 +41,7 @@ def music_graph_from_analysis(
                 "start": float(item.get("start") or item.get("start_s") or 0.0),
                 "end": float(item.get("end") or item.get("end_s") or 0.0),
                 "label": str(item.get("label") or item.get("name") or "section"),
-                "confidence": float(item.get("confidence") or 1.0),
+                "confidence": float(item["confidence"]) if item.get("confidence") is not None else 1.0,
             }
         )
 
