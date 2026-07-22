@@ -160,7 +160,6 @@ def analyze_audio(
 ) -> Dict[str, Any]:
     # This library API intentionally reads a caller-selected local file. Its
     # only browser entry point supplies a Gradio-managed upload path.
-    # codeql[py/path-injection]
     audio_path = Path(path).expanduser()
     if not audio_path.exists():
         raise FileNotFoundError(str(audio_path))

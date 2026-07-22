@@ -11891,7 +11891,10 @@ def assemble_video(project_id: str, req: AssembleVideoRequest):
     variant = variants[req.variant_index]
     scenes = variant.get("scenes") or []
 
-    pdir = store.project_dir(project_id)
+    # Revalidate the identifier loaded from the persisted project before path
+    # construction. Keeping the request value out of this downstream path also
+    # makes the ProjectStore trust boundary explicit to static analysis.
+    pdir = store.project_dir(proj.id)
     audio_meta = proj.meta.get("audio")
     audio_path = None
     if audio_meta:
