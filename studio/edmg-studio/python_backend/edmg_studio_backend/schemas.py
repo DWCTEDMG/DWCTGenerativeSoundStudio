@@ -313,6 +313,15 @@ class LayeredAnimateRequest(BaseModel):
     seed: int | None = None
 
 
+class MusicGraphCorrectionsRequest(BaseModel):
+    sections: list[dict[str, Any]] | None = None
+    beats: list[Any] | None = None
+    lyrics_lines: list[dict[str, Any]] | None = None
+    semantic_tags: list[Any] | None = None
+    tempo_bpm: float | None = Field(default=None, gt=0.0, le=400.0)
+    reason: str = "manual_edit"
+
+
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
 
@@ -630,6 +639,37 @@ class RenderStep(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     outputs: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
+    cache_key: str = Field(default="", max_length=260)
+
+
+class RenderTaskNode(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    scene_id: str = Field(min_length=1, max_length=120)
+    step_kind: RenderStepKind
+    adapter: str = Field(min_length=1, max_length=80)
+    cache_key: str = Field(min_length=1, max_length=260)
+    depends_on: list[str] = Field(default_factory=list)
+    estimated_seconds: float = Field(default=0.0, ge=0.0)
+
+
+class RenderPlanDependency(BaseModel):
+    from_: str = Field(alias="from", min_length=1, max_length=120)
+    to: str = Field(min_length=1, max_length=120)
+
+    model_config = {"populate_by_name": True}
+
+
+class RenderPlanEstimates(BaseModel):
+    seconds: float = Field(default=0.0, ge=0.0)
+    cost: float = Field(default=0.0, ge=0.0)
+    task_count: int = Field(default=0, ge=0)
+
+
+class PlanWarning(BaseModel):
+    code: str = Field(min_length=1, max_length=80)
+    message: str = Field(min_length=1, max_length=500)
+    severity: Literal["info", "warning", "blocking"] = "warning"
+    scene_id: str | None = Field(default=None, max_length=120)
 
 
 class RenderSectionPlan(BaseModel):
@@ -665,6 +705,15 @@ class RenderPlan(BaseModel):
     assembly: AssemblyPlan
     fallback_branches: list[FallbackBranch] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
+    tasks: list[RenderTaskNode] = Field(default_factory=list)
+    dependencies: list[RenderPlanDependency] = Field(default_factory=list)
+    estimates: RenderPlanEstimates | None = None
+    warnings: list[PlanWarning] = Field(default_factory=list)
+
+
+class TemplatePackageImportRequest(BaseModel):
+    package: dict[str, Any] = Field(default_factory=dict)
+    merge: bool = True
 
 
 class VisualDNAFeedbackRequest(BaseModel):
@@ -702,12 +751,45 @@ class RenderConductorPromoteRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=400)
 
 
+class PerformerWorkflowPlanRequest(BaseModel):
+    variant_index: int = Field(default=0, ge=0)
+    scene_ids: list[str] = Field(default_factory=list)
+    model_id: str = Field(default="wan_s2v_14b", max_length=120)
+
+
 class VisualDNAUpdateRequest(BaseModel):
     identity: dict[str, Any] | None = None
     continuity: dict[str, Any] | None = None
     approve_trait_ids: list[str] = Field(default_factory=list)
     deprecate_trait_ids: list[str] = Field(default_factory=list)
     notes: str | None = Field(default=None, max_length=1000)
+
+
+class VariantReviewDecisionRequest(BaseModel):
+    artifact_path: str = Field(min_length=1, max_length=1024)
+    decision: Literal["approved", "rejected", "cherry_picked", "unreviewed"]
+    notes: str | None = Field(default=None, max_length=2000)
+    cherry_pick_traits: list[str] = Field(default_factory=list)
+    lock_fields: list[str] = Field(default_factory=list)
+
+
+class LiveCuePublishRequest(BaseModel):
+    osc_host: str = Field(default="127.0.0.1", max_length=200)
+    osc_port: int = Field(default=9000, ge=1, le=65535)
+    midi_enabled: bool = True
+    websocket_enabled: bool = True
+    playback_speed: float = Field(default=1.0, gt=0.0, le=8.0)
+
+
+class LiveAssetModulationRequest(BaseModel):
+    t: float = Field(default=0.0, ge=0.0)
+    stem_values: dict[str, float] = Field(default_factory=dict)
+
+
+class WorldAdapterExportRequest(BaseModel):
+    adapter: Literal["touchdesigner", "unreal"] = "touchdesigner"
+    variant_index: int = Field(default=0, ge=0)
+    sequence_name: str | None = Field(default=None, max_length=200)
 
 
 class UnrealBridgeMarker(BaseModel):

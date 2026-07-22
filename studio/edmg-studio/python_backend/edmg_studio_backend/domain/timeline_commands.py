@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -71,3 +72,87 @@ def replace_timeline_value(
         set_value(next_value)
 
     stack.push(TimelineCommand(name=name, undo=undo, redo=redo, label=label or name))
+
+
+def clone_timeline(timeline: dict[str, Any]) -> dict[str, Any]:
+    return deepcopy(timeline or {})
+
+
+def move_clip_in_timeline(
+    timeline: dict[str, Any],
+    *,
+    track_idx: int,
+    clip_idx: int,
+    start_s: float,
+    end_s: float,
+) -> dict[str, Any]:
+    """Move or resize a clip by assigning new start/end seconds."""
+    next_timeline = clone_timeline(timeline)
+    tracks = list(next_timeline.get("tracks") or [])
+    if track_idx < 0 or track_idx >= len(tracks):
+        return next_timeline
+    track = dict(tracks[track_idx])
+    clips = list(track.get("clips") or [])
+    if clip_idx < 0 or clip_idx >= len(clips):
+        return next_timeline
+    clip = dict(clips[clip_idx])
+    clip["start_s"] = float(start_s)
+    clip["end_s"] = float(end_s)
+    clips[clip_idx] = clip
+    track["clips"] = clips
+    tracks[track_idx] = track
+    next_timeline["tracks"] = tracks
+    return next_timeline
+
+
+def trim_clip_in_timeline(
+    timeline: dict[str, Any],
+    *,
+    track_idx: int,
+    clip_idx: int,
+    start_s: float | None = None,
+    end_s: float | None = None,
+) -> dict[str, Any]:
+    """Trim a clip from the left, right, or both edges."""
+    next_timeline = clone_timeline(timeline)
+    tracks = list(next_timeline.get("tracks") or [])
+    if track_idx < 0 or track_idx >= len(tracks):
+        return next_timeline
+    track = dict(tracks[track_idx])
+    clips = list(track.get("clips") or [])
+    if clip_idx < 0 or clip_idx >= len(clips):
+        return next_timeline
+    clip = dict(clips[clip_idx])
+    if start_s is not None:
+        clip["start_s"] = float(start_s)
+    if end_s is not None:
+        clip["end_s"] = float(end_s)
+    clips[clip_idx] = clip
+    track["clips"] = clips
+    tracks[track_idx] = track
+    next_timeline["tracks"] = tracks
+    return next_timeline
+
+
+def apply_timeline_mutation(
+    *,
+    get_timeline: Callable[[], dict[str, Any]],
+    set_timeline: Callable[[dict[str, Any]], None],
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
+    stack: TimelineCommandStack,
+    name: str,
+    label: str = "",
+) -> dict[str, Any]:
+    """Apply a timeline mutation and record undo/redo snapshots."""
+    previous = clone_timeline(get_timeline())
+    next_value = mutate(clone_timeline(previous))
+    set_timeline(next_value)
+
+    def undo() -> None:
+        set_timeline(clone_timeline(previous))
+
+    def redo() -> None:
+        set_timeline(clone_timeline(next_value))
+
+    stack.push(TimelineCommand(name=name, undo=undo, redo=redo, label=label or name))
+    return next_value

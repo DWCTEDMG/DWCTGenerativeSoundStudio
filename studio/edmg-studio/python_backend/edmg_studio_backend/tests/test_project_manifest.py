@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from edmg_studio_backend.store.projects import (
     CURRENT_SCHEMA_VERSION,
     Project,
@@ -91,3 +93,12 @@ def test_unsupported_future_schema_is_rejected(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert store.get(project_id) is None
+
+
+def test_project_store_rejects_project_id_path_traversal(tmp_path: Path) -> None:
+    store = ProjectStore(tmp_path / "data")
+
+    with pytest.raises(ValueError, match="Invalid project identifier"):
+        store.project_dir("../outside")
+
+    assert not (tmp_path / "outside").exists()

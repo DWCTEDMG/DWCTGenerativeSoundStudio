@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiGet,
   apiFetch,
+  buildProjectFileUrl,
   ensureBrowserBridge,
   getBackendUrl,
   getBackendUrlAsync,
@@ -79,5 +80,24 @@ describe("backend URL resolution", () => {
       "different origin",
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("builds encoded project file URLs from validated backend and project paths", () => {
+    const url = new URL(buildProjectFileUrl(FRESH_TUNNEL, "project_01", "outputs/videos/hero clip.mp4"));
+    expect(url.origin).toBe(FRESH_TUNNEL);
+    expect(url.pathname).toBe("/v1/projects/project_01/file");
+    expect(url.searchParams.get("path")).toBe("outputs/videos/hero clip.mp4");
+  });
+
+  it("rejects unsafe project identifiers and traversal paths", () => {
+    expect(() => buildProjectFileUrl(FRESH_TUNNEL, "../outside", "outputs/video.mp4")).toThrow(
+      "Invalid project identifier",
+    );
+    expect(() => buildProjectFileUrl(FRESH_TUNNEL, "project_01", "../outside.mp4")).toThrow(
+      "Invalid project-relative file path",
+    );
+    expect(() => buildProjectFileUrl("javascript:alert(1)", "project_01", "outputs/video.mp4")).toThrow(
+      "valid HTTP(S) backend URL",
+    );
   });
 });

@@ -57,7 +57,7 @@ from .schemas import (
     BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudHfBucketSettingsRequest, CloudLightningBundleRequest,
-    ProjectSnapshot, RenderConductorPlanRequest, RenderConductorPromoteRequest, RenderIntent, VisualDNAFeedbackRequest,
+    ProjectSnapshot, RenderConductorPlanRequest, RenderConductorPromoteRequest, PerformerWorkflowPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
     VisualDNAUpdateRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
@@ -70,7 +70,7 @@ from .services import layer_animation as layeranim
 from .services import parseq_adapter
 from .store.projects import ProjectStore
 from .store.jobs import JobStore
-from .api import create_project_router, create_system_router
+from .api import create_models_router, create_project_router, create_system_router
 from .domain.director_modes import (
     director_mode_profile,
     flavor_prompt,
@@ -181,6 +181,8 @@ from .services.visual_dna import (
     update_visual_dna,
 )
 from .render_conductor.planner import build_advisory_render_plan, promote_proxy_sections
+from .domain.music_graph import music_graph_from_analysis
+from .domain.performer_workflow import build_performer_workflow_plan
 from .services.setup_wizard import (
     SetupTaskManager,
     check_backend_bundle,
@@ -201,6 +203,7 @@ from .services.setup_wizard import (
     resolve_setup_accelerator_profile,
 )
 from .services.system_readiness import assess_system_readiness
+from .services.baseline_metrics import collect_baseline_metrics
 from .services.project_health import assess_project_health, collect_project_bundle, suggest_relinks
 from .uv_toolchain import ToolchainError
 
@@ -2359,6 +2362,11 @@ def _system_readiness_report() -> dict[str, Any]:
         check_runtime=check_backend_bundle,
         hardware_profile=_hardware_profile,
     )
+
+
+def _baseline_metrics_report() -> dict[str, Any]:
+    """Read-only baseline timing counters for Settings (P0-06 stub)."""
+    return collect_baseline_metrics(hardware_probe=_hardware_profile)
 
 
 def _proxy_renders_enabled(payload: dict[str, Any] | None = None) -> bool:
@@ -5219,6 +5227,27 @@ def _build_creative_direction_payload(
     waveform = list(overall.get("waveform") or [])
     duration_s = float(overall.get("duration_s") or 0.0)
     saved_sections = list(analysis.get("sections") or []) if isinstance(analysis, dict) and isinstance(analysis.get("sections"), list) else []
+    audio_meta = (proj.meta.get("audio") or {}) if hasattr(proj, "meta") and isinstance(proj.meta, dict) else {}
+    music_graph = music_graph_from_analysis(
+        analysis if isinstance(analysis, dict) else {},
+        audio_filename=str(audio_meta.get("filename") or "") or None,
+        duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
+    )
+    if not saved_sections:
+        graph_sections = list(music_graph.get("sections") or [])
+        if graph_sections:
+            saved_sections = [
+                {
+                    "start_s": float(item.get("start") or 0.0),
+                    "end_s": float(item.get("end") or 0.0),
+                    "label": str(item.get("label") or "section"),
+                    "energy": item.get("energy"),
+                    "confidence": item.get("confidence"),
+                    "source": "music_graph",
+                }
+                for item in graph_sections
+                if isinstance(item, dict)
+            ]
     fallback_sections = saved_sections or _derive_reactive_sections(
         overall,
         duration_s,
@@ -5426,6 +5455,7 @@ def _build_creative_direction_payload(
         "transcript_text": transcript_text,
         "transcript_summary": str(analysis.get("summary") or "").strip() or " ".join(transcript_sentences[:3]),
         "narrative_analysis": narrative_analysis,
+        "music_graph": music_graph,
         "sections": fallback_sections,
         "scenes": packed_scenes,
         "export_text": export_text,
@@ -5859,7 +5889,10 @@ def _project_response_payload(proj: Any) -> dict[str, Any]:
     }
 
 
-app.include_router(create_system_router(readiness_report=_system_readiness_report))
+app.include_router(create_system_router(
+    readiness_report=_system_readiness_report,
+    baseline_metrics=_baseline_metrics_report,
+))
 app.include_router(
     create_project_router(
         get_store=lambda: store,
@@ -5867,6 +5900,7 @@ app.include_router(
         assess_health=assess_project_health,
     )
 )
+app.include_router(create_models_router(get_models=lambda: models))
 
 
 def _render_quality_tier_from_preset(preset: str | None) -> str:
@@ -10739,6 +10773,15 @@ def render_conductor_plan(project_id: str, req: RenderConductorPlanRequest):
     intent = _build_render_conductor_intent(project_id, proj, req)
     snapshot = _build_project_snapshot(proj, dna=visual_dna)
     environment = _build_render_conductor_environment()
+    meta = proj.meta if isinstance(proj.meta, dict) else {}
+    audio_meta = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
+    analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
+    environment["director_mode"] = normalize_director_mode(meta.get("director_mode") or meta.get("creative_direction_mode"))
+    environment["music_graph"] = music_graph_from_analysis(
+        analysis,
+        audio_filename=str(audio_meta.get("filename") or "") or None,
+        duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
+    )
     advisory_plan = build_advisory_render_plan(intent, snapshot, environment=environment)
     plan_payload = advisory_plan.model_dump(mode="json")
     proj.meta["last_conductor_plan"] = plan_payload
@@ -10791,6 +10834,62 @@ def render_conductor_promote(project_id: str, req: RenderConductorPromoteRequest
         "plan": plan_payload,
         "promoted_scene_ids": promoted,
         "promotions": promotions[-5:],
+    }
+
+
+@app.get("/v1/projects/{project_id}/render/performer/plan")
+def get_render_performer_plan(project_id: str, variant_index: int = 0) -> dict[str, Any]:
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    stored = proj.meta.get("last_performer_plan") if isinstance(proj.meta.get("last_performer_plan"), dict) else None
+    if not stored:
+        return {"ok": True, "performer_plan": None, "stored": False}
+    if int(stored.get("variant_index") or 0) != int(variant_index):
+        return {"ok": True, "performer_plan": None, "stored": False, "variant_index": variant_index}
+    return {"ok": True, "performer_plan": stored, "stored": True}
+
+
+@app.post("/v1/projects/{project_id}/render/performer/plan")
+def render_performer_plan(project_id: str, req: PerformerWorkflowPlanRequest) -> dict[str, Any]:
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated")
+    variants = plan.get("variants") if isinstance(plan.get("variants"), list) else []
+    vi = int(req.variant_index or 0)
+    if vi < 0 or vi >= len(variants):
+        raise HTTPException(400, "Invalid variant_index")
+    variant = variants[vi] if isinstance(variants[vi], dict) else {}
+    scenes = [scene for scene in list(variant.get("scenes") or []) if isinstance(scene, dict)]
+    meta = proj.meta if isinstance(proj.meta, dict) else {}
+    audio_meta = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
+    analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
+    music_graph = music_graph_from_analysis(
+        analysis,
+        audio_filename=str(audio_meta.get("filename") or "") or None,
+        duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
+    )
+    environment = _build_render_conductor_environment()
+    performer_plan = build_performer_workflow_plan(
+        project_id=project_id,
+        variant_index=vi,
+        scenes=scenes,
+        music_graph=music_graph,
+        director_mode=normalize_director_mode(meta.get("director_mode") or meta.get("creative_direction_mode")),
+        environment=environment,
+        scene_ids=list(req.scene_ids or []),
+        model_id=str(req.model_id or "wan_s2v_14b"),
+    )
+    proj.meta["last_performer_plan"] = performer_plan
+    store.save(proj)
+    return {
+        "ok": True,
+        "performer_plan": performer_plan,
+        "music_graph": music_graph,
+        "environment": environment,
     }
 
 
@@ -12466,71 +12565,5 @@ def cloud_lightning_bundle(req: CloudLightningBundleRequest):
         raise HTTPException(500, str(e))
 
 # ------------------------------
-# Model Manager (GUI)
+# Model Manager (GUI) — routes live in api/routers.create_models_router
 # ------------------------------
-
-@app.get("/v1/models/catalog")
-def models_catalog():
-    return models.catalog()
-
-@app.post("/v1/models/promote")
-def models_promote(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    target_lane = str(req.get("lane") or req.get("target_lane") or "recommended")
-    reason = req.get("reason")
-    force = bool(req.get("force") or False)
-    return models.promote_model_lane(model_id, target_lane, reason=str(reason) if reason else None, force=force)
-
-@app.post("/v1/models/benchmark")
-def models_benchmark(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    return models.record_model_benchmark(model_id, req)
-
-@app.get("/v1/models/tasks")
-def models_tasks():
-    return {"tasks": [t.__dict__ for t in models.tasks.list()]}
-
-@app.post("/v1/models/accept")
-def models_accept(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    license_id = str(req.get("license_id") or "")
-    models.accept_license(model_id, license_id)
-    return {"ok": True}
-
-@app.post("/v1/models/install")
-def models_install(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    task = models.install(model_id)
-    return {"task": task.__dict__}
-
-@app.post("/v1/models/restore_local")
-def models_restore_local(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    task = models.restore_local(model_id)
-    return {"task": task.__dict__}
-
-@app.post("/v1/models/install_pack")
-def models_install_pack(req: dict[str, Any]):
-    pack_id = str(req.get("pack_id") or "")
-    tasks = models.install_pack(pack_id)
-    return {"tasks": [t.__dict__ for t in tasks]}
-
-@app.post("/v1/models/import/civitai")
-def models_import_civitai(req: dict[str, Any]):
-    url_or_id = str(req.get("url") or req.get("id") or "")
-    entry = models.civitai_import(url_or_id)
-    return {"entry": entry}
-
-@app.post("/v1/models/import/local")
-def models_import_local(req: dict[str, Any]):
-    path = str(req.get("file_path") or "")
-    name = req.get("name")
-    folder = str(req.get("folder") or "checkpoints")
-    entry = models.import_local(path, name=name, folder=folder)
-    return {"entry": entry}
-
-@app.post("/v1/models/remove_user")
-def models_remove_user(req: dict[str, Any]):
-    model_id = str(req.get("model_id") or "")
-    models.remove_user_model(model_id)
-    return {"ok": True}

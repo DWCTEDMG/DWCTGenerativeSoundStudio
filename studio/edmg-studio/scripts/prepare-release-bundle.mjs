@@ -22,6 +22,7 @@ import {
   uvRunArgs,
   uvSyncArgs,
 } from "./release-python-toolchain.mjs";
+import { writeReleaseEvidence } from "./release-evidence-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -373,6 +374,14 @@ async function main() {
   const existing = await reusableBundle(expected);
   if (existing) {
     const directorManifest = await stageDirectorBundle();
+    const releaseEvidence = await writeReleaseEvidence({
+      root,
+      phase: "bundle",
+      profile: acceleratorProfile,
+      uvCommand,
+      version: JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version,
+      env: process.env,
+    });
     console.log(JSON.stringify({
       ok: true,
       skippedRebuild: true,
@@ -381,6 +390,11 @@ async function main() {
       manifest: existing,
       directorBundleManifestPath,
       directorManifest,
+      releaseEvidence: {
+        indexPath: path.relative(root, releaseEvidence.indexPath).split(path.sep).join("/"),
+        checksumPath: path.relative(root, releaseEvidence.checksumPath).split(path.sep).join("/"),
+        sbomPath: path.relative(root, releaseEvidence.sbomPath).split(path.sep).join("/"),
+      },
     }, null, 2));
     return;
   }
@@ -388,7 +402,26 @@ async function main() {
   const sourceArtifact = buildBackendBundle(uvCommand, acceleratorProfile);
   const manifest = await stageBackendBundle(sourceArtifact, expected);
   const directorManifest = await stageDirectorBundle();
-  console.log(JSON.stringify({ ok: true, bundleManifestPath, manifest, directorBundleManifestPath, directorManifest }, null, 2));
+  const releaseEvidence = await writeReleaseEvidence({
+    root,
+    phase: "bundle",
+    profile: acceleratorProfile,
+    uvCommand,
+    version: JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version,
+    env: process.env,
+  });
+  console.log(JSON.stringify({
+    ok: true,
+    bundleManifestPath,
+    manifest,
+    directorBundleManifestPath,
+    directorManifest,
+    releaseEvidence: {
+      indexPath: path.relative(root, releaseEvidence.indexPath).split(path.sep).join("/"),
+      checksumPath: path.relative(root, releaseEvidence.checksumPath).split(path.sep).join("/"),
+      sbomPath: path.relative(root, releaseEvidence.sbomPath).split(path.sep).join("/"),
+    },
+  }, null, 2));
 }
 
 main().catch((error) => {

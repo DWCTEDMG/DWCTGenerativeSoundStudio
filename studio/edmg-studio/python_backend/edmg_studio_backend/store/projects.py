@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,7 @@ class ProjectStore:
         self.projects_dir.mkdir(parents=True, exist_ok=True)
 
     def _proj_dir(self, project_id: str) -> Path:
-        d = self.projects_dir / project_id
+        d = self._resolve_project_dir(project_id)
         d.mkdir(parents=True, exist_ok=True)
         (d / "assets" / "audio").mkdir(parents=True, exist_ok=True)
         (d / "assets" / "overlays").mkdir(parents=True, exist_ok=True)
@@ -121,7 +123,22 @@ class ProjectStore:
         return d
 
     def _project_path(self, project_id: str) -> Path:
-        return self.projects_dir / project_id / "project.json"
+        return self._resolve_project_dir(project_id) / "project.json"
+
+    def _resolve_project_dir(self, project_id: str) -> Path:
+        safe_project_id = self._validate_project_id(project_id)
+        projects_root = os.path.realpath(os.fspath(self.projects_dir))
+        candidate = os.path.realpath(os.path.join(projects_root, safe_project_id))
+        if not candidate.startswith(projects_root + os.sep):
+            raise ValueError("Project directory must stay inside the projects root")
+        return Path(candidate)
+
+    @staticmethod
+    def _validate_project_id(project_id: str) -> str:
+        value = str(project_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value):
+            raise ValueError("Invalid project identifier")
+        return value
 
     def _backup_before_migration(self, project_path: Path, from_version: int) -> Path:
         stamp = time.strftime("%Y%m%d-%H%M%S")

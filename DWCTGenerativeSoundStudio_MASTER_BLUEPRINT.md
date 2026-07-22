@@ -1328,7 +1328,7 @@ Codex should create or update an ADR when a task changes:
 
 These form the dependency-critical queue for the integration captain. They are not a scope boundary: the creative-intelligence, model, live/world, quality, documentation, and release lanes begin in parallel according to the seven-day schedule.
 
-**Execution status on `codex/uv-integration` (2026-07-15):**
+**Execution status on `codex/uv-integration` (2026-07-21, re-audited):**
 
 | WP | Status | Notes |
 |---|---|---|
@@ -1339,13 +1339,22 @@ These form the dependency-critical queue for the integration captain. They are n
 | WP-05 / P1-02 | Done | SQLite `JobStore` with leases, events, JSON migrate |
 | WP-06 / P1-05 | Done | Autosave journal + Timeline recovery UI |
 | WP-07 / P1-03 | Done | `.mp4.artifact.json` on internal render completion |
-| WP-08 / P1-06 | Partial | Typed contracts for readiness/health/recovery in `src/shared/api/contracts.ts` |
-| WP-09 / P2-01 | Partial | System + Project durability routers extracted to `api/routers.py` |
-| WP-10 / P2-02 | Partial | Command stack + Timeline Undo/Redo for deletes; motion grammar apply API |
-| WP-11 / P2-04 | Partial | Shared job status helpers + chip on Render Queue; job events API |
-| WP-12 / P3-01 | Partial | Music Graph v1 compatibility adapter + `GET /v1/projects/{id}/music_graph` |
+| WP-08 / P1-06 | Partial | Typed contracts extended for Music Graph, Render Plan GET, variant review, live assets, template packages, and performer plan in `src/shared/api/contracts.ts` |
+| WP-09 / P2-01 | Partial | System + Project durability + **Models** routers extracted to `api/routers.py` |
+| WP-10 / P2-02 | Partial | Command stack + Timeline Undo/Redo for delete/move/trim (UI drag + backend helpers); split/property coverage still open |
+| WP-11 / P2-04 | Done | Shared `ProjectJobsPanel` + `useProjectJobs` on Render Queue and Review; job events in log viewer |
+| WP-12 / P3-01 | Partial | Music Graph v1 adapter enriched (stems, semantics, lyrics/ASR); consumed by Director payload, Conductor diagnostics/routing, Workspace Understand panel, and timeline section markers |
 
-Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`, `.env.example`); P0-02 branch policy (`docs/BRANCH_POLICY.md`); P1-04 Project Health (`GET /v1/projects/{id}/health` + Workspace panel); P3-05/P3-06 foundations (motion grammar + stem modulation APIs); **P3-03 Director modes** (six modes + Creative Direction UI); **P3-04 Visual DNA workspace** (inspect/approve/deprecate panel + update API); **P4-03/P4-04 Conductor promote** (proxy→hero promote endpoint + Render UX); **P5-02/P5-03 model lanes** (catalog lane tags, promote gates, benchmark record hooks + Models UI); **W6-01 live cue protocol preview** (`GET /v1/projects/{id}/live_cues` from Music Graph).
+Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`, `.env.example`); P0-02 branch policy (`docs/BRANCH_POLICY.md`); P1-04 Project Health (`GET /v1/projects/{id}/health` + Workspace panel); P3-02 foundations (semantic tags + ASR lyrics in Music Graph adapter; CLAP lane remains optional/offline-safe); P3-05/P3-06 foundations (motion grammar + stem modulation APIs); **P3-03 Director modes** (six modes + Creative Direction UI); **P3-04 Visual DNA workspace** (inspect/approve/deprecate panel + update API); **P4-01 Render Plan v1 (partial)** (`enrich_render_plan` task DAG + cache keys + estimates/warnings on conductor plans; `GET .../render/conductor/plan`; Render Lab `RenderPlanPanel`); **P4-03/P4-04 Conductor promote** (proxy→hero promote endpoint + Render UX); **P4-05 Variant Review** (compare/approve API + Review page); **P4-06 Continuity validation** (`GET .../render/conductor/continuity` + Render/Review UI); **P5-02/P5-03 model lanes** (catalog lane tags, promote gates, benchmark record hooks + Models UI); **P5-05 release evidence (partial)** (CycloneDX SBOM + SHA-256 checksum manifests under `release/evidence/`, env-gated signing hook stub, clean-machine smoke checklist; full signed installer + VM proof still credential/VM blocked); **P5-06 documentation relaunch (partial)** (`studio/edmg-studio/README.md` + `RELEASE.md` feature/evidence/contract-freeze sections; full architecture/migration/known-issues docs still open); **P0-06 baseline metrics (stub)** (`GET /v1/metrics/baseline` + Settings read-only budgets; named-hardware W7-04 evidence pending); **P2-05 Understand space (partial)** (`UnderstandPanel` on Workspace with Music Graph sections/stems/semantic tags/ASR display; editable corrections still open); **W6-01 live cue publishers** (OSC/MIDI/WS publish start/stop + Review Labs panel); **W6-02 world adapters** (TouchDesigner/Unreal export + simulator contract tests); **W6-01 live cue protocol preview** (`GET /v1/projects/{id}/live_cues` from Music Graph); **W6-03 live asset system (partial)** (`GET/POST .../live_assets` precomputed packs + bounded modulation sample API + Workspace stat strip); **W6-04 template packages (partial)** (`GET/POST .../template_package/export|import` versioned manifest + Workspace Handoff UI); **W6-05 performer workflow (partial)** (`GET/POST .../render/performer/plan` Wan S2V/high-end lane advisory plan + Render Lab panel); **P2-04 Render Lab completion (partial)** (`ProjectJobsPanel` for internal render jobs on Render Lab, matching Render Queue/Review); **W7-01 test matrix (partial)** — backend route/contract tests for new domains; Electron e2e, media golden, and full IPC matrix still open.
+
+| WP | Status | Notes |
+|---|---|---|
+| P5-06 / W7-01 docs | Partial | README + RELEASE relaunch sections; full doc set and complete test matrix pending |
+| P2-05 Understand | Partial | Workspace `UnderstandPanel` with editable section/lyric/tag/tempo corrections + `PATCH .../music_graph/corrections` invalidates Conductor plans; beat/stem/energy editors and dedicated route still open |
+| P0-06 / W7-04 metrics | Stub | `/v1/metrics/baseline` + Settings UI; named-hardware timing evidence pending |
+| W7-05 beta handoff | Blocked | Signing creds, clean VM installer proof, GPU benchmark evidence, full e2e matrix |
+
+**Verification on this audit (2026-07-21):** backend pytest **240+ passed** (includes understand corrections + timeline move/trim command tests); frontend `typecheck` + targeted vitest **pass** for Understand corrections and timeline history. Router store lookup fixed so extracted project routes honor test/runtime `store` monkeypatches. Blueprint acceptance gates (signed installer, GPU benchmarks, full Electron e2e, named-hardware W7-04) remain open.
 
 1. **WP-01 / P0-01:** repair FFmpeg provisioning in CI and make the four failing tests diagnostic when FFmpeg is absent.
 2. **WP-02 / P0-04:** add one shared system-readiness service and surface its result in Settings/System.

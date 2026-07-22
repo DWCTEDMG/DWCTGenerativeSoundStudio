@@ -96,6 +96,9 @@ def test_advisory_render_plan_routes_by_scene_profile_and_dna_bias():
     assert any(step.kind == "render_motion" for step in plan.sections[1].steps)
     assert plan.fallback_branches[1].reroute_to == "internal"
     assert any(item.startswith("visual_dna_confidence=") for item in plan.diagnostics)
+    assert plan.estimates is not None
+    assert len(plan.tasks) >= 3
+    assert all(task.cache_key for task in plan.tasks)
 
 
 def test_advisory_render_plan_falls_back_to_proxy_when_only_proxy_is_available():

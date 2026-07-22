@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm run build:widget && pnpm run build:server",
     "build:widget": "vite build",
@@ -13,10 +14,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/ext-apps": "^1.7.1",
+    "@modelcontextprotocol/ext-apps": "^1.7.4",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.5",
-    "express": "^5.1.0",
+    "express": "^5.2.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.1.12"
@@ -30,6 +31,17 @@
     "@vitejs/plugin-react": "^6.0.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vite": "^8.0.10"
+    "vite": "^8.1.5"
+  },
+  "pnpm": {
+    "overrides": {
+      "@hono/node-server": "2.0.11",
+      "body-parser": "2.3.0",
+      "esbuild": "0.28.1",
+      "fast-uri": "3.1.4",
+      "hono": "4.12.31",
+      "ip-address": "10.2.0",
+      "qs": "6.15.3"
+    }
   }
 }

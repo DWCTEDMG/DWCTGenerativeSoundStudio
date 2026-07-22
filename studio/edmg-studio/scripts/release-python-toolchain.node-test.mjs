@@ -22,6 +22,7 @@ import {
   uvLockCheckArgs,
   uvRunArgs,
   uvSyncArgs,
+  uvExportCycloneDxArgs,
   validateReleaseManifest,
 } from "./release-python-toolchain.mjs";
 
@@ -101,6 +102,7 @@ test("dynamic dependency and index overrides are rejected", () => {
 test("frozen uv commands compose one accelerator with deterministic capabilities", () => {
   assert.deepEqual(selectedExtras("cpu"), ["cpu", ...RELEASE_CAPABILITY_EXTRAS]);
   assert.deepEqual(uvLockCheckArgs(), ["lock", "--check"]);
+  assert.deepEqual(uvExportCycloneDxArgs("cpu").slice(0, 4), ["export", "--format", "cyclonedx1.5", "--frozen"]);
   assert.deepEqual(uvSyncArgs("cuda"), [
     "sync",
     "--frozen",
