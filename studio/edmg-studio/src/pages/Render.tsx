@@ -6,7 +6,6 @@ import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
-import { copyPathValue, desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
 import { useProjectJobs } from "../shared/jobs/useProjectJobs";
@@ -1267,30 +1266,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       await refreshInternalPreflight();
     } catch (e: any) {
       setErr(String(e));
-    }
-  };
-
-  const copyPathToClipboard = async (label: string, value?: string | null) => {
-    if (!value) return;
-    setErr(null);
-    try {
-      const result = await copyPathValue(label, value);
-      if (!result.ok) throw new Error(result.error || `Unable to copy ${label}`);
-      setInfo({ ...result, copied: label, value });
-    } catch (e: any) {
-      setErr(`Failed to copy ${label}: ${String(e)}`);
-    }
-  };
-
-  const revealLocalPath = async (label: string, value?: string | null, mode: "reveal" | "open" = "reveal") => {
-    if (!value) return;
-    setErr(null);
-    try {
-      const result = await runDesktopArtifactAction(label, value, mode);
-      if (!result.ok) throw new Error(result.error || `Unable to ${mode} ${label}`);
-      setInfo({ ...result, label, value });
-    } catch (e: any) {
-      setErr(`Failed to ${mode} ${label}: ${String(e)}`);
     }
   };
 
