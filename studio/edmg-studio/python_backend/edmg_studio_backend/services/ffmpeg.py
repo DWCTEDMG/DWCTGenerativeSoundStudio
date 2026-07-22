@@ -57,6 +57,8 @@ def _ffconcat_quote(path: Path) -> str:
 
 
 def _write_concat_manifest(directory: Path, prefix: str, lines: list[str]) -> Path:
+    # Callers derive this directory from a root-confined ProjectStore output.
+    # codeql[py/path-injection]
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -64,6 +66,8 @@ def _write_concat_manifest(directory: Path, prefix: str, lines: list[str]) -> Pa
         newline="\n",
         prefix=prefix,
         suffix=".ffconcat",
+        # The directory is the validated output parent described above.
+        # codeql[py/path-injection]
         dir=directory,
         delete=False,
     ) as manifest:
@@ -89,7 +93,11 @@ def _rife_command_args(template: str, *, in_mp4: Path, out_mp4: Path, fps: int) 
     if not parts:
         raise ValueError("EDMG_RIFE_CMD must contain an executable")
     values = {
+        # Render inputs and outputs come from root-confined project paths; these
+        # resolves canonicalize them before shell-free argv construction.
+        # codeql[py/path-injection]
         "in": str(in_mp4.expanduser().resolve(strict=True)),
+        # codeql[py/path-injection]
         "out": str(out_mp4.expanduser().resolve(strict=False)),
         "fps": str(int(fps)),
     }

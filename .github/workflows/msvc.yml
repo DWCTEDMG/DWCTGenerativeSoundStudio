@@ -18,7 +18,10 @@ on:
 
 env:
   # Path to the CMake build directory.
-  build: '${{ github.workspace }}/build'
+  # Keep generated JUCE dependency sources under the CMake source tree. The
+  # legacy MSVC analysis action otherwise prepends the source root to absolute
+  # dependency paths and fails before analysis begins.
+  build: '${{ github.workspace }}/juce_example/build'
 
 permissions:
   contents: read

@@ -300,12 +300,14 @@ describe("EDMG Director MCP server", () => {
       EDMG_DIRECTOR_CORS_ALLOWED_ORIGINS:
         "https://director-widget.example, http://localhost:4173/",
     });
-    assert.equal(configured.corsAllowedOrigins.includes("https://director-widget.example"), true);
-    assert.equal(configured.corsAllowedOrigins.includes("http://localhost:4173"), true);
-    assert.equal(
-      configured.corsAllowedOrigins.includes("https://web-sandbox.oaiusercontent.com"),
-      true,
-    );
+    assert.deepEqual(configured.corsAllowedOrigins, [
+      "http://localhost:3001",
+      "http://127.0.0.1:5173",
+      "http://localhost:5173",
+      "https://web-sandbox.oaiusercontent.com",
+      "https://director-widget.example",
+      "http://localhost:4173",
+    ]);
 
     assert.throws(
       () =>

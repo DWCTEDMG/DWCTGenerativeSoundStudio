@@ -62,11 +62,13 @@ describe("director runtime", () => {
     await expect(runtime.startDirectorIfNeeded()).resolves.toBe(false);
     expect(spawnCalls).toHaveLength(3);
     expect(spawnCalls[0]?.command).toBe(process.execPath);
-    expect(spawnCalls[0]?.args.join(" ")).toContain("node_modules\\vite\\bin\\vite.js build");
+    expect(spawnCalls[0]?.args[0]).toContain(path.join("node_modules", "vite", "bin", "vite.js"));
+    expect(spawnCalls[0]?.args.slice(1)).toEqual(["build"]);
     expect(spawnCalls[1]?.command).toBe(process.execPath);
-    expect(spawnCalls[1]?.args.join(" ")).toContain("node_modules\\typescript\\bin\\tsc -p");
+    expect(spawnCalls[1]?.args[0]).toContain(path.join("node_modules", "typescript", "bin", "tsc"));
+    expect(spawnCalls[1]?.args[1]).toBe("-p");
     expect(spawnCalls[2]?.command).toBe(process.execPath);
-    expect(spawnCalls[2]?.args.join(" ")).toContain("dist-server\\server.js");
+    expect(spawnCalls[2]?.args[0]).toContain(path.join("dist-server", "server.js"));
     expect(spawnCalls.every((call) => call.options?.shell === false)).toBe(true);
     expect(spawnCalls.every((call) => call.options?.env?.ELECTRON_RUN_AS_NODE === "1")).toBe(true);
   });
