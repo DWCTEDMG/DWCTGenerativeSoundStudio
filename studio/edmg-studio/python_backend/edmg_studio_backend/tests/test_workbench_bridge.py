@@ -1,12 +1,32 @@
 from __future__ import annotations
 
 from edmg_studio_backend.services.workbench_bridge import (
+    _parse_schedule_points,
     build_unreal_bridge_export_payloads,
     build_unreal_bridge_preview,
     merge_reactive_lab_into_timeline,
     planner_lab_to_canonical_plan,
     planner_lab_to_project_analysis,
 )
+
+
+def test_schedule_parser_rejects_oversized_input_without_regex_backtracking():
+    oversized = "9:" + ("9" * 65_535)
+
+    try:
+        _parse_schedule_points(oversized)
+    except ValueError as exc:
+        assert "65536-character limit" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("expected oversized schedule to be rejected")
+
+
+def test_schedule_parser_accepts_supported_numeric_forms_and_skips_non_finite_values():
+    assert _parse_schedule_points("0:(1.0), 24:-.25, 48:(+2), 72:nan") == [
+        (0, 1.0),
+        (24, -0.25),
+        (48, 2.0),
+    ]
 
 
 def test_planner_lab_conversion_builds_renderer_ready_analysis_and_plan():

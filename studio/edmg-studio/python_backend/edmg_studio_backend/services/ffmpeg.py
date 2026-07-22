@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import math
 import os
+import shlex
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
+from string import Formatter
 
 
 def ensure_ffmpeg(ffmpeg_path: str) -> str:
@@ -33,6 +37,81 @@ def ensure_ffprobe(ffmpeg_path: str) -> str:
     if not found:
         raise RuntimeError("ffprobe not found. Install FFmpeg with ffprobe available on PATH.")
     return found
+
+
+def _ffconcat_quote(path: Path) -> str:
+    """Return an ffconcat-safe, absolute file path.
+
+    The concat demuxer parses its input as a directive file, so writing a raw
+    filename would let quotes or newlines alter the manifest. Resolve inputs
+    before serialization and use the demuxer's documented single-quote
+    escaping form.
+    """
+    resolved = path.expanduser().resolve(strict=True)
+    if not resolved.is_file():
+        raise ValueError(f"Media input is not a file: {path}")
+    value = resolved.as_posix()
+    if any(char in value for char in ("\x00", "\r", "\n")):
+        raise ValueError("Media paths cannot contain NUL or newline characters")
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+def _write_concat_manifest(directory: Path, prefix: str, lines: list[str]) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        prefix=prefix,
+        suffix=".ffconcat",
+        dir=directory,
+        delete=False,
+    ) as manifest:
+        manifest.write("ffconcat version 1.0\n")
+        manifest.write("\n".join(lines))
+        manifest.write("\n")
+        return Path(manifest.name)
+
+
+def _rife_command_args(template: str, *, in_mp4: Path, out_mp4: Path, fps: int) -> list[str]:
+    """Expand a configured RIFE command without invoking a command shell."""
+    try:
+        parts = shlex.split(template, posix=os.name != "nt")
+    except ValueError as exc:
+        raise ValueError("EDMG_RIFE_CMD contains invalid quoting") from exc
+    if os.name == "nt":
+        parts = [
+            part[1:-1]
+            if len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}
+            else part
+            for part in parts
+        ]
+    if not parts:
+        raise ValueError("EDMG_RIFE_CMD must contain an executable")
+    values = {
+        "in": str(in_mp4.expanduser().resolve(strict=True)),
+        "out": str(out_mp4.expanduser().resolve(strict=False)),
+        "fps": str(int(fps)),
+    }
+    try:
+        parsed_parts = [list(Formatter().parse(part)) for part in parts]
+    except ValueError as exc:
+        raise ValueError("EDMG_RIFE_CMD contains invalid placeholder syntax") from exc
+    for parsed_part in parsed_parts:
+        for _literal, field_name, format_spec, conversion in parsed_part:
+            if field_name is None:
+                continue
+            if field_name not in values or format_spec or conversion:
+                raise ValueError(
+                    "EDMG_RIFE_CMD may only use exact {in}, {out}, and {fps} placeholders"
+                )
+    try:
+        args = [part.format_map(values) for part in parts]
+    except (KeyError, ValueError, AttributeError, IndexError) as exc:
+        raise ValueError("EDMG_RIFE_CMD may only use {in}, {out}, and {fps} placeholders") from exc
+    if any("\x00" in arg for arg in args):
+        raise ValueError("EDMG_RIFE_CMD arguments cannot contain NUL characters")
+    return args
 
 
 def _probe_duration_seconds(ffmpeg_path: str, media_path: Path) -> float | None:
@@ -111,14 +190,16 @@ def assemble_slideshow(
     ffmpeg = ensure_ffmpeg(ffmpeg_path)
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
 
-    list_file = out_mp4.parent / f".concat_{out_mp4.stem}.txt"
     lines: list[str] = []
-    for p, d in zip(image_paths, durations_s):
-        d = max(0.1, float(d))
-        lines.append(f"file '{p.as_posix()}'")
+    for p, d in zip(image_paths, durations_s, strict=True):
+        d = float(d)
+        if not math.isfinite(d):
+            raise ValueError("Image durations must be finite numbers")
+        d = max(0.1, d)
+        lines.append(f"file {_ffconcat_quote(p)}")
         lines.append(f"duration {d}")
-    lines.append(f"file '{image_paths[-1].as_posix()}'")
-    list_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    lines.append(f"file {_ffconcat_quote(image_paths[-1])}")
+    list_file = _write_concat_manifest(out_mp4.parent, ".concat_", lines)
 
     cmd = [
         ffmpeg, "-y",
@@ -135,9 +216,12 @@ def assemble_slideshow(
         str(out_mp4)
     ]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg failed: {proc.stderr[:2000]}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"FFmpeg failed: {proc.stderr[:2000]}")
+    finally:
+        list_file.unlink(missing_ok=True)
 
 def assemble_image_sequence(
     ffmpeg_path: str,
@@ -160,8 +244,11 @@ def assemble_image_sequence(
         raise ValueError(f"No frames found in {frames_dir} ({glob_pattern})")
 
     # Create concat list to avoid relying on strict %06d numbering.
-    list_file = out_mp4.parent / f".frames_{out_mp4.stem}.txt"
-    list_file.write_text("\n".join([f"file '{p.as_posix()}'" for p in frames]) + "\n", encoding="utf-8")
+    list_file = _write_concat_manifest(
+        out_mp4.parent,
+        ".frames_",
+        [f"file {_ffconcat_quote(path)}" for path in frames],
+    )
 
     cmd = [
         ffmpeg, "-y",
@@ -179,9 +266,12 @@ def assemble_image_sequence(
         str(out_mp4)
     ]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg failed: {proc.stderr[:2000]}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"FFmpeg failed: {proc.stderr[:2000]}")
+    finally:
+        list_file.unlink(missing_ok=True)
 
 def concat_videos(
     ffmpeg_path: str,
@@ -195,17 +285,23 @@ def concat_videos(
     ffmpeg = ensure_ffmpeg(ffmpeg_path)
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
 
-    list_file = out_mp4.parent / f".concat_vid_{out_mp4.stem}.txt"
-    list_file.write_text("\n".join([f"file '{p.as_posix()}'" for p in video_paths]) + "\n", encoding="utf-8")
+    list_file = _write_concat_manifest(
+        out_mp4.parent,
+        ".concat_vid_",
+        [f"file {_ffconcat_quote(path)}" for path in video_paths],
+    )
 
     cmd = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file)]
     if audio_path and audio_path.exists():
         cmd += ["-i", str(audio_path), "-shortest"]
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(out_mp4)]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg failed: {proc.stderr[:2000]}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"FFmpeg failed: {proc.stderr[:2000]}")
+    finally:
+        list_file.unlink(missing_ok=True)
 
 
 
@@ -252,8 +348,8 @@ def interpolate_video_fps(
     if engine_l in ("auto", "rife") and rife_cmd:
         # User supplies a command template, because RIFE CLIs vary.
         # Template fields: {in}, {out}, {fps}
-        cmd = rife_cmd.format(**{"in": str(in_mp4), "out": str(out_mp4), "fps": str(fps_out)})
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        cmd = _rife_command_args(rife_cmd, in_mp4=in_mp4, out_mp4=out_mp4, fps=fps_out)
+        proc = subprocess.run(cmd, shell=False, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"RIFE command failed: {proc.stderr[:2000]}")
         return

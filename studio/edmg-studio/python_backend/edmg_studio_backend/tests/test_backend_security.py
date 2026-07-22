@@ -135,7 +135,7 @@ def test_cors_defaults_survive_env_origin_override(monkeypatch):
     monkeypatch.delenv("EDMG_BACKEND_CORS_ORIGIN_REGEX", raising=False)
     settings = BackendSecuritySettings.from_env()
     assert "null" in settings.cors_origins
-    assert "https://app.example.com" in settings.cors_origins
+    assert settings.cors_origins.count("https://app.example.com") == 1
     # Loopback Studio UI is regex-covered (any port), not a pinned origin list.
     assert "http://127.0.0.1:5173" not in settings.cors_origins
     assert settings.cors_origin_regex == _LOCAL_DEV_CORS_ORIGIN_REGEX

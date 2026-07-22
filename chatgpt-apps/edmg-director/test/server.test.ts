@@ -295,6 +295,34 @@ describe("EDMG Director MCP server", () => {
   let appServer: HttpServer;
   let appBaseUrl = "";
 
+  it("parses only exact additional CORS origins from configuration", () => {
+    const configured = resolveServerConfig({
+      EDMG_DIRECTOR_CORS_ALLOWED_ORIGINS:
+        "https://director-widget.example, http://localhost:4173/",
+    });
+    assert.equal(configured.corsAllowedOrigins.includes("https://director-widget.example"), true);
+    assert.equal(configured.corsAllowedOrigins.includes("http://localhost:4173"), true);
+    assert.equal(
+      configured.corsAllowedOrigins.includes("https://web-sandbox.oaiusercontent.com"),
+      true,
+    );
+
+    assert.throws(
+      () =>
+        resolveServerConfig({
+          EDMG_DIRECTOR_CORS_ALLOWED_ORIGINS: "https://*.example.com",
+        }),
+      /exact HTTP\(S\) origins/i,
+    );
+    assert.throws(
+      () =>
+        resolveServerConfig({
+          EDMG_DIRECTOR_CORS_ALLOWED_ORIGINS: "https://example.com/widget",
+        }),
+      /exact HTTP\(S\) origins/i,
+    );
+  });
+
   before(async () => {
     backendServer = createBackendServer(captured);
     backendBaseUrl = await listen(backendServer);
@@ -318,6 +346,25 @@ describe("EDMG Director MCP server", () => {
     assert.equal(payload.edmgBaseUrl, backendBaseUrl);
   });
 
+  it("allows the Studio browser origin without reflecting arbitrary origins", async () => {
+    const allowedOrigin = "http://127.0.0.1:5173";
+    const allowed = await fetch(appBaseUrl, {
+      headers: { Origin: allowedOrigin },
+    });
+    assert.equal(allowed.headers.get("access-control-allow-origin"), allowedOrigin);
+
+    const denied = await fetch(appBaseUrl, {
+      headers: { Origin: "https://attacker.example" },
+    });
+    assert.equal(denied.headers.get("access-control-allow-origin"), null);
+
+    const chatGptWidgetOrigin = "https://web-sandbox.oaiusercontent.com";
+    const widget = await fetch(appBaseUrl, {
+      headers: { Origin: chatGptWidgetOrigin },
+    });
+    assert.equal(widget.headers.get("access-control-allow-origin"), chatGptWidgetOrigin);
+  });
+
   it("lists all EDMG tools", async () => {
     await withClient(appBaseUrl, async (client) => {
       const result = await client.listTools();
@@ -332,6 +379,26 @@ describe("EDMG Director MCP server", () => {
         "import_planner_lab_payload",
         "search",
       ]);
+    });
+  });
+
+  it("serves the ChatGPT widget resource and its module assets to the sandbox origin", async () => {
+    await withClient(appBaseUrl, async (client) => {
+      const resource = await client.readResource({ uri: "ui://edmg-director/review-board.html" });
+      const content = asRecord(resource.contents[0]);
+      const html = String(content.text ?? "");
+      const scriptUrl = html.match(/<script[^>]+src=["']([^"']+)["']/i)?.[1];
+
+      assert.equal(content.mimeType, "text/html;profile=mcp-app");
+      assert.ok(scriptUrl, "widget resource should reference its built module");
+      assert.equal(new URL(scriptUrl).origin, appBaseUrl);
+
+      const sandboxOrigin = "https://web-sandbox.oaiusercontent.com";
+      const script = await fetch(scriptUrl, {
+        headers: { Origin: sandboxOrigin },
+      });
+      assert.equal(script.ok, true);
+      assert.equal(script.headers.get("access-control-allow-origin"), sandboxOrigin);
     });
   });
 

@@ -181,7 +181,18 @@ class HFTransformersProvider(BaseJSONProvider):
         self._pipeline = None
         if _TF_OK and pipeline:
             try:
-                self._pipeline = pipeline("text-generation", model=self.config.model)
+                # Keep Hub configuration from selecting executable remote code. In
+                # vulnerable Transformers releases, a model config can smuggle a
+                # Hub kernel through ``_attn_implementation_internal`` even when
+                # ``trust_remote_code`` is false (GHSA-29pf-2h5f-8g72). Passing an
+                # explicit built-in implementation to ``from_pretrained`` overrides
+                # that untrusted internal value at the final model-loading boundary.
+                self._pipeline = pipeline(
+                    "text-generation",
+                    model=self.config.model,
+                    trust_remote_code=False,
+                    model_kwargs={"attn_implementation": "eager"},
+                )
             except Exception:
                 self._pipeline = None
 

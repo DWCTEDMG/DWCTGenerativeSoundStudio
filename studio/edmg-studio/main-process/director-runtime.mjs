@@ -87,10 +87,6 @@ export function createDirectorRuntime({
     } catch {}
   }
 
-  function getPnpmCommand() {
-    return isWindows ? "pnpm.cmd" : "pnpm";
-  }
-
   function getAdvertisedBaseUrl() {
     return String(currentDirectorPublicBaseUrl || serviceUrl).trim() || serviceUrl;
   }
@@ -127,8 +123,8 @@ export function createDirectorRuntime({
 
   function getDirectorLaunchSpec() {
     const cwd = getDirectorRootDir();
+    const entrypoint = getDirectorServerEntrypoint();
     if (app.isPackaged) {
-      const entrypoint = getDirectorServerEntrypoint();
       return {
         command: process.execPath,
         args: [entrypoint],
@@ -137,26 +133,81 @@ export function createDirectorRuntime({
           ELECTRON_RUN_AS_NODE: "1",
         },
         label: "packaged-director",
-      };
-    }
-
-    if (isWindows) {
-      return {
-        command: process.env.ComSpec || "cmd.exe",
-        args: ["/d", "/s", "/c", `${getPnpmCommand()} start`],
-        cwd,
-        env: {},
-        label: "dev-director",
+        requiredPaths: [entrypoint],
+        buildSteps: [],
       };
     }
 
     return {
-      command: getPnpmCommand(),
-      args: ["start"],
+      command: process.execPath,
+      args: [entrypoint],
       cwd,
-      env: {},
+      env: {
+        ELECTRON_RUN_AS_NODE: "1",
+      },
       label: "dev-director",
+      requiredPaths: [entrypoint, path.join(cwd, "assets", "review-board.html")],
+      buildSteps: [
+        {
+          label: "widget",
+          scriptPath: path.join(cwd, "node_modules", "vite", "bin", "vite.js"),
+          args: ["build"],
+        },
+        {
+          label: "server",
+          scriptPath: path.join(cwd, "node_modules", "typescript", "bin", "tsc"),
+          args: ["-p", path.join(cwd, "tsconfig.server.json")],
+        },
+      ],
     };
+  }
+
+  function runDirectorBuildStep(step, childEnv, logPaths) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let child;
+      try {
+        child = spawnProcess(process.execPath, [step.scriptPath, ...step.args], {
+          cwd: getDirectorRootDir(),
+          env: {
+            ...childEnv,
+            ELECTRON_RUN_AS_NODE: "1",
+          },
+          shell: false,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (error) {
+        lastError = `EDMG Director ${step.label} build could not start: ${String(error?.message ?? error)}`;
+        resolve(false);
+        return;
+      }
+
+      const stdoutLog = appendChildOutput(child.stdout, logPaths.stdoutPath);
+      const stderrLog = appendChildOutput(child.stderr, logPaths.stderrPath);
+      const finish = (ok, detail = "") => {
+        if (settled) return;
+        settled = true;
+        closeLogStream(stdoutLog);
+        closeLogStream(stderrLog);
+        if (!ok) {
+          lastError = detail || `EDMG Director ${step.label} build failed.`;
+        }
+        resolve(ok);
+      };
+
+      child.once("error", (error) => {
+        finish(false, `EDMG Director ${step.label} build failed to start: ${String(error?.message ?? error)}`);
+      });
+      child.once("exit", (code, signal) => {
+        if (code === 0) {
+          finish(true);
+          return;
+        }
+        const detail = signal ? ` after signal ${signal}` : ` with code ${code ?? "unknown"}`;
+        finish(false, `EDMG Director ${step.label} build exited${detail}.`);
+      });
+    });
   }
 
   async function probeDirector(url = currentDirectorUrl) {
@@ -224,18 +275,33 @@ export function createDirectorRuntime({
     }
 
     const spec = getDirectorLaunchSpec();
-    if (app.isPackaged && !pathExistsSync(getDirectorServerEntrypoint())) {
-      lastError = `Bundled EDMG Director runtime is missing: ${getDirectorServerEntrypoint()}`;
-      console.warn("[director] bundle missing", lastError);
+    lastStartedAt = new Date().toISOString();
+    const baseChildEnv = buildDirectorChildEnv();
+    const logPaths = resolveDirectorLogPaths();
+
+    for (const step of spec.buildSteps) {
+      if (!pathExistsSync(step.scriptPath)) {
+        lastError = `EDMG Director ${step.label} build tool is missing: ${step.scriptPath}`;
+        console.warn("[director] build tool missing", lastError);
+        return false;
+      }
+      if (!(await runDirectorBuildStep(step, baseChildEnv, logPaths))) {
+        console.warn("[director] build failed", lastError);
+        return false;
+      }
+    }
+
+    const missingRuntimePath = spec.requiredPaths.find((requiredPath) => !pathExistsSync(requiredPath));
+    if (missingRuntimePath) {
+      lastError = `EDMG Director runtime is missing: ${missingRuntimePath}`;
+      console.warn("[director] runtime missing", lastError);
       return false;
     }
 
-    lastStartedAt = new Date().toISOString();
     const childEnv = {
-      ...buildDirectorChildEnv(),
+      ...baseChildEnv,
       ...spec.env,
     };
-    const logPaths = resolveDirectorLogPaths();
     const child = spawnProcess(spec.command, spec.args, {
       cwd: spec.cwd,
       env: childEnv,

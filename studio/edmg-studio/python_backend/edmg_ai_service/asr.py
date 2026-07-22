@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 NO_SPEECH_AFTER_VAD_NOTE = "No speech detected after VAD."
 DEFAULT_MODEL_SIZE = "turbo"
@@ -439,27 +443,29 @@ def transcribe_detailed(
                 api_key=nvidia_api_key,
                 nim_base_url=nim_base_url,
             )
-        except Exception as exc:
+        except Exception:
             if not fallback_to_whisper:
                 raise
+            logger.warning("Parakeet NIM transcription failed; using faster-whisper fallback", exc_info=True)
             fallback = _transcribe_faster_whisper(path, DEFAULT_MODEL_SIZE, device="cpu", compute_type="int8")
-            fallback["note"] = f"Parakeet NIM unavailable; used faster-whisper fallback: {exc}"
+            fallback["note"] = "Parakeet NIM unavailable; used faster-whisper fallback."
             fallback["requested_provider"] = "parakeet_nim"
             return fallback
 
     if normalized_provider == "parakeet":
         try:
             return _transcribe_parakeet(path, model_size, device=device)
-        except Exception as exc:
+        except Exception:
             if not fallback_to_whisper:
                 raise
+            logger.warning("Parakeet transcription failed; using faster-whisper fallback", exc_info=True)
             fallback = _transcribe_faster_whisper(
                 path,
                 DEFAULT_MODEL_SIZE,
                 device="cpu",
                 compute_type="int8",
             )
-            fallback["note"] = f"Parakeet unavailable; used faster-whisper fallback: {exc}"
+            fallback["note"] = "Parakeet unavailable; used faster-whisper fallback."
             fallback["requested_provider"] = "parakeet"
             fallback["requested_model_size"] = _normalize_parakeet_model(model_size)
             return fallback
