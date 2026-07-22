@@ -15,6 +15,7 @@ import {
   assertTorchIndexForProfile,
   assertTrackedCleanDependencyStatus,
   binaryMatchesManifest,
+  releaseUvEnvironment,
   releaseProvenanceMatches,
   resolveAcceleratorProfile,
   selectedExtras,
@@ -128,6 +129,19 @@ test("frozen uv commands compose one accelerator with deterministic capabilities
   assert.equal(run.filter((value) => value === "--extra").length, 6);
 });
 
+test("release builds isolate accelerator environments from the source runtime", () => {
+  const sourceEnv = { KEEP_ME: "yes", UV_LINK_MODE: "hardlink" };
+  const releaseEnv = releaseUvEnvironment(studioRoot, "cuda", sourceEnv);
+  assert.equal(releaseEnv.KEEP_ME, "yes");
+  assert.equal(releaseEnv.UV_LINK_MODE, "copy");
+  assert.equal(
+    releaseEnv.UV_PROJECT_ENVIRONMENT,
+    path.join(studioRoot, "release", "uv-environments", "cuda"),
+  );
+  assert.equal(sourceEnv.UV_PROJECT_ENVIRONMENT, undefined);
+  assert.throws(() => releaseUvEnvironment(studioRoot, "unknown", {}), /Unsupported accelerator profile/);
+});
+
 test("uv, Python, and Torch provenance checks enforce the release pins", () => {
   assert.equal(assertPinnedUvVersion("uv 0.11.28 (build metadata)"), "0.11.28");
   assert.throws(() => assertPinnedUvVersion("uv 0.11.27"), /pinned uv 0\.11\.28/);
@@ -189,9 +203,37 @@ test("supported release paths contain no pip or venv build fallback", () => {
 test("package release commands select explicit profiles without changing pnpm", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(studioRoot, "package.json"), "utf8"));
   assert.equal(packageJson.packageManager, "pnpm@10.33.0");
+  for (const profile of ["cpu", "directml", "cuda"]) {
+    assert.equal(
+      packageJson.scripts[`prepare:release-bundle:${profile}`],
+      `node scripts/prepare-release-bundle.mjs --profile ${profile}`,
+    );
+  }
   assert.match(packageJson.scripts["dist:win:cpu"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:win:directml"], /prepare:release-bundle:directml/);
-  assert.match(packageJson.scripts["dist:win:cuda"], /prepare:release-bundle:cuda/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /dist:win:cuda:dir/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /build_inno_external\.ps1/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /--profile cuda/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /--artifact-set win-inno-cuda/);
+  assert.match(packageJson.scripts["dist:win:cuda:dir"], /prepare:release-bundle:cuda/);
+  assert.match(packageJson.scripts["dist:win:cuda:nsis"], /prepare:release-bundle:cuda/);
   assert.match(packageJson.scripts["dist:linux"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:linux:cuda"], /prepare:release-bundle:cuda/);
+});
+
+test("Inno external installer tracks extracted payload files for safe uninstall", () => {
+  const innoBuild = fs.readFileSync(
+    path.join(studioRoot, "packaging", "windows", "build_inno_external.ps1"),
+    "utf8",
+  );
+  assert.match(innoBuild, /VER < EncodeVer\(7,0,0\)/);
+  assert.match(innoBuild, /ArchiveExtraction=enhanced\/nopassword/);
+  assert.match(innoBuild, /PayloadExpandedSize/);
+  assert.match(innoBuild, /Security\.Cryptography\.SHA256\]::Create/);
+  assert.doesNotMatch(innoBuild, /Get-FileHash/);
+  assert.match(innoBuild, /ExternalSize: \{0\}; Hash: "\{1\}"/);
+  assert.match(innoBuild, /external extractarchive recursesubdirs createallsubdirs ignoreversion/);
+  assert.doesNotMatch(innoBuild, /\[UninstallDelete\]/);
+  assert.doesNotMatch(innoBuild, /\{app\}\\\*/);
+  assert.doesNotMatch(innoBuild, /payload\\tools\\7zip/);
 });

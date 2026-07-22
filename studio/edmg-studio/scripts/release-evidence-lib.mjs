@@ -23,11 +23,35 @@ const RELEASE_ARTIFACT_GLOBS = Object.freeze({
     "electron-resources/director/director-bundle-manifest.json",
     "python_backend/uv.lock",
   ],
-  dist: [
+});
+
+export const RELEASE_ARTIFACT_SETS = Object.freeze([
+  "win-nsis",
+  "linux-appimage",
+  "win-inno",
+  "win-inno-cuda",
+]);
+
+const DIST_ARTIFACT_GLOBS = Object.freeze({
+  "win-nsis": [
     "dist/*.exe",
     "dist/*.blockmap",
-    "dist/*.AppImage",
     "dist/latest*.yml",
+    "dist/builder-effective-config.yaml",
+  ],
+  "linux-appimage": [
+    "dist/*.AppImage",
+    "dist/latest-linux.yml",
+    "dist/builder-effective-config.yaml",
+  ],
+  "win-inno": [
+    "dist-inno/*.exe",
+    "dist-inno/payload/*.7z",
+    "dist/builder-effective-config.yaml",
+  ],
+  "win-inno-cuda": [
+    "dist-inno-cuda/*.exe",
+    "dist-inno-cuda/payload/*.7z",
     "dist/builder-effective-config.yaml",
   ],
 });
@@ -56,9 +80,18 @@ function expandGlob(root, pattern) {
     .filter((candidate) => fs.statSync(candidate).isFile());
 }
 
-export function collectReleaseArtifactPaths(root, phase = "bundle") {
-  const phases = phase === "all" ? ["bundle", "dist"] : [phase];
-  const patterns = phases.flatMap((entry) => RELEASE_ARTIFACT_GLOBS[entry] || []);
+export function collectReleaseArtifactPaths(root, phase = "bundle", artifactSet = "") {
+  const normalizedArtifactSet = String(artifactSet || "").trim();
+  const wantsDist = phase === "dist" || phase === "all";
+  if (wantsDist && !RELEASE_ARTIFACT_SETS.includes(normalizedArtifactSet)) {
+    throw new Error(
+      `A dist artifact set is required (${RELEASE_ARTIFACT_SETS.join(", ")}); received ${JSON.stringify(normalizedArtifactSet)}`,
+    );
+  }
+  const patterns = [
+    ...(phase === "bundle" || phase === "all" ? RELEASE_ARTIFACT_GLOBS.bundle : []),
+    ...(wantsDist ? DIST_ARTIFACT_GLOBS[normalizedArtifactSet] : []),
+  ];
   const seen = new Set();
   const files = [];
 
@@ -194,6 +227,7 @@ export async function writeReleaseEvidence({
   root,
   phase = "bundle",
   profile,
+  artifactSet = "",
   uvCommand = "uv",
   version = "",
   env = process.env,
@@ -205,7 +239,7 @@ export async function writeReleaseEvidence({
   const sbomPath = path.join(evidenceDir, `python-backend-${resolvedProfile}.cyclonedx.json`);
   const sbom = generatePythonSbom({ root, uvCommand, profile: resolvedProfile, outputPath: sbomPath, env });
 
-  const artifactPaths = collectReleaseArtifactPaths(root, phase);
+  const artifactPaths = collectReleaseArtifactPaths(root, phase, artifactSet);
   if (fs.existsSync(sbomPath) && !artifactPaths.includes(sbomPath)) {
     artifactPaths.push(sbomPath);
     artifactPaths.sort((left, right) => repoRelative(root, left).localeCompare(repoRelative(root, right)));
@@ -218,6 +252,7 @@ export async function writeReleaseEvidence({
     artifactPaths,
     metadata: {
       phase,
+      artifactSet: artifactSet || undefined,
       studioVersion: version || undefined,
       acceleratorProfile: resolvedProfile,
       sbom: {
@@ -245,6 +280,7 @@ export async function writeReleaseEvidence({
     schemaVersion: RELEASE_EVIDENCE_SCHEMA_VERSION,
     updatedAt: new Date().toISOString(),
     phase,
+    artifactSet: artifactSet || undefined,
     studioVersion: version || undefined,
     acceleratorProfile: resolvedProfile,
     sbomPath: repoRelative(root, sbomPath),

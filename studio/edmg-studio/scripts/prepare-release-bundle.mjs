@@ -16,6 +16,7 @@ import {
   assertTrackedCleanDependencyStatus,
   binaryMatchesManifest,
   releaseProvenanceMatches,
+  releaseUvEnvironment,
   resolveAcceleratorProfile,
   sha256File,
   uvLockCheckArgs,
@@ -145,12 +146,12 @@ function resolveUv() {
   return { uvCommand, uvVersion };
 }
 
-function synchronizeReleaseEnvironment(uvCommand, profile) {
-  runChecked("validate committed uv lock", uvCommand, uvLockCheckArgs(), { cwd: pythonBackendDir });
-  runChecked("synchronize frozen release environment", uvCommand, uvSyncArgs(profile), { cwd: pythonBackendDir });
+function synchronizeReleaseEnvironment(uvCommand, profile, env) {
+  runChecked("validate committed uv lock", uvCommand, uvLockCheckArgs(), { cwd: pythonBackendDir, env });
+  runChecked("synchronize frozen release environment", uvCommand, uvSyncArgs(profile), { cwd: pythonBackendDir, env });
 }
 
-function collectReleaseProvenance(uvCommand, profile) {
+function collectReleaseProvenance(uvCommand, profile, env) {
   const stdout = runCaptured(
     "collect release provenance",
     uvCommand,
@@ -162,7 +163,7 @@ function collectReleaseProvenance(uvCommand, profile) {
       "--profile",
       profile,
     ]),
-    { cwd: pythonBackendDir },
+    { cwd: pythonBackendDir, env },
   );
   let payload;
   try {
@@ -251,12 +252,12 @@ async function reusableBundle(expected) {
   return manifest;
 }
 
-function buildBackendBundle(uvCommand, profile) {
+function buildBackendBundle(uvCommand, profile, env) {
   runChecked(
     "build backend bundle with frozen uv environment",
     uvCommand,
     uvRunArgs(profile, ["pyinstaller", "pyinstaller.spec", "--clean", "--noconfirm"]),
-    { cwd: pythonBackendDir },
+    { cwd: pythonBackendDir, env },
   );
   const built = distBackendCandidates().find((candidate) => fs.existsSync(candidate));
   if (!built) {
@@ -351,12 +352,13 @@ async function main() {
   assertRequiredFiles();
   assertTrackedCleanDependencyInputs();
   const { uvCommand, uvVersion } = resolveUv();
+  const releaseEnv = releaseUvEnvironment(root, acceleratorProfile, process.env);
 
   runChecked("prepare electron build assets", process.execPath, [path.join(__dirname, "prepare-electron-build.mjs")], {
     cwd: root,
   });
-  synchronizeReleaseEnvironment(uvCommand, acceleratorProfile);
-  const provenance = collectReleaseProvenance(uvCommand, acceleratorProfile);
+  synchronizeReleaseEnvironment(uvCommand, acceleratorProfile, releaseEnv);
+  const provenance = collectReleaseProvenance(uvCommand, acceleratorProfile, releaseEnv);
   const fingerprint = await computeBackendSourceFingerprint();
   const lockSha256 = await sha256File(uvLockPath);
   const expected = {
@@ -380,7 +382,7 @@ async function main() {
       profile: acceleratorProfile,
       uvCommand,
       version: JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version,
-      env: process.env,
+      env: releaseEnv,
     });
     console.log(JSON.stringify({
       ok: true,
@@ -399,7 +401,7 @@ async function main() {
     return;
   }
 
-  const sourceArtifact = buildBackendBundle(uvCommand, acceleratorProfile);
+  const sourceArtifact = buildBackendBundle(uvCommand, acceleratorProfile, releaseEnv);
   const manifest = await stageBackendBundle(sourceArtifact, expected);
   const directorManifest = await stageDirectorBundle();
   const releaseEvidence = await writeReleaseEvidence({
@@ -408,7 +410,7 @@ async function main() {
     profile: acceleratorProfile,
     uvCommand,
     version: JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version,
-    env: process.env,
+    env: releaseEnv,
   });
   console.log(JSON.stringify({
     ok: true,

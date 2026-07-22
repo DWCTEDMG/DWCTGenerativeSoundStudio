@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import path from "node:path";
 
 export const PINNED_UV_VERSION = "0.11.28";
 export const RELEASE_MANIFEST_SCHEMA_VERSION = 2;
@@ -91,6 +92,19 @@ export function resolveAcceleratorProfile({ argv = [], env = process.env, platfo
 export function selectedExtras(profile) {
   if (!ACCELERATOR_PROFILES.includes(profile)) throw new Error(`Unsupported accelerator profile: ${profile}`);
   return [profile, ...RELEASE_CAPABILITY_EXTRAS];
+}
+
+export function releaseUvEnvironment(studioRoot, profile, env = process.env) {
+  if (!ACCELERATOR_PROFILES.includes(profile)) throw new Error(`Unsupported accelerator profile: ${profile}`);
+  return {
+    ...env,
+    // Release builds must not share the source-runtime .venv. A running Studio
+    // instance may legitimately sync a different accelerator profile there.
+    UV_PROJECT_ENVIRONMENT: path.join(studioRoot, "release", "uv-environments", profile),
+    // The global uv cache and this repository can live on different Windows
+    // volumes. Copy mode avoids a noisy hardlink attempt and fallback.
+    UV_LINK_MODE: "copy",
+  };
 }
 
 function extraArgs(profile) {

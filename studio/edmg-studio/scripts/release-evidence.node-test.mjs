@@ -23,7 +23,7 @@ test("uv CycloneDX export args mirror the frozen release profile", () => {
   assert.ok(uvExportCycloneDxArgs("cuda").includes("--group"));
 });
 
-test("release artifact inventory includes bundle manifests and dist installers", () => {
+test("release artifact inventory keeps installer targets isolated", () => {
   const bundlePaths = collectReleaseArtifactPaths(studioRoot, "bundle");
   assert.ok(
     bundlePaths.some((filePath) => filePath.replaceAll("\\", "/").endsWith("python_backend/uv.lock")),
@@ -32,12 +32,37 @@ test("release artifact inventory includes bundle manifests and dist installers",
 
   const tempRoot = path.join(os.tmpdir(), `edmg-release-evidence-${process.pid}`);
   const distDir = path.join(tempRoot, "dist");
+  const genericInnoDir = path.join(tempRoot, "dist-inno");
+  const innoDir = path.join(tempRoot, "dist-inno-cuda");
+  const genericPayloadDir = path.join(genericInnoDir, "payload");
+  const payloadDir = path.join(innoDir, "payload");
   fs.mkdirSync(distDir, { recursive: true });
+  fs.mkdirSync(genericPayloadDir, { recursive: true });
+  fs.mkdirSync(payloadDir, { recursive: true });
   const installer = path.join(distDir, "edmg-studio Setup 1.0.0.exe");
+  const appImage = path.join(distDir, "edmg-studio-1.0.0.AppImage");
+  const genericInnoInstaller = path.join(genericInnoDir, "EDMG-Studio-Setup-1.0.0.exe");
+  const genericPayload = path.join(genericPayloadDir, "win-unpacked.7z");
+  const innoInstaller = path.join(innoDir, "EDMG-Studio-Setup-1.0.0.exe");
+  const payload = path.join(payloadDir, "win-unpacked.7z");
   fs.writeFileSync(installer, "installer");
+  fs.writeFileSync(appImage, "appimage");
+  fs.writeFileSync(genericInnoInstaller, "inno installer");
+  fs.writeFileSync(genericPayload, "external payload");
+  fs.writeFileSync(innoInstaller, "inno installer");
+  fs.writeFileSync(payload, "external payload");
   try {
-    const distPaths = collectReleaseArtifactPaths(tempRoot, "dist");
-    assert.deepEqual(distPaths, [installer]);
+    assert.deepEqual(new Set(collectReleaseArtifactPaths(tempRoot, "dist", "win-nsis")), new Set([installer]));
+    assert.deepEqual(new Set(collectReleaseArtifactPaths(tempRoot, "dist", "linux-appimage")), new Set([appImage]));
+    assert.deepEqual(
+      new Set(collectReleaseArtifactPaths(tempRoot, "dist", "win-inno")),
+      new Set([genericInnoInstaller, genericPayload]),
+    );
+    assert.deepEqual(
+      new Set(collectReleaseArtifactPaths(tempRoot, "dist", "win-inno-cuda")),
+      new Set([innoInstaller, payload]),
+    );
+    assert.throws(() => collectReleaseArtifactPaths(tempRoot, "dist"), /artifact set is required/);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
