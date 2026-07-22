@@ -6,9 +6,19 @@ from pathlib import Path
 import pytest
 
 from edmg_studio_backend.domain.continuity_validation import validate_project_continuity
-from edmg_studio_backend.domain.variant_review import apply_variant_review_decision, collect_variant_review
-from edmg_studio_backend.domain.world_adapters import export_touchdesigner_adapter, run_adapter_simulator
-from edmg_studio_backend.services.live_publishers import publish_status, start_live_publish, stop_live_publish
+from edmg_studio_backend.domain.variant_review import (
+    apply_variant_review_decision,
+    collect_variant_review,
+)
+from edmg_studio_backend.domain.world_adapters import (
+    export_touchdesigner_adapter,
+    run_adapter_simulator,
+)
+from edmg_studio_backend.services.live_publishers import (
+    publish_status,
+    start_live_publish,
+    stop_live_publish,
+)
 from edmg_studio_backend.store.artifacts import write_artifact_manifest
 
 
@@ -71,6 +81,23 @@ def test_apply_variant_review_decision_rejects_path_traversal(tmp_path: Path) ->
         )
 
     assert not outside.with_suffix(".mp4.artifact.json").exists()
+
+
+def test_apply_variant_review_decision_rejects_non_output_media(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj"
+    audio_dir = project_dir / "assets" / "audio"
+    audio_dir.mkdir(parents=True)
+    audio = audio_dir / "source.wav"
+    audio.write_bytes(b"audio")
+
+    with pytest.raises(ValueError, match="rendered image or video"):
+        apply_variant_review_decision(
+            project_dir,
+            artifact_path="assets/audio/source.wav",
+            decision="approved",
+        )
+
+    assert not audio.with_suffix(".wav.artifact.json").exists()
 
 
 def test_validate_project_continuity_flags_forbidden_traits() -> None:

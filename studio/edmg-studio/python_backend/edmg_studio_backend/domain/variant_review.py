@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -194,11 +195,19 @@ def apply_variant_review_decision(
     rel = str(artifact_path or "").strip().replace("\\", "/")
     if not rel:
         raise ValueError("artifact_path is required")
-    project_root = project_dir.resolve()
-    try:
-        media_path = safe_join(project_root, rel)
-    except ValueError as exc:
-        raise ValueError("artifact_path must stay inside the project directory") from exc
+    project_root_path = os.path.realpath(os.fspath(project_dir))
+    candidate = os.path.realpath(os.path.join(project_root_path, rel))
+    if candidate == project_root_path or not candidate.startswith(project_root_path + os.sep):
+        raise ValueError("artifact_path must stay inside the project directory")
+    media_path = Path(candidate)
+    allowed_roots = (
+        os.path.realpath(os.path.join(project_root_path, "outputs", "images")),
+        os.path.realpath(os.path.join(project_root_path, "outputs", "videos")),
+    )
+    if not any(candidate.startswith(root + os.sep) for root in allowed_roots):
+        raise ValueError("artifact_path must identify a rendered image or video")
+    if media_path.suffix.lower() not in {".jpg", ".jpeg", ".mov", ".mp4", ".png", ".webm", ".webp"}:
+        raise ValueError("artifact_path must identify a supported media file")
     if not media_path.exists():
         raise ValueError("artifact media file not found")
     manifest_path = _artifact_manifest_path(media_path)
@@ -226,6 +235,6 @@ def apply_variant_review_decision(
     return {
         "ok": True,
         "artifact_path": rel,
-        "manifest_path": str(manifest_path.relative_to(project_root)).replace("\\", "/"),
+        "manifest_path": str(manifest_path.relative_to(Path(project_root_path))).replace("\\", "/"),
         "review": review,
     }
