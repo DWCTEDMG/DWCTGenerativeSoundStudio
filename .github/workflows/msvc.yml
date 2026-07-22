@@ -18,7 +18,10 @@ on:
 
 env:
   # Path to the CMake build directory.
-  build: '${{ github.workspace }}/build'
+  # Keep generated JUCE dependency sources under the CMake source tree. The
+  # legacy MSVC analysis action otherwise prepends the source root to absolute
+  # dependency paths and fails before analysis begins.
+  build: '${{ github.workspace }}/juce_example/build'
 
 permissions:
   contents: read
@@ -37,7 +40,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure CMake
-        run: cmake -B ${{ env.build }}
+        run: cmake -S juce_example -B "${{ env.build }}"
 
       # Build is not required unless generated source files are used
       # - name: Build CMake
@@ -52,9 +55,28 @@ jobs:
           # Ruleset file that will determine what checks will be run
           ruleset: NativeRecommendedRules.ruleset
 
+      # The legacy MSVC action emits one SARIF run per translation unit without
+      # categories. upload-sarif v4 rejects multiple runs from the same tool and
+      # category, so assign each translation unit a stable, distinct category.
+      - name: Assign unique SARIF categories
+        shell: pwsh
+        env:
+          SARIF_PATH: ${{ steps.run-analysis.outputs.sarif }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sarif = Get-Content -LiteralPath $env:SARIF_PATH -Raw | ConvertFrom-Json
+          if (-not $sarif.runs -or $sarif.runs.Count -eq 0) {
+            throw 'MSVC analysis produced no SARIF runs.'
+          }
+          for ($index = 0; $index -lt $sarif.runs.Count; $index++) {
+            $details = [pscustomobject]@{ id = "msvc/translation-unit-$index/" }
+            $sarif.runs[$index] | Add-Member -NotePropertyName automationDetails -NotePropertyValue $details -Force
+          }
+          $sarif | ConvertTo-Json -Depth 100 -Compress | Set-Content -LiteralPath $env:SARIF_PATH -Encoding utf8NoBOM -NoNewline
+
       # Upload SARIF file to GitHub Code Scanning Alerts
       - name: Upload SARIF to GitHub
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.run-analysis.outputs.sarif }}
 

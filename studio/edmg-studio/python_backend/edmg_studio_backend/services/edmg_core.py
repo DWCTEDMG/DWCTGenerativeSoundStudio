@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 INSTALLER_NAME = "edmg_core_installer.py"
+logger = logging.getLogger(__name__)
 
 
 def _is_studio_root(candidate: Path) -> bool:
@@ -55,8 +57,9 @@ def _try_import_template() -> tuple[bool, Any | None, str | None]:
     try:
         from enhanced_deforum_music_generator.deforum_defaults import make_deforum_settings_template  # type: ignore
         return True, make_deforum_settings_template(), None
-    except Exception as e:
-        return False, None, str(e)
+    except Exception:
+        logger.exception("Unable to load the EDMG Core template")
+        return False, None, "EDMG Core template is unavailable"
 
 def core_status() -> dict[str, Any]:
     installer = _installer_path()
@@ -73,7 +76,8 @@ def core_status() -> dict[str, Any]:
             "installer_path": str(installer) if installer is not None else None,
             "repo_root": str(repo_root) if repo_root is not None else None,
         }
-    except Exception as e:
+    except Exception:
+        logger.exception("Unable to import bundled EDMG Core")
         hint = (
             "Studio backend installs should bundle EDMG Core by default. Use Studio Setup to repair or reinstall it if this environment is missing Core."
             if installable
@@ -81,7 +85,7 @@ def core_status() -> dict[str, Any]:
         )
         return {
             "available": False,
-            "error": str(e),
+            "error": "EDMG Core is unavailable",
             "bundled": False,
             "installable": installable,
             "installer_path": str(installer) if installer is not None else None,

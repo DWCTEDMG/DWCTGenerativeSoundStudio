@@ -23,6 +23,9 @@ on:
       - ".github/workflows/studio.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: studio-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

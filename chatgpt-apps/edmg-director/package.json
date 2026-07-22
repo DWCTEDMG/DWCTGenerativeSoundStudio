@@ -10,7 +10,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "dev:widget": "vite",
     "start": "pnpm run build && node dist-server/server.js",
-    "test": "tsx --test test/server.test.ts test/reactiveScheduler.test.ts",
+    "test": "pnpm run build:widget && tsx --test test/server.test.ts test/reactiveScheduler.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
 import tempfile
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -11,6 +13,7 @@ from .provider_factory import build_provider
 from .schemas import PlanRequest, PlanResponse, HealthResponse
 
 
+logger = logging.getLogger(__name__)
 settings = Settings()
 provider = build_provider(settings)
 
@@ -58,6 +61,11 @@ def _coerce_bool(value: object, default: bool = True) -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _safe_upload_suffix(filename: str | None, default: str = ".wav") -> str:
+    suffix = os.path.splitext(str(filename or ""))[1].lower()
+    return suffix if re.fullmatch(r"\.[a-z0-9]{1,8}", suffix) else default
+
+
 @app.post("/v1/transcribe")
 async def transcribe_audio(
     file: UploadFile = File(...),
@@ -69,10 +77,11 @@ async def transcribe_audio(
 ) -> dict:
     try:
         from .asr import transcribe_detailed
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as exc:
+        logger.exception("ASR capability import failed")
+        raise HTTPException(status_code=501, detail="Transcription capability is unavailable") from exc
 
-    suffix = "." + (file.filename.split(".")[-1] if file.filename and "." in file.filename else "wav")
+    suffix = _safe_upload_suffix(file.filename)
     tmp_path = await _persist_upload_to_tempfile(file, suffix=suffix)
 
     try:
@@ -84,8 +93,9 @@ async def transcribe_audio(
             compute_type=compute_type,
             fallback_to_whisper=_coerce_bool(fallback_to_whisper, True),
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.exception("Audio transcription failed")
+        raise HTTPException(status_code=500, detail="Audio transcription failed") from exc
     finally:
         try:
             os.remove(tmp_path)
@@ -97,17 +107,19 @@ async def transcribe_audio(
 async def audio_features(file: UploadFile = File(...)) -> dict:
     try:
         from .audio import lightweight_audio_features
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as exc:
+        logger.exception("Audio feature capability import failed")
+        raise HTTPException(status_code=501, detail="Audio feature analysis is unavailable") from exc
 
-    suffix = "." + (file.filename.split(".")[-1] if file.filename and "." in file.filename else "wav")
+    suffix = _safe_upload_suffix(file.filename)
     tmp_path = await _persist_upload_to_tempfile(file, suffix=suffix)
 
     try:
         feats = lightweight_audio_features(tmp_path)
         return feats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.exception("Audio feature analysis failed")
+        raise HTTPException(status_code=500, detail="Audio feature analysis failed") from exc
     finally:
         try:
             os.remove(tmp_path)

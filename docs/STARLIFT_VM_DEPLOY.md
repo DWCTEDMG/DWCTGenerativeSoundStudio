@@ -26,13 +26,18 @@ Important limits:
 - `studio/edmg-studio/deployment/starlift/nginx.conf`
 - `docker-compose.starlift.yml`
 
-The deployment runs two containers:
+The deployment runs two long-lived containers:
 
 - `web`
   - nginx serving the built React app on port `8080`
   - reverse proxy for `/v1/*`, `/health`, `/docs`, `/redoc`, and `/openapi.json`
 - `backend`
   - the existing FastAPI container on internal port `7863`
+
+Compose also runs a short-lived `data-init` job before the backend. It assigns
+the bind-mounted runtime directories to the backend's non-root UID/GID
+`10001:10001`, then exits. The ownership migration is recursive only when a
+directory's top-level ownership is different, so later starts remain fast.
 
 Default port:
 
@@ -102,6 +107,10 @@ Persistent runtime data is stored under:
 - `./starlift-data/cache`
 - `./starlift-data/logs`
 - `./starlift-data/external`
+
+These host directories are owned by UID/GID `10001:10001` so the hardened
+non-root backend can write to them. Do not change their ownership while the
+containers are running.
 
 ## Logs and health
 

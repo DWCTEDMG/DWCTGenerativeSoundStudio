@@ -24,6 +24,7 @@ Enable with environment variables (see ``from_env``)::
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..services.hf_auth import resolve_hf_token as _resolve_hf_auth_token
+
+
+logger = logging.getLogger(__name__)
 
 
 def _truthy(value: str | None) -> bool:
@@ -516,8 +520,9 @@ def describe_status(
                 models_dir=resolved_models_dir,
                 secrets_store=secrets_store,
             ) is not None
-        except Exception as exc:
-            active_error = str(exc)
+        except Exception:
+            logger.exception("Hugging Face bucket status check failed")
+            active_error = "Hugging Face bucket is unavailable"
 
     return {
         "ok": True,

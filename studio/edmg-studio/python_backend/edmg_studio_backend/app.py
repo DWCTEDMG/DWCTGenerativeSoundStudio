@@ -12,6 +12,7 @@ import time
 import zipfile
 import json
 import hashlib
+import logging
 import shutil
 import subprocess
 import sys
@@ -207,6 +208,7 @@ from .services.baseline_metrics import collect_baseline_metrics
 from .services.project_health import assess_project_health, collect_project_bundle, suggest_relinks
 from .uv_toolchain import ToolchainError
 
+logger = logging.getLogger(__name__)
 settings = Settings()
 
 
@@ -349,9 +351,21 @@ async def _http_exception(_req: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def _unhandled_exception(_req: Request, exc: Exception):
-    msg = str(exc) or "Internal error"
-    hint = hint_from_exception(exc) or "Open Render Queue → Log for details, then retry."
-    return JSONResponse(status_code=500, content={"ok": False, "error": {"message": msg, "hint": hint, "code": "INTERNAL"}})
+    logger.error(
+        "Unhandled backend request error",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "ok": False,
+            "error": {
+                "message": "Internal server error",
+                "hint": "Open Render Queue → Log for details, then retry.",
+                "code": "INTERNAL",
+            },
+        },
+    )
 
 
 def _require_multipart() -> None:
@@ -365,6 +379,37 @@ def _require_multipart() -> None:
             code="MISSING_MULTIPART",
             status_code=503,
         )
+
+
+_WINDOWS_RESERVED_FILENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+def _safe_upload_filename(filename: str | None, fallback: str) -> str:
+    """Reduce an untrusted upload name to one portable basename."""
+    basename = str(filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", basename).strip(" ._")
+    if not cleaned:
+        cleaned = fallback
+    suffix = Path(cleaned).suffix[:16]
+    stem = Path(cleaned).stem[:96].rstrip(" ._") or Path(fallback).stem
+    # Windows treats the portion before the first dot as the DOS device name,
+    # so names such as ``CON.preview.png`` are reserved too.
+    device_stem = stem.split(".", 1)[0].upper()
+    if device_stem in _WINDOWS_RESERVED_FILENAMES:
+        stem = f"_{stem}"
+    return f"{stem}{suffix}"[:112]
+
+
+def _cache_key_token(value: str) -> str:
+    """Map untrusted labels to a fixed-width, filename-safe cache token."""
+    return hashlib.sha256(str(value).encode("utf-8", errors="ignore")).hexdigest()[:16]
 
 
 def _stable_seed(project_id: str, variant_index: int, scene_index: int) -> int:
@@ -2035,8 +2080,9 @@ def _directml_runtime_status() -> dict[str, Any]:
         providers = list(ort.get_available_providers() or [])
         out["providers"] = providers
         out["runtime_ready"] = "DmlExecutionProvider" in providers
-    except Exception as e:
-        out["error"] = str(e)
+    except Exception:
+        logger.exception("DirectML runtime discovery failed")
+        out["error"] = "DirectML runtime discovery failed"
         return out
 
     gpu = _pick_windows_accel_gpu()
@@ -2960,8 +3006,9 @@ def setup_status():
     ollama_exe_error = None
     try:
         ollama_exe = _find_ollama_exe(settings.external_dir)
-    except Exception as e:
-        ollama_exe_error = str(e)
+    except Exception:
+        logger.exception("Ollama executable discovery failed")
+        ollama_exe_error = "Ollama executable discovery failed"
     ollama["managed_models_dir"] = str(settings.ollama_models_dir)
     ollama["managed_launch_script"] = str(managed_ollama_launch_script_path(settings.external_dir))
     ollama["launch_available"] = bool(ollama_exe)
@@ -3021,13 +3068,14 @@ def setup_status():
             "portable_installed": comfy_portable_installed(settings.external_dir, settings.data_dir),
             "hint": comfy_hint,
         }
-    except Exception as e:
+    except Exception:
+        logger.exception("ComfyUI setup status check failed")
         comfy_status = {
             "ok": False,
             "url": settings.comfyui_url,
             "checkpoint": settings.comfyui_checkpoint,
             "portable_installed": comfy_portable_installed(settings.external_dir, settings.data_dir),
-            "error": str(e),
+            "error": "ComfyUI setup status check failed",
             "hint": (
                 "Configure EDMG_COMFYUI_URL to a running ComfyUI instance, or install ComfyUI Portable via this wizard."
                 if is_windows
@@ -3331,16 +3379,18 @@ def comfyui_object_info():
     try:
         primary = settings.resolved_comfyui_urls()[0]
         return comfy.get_object_info(primary)
-    except Exception as e:
-        raise HTTPException(502, f"ComfyUI error: {e}")
+    except Exception as exc:
+        logger.exception("ComfyUI node discovery failed")
+        raise HTTPException(502, "ComfyUI node discovery failed") from exc
 
 @app.get("/v1/comfyui/capabilities")
 def comfyui_capabilities():
     try:
         primary = settings.resolved_comfyui_urls()[0]
         obj = comfy.get_object_info(primary)
-    except Exception as e:
-        raise HTTPException(502, f"ComfyUI error: {e}")
+    except Exception as exc:
+        logger.exception("ComfyUI queue discovery failed")
+        raise HTTPException(502, "ComfyUI queue discovery failed") from exc
 
     ad_ok, ad_missing = comfy.has_nodes(obj, ["ADE_AnimateDiffLoaderGen1", "ADE_StandardStaticContextOptions"])
     svd_ok, svd_missing = comfy.has_nodes(obj, ["SVDSimpleImg2Vid"])
@@ -3473,8 +3523,9 @@ def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, f
 
     try:
         from PIL import Image  # type: ignore
-    except Exception as e:
-        raise HTTPException(500, f"Pillow not installed: {e}")
+    except Exception as exc:
+        logger.exception("Preview image dependency is unavailable")
+        raise HTTPException(500, "Preview image dependency is unavailable") from exc
 
     cache_dir = (pdir / "outputs" / "previews" / f"{int(w)}x{int(h)}").resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -3519,8 +3570,9 @@ def preview_segment(
 
     try:
         from PIL import Image, ImageDraw, ImageFont  # type: ignore
-    except Exception as e:
-        raise HTTPException(500, f"Pillow not installed: {e}")
+    except Exception as exc:
+        logger.exception("Preview image dependency is unavailable")
+        raise HTTPException(500, "Preview image dependency is unavailable") from exc
 
     start = max(0.0, float(start_s))
     end = max(start + 0.05, float(end_s))
@@ -3666,7 +3718,8 @@ def preview_diffusion_segment(
     p_hash = hashlib.sha1((prompt or "").encode("utf-8")).hexdigest()[:8]
     cache_dir = (pdir / "outputs" / "previews" / f"diff_{w_i}x{h_i}").resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = f"diff_{int(start*1000):010d}_{int(end*1000):010d}_{fps_i}fps_{steps_i}s_{int(cfg*10):03d}c_{int(strength*100):03d}st_{mid}_{tl_hash}_{p_hash}.mp4"
+    model_cache_token = _cache_key_token(mid)
+    key = f"diff_{int(start*1000):010d}_{int(end*1000):010d}_{fps_i}fps_{steps_i}s_{int(cfg*10):03d}c_{int(strength*100):03d}st_{model_cache_token}_{tl_hash}_{p_hash}.mp4"
     out_mp4 = cache_dir / key
 
     if out_mp4.exists() and not force:
@@ -3713,7 +3766,7 @@ if HAS_MULTIPART:
         pdir = store.project_dir(project_id)
         audio_dir = pdir / "assets" / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
-        name = (file.filename or "audio.wav").replace("\\", "_").replace("/", "_")
+        name = _safe_upload_filename(file.filename, "audio.wav")
         out = audio_dir / name
         size = 0
         with out.open("wb") as handle:
@@ -3762,7 +3815,7 @@ if HAS_MULTIPART:
         pdir = store.project_dir(project_id)
         overlays_dir = pdir / "assets" / "overlays"
         overlays_dir.mkdir(parents=True, exist_ok=True)
-        name = (file.filename or "overlay.png").replace("\\", "_").replace("/", "_")
+        name = _safe_upload_filename(file.filename, "overlay.png")
         out = overlays_dir / name
         data = await file.read()
         out.write_bytes(data)
@@ -3784,7 +3837,7 @@ if HAS_MULTIPART:
         pdir = store.project_dir(project_id)
         masks_dir = pdir / "assets" / "masks"
         masks_dir.mkdir(parents=True, exist_ok=True)
-        name = (file.filename or "mask.png").replace("\\", "_").replace("/", "_")
+        name = _safe_upload_filename(file.filename, "mask.png")
         out = masks_dir / name
         data = await file.read()
         out.write_bytes(data)
@@ -3845,9 +3898,10 @@ def _prepare_transcription_audio(audio_path: Path, project_dir: Path, asr_cfg: d
             text=True,
             timeout=1800,
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("Demucs vocal separation failed")
         metadata["available"] = True
-        metadata["error"] = str(exc)
+        metadata["error"] = "Vocal separation failed; using the original mix."
         metadata["fallback_audio_path"] = str(audio_path)
         return audio_path, metadata
 
@@ -3905,8 +3959,9 @@ def analyze_audio(project_id: str):
         trans = transcript_result if isinstance(transcript_result, dict) else {"text": str(transcript_result or "")}
         trans["source_audio_path"] = str(transcription_audio_path)
         trans["vocal_separation"] = separation_meta
-    except Exception as e:
-        trans = {"error": f"transcribe failed: {e}"}
+    except Exception:
+        logger.exception("Project transcription failed")
+        trans = {"error": "Transcription failed"}
 
     with development_timing("analysis_enrichment", development_timings_ms):
         analysis = _enrich_project_audio_analysis(
@@ -4066,8 +4121,9 @@ def _collect_audio_analysis_features(audio_path: Path) -> dict[str, Any]:
             from edmg_ai_service.audio import lightweight_audio_features  # type: ignore
 
             return lightweight_audio_features(str(audio_path))
-        except Exception as e:
-            return {"error": f"audio_features failed: {e}"}
+        except Exception:
+            logger.exception("Audio feature analysis failed")
+            return {"error": "Audio feature analysis failed"}
 
 
 def _normalize_transcript_payload(raw: Any) -> dict[str, Any]:
@@ -6645,15 +6701,22 @@ def _execute_job(job):
         if latest and latest.result:
             job.result = latest.result
         jobs.append_log(job.project_id, job.id, str(e) or "Job canceled during execution")
-    except Exception as e:
+    except Exception as exc:
+        logger.error(
+            "Render job failed: project=%s job=%s type=%s",
+            job.project_id,
+            job.id,
+            job.type,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         latest = jobs.get(job.project_id, job.id)
         if latest and latest.status == "canceled":
             job.status = "canceled"
             job.error = None
         else:
             job.status = "failed"
-            hint = hint_from_exception(e)
-            job.error = f"{e}" + (f"\nFix: {hint}" if hint else "")
+            hint = hint_from_exception(exc)
+            job.error = "Render job failed." + (f"\nFix: {hint}" if hint else "")
 
     jobs.append_log(job.project_id, job.id, f"Finished status={job.status}")
     if job.error:
@@ -6747,10 +6810,14 @@ def _dispatch_job(job) -> None:
             _run_job_in_subprocess(job)
             return
         except Exception as exc:  # pragma: no cover - launch failure fallback
+            logger.warning(
+                "Isolated render process could not start; running in-process",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
             jobs.append_log(
                 job.project_id,
                 job.id,
-                f"Isolated render process could not start ({exc}); running in-process.",
+                "Isolated render process could not start; running in-process.",
             )
     _execute_job(job)
 
@@ -8278,8 +8345,9 @@ def render_cosmos_all_scenes(project_id: str, payload: dict[str, Any]):
             results.append(r)
         except UserFacingError as e:
             results.append({"ok": False, "scene_index": idx, "error": e.message, "hint": e.hint})
-        except Exception as e:
-            results.append({"ok": False, "scene_index": idx, "error": str(e)})
+        except Exception:
+            logger.exception("Cosmos scene render failed for scene %s", idx)
+            results.append({"ok": False, "scene_index": idx, "error": "Cosmos scene render failed"})
 
     return {"ok": True, "provider": "nvidia-cosmos", "results": results, "total": len(scenes)}
 
@@ -8353,8 +8421,9 @@ def render_firefly_scenes(project_id: str, req: RenderScenesRequest):
             })
         except UserFacingError:
             raise
-        except Exception as exc:
-            results.append({"scene_index": idx, "ok": False, "error": str(exc)})
+        except Exception:
+            logger.exception("Firefly scene render failed for scene %s", idx)
+            results.append({"scene_index": idx, "ok": False, "error": "Firefly scene render failed"})
 
     return {"ok": True, "provider": "adobe-firefly", "results": results, "width": width, "height": height}
 
@@ -8445,8 +8514,9 @@ def render_firefly_video(project_id: str, payload: dict[str, Any]):
             })
         except UserFacingError:
             raise
-        except Exception as exc:
-            results.append({"scene_index": idx, "ok": False, "error": str(exc)})
+        except Exception:
+            logger.exception("Firefly video render failed for scene %s", idx)
+            results.append({"scene_index": idx, "ok": False, "error": "Firefly video render failed"})
 
     return {
         "ok": True,
@@ -8599,8 +8669,9 @@ def render_imagineart_scenes(project_id: str, req: RenderScenesRequest):
             })
         except UserFacingError:
             raise
-        except Exception as exc:
-            results.append({"scene_index": idx, "ok": False, "error": str(exc)})
+        except Exception:
+            logger.exception("ImagineArt scene render failed for scene %s", idx)
+            results.append({"scene_index": idx, "ok": False, "error": "ImagineArt scene render failed"})
 
     return {"ok": True, "provider": "imagineart", "results": results, "width": width, "height": height}
 
@@ -8683,8 +8754,9 @@ def render_imagineart_video(project_id: str, payload: dict[str, Any]):
             })
         except UserFacingError:
             raise
-        except Exception as exc:
-            results.append({"scene_index": idx, "ok": False, "error": str(exc)})
+        except Exception:
+            logger.exception("ImagineArt video render failed for scene %s", idx)
+            results.append({"scene_index": idx, "ok": False, "error": "ImagineArt video render failed"})
 
     return {
         "ok": True,
@@ -8970,8 +9042,9 @@ def render_tensorrt_standalone_preview(project_id: str, req: TensorRTStandaloneR
         return {"ok": True, "image": result["image"], "engine_used": result["engine_used"]}
     except UserFacingError as e:
         raise HTTPException(e.status_code, str(e.message))
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    except Exception as exc:
+        logger.exception("TensorRT preview render failed")
+        raise HTTPException(500, "TensorRT preview render failed") from exc
 
 
 
@@ -10409,8 +10482,13 @@ def _internal_diffusion_runtime_status() -> dict[str, Any]:
         if directml.get("runtime_ready"):
             diagnostics.append("directml_runtime=ready")
         return {"ok": True, "diagnostics": diagnostics}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "diagnostics": ["internal_runtime=missing"]}
+    except Exception:
+        logger.exception("Internal diffusion runtime check failed")
+        return {
+            "ok": False,
+            "error": "Internal diffusion runtime is unavailable",
+            "diagnostics": ["internal_runtime=missing"],
+        }
 
 
 def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> dict[str, Any]:
@@ -11465,7 +11543,7 @@ if HAS_MULTIPART:
         pdir = store.project_dir(project_id)
         refs_dir = pdir / "assets" / "refs"
         refs_dir.mkdir(parents=True, exist_ok=True)
-        name = (file.filename or "ref.png").replace("\\", "_").replace("/", "_")
+        name = _safe_upload_filename(file.filename, "ref.png")
         out = refs_dir / name
         data = await file.read()
         out.write_bytes(data)
@@ -11813,7 +11891,10 @@ def assemble_video(project_id: str, req: AssembleVideoRequest):
     variant = variants[req.variant_index]
     scenes = variant.get("scenes") or []
 
-    pdir = store.project_dir(project_id)
+    # Revalidate the identifier loaded from the persisted project before path
+    # construction. Keeping the request value out of this downstream path also
+    # makes the ProjectStore trust boundary explicit to static analysis.
+    pdir = store.project_dir(proj.id)
     audio_meta = proj.meta.get("audio")
     audio_path = None
     if audio_meta:
@@ -12266,7 +12347,8 @@ def build_unreal_bridge_import_plan(project_id: str, req: BuildUnrealImportPlanR
             asset_name=req.asset_name,
         )
     except ValueError as exc:
-        raise HTTPException(400, str(exc))
+        logger.warning("Unreal import bundle validation failed", exc_info=True)
+        raise HTTPException(400, "Unreal bundle validation failed") from exc
 
     plan_path = bundle_dir / "unreal_import_plan.json"
     write_unreal_sequence_import_plan(plan, plan_path)
@@ -12452,8 +12534,9 @@ def cloud_aws_test(req: CloudAwsTestRequest):
     try:
         res = aws_integration.test_credentials(bucket=req.bucket, prefix=req.prefix)
         return {"ok": res.ok, "account": res.account, "region": res.region}
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as exc:
+        logger.exception("AWS credential test failed")
+        raise HTTPException(status_code=501, detail="AWS credential test failed") from exc
 
 @app.post("/v1/cloud/aws/bundle")
 def cloud_aws_bundle(req: CloudAwsBundleRequest):
@@ -12469,16 +12552,18 @@ def cloud_aws_bundle(req: CloudAwsBundleRequest):
         try:
             up = aws_integration.upload_file_s3(req.bucket, req.key, str(out_zip))
             result["uploaded"] = up
-        except Exception as e:
-            result["upload_error"] = str(e)
+        except Exception:
+            logger.exception("AWS bundle upload failed")
+            result["upload_error"] = "AWS bundle upload failed"
     return result
 
 @app.post("/v1/cloud/azure/test")
 def cloud_azure_test(req: CloudAzureTestRequest):
     try:
         return azure_integration.test_credentials(container=req.container, prefix=req.prefix)
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as exc:
+        logger.exception("Azure credential test failed")
+        raise HTTPException(status_code=501, detail="Azure credential test failed") from exc
 
 
 @app.get("/v1/cloud/hf/status")
@@ -12488,8 +12573,9 @@ def cloud_hf_status():
             models_dir=settings.models_dir,
             secrets_store=secrets,
         )
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as exc:
+        logger.exception("Hugging Face bucket status check failed")
+        raise HTTPException(status_code=501, detail="Hugging Face bucket status check failed") from exc
 
 
 @app.post("/v1/cloud/hf/test")
@@ -12501,8 +12587,9 @@ def cloud_hf_test(req: CloudHfBucketTestRequest):
             models_dir=settings.models_dir,
             secrets_store=secrets,
         )
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as exc:
+        logger.exception("Hugging Face bucket credential test failed")
+        raise HTTPException(status_code=501, detail="Hugging Face bucket credential test failed") from exc
 
 
 def _hf_settings_payload() -> dict[str, Any]:
@@ -12524,8 +12611,9 @@ def _hf_settings_payload() -> dict[str, Any]:
 def cloud_hf_settings_get():
     try:
         return _hf_settings_payload()
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as exc:
+        logger.exception("Hugging Face bucket settings read failed")
+        raise HTTPException(status_code=501, detail="Hugging Face bucket settings are unavailable") from exc
 
 
 @app.post("/v1/cloud/hf/settings")
@@ -12537,20 +12625,18 @@ def cloud_hf_settings_set(req: CloudHfBucketSettingsRequest):
         model_cache_settings.apply_to_env(force=True)
         models.refresh_model_cache()
         return _hf_settings_payload()
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as exc:
+        logger.exception("Hugging Face bucket settings update failed")
+        raise HTTPException(status_code=501, detail="Hugging Face bucket settings update failed") from exc
 
 
 def _resolve_lightning_bundle_output_dir(output_dir: str | None) -> Path:
     raw = str(output_dir or "lightning/lightning_bundle").strip() or "lightning/lightning_bundle"
     requested = Path(raw).expanduser()
-    if requested.is_absolute():
-        return requested.resolve()
-
     cloud_root = (settings.data_dir / "cloud").resolve()
-    resolved = (cloud_root / requested).resolve()
+    resolved = requested.resolve() if requested.is_absolute() else (cloud_root / requested).resolve()
     if not (resolved == cloud_root or resolved.is_relative_to(cloud_root)):
-        raise HTTPException(400, "Relative Lightning bundle output must stay under Studio data/cloud.")
+        raise HTTPException(400, "Lightning bundle output must stay under Studio data/cloud.")
     return resolved
 
 
@@ -12559,10 +12645,11 @@ def cloud_lightning_bundle(req: CloudLightningBundleRequest):
     try:
         output_dir = _resolve_lightning_bundle_output_dir(req.output_dir)
         return lightning_integration.generate_lightning_bundle(str(output_dir))
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(500, str(e))
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
+        logger.exception("Lightning bundle generation failed")
+        raise HTTPException(500, "Lightning bundle generation failed") from exc
 
 # ------------------------------
 # Model Manager (GUI) — routes live in api/routers.create_models_router

@@ -23,3 +23,12 @@ def test_relative_lightning_bundle_output_cannot_escape_studio_data(tmp_path, mo
         backend_app._resolve_lightning_bundle_output_dir("../outside")
 
     assert exc.value.status_code == 400
+
+
+def test_absolute_lightning_bundle_output_cannot_escape_studio_data(tmp_path, monkeypatch):
+    monkeypatch.setattr(backend_app, "settings", SimpleNamespace(data_dir=tmp_path / "data"))
+
+    with pytest.raises(HTTPException) as exc:
+        backend_app._resolve_lightning_bundle_output_dir(str(tmp_path / "outside"))
+
+    assert exc.value.status_code == 400

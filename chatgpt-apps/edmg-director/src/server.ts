@@ -34,6 +34,7 @@ export type ServerConfig = {
   edmgBaseUrl: string;
   publicBaseUrl: string;
   assetsDir: string;
+  corsAllowedOrigins: string[];
 };
 
 type AnyRecord = Record<string, unknown>;
@@ -136,14 +137,71 @@ export function resolveServerConfig(
   overrides: Partial<ServerConfig> = {},
 ): ServerConfig {
   const port = Number.parseInt(env.PORT ?? "3001", 10);
-  return {
+  const config = {
     port,
     bindHost: String(env.HOST ?? "127.0.0.1"),
     edmgBaseUrl: String(env.EDMG_BASE_URL ?? "http://127.0.0.1:7863").replace(/\/+$/, ""),
     publicBaseUrl: String(env.BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, ""),
     assetsDir: ASSETS_DIR,
+    corsAllowedOrigins: [],
     ...overrides,
   };
+  const publicOrigin = httpOrigin(config.publicBaseUrl);
+  config.corsAllowedOrigins = normalizeCorsOrigins(
+    overrides.corsAllowedOrigins ?? [
+      ...(publicOrigin ? [publicOrigin] : []),
+      "http://127.0.0.1:5173",
+      "http://localhost:5173",
+      "https://web-sandbox.oaiusercontent.com",
+      ...splitCorsOrigins(env.EDMG_DIRECTOR_CORS_ALLOWED_ORIGINS),
+    ],
+  );
+  return config;
+}
+
+function httpOrigin(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function exactHttpOrigin(value: string): string | null {
+  const candidate = String(value).trim();
+  try {
+    const parsed = new URL(candidate);
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      parsed.username ||
+      parsed.password ||
+      parsed.hostname.includes("*") ||
+      (parsed.pathname !== "/" && parsed.pathname !== "") ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function splitCorsOrigins(value: string | undefined): string[] {
+  return String(value ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+function normalizeCorsOrigins(values: string[]): string[] {
+  const origins = values.map((value) => exactHttpOrigin(value));
+  if (origins.some((origin) => !origin)) {
+    throw new Error("Director CORS origins must be exact HTTP(S) origins without paths or wildcards.");
+  }
+  return [...new Set(origins as string[])];
 }
 
 function allowedHosts(config: ServerConfig): string[] | undefined {
@@ -964,7 +1022,7 @@ export function createStreamableHttpApp(config: ServerConfig = resolveServerConf
   });
   app.use(
     cors({
-      origin: "*",
+      origin: config.corsAllowedOrigins,
       exposedHeaders: ["Mcp-Session-Id"],
     }),
   );

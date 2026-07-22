@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, getBackendUrl } from "../components/api";
+import { apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
@@ -59,7 +59,7 @@ export default function Outputs(props: PageProps) {
     return () => window.clearInterval(timer);
   }, [projectId, autoRefresh, backendUrl]);
 
-  const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
+  const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pid, rel);
   const activeInternalJobs = (outs?.active_internal_jobs || []) as any[];
 
   const renderMetadataCard = (entry: any) => {

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
 import requests
+
+
+logger = logging.getLogger(__name__)
 
 
 class AiDirector(Protocol):
@@ -89,8 +93,14 @@ class HttpAiDirectorClient:
             r = requests.get(f"{self.base_url}/health", timeout=5.0)
             r.raise_for_status()
             return {"mode": "http", "ok": True, **r.json()}
-        except Exception as e:
-            return {"mode": "http", "ok": False, "error": str(e), "base_url": self.base_url}
+        except Exception:
+            logger.exception("Remote AI director health check failed")
+            return {
+                "mode": "http",
+                "ok": False,
+                "error": "AI director is unavailable",
+                "base_url": self.base_url,
+            }
 
 
 class LocalAiDirectorClient:
@@ -157,8 +167,9 @@ class LocalAiDirectorClient:
         try:
             self._ensure_import_path()
             from edmg_ai_service.asr import transcribe_detailed
-        except Exception as e:
-            return {"text": None, "note": f"transcription not available: {e}"}
+        except Exception:
+            logger.exception("Local transcription capability import failed")
+            return {"text": None, "note": "Transcription is unavailable"}
 
         try:
             return transcribe_detailed(
@@ -171,20 +182,23 @@ class LocalAiDirectorClient:
                 nvidia_api_key=nvidia_api_key,
                 nim_base_url=nim_base_url,
             )
-        except Exception as e:
-            return {"text": None, "error": str(e)}
+        except Exception:
+            logger.exception("Local transcription failed")
+            return {"text": None, "error": "Transcription failed"}
 
     def audio_features(self, audio_path: str) -> dict[str, Any]:
         try:
             self._ensure_import_path()
             from edmg_ai_service.audio import lightweight_audio_features
-        except Exception as e:
-            return {"note": f"audio_features not available: {e}"}
+        except Exception:
+            logger.exception("Local audio feature capability import failed")
+            return {"note": "Audio feature analysis is unavailable"}
 
         try:
             return lightweight_audio_features(audio_path)
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Local audio feature analysis failed")
+            return {"error": "Audio feature analysis failed"}
 
     def status(self) -> dict[str, Any]:
         try:
@@ -212,8 +226,9 @@ class LocalAiDirectorClient:
                 "ok": True,
                 **provider_status,
             }
-        except Exception as e:
-            return {"mode": "local", "ok": False, "error": str(e)}
+        except Exception:
+            logger.exception("Local AI director status check failed")
+            return {"mode": "local", "ok": False, "error": "AI director is unavailable"}
 
 
 def build_ai_client(ai_mode: str, ai_base_url: str, timeout_s: float) -> AiDirector:

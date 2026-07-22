@@ -99,25 +99,28 @@ def _ps_elevated(ps_block: str) -> tuple[int, str]:
     Returns (0, "") on success, (-1, reason) if UAC was cancelled or failed.
     """
     import tempfile
-    tmp = tempfile.mktemp(suffix=".txt")
-    # Append exit code to temp file so we can read it after the elevated run
-    wrapped = ps_block.rstrip("; ") + f"; $null | Out-Null; [IO.File]::WriteAllText('{tmp}', $LASTEXITCODE)"
-    escaped = wrapped.replace("'", "''")
-    cmd = (
-        f"Start-Process powershell "
-        f"-Verb RunAs -Wait "
-        f"-WindowStyle Hidden "
-        f"-ArgumentList '-NoProfile', '-NonInteractive', '-Command', '{escaped}'"
-    )
-    rc, out = _ps(cmd)
-    if rc != 0:
-        return rc, out  # UAC declined or PowerShell not found
+    with tempfile.NamedTemporaryFile(prefix="edmg-elevated-", suffix=".txt", delete=False) as result_file:
+        tmp = Path(result_file.name)
     try:
-        result_code = int(Path(tmp).read_text(encoding="utf-8").strip())
-        Path(tmp).unlink(missing_ok=True)
-        return result_code, ""
-    except Exception:
-        return 0, ""  # elevated ran but temp file missing — assume ok
+        # Append exit code to temp file so we can read it after the elevated run.
+        wrapped = ps_block.rstrip("; ") + f"; $null | Out-Null; [IO.File]::WriteAllText('{tmp}', $LASTEXITCODE)"
+        escaped = wrapped.replace("'", "''")
+        cmd = (
+            f"Start-Process powershell "
+            f"-Verb RunAs -Wait "
+            f"-WindowStyle Hidden "
+            f"-ArgumentList '-NoProfile', '-NonInteractive', '-Command', '{escaped}'"
+        )
+        rc, out = _ps(cmd)
+        if rc != 0:
+            return rc, out  # UAC declined or PowerShell not found
+        try:
+            result_code = int(tmp.read_text(encoding="utf-8").strip())
+            return result_code, ""
+        except Exception:
+            return 0, ""  # elevated ran but result file missing — assume ok
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _svc_query(name: str) -> str:
