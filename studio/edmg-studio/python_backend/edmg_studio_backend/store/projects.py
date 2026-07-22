@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
@@ -106,7 +107,8 @@ class ProjectStore:
         self.projects_dir.mkdir(parents=True, exist_ok=True)
 
     def _proj_dir(self, project_id: str) -> Path:
-        d = self.projects_dir / project_id
+        safe_project_id = self._validate_project_id(project_id)
+        d = self.projects_dir / safe_project_id
         d.mkdir(parents=True, exist_ok=True)
         (d / "assets" / "audio").mkdir(parents=True, exist_ok=True)
         (d / "assets" / "overlays").mkdir(parents=True, exist_ok=True)
@@ -121,7 +123,15 @@ class ProjectStore:
         return d
 
     def _project_path(self, project_id: str) -> Path:
-        return self.projects_dir / project_id / "project.json"
+        safe_project_id = self._validate_project_id(project_id)
+        return self.projects_dir / safe_project_id / "project.json"
+
+    @staticmethod
+    def _validate_project_id(project_id: str) -> str:
+        value = str(project_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value):
+            raise ValueError("Invalid project identifier")
+        return value
 
     def _backup_before_migration(self, project_path: Path, from_version: int) -> Path:
         stamp = time.strftime("%Y%m%d-%H%M%S")

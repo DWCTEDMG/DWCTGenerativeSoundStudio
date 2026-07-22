@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 from edmg_studio_backend.services.baseline_metrics import (
     baseline_timer,

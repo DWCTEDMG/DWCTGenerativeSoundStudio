@@ -117,7 +117,8 @@ def collect_baseline_metrics(
             if probed:
                 hardware.update(probed)
         except Exception:
-            pass
+            # Optional probes must not make the read-only metrics endpoint unavailable.
+            hardware["probe_status"] = "unavailable"
 
     return {
         "ok": True,

@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..utils.path import safe_join
+
 VARIANT_REVIEW_SCHEMA_VERSION = "1.0"
 
 _REVIEW_STATES = {"unreviewed", "approved", "rejected", "cherry_picked"}
@@ -41,6 +43,12 @@ def _artifact_entry(
     *,
     kind: str,
 ) -> dict[str, Any] | None:
+    project_dir = project_dir.resolve()
+    media_path = media_path.resolve()
+    try:
+        media_path.relative_to(project_dir)
+    except ValueError:
+        return None
     if not media_path.exists() or not media_path.is_file():
         return None
     rel = str(media_path.relative_to(project_dir)).replace("\\", "/")
@@ -102,14 +110,15 @@ def _artifact_entry(
 
 def collect_variant_review(project_dir: Path, meta: dict[str, Any] | None) -> dict[str, Any]:
     """Build synchronized variant groups for the Review workspace."""
+    project_dir = project_dir.resolve()
     meta = dict(meta or {})
     plan = meta.get("last_plan") if isinstance(meta.get("last_plan"), dict) else {}
     variants = [item for item in list(plan.get("variants") or []) if isinstance(item, dict)]
     plan_variant_count = len(variants)
 
     artifacts: list[dict[str, Any]] = []
-    videos_dir = project_dir / "outputs" / "videos"
-    images_dir = project_dir / "outputs" / "images"
+    videos_dir = safe_join(project_dir, "outputs/videos")
+    images_dir = safe_join(project_dir, "outputs/images")
     if videos_dir.exists():
         for media_path in sorted(videos_dir.glob("*"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True):
             if media_path.suffix.lower() not in {".mp4", ".webm", ".mov"}:
@@ -186,9 +195,8 @@ def apply_variant_review_decision(
     if not rel:
         raise ValueError("artifact_path is required")
     project_root = project_dir.resolve()
-    media_path = (project_dir / rel).resolve()
     try:
-        media_path.relative_to(project_root)
+        media_path = safe_join(project_root, rel)
     except ValueError as exc:
         raise ValueError("artifact_path must stay inside the project directory") from exc
     if not media_path.exists():
@@ -218,6 +226,6 @@ def apply_variant_review_decision(
     return {
         "ok": True,
         "artifact_path": rel,
-        "manifest_path": str(manifest_path.relative_to(project_dir)).replace("\\", "/"),
+        "manifest_path": str(manifest_path.relative_to(project_root)).replace("\\", "/"),
         "review": review,
     }

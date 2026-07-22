@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
+import { apiGet, apiPost, apiUpload, buildProjectFileUrl, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
 import { RenderPlanPanel } from "../components/RenderPlanPanel";
 import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
+import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
 import { useProjectJobs } from "../shared/jobs/useProjectJobs";
@@ -356,7 +357,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   const latestInternalVideoPath = String(project?.meta?.last_internal_render?.video || "");
   const latestInternalVideoUrl = latestInternalVideoPath
-    ? `${backendUrl}/v1/projects/${projectId}/file?path=${encodeURIComponent(latestInternalVideoPath)}`
+    ? buildProjectFileUrl(backendUrl, projectId, latestInternalVideoPath)
     : "";
   const effectiveInternalTemporalMode = internalMotionStrategy === "storyboard_full_motion" ? "video_model" : internalTemporalMode;
 
@@ -1269,6 +1270,18 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const openLocalPath = async (label: string, value?: string | null) => {
+    if (!value) return;
+    setErr(null);
+    try {
+      const result = await runDesktopArtifactAction(label, value, "open");
+      if (!result.ok) throw new Error(result.error || `Unable to open ${label}`);
+      setInfo({ ...result, label, value });
+    } catch (e: any) {
+      setErr(`Failed to open ${label}: ${String(e)}`);
+    }
+  };
+
   const applyLatestInternalSettings = () => {
     const jobPayload = latestInternalJob && "payload" in latestInternalJob
       ? (latestInternalJob as StudioJob & { payload?: Record<string, unknown> }).payload
@@ -1741,7 +1754,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
-const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
+const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pid, rel);
   const sourceAssetPreviewUrl = sourceAsset ? fileUrl(projectId, sourceAsset) : "";
   const maskAssetPreviewUrl = stillMaskAsset ? fileUrl(projectId, stillMaskAsset) : "";
   const deforumExports = project?.meta?.exports?.deforum || [];
@@ -2324,7 +2337,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       <button className="secondary" onClick={clearLatestInternalCachedFrames} disabled={isJobActive(latestInternalJob.status)}>Clear cached frames</button>
                       <button className="secondary" onClick={dropLatestInternalCheckpoint} disabled={isJobActive(latestInternalJob.status)}>Drop checkpoint</button>
                       {latestInternalVideoUrl ? (
-                        <a className="secondary" href={latestInternalVideoUrl} target="_blank" rel="noreferrer">Open latest video</a>
+                        <button className="secondary" onClick={() => openLocalPath("latest internal video", latestInternalVideoPath)}>{desktopActionLabel("open", "latest video")}</button>
                       ) : null}
                     </div>
                   </div>
@@ -2376,7 +2389,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       ) : (
                         <>
                           <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                            <a className="secondary" href={latestInternalVideoUrl} target="_blank" rel="noreferrer">Open video</a>
+                            <button className="secondary" onClick={() => openLocalPath("latest internal video", latestInternalVideoPath)}>{desktopActionLabel("open", "video")}</button>
                             <a className="secondary" href={latestInternalVideoUrl} download>Download video</a>
                             <button className="secondary" onClick={() => { applyLatestInternalSettings(); setInternalResumeExisting(true); }}>Reuse settings + resume caches</button>
                           </div>

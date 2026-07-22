@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, getBackendUrl } from "../components/api";
+import { apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
@@ -210,7 +210,7 @@ export default function Review(props: PageProps) {
     }
   };
 
-  const fileUrl = (rel: string) => `${backendUrl}/v1/projects/${projectId}/file?path=${encodeURIComponent(rel)}`;
+  const fileUrl = (rel: string) => buildProjectFileUrl(backendUrl, projectId, rel);
 
   const panelContent: Record<ReviewPanelId, React.ReactNode> = {
     controls: (

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from edmg_studio_backend.domain.continuity_validation import validate_project_continuity
 from edmg_studio_backend.domain.variant_review import apply_variant_review_decision, collect_variant_review
 from edmg_studio_backend.domain.world_adapters import export_touchdesigner_adapter, run_adapter_simulator
@@ -53,6 +55,22 @@ def test_apply_variant_review_decision_updates_manifest(tmp_path: Path) -> None:
     assert result["review"]["state"] == "approved"
     assert manifest["review"]["state"] == "approved"
     assert manifest["review"]["notes"] == "Hero framing locked"
+
+
+def test_apply_variant_review_decision_rejects_path_traversal(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    outside = tmp_path / "outside.mp4"
+    outside.write_bytes(b"outside")
+
+    with pytest.raises(ValueError, match="must stay inside"):
+        apply_variant_review_decision(
+            project_dir,
+            artifact_path="../outside.mp4",
+            decision="approved",
+        )
+
+    assert not outside.with_suffix(".mp4.artifact.json").exists()
 
 
 def test_validate_project_continuity_flags_forbidden_traits() -> None:

@@ -99,10 +99,17 @@ jobs:
           $archive = Join-Path $env:RUNNER_TEMP $asset
           $installRoot = Join-Path $env:RUNNER_TEMP "edmg-ffmpeg"
           $downloaded = $false
+          $checksumFailures = @()
           foreach ($url in $downloadUrls) {
             try {
               Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
               Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRetryCount 3
+              $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actualSha256 -ne $expectedSha256) {
+                $checksumFailures += "$url returned $actualSha256"
+                Write-Host "FFmpeg checksum mismatch from $url; trying the next pinned location."
+                continue
+              }
               $downloaded = $true
               break
             } catch {
@@ -110,11 +117,7 @@ jobs:
             }
           }
           if (-not $downloaded) {
-            throw "Unable to download pinned FFmpeg archive from: $($downloadUrls -join ', ')"
-          }
-          $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualSha256 -ne $expectedSha256) {
-            throw "FFmpeg archive checksum mismatch: expected $expectedSha256, got $actualSha256"
+            throw "Unable to download a checksum-valid pinned FFmpeg archive (expected $expectedSha256). Attempts: $($checksumFailures -join '; ')"
           }
 
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null

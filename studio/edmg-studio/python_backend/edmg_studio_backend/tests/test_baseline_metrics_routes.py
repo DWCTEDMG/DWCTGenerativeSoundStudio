@@ -12,7 +12,7 @@ def test_baseline_metrics_route_returns_stub_report():
     app.include_router(
         create_system_router(
             readiness_report=lambda: {"ok": True, "status": "ready"},
-            baseline_metrics=lambda: collect_baseline_metrics(),
+            baseline_metrics=collect_baseline_metrics,
         )
     )
     client = TestClient(app)

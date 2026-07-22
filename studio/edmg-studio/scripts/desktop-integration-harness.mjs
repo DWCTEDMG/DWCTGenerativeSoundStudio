@@ -27,7 +27,7 @@ function assertSourceCoverage() {
   assert.match(desktopArtifacts, /copied_path_fallback/, "desktopArtifacts.ts must preserve browser fallback");
   assert.match(desktopArtifacts, /hasDesktopPathBridge/, "desktopArtifacts.ts must detect Electron bridge");
 
-  for (const rel of ["src/pages/Render.tsx", "src/pages/Outputs.tsx", "src/pages/RenderQueue.tsx"]) {
+  for (const rel of ["src/pages/Render.tsx", "src/pages/Outputs.tsx", "src/shared/jobs/ProjectJobsPanel.tsx"]) {
     const text = read(rel);
     assert.match(text, /desktopArtifacts/, `${rel} must import desktop artifact helper`);
     assert.match(text, /desktopActionLabel\(/, `${rel} must render desktop action labels`);

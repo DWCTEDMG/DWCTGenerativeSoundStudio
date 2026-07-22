@@ -121,6 +121,26 @@ export function normalizeBackendUrl(rawUrl: string): string {
   }
 }
 
+export function buildProjectFileUrl(backendUrl: string, projectId: string, relativePath: string): string {
+  const base = normalizeBackendUrl(backendUrl);
+  if (!base) throw new Error("A valid HTTP(S) backend URL is required.");
+
+  const safeProjectId = String(projectId || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(safeProjectId)) {
+    throw new Error("Invalid project identifier.");
+  }
+
+  const safePath = String(relativePath || "").trim().replace(/\\/g, "/");
+  const pathParts = safePath.split("/");
+  if (!safePath || safePath.startsWith("/") || pathParts.some((part) => part === ".." || part === "")) {
+    throw new Error("Invalid project-relative file path.");
+  }
+
+  const target = new URL(`${base}/v1/projects/${encodeURIComponent(safeProjectId)}/file`);
+  target.searchParams.set("path", safePath);
+  return target.toString();
+}
+
 function pickBackendUrl(...values: unknown[]): string {
   for (const value of values) {
     const normalized = normalizeBackendUrl(String(value || ""));

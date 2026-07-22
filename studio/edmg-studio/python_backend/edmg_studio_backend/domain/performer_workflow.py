@@ -4,7 +4,7 @@ import time
 import uuid
 from typing import Any
 
-from .music_graph import music_graph_from_analysis, section_energy_at_time
+from .music_graph import section_energy_at_time
 
 
 WAN_S2V_MODEL = {
