@@ -15,10 +15,13 @@ from typing import Any, Callable, Optional
 import requests
 
 logger = logging.getLogger(__name__)
+_HF_SNAPSHOT_DOWNLOAD_LOCK = threading.Lock()
 
 try:
+    from huggingface_hub import constants as hf_hub_constants  # type: ignore
     from huggingface_hub import snapshot_download  # type: ignore
 except Exception:  # pragma: no cover
+    hf_hub_constants = None  # type: ignore
     snapshot_download = None  # type: ignore
 
 from ..errors import UserFacingError
@@ -1609,6 +1612,47 @@ class ModelManager:
                 "Downloaded without Hugging Face authentication after stored credentials were rejected.",
             )
 
+    def _download_hf_snapshot(self, task: ModelTask, **kwargs: Any) -> None:
+        if snapshot_download is None:
+            raise RuntimeError("huggingface_hub is not installed (required for snapshot downloads)")
+        with _HF_SNAPSHOT_DOWNLOAD_LOCK:
+            restore_xet_disabled: bool | None = None
+            if hf_hub_constants is not None and hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER:
+                try:
+                    requested_concurrency = int(os.getenv("EDMG_HF_TRANSFER_CONCURRENCY", "4"))
+                except ValueError:
+                    requested_concurrency = 4
+                concurrency = max(1, min(16, requested_concurrency))
+                hf_hub_constants.HF_TRANSFER_CONCURRENCY = concurrency
+                # Xet-backed repositories otherwise bypass hf_transfer entirely. Honor
+                # Studio's explicit fast-transfer setting for this snapshot operation;
+                # restore Xet immediately afterward for bucket and other Hub workflows.
+                restore_xet_disabled = bool(hf_hub_constants.HF_HUB_DISABLE_XET)
+                hf_hub_constants.HF_HUB_DISABLE_XET = True
+                self._append_task_log(task, f"Using hf_transfer with concurrency {concurrency}.")
+            try:
+                snapshot_download(**kwargs)
+            except ValueError as exc:
+                missing_transfer = (
+                    "HF_HUB_ENABLE_HF_TRANSFER=1" in str(exc)
+                    and "'hf_transfer' package is not available" in str(exc)
+                )
+                if not missing_transfer or hf_hub_constants is None:
+                    raise
+
+                # huggingface_hub reads this flag once when its constants module is imported.
+                # Disable only its in-process cached value so an optional accelerator cannot
+                # prevent the standard resumable downloader from doing the requested install.
+                hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER = False
+                self._append_task_log(
+                    task,
+                    "hf_transfer is unavailable; continuing with the standard Hugging Face downloader.",
+                )
+                snapshot_download(**kwargs)
+            finally:
+                if restore_xet_disabled is not None and hf_hub_constants is not None:
+                    hf_hub_constants.HF_HUB_DISABLE_XET = restore_xet_disabled
+
     def _append_task_log(self, task: ModelTask, msg: str) -> None:
         current = str(task.last_log or "").strip()
         ModelTaskManager.log(task, f"{current}\n{msg}" if current else msg)
@@ -1788,7 +1832,8 @@ class ModelManager:
                         task,
                         resource=repo_id,
                         candidates=hf_candidates,
-                        download=lambda token: snapshot_download(
+                        download=lambda token: self._download_hf_snapshot(
+                            task,
                             repo_id=repo_id,
                             local_dir=str(target_path),
                             local_dir_use_symlinks=False,

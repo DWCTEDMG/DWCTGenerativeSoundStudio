@@ -13,7 +13,7 @@ from PIL import Image
 from ..errors import UserFacingError
 
 
-DEFAULT_SD15_BASE_MODEL = "runwayml/stable-diffusion-v1-5"
+DEFAULT_SD15_BASE_MODEL = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 
 
 def _runtime_store():

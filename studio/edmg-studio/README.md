@@ -21,6 +21,9 @@ A desktop-style "studio" application:
 - Python 3.12 (pinned by the repository `.python-version`)
 - `uv` 0.11.28 for source development; packaged apps include the backend and
   require neither Python nor uv
+- Git LFS 3.x for Git-managed large assets (`git lfs install` after cloning).
+  Runtime model snapshots remain under Studio Home and use the pinned
+  `hf-transfer`/`hf-xet` download clients instead of Git LFS.
 - FFmpeg on PATH for dev checkouts, or the bundled Studio FFmpeg for packaged builds (used for MP4 assembly)
 - ComfyUI only if you want ComfyUI-backed still or motion workflows (default `http://127.0.0.1:8188`)
 - Planning/transcription run **in-process** by default through the selected provider; no separate AI server is required for the normal Studio path.

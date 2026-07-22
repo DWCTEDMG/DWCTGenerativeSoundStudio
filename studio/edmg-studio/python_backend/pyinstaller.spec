@@ -61,6 +61,8 @@ hidden += safe_collect(collect_submodules, "boto3")
 hidden += safe_collect(collect_submodules, "botocore")
 hidden += safe_collect(collect_submodules, "s3transfer")
 hidden += safe_collect(collect_submodules, "jmespath")
+hidden += safe_collect(collect_submodules, "hf_transfer")
+hidden += safe_collect(collect_submodules, "hf_xet")
 hidden += [
     "matplotlib",
     "matplotlib.pyplot",
@@ -112,6 +114,8 @@ datas += safe_collect(copy_metadata, "boto3")
 datas += safe_collect(copy_metadata, "botocore")
 datas += safe_collect(copy_metadata, "s3transfer")
 datas += safe_collect(copy_metadata, "jmespath")
+datas += safe_collect(copy_metadata, "hf-transfer")
+datas += safe_collect(copy_metadata, "hf-xet")
 if nltk_data_dir.exists():
     datas.append((str(nltk_data_dir), "nltk_data"))
 

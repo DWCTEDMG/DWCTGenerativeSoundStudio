@@ -1197,8 +1197,10 @@ def _sync_locked_backend(profile: str, log_cb) -> None:
             "python",
             "-c",
             (
-                "import platform,torch,torchvision,torchaudio;"
+                "import platform,hf_transfer,hf_xet,torch,torchvision,torchaudio;"
                 "print('python', platform.python_version());"
+                "print('hf_transfer', hf_transfer.__version__);"
+                "print('hf_xet', hf_xet.__file__);"
                 "print('torch', torch.__version__);"
                 "print('torchvision', torchvision.__version__);"
                 "print('torchaudio', torchaudio.__version__)"

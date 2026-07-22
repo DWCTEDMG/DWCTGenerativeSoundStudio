@@ -338,6 +338,58 @@ def test_snapshot_install_retries_a_rejected_cache_token_with_settings_token(tmp
     assert "hf_cache was rejected" in task.last_log
 
 
+def test_snapshot_install_falls_back_when_hf_transfer_is_enabled_but_missing(tmp_path, monkeypatch) -> None:
+    manager = _offline_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(model_manager_module.hf_hub_constants, "HF_HUB_ENABLE_HF_TRANSFER", True)
+    monkeypatch.setattr(model_manager_module.hf_hub_constants, "HF_HUB_DISABLE_XET", False)
+    monkeypatch.setenv("EDMG_HF_TRANSFER_CONCURRENCY", "3")
+    attempts = 0
+    xet_disabled_during_download: list[bool] = []
+
+    def _fake_snapshot_download(*, local_dir, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        xet_disabled_during_download.append(model_manager_module.hf_hub_constants.HF_HUB_DISABLE_XET)
+        if attempts == 1:
+            raise ValueError(
+                "Fast download using 'hf_transfer' is enabled "
+                "(HF_HUB_ENABLE_HF_TRANSFER=1) but 'hf_transfer' package is not available "
+                "in your environment. Try `pip install hf_transfer`."
+            )
+        target = Path(local_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "model_index.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(model_manager_module, "snapshot_download", _fake_snapshot_download)
+    entry = {
+        "id": "hf_transfer_fallback",
+        "name": "HF transfer fallback",
+        "kind": "diffusers",
+        "source": "hf",
+        "hf_repo_id": "example/internal-model",
+        "target": {"engine": "internal", "folder": "diffusers"},
+    }
+    task = model_manager_module.ModelTask(id="test", name="install")
+
+    manager._install_file_model(task, entry)
+
+    assert attempts == 2
+    assert xet_disabled_during_download == [True, True]
+    assert model_manager_module.hf_hub_constants.HF_TRANSFER_CONCURRENCY == 3
+    assert model_manager_module.hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER is False
+    assert model_manager_module.hf_hub_constants.HF_HUB_DISABLE_XET is False
+    assert "continuing with the standard Hugging Face downloader" in task.last_log
+    assert (
+        tmp_path
+        / "home"
+        / "models"
+        / "internal"
+        / "diffusers"
+        / "hf_transfer_fallback"
+        / "model_index.json"
+    ).exists()
+
+
 def test_file_install_retries_anonymously_after_rejected_hf_auth(tmp_path, monkeypatch) -> None:
     manager = _offline_manager(tmp_path, monkeypatch)
     cache_token = "oauth-" + ("cache" * 8)

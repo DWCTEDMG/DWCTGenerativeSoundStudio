@@ -214,3 +214,6 @@ def test_sync_locked_backend_uses_one_fixed_profile_and_capability_set(monkeypat
     assert calls["sync"][0] == "cuda"
     assert "core" in calls["sync"][1]
     assert calls["run"][0] == "cuda"
+    verification_command = " ".join(calls["run"][1])
+    assert "hf_transfer" in verification_command
+    assert "hf_xet" in verification_command
