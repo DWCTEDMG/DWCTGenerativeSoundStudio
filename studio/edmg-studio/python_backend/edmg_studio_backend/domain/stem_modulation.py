@@ -31,13 +31,13 @@ def normalize_modulation_matrix(matrix: dict[str, Any] | None) -> dict[str, Any]
                 "target": str(lane.get("target") or "camera.zoom"),
                 "confidence": float(lane.get("confidence") or 0.5),
                 "mapping": {
-                    "smoothing": float(mapping.get("smoothing") or 0.35),
-                    "attack": float(mapping.get("attack") or 0.05),
-                    "release": float(mapping.get("release") or 0.2),
-                    "min": float(mapping.get("min") or 0.0),
-                    "max": float(mapping.get("max") or 1.0),
+                    "smoothing": float(mapping["smoothing"]) if mapping.get("smoothing") is not None else 0.35,
+                    "attack": float(mapping["attack"]) if mapping.get("attack") is not None else 0.05,
+                    "release": float(mapping["release"]) if mapping.get("release") is not None else 0.2,
+                    "min": float(mapping["min"]) if mapping.get("min") is not None else 0.0,
+                    "max": float(mapping["max"]) if mapping.get("max") is not None else 1.0,
                     "muted": bool(mapping.get("muted")),
-                    "scale": float(mapping.get("scale") or 1.0),
+                    "scale": float(mapping["scale"]) if mapping.get("scale") is not None else 1.0,
                 },
             }
         )

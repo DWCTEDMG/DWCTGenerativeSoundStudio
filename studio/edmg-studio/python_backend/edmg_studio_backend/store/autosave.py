@@ -69,7 +69,7 @@ class AutosaveJournal:
         meta: dict[str, Any],
         reason: str = "checkpoint",
     ) -> Path:
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
         path = self.snapshot_dir / f"snapshot-{stamp}.json"
         payload = {
             "schema_version": JOURNAL_SCHEMA_VERSION,
