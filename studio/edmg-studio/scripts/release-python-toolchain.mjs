@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 export const PINNED_UV_VERSION = "0.11.28";
-export const RELEASE_MANIFEST_SCHEMA_VERSION = 2;
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 3;
 export const ACCELERATOR_PROFILES = Object.freeze(["cpu", "directml", "cuda"]);
 export const RELEASE_CAPABILITY_EXTRAS = Object.freeze([
   "core",
@@ -194,6 +194,24 @@ function isSha256(value) {
   return /^[a-f0-9]{64}$/.test(String(value ?? ""));
 }
 
+function normalizedBundlePath(value) {
+  const candidate = String(value ?? "").replaceAll("\\", "/");
+  if (!candidate || candidate.startsWith("/") || /^[a-z]:\//i.test(candidate)) return "";
+  const normalized = path.posix.normalize(candidate);
+  if (normalized !== candidate || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
+    return "";
+  }
+  return normalized;
+}
+
+function safeSymlinkTarget(entryPath, value) {
+  const target = String(value ?? "").replaceAll("\\", "/");
+  if (!target || target.startsWith("/") || /^[a-z]:\//i.test(target)) return "";
+  const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(entryPath), target));
+  if (resolved === ".." || resolved.startsWith("../")) return "";
+  return target;
+}
+
 function sameStringArray(left, right) {
   return Array.isArray(left) && Array.isArray(right) &&
     left.length === right.length && left.every((value, index) => value === right[index]);
@@ -213,7 +231,9 @@ function normalizedTorchPackages(packages) {
 export function validateReleaseManifest(manifest, { expectedProfile = "", expectedUvVersion = PINNED_UV_VERSION } = {}) {
   const errors = [];
   if (!manifest || typeof manifest !== "object") return ["manifest is not an object"];
-  if (manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) errors.push("schemaVersion must be 2");
+  if (manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) {
+    errors.push(`schemaVersion must be ${RELEASE_MANIFEST_SCHEMA_VERSION}`);
+  }
   if (manifest.ok !== true) errors.push("ok must be true");
   if (!isSha256(manifest.sourceHash)) errors.push("sourceHash must be a SHA-256 digest");
   if (!isSha256(manifest.lockSha256)) errors.push("lockSha256 must be a SHA-256 digest");
@@ -230,6 +250,61 @@ export function validateReleaseManifest(manifest, { expectedProfile = "", expect
   if (!String(manifest.pyinstallerVersion ?? "").trim()) errors.push("pyinstallerVersion is required");
   if (!Number.isInteger(manifest.sourceFileCount) || manifest.sourceFileCount <= 0) errors.push("sourceFileCount is invalid");
   if (!Number.isInteger(manifest.binarySize) || manifest.binarySize <= 0) errors.push("binarySize is invalid");
+  if (manifest.bundleLayout !== "onedir") errors.push("bundleLayout must be onedir");
+  const backendEntryPoint = normalizedBundlePath(manifest.backendEntryPoint);
+  if (!backendEntryPoint) errors.push("backendEntryPoint must be a safe bundle-relative path");
+
+  const bundleEntries = Array.isArray(manifest.bundleEntries) ? manifest.bundleEntries : [];
+  if (!bundleEntries.length) {
+    errors.push("bundleEntries must inventory the complete onedir runtime");
+  } else {
+    const seen = new Set();
+    let regularFileCount = 0;
+    let regularFileBytes = 0;
+    let previousPath = "";
+    for (const entry of bundleEntries) {
+      const entryPath = normalizedBundlePath(entry?.path);
+      if (!entryPath) {
+        errors.push("bundleEntries contain an unsafe path");
+        break;
+      }
+      if (seen.has(entryPath)) {
+        errors.push(`bundleEntries contain duplicate path ${entryPath}`);
+        break;
+      }
+      if (previousPath && previousPath.localeCompare(entryPath) > 0) {
+        errors.push("bundleEntries must be sorted by path");
+        break;
+      }
+      seen.add(entryPath);
+      previousPath = entryPath;
+      if (entry?.type === "file") {
+        regularFileCount += 1;
+        if (!Number.isInteger(entry.size) || entry.size < 0 || !isSha256(entry.sha256)) {
+          errors.push(`bundleEntries file metadata is invalid for ${entryPath}`);
+          break;
+        }
+        regularFileBytes += entry.size;
+      } else if (entry?.type === "symlink") {
+        if (!safeSymlinkTarget(entryPath, entry.target)) {
+          errors.push(`bundleEntries symlink target is invalid for ${entryPath}`);
+          break;
+        }
+      } else {
+        errors.push(`bundleEntries type is invalid for ${entryPath}`);
+        break;
+      }
+    }
+    if (manifest.bundleEntryCount !== bundleEntries.length) errors.push("bundleEntryCount is invalid");
+    if (manifest.bundleFileCount !== regularFileCount || regularFileCount <= 0) errors.push("bundleFileCount is invalid");
+    if (manifest.bundleSize !== regularFileBytes || regularFileBytes <= 0) errors.push("bundleSize is invalid");
+    const launcher = bundleEntries.find((entry) => entry?.path === backendEntryPoint && entry?.type === "file");
+    if (!launcher) {
+      errors.push("backendEntryPoint is missing from bundleEntries");
+    } else if (launcher.size !== manifest.binarySize || launcher.sha256 !== manifest.binarySha256) {
+      errors.push("backendEntryPoint metadata does not match binary provenance");
+    }
+  }
 
   const torchPackages = normalizedTorchPackages(manifest.torchPackages);
   const expectedNames = ["torch", "torchaudio", "torchvision"];
@@ -313,6 +388,58 @@ export async function fileFingerprintEntries(files, baseDir) {
     });
   }
   return entries;
+}
+
+export async function collectBundleEntries(bundleDirectory, {
+  exclude = ["backend-bundle-manifest.json"],
+} = {}) {
+  const root = path.resolve(bundleDirectory);
+  const excluded = new Set(exclude.map((entry) => normalizedBundlePath(entry)).filter(Boolean));
+  const entries = [];
+
+  async function walk(directory) {
+    const children = await fsp.readdir(directory, { withFileTypes: true });
+    children.sort((left, right) => left.name.localeCompare(right.name));
+    for (const child of children) {
+      const absolutePath = path.join(directory, child.name);
+      const relativePath = path.relative(root, absolutePath).split(path.sep).join("/");
+      if (excluded.has(relativePath)) continue;
+      if (child.isSymbolicLink()) {
+        entries.push({
+          path: relativePath,
+          type: "symlink",
+          target: (await fsp.readlink(absolutePath)).replaceAll("\\", "/"),
+        });
+      } else if (child.isDirectory()) {
+        await walk(absolutePath);
+      } else if (child.isFile()) {
+        const stat = await fsp.stat(absolutePath);
+        entries.push({
+          path: relativePath,
+          type: "file",
+          size: stat.size,
+          sha256: await sha256File(absolutePath),
+        });
+      } else {
+        throw new Error(`Unsupported backend bundle entry: ${absolutePath}`);
+      }
+    }
+  }
+
+  await walk(root);
+  return entries.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export async function bundleMatchesManifest(bundleDirectory, manifest) {
+  if (!fs.existsSync(bundleDirectory) || !Array.isArray(manifest?.bundleEntries)) return false;
+  try {
+    const stat = await fsp.stat(bundleDirectory);
+    if (!stat.isDirectory()) return false;
+    const actual = await collectBundleEntries(bundleDirectory);
+    return JSON.stringify(actual) === JSON.stringify(manifest.bundleEntries);
+  } catch {
+    return false;
+  }
 }
 
 export async function binaryMatchesManifest(binaryPath, manifest) {

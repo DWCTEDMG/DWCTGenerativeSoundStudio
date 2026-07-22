@@ -2,6 +2,14 @@ import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+export function resolveWindowBackendUrl(backendUrl, getBackendUrl) {
+  if (typeof getBackendUrl === "function") {
+    const current = String(getBackendUrl() || "").trim();
+    if (current) return current;
+  }
+  return String(backendUrl || "").trim();
+}
+
 export function createWindowRuntime({
   app,
   BrowserWindow,
@@ -12,6 +20,7 @@ export function createWindowRuntime({
   backendHost,
   backendPort,
   backendUrl,
+  getBackendUrl,
   testMode,
   testPage,
   testReportPath,
@@ -183,6 +192,7 @@ export function createWindowRuntime({
   }
 
   async function createMainWindow() {
+    const currentBackendUrl = resolveWindowBackendUrl(backendUrl, getBackendUrl);
     const win = new BrowserWindow({
       width: 1440,
       height: 920,
@@ -202,7 +212,7 @@ export function createWindowRuntime({
         additionalArguments: [
           `--edmg-backend-host=${backendHost}`,
           `--edmg-backend-port=${String(backendPort)}`,
-          ...(backendUrl ? [`--edmg-backend-url=${backendUrl}`] : []),
+          ...(currentBackendUrl ? [`--edmg-backend-url=${currentBackendUrl}`] : []),
           `--edmg-test-mode=${testMode ? "1" : "0"}`,
         ],
       },

@@ -141,10 +141,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="edmg-studio-backend",
     debug=False,
     bootloader_ignore_signals=False,
@@ -158,4 +156,16 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+# Keep the backend as an onedir application. The CUDA profile is several
+# gigabytes; a onefile executable would unpack that entire runtime into a
+# temporary _MEI directory on every Studio launch.
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="edmg-studio-backend",
 )

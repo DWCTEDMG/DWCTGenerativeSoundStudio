@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   PINNED_UV_VERSION,
@@ -14,7 +14,8 @@ import {
   assertPython312,
   assertTorchIndexForProfile,
   assertTrackedCleanDependencyStatus,
-  binaryMatchesManifest,
+  bundleMatchesManifest,
+  collectBundleEntries,
   releaseProvenanceMatches,
   releaseUvEnvironment,
   resolveAcceleratorProfile,
@@ -35,6 +36,9 @@ const uvLockPath = path.join(pythonBackendDir, "uv.lock");
 const provenanceScriptPath = path.join(__dirname, "release_provenance.py");
 const toolchainScriptPath = path.join(__dirname, "release-python-toolchain.mjs");
 const electronBackendDir = path.join(root, "electron-resources", "backend");
+const electronResourcesDir = path.dirname(electronBackendDir);
+const backendStagingDir = path.join(electronResourcesDir, "backend.staging");
+const backendPreviousDir = path.join(electronResourcesDir, "backend.previous");
 const directorAppDir = path.resolve(root, "..", "..", "chatgpt-apps", "edmg-director");
 const electronDirectorDir = path.join(root, "electron-resources", "director");
 const directorBundleManifestPath = path.join(electronDirectorDir, "director-bundle-manifest.json");
@@ -238,17 +242,22 @@ function readBundleManifest() {
   }
 }
 
-function distBackendCandidates() {
-  return [
-    path.join(pythonBackendDir, "dist", "edmg-studio-backend", backendBinaryName),
-    path.join(pythonBackendDir, "dist", backendBinaryName),
-  ];
+function summarizeBundleManifest(manifest) {
+  const { bundleEntries: _bundleEntries, ...summary } = manifest;
+  return {
+    ...summary,
+    bundleEntriesRecorded: Array.isArray(manifest.bundleEntries) ? manifest.bundleEntries.length : 0,
+  };
+}
+
+function distBackendDirectory() {
+  return path.join(pythonBackendDir, "dist", "edmg-studio-backend");
 }
 
 async function reusableBundle(expected) {
   const manifest = readBundleManifest();
   if (!manifest || !releaseProvenanceMatches(manifest, expected)) return null;
-  if (!(await binaryMatchesManifest(bundledBackendPath, manifest))) return null;
+  if (!(await bundleMatchesManifest(electronBackendDir, manifest))) return null;
   return manifest;
 }
 
@@ -259,17 +268,77 @@ function buildBackendBundle(uvCommand, profile, env) {
     uvRunArgs(profile, ["pyinstaller", "pyinstaller.spec", "--clean", "--noconfirm"]),
     { cwd: pythonBackendDir, env },
   );
-  const built = distBackendCandidates().find((candidate) => fs.existsSync(candidate));
-  if (!built) {
-    throw new Error(`Backend build completed but ${backendBinaryName} was not found under python_backend/dist`);
+  const built = distBackendDirectory();
+  const builtLauncher = path.join(built, backendBinaryName);
+  if (!fs.existsSync(built) || !fs.statSync(built).isDirectory() || !fs.existsSync(builtLauncher)) {
+    throw new Error(
+      `Backend build completed but the onedir bundle ${path.relative(root, built)} was not complete`,
+    );
   }
   return built;
 }
 
-async function stageBackendBundle(sourcePath, expected) {
-  await fsp.mkdir(electronBackendDir, { recursive: true });
-  await fsp.copyFile(sourcePath, bundledBackendPath);
-  const stat = await fsp.stat(bundledBackendPath);
+function assertOwnedBackendStagePath(target) {
+  const resolved = path.resolve(target);
+  const allowed = new Set([
+    path.resolve(electronBackendDir),
+    path.resolve(backendStagingDir),
+    path.resolve(backendPreviousDir),
+  ]);
+  if (!allowed.has(resolved) || path.dirname(resolved) !== path.resolve(electronResourcesDir)) {
+    throw new Error(`Refusing to replace unexpected backend bundle path: ${target}`);
+  }
+  return resolved;
+}
+
+async function removeBackendStagePath(target) {
+  await fsp.rm(assertOwnedBackendStagePath(target), { recursive: true, force: true });
+}
+
+async function prepareBackendStagePaths() {
+  await fsp.mkdir(electronResourcesDir, { recursive: true });
+  if (!fs.existsSync(electronBackendDir) && fs.existsSync(backendPreviousDir)) {
+    await fsp.rename(backendPreviousDir, electronBackendDir);
+  }
+  await removeBackendStagePath(backendStagingDir);
+  if (fs.existsSync(electronBackendDir)) await removeBackendStagePath(backendPreviousDir);
+}
+
+async function activateBackendStage() {
+  let movedPrevious = false;
+  try {
+    if (fs.existsSync(electronBackendDir)) {
+      await fsp.rename(electronBackendDir, backendPreviousDir);
+      movedPrevious = true;
+    }
+    await fsp.rename(backendStagingDir, electronBackendDir);
+  } catch (error) {
+    if (movedPrevious && !fs.existsSync(electronBackendDir) && fs.existsSync(backendPreviousDir)) {
+      await fsp.rename(backendPreviousDir, electronBackendDir);
+    }
+    throw error;
+  }
+  if (movedPrevious) await removeBackendStagePath(backendPreviousDir);
+}
+
+async function stageBackendBundle(sourceDirectory, expected) {
+  await prepareBackendStagePaths();
+  await fsp.cp(sourceDirectory, backendStagingDir, {
+    recursive: true,
+    force: true,
+    dereference: false,
+  });
+  // Preserve the tracked placeholder when replacing the generated directory.
+  // It is intentionally part of the full-tree inventory below.
+  await fsp.writeFile(path.join(backendStagingDir, ".gitkeep"), "", "utf8");
+  const stagedLauncherPath = path.join(backendStagingDir, backendBinaryName);
+  if (!fs.existsSync(stagedLauncherPath) || !fs.statSync(stagedLauncherPath).isFile()) {
+    throw new Error(`Staged onedir backend is missing ${backendBinaryName}`);
+  }
+  const bundleEntries = await collectBundleEntries(backendStagingDir);
+  const launcher = bundleEntries.find((entry) => entry.path === backendBinaryName && entry.type === "file");
+  if (!launcher) throw new Error(`Staged onedir backend inventory is missing ${backendBinaryName}`);
+  const bundleFiles = bundleEntries.filter((entry) => entry.type === "file");
   const manifest = {
     schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
     ok: true,
@@ -288,15 +357,78 @@ async function stageBackendBundle(sourcePath, expected) {
     torchIndex: expected.torchIndex,
     torchPackages: expected.torchPackages,
     nltkResources: expected.nltkResources,
+    bundleLayout: "onedir",
+    backendEntryPoint: backendBinaryName,
+    bundleEntries,
+    bundleEntryCount: bundleEntries.length,
+    bundleFileCount: bundleFiles.length,
+    bundleSize: bundleFiles.reduce((total, entry) => total + entry.size, 0),
     bundledBackend: path.relative(root, bundledBackendPath).split(path.sep).join("/"),
-    sourceArtifact: path.relative(root, sourcePath).split(path.sep).join("/"),
-    binarySha256: await sha256File(bundledBackendPath),
-    binarySize: stat.size,
+    sourceArtifact: path.relative(root, sourceDirectory).split(path.sep).join("/"),
+    binarySha256: launcher.sha256,
+    binarySize: launcher.size,
     reusedExistingBuild: false,
     preparedAt: new Date().toISOString(),
   };
-  await fsp.writeFile(bundleManifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  await fsp.writeFile(
+    path.join(backendStagingDir, path.basename(bundleManifestPath)),
+    JSON.stringify(manifest, null, 2) + "\n",
+    "utf8",
+  );
+  await activateBackendStage();
   return manifest;
+}
+
+function isPathInside(parentDirectory, candidate) {
+  const relative = path.relative(path.resolve(parentDirectory), path.resolve(candidate));
+  return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+}
+
+async function inspectDirectorDependencyTree(packageJson) {
+  const nodeModulesDir = path.join(electronDirectorDir, "node_modules");
+  if (!fs.existsSync(nodeModulesDir) || !fs.statSync(nodeModulesDir).isDirectory()) {
+    throw new Error("Director production install did not create node_modules");
+  }
+
+  const dependencyNames = Object.keys(packageJson.dependencies || {}).sort();
+  const missingDependencies = dependencyNames.filter((name) => {
+    const packagePath = path.join(nodeModulesDir, ...name.split("/"), "package.json");
+    return !fs.existsSync(packagePath) || !fs.statSync(packagePath).isFile();
+  });
+  if (missingDependencies.length) {
+    throw new Error(`Director production install is missing dependencies: ${missingDependencies.join(", ")}`);
+  }
+
+  let directoryCount = 0;
+  let fileCount = 0;
+  let symlinkCount = 0;
+  let totalSize = 0;
+  async function walk(directory) {
+    for (const child of await fsp.readdir(directory, { withFileTypes: true })) {
+      const childPath = path.join(directory, child.name);
+      if (child.isSymbolicLink()) {
+        symlinkCount += 1;
+        const target = await fsp.readlink(childPath);
+        const resolvedTarget = path.resolve(path.dirname(childPath), target);
+        if (!isPathInside(electronDirectorDir, resolvedTarget)) {
+          throw new Error(
+            `Director production dependency link escapes the bundle: ${path.relative(electronDirectorDir, childPath)} -> ${target}`,
+          );
+        }
+      } else if (child.isDirectory()) {
+        directoryCount += 1;
+        await walk(childPath);
+      } else if (child.isFile()) {
+        fileCount += 1;
+        totalSize += (await fsp.stat(childPath)).size;
+      } else {
+        throw new Error(`Unsupported Director dependency entry: ${childPath}`);
+      }
+    }
+  }
+  await walk(nodeModulesDir);
+  if (fileCount === 0) throw new Error("Director production dependency tree is empty");
+  return { dependencyNames, directoryCount, fileCount, symlinkCount, totalSize };
 }
 
 async function stageDirectorBundle() {
@@ -313,7 +445,6 @@ async function stageDirectorBundle() {
   const requiredEntries = [
     path.join(directorAppDir, "dist-server", "server.js"),
     path.join(directorAppDir, "assets"),
-    path.join(directorAppDir, "node_modules"),
     path.join(directorAppDir, "package.json"),
   ];
   for (const entry of requiredEntries) {
@@ -322,7 +453,7 @@ async function stageDirectorBundle() {
 
   await fsp.rm(electronDirectorDir, { recursive: true, force: true });
   await fsp.mkdir(electronDirectorDir, { recursive: true });
-  const copyEntries = ["assets", "dist-server", "node_modules", "package.json", "README.md"];
+  const copyEntries = ["assets", "dist-server", "package.json", "pnpm-lock.yaml", "README.md"];
   for (const name of copyEntries) {
     const source = path.join(directorAppDir, name);
     if (!fs.existsSync(source)) continue;
@@ -333,12 +464,47 @@ async function stageDirectorBundle() {
     });
   }
 
+  runPnpmChecked(
+    "install frozen production director dependencies",
+    [
+      "install",
+      "--prod",
+      "--frozen-lockfile",
+      "--config.node-linker=hoisted",
+      "--config.package-import-method=copy",
+    ],
+    { cwd: electronDirectorDir },
+  );
+  const bundledPackageJson = JSON.parse(
+    await fsp.readFile(path.join(electronDirectorDir, "package.json"), "utf8"),
+  );
+  const productionDependencies = await inspectDirectorDependencyTree(bundledPackageJson);
+  const directorEntrypoint = path.join(electronDirectorDir, "dist-server", "server.js");
+  runCaptured(
+    "load staged director entrypoint",
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `await import(${JSON.stringify(pathToFileURL(directorEntrypoint).href)});`,
+    ],
+    { cwd: electronDirectorDir },
+  );
+
   const manifest = {
     ok: true,
     builder: "scripts/prepare-release-bundle.mjs",
     directorAppDir: path.relative(root, directorAppDir).split(path.sep).join("/"),
     bundledDirectorDir: path.relative(root, electronDirectorDir).split(path.sep).join("/"),
-    included: copyEntries.filter((name) => fs.existsSync(path.join(electronDirectorDir, name))),
+    included: [...copyEntries, "node_modules"].filter((name) => fs.existsSync(path.join(electronDirectorDir, name))),
+    dependencyInstall: {
+      productionOnly: true,
+      nodeLinker: "hoisted",
+      packageImportMethod: "copy",
+      selfContained: true,
+      entrypointImportVerified: true,
+      ...productionDependencies,
+    },
     lockSha256: await sha256File(path.join(directorAppDir, "pnpm-lock.yaml")),
     preparedAt: new Date().toISOString(),
   };
@@ -389,7 +555,7 @@ async function main() {
       skippedRebuild: true,
       reason: "bundled backend matches the committed lock, profile, provenance, sources, and binary hash",
       bundleManifestPath,
-      manifest: existing,
+      manifest: summarizeBundleManifest(existing),
       directorBundleManifestPath,
       directorManifest,
       releaseEvidence: {
@@ -415,7 +581,7 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     bundleManifestPath,
-    manifest,
+    manifest: summarizeBundleManifest(manifest),
     directorBundleManifestPath,
     directorManifest,
     releaseEvidence: {

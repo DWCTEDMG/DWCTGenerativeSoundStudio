@@ -15,6 +15,8 @@ import {
   assertTorchIndexForProfile,
   assertTrackedCleanDependencyStatus,
   binaryMatchesManifest,
+  bundleMatchesManifest,
+  collectBundleEntries,
   releaseUvEnvironment,
   releaseProvenanceMatches,
   resolveAcceleratorProfile,
@@ -32,14 +34,25 @@ const studioRoot = path.resolve(__dirname, "..");
 
 function validManifest(overrides = {}) {
   const cpuIndex = "https://download.pytorch.org/whl/cpu";
+  const backendEntryPoint = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+  const binarySha256 = "3".repeat(64);
+  const binarySize = 123;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     ok: true,
     sourceHash: "1".repeat(64),
     sourceFileCount: 10,
     lockSha256: "2".repeat(64),
-    binarySha256: "3".repeat(64),
-    binarySize: 123,
+    binarySha256,
+    binarySize,
+    bundleLayout: "onedir",
+    backendEntryPoint,
+    bundleEntries: [
+      { path: backendEntryPoint, type: "file", size: binarySize, sha256: binarySha256 },
+    ],
+    bundleEntryCount: 1,
+    bundleFileCount: 1,
+    bundleSize: binarySize,
     acceleratorProfile: "cpu",
     capabilityExtras: [...RELEASE_CAPABILITY_EXTRAS],
     uvVersion: PINNED_UV_VERSION,
@@ -164,7 +177,7 @@ test("release dependency metadata must be tracked and clean", () => {
   );
 });
 
-test("schema-2 manifest validation and reuse reject provenance drift", () => {
+test("schema-3 onedir manifest validation and reuse reject provenance drift", () => {
   const manifest = validManifest();
   assert.deepEqual(validateReleaseManifest(manifest), []);
   assert.equal(releaseProvenanceMatches(manifest, manifest), true);
@@ -189,15 +202,65 @@ test("binary reuse verifies both size and SHA-256", async () => {
   }
 });
 
+test("onedir reuse verifies every staged backend entry", async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-onedir-"));
+  const backendEntryPoint = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+  const launcherPath = path.join(tempDir, backendEntryPoint);
+  const runtimePath = path.join(tempDir, "_internal", "torch-runtime.bin");
+  try {
+    await fsp.mkdir(path.dirname(runtimePath), { recursive: true });
+    await fsp.writeFile(launcherPath, "launcher\n", "utf8");
+    await fsp.writeFile(runtimePath, "runtime\n", "utf8");
+    const bundleEntries = await collectBundleEntries(tempDir);
+    const launcher = bundleEntries.find((entry) => entry.path === backendEntryPoint);
+    const manifest = validManifest({
+      backendEntryPoint,
+      bundleEntries,
+      bundleEntryCount: bundleEntries.length,
+      bundleFileCount: bundleEntries.filter((entry) => entry.type === "file").length,
+      bundleSize: bundleEntries
+        .filter((entry) => entry.type === "file")
+        .reduce((total, entry) => total + entry.size, 0),
+      binarySize: launcher.size,
+      binarySha256: launcher.sha256,
+    });
+    assert.deepEqual(validateReleaseManifest(manifest), []);
+    assert.equal(await bundleMatchesManifest(tempDir, manifest), true);
+    await fsp.appendFile(runtimePath, "tampered\n", "utf8");
+    assert.equal(await bundleMatchesManifest(tempDir, manifest), false);
+    await fsp.writeFile(path.join(tempDir, "unexpected.txt"), "extra\n", "utf8");
+    assert.equal(await bundleMatchesManifest(tempDir, manifest), false);
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("supported release paths contain no pip or venv build fallback", () => {
   const prepare = fs.readFileSync(path.join(__dirname, "prepare-release-bundle.mjs"), "utf8");
   const windowsBuild = fs.readFileSync(path.join(studioRoot, "packaging", "windows", "build_all.ps1"), "utf8");
+  const gitignore = fs.readFileSync(path.resolve(studioRoot, "..", "..", ".gitignore"), "utf8");
   const pyinstallerSupport = fs.readFileSync(path.join(studioRoot, "python_backend", "pyinstaller_support.py"), "utf8");
   const pyinstallerSpec = fs.readFileSync(path.join(studioRoot, "python_backend", "pyinstaller.spec"), "utf8");
   assert.doesNotMatch(prepare, /(?:-m\s+pip|pip\s+install|-m\s+venv)/i);
   assert.doesNotMatch(windowsBuild, /(?:-m\s+pip|pip\s+install|-m\s+venv)/i);
   assert.doesNotMatch(pyinstallerSupport, /nltk\.download\s*\(/);
   assert.match(pyinstallerSpec, /upx=False/);
+  assert.match(pyinstallerSpec, /exclude_binaries=True/);
+  assert.match(pyinstallerSpec, /COLLECT\s*\(/);
+  assert.match(gitignore, /electron-resources\/backend\/\*/);
+  assert.match(gitignore, /!studio\/edmg-studio\/electron-resources\/backend\/\.gitkeep/);
+});
+
+test("Director release stages a self-contained production hoisted install", () => {
+  const prepare = fs.readFileSync(path.join(__dirname, "prepare-release-bundle.mjs"), "utf8");
+  assert.match(prepare, /"--prod"/);
+  assert.match(prepare, /"--frozen-lockfile"/);
+  assert.match(prepare, /"--config\.node-linker=hoisted"/);
+  assert.match(prepare, /"--config\.package-import-method=copy"/);
+  assert.match(prepare, /inspectDirectorDependencyTree/);
+  assert.match(prepare, /load staged director entrypoint/);
+  assert.match(prepare, /await import/);
+  assert.doesNotMatch(prepare, /const copyEntries = \[[^\]]*"node_modules"/s);
 });
 
 test("package release commands select explicit profiles without changing pnpm", () => {
@@ -232,6 +295,9 @@ test("Inno external installer tracks extracted payload files for safe uninstall"
   assert.match(innoBuild, /Security\.Cryptography\.SHA256\]::Create/);
   assert.doesNotMatch(innoBuild, /Get-FileHash/);
   assert.match(innoBuild, /ExternalSize: \{0\}; Hash: "\{1\}"/);
+  assert.match(innoBuild, /\[InstallDelete\]/);
+  assert.match(innoBuild, /Type: filesandordirs; Name: "\{app\}\\resources\\backend"/);
+  assert.doesNotMatch(innoBuild, /Type: filesandordirs; Name: "\{app\}"/);
   assert.match(innoBuild, /external extractarchive recursesubdirs createallsubdirs ignoreversion/);
   assert.doesNotMatch(innoBuild, /\[UninstallDelete\]/);
   assert.doesNotMatch(innoBuild, /\{app\}\\\*/);

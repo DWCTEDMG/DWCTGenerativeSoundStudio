@@ -102,9 +102,10 @@ studio/edmg-studio/src/.env
 studio/edmg-studio/src/.env.local
 .env
 .env.local
-studio/edmg-studio/electron-resources/backend/*.exe
-studio/edmg-studio/electron-resources/backend/edmg-studio-backend
-studio/edmg-studio/electron-resources/backend/backend-bundle-manifest.json
+studio/edmg-studio/electron-resources/backend/*
+!studio/edmg-studio/electron-resources/backend/.gitkeep
+studio/edmg-studio/electron-resources/backend.staging/
+studio/edmg-studio/electron-resources/backend.previous/
 studio/edmg-studio/electron-resources/bin/*.exe
 studio/edmg-studio/electron-resources/bin/ffmpeg
 studio/edmg-studio/electron-resources/director/

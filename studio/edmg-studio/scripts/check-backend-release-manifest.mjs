@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   assertValidReleaseManifest,
+  bundleMatchesManifest,
   sha256File,
 } from "./release-python-toolchain.mjs";
 
@@ -22,6 +23,11 @@ async function validateBundle(directory, expected = null) {
   assert.ok(fs.existsSync(binaryPath), `Backend release binary is missing: ${binaryPath}`);
   const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
   assertValidReleaseManifest(manifest);
+  assert.equal(
+    await bundleMatchesManifest(directory, manifest),
+    true,
+    `Backend onedir contents do not match ${manifestPath}`,
+  );
   const stat = await fsp.stat(binaryPath);
   assert.equal(stat.size, manifest.binarySize, `Backend binary size does not match ${manifestPath}`);
   assert.equal(await sha256File(binaryPath), manifest.binarySha256, `Backend binary hash does not match ${manifestPath}`);
