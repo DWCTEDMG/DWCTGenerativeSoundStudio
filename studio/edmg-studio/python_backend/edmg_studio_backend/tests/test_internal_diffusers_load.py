@@ -61,6 +61,17 @@ def test_diffusers_model_load_kwargs_keeps_real_fp16_safetensors_preferred(tmp_p
     assert kwargs["use_safetensors"] is True
 
 
+def test_diffusers_model_load_kwargs_falls_back_to_bin_only_snapshot_on_cpu(tmp_path: Path) -> None:
+    (tmp_path / "unet").mkdir(parents=True)
+    (tmp_path / "unet" / "diffusion_pytorch_model.bin").write_bytes(b"real bin weights")
+    (tmp_path / "text_encoder").mkdir(parents=True)
+    (tmp_path / "text_encoder" / "pytorch_model.bin").write_bytes(b"real text weights")
+
+    kwargs = iv._diffusers_model_load_kwargs(tmp_path, "cpu")
+
+    assert kwargs["use_safetensors"] is False
+
+
 def test_reraise_snapshot_load_error_wraps_missing_weight_message(tmp_path: Path) -> None:
     with pytest.raises(iv.UserFacingError) as exc:
         iv._reraise_snapshot_load_error(

@@ -9,6 +9,7 @@ import shutil
 
 import pytest
 
+from edmg_studio_backend.services import internal_video as internal_video_service
 from edmg_studio_backend.services.internal_video import (
     InternalVideoSettings,
     _apply_proxy_finish,
@@ -20,7 +21,6 @@ from edmg_studio_backend.services.internal_video import (
 )
 
 PIL = pytest.importorskip("PIL")
-from PIL import Image  # noqa: E402
 
 
 def _sample_scenes():
@@ -106,3 +106,59 @@ def test_render_internal_proxy_video_produces_mp4(tmp_path):
     assert out.exists()
     assert out.suffix == ".mp4"
     assert out.stat().st_size > 0
+
+
+def test_proxy_render_does_not_reuse_invalid_cached_final_video(tmp_path, monkeypatch):
+    project_dir = tmp_path / "proj"
+    videos_dir = project_dir / "outputs" / "videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    settings = InternalVideoSettings(
+        fps_render=1,
+        fps_output=2,
+        width=64,
+        height=64,
+        render_tier="draft",
+        proxy_motion=False,
+        proxy_finish=False,
+        interpolation_engine="fps",
+        resume_existing_frames=True,
+    )
+    variant = {"index": 0, "duration_s": 1.0}
+    work_tag = internal_video_service._build_proxy_work_tag(  # noqa: SLF001 - deterministic cache key helper
+        variant_index=0,
+        scenes=_sample_scenes(),
+        timeline=_sample_timeline(),
+        settings=settings,
+    )
+    final_mp4 = videos_dir / f"{work_tag}.mp4"
+    final_mp4.write_bytes(b"")
+
+    monkeypatch.setattr(internal_video_service, "has_video_stream", lambda _ffmpeg_path, path: path.stat().st_size > 0)
+
+    calls: list[str] = []
+
+    def fake_assemble_image_sequence(*, ffmpeg_path, frames_dir, out_mp4, fps, glob_pattern, audio_path=None):
+        calls.append("assemble")
+        out_mp4.write_bytes(b"raw-video")
+
+    def fake_interpolate_video_fps(*, ffmpeg_path, in_mp4, out_mp4, fps_out, engine):
+        calls.append("interpolate")
+        assert in_mp4.read_bytes() == b"raw-video"
+        out_mp4.write_bytes(b"interp-video")
+
+    monkeypatch.setattr(internal_video_service, "assemble_image_sequence", fake_assemble_image_sequence)
+    monkeypatch.setattr(internal_video_service, "interpolate_video_fps", fake_interpolate_video_fps)
+
+    out = render_internal_proxy_video_variant(
+        ffmpeg_path="ffmpeg",
+        project_dir=project_dir,
+        variant=variant,
+        scenes=_sample_scenes(),
+        audio_path=None,
+        settings=settings,
+        timeline=_sample_timeline(),
+    )
+
+    assert out == final_mp4
+    assert out.read_bytes() == b"interp-video"
+    assert calls == ["assemble", "interpolate"]

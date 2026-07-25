@@ -3,5 +3,5 @@
   "EDMG_HF_BUCKET_MODEL_CACHE": "1",
   "EDMG_HF_BUCKET_ID": "gulle1155/DWCTedmgAIStudioModels",
   "EDMG_HF_BUCKET_PREFIX": "",
-  "EDMG_MODEL_STORAGE_MODE": "cloud_only"
+  "EDMG_MODEL_STORAGE_MODE": "local_cache"
 }

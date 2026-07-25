@@ -266,7 +266,9 @@ only validates an existing bucket.
 
 The backend also supports Hugging Face bucket-backed model hosting through the
 built-in model cache. Project defaults ship in `launcher_env.defaults.json`
-(`EDMG_HF_BUCKET_MODEL_CACHE=1`, `EDMG_MODEL_STORAGE_MODE=cloud_only`).
+with the HF bucket enabled and `EDMG_MODEL_STORAGE_MODE=local_cache` so a fresh
+install keeps usable local model copies while mirroring supported assets into
+the bucket.
 
 Authenticate once on the Linux host:
 
@@ -293,8 +295,8 @@ source "$EDMG_STUDIO_HOME/hf-bucket.env"
 EDMG_BACKEND_ENV_MODE=active EDMG_SKIP_BOOTSTRAP=1 bash scripts/start_lightning_backend.sh
 ```
 
-Use `local_cache` instead of `cloud_only` when you want local files mirrored into
-the bucket.
+`cloud_only` is for explicitly remote-only installs. Leave the default
+`local_cache` mode in place when you want local files mirrored into the bucket.
 
 ## Point Studio at a remote backend (Lightning / Vast / GCP)
 

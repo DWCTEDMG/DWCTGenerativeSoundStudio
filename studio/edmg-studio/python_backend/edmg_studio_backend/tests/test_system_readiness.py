@@ -43,23 +43,34 @@ def test_system_readiness_reports_ready_when_dependencies_and_paths_are_healthy(
         path.mkdir(parents=True, exist_ok=True)
     (models / "demo.bin").write_bytes(b"x")
 
-    report = assess_system_readiness(
-        ffmpeg_path="ffmpeg",
-        data_dir=data,
-        models_dir=models,
-        cache_dir=cache,
-        logs_dir=logs,
-        check_ffmpeg=_ready_ffmpeg,
-        check_runtime=_ready_runtime,
-        hardware_profile=lambda: {
-            "backend": "cuda",
-            "device": "cuda",
-            "device_name": "Test GPU",
-            "available_backends": ["cpu", "cuda"],
-            "vram_gb": 12.0,
-            "ram_gb": 32.0,
-        },
-    )
+    class Usage:
+        total = 100 * 1024**3
+        free = 20 * 1024**3
+
+    from edmg_studio_backend.services import system_readiness
+
+    original_disk_usage = system_readiness.shutil.disk_usage
+    system_readiness.shutil.disk_usage = lambda _path: Usage()
+    try:
+        report = assess_system_readiness(
+            ffmpeg_path="ffmpeg",
+            data_dir=data,
+            models_dir=models,
+            cache_dir=cache,
+            logs_dir=logs,
+            check_ffmpeg=_ready_ffmpeg,
+            check_runtime=_ready_runtime,
+            hardware_profile=lambda: {
+                "backend": "cuda",
+                "device": "cuda",
+                "device_name": "Test GPU",
+                "available_backends": ["cpu", "cuda"],
+                "vram_gb": 12.0,
+                "ram_gb": 32.0,
+            },
+        )
+    finally:
+        system_readiness.shutil.disk_usage = original_disk_usage
 
     assert report["schema_version"] == 1
     assert report["ok"] is True

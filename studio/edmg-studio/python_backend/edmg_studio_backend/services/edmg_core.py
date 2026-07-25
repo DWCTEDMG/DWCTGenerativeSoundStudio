@@ -8,45 +8,47 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-INSTALLER_NAME = "edmg_core_installer.py"
 logger = logging.getLogger(__name__)
 
 
-def _is_studio_root(candidate: Path) -> bool:
-    return (candidate / "python_backend").exists() and (candidate / "scripts" / INSTALLER_NAME).exists()
+def _repo_root_candidate(candidate: Path) -> Path | None:
+    resolved = candidate.expanduser().resolve()
+    if (resolved / "scripts" / "edmg_installer.py").exists() and (resolved / "studio" / "edmg-studio").exists():
+        return resolved
+    if resolved.name == "edmg-studio" and resolved.parent.name == "studio":
+        repo_root = resolved.parent.parent
+        if (repo_root / "scripts" / "edmg_installer.py").exists() and (repo_root / "studio" / "edmg-studio").exists():
+            return repo_root
+    return None
 
 
-def _find_studio_root() -> Path | None:
+def _find_repo_root() -> Path | None:
     env_root = os.getenv("EDMG_STUDIO_REPO_ROOT", "").strip()
     if env_root:
-        candidate = Path(env_root).expanduser().resolve()
-        if _is_studio_root(candidate):
+        candidate = _repo_root_candidate(Path(env_root))
+        if candidate is not None:
             return candidate
-        nested = candidate / "studio" / "edmg-studio"
-        if _is_studio_root(nested):
-            return nested
 
     cur = Path(__file__).resolve()
     for parent in cur.parents:
-        if _is_studio_root(parent):
-            return parent
+        candidate = _repo_root_candidate(parent)
+        if candidate is not None:
+            return candidate
     return None
 
 
 def _repo_root() -> Path:
-    studio_root = _find_studio_root()
-    if studio_root is None:
-        raise RuntimeError("Could not locate the Studio support installer for EDMG Core.")
-    if studio_root.parent.name == "studio":
-        return studio_root.parent.parent
-    return studio_root.parent
+    root = _find_repo_root()
+    if root is not None:
+        return root
+    raise RuntimeError("Could not locate repo root for EDMG Core installer.")
 
 
 def _installer_path() -> Path | None:
-    studio_root = _find_studio_root()
-    if studio_root is None:
+    root = _find_repo_root()
+    if root is None:
         return None
-    return studio_root / "scripts" / INSTALLER_NAME
+    return root / "scripts" / "edmg_installer.py"
 
 
 def _core_cache_root(data_dir: Path) -> Path:
@@ -63,7 +65,7 @@ def _try_import_template() -> tuple[bool, Any | None, str | None]:
 
 def core_status() -> dict[str, Any]:
     installer = _installer_path()
-    repo_root = _repo_root() if installer is not None else None
+    repo_root = installer.parent.parent if installer is not None else None
     installable = bool(installer and installer.exists())
     try:
         import enhanced_deforum_music_generator  # type: ignore
@@ -81,7 +83,7 @@ def core_status() -> dict[str, Any]:
         hint = (
             "Studio backend installs should bundle EDMG Core by default. Use Studio Setup to repair or reinstall it if this environment is missing Core."
             if installable
-            else "This packaged Studio build cannot self-repair EDMG Core because the Studio support installer is not bundled. Reinstall or rebuild Studio if Core is missing."
+            else "This packaged Studio build cannot self-repair EDMG Core because the repo installer is not bundled. Reinstall or rebuild Studio if Core is missing."
         )
         return {
             "available": False,
@@ -121,7 +123,7 @@ def deforum_template() -> dict[str, Any]:
 def install_core(task: Any, data_dir: Path, *, mode: str = "standard", backend: str = "cpu") -> None:
     installer = _installer_path()
     if installer is None or not installer.exists():
-        raise RuntimeError("EDMG Core repair installer is not available in this Studio build.")
+        raise RuntimeError("EDMG Core repair installer is not available in this packaged Studio build.")
 
     cache_root = _core_cache_root(data_dir)
     cache_root.mkdir(parents=True, exist_ok=True)
