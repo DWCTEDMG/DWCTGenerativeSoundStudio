@@ -36,7 +36,11 @@ def run_step(label: str, cwd: Path, args: list[str], *, env: dict[str, str]) -> 
 
 
 def _resolve_uv() -> str:
-    uv = os.getenv("EDMG_UV_BIN", "").strip() or shutil.which("uv")
+    uv = (
+        os.getenv("EDMG_UV_BIN", "").strip()
+        or os.getenv("UV", "").strip()
+        or shutil.which("uv")
+    )
     if not uv:
         raise RuntimeError(
             f"uv {UV_VERSION} is required. Install the pinned toolchain before running pytest scopes."
