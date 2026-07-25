@@ -27,6 +27,7 @@
     "prepare:release-bundle": "node scripts/prepare-release-bundle.mjs",
     "prepare:release-bundle:cpu": "node scripts/prepare-release-bundle.mjs --profile cpu",
     "prepare:release-bundle:directml": "node scripts/prepare-release-bundle.mjs --profile directml",
+    "prepare:release-bundle:cuda": "node scripts/prepare-release-bundle.mjs --profile cuda",
     "generate:release-evidence": "node scripts/generate-release-evidence.mjs",
     "generate:release-evidence:dist": "node scripts/generate-release-evidence.mjs --phase dist",
     "release:stage-desktop": "node scripts/release-stage-desktop.mjs",
@@ -73,6 +74,7 @@
     "concurrently": "^10.0.3",
     "electron": "41.10.3",
     "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
     "eslint": "^10.0.3",
     "globals": "^17.4.0",
     "jsdom": "^29.1.1",
@@ -81,7 +83,7 @@
     "typescript": "^5.9.3",
     "vite": "^8.1.5",
     "vite-plugin-babel": "^1.6.0",
-    "vitest": "^3.2.7",
+    "vitest": "^4.1.10",
     "wait-on": "^9.1.0"
   },
   "build": {

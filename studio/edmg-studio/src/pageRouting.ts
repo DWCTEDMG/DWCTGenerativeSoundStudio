@@ -131,9 +131,16 @@ function filterPreloadCandidates(pages: Page[]): Page[] {
   );
 }
 
+export function runBestEffortPagePreload(
+  loader: (() => Promise<unknown>) | undefined,
+): Promise<void> {
+  if (!loader) return Promise.resolve();
+  return loader().then(() => undefined).catch(() => undefined);
+}
+
 function preloadPages(pages: Page[]) {
   filterPreloadCandidates(pages).forEach((candidate) => {
-    void PAGE_LOADERS[candidate]?.();
+    void runBestEffortPagePreload(PAGE_LOADERS[candidate]);
   });
 }
 

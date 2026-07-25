@@ -1,5 +1,8 @@
 # Contributing
 
+Read the [stable branch and preview policy](docs/BRANCH_POLICY.md) before opening a pull request.
+Report security issues privately as described in [SECURITY.md](SECURITY.md), never in a public issue.
+
 ## Dev setup
 - Use Node >= 18 (or the version specified in project docs)
 - Use `pnpm@10.33.0` for `studio/edmg-studio/` (`corepack enable` once first if `pnpm` is unavailable)
@@ -42,3 +45,5 @@ index or install a package outside the lock. Dependency changes must update
 - Keep changes focused
 - Include tests for behavior changes
 - Update docs if you change API shape or UX
+- Target the documented integration channel; promotion to protected `main` happens through a separate reviewed pull request
+- Include compatibility and rollback notes when changing persisted project data, render paths, or provider contracts

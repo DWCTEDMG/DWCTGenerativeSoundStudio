@@ -1,6 +1,11 @@
-Copyright (c) DWCTEDMG / DWCT Generative Sound Studio contributors.
+Copyright (c) 2026 DWCTEDMG / DWCT Generative Sound Studio contributors.
 All rights reserved.
 
 This repository and its contents are proprietary unless a separate written
-license agreement expressly grants other rights. Model weights, third-party
-packages, and vendored components remain subject to their own upstream licenses.
+license agreement expressly grants other rights. No license or permission is
+granted to use, copy, modify, distribute, sublicense, or sell this software or
+its documentation except under a separate written agreement with the copyright
+holder.
+
+Model weights, third-party packages, vendored components, media fixtures, and
+generated assets remain subject to their own upstream licenses and notices.
