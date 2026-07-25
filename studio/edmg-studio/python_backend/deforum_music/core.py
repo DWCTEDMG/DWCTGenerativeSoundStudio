@@ -175,7 +175,9 @@ def create_gradio_interface() -> Any:
     with gr.Blocks(title="Deforum Music Analyzer") as demo:
         gr.Markdown("# Deforum Music Analyzer\nAnalyze audio and export Deforum schedules.")
         with gr.Row():
-            audio = gr.Textbox(label="Audio file path")
+            # Use Gradio's upload-backed path instead of accepting an arbitrary
+            # server-side filesystem path from the browser.
+            audio = gr.Audio(label="Audio file", type="filepath", sources=["upload"])
             fps = gr.Number(label="FPS", value=24, precision=0)
         base_prompt = gr.Textbox(label="Base prompt", value="cinematic masterpiece, highly detailed")
         style_prompt = gr.Textbox(label="Style prompt", value="film grain, dynamic lighting")

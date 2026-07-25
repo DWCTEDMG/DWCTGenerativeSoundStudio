@@ -5,7 +5,6 @@ Hugging Face model catalog + downloader + wiring helpers.
 Design goals:
 - Keep a *central* models store under `models_root`.
 - Optionally wire (symlink/junction/copy) into:
-    - Automatic1111 WebUI (checkpoints, loras, vae, embeddings, controlnet)
     - ComfyUI (checkpoints, loras, vae, embeddings, controlnet, video)
 - Support auth via:
     - HF_TOKEN / HUGGINGFACE_TOKEN env vars
@@ -203,23 +202,4 @@ def wire_hf_video_model_to_comfyui(
     Your ComfyUI video nodes/plugins should be configured to point there.
     """
     dst = comfyui_root / "models" / "video" / model_name
-    return wire_directory(model_local_dir, dst, prefer_link=prefer_link)
-
-
-def wire_hf_video_model_to_a1111(
-    model_local_dir: Path,
-    *,
-    a1111_root: Path,
-    model_name: str,
-    prefer_link: bool = True,
-) -> Tuple[Path, str]:
-    """Wire an HF *Diffusers-format* video model snapshot into A1111.
-
-    A1111 doesn't natively load Diffusers video repos. We place these under:
-        stable-diffusion-webui/models/video/<model_name>
-    as a convenience store (for extensions/scripts).
-
-    Returns destination + method.
-    """
-    dst = a1111_root / "models" / "video" / model_name
     return wire_directory(model_local_dir, dst, prefer_link=prefer_link)

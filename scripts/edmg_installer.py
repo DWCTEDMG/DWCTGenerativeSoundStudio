@@ -19,6 +19,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import subprocess
 import sys
@@ -27,6 +28,34 @@ from typing import Optional, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_UV_TOOLCHAIN_PATH = (
+    REPO_ROOT
+    / "studio"
+    / "edmg-studio"
+    / "python_backend"
+    / "edmg_studio_backend"
+    / "uv_toolchain.py"
+)
+
+
+def _load_uv_toolchain():
+    spec = importlib.util.spec_from_file_location(
+        "edmg_installer_uv_toolchain", _UV_TOOLCHAIN_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Missing uv toolchain helper: {_UV_TOOLCHAIN_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_UV_TOOLCHAIN = _load_uv_toolchain()
+ToolchainError = _UV_TOOLCHAIN.ToolchainError
+PYTHON_REQUIRED_MINOR = tuple(_UV_TOOLCHAIN.PYTHON_REQUIRED_MINOR)
+
+
+def _required_python_version() -> str:
+    return ".".join(str(part) for part in PYTHON_REQUIRED_MINOR)
 
 
 def _is_windows() -> bool:
@@ -59,6 +88,9 @@ def _managed_env(cache_root: Optional[Path]) -> Optional[dict[str, str]]:
         "nltk": cache_root / "nltk_data",
         "whisper": cache_root / "whisper",
         "matplotlib": cache_root / "matplotlib",
+        "uv": cache_root / "uv",
+        "uv_toolchain": cache_root / "toolchain" / "uv",
+        "python_install": cache_root / "python",
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -78,6 +110,9 @@ def _managed_env(cache_root: Optional[Path]) -> Optional[dict[str, str]]:
             "MPLCONFIGDIR": str(paths["matplotlib"]),
             "TMP": str(paths["tmp"]),
             "TEMP": str(paths["tmp"]),
+            "UV_CACHE_DIR": str(paths["uv"]),
+            "UV_PYTHON_INSTALL_DIR": str(paths["python_install"]),
+            "EDMG_UV_INSTALL_ROOT": str(paths["uv_toolchain"]),
         }
     )
     return env
@@ -88,16 +123,71 @@ def _run(cmd: Sequence[str], *, cwd: Optional[Path] = None, env: Optional[dict[s
     return int(p.returncode)
 
 
-def _pip(py: Path, args: Sequence[str], *, env: Optional[dict[str, str]] = None) -> int:
-    return _run([str(py), "-m", "pip", *args], cwd=REPO_ROOT, env=env)
+def _resolve_uv(env: Optional[dict[str, str]] = None) -> Path:
+    if env:
+        override_keys = [
+            key
+            for key in env
+            if key.startswith("UV_")
+            or key.startswith("EDMG_UV_")
+            or key in {"XDG_CACHE_HOME", "TMP", "TEMP"}
+        ]
+    else:
+        override_keys = []
+
+    previous = {key: os.environ.get(key) for key in override_keys}
+    try:
+        for key in override_keys:
+            os.environ[key] = env[key]
+        return Path(_UV_TOOLCHAIN.resolve_uv(install=True))
+    finally:
+        for key in override_keys:
+            prior = previous[key]
+            if prior is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prior
 
 
-def _ensure_venv(venv_dir: Path, *, env: Optional[dict[str, str]] = None) -> Path:
+def _uv_install(
+    uv: Path,
+    py: Path,
+    args: Sequence[str],
+    *,
+    env: Optional[dict[str, str]] = None,
+) -> int:
+    return _run(
+        [str(uv), "pip", "install", "--python", str(py), *args],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+
+def _ensure_venv(
+    uv: Path,
+    venv_dir: Path,
+    *,
+    env: Optional[dict[str, str]] = None,
+) -> Path:
     py = _venv_python(venv_dir)
     if py.exists():
         return py
     print(f"[edmg-installer] Creating venv: {venv_dir}")
-    if _run([sys.executable, "-m", "venv", str(venv_dir)], cwd=REPO_ROOT, env=env) != 0:
+    if (
+        _run(
+            [
+                str(uv),
+                "venv",
+                "--python",
+                _required_python_version(),
+                "--seed",
+                str(venv_dir),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        != 0
+    ):
         raise RuntimeError("Failed to create venv")
     return _venv_python(venv_dir)
 
@@ -129,21 +219,35 @@ def _torch_index_url(backend: str) -> str:
         return f"https://download.pytorch.org/whl/{backend}"
     raise ValueError(f"Unsupported backend: {backend} (use cpu, cu118, cu121, cu124)")
 
-
-
-def _install_whisper_no_deps(py: Path, *, env: Optional[dict[str, str]] = None) -> int:
+def _install_whisper_no_deps(
+    uv: Path,
+    py: Path,
+    *,
+    env: Optional[dict[str, str]] = None,
+) -> int:
     # Install Whisper without deps to avoid pulling a conflicting torch wheel.
     # FFmpeg must be available separately.
-    return _pip(py, ["install", "--no-deps", "-U", "openai-whisper>=20230314"], env=env)
+    return _uv_install(
+        uv,
+        py,
+        ["--no-deps", "-U", "openai-whisper>=20230314"],
+        env=env,
+    )
 
 
-def _install_torch(py: Path, backend: str, *, env: Optional[dict[str, str]] = None) -> int:
+def _install_torch(
+    uv: Path,
+    py: Path,
+    backend: str,
+    *,
+    env: Optional[dict[str, str]] = None,
+) -> int:
     url = _torch_index_url(backend)
     print(f"[edmg-installer] Installing PyTorch ({backend}) from {url}")
-    return _pip(
+    return _uv_install(
+        uv,
         py,
         [
-            "install",
             "-U",
             "torch",
             "torchvision",
@@ -192,32 +296,35 @@ def install(
     skip_whisper: bool,
 ) -> int:
     managed_env = _managed_env(_resolve_path(cache_root) if cache_root else None)
+    try:
+        uv = _resolve_uv(managed_env)
+    except ToolchainError as exc:
+        print(f"[edmg-installer] ERROR: {exc}", file=sys.stderr)
+        return 1
+
     py = Path(sys.executable)
     resolved_venv: Optional[Path] = None
     if venv:
         resolved_venv = _resolve_path(venv)
-        py = _ensure_venv(resolved_venv, env=managed_env)
-
-    if _pip(py, ["install", "-U", "pip", "setuptools", "wheel"], env=managed_env) != 0:
-        return 1
+        py = _ensure_venv(uv, resolved_venv, env=managed_env)
 
     if not skip_torch:
-        if _install_torch(py, backend, env=managed_env) != 0:
+        if _install_torch(uv, py, backend, env=managed_env) != 0:
             return 1
 
     req = _select_requirements(mode)
     print(f"[edmg-installer] Installing requirements from: {req.name}")
-    if _pip(py, ["install", "-r", str(req)], env=managed_env) != 0:
+    if _uv_install(uv, py, ["-r", str(req)], env=managed_env) != 0:
         return 1
 
     # Whisper is optional and only installed for full/dev by default.
     if mode in ("full", "dev") and not skip_whisper:
         print("[edmg-installer] Installing Whisper (no-deps)")
-        if _install_whisper_no_deps(py, env=managed_env) != 0:
+        if _install_whisper_no_deps(uv, py, env=managed_env) != 0:
             print("[edmg-installer] WARNING: Whisper install failed. Continuing.")
 
     # Editable install so `src/` packages are importable everywhere
-    if _pip(py, ["install", "-e", "."], env=managed_env) != 0:
+    if _uv_install(uv, py, ["-e", "."], env=managed_env) != 0:
         return 1
 
     _post_install(py, skip_corpora=skip_corpora, skip_models=skip_models, env=managed_env)

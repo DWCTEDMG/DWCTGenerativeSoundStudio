@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -8,13 +9,25 @@ from typing import Any, Protocol
 import requests
 
 
+logger = logging.getLogger(__name__)
+
+
 class AiDirector(Protocol):
     """Small interface used by Studio backend."""
 
     def plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         ...
 
-    def transcribe(self, audio_path: str, model_size: str = "small") -> dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: str,
+        model_size: str = "turbo",
+        *,
+        provider: str = "faster_whisper",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        fallback_to_whisper: bool = True,
+    ) -> dict[str, Any]:
         ...
 
     def audio_features(self, audio_path: str) -> dict[str, Any]:
@@ -37,13 +50,28 @@ class HttpAiDirectorClient:
         r.raise_for_status()
         return r.json()
 
-    def transcribe(self, audio_path: str, model_size: str = "small") -> dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: str,
+        model_size: str = "turbo",
+        *,
+        provider: str = "faster_whisper",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        fallback_to_whisper: bool = True,
+    ) -> dict[str, Any]:
         with open(audio_path, "rb") as f:
             files = {"file": f}
             r = requests.post(
                 f"{self.base_url}/v1/transcribe",
                 files=files,
-                data={"model_size": model_size},
+                data={
+                    "model_size": model_size,
+                    "provider": provider,
+                    "device": device,
+                    "compute_type": compute_type,
+                    "fallback_to_whisper": "1" if fallback_to_whisper else "0",
+                },
                 timeout=self.timeout_s,
             )
         if r.status_code == 501:
@@ -65,8 +93,14 @@ class HttpAiDirectorClient:
             r = requests.get(f"{self.base_url}/health", timeout=5.0)
             r.raise_for_status()
             return {"mode": "http", "ok": True, **r.json()}
-        except Exception as e:
-            return {"mode": "http", "ok": False, "error": str(e), "base_url": self.base_url}
+        except Exception:
+            logger.exception("Remote AI director health check failed")
+            return {
+                "mode": "http",
+                "ok": False,
+                "error": "AI director is unavailable",
+                "base_url": self.base_url,
+            }
 
 
 class LocalAiDirectorClient:
@@ -98,10 +132,15 @@ class LocalAiDirectorClient:
         self._provider_settings = AiSettings()
         backend_settings = Settings()
         provider_name = (self._provider_settings.provider or "").strip().lower()
+        secret_store = SecretStore(backend_settings.data_dir)
         if provider_name in ("openai_compat", "openai-compatible", "openai") and not self._provider_settings.openai_compat_api_key:
-            secret_api_key = SecretStore(backend_settings.data_dir).get("openai_compat_api_key")
+            secret_api_key = secret_store.get("openai_compat_api_key")
             if secret_api_key:
                 self._provider_settings = replace(self._provider_settings, openai_compat_api_key=secret_api_key)
+        if provider_name in ("nemotron_cloud", "nvidia_nim", "nemotron") and not self._provider_settings.nemotron_cloud_api_key:
+            secret_api_key = secret_store.get("nvidia_api_key") or secret_store.get("openai_compat_api_key")
+            if secret_api_key:
+                self._provider_settings = replace(self._provider_settings, nemotron_cloud_api_key=secret_api_key)
         self._provider = build_provider(self._provider_settings)
 
     def plan(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -113,30 +152,53 @@ class LocalAiDirectorClient:
         # Pydantic v2
         return resp.model_dump()
 
-    def transcribe(self, audio_path: str, model_size: str = "small") -> dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: str,
+        model_size: str = "turbo",
+        *,
+        provider: str = "faster_whisper",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        fallback_to_whisper: bool = True,
+        nvidia_api_key: str = "",
+        nim_base_url: str = "",
+    ) -> dict[str, Any]:
         try:
             self._ensure_import_path()
-            from edmg_ai_service.asr import transcribe
-        except Exception as e:
-            return {"text": None, "note": f"transcription not available: {e}"}
+            from edmg_ai_service.asr import transcribe_detailed
+        except Exception:
+            logger.exception("Local transcription capability import failed")
+            return {"text": None, "note": "Transcription is unavailable"}
 
         try:
-            text = transcribe(audio_path, model_size=model_size)
-            return {"text": text}
-        except Exception as e:
-            return {"text": None, "error": str(e)}
+            return transcribe_detailed(
+                audio_path,
+                model_size=model_size,
+                provider=provider,
+                device=device,
+                compute_type=compute_type,
+                fallback_to_whisper=fallback_to_whisper,
+                nvidia_api_key=nvidia_api_key,
+                nim_base_url=nim_base_url,
+            )
+        except Exception:
+            logger.exception("Local transcription failed")
+            return {"text": None, "error": "Transcription failed"}
 
     def audio_features(self, audio_path: str) -> dict[str, Any]:
         try:
             self._ensure_import_path()
             from edmg_ai_service.audio import lightweight_audio_features
-        except Exception as e:
-            return {"note": f"audio_features not available: {e}"}
+        except Exception:
+            logger.exception("Local audio feature capability import failed")
+            return {"note": "Audio feature analysis is unavailable"}
 
         try:
             return lightweight_audio_features(audio_path)
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception:
+            logger.exception("Local audio feature analysis failed")
+            return {"error": "Audio feature analysis failed"}
 
     def status(self) -> dict[str, Any]:
         try:
@@ -153,13 +215,20 @@ class LocalAiDirectorClient:
                 provider_status["api_key_configured"] = bool(
                     getattr(self._provider_settings, "openai_compat_api_key", None)
                 )
+            elif provider_name in ("nemotron_cloud", "nvidia_nim", "nemotron"):
+                provider_status["provider"] = "nemotron_cloud"
+                provider_status["base_url"] = getattr(self._provider_settings, "nemotron_cloud_base_url", None)
+                provider_status["api_key_configured"] = bool(
+                    getattr(self._provider_settings, "nemotron_cloud_api_key", None)
+                )
             return {
                 "mode": "local",
                 "ok": True,
                 **provider_status,
             }
-        except Exception as e:
-            return {"mode": "local", "ok": False, "error": str(e)}
+        except Exception:
+            logger.exception("Local AI director status check failed")
+            return {"mode": "local", "ok": False, "error": "AI director is unavailable"}
 
 
 def build_ai_client(ai_mode: str, ai_base_url: str, timeout_s: float) -> AiDirector:

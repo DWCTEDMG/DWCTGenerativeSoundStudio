@@ -10,6 +10,9 @@ class AudioConfig:
     max_duration: int = 1800  # 30 minutes default as requested
     cache_dir: Optional[str] = None
     sample_rate: int = 22050
+    beat_track_units: str = "time"
+    enable_noise_reduction: bool = False
+    normalize_audio: bool = False
 
 @dataclass
 class LyricsConfig:
@@ -22,12 +25,6 @@ class AnimationConfig:
     fps: int = 30
     duration: int = 60
     resolution: str = "512x512"
-
-@dataclass
-class A1111Config:
-    host: str = "127.0.0.1"
-    port: int = 7860
-    timeout: int = 120
 
 @dataclass
 class InterfaceConfig:
@@ -49,7 +46,6 @@ class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     lyrics: LyricsConfig = field(default_factory=LyricsConfig)
     animation: AnimationConfig = field(default_factory=AnimationConfig)
-    a1111: A1111Config = field(default_factory=A1111Config)
     interface: InterfaceConfig = field(default_factory=InterfaceConfig)
     advanced: AdvancedConfig = field(default_factory=AdvancedConfig)
 
@@ -61,7 +57,6 @@ class Config:
             audio=AudioConfig(**data.get("audio", {})),
             lyrics=LyricsConfig(**data.get("lyrics", {})),
             animation=AnimationConfig(**data.get("animation", {})),
-            a1111=A1111Config(**data.get("a1111", {})),
             interface=InterfaceConfig(**data.get("interface", {})),
             advanced=AdvancedConfig(**data.get("advanced", {})),
         )

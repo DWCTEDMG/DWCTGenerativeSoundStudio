@@ -2,7 +2,7 @@ import asyncio
 
 import httpx
 
-from src.api.main import app
+from enhanced_deforum_music_generator.api.main import app
 
 
 async def _get(path: str) -> httpx.Response:

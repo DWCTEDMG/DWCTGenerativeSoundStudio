@@ -1,4 +1,38 @@
 const { contextBridge, ipcRenderer, shell } = require("electron");
+const fs = require("node:fs");
+const path = require("node:path");
+
+function readRuntimeDefaults() {
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, "runtime-defaults.json"));
+  }
+  candidates.push(path.join(__dirname, "electron-resources", "runtime-defaults.json"));
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        return parsed;
+      }
+    } catch {}
+  }
+
+  return {};
+}
+
+const runtimeDefaults = readRuntimeDefaults();
+const runtimeBackendDefaults =
+  runtimeDefaults.backend && typeof runtimeDefaults.backend === "object"
+    ? runtimeDefaults.backend
+    : {};
+const runtimeBackendHost =
+  typeof runtimeBackendDefaults.host === "string" ? runtimeBackendDefaults.host.trim() : "";
+const runtimeBackendPort =
+  runtimeBackendDefaults.port != null ? String(runtimeBackendDefaults.port).trim() : "";
+const runtimeBackendUrl =
+  typeof runtimeBackendDefaults.url === "string" ? runtimeBackendDefaults.url.trim() : "";
 
 function getArgValue(prefix) {
   const found = process.argv.find((entry) => typeof entry === "string" && entry.startsWith(prefix));
@@ -8,18 +42,26 @@ function getArgValue(prefix) {
 const BACKEND_HOST =
   process.env.EDMG_STUDIO_BACKEND_HOST ||
   getArgValue("--edmg-backend-host=") ||
+  runtimeBackendHost ||
   "127.0.0.1";
 
 const BACKEND_PORT =
   process.env.EDMG_STUDIO_BACKEND_PORT ||
   getArgValue("--edmg-backend-port=") ||
+  runtimeBackendPort ||
   "7863";
+
+const BACKEND_URL =
+  process.env.EDMG_STUDIO_BACKEND_URL ||
+  getArgValue("--edmg-backend-url=") ||
+  runtimeBackendUrl ||
+  "";
 
 const TEST_MODE =
   (process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1" ||
   getArgValue("--edmg-test-mode=") === "1";
 
-const DEFAULT_BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+const DEFAULT_BACKEND_URL = BACKEND_URL || `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 
 contextBridge.exposeInMainWorld("edmg", {
   backendUrl: () => DEFAULT_BACKEND_URL,
@@ -34,6 +76,12 @@ contextBridge.exposeInMainWorld("edmg", {
 
     return DEFAULT_BACKEND_URL;
   },
+  getBackendSettings: () => ipcRenderer.invoke("edmg:getBackendSettings"),
+  getBackendAuthToken: () => ipcRenderer.invoke("edmg:getBackendAuthToken"),
+  setBackendAuthToken: (token) => ipcRenderer.invoke("edmg:setBackendAuthToken", String(token || "")),
+  getDirectorStatus: () => ipcRenderer.invoke("edmg:getDirectorStatus"),
+  setBackendSettings: (settings) => ipcRenderer.invoke("edmg:setBackendSettings", settings),
+  setDirectorSettings: (settings) => ipcRenderer.invoke("edmg:setDirectorSettings", settings),
 
   openExternal: (url) => shell.openExternal(String(url)),
   openPath: (targetPath) => ipcRenderer.invoke("edmg:openPath", targetPath),

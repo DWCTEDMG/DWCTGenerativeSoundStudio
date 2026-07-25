@@ -54,7 +54,7 @@ def main() -> None:
     bucket_out = _env("EDMG_S3_BUCKET_OUT", bucket_in)
     prefix_out = _env("EDMG_S3_PREFIX_OUT", "edmg_outputs/")
 
-    backend_url = _env("EDMG_BACKEND_URL", "http://127.0.0.1:7860")
+    backend_url = _env("EDMG_BACKEND_URL", "http://127.0.0.1:7863")
     ticks = int(_env("EDMG_TICKS", "9999"))
 
     work = Path("/data")

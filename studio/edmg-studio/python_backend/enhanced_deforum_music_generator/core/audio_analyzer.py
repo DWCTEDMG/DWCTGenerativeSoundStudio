@@ -17,6 +17,20 @@ from ..utils.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def _coerce_scalar_float(value: Any, default: float = 0.0) -> float:
+    """librosa may return scalar-like numpy arrays for tempo on newer versions."""
+    try:
+        arr = np.asarray(value, dtype=float).reshape(-1)
+    except Exception:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+    if arr.size == 0:
+        return float(default)
+    return float(arr[0])
+
+
 @dataclass
 class AudioFeatures:
     """Container for extracted audio features."""
@@ -159,10 +173,15 @@ class AudioAnalyzer:
         duration = len(y) / sr
         
         # Beat tracking
-        tempo, beat_frames = librosa.beat.beat_track(
-            y=y, sr=sr, units=getattr(self.config, "beat_track_units", "time")
-        )
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+        beat_track_units = str(getattr(self.config, "beat_track_units", "time") or "time").lower()
+        tempo, beat_positions = librosa.beat.beat_track(y=y, sr=sr, units=beat_track_units)
+        tempo_bpm = _coerce_scalar_float(tempo)
+        if beat_track_units == "time":
+            beat_times = np.asarray(beat_positions, dtype=float)
+            beat_frames = librosa.time_to_frames(beat_times, sr=sr)
+        else:
+            beat_frames = np.asarray(beat_positions, dtype=int)
+            beat_times = librosa.frames_to_time(beat_frames, sr=sr)
         
         # Energy analysis (frame-wise RMS)
         frame_length = int(0.05 * sr)  # 50ms frames
@@ -197,7 +216,7 @@ class AudioAnalyzer:
         return AudioFeatures(
             duration=duration,
             sample_rate=sr,
-            tempo=float(tempo),
+            tempo=tempo_bpm,
             beats=beat_times.tolist(),
             beat_frames=beat_frames.tolist(),
             energy=energy.tolist(),

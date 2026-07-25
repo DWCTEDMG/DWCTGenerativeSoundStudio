@@ -4,6 +4,8 @@ from __future__ import annotations
 # NOTE: We intentionally do NOT bundle large weights in the installer.
 # The catalog drives the GUI "Model Manager" which downloads models on-demand.
 
+import os
+from pathlib import Path
 from typing import Any
 
 
@@ -37,17 +39,60 @@ def _entry(
     return entry
 
 
+def _local_sd15_tensorrt_bundle_path() -> str:
+    candidates = [
+        os.getenv("EDMG_TENSORRT_SD15_BUNDLE", "").strip(),
+        os.getenv("EDMG_TENSORRT_MODEL_DIR", "").strip(),
+    ]
+    if os.name == "nt":
+        candidates.append(r"D:\my_tensorrt_models")
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            path = Path(candidate).expanduser()
+        except Exception:
+            continue
+        if (path / "engine").exists() and (path / "onnx").exists():
+            return str(path)
+    return ""
+
+
 def built_in_catalog() -> list[dict[str, Any]]:
     # Fields:
     # - id: stable ID
     # - name: display name
     # - kind: llm | checkpoint | diffusers | controlnet | motion_module | runtime_bundle
-    # - source: ollama | hf | civitai | local
+    # - source: ollama | hf | civitai | local | s3
     # - installable: whether Studio can install this entry directly
     # - target: installation instructions (where it goes)
     # - render: optional UI/runtime metadata for Render page presets
     # - collections / tags / hardware_targets: discovery metadata for the richer Hub browser
     return [
+        _entry(
+            model_id="ollama_qwen3_4b",
+            name="Qwen3 4B (Ollama)",
+            kind="llm",
+            source="ollama",
+            ollama_model="qwen3:4b",
+            license_id="Apache-2.0",
+            license_url="https://huggingface.co/Qwen/Qwen3-4B",
+            recommended="advanced",
+            notes="Low-resource local planner fallback for CPU-only or low-memory systems.",
+            tags=["planning", "local", "fallback", "lightweight"],
+        ),
+        _entry(
+            model_id="ollama_qwen3_8b",
+            name="Qwen3 8B (Ollama)",
+            kind="llm",
+            source="ollama",
+            ollama_model="qwen3:8b",
+            license_id="Apache-2.0",
+            license_url="https://huggingface.co/Qwen/Qwen3-8B",
+            recommended="default",
+            notes="Recommended local planner default for offline Studio workflows on capable systems.",
+            tags=["planning", "local", "default", "quality"],
+        ),
         _entry(
             model_id="ollama_qwen2p5_3b_instruct",
             name="Qwen2.5 3B Instruct (Ollama)",
@@ -56,9 +101,9 @@ def built_in_catalog() -> list[dict[str, Any]]:
             ollama_model="qwen2.5:3b-instruct",
             license_id="Apache-2.0",
             license_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct",
-            recommended="default",
-            notes="Fast local director model (CPU-friendly).",
-            tags=["planning", "local", "default"],
+            recommended="advanced",
+            notes="Legacy light planner retained for existing installs that still depend on the Qwen2.5 tag.",
+            tags=["planning", "local", "legacy", "lightweight"],
         ),
         _entry(
             model_id="ollama_qwen2p5_7b_instruct",
@@ -69,8 +114,8 @@ def built_in_catalog() -> list[dict[str, Any]]:
             license_id="Apache-2.0",
             license_url="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct",
             recommended="advanced",
-            notes="Higher quality local planning model; slower on CPU.",
-            tags=["planning", "local", "quality"],
+            notes="Legacy higher-quality planner retained for compatibility with existing Qwen2.5 setups.",
+            tags=["planning", "local", "legacy", "quality"],
         ),
         _entry(
             model_id="hf_sd15_internal",
@@ -92,6 +137,37 @@ def built_in_catalog() -> list[dict[str, Any]]:
                 "workflow_family": "diffusers",
                 "render_modes": ["internal_video"],
                 "preferred_for": ["fallback", "draft", "laptop"],
+            },
+        ),
+        _entry(
+            model_id="local_sd15_tensorrt_bundle",
+            name="Stable Diffusion v1.5 TensorRT (Local Build)",
+            kind="runtime_bundle",
+            source="local",
+            source_path=_local_sd15_tensorrt_bundle_path(),
+            target={"engine": "runtime_bundle", "folder": "tensorrt"},
+            installable=False,
+            license_id="openrail-m",
+            license_url="https://huggingface.co/runwayml/stable-diffusion-v1-5",
+            recommended="advanced",
+            notes=(
+                "Local SD1.5 TensorRT export. Studio uses the compiled UNet engine in this folder "
+                "and loads the matching SD1.5 tokenizer, text encoder, scheduler, and VAE for still-image generation "
+                "and internal keyframe video assembly. This is the only TensorRT bundle Studio can execute for internal video."
+            ),
+            family="sd15",
+            author="runwayml",
+            tags=["local", "nvidia", "tensorrt", "sd15"],
+            hardware_targets=["nvidia"],
+            render={
+                "engine": "tensorrt_standalone",
+                "workflow_family": "sd15",
+                "render_modes": ["stills", "internal_video_keyframes"],
+                "base_model_id": "runwayml/stable-diffusion-v1-5",
+                "profile_width": 512,
+                "profile_height": 512,
+                "max_batch": 1,
+                "live_preview": False,
             },
         ),
         _entry(
@@ -141,6 +217,123 @@ def built_in_catalog() -> list[dict[str, Any]]:
             },
         ),
         _entry(
+            model_id="hf_sd15_controlnet_canny_internal",
+            name="ControlNet Canny SD 1.5 (Internal / Diffusers)",
+            kind="controlnet",
+            source="hf",
+            hf_repo_id="lllyasviel/control_v11p_sd15_canny",
+            target={"engine": "internal", "folder": "controlnet"},
+            license_id="openrail",
+            license_url="https://huggingface.co/lllyasviel/control_v11p_sd15_canny",
+            recommended="advanced",
+            notes="Curated internal ControlNet for SD 1.5 edge-guided still generation.",
+            family="sd15",
+            author="lllyasviel",
+            tags=["internal", "controlnet", "sd15", "canny"],
+            hardware_targets=["cpu", "integrated_gpu", "discrete_gpu"],
+            render={
+                "engine": "internal",
+                "workflow_family": "controlnet",
+                "render_modes": ["stills"],
+                "conditioning_mode": "edge",
+            },
+        ),
+        _entry(
+            model_id="hf_sd15_controlnet_depth_internal",
+            name="ControlNet Depth SD 1.5 (Internal / Diffusers)",
+            kind="controlnet",
+            source="hf",
+            hf_repo_id="lllyasviel/control_v11f1p_sd15_depth",
+            target={"engine": "internal", "folder": "controlnet"},
+            license_id="openrail",
+            license_url="https://huggingface.co/lllyasviel/control_v11f1p_sd15_depth",
+            recommended="advanced",
+            notes="Curated internal ControlNet for SD 1.5 depth-guided still generation.",
+            family="sd15",
+            author="lllyasviel",
+            tags=["internal", "controlnet", "sd15", "depth"],
+            hardware_targets=["cpu", "integrated_gpu", "discrete_gpu"],
+            render={
+                "engine": "internal",
+                "workflow_family": "controlnet",
+                "render_modes": ["stills"],
+                "conditioning_mode": "external",
+            },
+        ),
+        _entry(
+            model_id="hf_sdxl_controlnet_canny_internal",
+            name="ControlNet Canny SDXL (Internal / Diffusers)",
+            kind="controlnet",
+            source="hf",
+            hf_repo_id="diffusers/controlnet-canny-sdxl-1.0",
+            target={"engine": "internal", "folder": "controlnet"},
+            license_id="openrail++",
+            license_url="https://huggingface.co/diffusers/controlnet-canny-sdxl-1.0",
+            recommended="advanced",
+            notes="Curated internal ControlNet for SDXL edge-guided still generation.",
+            family="sdxl",
+            author="diffusers",
+            tags=["internal", "controlnet", "sdxl", "canny"],
+            hardware_targets=["discrete_gpu", "apple_silicon"],
+            render={
+                "engine": "internal",
+                "workflow_family": "controlnet",
+                "render_modes": ["stills"],
+                "conditioning_mode": "edge",
+            },
+        ),
+        _entry(
+            model_id="hf_bucket_sdxl_controlnet_canny_internal",
+            name="ControlNet Canny SDXL — HF Bucket (Internal / Diffusers)",
+            kind="controlnet",
+            source="hf_bucket",
+            hf_bucket_id="gulle1155/controlnet-canny-sdxl-1.0-bucket",
+            hf_bucket_path="",
+            target={"engine": "internal", "folder": "controlnet"},
+            license_id="openrail++",
+            license_url="https://huggingface.co/diffusers/controlnet-canny-sdxl-1.0",
+            recommended="advanced",
+            notes=(
+                "ControlNet Canny SDXL weights served from the gulle1155 Hugging Face bucket "
+                "(hf://buckets/gulle1155/controlnet-canny-sdxl-1.0-bucket) for edge-guided internal stills. "
+                "Studio syncs the bucket into the internal ControlNet folder on install, so it can be used "
+                "during render without re-downloading from the public repo."
+            ),
+            family="sdxl",
+            author="gulle1155",
+            collections=["image"],
+            tags=["internal", "controlnet", "sdxl", "canny", "hf_bucket"],
+            hardware_targets=["discrete_gpu", "apple_silicon"],
+            render={
+                "engine": "internal",
+                "workflow_family": "controlnet",
+                "render_modes": ["stills"],
+                "conditioning_mode": "edge",
+            },
+        ),
+        _entry(
+            model_id="hf_sdxl_controlnet_depth_internal",
+            name="ControlNet Depth SDXL (Internal / Diffusers)",
+            kind="controlnet",
+            source="hf",
+            hf_repo_id="diffusers/controlnet-depth-sdxl-1.0",
+            target={"engine": "internal", "folder": "controlnet"},
+            license_id="openrail++",
+            license_url="https://huggingface.co/diffusers/controlnet-depth-sdxl-1.0",
+            recommended="advanced",
+            notes="Curated internal ControlNet for SDXL depth-guided still generation.",
+            family="sdxl",
+            author="diffusers",
+            tags=["internal", "controlnet", "sdxl", "depth"],
+            hardware_targets=["discrete_gpu", "apple_silicon"],
+            render={
+                "engine": "internal",
+                "workflow_family": "controlnet",
+                "render_modes": ["stills"],
+                "conditioning_mode": "external",
+            },
+        ),
+        _entry(
             model_id="hf_sdxl_base_1_0",
             name="Stable Diffusion XL Base 1.0 (Checkpoint)",
             kind="checkpoint",
@@ -151,7 +344,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             license_id="openrail++",
             license_url="https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/LICENSE.md",
             recommended="default",
-            notes="Broadly compatible ComfyUI baseline checkpoint.",
+            notes="Broadly compatible ComfyUI baseline checkpoint and the default still-image lane inside Studio.",
             family="sdxl",
             author="stabilityai",
             collections=["image", "stabilityais-sdxl-models"],
@@ -246,8 +439,8 @@ def built_in_catalog() -> list[dict[str, Any]]:
             target={"engine": "comfyui", "folder": "checkpoints"},
             license_id="stability-ai-community",
             license_url="https://huggingface.co/stabilityai/stable-diffusion-3.5-large-turbo/blob/main/LICENSE.md",
-            recommended="default",
-            notes="Fast SD3.5 checkpoint for native-feeling ComfyUI still workflows inside Studio.",
+            recommended="advanced",
+            notes="Fast higher-quality SD3.5 still checkpoint for Studio's accelerated ComfyUI lane.",
             family="sd35",
             author="stabilityai",
             collections=["stable-diffusion-35", "stable-diffusion-3"],
@@ -364,22 +557,86 @@ def built_in_catalog() -> list[dict[str, Any]]:
             },
         ),
         _entry(
+            model_id="hf_svd_xt_1_1_internal",
+            name="Stable Video Diffusion XT 1.1 (Internal / Diffusers)",
+            kind="video_diffusers",
+            source="hf",
+            hf_repo_id="stabilityai/stable-video-diffusion-img2vid-xt-1-1",
+            target={"engine": "internal", "folder": "video"},
+            license_id="stability-ai-community",
+            license_url="https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt-1-1/blob/main/LICENSE.md",
+            recommended="advanced",
+            notes=(
+                "Internal image-to-video adapter for real short subject/object motion from generated keyframes. "
+                "Use this for walking, turning, dancing, fabric motion, and transitions when you want motion inside "
+                "the Studio internal renderer without ComfyUI."
+            ),
+            family="svd",
+            author="stabilityai",
+            collections=["video"],
+            tags=["internal", "video", "svd", "diffusers", "motion"],
+            hardware_targets=["discrete_gpu"],
+            render={
+                "engine": "internal_video_model",
+                "workflow_family": "svd",
+                "render_modes": ["internal_video_model"],
+                "video_model_engine": "svd",
+                "preferred_for": ["subject_motion", "fabric_motion", "transitions"],
+            },
+        ),
+        _entry(
+            model_id="hf_animatediff_motion_adapter_v15_2_internal",
+            name="AnimateDiff Motion Adapter v1.5 v2 (Internal / Diffusers)",
+            kind="motion_adapter",
+            source="hf",
+            hf_repo_id="guoyww/animatediff-motion-adapter-v1-5-2",
+            target={"engine": "internal", "folder": "video"},
+            license_id="creativeml-openrail-m",
+            license_url="https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2",
+            recommended="advanced",
+            notes=(
+                "Internal SD1.5 AnimateDiff motion adapter for prompt-driven subject motion. "
+                "Requires the Stable Diffusion v1.5 internal base model; use SVD internal motion for SDXL/SD3 keyframes."
+            ),
+            family="animatediff",
+            author="guoyww",
+            collections=["video"],
+            tags=["internal", "video", "animatediff", "diffusers", "motion", "sd15"],
+            hardware_targets=["discrete_gpu"],
+            render={
+                "engine": "internal_video_model",
+                "workflow_family": "animatediff",
+                "render_modes": ["internal_video_model"],
+                "video_model_engine": "animatediff",
+                "base_family": "sd15",
+                "preferred_for": ["prompt_motion", "dance_motion", "character_motion"],
+            },
+        ),
+        _entry(
             model_id="hf_sd35_large_tensorrt_bundle",
             name="Stable Diffusion 3.5 Large TensorRT Bundle",
             kind="runtime_bundle",
             source="hf",
             hf_repo_id="stabilityai/stable-diffusion-3.5-large-tensorrt",
             target={"engine": "runtime_bundle", "folder": "tensorrt"},
+            installable=False,
             license_id="stability-ai-community",
             license_url="https://huggingface.co/stabilityai/stable-diffusion-3.5-large-tensorrt/blob/main/LICENSE.md",
             recommended="advanced",
-            installable=False,
-            notes="NVIDIA-optimized runtime bundle. Surfaced in Studio for discovery, but Studio does not yet run TensorRT image jobs natively.",
+            notes=(
+                "Discovery-only NVIDIA runtime bundle. Studio does not execute this SD3.5 TensorRT bundle yet; "
+                "use internal diffusion for SD3.5 rendering or the local SD1.5 TensorRT bundle for keyframe video assembly."
+            ),
             family="sd35",
             author="stabilityai",
             collections=["nvidia-optimized", "stable-diffusion-35"],
-            tags=["browser_only", "nvidia", "tensorrt"],
+            tags=["nvidia", "tensorrt"],
             hardware_targets=["nvidia"],
+            render={
+                "engine": "external_tensorrt_bundle",
+                "workflow_family": "sd35",
+                "render_modes": [],
+            },
         ),
         _entry(
             model_id="hf_sd35_controlnets_tensorrt_bundle",
@@ -388,16 +645,25 @@ def built_in_catalog() -> list[dict[str, Any]]:
             source="hf",
             hf_repo_id="stabilityai/stable-diffusion-3.5-controlnets-tensorrt",
             target={"engine": "runtime_bundle", "folder": "tensorrt"},
+            installable=False,
             license_id="stability-ai-community",
             license_url="https://huggingface.co/stabilityai/stable-diffusion-3.5-controlnets-tensorrt/blob/main/LICENSE.md",
             recommended="advanced",
-            installable=False,
-            notes="NVIDIA-optimized SD3.5 ControlNet bundle. Browser-only in this pass until Studio grows a TensorRT execution path.",
+            notes=(
+                "Discovery-only NVIDIA SD3.5 ControlNet runtime bundle. Studio does not execute this TensorRT bundle yet; "
+                "use standard ControlNet/internal paths until a dedicated adapter exists."
+            ),
             family="sd35",
             author="stabilityai",
             collections=["nvidia-optimized", "stable-diffusion-35"],
-            tags=["browser_only", "nvidia", "tensorrt", "controlnet"],
+            tags=["nvidia", "tensorrt", "controlnet"],
             hardware_targets=["nvidia"],
+            render={
+                "engine": "external_tensorrt_bundle",
+                "workflow_family": "sd35",
+                "render_modes": [],
+                "conditioning_mode": "edge",
+            },
         ),
         _entry(
             model_id="hf_svd_xt_1_1_tensorrt_bundle",
@@ -406,16 +672,24 @@ def built_in_catalog() -> list[dict[str, Any]]:
             source="hf",
             hf_repo_id="stabilityai/stable-video-diffusion-img2vid-xt-1-1-tensorrt",
             target={"engine": "runtime_bundle", "folder": "tensorrt"},
+            installable=False,
             license_id="other",
             license_url="https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt-1-1-tensorrt",
             recommended="advanced",
-            installable=False,
-            notes="NVIDIA-optimized SVD runtime. Surfaced for discovery while Studio keeps the standard SVD checkpoint path.",
+            notes=(
+                "Discovery-only NVIDIA SVD runtime bundle. Studio's internal TensorRT video path does not run SVD yet; "
+                "use the ComfyUI SVD motion model for real img2vid motion or the local SD1.5 TensorRT keyframe path."
+            ),
             family="svd",
             author="stabilityai",
             collections=["nvidia-optimized", "video"],
-            tags=["browser_only", "nvidia", "tensorrt", "video"],
+            tags=["nvidia", "tensorrt", "video"],
             hardware_targets=["nvidia"],
+            render={
+                "engine": "external_tensorrt_bundle",
+                "workflow_family": "svd",
+                "render_modes": [],
+            },
         ),
         _entry(
             model_id="hf_sd35_large_amdgpu_bundle",
@@ -435,6 +709,107 @@ def built_in_catalog() -> list[dict[str, Any]]:
             tags=["browser_only", "amd", "directml"],
             hardware_targets=["amd", "windows"],
         ),
+
+        # ── Adobe Firefly ────────────────────────────────────────────────────
+        _entry(
+            model_id="firefly_standard",
+            name="Adobe Firefly Image 3 (Hosted)",
+            kind="hosted_api",
+            source="adobe",
+            license_id="adobe-firefly-tos",
+            license_url="https://www.adobe.com/legal/licenses-terms/adobe-firefly-generative-ai-terms.html",
+            recommended="advanced",
+            installable=False,
+            notes=(
+                "Generates keyframes via the Adobe Firefly v3 API. "
+                "No local GPU needed. Requires an Adobe Developer account with the Firefly API scope. "
+                "Configure Client ID and Client Secret in Settings → Adobe Firefly."
+            ),
+            author="adobe",
+            tags=["hosted", "firefly", "adobe", "no-gpu"],
+            hardware_targets=["any"],
+            render={
+                "engine": "firefly",
+                "render_modes": ["stills", "firefly_scenes"],
+                "preferred_for": ["hosted", "adobe_workflow"],
+            },
+        ),
+        _entry(
+            model_id="firefly_custom",
+            name="Adobe Firefly Custom Model (Hosted)",
+            kind="hosted_api",
+            source="adobe",
+            license_id="adobe-firefly-custom-tos",
+            license_url="https://www.adobe.com/legal/licenses-terms/adobe-firefly-generative-ai-terms.html",
+            recommended="advanced",
+            installable=False,
+            notes=(
+                "Uses your own custom-trained Adobe Firefly model accessed via the Adobe Firefly API. "
+                "Train your model at firefly.adobe.com (enterprise), then paste the resulting "
+                "custom model ID (urn:firefly:...) into Settings → Adobe Firefly → Custom Model ID. "
+                "Works with any content you fine-tuned Firefly on: brand assets, characters, styles, etc."
+            ),
+            author="custom",
+            tags=["hosted", "firefly", "adobe", "custom-model", "fine-tuned", "no-gpu"],
+            hardware_targets=["any"],
+            render={
+                "engine": "firefly",
+                "render_modes": ["stills", "firefly_scenes"],
+                "preferred_for": ["custom_brand", "adobe_workflow"],
+                "requires_custom_model_id": True,
+            },
+        ),
+
+        # ── Local custom safetensors (user-supplied) ─────────────────────────
+        _entry(
+            model_id="local_custom_sdxl",
+            name="Local Custom SDXL Checkpoint (.safetensors)",
+            kind="checkpoint",
+            source="local",
+            license_id="user-supplied",
+            license_url="",
+            recommended="advanced",
+            installable=False,
+            notes=(
+                "Point Studio at any SDXL-compatible .safetensors checkpoint you have built or downloaded. "
+                "Place the file under your Studio models directory → checkpoints/, "
+                "then set the model path in Render → Model or via EDMG_COMFYUI_CHECKPOINT. "
+                "Works with models fine-tuned in Kohya_ss, EveryDream, DreamBooth, or exported from Adobe's tools."
+            ),
+            author="user",
+            tags=["local", "custom", "safetensors", "sdxl", "user-trained"],
+            hardware_targets=["discrete_gpu", "apple_silicon"],
+            render={
+                "engine": "comfyui",
+                "workflow_family": "txt2img",
+                "render_modes": ["stills", "internal_video"],
+                "preferred_for": ["custom_model"],
+            },
+        ),
+        _entry(
+            model_id="local_custom_sd15",
+            name="Local Custom SD 1.5 Checkpoint (.safetensors)",
+            kind="checkpoint",
+            source="local",
+            license_id="user-supplied",
+            license_url="",
+            recommended="advanced",
+            installable=False,
+            notes=(
+                "Any SD 1.5-compatible .safetensors checkpoint you supply. "
+                "Compatible with Stable Diffusion 1.x fine-tunes, LoRA merges, and custom DreamBooth outputs. "
+                "Place under models/checkpoints/ and select via Render → Model."
+            ),
+            author="user",
+            tags=["local", "custom", "safetensors", "sd15", "user-trained"],
+            hardware_targets=["cpu", "integrated_gpu", "discrete_gpu"],
+            render={
+                "engine": "comfyui",
+                "workflow_family": "txt2img",
+                "render_modes": ["stills", "internal_video"],
+                "preferred_for": ["custom_model", "fallback"],
+            },
+        ),
     ]
 
 
@@ -444,34 +819,36 @@ def built_in_packs() -> list[dict[str, Any]]:
         {
             "id": "basic",
             "name": "Basic (Planning + Preflight)",
-            "description": "Installs the default Ollama director model. Use this if you only want planning, ingest, and preflight right now.",
-            "models": ["ollama_qwen2p5_3b_instruct"],
+            "description": "Installs the default Qwen3 8B Ollama planner. Use this if you only want planning, ingest, and preflight right now.",
+            "models": ["ollama_qwen3_8b"],
         },
         {
             "id": "creator",
             "name": "Creator (Recommended)",
-            "description": "Installs the default Ollama director model plus SDXL Base for broadly compatible ComfyUI still rendering.",
-            "models": ["ollama_qwen2p5_3b_instruct", "hf_sdxl_base_1_0"],
+            "description": "Installs the default Qwen3 8B Ollama planner plus SDXL Base for broadly compatible ComfyUI still rendering.",
+            "models": ["ollama_qwen3_8b", "hf_sdxl_base_1_0"],
         },
         {
             "id": "stability_sd35",
             "name": "Stability SD3.5 Image Lab",
-            "description": "Adds Studio's curated SD3.5 still stack: Large Turbo plus Blur/Canny ControlNet for reference-driven renders.",
+            "description": "Adds Studio's curated SD3.5 still stack: Large Turbo plus Blur/Canny/Depth ControlNets for reference-driven renders.",
             "models": [
-                "ollama_qwen2p5_3b_instruct",
+                "ollama_qwen3_8b",
                 "hf_sd35_large_turbo_ckpt",
                 "hf_sd35_controlnet_blur",
                 "hf_sd35_controlnet_canny",
+                "hf_sd35_controlnet_depth",
             ],
         },
         {
             "id": "stability_motion",
             "name": "Stability Motion Lab",
-            "description": "Adds the curated SVD 1.1 image-to-video checkpoint on top of the SD3.5 turbo still path.",
+            "description": "Adds the curated SVD XT image-to-video fallback on top of the SD3.5 turbo still path.",
             "models": [
-                "ollama_qwen2p5_3b_instruct",
+                "ollama_qwen3_8b",
                 "hf_sd35_large_turbo_ckpt",
                 "hf_svd_xt_1_1",
+                "hf_svd_xt_1_1_internal",
             ],
         },
         {
@@ -479,7 +856,7 @@ def built_in_packs() -> list[dict[str, Any]]:
             "name": "Pro (Advanced)",
             "description": "Adds higher-quality internal and ComfyUI renderers: SDXL internal, SD3.5 medium internal, SD3.5 large, and the SDXL refiner.",
             "models": [
-                "ollama_qwen2p5_3b_instruct",
+                "ollama_qwen3_8b",
                 "hf_sdxl_base_1_0",
                 "hf_sdxl_internal",
                 "hf_sd35_medium_internal",

@@ -1,11 +1,12 @@
 import React from "react";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import Workspace from "../pages/Workspace";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
 describe("Workspace page", () => {
   it("integrates creative direction from the real project analysis and plan", async () => {
+    window.localStorage.clear();
     installEdmgBridge();
     installFetchMock({
       "/v1/projects": { projects: [{ id: "p1", name: "Demo Project" }] },
@@ -43,6 +44,7 @@ describe("Workspace page", () => {
         },
       },
       "/v1/projects/p1/assets": { assets: { refs: [] } },
+      "/v1/projects/p1/audio": {},
       "/v1/projects/p1/creative_direction*": {
         creative_direction: {
           preset: "cinematic",
@@ -84,5 +86,113 @@ describe("Workspace page", () => {
     expect(await screen.findByRole("button", { name: "Timeline patch" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "LLM contract" })).toBeTruthy();
     expect(await screen.findByText(/Transcript anchor/i)).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Reactive Lab/i }));
+    expect(await screen.findByText("Reactive Lab + Renderer Handoff")).toBeTruthy();
+  });
+
+  it("reconciles a stale stored project id before loading project detail routes", async () => {
+    window.localStorage.clear();
+    window.localStorage.setItem("edmg_studio_session_v1", JSON.stringify({
+      projectId: "stale-project",
+      selectedVariant: 0,
+      lastHandoff: null,
+    }));
+    installEdmgBridge();
+    const fetchMock = installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Recovered Project" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Recovered Project",
+          meta: {
+            last_plan: {
+              variants: [{ name: "Variant 1", scenes: [] }],
+            },
+          },
+        },
+      },
+      "/v1/projects/p1/assets": { assets: { refs: [] } },
+      "/v1/projects/p1/creative_direction*": {
+        creative_direction: {
+          status: "Recovered selection.",
+          export_text: "",
+          scenes: [],
+          metrics: { energy: 0, bass: 0, mid: 0, treble: 0, duration_s: 0, source: "analysis" },
+          missing: [],
+          waveform: [],
+          motifs: [],
+          transcript_text: "",
+          transcript_summary: "",
+          preset: "cinematic",
+          sensitivity: 1,
+          provider_mode: "local",
+          scene_source: "plan",
+          ready: false,
+        },
+      },
+    });
+
+    renderWithStudio(<Workspace backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByText("Recovered Project")).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/v1/projects/stale-project"))).toBe(false);
+  });
+
+  it("surfaces a precise no-speech-after-vad status when no transcript is available", async () => {
+    window.localStorage.clear();
+    installEdmgBridge();
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Instrumental Project" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Instrumental Project",
+          meta: {
+            analysis: {
+              summary: "Transcription unavailable. Using audio-only analysis from rhythm, energy, and spectral movement.",
+              transcript: {
+                text: "",
+                note: "No speech detected after VAD.",
+                duration_after_vad_s: 0,
+                source: "faster_whisper",
+              },
+              features: {
+                duration_s: 374.8,
+                bpm: 60,
+                energy: 0.41,
+              },
+            },
+            last_plan: {
+              variants: [{ name: "Variant 1", scenes: [] }],
+            },
+          },
+        },
+      },
+      "/v1/projects/p1/assets": { assets: { refs: [] } },
+      "/v1/projects/p1/creative_direction*": {
+        creative_direction: {
+          status: "Audio-only creative direction is ready.",
+          export_text: "",
+          scenes: [],
+          metrics: { energy: 0.41, bass: 0.28, mid: 0.35, treble: 0.22, duration_s: 374.8, source: "analysis" },
+          missing: [],
+          waveform: [],
+          motifs: [],
+          transcript_text: "",
+          transcript_summary: "No speech detected after VAD. Studio is still able to build audio-reactive sections and a first creative direction from rhythm, energy, and spectral movement.",
+          preset: "cinematic",
+          sensitivity: 1,
+          provider_mode: "local",
+          scene_source: "analysis_fallback",
+          ready: true,
+        },
+      },
+    });
+
+    renderWithStudio(<Workspace backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect((await screen.findAllByText(/No speech detected after VAD/i)).length).toBeGreaterThan(0);
+    expect(await screen.findByText("No speech after VAD")).toBeTruthy();
   });
 });

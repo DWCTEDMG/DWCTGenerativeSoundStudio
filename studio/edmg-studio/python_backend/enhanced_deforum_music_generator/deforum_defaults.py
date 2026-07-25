@@ -2,7 +2,7 @@
 Deforum defaults
 
 This module provides a *complete* Deforum settings template (101 keys),
-based on the A1111 Deforum extension schema.
+based on the legacy Deforum extension schema.
 
 Primary entrypoints:
 - make_deforum_settings_template(overrides=None) -> dict

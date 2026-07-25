@@ -22,7 +22,8 @@ from __future__ import annotations
 import argparse
 import random
 from pathlib import Path
-from typing import Optional
+
+from enhanced_deforum_music_generator import tensorrt_accel
 
 
 def _parse_dtype(dtype: str):
@@ -42,7 +43,7 @@ def _parse_dtype(dtype: str):
     return m[key]
 
 
-def _load_image(path: Optional[str]):
+def _load_image(path: str | None):
     if not path:
         return None
     from diffusers.utils import load_image
@@ -57,7 +58,31 @@ def _export_video(frames, out_path: Path, fps: int) -> None:
     export_to_video(frames, str(out_path), fps=fps)
 
 
-def _seeded_generator(seed: Optional[int], device: str):
+def _run_svd_pipeline(pipe, *, image, num_frames: int, steps: int, guidance_scale: float, generator):
+    """Call StableVideoDiffusionPipeline across diffusers API variants.
+
+    Some SVD builds accept ``guidance_scale`` while others expose only
+    min/max guidance or no guidance parameter at all. Prefer the explicit
+    guidance-scale call first, then gracefully fall back when the runtime
+    pipeline rejects that kwarg.
+    """
+    kwargs = {
+        "image": image,
+        "num_frames": num_frames,
+        "num_inference_steps": steps,
+        "guidance_scale": guidance_scale,
+        "generator": generator,
+    }
+    try:
+        return pipe(**kwargs)
+    except TypeError as exc:
+        if "guidance_scale" not in str(exc):
+            raise
+        kwargs.pop("guidance_scale", None)
+        return pipe(**kwargs)
+
+
+def _seeded_generator(seed: int | None, device: str):
     import torch
 
     if seed is None:
@@ -82,7 +107,7 @@ def _infer_family(model_id: str) -> str:
     return "auto"
 
 
-def run_cli(argv: Optional[list[str]] = None) -> int:
+def run_cli(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return int(_run(args))
 
@@ -90,6 +115,8 @@ def run_cli(argv: Optional[list[str]] = None) -> int:
 def _run(args: argparse.Namespace) -> int:
     dtype = _parse_dtype(args.dtype)
     device = args.device
+
+    accel_enabled = tensorrt_accel.resolve_enabled(getattr(args, "accel", None))
 
     family = args.family if args.family != "auto" else _infer_family(args.model_id)
     prompt = args.prompt
@@ -101,7 +128,6 @@ def _run(args: argparse.Namespace) -> int:
     if family == "wan":
         from diffusers import AutoencoderKLWan, WanPipeline
 
-        import torch
         vae_dtype = _parse_dtype(args.vae_dtype)
         vae = AutoencoderKLWan.from_pretrained(args.model_id, subfolder="vae", torch_dtype=vae_dtype)
         pipe = WanPipeline.from_pretrained(args.model_id, vae=vae, torch_dtype=dtype)
@@ -109,6 +135,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.enable_model_cpu_offload()
         else:
             pipe.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         result = pipe(
             prompt=prompt,
@@ -148,6 +175,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.enable_model_cpu_offload()
         else:
             pipe.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         kwargs = dict(
             prompt=prompt,
@@ -179,6 +207,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.enable_model_cpu_offload()
         else:
             pipe.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         kwargs = dict(
             prompt=prompt,
@@ -209,11 +238,13 @@ def _run(args: argparse.Namespace) -> int:
             pipe.enable_model_cpu_offload()
         else:
             pipe.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
-        result = pipe(
+        result = _run_svd_pipeline(
+            pipe,
             image=image,
             num_frames=args.num_frames,
-            num_inference_steps=args.steps,
+            steps=args.steps,
             guidance_scale=args.guidance_scale,
             generator=generator,
         )
@@ -246,6 +277,7 @@ def _run(args: argparse.Namespace) -> int:
             pipe.to(device)
             if pipe_upsample is not None:
                 pipe_upsample.to(device)
+        pipe = tensorrt_accel.accelerate_pipe(pipe, enabled=accel_enabled, logger=print)
 
         # LTX expects video-like compression for conditions; compress the single image into a 1-frame video.
         cond_video = load_video(export_to_video([image]))
@@ -273,8 +305,6 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    import torch
-
     p = argparse.ArgumentParser()
     p.add_argument("--model-id", required=True, help="Hugging Face repo id (Diffusers-format).")
     p.add_argument(
@@ -296,6 +326,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dtype", default="bfloat16", help="float16|bfloat16|float32")
     p.add_argument("--device", default="cuda", help="cuda|cpu|mps")
     p.add_argument("--cpu-offload", action="store_true", help="Enable CPU offload (lower VRAM, slower).")
+    p.add_argument(
+        "--accel",
+        default=None,
+        choices=["none", "tensorrt"],
+        help=(
+            "Optional inference acceleration for the denoiser. 'tensorrt' uses the "
+            "Torch-TensorRT compile backend (requires torch-tensorrt matching your "
+            "torch CUDA build) and falls back to eager PyTorch if unavailable. "
+            "Defaults to the EDMG_TRT_ACCEL env var."
+        ),
+    )
     p.add_argument(
         "--vae-dtype",
         default="float32",

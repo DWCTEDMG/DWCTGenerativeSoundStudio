@@ -5,12 +5,24 @@ import json
 from contextlib import ExitStack
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from edmg_studio_backend import app as studio_app
 from edmg_studio_backend.services import internal_video as internal_video_service
+from edmg_studio_backend.services.render_settings import DEFAULT_RENDER_PROVIDER_SETTINGS
 from edmg_studio_backend.store.projects import ProjectStore
 from edmg_studio_backend.store.jobs import JobStore
+
+
+def _enable_proxy_renders(monkeypatch):
+    monkeypatch.setattr(studio_app.render_settings, "get", lambda: DEFAULT_RENDER_PROVIDER_SETTINGS)
+
+
+def _disable_proxy_renders(monkeypatch):
+    settings = DEFAULT_RENDER_PROVIDER_SETTINGS.copy()
+    settings["video"] = {**settings["video"], "allow_proxy_renders": False}
+    monkeypatch.setattr(studio_app.render_settings, "get", lambda: settings)
 
 
 def _make_project(tmp_path: Path):
@@ -42,6 +54,7 @@ def test_internal_preflight_falls_back_to_proxy(tmp_path, monkeypatch):
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    _enable_proxy_renders(monkeypatch)
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
@@ -56,12 +69,73 @@ def test_internal_preflight_falls_back_to_proxy(tmp_path, monkeypatch):
     assert any("proxy" in w.lower() for w in preflight["warnings"])
 
 
+def test_internal_preflight_blocks_explicit_proxy_when_disabled(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    _disable_proxy_renders(monkeypatch)
+
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        studio_app._internal_render_preflight_data(
+            proj.id,
+            {"variant_index": 0, "render_mode": "proxy", "allow_proxy_fallback": True},
+        )
+
+    assert exc.value.code == "PROXY_RENDER_DISABLED"
+
+
+def test_internal_preflight_blocks_proxy_fallback_when_disabled(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
+    _disable_proxy_renders(monkeypatch)
+
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        studio_app._internal_render_preflight_data(
+            proj.id,
+            {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": True},
+        )
+
+    assert exc.value.code == "PROXY_RENDER_DISABLED"
+
+
+def test_internal_preflight_falls_back_to_proxy_for_incomplete_internal_model(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    _enable_proxy_renders(monkeypatch)
+    monkeypatch.setattr(
+        studio_app.models,
+        "internal_asset_issue",
+        lambda model_id: "incomplete" if model_id == "hf_sd35_medium_internal" else None,
+    )
+
+    preflight = studio_app._internal_render_preflight_data(
+        proj.id,
+        {
+            "variant_index": 0,
+            "fps_render": 2,
+            "fps_output": 24,
+            "model_id": "hf_sd35_medium_internal",
+            "allow_proxy_fallback": True,
+        },
+    )
+
+    assert preflight["ok"] is True
+    assert preflight["mode"] == "proxy"
+    assert any("incomplete" in w.lower() for w in preflight["warnings"])
+
+
 def test_run_pipeline_auto_uses_proxy_when_comfy_and_models_missing(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
     monkeypatch.setattr(studio_app.comfy_pool, "diagnose", lambda _req: {"compatible": [], "busy_compatible": []})
+    _enable_proxy_renders(monkeypatch)
 
     captured = {}
 
@@ -80,6 +154,21 @@ def test_run_pipeline_auto_uses_proxy_when_comfy_and_models_missing(tmp_path, mo
     assert captured["project_id"] == proj.id
     assert captured["req"].render_mode == "proxy"
     assert captured["req"].allow_proxy_fallback is True
+
+
+def test_run_pipeline_auto_reports_no_route_when_proxy_disabled(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    monkeypatch.setattr(studio_app.comfy_pool, "diagnose", lambda _req: {"compatible": [], "busy_compatible": []})
+    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
+    _disable_proxy_renders(monkeypatch)
+
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        studio_app.run_pipeline(proj.id, variant_index=0, preset="balanced", mode="auto", engine="auto")
+
+    assert exc.value.code == "NO_RENDER_ROUTE"
 
 
 def test_proxy_renderer_creates_video_and_metadata_without_ffmpeg(tmp_path, monkeypatch):
@@ -139,6 +228,7 @@ def test_resume_and_restart_routes_clone_internal_job_with_checkpoint(tmp_path, 
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
+    _disable_proxy_renders(monkeypatch)
 
     source = jobs.create(
         proj.id,
@@ -281,3 +371,26 @@ def test_job_detail_endpoint_returns_checkpoint_and_log_metadata(tmp_path, monke
             assert payload["outputs"]["checkpoint_exists"] is True
             assert payload["outputs"]["render_meta_exists"] is True
             assert payload["outputs"]["cache_paths"]["frames_dir"] == "frames_dir"
+
+
+def test_audio_upload_endpoint_persists_large_audio_payload(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    payload = (b"riff" * 4096) + b"tail"
+
+    with TestClient(studio_app.app) as client:
+        response = client.post(
+            f"/v1/projects/{proj.id}/assets/audio",
+            files={"file": ("long.wav", payload, "audio/wav")},
+        )
+
+    assert response.status_code == 200
+    audio_path = store.project_dir(proj.id) / "assets" / "audio" / "long.wav"
+    assert audio_path.read_bytes() == payload
+
+    saved = store.get(proj.id)
+    assert saved is not None
+    assert saved.meta["audio"]["filename"] == "long.wav"
+    assert saved.meta["audio"]["size_bytes"] == len(payload)

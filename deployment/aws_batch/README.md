@@ -27,7 +27,7 @@ This folder is a **starter template** for running EDMG Studio renders on AWS Bat
 - `EDMG_S3_KEY_IN` – key for the bundle zip
 - `EDMG_S3_BUCKET_OUT` – bucket to upload results
 - `EDMG_S3_PREFIX_OUT` – prefix/folder for results
-- `EDMG_BACKEND_URL` – backend base URL (default: http://127.0.0.1:7860)
+- `EDMG_BACKEND_URL` – backend base URL (default: http://127.0.0.1:7863)
 - `EDMG_TICKS` – number of job ticks to run (default: 9999)
 
 This is intentionally opinionated but minimal; adapt to your Batch setup.

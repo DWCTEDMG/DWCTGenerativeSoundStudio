@@ -142,12 +142,11 @@ This analysis used enhanced algorithms for superior audio-visual synchronization
         return f"""# Enhanced Deforum Quickstart Guide
 
 ## Quick Import (30 seconds)
-1. Open Automatic1111 WebUI
-2. Navigate to txt2img tab
-3. Scroll down to Scripts → Select "Deforum"
-4. Click "Load Settings" → Select `enhanced_deforum_settings.json`
-5. In Video settings → Set audio path to: `{os.path.basename(audio_file)}`
-6. Click Generate!
+1. Open your Deforum-compatible workflow or tool
+2. Load `enhanced_deforum_settings.json`
+3. Set the audio path to: `{os.path.basename(audio_file)}`
+4. Review frame count, FPS, and resolution
+5. Run the animation pass
 
 ## Settings Overview
 - **Frames**: {settings.get('max_frames', 0):,} total
@@ -185,7 +184,7 @@ class ReportGenerator:
     def generate(self, audio_analysis, lyric_analysis, processing_time):
         """Generate user-friendly status report"""
         
-        return f"""Enhanced A1111/Deforum Settings Generated Successfully!
+        return f"""Enhanced Deforum Settings Generated Successfully!
 
 Audio Analysis Complete
 • Duration: {audio_analysis.duration:.1f}s ({audio_analysis.duration/60:.1f} minutes)
@@ -216,10 +215,10 @@ Performance Metrics
 • Analysis Quality: Enhanced algorithms with fallback protection
 
 Package Contents
-• enhanced_deforum_settings.json - Ready for A1111 import
+• enhanced_deforum_settings.json - Ready for Deforum-compatible import
 • analysis_report.md - Comprehensive technical details
 • QUICKSTART.md - Step-by-step setup instructions
 • configuration_summary.json - Current system configuration
 
-Ready for direct import into A1111 WebUI with enhanced quality and performance!
+Ready for direct import into a Deforum-compatible workflow with enhanced quality and performance!
 The refactored architecture provides better maintainability and cleaner separation of concerns."""

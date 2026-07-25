@@ -53,8 +53,8 @@ export function assertDesktopArtifacts() {
   const mainPath = path.join(root, 'main.mjs');
   const preloadPath = path.join(root, 'preload.cjs');
   const pkgPath = path.join(root, 'package.json');
-  if (!fs.existsSync(distIndex)) throw new Error('dist-web/index.html must exist. Run npm run build first.');
-  if (!fs.existsSync(distAssets)) throw new Error('dist-web/assets must exist. Run npm run build first.');
+  if (!fs.existsSync(distIndex)) throw new Error('dist-web/index.html must exist. Run pnpm run build first.');
+  if (!fs.existsSync(distAssets)) throw new Error('dist-web/assets must exist. Run pnpm run build first.');
   if (!fs.existsSync(mainPath)) throw new Error('main.mjs must exist');
   if (!fs.existsSync(preloadPath)) throw new Error('preload.cjs must exist');
   if (!fs.existsSync(pkgPath)) throw new Error('package.json must exist');
@@ -95,7 +95,7 @@ function buildElectronBuilderConfig() {
   return pkg.build;
 }
 
-function renderElectronBuilderConfig() {
+export function renderElectronBuilderConfig() {
   return [
     '# Auto-generated from package.json build. Do not edit by hand.',
     JSON.stringify(buildElectronBuilderConfig(), null, 2),
@@ -127,6 +127,8 @@ async function copyFileWithRetry(from, to) {
   await fsp.mkdir(path.dirname(to), { recursive: true });
   await withFsRetries(`copy ${from} -> ${to}`, async () => {
     await fsp.copyFile(from, to);
+    const sourceStat = await fsp.stat(from);
+    await fsp.chmod(to, sourceStat.mode);
   });
 }
 

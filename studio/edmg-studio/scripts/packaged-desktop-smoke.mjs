@@ -7,6 +7,12 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import {
+  RELEASE_CAPABILITY_EXTRAS,
+  assertValidReleaseManifest,
+  sha256File,
+} from "./release-python-toolchain.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 
@@ -140,11 +146,35 @@ async function runStagedAppProbe() {
   assert.ok(fs.existsSync(path.join(appDir, 'electron-builder.yml')), 'staged app electron-builder.yml missing');
   assert.ok(fs.existsSync(resources.backendExe), `staged app missing bundled backend: ${resources.backendExe}`);
   assert.ok(fs.existsSync(resources.backendManifest), `staged app missing backend bundle manifest: ${resources.backendManifest}`);
-  assert.ok(fs.existsSync(resources.ffmpegExe), `staged app missing bundled ffmpeg: ${resources.ffmpegExe}`);
+  const bundledFfmpeg = fs.existsSync(resources.ffmpegExe);
+  if (process.platform === "win32") {
+    assert.ok(bundledFfmpeg, `staged app missing bundled ffmpeg: ${resources.ffmpegExe}`);
+  }
   const backendManifest = JSON.parse(await fsp.readFile(resources.backendManifest, "utf8"));
-  assert.equal(typeof backendManifest.sourceHash, "string", "backend bundle manifest must include sourceHash");
-  assert.equal(typeof backendManifest.binarySha256, "string", "backend bundle manifest must include binarySha256");
+  assertValidReleaseManifest(backendManifest);
+  assert.equal(
+    await sha256File(resources.backendExe),
+    backendManifest.binarySha256,
+    "backend binary hash must match its release manifest",
+  );
+  assert.equal(
+    await sha256File(path.join(root, "python_backend", "uv.lock")),
+    backendManifest.lockSha256,
+    "backend release manifest must match the committed uv.lock",
+  );
+  assert.ok(
+    Array.isArray(backendManifest.requiredBackendSources) &&
+      backendManifest.requiredBackendSources.includes("edmg_studio_backend/services/internal_video.py") &&
+      backendManifest.requiredBackendSources.includes("edmg_studio_backend/services/internal_video_models.py"),
+    "backend bundle manifest must prove internal video source modules were included",
+  );
+  assert.deepEqual(
+    backendManifest.capabilityExtras,
+    RELEASE_CAPABILITY_EXTRAS,
+    "backend release manifest must preserve the deterministic capability extras",
+  );
   summary.resources = resources;
+  summary.ffmpegMode = bundledFfmpeg ? "bundled" : "system-or-EDMG_FFMPEG_PATH";
   summary.backendManifest = backendManifest;
 
   if (!support.ok) {

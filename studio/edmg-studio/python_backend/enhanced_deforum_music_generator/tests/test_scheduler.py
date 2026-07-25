@@ -1,5 +1,5 @@
-from core.scheduler import DeforumScheduler
-from config.config_system import AnimationConfig
+from enhanced_deforum_music_generator.config.config_system import AnimationConfig
+from enhanced_deforum_music_generator.core.scheduler import DeforumScheduler
 
 
 def test_scheduler_aligns_lyrics():

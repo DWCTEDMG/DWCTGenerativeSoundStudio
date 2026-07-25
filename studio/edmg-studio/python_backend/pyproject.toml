@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68,<82", "wheel>=0.45,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "edmg-studio-backend"
 version = "1.1.0"
 description = "Backend API for EDMG Studio"
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi>=0.110",
   "uvicorn[standard]>=0.24",
@@ -16,98 +16,144 @@ dependencies = [
   "python-multipart>=0.0.9",
   "py7zr>=0.21.0",
   "Pillow>=10.0.0",
-  "huggingface-hub>=0.23.0",
+  "huggingface-hub>=0.34.0,<1.0",
   "keyring>=24.3.0",
 ]
 
 [project.optional-dependencies]
-aws = ["boto3>=1.34.0"]
-audio = [
-  "librosa>=0.10.2",
-  "soundfile>=0.12.0",
-]
-asr = [
-  "faster-whisper>=1.1.0",
-]
-core = [
-  "numpy>=1.23.0",
-  "scipy>=1.10.0",
-  "PyYAML>=6.0.0",
-  "librosa>=0.10.2",
-  "soundfile>=0.12.0",
-  "spacy>=3.5.0",
-  "textblob>=0.17.0",
-  "nltk>=3.8.0",
-  "python-dotenv>=0.21.0",
-]
-internal = [
-  "diffusers>=0.30.0",
-  "transformers>=4.42.0",
-  "accelerate>=0.33.0",
-  "safetensors>=0.4.3",
-  "torch>=2.2.0",
+cpu = [
+  "torch==2.11.0",
+  "torchvision==0.26.0",
+  "torchaudio==2.11.0",
 ]
 directml = [
-  "onnxruntime-directml>=1.18.0; platform_system == 'Windows'",
-  "optimum[onnxruntime]>=1.19.0; platform_system == 'Windows'",
+  "torch==2.11.0",
+  "torchvision==0.26.0",
+  "torchaudio==2.11.0",
+  "onnxruntime-directml>=1.18.0,<2; sys_platform == 'win32'",
+  "optimum>=2,<3; sys_platform == 'win32'",
+  "optimum-onnx>=0.1,<1; sys_platform == 'win32'",
 ]
-full = [
-  "numpy>=1.23.0",
-  "scipy>=1.10.0",
-  "PyYAML>=6.0.0",
-  "librosa>=0.10.2",
-  "soundfile>=0.12.0",
-  "faster-whisper>=1.1.0",
-  "diffusers>=0.30.0",
-  "transformers>=4.42.0",
-  "accelerate>=0.33.0",
-  "safetensors>=0.4.3",
-  "torch>=2.2.0",
-  "spacy>=3.5.0",
-  "textblob>=0.17.0",
-  "nltk>=3.8.0",
-  "python-dotenv>=0.21.0",
+cuda = [
+  "torch==2.11.0",
+  "torchvision==0.26.0",
+  "torchaudio==2.11.0",
+  "torch-tensorrt==2.11.0",
+  "cuda-python==13.0.3",
+  "tensorrt==10.15.1.29",
+  "tensorrt-cu13==10.15.1.29",
+  "tensorrt-cu13-bindings==10.15.1.29",
+  "tensorrt-cu13-libs==10.15.1.29",
 ]
-studio_bundle = [
-  "numpy>=1.23.0",
-  "scipy>=1.10.0",
-  "PyYAML>=6.0.0",
-  "librosa>=0.10.2",
-  "soundfile>=0.12.0",
-  "faster-whisper>=1.1.0",
-  "diffusers>=0.30.0",
-  "transformers>=4.42.0",
-  "accelerate>=0.33.0",
-  "safetensors>=0.4.3",
-  "torch>=2.2.0",
-  "spacy>=3.5.0",
-  "textblob>=0.17.0",
-  "nltk>=3.8.0",
-  "python-dotenv>=0.21.0",
+core = [
+  "numpy>=1.26,<2",
+  "scipy>=1.10,<2",
+  "PyYAML>=6,<7",
+  "matplotlib>=3.9,<4",
+  "spacy>=3.5,<4",
+  "textblob>=0.17,<1",
+  "nltk>=3.8,<4",
+  "tzdata>=2024.1",
+  "python-dotenv>=0.21,<2",
+  "tbb>=2021; sys_platform == 'win32'",
 ]
-studio_bundle_directml = [
-  "numpy>=1.23.0",
-  "scipy>=1.10.0",
-  "PyYAML>=6.0.0",
-  "librosa>=0.10.2",
-  "soundfile>=0.12.0",
-  "faster-whisper>=1.1.0",
-  "diffusers>=0.30.0",
-  "transformers>=4.42.0",
-  "accelerate>=0.33.0",
-  "safetensors>=0.4.3",
-  "torch>=2.2.0",
-  "spacy>=3.5.0",
-  "textblob>=0.17.0",
-  "nltk>=3.8.0",
-  "python-dotenv>=0.21.0",
-  "onnxruntime-directml>=1.18.0; platform_system == 'Windows'",
-  "optimum[onnxruntime]>=1.19.0; platform_system == 'Windows'",
+audio = [
+  "librosa>=0.10.2,<1",
+  "soundfile>=0.12,<1",
 ]
+clap = ["transformers>=4.42,<5"]
+asr = [
+  "faster-whisper>=1.1,<2",
+  "openai-whisper>=20240930",
+]
+source-separation = ["demucs>=4.0.1,<5"]
+parakeet = ["nemo-toolkit[asr]>=2.6.2,<3"]
+aws = ["boto3>=1.34,<2"]
+azure = [
+  "azure-storage-blob>=12.20,<13",
+  "azure-identity>=1.16,<2",
+]
+codex = ["openai-codex"]
+internal-video = [
+  "diffusers>=0.30,<1",
+  "transformers>=4.42,<5",
+  "accelerate>=0.33,<2",
+  "safetensors>=0.4.3,<1",
+  "tensorboard>=2.16,<3",
+]
+advanced = [
+  "aiohttp>=3.10,<4",
+  "opencv-python-headless>=4.10,<5",
+  "psutil>=5.9,<8",
+]
+gradio = ["gradio>=5,<7"]
+background-removal = ["rembg>=2,<3"]
+
+[dependency-groups]
 test = [
-  "pytest>=8.3.0",
-  "httpx>=0.27.0",
+  "pytest>=9.0.3,<10",
+  "httpx>=0.27,<1",
 ]
+lint = ["ruff>=0.8,<1"]
+build = [
+  "build>=1.2,<2",
+  "pyinstaller>=6.11,<7",
+  "pycparser>=2.22,<3",
+  "wheel>=0.45,<1",
+  "setuptools>=68,<82",
+]
+dev = [
+  { include-group = "test" },
+  { include-group = "lint" },
+  "mypy>=1.11,<2",
+  "pre-commit>=3.8,<5",
+]
+
+[tool.uv]
+required-version = "==0.11.28"
+default-groups = []
+conflicts = [
+  [{ extra = "cpu" }, { extra = "directml" }],
+  [{ extra = "cpu" }, { extra = "cuda" }],
+  [{ extra = "directml" }, { extra = "cuda" }],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cpu", extra = "directml" },
+  { index = "pytorch-cu130", extra = "cuda" },
+]
+torchvision = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cpu", extra = "directml" },
+  { index = "pytorch-cu130", extra = "cuda" },
+]
+torchaudio = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cpu", extra = "directml" },
+  { index = "pytorch-cu130", extra = "cuda" },
+]
+torch-tensorrt = [{ index = "pytorch-cu130", extra = "cuda" }]
+tensorrt = [{ index = "nvidia", extra = "cuda" }]
+tensorrt-cu13 = [{ index = "nvidia", extra = "cuda" }]
+tensorrt-cu13-bindings = [{ index = "nvidia", extra = "cuda" }]
+tensorrt-cu13-libs = [{ index = "nvidia", extra = "cuda" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+explicit = true
 
 [project.scripts]
 edmg-studio-backend = "edmg_studio_backend.cli:main"
@@ -119,24 +165,17 @@ include = [
   "edmg_studio_backend*",
   "enhanced_deforum_music_generator*",
   "deforum_music*",
-  "edmg*",
-  "core*",
-  "config*",
-  "integrations*",
-  "src*",
   "edmg_ai_service*",
+  "edmg*",
 ]
-
-
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 100
 extend-exclude = [
   ".venv",
   "build",
   "dist",
   "node_modules",
-  "src/enhanced_deforum_music_generator/tests",
 ]
 
 [tool.ruff.lint]
@@ -152,7 +191,10 @@ indent-style = "space"
 
 [tool.pytest.ini_options]
 addopts = "-ra"
-testpaths = ["enhanced_deforum_music_generator/tests"]
+testpaths = [
+  "enhanced_deforum_music_generator/tests",
+  "edmg_studio_backend/tests",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]

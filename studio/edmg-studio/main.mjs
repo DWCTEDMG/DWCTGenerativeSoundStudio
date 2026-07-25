@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBackendRuntime } from "./main-process/backend-runtime.mjs";
+import { createDirectorRuntime } from "./main-process/director-runtime.mjs";
 import { createWindowRuntime } from "./main-process/window-runtime.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,14 +14,217 @@ const APP_NAME = "EDMG Studio";
 const IS_DEV = !app.isPackaged;
 const IS_WINDOWS = process.platform === "win32";
 const BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json";
+const BACKEND_AUTH_TOKEN_BASENAME = "backend-auth-token.bin";
 const IGNORABLE_WRITE_ERROR_CODES = new Set(["EPIPE", "ERR_STREAM_DESTROYED"]);
 
-const BACKEND_HOST = process.env.EDMG_STUDIO_BACKEND_HOST ?? "127.0.0.1";
-let BACKEND_PORT = Number(process.env.EDMG_STUDIO_BACKEND_PORT ?? "7863");
+function backendAuthTokenPath() {
+  return path.join(app.getPath("userData"), BACKEND_AUTH_TOKEN_BASENAME);
+}
+
+function secureStorageAvailable() {
+  try {
+    return safeStorage.isEncryptionAvailable();
+  } catch {
+    return false;
+  }
+}
+
+function readBackendAuthToken() {
+  const environmentToken = String(
+    process.env.EDMG_BACKEND_AUTH_TOKEN || process.env.EDMG_STUDIO_BACKEND_AUTH_TOKEN || "",
+  ).trim();
+  if (environmentToken) {
+    return {
+      token: environmentToken,
+      persisted: false,
+      secureStorageAvailable: secureStorageAvailable(),
+      note: "Loaded from the Studio process environment.",
+    };
+  }
+
+  const available = secureStorageAvailable();
+  const tokenPath = backendAuthTokenPath();
+  if (!available || !fs.existsSync(tokenPath)) {
+    return {
+      token: "",
+      persisted: false,
+      secureStorageAvailable: available,
+      note: available
+        ? "No encrypted backend token is saved."
+        : "OS-backed Electron encryption is unavailable; tokens remain session-only.",
+    };
+  }
+
+  try {
+    const encrypted = fs.readFileSync(tokenPath);
+    return {
+      token: safeStorage.decryptString(encrypted).trim(),
+      persisted: true,
+      secureStorageAvailable: true,
+      note: "Loaded from encrypted Electron storage.",
+    };
+  } catch (error) {
+    console.warn("[backend-auth] unable to read encrypted token", String(error?.message ?? error));
+    return {
+      token: "",
+      persisted: false,
+      secureStorageAvailable: available,
+      note: "The encrypted token could not be read. Save it again in Studio Settings.",
+    };
+  }
+}
+
+function writeBackendAuthToken(rawToken) {
+  const token = String(rawToken || "").trim();
+  const tokenPath = backendAuthTokenPath();
+  if (!token) {
+    delete process.env.EDMG_BACKEND_AUTH_TOKEN;
+    try {
+      fs.rmSync(tokenPath, { force: true });
+    } catch {}
+    return {
+      ok: true,
+      configured: false,
+      persisted: false,
+      secureStorageAvailable: secureStorageAvailable(),
+      note: "Backend access token cleared.",
+    };
+  }
+
+  process.env.EDMG_BACKEND_AUTH_TOKEN = token;
+  if (!secureStorageAvailable()) {
+    return {
+      ok: true,
+      configured: true,
+      persisted: false,
+      secureStorageAvailable: false,
+      note: "OS-backed encryption is unavailable; the token is active for this Studio session only.",
+    };
+  }
+
+  try {
+    ensureDirSync(path.dirname(tokenPath));
+    const encrypted = safeStorage.encryptString(token);
+    const tmp = `${tokenPath}.tmp`;
+    fs.writeFileSync(tmp, encrypted, { mode: 0o600 });
+    fs.renameSync(tmp, tokenPath);
+    return {
+      ok: true,
+      configured: true,
+      persisted: true,
+      secureStorageAvailable: true,
+      note: "Backend access token saved with Electron OS-backed encryption.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message ?? error),
+      configured: true,
+      persisted: false,
+      secureStorageAvailable: true,
+      note: "The token is active for this session but could not be persisted.",
+    };
+  }
+}
+
+function readRuntimeDefaults() {
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, "runtime-defaults.json"));
+  }
+  candidates.push(path.join(__dirname, "electron-resources", "runtime-defaults.json"));
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("[runtime-defaults] failed to read", candidate, error);
+    }
+  }
+
+  return {};
+}
+
+const RUNTIME_DEFAULTS = readRuntimeDefaults();
+const BACKEND_RUNTIME_DEFAULTS =
+  RUNTIME_DEFAULTS.backend && typeof RUNTIME_DEFAULTS.backend === "object"
+    ? RUNTIME_DEFAULTS.backend
+    : {};
+const DEFAULT_LOCAL_BACKEND_HOST = "127.0.0.1";
+const DEFAULT_LOCAL_BACKEND_PORT = "7863";
+const BACKEND_DEFAULT_MODE =
+  typeof BACKEND_RUNTIME_DEFAULTS.spawnBackend === "boolean" && BACKEND_RUNTIME_DEFAULTS.spawnBackend === false
+    ? "external"
+    : "managed";
+const BACKEND_SETTINGS_DEFAULTS = Object.freeze({
+  mode: BACKEND_DEFAULT_MODE,
+  host:
+    BACKEND_DEFAULT_MODE !== "external" &&
+    typeof BACKEND_RUNTIME_DEFAULTS.host === "string" && BACKEND_RUNTIME_DEFAULTS.host.trim()
+      ? BACKEND_RUNTIME_DEFAULTS.host.trim()
+      : DEFAULT_LOCAL_BACKEND_HOST,
+  port:
+    BACKEND_DEFAULT_MODE !== "external" &&
+    BACKEND_RUNTIME_DEFAULTS.port != null && String(BACKEND_RUNTIME_DEFAULTS.port).trim()
+      ? String(BACKEND_RUNTIME_DEFAULTS.port).trim()
+      : DEFAULT_LOCAL_BACKEND_PORT,
+  url:
+    typeof BACKEND_RUNTIME_DEFAULTS.url === "string" && BACKEND_RUNTIME_DEFAULTS.url.trim()
+      ? BACKEND_RUNTIME_DEFAULTS.url.trim()
+      : "",
+});
+
+const BACKEND_SETTINGS_ENV_KEYS = Object.freeze({
+  mode: "EDMG_STUDIO_BACKEND_MODE",
+  host: "EDMG_STUDIO_BACKEND_HOST",
+  port: "EDMG_STUDIO_BACKEND_PORT",
+  url: "EDMG_STUDIO_BACKEND_URL",
+  spawnBackend: "EDMG_STUDIO_SPAWN_BACKEND",
+});
+
+const STARTUP_BACKEND_SETTINGS = syncBackendSettingsToProcessEnv(getConfiguredBackendSettings());
+const BACKEND_HOST = STARTUP_BACKEND_SETTINGS.host;
+let BACKEND_PORT = Number(STARTUP_BACKEND_SETTINGS.port || BACKEND_SETTINGS_DEFAULTS.port);
+const BACKEND_URL = STARTUP_BACKEND_SETTINGS.url || `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 const BACKEND_READY_TIMEOUT_MS = Number(
   process.env.EDMG_STUDIO_BACKEND_READY_TIMEOUT_MS ??
   (app.isPackaged && IS_WINDOWS ? "120000" : "15000"),
 );
+
+const DIRECTOR_RUNTIME_DEFAULTS =
+  RUNTIME_DEFAULTS.director && typeof RUNTIME_DEFAULTS.director === "object"
+    ? RUNTIME_DEFAULTS.director
+    : {};
+const DIRECTOR_HOST =
+  String(process.env.EDMG_DIRECTOR_HOST ?? DIRECTOR_RUNTIME_DEFAULTS.host ?? "127.0.0.1").trim() ||
+  "127.0.0.1";
+const DIRECTOR_PORT_RAW = Number.parseInt(
+  String(process.env.EDMG_DIRECTOR_PORT ?? DIRECTOR_RUNTIME_DEFAULTS.port ?? "3001"),
+  10,
+);
+const DIRECTOR_PORT = Number.isFinite(DIRECTOR_PORT_RAW) && DIRECTOR_PORT_RAW > 0 ? DIRECTOR_PORT_RAW : 3001;
+const DIRECTOR_SETTINGS_ENV_KEYS = Object.freeze({
+  baseUrl: "EDMG_DIRECTOR_BASE_URL",
+});
+const DIRECTOR_SETTINGS_DEFAULTS = Object.freeze({
+  baseUrl:
+    normalizeBackendUrl(DIRECTOR_RUNTIME_DEFAULTS.baseUrl, "") ||
+    `http://${DIRECTOR_HOST}:${DIRECTOR_PORT}`,
+});
+const STARTUP_DIRECTOR_SETTINGS = syncDirectorSettingsToProcessEnv(getConfiguredDirectorSettings());
+const DIRECTOR_PUBLIC_BASE_URL = STARTUP_DIRECTOR_SETTINGS.baseUrl;
+const DIRECTOR_READY_TIMEOUT_MS = Number(
+  process.env.EDMG_DIRECTOR_READY_TIMEOUT_MS ??
+  (app.isPackaged && IS_WINDOWS ? "45000" : "30000"),
+);
+const DIRECTOR_SPAWN =
+  String(process.env.EDMG_DIRECTOR_SPAWN ?? "").trim() ||
+  (DIRECTOR_RUNTIME_DEFAULTS.spawnDirector === false ? "0" : "1");
+const SHOULD_SPAWN_DIRECTOR = DIRECTOR_SPAWN !== "0";
 
 const TEST_MODE = (process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1";
 const TEST_SKIP_MIGRATION = (process.env.EDMG_STUDIO_TEST_SKIP_MIGRATION ?? "0") === "1";
@@ -46,14 +250,21 @@ const DEV_SERVER_URL =
   process.env.EDMG_STUDIO_DEV_SERVER_URL ??
   `http://127.0.0.1:${UI_PORT}`;
 
+const NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const NEMOTRON_ULTRA_MODEL = "nvidia/llama-3.1-nemotron-ultra-253b-v1";
+const LEGACY_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8000";
+const LEGACY_OPENAI_COMPAT_MODEL = "qwen3-8b";
+
 const AI_SETTINGS_DEFAULTS = Object.freeze({
   mode: "local",
-  provider: "ollama",
+  provider: "nemotron_cloud",
   aiBaseUrl: "http://127.0.0.1:7862",
   ollamaUrl: "http://127.0.0.1:11434",
-  ollamaModel: "qwen2.5:3b-instruct",
-  openaiCompatBaseUrl: "http://127.0.0.1:8000",
-  openaiCompatModel: "qwen2.5-7b-instruct",
+  ollamaModel: "qwen3:8b",
+  openaiCompatBaseUrl: NVIDIA_NIM_BASE_URL,
+  openaiCompatModel: NEMOTRON_ULTRA_MODEL,
+  nvidiaBaseUrl: NVIDIA_NIM_BASE_URL,
+  nvidiaModel: NEMOTRON_ULTRA_MODEL,
 });
 
 const AI_SETTINGS_ENV_KEYS = Object.freeze({
@@ -64,6 +275,8 @@ const AI_SETTINGS_ENV_KEYS = Object.freeze({
   ollamaModel: "EDMG_AI_OLLAMA_MODEL",
   openaiCompatBaseUrl: "EDMG_AI_OPENAI_COMPAT_BASE_URL",
   openaiCompatModel: "EDMG_AI_OPENAI_COMPAT_MODEL",
+  nvidiaBaseUrl: "EDMG_AI_NVIDIA_BASE_URL",
+  nvidiaModel: "EDMG_AI_NVIDIA_MODEL",
 });
 
 const AI_LOCAL_PROVIDER_ALIASES = Object.freeze({
@@ -71,6 +284,9 @@ const AI_LOCAL_PROVIDER_ALIASES = Object.freeze({
   openai: "openai_compat",
   "openai-compatible": "openai_compat",
   openai_compat: "openai_compat",
+  nemotron_cloud: "nemotron_cloud",
+  nemotron: "nemotron_cloud",
+  nvidia_nim: "nemotron_cloud",
   rule_based: "rule_based",
   none: "rule_based",
 });
@@ -148,14 +364,83 @@ installSafeProcessLogging();
 app.setName(APP_NAME);
 
 function ensureDirSync(targetPath) {
+  if (isExistingDirectory(targetPath)) {
+    return;
+  }
   try {
     fs.mkdirSync(targetPath, { recursive: true });
   } catch (error) {
     if (error?.code === "ELOOP" && repairMutualJunctionLoopSync(targetPath)) {
       return;
     }
+    if ((error?.code === "EPERM" || error?.code === "EEXIST") && isExistingDirectory(targetPath)) {
+      return;
+    }
     throw error;
   }
+}
+
+function tryEnsureDirSync(targetPath) {
+  try {
+    ensureDirSync(targetPath);
+    return true;
+  } catch (error) {
+    console.warn(
+      `[storage] failed to ensure directory ${targetPath}:`,
+      error?.code || error?.errno || "",
+      error?.message || error,
+    );
+    return false;
+  }
+}
+
+function localFallbackCacheRoot() {
+  return path.join(app.getPath("userData"), "cache-fallback");
+}
+
+function buildCacheEnvPaths(cacheRoot) {
+  const root = path.resolve(cacheRoot);
+  return {
+    EDMG_STUDIO_CACHE_DIR: root,
+    PIP_CACHE_DIR: path.join(root, "pip"),
+    XDG_CACHE_HOME: path.join(root, "xdg"),
+    HF_HOME: path.join(root, "huggingface"),
+    HUGGINGFACE_HUB_CACHE: path.join(root, "huggingface", "hub"),
+    TRANSFORMERS_CACHE: path.join(root, "transformers"),
+    TORCH_HOME: path.join(root, "torch"),
+    NLTK_DATA: path.join(root, "nltk_data"),
+    WHISPER_CACHE_DIR: path.join(root, "whisper"),
+    MPLCONFIGDIR: path.join(root, "matplotlib"),
+    TMP: path.join(root, "tmp"),
+    TEMP: path.join(root, "tmp"),
+  };
+}
+
+function ensureManagedEnvDirs(managed) {
+  const failedKeys = [];
+  for (const [key, targetPath] of Object.entries(managed)) {
+    if (typeof targetPath !== "string" || !targetPath.trim()) continue;
+    if (!tryEnsureDirSync(targetPath)) {
+      failedKeys.push(key);
+    }
+  }
+
+  if (!failedKeys.length) {
+    return managed;
+  }
+
+  // Remounted/corrupt volumes (WinError 1392 / UNKNOWN mkdir) must not kill Electron.
+  // Keep data/models/home where they are; only relocate cache-derived paths locally.
+  const fallbackCache = localFallbackCacheRoot();
+  const remappedCache = buildCacheEnvPaths(fallbackCache);
+  Object.assign(managed, remappedCache);
+  for (const targetPath of Object.values(remappedCache)) {
+    ensureDirSync(targetPath);
+  }
+  console.warn(
+    `[storage] remapped cache paths to ${fallbackCache} after mkdir failures on: ${failedKeys.join(", ")}`,
+  );
+  return managed;
 }
 
 function pathExistsSync(targetPath) {
@@ -166,10 +451,18 @@ function pathExistsSync(targetPath) {
   }
 }
 
+function configuredPathHasAvailableRoot(resolvedPath) {
+  if (!resolvedPath || !IS_WINDOWS) return true;
+  const root = path.parse(resolvedPath).root;
+  if (!root) return true;
+  return pathExistsSync(root);
+}
+
 function resolveConfiguredPath(rawValue) {
   const value = String(rawValue ?? "").trim();
   if (!value) return "";
   const resolved = path.resolve(value);
+  if (!configuredPathHasAvailableRoot(resolved)) return "";
   return resolved.toLowerCase().includes("app.asar") ? "" : resolved;
 }
 
@@ -324,6 +617,22 @@ function getRawAiSettingsFromEnv(envLike) {
     ollamaModel: env[AI_SETTINGS_ENV_KEYS.ollamaModel],
     openaiCompatBaseUrl: env[AI_SETTINGS_ENV_KEYS.openaiCompatBaseUrl],
     openaiCompatModel: env[AI_SETTINGS_ENV_KEYS.openaiCompatModel],
+    nvidiaBaseUrl: env[AI_SETTINGS_ENV_KEYS.nvidiaBaseUrl],
+    nvidiaModel: env[AI_SETTINGS_ENV_KEYS.nvidiaModel],
+  };
+}
+
+function getRawBackendSettingsFromEnv(envLike) {
+  const env = envLike && typeof envLike === "object" ? envLike : {};
+  let mode = env[BACKEND_SETTINGS_ENV_KEYS.mode];
+  if (!mode && typeof env[BACKEND_SETTINGS_ENV_KEYS.spawnBackend] === "string") {
+    mode = String(env[BACKEND_SETTINGS_ENV_KEYS.spawnBackend]).trim() === "0" ? "external" : "managed";
+  }
+  return {
+    mode,
+    host: env[BACKEND_SETTINGS_ENV_KEYS.host],
+    port: env[BACKEND_SETTINGS_ENV_KEYS.port],
+    url: env[BACKEND_SETTINGS_ENV_KEYS.url],
   };
 }
 
@@ -335,7 +644,31 @@ function readBootstrapAiSettingsRaw() {
   return {};
 }
 
+function readBootstrapBackendSettingsRaw() {
+  const bootstrapConfig = readBootstrapConfig();
+  if (bootstrapConfig?.backendSettings && typeof bootstrapConfig.backendSettings === "object") {
+    return bootstrapConfig.backendSettings;
+  }
+  return {};
+}
+
+function readBootstrapDirectorSettingsRaw() {
+  const bootstrapConfig = readBootstrapConfig();
+  if (bootstrapConfig?.directorSettings && typeof bootstrapConfig.directorSettings === "object") {
+    return bootstrapConfig.directorSettings;
+  }
+  return {};
+}
+
 function hasAnyAiSetting(rawSettings) {
+  return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
+}
+
+function hasAnyBackendSetting(rawSettings) {
+  return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
+}
+
+function hasAnyDirectorSetting(rawSettings) {
   return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
 }
 
@@ -344,27 +677,123 @@ function normalizeAiMode(rawValue) {
   return mode === "http" || mode === "remote" ? "http" : "local";
 }
 
+function normalizeBackendMode(rawValue) {
+  const mode = String(rawValue ?? BACKEND_SETTINGS_DEFAULTS.mode).trim().toLowerCase();
+  return mode === "external" || mode === "remote" || mode === "connect" ? "external" : "managed";
+}
+
 function normalizeAiProvider(rawValue) {
   const provider = String(rawValue ?? "").trim().toLowerCase();
   return AI_LOCAL_PROVIDER_ALIASES[provider] ?? AI_SETTINGS_DEFAULTS.provider;
 }
 
+function normalizeBackendPort(rawValue) {
+  const raw = String(rawValue ?? "").trim();
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 1 && value <= 65535) {
+    return String(value);
+  }
+  return BACKEND_SETTINGS_DEFAULTS.port;
+}
+
+function buildManagedBackendUrl(host, port) {
+  return `http://${host}:${port}`;
+}
+
+function normalizeBackendUrl(rawValue, fallbackUrl = "") {
+  const candidate = pickConfiguredString(rawValue, fallbackUrl);
+  if (!candidate) return "";
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    const normalizedPath =
+      parsed.pathname && parsed.pathname !== "/"
+        ? parsed.pathname.replace(/\/+$/, "")
+        : "";
+    return `${parsed.origin}${normalizedPath}`;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeOpenAiCompatDefaults(rawBaseUrl, rawModel) {
+  const baseUrl = pickConfiguredString(rawBaseUrl, "");
+  const model = pickConfiguredString(rawModel, "");
+  if (
+    (baseUrl === LEGACY_OPENAI_COMPAT_BASE_URL && (!model || model === LEGACY_OPENAI_COMPAT_MODEL)) ||
+    (!baseUrl && model === LEGACY_OPENAI_COMPAT_MODEL)
+  ) {
+    return {
+      baseUrl: AI_SETTINGS_DEFAULTS.openaiCompatBaseUrl,
+      model: AI_SETTINGS_DEFAULTS.openaiCompatModel,
+    };
+  }
+  return {
+    baseUrl: baseUrl || AI_SETTINGS_DEFAULTS.openaiCompatBaseUrl,
+    model: model || AI_SETTINGS_DEFAULTS.openaiCompatModel,
+  };
+}
+
 function normalizeAiSettings(rawSettings = {}) {
   const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  const openaiCompat = normalizeOpenAiCompatDefaults(
+    current.openaiCompatBaseUrl,
+    current.openaiCompatModel
+  );
   return {
     mode: normalizeAiMode(current.mode),
     provider: normalizeAiProvider(current.provider),
     aiBaseUrl: pickConfiguredString(current.aiBaseUrl, AI_SETTINGS_DEFAULTS.aiBaseUrl),
     ollamaUrl: pickConfiguredString(current.ollamaUrl, AI_SETTINGS_DEFAULTS.ollamaUrl),
     ollamaModel: pickConfiguredString(current.ollamaModel, AI_SETTINGS_DEFAULTS.ollamaModel),
-    openaiCompatBaseUrl: pickConfiguredString(
-      current.openaiCompatBaseUrl,
-      AI_SETTINGS_DEFAULTS.openaiCompatBaseUrl
+    openaiCompatBaseUrl: openaiCompat.baseUrl,
+    openaiCompatModel: openaiCompat.model,
+    nvidiaBaseUrl: pickConfiguredString(
+      current.nvidiaBaseUrl,
+      AI_SETTINGS_DEFAULTS.nvidiaBaseUrl
     ),
-    openaiCompatModel: pickConfiguredString(
-      current.openaiCompatModel,
-      AI_SETTINGS_DEFAULTS.openaiCompatModel
+    nvidiaModel: pickConfiguredString(
+      current.nvidiaModel,
+      AI_SETTINGS_DEFAULTS.nvidiaModel
     ),
+  };
+}
+
+function normalizeBackendSettings(rawSettings = {}) {
+  const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  const mode = normalizeBackendMode(current.mode);
+  const host = pickConfiguredString(current.host, BACKEND_SETTINGS_DEFAULTS.host);
+  const port = normalizeBackendPort(current.port);
+  const fallbackUrl = buildManagedBackendUrl(host, port);
+  const hasHostOrPortOverride = !!(
+    pickConfiguredString(current.host, "") || pickConfiguredString(current.port, "")
+  );
+  const defaultExternalUrl = hasHostOrPortOverride ? fallbackUrl : BACKEND_SETTINGS_DEFAULTS.url;
+  const url = mode === "external" ? normalizeBackendUrl(current.url, defaultExternalUrl || fallbackUrl) : "";
+
+  return {
+    mode,
+    host,
+    port,
+    url,
+  };
+}
+
+function getRawDirectorSettingsFromEnv(envLike) {
+  const env = envLike && typeof envLike === "object" ? envLike : {};
+  return {
+    baseUrl: env[DIRECTOR_SETTINGS_ENV_KEYS.baseUrl],
+  };
+}
+
+function normalizeDirectorSettings(rawSettings = {}) {
+  const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  return {
+    baseUrl:
+      normalizeBackendUrl(current.baseUrl, DIRECTOR_SETTINGS_DEFAULTS.baseUrl) ||
+      DIRECTOR_SETTINGS_DEFAULTS.baseUrl,
   };
 }
 
@@ -386,6 +815,42 @@ function getConfiguredAiSettings() {
   return { ...configured, source };
 }
 
+function getConfiguredBackendSettings() {
+  const launcherRaw = getRawBackendSettingsFromEnv(readLauncherEnv());
+  const bootstrapRaw = readBootstrapBackendSettingsRaw();
+  const envRaw = getRawBackendSettingsFromEnv(process.env);
+  const configured = normalizeBackendSettings({
+    ...launcherRaw,
+    ...bootstrapRaw,
+    ...envRaw,
+  });
+
+  let source = "default";
+  if (hasAnyBackendSetting(launcherRaw)) source = "launcher";
+  if (hasAnyBackendSetting(bootstrapRaw)) source = "bootstrap";
+  if (hasAnyBackendSetting(envRaw)) source = "env";
+
+  return { ...configured, source };
+}
+
+function getConfiguredDirectorSettings() {
+  const launcherRaw = getRawDirectorSettingsFromEnv(readLauncherEnv());
+  const bootstrapRaw = readBootstrapDirectorSettingsRaw();
+  const envRaw = getRawDirectorSettingsFromEnv(process.env);
+  const configured = normalizeDirectorSettings({
+    ...launcherRaw,
+    ...bootstrapRaw,
+    ...envRaw,
+  });
+
+  let source = "default";
+  if (hasAnyDirectorSetting(launcherRaw)) source = "launcher";
+  if (hasAnyDirectorSetting(bootstrapRaw)) source = "bootstrap";
+  if (hasAnyDirectorSetting(envRaw)) source = "env";
+
+  return { ...configured, source };
+}
+
 function syncAiSettingsToProcessEnv(rawSettings) {
   const aiSettings = normalizeAiSettings(rawSettings);
   process.env.EDMG_AI_MODE = aiSettings.mode;
@@ -395,7 +860,25 @@ function syncAiSettingsToProcessEnv(rawSettings) {
   process.env.EDMG_AI_OLLAMA_MODEL = aiSettings.ollamaModel;
   process.env.EDMG_AI_OPENAI_COMPAT_BASE_URL = aiSettings.openaiCompatBaseUrl;
   process.env.EDMG_AI_OPENAI_COMPAT_MODEL = aiSettings.openaiCompatModel;
+  process.env.EDMG_AI_NVIDIA_BASE_URL = aiSettings.nvidiaBaseUrl;
+  process.env.EDMG_AI_NVIDIA_MODEL = aiSettings.nvidiaModel;
   return aiSettings;
+}
+
+function syncBackendSettingsToProcessEnv(rawSettings) {
+  const backendSettings = normalizeBackendSettings(rawSettings);
+  process.env[BACKEND_SETTINGS_ENV_KEYS.mode] = backendSettings.mode;
+  process.env[BACKEND_SETTINGS_ENV_KEYS.host] = backendSettings.host;
+  process.env[BACKEND_SETTINGS_ENV_KEYS.port] = backendSettings.port;
+  process.env[BACKEND_SETTINGS_ENV_KEYS.url] = backendSettings.url;
+  process.env[BACKEND_SETTINGS_ENV_KEYS.spawnBackend] = backendSettings.mode === "external" ? "0" : "1";
+  return backendSettings;
+}
+
+function syncDirectorSettingsToProcessEnv(rawSettings) {
+  const directorSettings = normalizeDirectorSettings(rawSettings);
+  process.env[DIRECTOR_SETTINGS_ENV_KEYS.baseUrl] = directorSettings.baseUrl;
+  return directorSettings;
 }
 
 syncAiSettingsToProcessEnv(getConfiguredAiSettings());
@@ -496,6 +979,7 @@ function getStudioPaths(studioHomeOverride = "", storageOverrideValues = null) {
 
   return {
     ...paths,
+    platform: process.platform,
     storageOverrides: trimStorageOverrides(mergedRaw, resolvedHome),
     bootstrapConfigPath: getBootstrapConfigPath(),
     pendingMigration: bootstrapConfig?.pendingMigration ?? null,
@@ -511,30 +995,13 @@ function buildManagedStudioEnv(studioHomeOverride = "", storageOverrideValues = 
     EDMG_STUDIO_HOME: paths.studioHome,
     EDMG_STUDIO_DATA_DIR: paths.dataDir,
     EDMG_STUDIO_MODELS_DIR: paths.modelsDir,
-    EDMG_STUDIO_CACHE_DIR: paths.cacheRoot,
     EDMG_STUDIO_LOGS_DIR: paths.logsDir,
     EDMG_STUDIO_EXTERNAL_DIR: paths.externalDir,
     OLLAMA_MODELS: path.join(paths.modelsDir, "ollama"),
-    PIP_CACHE_DIR: path.join(paths.cacheRoot, "pip"),
-    XDG_CACHE_HOME: path.join(paths.cacheRoot, "xdg"),
-    HF_HOME: path.join(paths.cacheRoot, "huggingface"),
-    HUGGINGFACE_HUB_CACHE: path.join(paths.cacheRoot, "huggingface", "hub"),
-    TRANSFORMERS_CACHE: path.join(paths.cacheRoot, "transformers"),
-    TORCH_HOME: path.join(paths.cacheRoot, "torch"),
-    NLTK_DATA: path.join(paths.cacheRoot, "nltk_data"),
-    WHISPER_CACHE_DIR: path.join(paths.cacheRoot, "whisper"),
-    MPLCONFIGDIR: path.join(paths.cacheRoot, "matplotlib"),
-    TMP: path.join(paths.cacheRoot, "tmp"),
-    TEMP: path.join(paths.cacheRoot, "tmp"),
+    ...buildCacheEnvPaths(paths.cacheRoot),
   };
 
-  for (const targetPath of Object.values(managed)) {
-    if (typeof targetPath === "string" && targetPath.trim()) {
-      ensureDirSync(targetPath);
-    }
-  }
-
-  return managed;
+  return ensureManagedEnvDirs(managed);
 }
 
 function syncStorageSettingsToProcessEnv(studioHome = "", storageOverrides = null) {
@@ -542,28 +1009,16 @@ function syncStorageSettingsToProcessEnv(studioHome = "", storageOverrides = nul
     studioHome || getConfiguredStudioHome() || path.dirname(getDefaultDataDir()),
     storageOverrides || {}
   );
-  const managed = {
+  const managed = ensureManagedEnvDirs({
     EDMG_STUDIO_HOME: paths.studioHome,
     EDMG_STUDIO_DATA_DIR: paths.dataDir,
     EDMG_STUDIO_MODELS_DIR: paths.modelsDir,
-    EDMG_STUDIO_CACHE_DIR: paths.cacheRoot,
     EDMG_STUDIO_LOGS_DIR: paths.logsDir,
     EDMG_STUDIO_EXTERNAL_DIR: paths.externalDir,
     OLLAMA_MODELS: path.join(paths.modelsDir, "ollama"),
-    PIP_CACHE_DIR: path.join(paths.cacheRoot, "pip"),
-    XDG_CACHE_HOME: path.join(paths.cacheRoot, "xdg"),
-    HF_HOME: path.join(paths.cacheRoot, "huggingface"),
-    HUGGINGFACE_HUB_CACHE: path.join(paths.cacheRoot, "huggingface", "hub"),
-    TRANSFORMERS_CACHE: path.join(paths.cacheRoot, "transformers"),
-    TORCH_HOME: path.join(paths.cacheRoot, "torch"),
-    NLTK_DATA: path.join(paths.cacheRoot, "nltk_data"),
-    WHISPER_CACHE_DIR: path.join(paths.cacheRoot, "whisper"),
-    MPLCONFIGDIR: path.join(paths.cacheRoot, "matplotlib"),
-    TMP: path.join(paths.cacheRoot, "tmp"),
-    TEMP: path.join(paths.cacheRoot, "tmp"),
-  };
+    ...buildCacheEnvPaths(paths.cacheRoot),
+  });
   for (const [key, value] of Object.entries(managed)) {
-    ensureDirSync(value);
     process.env[key] = value;
   }
   return {
@@ -587,6 +1042,8 @@ function buildManagedAiEnv() {
     EDMG_AI_OLLAMA_MODEL: aiSettings.ollamaModel,
     EDMG_AI_OPENAI_COMPAT_BASE_URL: aiSettings.openaiCompatBaseUrl,
     EDMG_AI_OPENAI_COMPAT_MODEL: aiSettings.openaiCompatModel,
+    EDMG_AI_NVIDIA_BASE_URL: aiSettings.nvidiaBaseUrl,
+    EDMG_AI_NVIDIA_MODEL: aiSettings.nvidiaModel,
   };
 }
 
@@ -914,6 +1371,7 @@ const backendRuntime = createBackendRuntime({
   isWindows: IS_WINDOWS,
   backendHost: BACKEND_HOST,
   backendPort: BACKEND_PORT,
+  backendUrl: BACKEND_URL,
   backendReadyTimeoutMs: BACKEND_READY_TIMEOUT_MS,
   testMode: TEST_MODE,
   pathExistsSync,
@@ -922,6 +1380,24 @@ const backendRuntime = createBackendRuntime({
   getStudioPaths,
   buildManagedStudioEnv,
   buildManagedAiEnv,
+  isDev: IS_DEV,
+  devServerUrl: DEV_SERVER_URL,
+});
+
+const directorRuntime = createDirectorRuntime({
+  app,
+  rootDir: __dirname,
+  isWindows: IS_WINDOWS,
+  directorHost: DIRECTOR_HOST,
+  directorPort: DIRECTOR_PORT,
+  directorPublicBaseUrl: DIRECTOR_PUBLIC_BASE_URL,
+  directorReadyTimeoutMs: DIRECTOR_READY_TIMEOUT_MS,
+  spawnDirector: SHOULD_SPAWN_DIRECTOR,
+  pathExistsSync,
+  ensureDirSync,
+  safeStreamWrite,
+  getStudioPaths,
+  getBackendUrl: () => backendRuntime.getCurrentBackendUrl(),
 });
 
 const windowRuntime = createWindowRuntime({
@@ -933,6 +1409,7 @@ const windowRuntime = createWindowRuntime({
   devServerUrl: DEV_SERVER_URL,
   backendHost: BACKEND_HOST,
   backendPort: BACKEND_PORT,
+  backendUrl: BACKEND_URL,
   testMode: TEST_MODE,
   testPage: TEST_PAGE,
   testReportPath: TEST_REPORT_PATH,
@@ -948,6 +1425,19 @@ console.log(`EDMG_currentBackendUrl=${backendRuntime.getCurrentBackendUrl()}`);
 
 function registerIpcHandlers() {
   ipcMain.handle("edmg:getBackendUrl", async () => backendRuntime.getCurrentBackendUrl());
+  ipcMain.handle("edmg:getBackendAuthToken", async () => {
+    const result = readBackendAuthToken();
+    return { ok: true, configured: !!result.token, ...result };
+  });
+  ipcMain.handle("edmg:setBackendAuthToken", async (_event, token = "") =>
+    writeBackendAuthToken(token),
+  );
+  ipcMain.handle("edmg:getBackendSettings", async () => ({
+    ok: true,
+    ...getConfiguredBackendSettings(),
+    currentBackendUrl: backendRuntime.getCurrentBackendUrl(),
+  }));
+  ipcMain.handle("edmg:getDirectorStatus", async () => directorRuntime.getDirectorStatus());
   ipcMain.handle("edmg:getStudioPaths", async () => ({ ok: true, ...getStudioPaths() }));
   ipcMain.handle("edmg:getAiSettings", async () => ({ ok: true, ...getConfiguredAiSettings() }));
 
@@ -1027,12 +1517,61 @@ function registerIpcHandlers() {
       EDMG_AI_OLLAMA_MODEL: aiSettings.ollamaModel,
       EDMG_AI_OPENAI_COMPAT_BASE_URL: aiSettings.openaiCompatBaseUrl,
       EDMG_AI_OPENAI_COMPAT_MODEL: aiSettings.openaiCompatModel,
+      EDMG_AI_NVIDIA_BASE_URL: aiSettings.nvidiaBaseUrl,
+      EDMG_AI_NVIDIA_MODEL: aiSettings.nvidiaModel,
     });
 
     return {
       ok: true,
       restartRequired: true,
       ...aiSettings,
+    };
+  });
+
+  ipcMain.handle("edmg:setBackendSettings", async (_event, nextSettings = {}) => {
+    const backendSettings = syncBackendSettingsToProcessEnv(nextSettings);
+    const nextConfig = {
+      ...readBootstrapConfig(),
+      backendSettings,
+      updatedAt: new Date().toISOString(),
+    };
+    writeBootstrapConfig(nextConfig);
+    writeLauncherEnv({
+      ...readLauncherEnv(),
+      EDMG_STUDIO_BACKEND_MODE: backendSettings.mode,
+      EDMG_STUDIO_BACKEND_HOST: backendSettings.host,
+      EDMG_STUDIO_BACKEND_PORT: backendSettings.port,
+      EDMG_STUDIO_BACKEND_URL: backendSettings.url,
+      EDMG_STUDIO_SPAWN_BACKEND: backendSettings.mode === "external" ? "0" : "1",
+    });
+
+    return {
+      ok: true,
+      restartRequired: true,
+      currentBackendUrl: backendRuntime.getCurrentBackendUrl(),
+      ...backendSettings,
+    };
+  });
+
+  ipcMain.handle("edmg:setDirectorSettings", async (_event, nextSettings = {}) => {
+    const directorSettings = syncDirectorSettingsToProcessEnv(nextSettings);
+    const nextConfig = {
+      ...readBootstrapConfig(),
+      directorSettings,
+      updatedAt: new Date().toISOString(),
+    };
+    writeBootstrapConfig(nextConfig);
+    writeLauncherEnv({
+      ...readLauncherEnv(),
+      EDMG_DIRECTOR_BASE_URL: directorSettings.baseUrl,
+    });
+    await directorRuntime.restartDirector({
+      directorPublicBaseUrl: directorSettings.baseUrl,
+    });
+    const status = await directorRuntime.getDirectorStatus();
+    return {
+      ...status,
+      restartRequired: false,
     };
   });
 
@@ -1131,6 +1670,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  directorRuntime.stopDirector();
   backendRuntime.stopBackend();
 });
 
@@ -1152,6 +1692,8 @@ app.whenReady().then(async () => {
   appendTestTrace("app.whenReady:afterRegisterIpc");
   await backendRuntime.startBackendIfNeeded();
   appendTestTrace("app.whenReady:afterStartBackend");
+  await directorRuntime.startDirectorIfNeeded();
+  appendTestTrace("app.whenReady:afterStartDirector");
   await windowRuntime.createMainWindow();
   appendTestTrace("app.whenReady:afterCreateMainWindow");
 }).catch((error) => {

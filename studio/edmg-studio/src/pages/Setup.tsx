@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
+import { getDesktopPlatformKind, type DesktopPlatformKind } from "../components/desktopArtifacts";
 
 type StorageDraft = {
   studioHome: string;
@@ -18,6 +19,45 @@ const EMPTY_STORAGE_DRAFT: StorageDraft = {
   logsDir: "",
   externalDir: "",
 };
+
+type StorageFieldConfig = {
+  key: keyof StorageDraft;
+  label: string;
+  placeholder: string;
+};
+
+function normalizePlatformKind(rawPlatform: unknown): DesktopPlatformKind {
+  const value = String(rawPlatform ?? "").trim().toLowerCase();
+  if (value.includes("win")) return "windows";
+  if (value.includes("darwin") || value.includes("mac")) return "mac";
+  if (value.includes("linux")) return "linux";
+  return getDesktopPlatformKind();
+}
+
+function joinStoragePath(basePath: string, segment: string, platformKind: DesktopPlatformKind): string {
+  const base = String(basePath || "").trim();
+  if (!base) return "";
+  const separator = platformKind === "windows" ? "\\" : "/";
+  const normalizedBase = base.replace(/[\\/]+$/, "");
+  const normalizedSegment = String(segment || "").trim().replace(/^[\\/]+|[\\/]+$/g, "");
+  return normalizedSegment ? `${normalizedBase}${separator}${normalizedSegment}` : normalizedBase;
+}
+
+function getStorageFieldConfigs(platformKind: DesktopPlatformKind): StorageFieldConfig[] {
+  const homePlaceholder = platformKind === "windows"
+    ? "D:\\EDMG-Studio"
+    : platformKind === "mac"
+      ? "/Users/tyler/EDMG-Studio"
+      : "/home/tyler/EDMG-Studio";
+  return [
+    { key: "studioHome", label: "Studio home", placeholder: homePlaceholder },
+    { key: "dataDir", label: "Project data", placeholder: joinStoragePath(homePlaceholder, "data", platformKind) },
+    { key: "modelsDir", label: "Models", placeholder: joinStoragePath(homePlaceholder, "models", platformKind) },
+    { key: "cacheRoot", label: "Shared cache", placeholder: joinStoragePath(homePlaceholder, "cache", platformKind) },
+    { key: "logsDir", label: "Logs", placeholder: joinStoragePath(homePlaceholder, "logs", platformKind) },
+    { key: "externalDir", label: "External tools", placeholder: joinStoragePath(homePlaceholder, "external", platformKind) },
+  ];
+}
 
 function Badge({ ok, label }: { ok: boolean; label: string }) {
   return (
@@ -79,7 +119,8 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     const t = setInterval(refresh, 2000);
     return () => clearInterval(t);
   }, []);
-async function run(action: string, path: string, body: any = {}) {
+
+  async function run(action: string, path: string, body: any = {}) {
     setBusy(action);
     setErr("");
     try {
@@ -92,12 +133,27 @@ async function run(action: string, path: string, body: any = {}) {
     }
   }
 
+  async function cancelTask(taskId: string) {
+    setBusy(`cancel_${taskId}`);
+    setErr("");
+    try {
+      await apiPost(`/v1/setup/tasks/${taskId}/cancel`, {});
+      await refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy("");
+    }
+  }
+
   const ollamaOk = !!status?.ollama?.ok;
   const modelOk = !!status?.ollama?.model_present;
   const comfyOk = !!status?.comfyui?.ok;
   const ffOk = !!status?.ffmpeg?.ok;
-  const backendBundleOk = !!status?.backend_bundle?.ok;
-  const backendBundleDirectmlOk = !!status?.backend_bundle_directml?.ok;
+  const toolchain = status?.toolchain ?? status?.backend_bundle ?? null;
+  const toolchainOk = !!toolchain?.ok;
+  const toolchainImmutable = !!toolchain?.immutable;
+  const acceleratorProfile = String(toolchain?.accelerator_profile ?? toolchain?.profile ?? "cpu");
   const edmgOk = !!status?.edmg?.available;
   const sevenOk = !!status?.sevenzip?.ok;
   const aiConfig = status?.ai_config ?? null;
@@ -105,7 +161,21 @@ async function run(action: string, path: string, body: any = {}) {
   const aiLabel = String(aiConfig?.label ?? "Local Ollama");
   const ollamaRequired = !!aiConfig?.ollama_required;
   const modelRequired = !!aiConfig?.model_required;
-  const fullSetupReady = backendBundleOk && sevenOk && comfyOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
+  const platformKind = normalizePlatformKind(studioPaths?.platform);
+  const isWindows = platformKind === "windows";
+  const isLinux = platformKind === "linux";
+  const managedSetupSupported = isWindows || isLinux;
+  const ollamaDownloadUrl = isWindows
+    ? "https://ollama.com/download/windows"
+    : platformKind === "linux"
+      ? "https://ollama.com/download/linux"
+      : "https://ollama.com/download";
+  const comfyDocsUrl = isWindows
+    ? "https://docs.comfy.org/installation/comfyui_portable_windows"
+    : "https://docs.comfy.org/";
+  const storageFieldConfigs = getStorageFieldConfigs(platformKind);
+  const setupReady = toolchainOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
+  const fullSetupReady = managedSetupSupported && setupReady && (isWindows ? sevenOk : true);
 
   function deriveStorageLayout(studioHome: string): StorageDraft {
     const home = String(studioHome || "").trim();
@@ -117,11 +187,11 @@ async function run(action: string, path: string, body: any = {}) {
     }
     return {
       studioHome: home,
-      dataDir: `${home}\\data`,
-      modelsDir: `${home}\\models`,
-      cacheRoot: `${home}\\cache`,
-      logsDir: `${home}\\logs`,
-      externalDir: `${home}\\external`,
+      dataDir: joinStoragePath(home, "data", platformKind),
+      modelsDir: joinStoragePath(home, "models", platformKind),
+      cacheRoot: joinStoragePath(home, "cache", platformKind),
+      logsDir: joinStoragePath(home, "logs", platformKind),
+      externalDir: joinStoragePath(home, "external", platformKind),
     };
   }
 
@@ -286,7 +356,7 @@ async function run(action: string, path: string, body: any = {}) {
             />
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            Set this before running Full Setup if you want Studio projects, model downloads, caches, logs, and external tools like ComfyUI Portable to stay on <code>D:\...</code> instead of silently filling <code>C:\</code>.
+            Set this before installing runtimes or model packs if you want Studio projects, model downloads, caches, logs, and external tools to stay under one root instead of filling the default system drive.
           </div>
           {storageCustomLabels.length ? (
             <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>
@@ -294,14 +364,7 @@ async function run(action: string, path: string, body: any = {}) {
             </div>
           ) : null}
           <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-            {[
-              { key: "studioHome", label: "Studio home", placeholder: "D:\\EDMG-Studio" },
-              { key: "dataDir", label: "Project data", placeholder: "D:\\EDMG-Studio\\data" },
-              { key: "modelsDir", label: "Models", placeholder: "D:\\EDMG-Studio\\models" },
-              { key: "cacheRoot", label: "Shared cache", placeholder: "D:\\EDMG-Studio\\cache" },
-              { key: "logsDir", label: "Logs", placeholder: "D:\\EDMG-Studio\\logs" },
-              { key: "externalDir", label: "External tools", placeholder: "D:\\EDMG-Studio\\external" },
-            ].map((field) => (
+            {storageFieldConfigs.map((field) => (
               <div key={field.key} style={{ display: "grid", gridTemplateColumns: "140px 1fr auto", gap: 8, alignItems: "center" }}>
                 <div className="small" style={{ fontWeight: 800 }}>{field.label}</div>
                 <input
@@ -359,13 +422,23 @@ async function run(action: string, path: string, body: any = {}) {
 
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-    <div style={{ fontWeight: 800 }}>0) Full System Setup (One-Click)</div>
-    <Badge ok={fullSetupReady} label={fullSetupReady ? "Ready" : "Setup"} />
+    <div style={{ fontWeight: 800 }}>{managedSetupSupported ? "0) Full System Setup (One-Click)" : "0) System Setup"}</div>
+    <Badge ok={managedSetupSupported ? fullSetupReady : setupReady} label={managedSetupSupported ? (fullSetupReady ? "Ready" : "Setup") : (setupReady ? "Ready" : "Manual")} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    {ollamaRequired
-      ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → managed Ollama install → pull model → ComfyUI Portable install + start."
-      : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → ComfyUI Portable install + start. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`}
+    {isWindows ? (
+      ollamaRequired
+      ? "Runs the full installer pipeline: frozen backend profile → 7-Zip (if needed) → managed Ollama install → pull model → optional ComfyUI Portable install + start for alternate still/motion workflows."
+      : `Runs the full installer pipeline: frozen backend profile → 7-Zip (if needed) → optional ComfyUI Portable install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
+    ) : isLinux ? (
+      ollamaRequired
+        ? "Runs the Linux setup pipeline: frozen backend profile → Ollama sidecar setup → pull model → optional ComfyUI sidecar install + start for alternate still/motion workflows."
+        : `Runs the Linux setup pipeline: frozen backend profile → optional ComfyUI sidecar install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
+    ) : (
+      ollamaRequired
+        ? "macOS uses the manual setup path: synchronize the locked CPU backend profile here, install Ollama system-wide if needed, pull the configured model, and run a local ComfyUI instance only if you want the optional ComfyUI workflows."
+        : `macOS uses the manual setup path: synchronize the locked CPU backend profile here and add ComfyUI only if you want the optional ComfyUI workflows. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
+    )}
   </div>
   <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
     Active AI path: <b>{aiLabel}</b>
@@ -374,24 +447,59 @@ async function run(action: string, path: string, body: any = {}) {
     {aiConfig?.provider === "openai_compat" ? <> • API key <b>{aiConfig?.openai_compat_api_key_configured ? "saved" : "not saved"}</b></> : null}
   </div>
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-    <button
-      disabled={busy === "full_cpu"}
-      onClick={() => run("full_cpu", "/v1/setup/full/install", { flavor: "cpu" })}
-    >
-      {busy === "full_cpu" ? "Running…" : "Full Setup (CPU)"}
-    </button>
-    <button
-      disabled={busy === "full_nvidia"}
-      onClick={() => run("full_nvidia", "/v1/setup/full/install", { flavor: "nvidia" })}
-    >
-      {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
-    </button>
-    <button
-      disabled={busy === "full_amd"}
-      onClick={() => run("full_amd", "/v1/setup/full/install", { flavor: "amd", bundle: "studio_bundle_directml" })}
-    >
-      {busy === "full_amd" ? "Running…" : "Full Setup (AMD / DirectML)"}
-    </button>
+    {toolchainImmutable ? (
+      <button
+        disabled={!managedSetupSupported || !toolchainOk || busy === "full_packaged"}
+        onClick={() => run("full_packaged", "/v1/setup/full/install", { accelerator_profile: acceleratorProfile })}
+      >
+        {busy === "full_packaged" ? "Running…" : `Complete External Setup (${acceleratorProfile.toUpperCase()} build)`}
+      </button>
+    ) : isWindows ? (
+      <>
+        <button
+          disabled={busy === "full_cpu"}
+          onClick={() => run("full_cpu", "/v1/setup/full/install", { accelerator_profile: "cpu" })}
+        >
+          {busy === "full_cpu" ? "Running…" : "Full Setup (CPU profile)"}
+        </button>
+        <button
+          disabled={busy === "full_nvidia"}
+          onClick={() => run("full_nvidia", "/v1/setup/full/install", { accelerator_profile: "cuda" })}
+        >
+          {busy === "full_nvidia" ? "Running…" : "Full Setup (CUDA profile)"}
+        </button>
+        <button
+          disabled={busy === "full_amd"}
+          onClick={() => run("full_amd", "/v1/setup/full/install", { accelerator_profile: "directml" })}
+        >
+          {busy === "full_amd" ? "Running…" : "Full Setup (DirectML profile)"}
+        </button>
+      </>
+    ) : isLinux ? (
+      <>
+        <button
+          disabled={busy === "full_cpu"}
+          onClick={() => run("full_cpu", "/v1/setup/full/install", { accelerator_profile: "cpu" })}
+        >
+          {busy === "full_cpu" ? "Running…" : "Full Setup (CPU profile)"}
+        </button>
+        <button
+          disabled={busy === "full_nvidia"}
+          onClick={() => run("full_nvidia", "/v1/setup/full/install", { accelerator_profile: "cuda" })}
+        >
+          {busy === "full_nvidia" ? "Running…" : "Full Setup (CUDA profile)"}
+        </button>
+      </>
+    ) : (
+      <>
+        <button className="secondary" onClick={() => window.edmg?.openExternal?.(ollamaDownloadUrl)}>
+          Open Ollama Install Guide
+        </button>
+        <button className="secondary" onClick={() => window.edmg?.openExternal?.(comfyDocsUrl)}>
+          Open ComfyUI Docs
+        </button>
+      </>
+    )}
     {onNavigate ? (
       <button className="secondary" onClick={() => onNavigate("settings")}>
         Open AI Settings
@@ -402,69 +510,105 @@ async function run(action: string, path: string, body: any = {}) {
 
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-    <div style={{ fontWeight: 800 }}>0.25) Backend Runtime Bundle</div>
-    <Badge ok={backendBundleOk} label={backendBundleOk ? "OK" : "Missing"} />
+    <div style={{ fontWeight: 800 }}>0.25) Locked Python Toolchain</div>
+    <Badge
+      ok={toolchainOk}
+      label={toolchainImmutable ? (toolchainOk ? "Bundled" : "Invalid build") : (toolchainOk ? "Synchronized" : "Needs sync")}
+    />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    Installs the backend audio, ASR, and internal-render Python dependencies into the Studio backend environment.
+    {toolchainImmutable
+      ? "This installed application already contains its Python runtime and locked dependencies. You do not need to install Python or uv."
+      : "Source checkouts synchronize one exact accelerator profile from the committed uv.lock. Profile dependencies and PyTorch indexes are fixed by the project; Setup never resolves a wheel channel dynamically."}
   </div>
-  <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
-    DirectML available on this machine: <b>{directmlAvailable ? "yes" : "no"}</b>
-    {status?.hardware?.directml_device_name ? <> • device <code>{status.hardware.directml_device_name}</code></> : null}
-  </div>
-  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-    <button
-      disabled={busy === "backend_bundle"}
-      onClick={() => run("backend_bundle", "/v1/setup/backend/install", { bundle: "studio_bundle" })}
-    >
-      {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime"}
-    </button>
-    <button
-      disabled={busy === "backend_bundle_directml"}
-      onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml" })}
-    >
-      {busy === "backend_bundle_directml" ? "Installing…" : "Install AMD / DirectML Runtime"}
-    </button>
-  </div>
-  {!backendBundleOk && status?.backend_bundle?.hint && (
-    <div className="small" style={{ marginTop: 10 }}>
-      Fix: {status.backend_bundle.hint}
+  {isWindows ? (
+    <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+      DirectML available on this machine: <b>{directmlAvailable ? "yes" : "no"}</b>
+      {status?.hardware?.directml_device_name ? <> • device <code>{status.hardware.directml_device_name}</code></> : null}
+    </div>
+  ) : isLinux ? (
+    <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+      Linux supports the locked CPU and CUDA profiles. DirectML remains Windows-only.
+    </div>
+  ) : (
+    <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+      This platform uses the locked CPU profile. DirectML remains Windows-only.
     </div>
   )}
-  {!!status?.backend_bundle?.missing?.length && (
-    <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
-      Missing modules: <code>{status.backend_bundle.missing.join(", ")}</code>
+  <div className="small" style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 8 }}>
+    <div>Python: <code>{toolchain?.python_version || "unavailable"}</code></div>
+    <div>uv: <code>{toolchain?.uv_version || "unavailable"}</code></div>
+    <div>Accelerator profile: <code>{acceleratorProfile}</code></div>
+    <div>Lock check: <b>{toolchain?.lock_check || "unknown"}</b></div>
+    <div>Sync health: <b>{toolchain?.sync_health || "unknown"}</b></div>
+    <div>PyInstaller: <code>{toolchain?.pyinstaller_version || "not installed in this environment"}</code></div>
+    <div style={{ gridColumn: "1 / -1", overflowWrap: "anywhere" }}>
+      uv.lock SHA-256: <code>{toolchain?.lock_sha256 || "unavailable"}</code>
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+      Torch packages:{" "}
+      {(toolchain?.torch_packages ?? []).length
+        ? (toolchain.torch_packages as any[]).map((item: any) => `${item.name} ${item.version || "missing"}`).join(" • ")
+        : "not recorded"}
+    </div>
+    <div style={{ gridColumn: "1 / -1", overflowWrap: "anywhere" }}>
+      Torch index: <code>{toolchain?.torch_index || "unavailable"}</code>
+    </div>
+  </div>
+  {!toolchainImmutable ? (
+    <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <button
+        disabled={busy === "backend_profile_cpu"}
+        onClick={() => run("backend_profile_cpu", "/v1/setup/backend/install", { accelerator_profile: "cpu" })}
+      >
+        {busy === "backend_profile_cpu" ? "Synchronizing…" : "Sync CPU profile"}
+      </button>
+      {(isWindows || isLinux) ? (
+        <button
+          disabled={busy === "backend_profile_cuda"}
+          onClick={() => run("backend_profile_cuda", "/v1/setup/backend/install", { accelerator_profile: "cuda" })}
+        >
+          {busy === "backend_profile_cuda" ? "Synchronizing…" : "Sync CUDA profile"}
+        </button>
+      ) : null}
+      {isWindows ? (
+        <button
+          disabled={busy === "backend_profile_directml"}
+          onClick={() => run("backend_profile_directml", "/v1/setup/backend/install", { accelerator_profile: "directml" })}
+        >
+          {busy === "backend_profile_directml" ? "Synchronizing…" : "Sync DirectML profile"}
+        </button>
+      ) : null}
+    </div>
+  ) : null}
+  {!toolchainOk && toolchain?.hint && (
+    <div className="small" style={{ marginTop: 10 }}>
+      Fix: {toolchain.hint}
     </div>
   )}
-  {!backendBundleDirectmlOk && status?.backend_bundle_directml?.hint ? (
-    <div className="small" style={{ marginTop: 10 }}>
-      DirectML fix: {status.backend_bundle_directml.hint}
-    </div>
-  ) : null}
-  {!!status?.backend_bundle_directml?.missing?.length ? (
-    <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
-      DirectML modules: <code>{status.backend_bundle_directml.missing.join(", ")}</code>
-    </div>
-  ) : null}
 </div>
 
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
     <div style={{ fontWeight: 800 }}>0.5) 7-Zip (Extractor)</div>
-    <Badge ok={sevenOk} label={sevenOk ? "OK" : "Missing"} />
+    <Badge ok={sevenOk} label={isWindows ? (sevenOk ? "OK" : "Missing") : "Optional"} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    Required to extract some .7z archives (BCJ2), including some ComfyUI Portable releases. Studio now keeps the portable CLI under your External tools root.
+    {isWindows
+      ? "Required to extract some .7z archives (BCJ2), including some ComfyUI Portable releases. Studio now keeps the portable CLI under your External tools root."
+      : "Only needed for the Windows ComfyUI Portable workflow. Linux and macOS users can skip this and install ComfyUI manually."}
   </div>
-  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-    <button
-      disabled={busy === "sevenzip"}
-      onClick={() => run("sevenzip", "/v1/setup/7zip/install", {})}
-    >
-      {busy === "sevenzip" ? "Downloading…" : "Download Portable 7-Zip"}
-    </button>
-  </div>
-  {!sevenOk && status?.sevenzip?.hint && (
+  {isWindows ? (
+    <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <button
+        disabled={busy === "sevenzip"}
+        onClick={() => run("sevenzip", "/v1/setup/7zip/install", {})}
+      >
+        {busy === "sevenzip" ? "Downloading…" : "Download Portable 7-Zip"}
+      </button>
+    </div>
+  ) : null}
+  {isWindows && !sevenOk && status?.sevenzip?.hint && (
     <div className="small" style={{ marginTop: 10 }}>
       Fix: {status.sevenzip.hint}
     </div>
@@ -485,18 +629,27 @@ async function run(action: string, path: string, body: any = {}) {
           <div className="small" style={{ marginTop: 6, opacity: 0.9 }}>
             Studio-managed Ollama models live under <code>{status?.ollama?.managed_models_dir ?? "(set your Models path first)"}</code>.
           </div>
+          {isLinux ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+              Linux setup uses Studio&apos;s bundled sidecar script to install or start Ollama, keep models under the Studio models root, and write the launch helper.
+            </div>
+          ) : !isWindows ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+              macOS support expects a system-installed <code>ollama</code> binary or a custom <code>EDMG_OLLAMA_PATH</code>.
+            </div>
+          ) : null}
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="secondary"
-              onClick={() => window.edmg?.openExternal?.("https://ollama.com/download/windows")}
+              onClick={() => window.edmg?.openExternal?.(ollamaDownloadUrl)}
             >
               Open Ollama Download Page
             </button>
             <button
-              disabled={busy === "ollama"}
+              disabled={!managedSetupSupported || busy === "ollama"}
               onClick={() => run("ollama", "/v1/setup/ollama/install_managed", {})}
             >
-              {busy === "ollama" ? "Installing…" : "Install Ollama Into External Tools"}
+              {busy === "ollama" ? "Installing…" : (isWindows ? "Install Ollama Into External Tools" : isLinux ? "Install/Start Ollama Sidecar" : "Manual Install")}
             </button>
             <button
               className="secondary"
@@ -558,13 +711,27 @@ async function run(action: string, path: string, body: any = {}) {
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
                 {status.tasks.slice(0, 5).map((t: any) => (
                   <div key={t.id} style={{ padding: 8, borderRadius: 10, background: "#121422", border: "1px solid #22263a" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
                       <div style={{ fontWeight: 700 }}>{t.name}</div>
-                      <div className="small">{t.status}{t.progress != null ? ` • ${Math.round(t.progress * 100)}%` : ""}</div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        <div className="small">{t.status}{t.progress != null ? ` • ${Math.round(t.progress * 100)}%` : ""}</div>
+                        {(t.status === "queued" || t.status === "running") ? (
+                          <button
+                            className="secondary"
+                            disabled={busy === `cancel_${t.id}` || !!t.cancel_requested}
+                            onClick={() => void cancelTask(t.id)}
+                          >
+                            {(busy === `cancel_${t.id}` || t.cancel_requested) ? "Canceling…" : "Cancel"}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                     {t.last_log && (
                       <div className="small" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{t.last_log}</div>
                     )}
+                    {t.error ? (
+                      <div className="small" style={{ marginTop: 6, color: "#ffb7b7", whiteSpace: "pre-wrap" }}>{t.error}</div>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -574,37 +741,64 @@ async function run(action: string, path: string, body: any = {}) {
 
         <div className="card">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 800 }}>3) ComfyUI (Video generation)</div>
-            <Badge ok={comfyOk} label={comfyOk ? "OK" : "Missing"} />
+            <div style={{ fontWeight: 800 }}>3) ComfyUI (Optional still/motion engine)</div>
+            <Badge ok={comfyOk} label={comfyOk ? "Available" : "Optional"} />
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            EDMG talks to ComfyUI at <code>{status?.comfyui?.url ?? "http://127.0.0.1:8188"}</code>.
+            Studio's internal renderer is the default path. EDMG can also talk to ComfyUI at <code>{status?.comfyui?.url ?? "http://127.0.0.1:8188"}</code> when you want alternate still or motion workflows.
           </div>
+          <div className="small" style={{ marginTop: 10, opacity: 0.92 }}>
+            To make ComfyUI actually show up inside Studio, four things have to line up in order:
+          </div>
+          <ol className="small" style={{ marginTop: 8, paddingLeft: 18, display: "grid", gap: 6, opacity: 0.9 }}>
+            <li>Setup must install or point Studio at a live ComfyUI server.</li>
+            <li>Models must include a checkpoint or workflow family that uses the <code>ComfyUI</code> engine rather than the internal engine.</li>
+            <li>Render or Timeline only exposes ComfyUI-specific paths when that ComfyUI model is selected for the job.</li>
+            <li>If nothing changes in Render, the usual cause is that ComfyUI is not running, the selected model is still an internal model, or the required workflow or ControlNet assets are not installed yet.</li>
+          </ol>
+          <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+            In other words, installing ComfyUI alone does not switch the product over. It only adds an alternate engine path that becomes available when the active render model is ComfyUI-backed.
+          </div>
+          {isLinux ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+              Linux setup uses Studio&apos;s bundled ComfyUI sidecar script and can install or start the CPU/NVIDIA paths from this wizard.
+            </div>
+          ) : !isWindows ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
+              macOS support uses a manually installed ComfyUI instance. Start it yourself only if you want those optional workflows, and keep <code>EDMG_COMFYUI_URL</code> pointed at the running server.
+            </div>
+          ) : null}
 
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="secondary"
-              onClick={() => window.edmg?.openExternal?.("https://docs.comfy.org/installation/comfyui_portable_windows")}
+              onClick={() => window.edmg?.openExternal?.(comfyDocsUrl)}
             >
-              Open ComfyUI Portable Guide
+              {isWindows ? "Open ComfyUI Portable Guide" : "Open ComfyUI Docs"}
             </button>
             <button
-              disabled={busy === "comfyui"}
+              disabled={!managedSetupSupported || busy === "comfyui"}
               onClick={() => run("comfyui", "/v1/setup/comfyui/portable/install", { flavor: "cpu" })}
             >
-              {busy === "comfyui" ? "Working…" : "Install ComfyUI Portable (CPU)"}
+              {busy === "comfyui" ? "Working…" : (isWindows ? "Install ComfyUI Portable (CPU)" : isLinux ? "Install ComfyUI Sidecar (CPU)" : "Manual Install")}
             </button>
             <button
-              disabled={busy === "comfyui_n"}
+              disabled={!managedSetupSupported || busy === "comfyui_n"}
               onClick={() => run("comfyui_n", "/v1/setup/comfyui/portable/install", { flavor: "nvidia" })}
             >
-              {busy === "comfyui_n" ? "Working…" : "Install ComfyUI Portable (NVIDIA)"}
+              {busy === "comfyui_n" ? "Working…" : (isWindows ? "Install ComfyUI Portable (NVIDIA)" : isLinux ? "Install ComfyUI Sidecar (NVIDIA)" : "Manual Install")}
             </button>
             <button
-              disabled={busy === "start_comfy"}
+              disabled={!managedSetupSupported || busy === "start_comfy"}
               onClick={() => run("start_comfy", "/v1/setup/comfyui/portable/start", { flavor: "cpu" })}
             >
               {busy === "start_comfy" ? "Starting…" : "Start ComfyUI (CPU)"}
+            </button>
+            <button
+              disabled={!managedSetupSupported || busy === "start_comfy_n"}
+              onClick={() => run("start_comfy_n", "/v1/setup/comfyui/portable/start", { flavor: "nvidia" })}
+            >
+              {busy === "start_comfy_n" ? "Starting…" : "Start ComfyUI (NVIDIA)"}
             </button>
           </div>
 
@@ -645,7 +839,7 @@ async function run(action: string, path: string, body: any = {}) {
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               disabled={busy === "install_edmg"}
-              onClick={() => run("install_edmg", "/v1/setup/edmg/install", { mode: "standard", backend: "cpu" })}
+              onClick={() => run("install_edmg", "/v1/setup/edmg/install", { mode: "standard", backend: acceleratorProfile })}
             >
               {busy === "install_edmg" ? "Installing…" : (edmgOk ? "Repair EDMG Core" : "Install EDMG Core")}
             </button>
@@ -739,11 +933,13 @@ async function run(action: string, path: string, body: any = {}) {
         <div className="card">
           <div style={{ fontWeight: 800 }}>Ready check</div>
           <div className="small" style={{ marginTop: 6 }}>
-            When the backend runtime bundle + Ollama + a model + ComfyUI + FFmpeg are all OK, EDMG Studio is ready to generate. EDMG Core is optional but recommended for the fully unified workflow.
+            {ollamaRequired
+              ? "When the locked Python toolchain + Ollama + a model + FFmpeg are all OK, EDMG Studio is ready for the default internal-render workflow. ComfyUI remains optional for alternate still/motion paths. EDMG Core is optional but recommended for the fully unified workflow."
+              : "When the locked Python toolchain + your active AI provider + FFmpeg are all OK, EDMG Studio is ready for the default internal-render workflow. ComfyUI remains optional for alternate still/motion paths. EDMG Core is optional but recommended for the fully unified workflow."}
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
             <button
-              disabled={!(backendBundleOk && ollamaOk && modelOk && comfyOk && ffOk)}
+              disabled={!setupReady}
               onClick={() => onNavigate?.("workspace")}
             >
               Go to Workspace

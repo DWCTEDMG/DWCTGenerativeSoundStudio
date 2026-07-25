@@ -30,6 +30,10 @@ EDMG's workflows and keeps the project runnable in CPU-only environments.
 If you *explicitly* want to force system librosa (and accept import errors),
 set:
     EDMG_PREFER_SYSTEM_LIBROSA=1
+
+This repo-root shim exists for source-tree compatibility and tests. The packaged
+Studio backend should use the declared `librosa` dependency instead of relying
+on this module being on `sys.path`.
 """
 
 from __future__ import annotations

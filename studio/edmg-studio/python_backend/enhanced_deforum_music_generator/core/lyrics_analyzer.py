@@ -289,10 +289,12 @@ class LyricAnalyzer:
         
         # Initialize Whisper model if available
         self.whisper_model = None
-        if WHISPER_AVAILABLE and config.enable_transcription:
+        enable_transcription = bool(getattr(config, "enable_transcription", True))
+        model_name = str(getattr(config, "whisper_model_size", getattr(config, "model", "base")) or "base")
+        if WHISPER_AVAILABLE and enable_transcription:
             try:
-                self.whisper_model = whisper.load_model(config.whisper_model_size)
-                print(f"Whisper model '{config.whisper_model_size}' loaded")
+                self.whisper_model = whisper.load_model(model_name)
+                print(f"Whisper model '{model_name}' loaded")
             except Exception as e:
                 print(f"Whisper initialization failed: {e}")
     
@@ -346,15 +348,18 @@ class LyricAnalyzer:
             return ""
         
         try:
-            # Limit transcription duration for performance
-            max_duration = min(self.config.max_transcription_duration, 300)
-            
+            transcribe_kwargs = {
+                "word_timestamps": False,
+                "condition_on_previous_text": False,
+                "no_speech_threshold": 0.6,
+                "logprob_threshold": -1.0,
+            }
+            language = getattr(self.config, "language", None)
+            if language:
+                transcribe_kwargs["language"] = language
             result = self.whisper_model.transcribe(
                 audio_file,
-                word_timestamps=False,
-                condition_on_previous_text=False,
-                no_speech_threshold=0.6,
-                logprob_threshold=-1.0
+                **transcribe_kwargs,
             )
             
             transcript = result.get("text", "").strip()

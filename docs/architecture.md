@@ -8,11 +8,13 @@
 ## High-level components
 ### Desktop App (Node/TS)
 - Package root: `studio/edmg-studio/`
-- Typecheck: `npm run typecheck`
-- Dev: `npm run dev`
+- Package manager: `pnpm@10.33.0` via `packageManager`
+- Typecheck: `pnpm run typecheck`
+- Dev: `pnpm run dev`
 
 ### Python Backend (FastAPI)
-- Run: `edmg-studio-backend serve --host 127.0.0.1 --port 7863`
+- Toolchain: Python 3.12 and uv 0.11.28 with committed `uv.lock`
+- Run: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863`
 - `edmg_studio_backend/app.py` sets up routes + exception handlers
 - `edmg_studio_backend/errors.py` defines user-facing error model
 - Logging via `enhanced_deforum_music_generator/utils/logging_utils.py`
@@ -37,5 +39,8 @@
 - Avoid printing secrets/tokens/API keys
 
 ## Testing
-- Python: `python -m pytest enhanced_deforum_music_generator/tests` after `pip install -e ".[studio_bundle,test]"`
+- Check the backend lock before synchronization: `uv lock --project studio/edmg-studio/python_backend --check`.
+- Combined Python scope from the repo root: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`.
+- CI, cloud bootstraps, and release builds consume the same frozen project; see
+  [`PYTHON_TOOLCHAIN.md`](PYTHON_TOOLCHAIN.md).
 - Node/TS: Vitest + jsdom smoke tests under `studio/edmg-studio/src/test`

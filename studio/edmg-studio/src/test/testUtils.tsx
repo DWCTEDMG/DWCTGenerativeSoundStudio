@@ -1,7 +1,9 @@
 import React from "react";
 import { render } from "@testing-library/react";
 import { vi } from "vitest";
+import { StudioAppearanceProvider } from "../components/studioAppearance";
 import { UiModeProvider } from "../components/uiMode";
+import { StudioSessionProvider } from "../components/studioSession";
 
 type MockRouteHandler =
   | unknown
@@ -28,17 +30,103 @@ function findRouteKey(routes: MockRouteMap, method: string, path: string) {
   return "";
 }
 
-export function installEdmgBridge(overrides: Partial<NonNullable<Window["edmg"]>> = {}) {
+export function installEdmgBridge(
+  overrides: Partial<NonNullable<Window["edmg"]>> & Record<string, unknown> = {},
+) {
   window.__EDMG_BACKEND_URL__ = "http://127.0.0.1:7863";
   window.edmg = {
     backendUrl: () => "http://127.0.0.1:7863",
     getBackendUrl: async () => "http://127.0.0.1:7863",
+    getBackendAuthToken: async () => ({
+      ok: true,
+      token: "",
+      configured: false,
+      persisted: false,
+      secureStorageAvailable: true,
+    }),
+    setBackendAuthToken: async (token) => ({
+      ok: true,
+      configured: !!String(token || "").trim(),
+      persisted: !!String(token || "").trim(),
+      secureStorageAvailable: true,
+      note: String(token || "").trim() ? "saved" : "cleared",
+    }),
+    getBackendSettings: async () => ({
+      ok: true,
+      mode: "managed",
+      host: "127.0.0.1",
+      port: "7863",
+      url: "",
+      source: "test",
+      currentBackendUrl: "http://127.0.0.1:7863",
+    }),
+    getDirectorStatus: async () => ({
+      ok: true,
+      available: true,
+      managed: true,
+      serviceUrl: "http://127.0.0.1:3001",
+      mcpUrl: "http://127.0.0.1:3001/mcp",
+      advertisedBaseUrl: "http://127.0.0.1:3001",
+      backendUrl: "http://127.0.0.1:7863",
+      pid: 12345,
+      lastError: "",
+      startedAt: "2026-05-02T00:00:00.000Z",
+      packaged: false,
+    }),
+    setDirectorSettings: async (settings) => ({
+      ok: true,
+      restartRequired: false,
+      available: true,
+      managed: true,
+      serviceUrl: "http://127.0.0.1:3001",
+      mcpUrl: `${String(settings?.baseUrl || "http://127.0.0.1:3001").replace(/\/+$/, "")}/mcp`,
+      advertisedBaseUrl: String(settings?.baseUrl || "http://127.0.0.1:3001"),
+      backendUrl: "http://127.0.0.1:7863",
+      pid: 12345,
+      lastError: "",
+      startedAt: "2026-05-02T00:00:00.000Z",
+      packaged: false,
+    }),
+    setBackendSettings: async (settings) => ({
+      ok: true,
+      restartRequired: true,
+      mode: String(settings?.mode || "managed"),
+      host: String(settings?.host || "127.0.0.1"),
+      port: String(settings?.port || "7863"),
+      url: String(settings?.url || ""),
+      currentBackendUrl:
+        String(settings?.url || "").trim() ||
+        `http://${String(settings?.host || "127.0.0.1")}:${String(settings?.port || "7863")}`,
+    }),
+    getAiSettings: async () => ({
+      ok: true,
+      mode: "local",
+      provider: "ollama",
+      aiBaseUrl: "http://127.0.0.1:7862",
+      ollamaUrl: "http://127.0.0.1:11434",
+      ollamaModel: "qwen3:8b",
+      openaiCompatBaseUrl: "https://integrate.api.nvidia.com/v1",
+      openaiCompatModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      source: "test",
+    }),
+    setAiSettings: async (settings) => ({
+      ok: true,
+      restartRequired: true,
+      mode: String(settings?.mode || "local"),
+      provider: String(settings?.provider || "ollama"),
+      aiBaseUrl: String(settings?.aiBaseUrl || "http://127.0.0.1:7862"),
+      ollamaUrl: String(settings?.ollamaUrl || "http://127.0.0.1:11434"),
+      ollamaModel: String(settings?.ollamaModel || "qwen3:8b"),
+      openaiCompatBaseUrl: String(settings?.openaiCompatBaseUrl || "https://integrate.api.nvidia.com/v1"),
+      openaiCompatModel: String(settings?.openaiCompatModel || "nvidia/llama-3.1-nemotron-ultra-253b-v1"),
+    }),
     revealPath: async (value: string) => ({ ok: true, action: "reveal_path", path: value }),
     showItemInFolder: async (value: string) => ({ ok: true, action: "show_item", path: value }),
     openPath: async (value: string) => ({ ok: true, action: "open_path", path: value }),
     openExternal: async () => {},
     getStudioPaths: async () => ({
       ok: true,
+      platform: "win32",
       studioHome: "D:\\EDMG-Studio",
       dataDir: "D:\\EDMG-Studio\\data",
       modelsDir: "D:\\EDMG-Studio\\models",
@@ -80,5 +168,11 @@ export function installFetchMock(routes: MockRouteMap) {
 }
 
 export function renderWithStudio(ui: React.ReactElement) {
-  return render(<UiModeProvider>{ui}</UiModeProvider>);
+  return render(
+    <StudioSessionProvider>
+      <StudioAppearanceProvider>
+        <UiModeProvider>{ui}</UiModeProvider>
+      </StudioAppearanceProvider>
+    </StudioSessionProvider>,
+  );
 }

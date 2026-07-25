@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     from huggingface_hub import snapshot_download  # type: ignore
@@ -20,8 +24,29 @@ except Exception:  # pragma: no cover
 from ..errors import UserFacingError
 from .setup_wizard import _ollama_base  # reuse
 from .model_catalog import built_in_catalog, built_in_packs
+from ..domain.model_lanes import annotate_entry, can_promote, infer_lane, normalize_lane, promotion_blockers
 from ..services.setup_wizard import comfy_portable_installed, comfy_portable_root
+from .hf_auth import HfTokenCandidate, hf_token_candidates
 from .secrets import SecretStore
+
+try:
+    from ..integrations.azure import AzureModelCache
+except Exception:  # pragma: no cover - optional integration
+    AzureModelCache = None  # type: ignore
+
+try:
+    from ..integrations.aws import S3ModelCache
+except Exception:  # pragma: no cover - optional integration
+    S3ModelCache = None  # type: ignore
+
+try:
+    from ..integrations.hf_bucket import HFBucketModelCache
+    from ..integrations.hf_bucket import download_bucket_snapshot as _hf_bucket_download_snapshot
+    from ..integrations.hf_bucket import download_bucket_file as _hf_bucket_download_file
+except Exception:  # pragma: no cover - optional integration
+    HFBucketModelCache = None  # type: ignore
+    _hf_bucket_download_snapshot = None  # type: ignore
+    _hf_bucket_download_file = None  # type: ignore
 
 
 # ------------------------------ persistence ------------------------------
@@ -44,6 +69,24 @@ def _write_json(path: Path, obj: Any) -> None:
     tmp.replace(path)
 
 
+def _is_hf_auth_failure(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) in (401, 403):
+        return True
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "401",
+            "403",
+            "unauthorized",
+            "forbidden",
+            "invalid user token",
+            "oauth token signature verification failed",
+        )
+    )
+
+
 def _normalize_path(path: Path | str) -> str:
     raw = os.fspath(path)
     if raw.startswith("\\\\?\\"):
@@ -53,6 +96,60 @@ def _normalize_path(path: Path | str) -> str:
 
 def _same_path(left: Path | str, right: Path | str) -> bool:
     return _normalize_path(left) == _normalize_path(right)
+
+
+# Renamed aside when a model tree is unreadable (e.g. WinError 1392 on USB).
+_CORRUPTED_QUARANTINE_SUFFIX = ".__corrupted_quarantine"
+
+
+def _path_exists_safe(path: Path) -> bool:
+    """Return whether *path* exists; treat unreadable volumes as missing.
+
+    On Windows, corrupt/unreadable paths (e.g. WinError 1392 on USB/external
+    mounts) can raise OSError from ``Path.exists()`` / ``stat()`` instead of
+    returning False. Catalog and install probes must never crash on that.
+    """
+    try:
+        return path.exists()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as missing: %s (%s)", path, exc)
+        return False
+
+
+def _path_is_dir_safe(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as non-directory: %s (%s)", path, exc)
+        return False
+
+
+def _path_is_file_safe(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError as exc:
+        logger.warning("Treating unreadable path as non-file: %s (%s)", path, exc)
+        return False
+
+
+def _quarantine_unreadable_model_dir(model_dir: Path) -> Path | None:
+    """Best-effort rename of a corrupted model folder so later scans skip it."""
+    name = model_dir.name
+    if not name or name.endswith(_CORRUPTED_QUARANTINE_SUFFIX):
+        return None
+    target = model_dir.with_name(f"{name}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    try:
+        if target.exists():
+            target = model_dir.with_name(f"{name}.{int(time.time())}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    except OSError:
+        target = model_dir.with_name(f"{name}.{int(time.time())}{_CORRUPTED_QUARANTINE_SUFFIX}")
+    try:
+        model_dir.rename(target)
+        logger.warning("Quarantined unreadable model directory: %s -> %s", model_dir, target)
+        return target
+    except OSError as exc:
+        logger.warning("Could not quarantine unreadable model dir %s: %s", model_dir, exc)
+        return None
 
 
 def _read_reparse_target(path: Path) -> Path | None:
@@ -108,6 +205,83 @@ def _ensure_managed_dir(path: Path, *, label: str) -> Path:
             hint="Restart EDMG Studio so it can repair the storage junctions, then retry.",
             code="INVALID_STORAGE_PATH",
         ) from exc
+
+
+def _entry_render(entry: dict[str, Any]) -> dict[str, Any]:
+    render = entry.get("render")
+    return dict(render) if isinstance(render, dict) else {}
+
+
+def _entry_target(entry: dict[str, Any]) -> dict[str, Any]:
+    target = entry.get("target")
+    return dict(target) if isinstance(target, dict) else {}
+
+
+def _entry_engine(entry: dict[str, Any]) -> str:
+    render = _entry_render(entry)
+    target = _entry_target(entry)
+    engine = str(render.get("engine") or target.get("engine") or "").strip().lower()
+    if engine:
+        return engine
+    kind = str(entry.get("kind") or "").strip().lower()
+    if kind == "diffusers":
+        return "internal"
+    return "comfyui"
+
+
+def _entry_family(entry: dict[str, Any]) -> str | None:
+    family = str(entry.get("family") or _entry_render(entry).get("family") or "").strip().lower()
+    return family or None
+
+
+def _entry_support_flags(entry: dict[str, Any]) -> dict[str, bool]:
+    kind = str(entry.get("kind") or "").strip().lower()
+    engine = _entry_engine(entry)
+    family = _entry_family(entry)
+    if kind in {"checkpoint", "diffusers"}:
+        return {
+            "supports_txt2img": True,
+            "supports_img2img": True,
+            "supports_inpaint": True,
+            "supports_outpaint": True,
+            "supports_controlnet": not (engine == "internal" and family == "sd35"),
+        }
+    if kind == "runtime_bundle" and engine == "tensorrt_standalone":
+        return {
+            "supports_txt2img": True,
+            "supports_img2img": False,
+            "supports_inpaint": False,
+            "supports_outpaint": False,
+            "supports_controlnet": False,
+        }
+    return {
+        "supports_txt2img": False,
+        "supports_img2img": False,
+        "supports_inpaint": False,
+        "supports_outpaint": False,
+        "supports_controlnet": False,
+    }
+
+
+def _normalize_catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    item = dict(entry)
+    render = _entry_render(item)
+    engine = _entry_engine(item)
+    family = _entry_family(item)
+    kind = str(item.get("kind") or "").strip().lower()
+    render_modes = [str(mode).strip() for mode in (render.get("render_modes") or []) if str(mode).strip()]
+    if kind in {"checkpoint", "diffusers"} and "stills" not in render_modes:
+        render_modes.append("stills")
+    if kind == "diffusers" and "internal_video" not in render_modes:
+        render_modes.append("internal_video")
+    render["engine"] = engine
+    render["family"] = family
+    render["render_modes"] = render_modes
+    item["render"] = render
+    item["engine"] = engine
+    item["family"] = family
+    item.update(_entry_support_flags(item))
+    return annotate_entry(item)
 
 
 # ------------------------------ tasks ------------------------------
@@ -166,6 +340,99 @@ class ModelTaskManager:
 
 # ------------------------------ manager ------------------------------
 
+class _CompositeModelCache:
+    """Try multiple remote caches in priority order.
+
+    HF bucket is normally first; S3/Azure remain secondary mirrors and restore
+    fallbacks. Uploads are best-effort fan-out so a configured secondary cache
+    can keep a copy without blocking the primary local install path.
+    """
+
+    def __init__(self, caches: list[Any]):
+        self.caches = [cache for cache in caches if cache is not None]
+        self._last_cache = self.caches[0] if self.caches else None
+
+    @property
+    def label(self) -> str:
+        labels = [str(getattr(cache, "label", cache.__class__.__name__)) for cache in self.caches]
+        if not labels:
+            return "No model cache"
+        if len(labels) == 1:
+            return labels[0]
+        return f"{labels[0]} primary + " + " + ".join(f"{label} secondary" for label in labels[1:])
+
+    @property
+    def settings(self) -> Any:
+        return getattr(self._last_cache, "settings", None)
+
+    def _call_exists(self, method_name: str, entry: dict[str, Any], path: Path) -> str | None:
+        for cache in self.caches:
+            method = getattr(cache, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                result = method(entry, path)
+            except Exception:
+                continue
+            if result:
+                self._last_cache = cache
+                return str(result)
+        return None
+
+    def _call_download(self, method_name: str, entry: dict[str, Any], dest: Path) -> bool:
+        for cache in self.caches:
+            method = getattr(cache, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                if method(entry, dest):
+                    self._last_cache = cache
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _call_upload(self, method_name: str, entry: dict[str, Any], path: Path) -> str:
+        first_object: str | None = None
+        first_cache: Any | None = None
+        for cache in self.caches:
+            method = getattr(cache, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                result = method(entry, path)
+            except Exception:
+                continue
+            if not result:
+                continue
+            object_name = str(result)
+            if object_name and first_object is None:
+                first_object = object_name
+                first_cache = cache
+        if first_object is None:
+            raise RuntimeError("No configured model cache accepted the upload")
+        self._last_cache = first_cache
+        return first_object
+
+    def model_exists(self, entry: dict[str, Any], path: Path) -> str | None:
+        return self._call_exists("model_exists", entry, path)
+
+    def model_directory_exists(self, entry: dict[str, Any], path: Path) -> str | None:
+        return self._call_exists("model_directory_exists", entry, path)
+
+    def download_model(self, entry: dict[str, Any], dest: Path) -> bool:
+        return self._call_download("download_model", entry, dest)
+
+    def download_model_directory(self, entry: dict[str, Any], dest: Path) -> bool:
+        return self._call_download("download_model_directory", entry, dest)
+
+    def upload_model(self, entry: dict[str, Any], path: Path) -> str:
+        return self._call_upload("upload_model", entry, path)
+
+    def upload_model_directory(self, entry: dict[str, Any], path: Path) -> str:
+        return self._call_upload("upload_model_directory", entry, path)
+
+
 class ModelManager:
     def __init__(
         self,
@@ -183,16 +450,140 @@ class ModelManager:
         self.ollama_url = _ollama_base(ollama_url)
         self.secrets = secrets
         self.tasks = ModelTaskManager()
+        self.model_cache = self._build_model_cache()
 
         cfg = _config_dir(self.data_dir)
         self._user_models_path = cfg / "models_user.json"
         self._accept_path = cfg / "licenses_accepted.json"
+        self._cloud_models_path = cfg / "models_cloud.json"
+        self._lane_overrides_path = cfg / "model_lane_overrides.json"
+        self._benchmarks_path = cfg / "model_benchmarks.json"
 
         self._lock = threading.Lock()
 
+    def refresh_model_cache(self):
+        """Rebuild the active model cache after settings/env changes."""
+        self.model_cache = self._build_model_cache()
+        return self.model_cache
+
+    def _build_model_cache(self):
+        # Priority: Hugging Face bucket first, then AWS S3, then Azure. When
+        # more than one cache is configured, keep all of them so HF can be the
+        # primary model mirror while S3/Azure remain secondary storage.
+        caches: list[Any] = []
+        if HFBucketModelCache is not None:
+            try:
+                cache = HFBucketModelCache.from_runtime(
+                    models_dir=self.models_dir,
+                    secrets_store=self.secrets,
+                )
+                if cache is not None:
+                    caches.append(cache)
+            except Exception:
+                pass
+        for cache_type in (S3ModelCache, AzureModelCache):
+            if cache_type is None:
+                continue
+            try:
+                cache = cache_type.from_env()
+            except Exception:
+                continue
+            if cache is not None:
+                caches.append(cache)
+        if len(caches) > 1:
+            return _CompositeModelCache(caches)
+        return caches[0] if caches else None
+
+    def _model_cache_label(self) -> str:
+        cache = getattr(self, "model_cache", None)
+        label = getattr(cache, "label", "")
+        if label:
+            return str(label)
+        cache_name = cache.__class__.__name__.lower() if cache is not None else ""
+        if "s3" in cache_name:
+            return "S3 model cache"
+        return "Azure model cache"
+
+    def _model_storage_mode(self) -> str:
+        raw = (
+            os.getenv("EDMG_MODEL_STORAGE_MODE", "").strip().lower()
+            or os.getenv("EDMG_AWS_MODEL_CACHE_MODE", "").strip().lower()
+            or os.getenv("EDMG_MODEL_CACHE_MODE", "").strip().lower()
+        )
+        if raw in {"cloud_only", "s3_only", "remote_only"}:
+            return "cloud_only"
+        return "local_cache"
+
+    def _cloud_models(self) -> dict[str, Any]:
+        data = _read_json(self._cloud_models_path, default={})
+        return data if isinstance(data, dict) else {}
+
+    def _write_cloud_models(self, data: dict[str, Any]) -> None:
+        _write_json(self._cloud_models_path, data)
+
+    def _record_cloud_model(self, entry: dict[str, Any], object_name: str, *, mode: str) -> None:
+        model_id = str(entry.get("id") or "").strip()
+        if not model_id:
+            return
+        cache = getattr(self, "model_cache", None)
+        settings = getattr(cache, "settings", None)
+        record: dict[str, Any] = {
+            "provider": self._model_cache_label(),
+            "object": object_name,
+            "mode": mode,
+            "stored_at": time.time(),
+        }
+        for attr in ("bucket", "container", "prefix", "region", "endpoint_url"):
+            value = getattr(settings, attr, None)
+            if value:
+                record[attr] = value
+        data = self._cloud_models()
+        data[model_id] = record
+        self._write_cloud_models(data)
+
+    def _cloud_model_record(self, model_id: str) -> dict[str, Any] | None:
+        record = self._cloud_models().get(str(model_id or ""))
+        return record if isinstance(record, dict) else None
+
+    def _cache_entry_from_cloud_record(self, entry: dict[str, Any], record: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(record, dict):
+            return entry
+        object_name = str(record.get("object") or record.get("key") or "").strip()
+        if not object_name:
+            return entry
+
+        cache_entry = dict(entry)
+        cache_entry["s3_key"] = object_name
+        bucket = str(record.get("bucket") or "").strip()
+        if bucket:
+            cache_entry["s3_bucket"] = bucket
+        return cache_entry
+
+    def _cache_model_exists(self, entry: dict[str, Any], dest: Path) -> str | None:
+        cache = getattr(self, "model_cache", None)
+        exists = getattr(cache, "model_exists", None)
+        if cache is None or not callable(exists):
+            return None
+        return exists(entry, dest)
+
+    def _cache_snapshot_exists(self, entry: dict[str, Any], dest: Path) -> str | None:
+        cache = getattr(self, "model_cache", None)
+        exists = getattr(cache, "model_directory_exists", None)
+        if cache is None or not callable(exists):
+            return None
+        return exists(entry, dest)
+
+    def _cloud_temp_path(self, dest: Path) -> Path:
+        root = _ensure_managed_dir(self.data_dir / "cache" / "model_transfers", label="model transfer cache")
+        return root / uuid.uuid4().hex / dest.name
+
     def _all_entries(self) -> list[dict[str, Any]]:
-        cat = self.catalog()
-        return list(cat.get("catalog") or []) + list(cat.get("user") or [])
+        built = [_normalize_catalog_entry(entry) for entry in built_in_catalog()]
+        user = _read_json(self._user_models_path, default=[])
+        if not isinstance(user, list):
+            user = []
+        user = [_normalize_catalog_entry(entry) for entry in user if isinstance(entry, dict)]
+        return built + user
 
     def _find_entry(self, model_id: str) -> dict[str, Any] | None:
         return next(
@@ -202,15 +593,39 @@ class ModelManager:
 
     # ---- catalog ----
     def catalog(self) -> dict[str, Any]:
-        built = built_in_catalog()
+        built = [_normalize_catalog_entry(entry) for entry in built_in_catalog()]
         user = _read_json(self._user_models_path, default=[])
         if not isinstance(user, list):
             user = []
+        user = [_normalize_catalog_entry(entry) for entry in user if isinstance(entry, dict)]
         accepted = _read_json(self._accept_path, default={})
         if not isinstance(accepted, dict):
             accepted = {}
+        overrides = _read_json(self._lane_overrides_path, default={})
+        if not isinstance(overrides, dict):
+            overrides = {}
+        benchmarks = _read_json(self._benchmarks_path, default={})
+        if not isinstance(benchmarks, dict):
+            benchmarks = {}
+
+        def _apply_lane(entry: dict[str, Any]) -> dict[str, Any]:
+            model_id = str(entry.get("id") or "")
+            override = overrides.get(model_id) if isinstance(overrides.get(model_id), dict) else None
+            lane_value = str((override or {}).get("lane") or "") or None
+            annotated = annotate_entry(entry, lane_override=lane_value)
+            bench = benchmarks.get(model_id) if isinstance(benchmarks.get(model_id), dict) else None
+            annotated["benchmark"] = {
+                "present": bool(bench),
+                "summary": (bench or {}).get("summary"),
+                "updated_at": (bench or {}).get("updated_at"),
+            }
+            return annotated
+
+        built = [_apply_lane(entry) for entry in built]
+        user = [_apply_lane(entry) for entry in user]
 
         installed = self._installed_map(built + user)
+        cloud = self._cloud_models()
 
         return {
             "catalog": built,
@@ -218,7 +633,87 @@ class ModelManager:
             "packs": built_in_packs(),
             "accepted": accepted,
             "installed": installed,
+            "cloud": cloud,
+            "lanes": {
+                "overrides": overrides,
+                "order": ["stable", "recommended", "experimental", "research", "legacy"],
+            },
+            "storage_mode": self._model_storage_mode(),
+            "model_cache": self._model_cache_label() if self.model_cache is not None else None,
         }
+
+    def promote_model_lane(self, model_id: str, target_lane: str, *, reason: str | None = None, force: bool = False) -> dict[str, Any]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        target = normalize_lane(target_lane)
+        current = infer_lane(entry)
+        overrides = _read_json(self._lane_overrides_path, default={})
+        if not isinstance(overrides, dict):
+            overrides = {}
+        existing = overrides.get(model_id) if isinstance(overrides.get(model_id), dict) else {}
+        if existing.get("lane"):
+            current = normalize_lane(str(existing.get("lane")))
+        benchmarks = _read_json(self._benchmarks_path, default={})
+        has_benchmark = isinstance(benchmarks, dict) and isinstance(benchmarks.get(model_id), dict)
+        license_accepted = self._is_accepted(model_id)
+        blockers = promotion_blockers(
+            {**entry, "lane": current},
+            target_lane=target,
+            has_benchmark=has_benchmark,
+            license_accepted=license_accepted,
+        )
+        if blockers and not force:
+            raise UserFacingError(
+                f"Promotion blocked for {model_id}",
+                hint="; ".join(blockers),
+                code="MODEL_PROMOTION_BLOCKED",
+            )
+        if not can_promote(current, target) and not force:
+            raise UserFacingError(
+                f"Cannot promote from {current} to {target}",
+                hint="Choose a allowed target lane for this model.",
+                code="MODEL_LANE_GATE",
+            )
+        with self._lock:
+            overrides[model_id] = {
+                "lane": target,
+                "from_lane": current,
+                "reason": str(reason or "").strip() or None,
+                "updated_at": time.time(),
+                "force": bool(force),
+                "blockers_ignored": blockers if force else [],
+            }
+            _write_json(self._lane_overrides_path, overrides)
+        return {
+            "ok": True,
+            "model_id": model_id,
+            "lane": target,
+            "from_lane": current,
+            "blockers": blockers,
+            "override": overrides[model_id],
+        }
+
+    def record_model_benchmark(self, model_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        body = dict(payload or {})
+        record = {
+            "model_id": model_id,
+            "lane": infer_lane(entry),
+            "summary": str(body.get("summary") or "manual_benchmark_recorded"),
+            "metrics": body.get("metrics") if isinstance(body.get("metrics"), dict) else {},
+            "passed": bool(body.get("passed", True)),
+            "updated_at": time.time(),
+        }
+        with self._lock:
+            data = _read_json(self._benchmarks_path, default={})
+            if not isinstance(data, dict):
+                data = {}
+            data[model_id] = record
+            _write_json(self._benchmarks_path, data)
+        return {"ok": True, "benchmark": record}
 
     # ---- acceptance ----
     def accept_license(self, model_id: str, license_id: str) -> None:
@@ -282,7 +777,7 @@ class ModelManager:
         if source == "ollama":
             name = f"Install (Ollama): {entry.get('name')}"
             return self.tasks.start(name, self._install_ollama, entry)
-        if source in ("hf", "civitai", "local"):
+        if source in ("hf", "civitai", "local", "s3", "hf_bucket"):
             name = f"Install: {entry.get('name')}"
             return self.tasks.start(name, self._install_file_model, entry)
 
@@ -297,6 +792,13 @@ class ModelManager:
         for mid in (pack.get("models") or []):
             tasks.append(self.install(mid))
         return tasks
+
+    def restore_local(self, model_id: str) -> ModelTask:
+        entry = self._find_entry(model_id)
+        if not entry:
+            raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        name = f"Restore local: {entry.get('name')}"
+        return self.tasks.start(name, self._restore_cloud_model, entry)
 
 
     # ---- resolution ----
@@ -319,6 +821,9 @@ class ModelManager:
             # Diffusers expects a directory repo snapshot.
             model_dir = self._internal_models_dir(folder) / str(entry.get("id") or "model")
             return "snapshot", model_dir
+        if engine == "runtime_bundle":
+            bundle_dir = self._internal_models_dir(folder) / str(entry.get("id") or "model")
+            return "snapshot", bundle_dir
 
         # default: comfyui file model
         if not fname:
@@ -333,10 +838,10 @@ class ModelManager:
         if comfy_portable_installed(self.external_dir, self.data_dir):
             root = Path(os.path.abspath(os.fspath(comfy_portable_root(self.external_dir, self.data_dir) / "ComfyUI" / "models" / folder)))
             try:
-                if root.exists():
+                if _path_exists_safe(root):
                     return root
             except (OSError, RuntimeError):
-                if _repair_mutual_junction_chain(root) and root.exists():
+                if _repair_mutual_junction_chain(root) and _path_exists_safe(root):
                     return root
         return None
 
@@ -358,27 +863,630 @@ class ModelManager:
             mid = str(e.get("id") or "")
             if not mid:
                 continue
-            src = (e.get("source") or "").lower()
-            if src == "ollama":
-                out[mid] = str(e.get("ollama_model") or "") in ollama_models
-                continue
+            try:
+                src = (e.get("source") or "").lower()
+                if src == "ollama":
+                    out[mid] = str(e.get("ollama_model") or "") in ollama_models
+                    continue
 
-            target = e.get("target") or {}
-            engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
-            folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
-            fname = str(e.get("filename") or "")
+                target = e.get("target") or {}
+                engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+                folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+                fname = str(e.get("filename") or "")
 
-            if engine == "internal":
-                out[mid] = bool((self._internal_models_dir(folder) / mid).exists())
-                continue
+                if engine == "internal":
+                    out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
+                    continue
+                if engine == "runtime_bundle":
+                    out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
+                    continue
 
-            if fname:
-                primary = self._comfy_models_dir(folder) / fname
-                legacy_root = self._legacy_comfy_models_dir(folder)
-                out[mid] = primary.exists() or bool(legacy_root and (legacy_root / fname).exists())
-            else:
+                if fname:
+                    primary = self._comfy_models_dir(folder) / fname
+                    legacy_root = self._legacy_comfy_models_dir(folder)
+                    out[mid] = _path_exists_safe(primary) or bool(
+                        legacy_root and _path_exists_safe(legacy_root / fname)
+                    )
+                else:
+                    out[mid] = False
+            except OSError as exc:
+                # Belt-and-suspenders: corrupt volumes can raise from exists/stat/listdir
+                # deep in install probes (WinError 1392). Never fail the whole catalog.
+                logger.warning(
+                    "Skipping unreadable model install probe for %s: %s",
+                    mid,
+                    exc,
+                )
                 out[mid] = False
         return out
+
+    def _iter_comfy_model_dirs(self, folder: str) -> list[Path]:
+        dirs = [self._comfy_models_dir(folder)]
+        legacy_root = self._legacy_comfy_models_dir(folder)
+        if legacy_root is not None:
+            dirs.append(legacy_root)
+        return dirs
+
+    def _is_model_weight_file(self, candidate: Path) -> bool:
+        try:
+            if not _path_exists_safe(candidate) or not _path_is_file_safe(candidate):
+                return False
+            if candidate.stat().st_size <= 0:
+                return False
+            if candidate.stat().st_size <= 4096:
+                with candidate.open("rb") as handle:
+                    prefix = handle.read(256)
+                if prefix.startswith(b"version https://git-lfs.github.com/spec"):
+                    return False
+        except OSError:
+            return False
+        return True
+
+    def _internal_component_has_weights(self, component_dir: Path) -> bool:
+        if not _path_exists_safe(component_dir) or not _path_is_dir_safe(component_dir):
+            return False
+        patterns = (
+            "diffusion_pytorch_model*.safetensors",
+            "diffusion_pytorch_model*.bin",
+            "pytorch_model*.safetensors",
+            "pytorch_model*.bin",
+            "model*.safetensors",
+            "model*.bin",
+            "model.onnx",
+            "model.onnx_data",
+            "openvino_model.bin",
+            "flax_model.msgpack",
+        )
+        try:
+            return any(
+                self._is_model_weight_file(candidate)
+                for pattern in patterns
+                for candidate in component_dir.glob(pattern)
+            )
+        except OSError as exc:
+            logger.warning(
+                "Treating unreadable component directory as missing weights: %s (%s)",
+                component_dir,
+                exc,
+            )
+            return False
+
+    def _diffusers_snapshot_complete(self, path: Path) -> bool:
+        model_index = path / "model_index.json"
+        try:
+            index_exists = model_index.exists()
+        except OSError as exc:
+            # WinError 1392 etc.: treat as not installed and quarantine when possible.
+            logger.warning("Treating unreadable path as missing: %s (%s)", model_index, exc)
+            _quarantine_unreadable_model_dir(path)
+            return False
+        if not index_exists:
+            return False
+        try:
+            data = json.loads(model_index.read_text(encoding="utf-8"))
+        except OSError as exc:
+            logger.warning("Treating unreadable model_index as missing: %s (%s)", model_index, exc)
+            _quarantine_unreadable_model_dir(path)
+            return False
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+
+        weightless_markers = (
+            "Tokenizer",
+            "TokenizerFast",
+            "Scheduler",
+            "ImageProcessor",
+            "FeatureExtractor",
+            "SafetyChecker",
+        )
+        required_components: list[str] = []
+        for name, spec in data.items():
+            if not isinstance(name, str) or not isinstance(spec, list) or len(spec) < 2:
+                continue
+            class_name = str(spec[1] or "")
+            if any(marker in class_name for marker in weightless_markers):
+                continue
+            required_components.append(name)
+
+        if not required_components:
+            return False
+
+        try:
+            return all(
+                self._internal_component_has_weights(path / component) for component in required_components
+            )
+        except OSError as exc:
+            logger.warning(
+                "Treating unreadable diffusers snapshot as incomplete: %s (%s)",
+                path,
+                exc,
+            )
+            _quarantine_unreadable_model_dir(path)
+            return False
+
+    def missing_diffusers_components(self, model_id: str) -> list[str]:
+        entry = self._find_entry(model_id)
+        if not entry:
+            return []
+        target = entry.get("target") or {}
+        engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+        if engine != "internal" or str(entry.get("kind") or "").strip().lower() != "diffusers":
+            return []
+        folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+        path = self._internal_models_dir(folder) / str(model_id or "")
+        if not _path_exists_safe(path):
+            return ["snapshot"]
+        model_index = path / "model_index.json"
+        if not _path_exists_safe(model_index):
+            return ["model_index.json"]
+        try:
+            data = json.loads(model_index.read_text(encoding="utf-8"))
+        except Exception:
+            return ["model_index.json"]
+        if not isinstance(data, dict):
+            return ["model_index.json"]
+
+        weightless_markers = (
+            "Tokenizer",
+            "TokenizerFast",
+            "Scheduler",
+            "ImageProcessor",
+            "FeatureExtractor",
+            "SafetyChecker",
+        )
+        missing: list[str] = []
+        for name, spec in data.items():
+            if not isinstance(name, str) or not isinstance(spec, list) or len(spec) < 2:
+                continue
+            class_name = str(spec[1] or "")
+            if any(marker in class_name for marker in weightless_markers):
+                continue
+            if not self._internal_component_has_weights(path / name):
+                missing.append(name)
+        return missing
+
+    def _clear_incomplete_snapshot(self, dest: Path) -> None:
+        if not _path_exists_safe(dest):
+            return
+        import shutil
+
+        try:
+            shutil.rmtree(dest)
+        except OSError:
+            pass
+
+    def _internal_asset_installed(self, entry: dict[str, Any], path: Path) -> bool:
+        if not _path_exists_safe(path):
+            return False
+
+        kind = str(entry.get("kind") or "").strip().lower()
+        if kind in {"diffusers", "video_diffusers"}:
+            return self._diffusers_snapshot_complete(path)
+        if kind == "motion_adapter":
+            try:
+                has_config = _path_exists_safe(path / "config.json") or _path_exists_safe(
+                    path / "adapter_config.json"
+                )
+                has_weights = any(
+                    self._is_model_weight_file(candidate)
+                    for pattern in (
+                        "diffusion_pytorch_model*.safetensors",
+                        "diffusion_pytorch_model*.bin",
+                        "pytorch_model*.safetensors",
+                        "pytorch_model*.bin",
+                        "model*.safetensors",
+                        "model*.bin",
+                    )
+                    for candidate in path.glob(pattern)
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Treating unreadable motion adapter as not installed: %s (%s)",
+                    path,
+                    exc,
+                )
+                return False
+            return bool(has_config and has_weights)
+        if kind == "controlnet":
+            if not _path_exists_safe(path / "config.json"):
+                return False
+            try:
+                return any(
+                    self._is_model_weight_file(candidate)
+                    for pattern in ("diffusion_pytorch_model*.safetensors", "diffusion_pytorch_model*.bin")
+                    for candidate in path.glob(pattern)
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Treating unreadable controlnet as not installed: %s (%s)",
+                    path,
+                    exc,
+                )
+                return False
+        return True
+
+    def _local_installed_path(self, entry: dict[str, Any]) -> Path | None:
+        model_id = str(entry.get("id") or "").strip()
+        if not model_id:
+            return None
+
+        target = entry.get("target") or {}
+        engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+        folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+        if engine == "internal":
+            path = self._internal_models_dir(folder) / model_id
+            return path if self._internal_asset_installed(entry, path) else None
+        if engine == "runtime_bundle":
+            source_path = str(entry.get("source_path") or "").strip()
+            if source_path:
+                try:
+                    path = Path(source_path).expanduser()
+                    if _path_exists_safe(path):
+                        return path
+                except (OSError, RuntimeError):
+                    pass
+            path = self._internal_models_dir(folder) / model_id
+            return path if _path_exists_safe(path) else None
+
+        filename = str(entry.get("filename") or "")
+        if not filename:
+            return None
+
+        primary = self._comfy_models_dir(folder) / filename
+        if _path_exists_safe(primary):
+            return primary
+        legacy_root = self._legacy_comfy_models_dir(folder)
+        if legacy_root is not None:
+            legacy = legacy_root / filename
+            if _path_exists_safe(legacy):
+                return legacy
+        return None
+
+    def _materialize_file_from_model_cache(self, entry: dict[str, Any], dest: Path) -> Path | None:
+        cache = getattr(self, "model_cache", None)
+        if cache is None:
+            return None
+
+        model_id = str(entry.get("id") or "").strip()
+        record = self._cloud_model_record(model_id)
+        candidates: list[dict[str, Any]] = []
+        if record is not None:
+            candidates.append(self._cache_entry_from_cloud_record(entry, record))
+        candidates.append(entry)
+
+        seen_objects: set[str] = set()
+        for candidate in candidates:
+            try:
+                object_name = self._cache_model_exists(candidate, dest)
+            except Exception as exc:
+                if record is not None:
+                    raise UserFacingError(
+                        "Cloud model cache is unavailable",
+                        hint=f"Check the {self._model_cache_label()} credentials and bucket/prefix settings, then retry.",
+                        code="MODEL_CACHE_UNAVAILABLE",
+                    ) from exc
+                continue
+
+            if not object_name or object_name in seen_objects:
+                continue
+            seen_objects.add(str(object_name))
+
+            try:
+                if not cache.download_model(candidate, dest):
+                    continue
+            except Exception as exc:
+                raise UserFacingError(
+                    "Could not restore model from cloud cache",
+                    hint=f"Check that the model object exists in {self._model_cache_label()} and that Studio has read access.",
+                    code="MODEL_CACHE_RESTORE_FAILED",
+                ) from exc
+
+            mode = str(record.get("mode") or "remote_cache") if record is not None else "remote_cache"
+            self._record_cloud_model(entry, str(object_name), mode=mode)
+            return dest if dest.exists() else None
+
+        return None
+
+    def _materialize_snapshot_from_model_cache(self, entry: dict[str, Any], dest: Path) -> Path | None:
+        cache = getattr(self, "model_cache", None)
+        download = getattr(cache, "download_model_directory", None)
+        if cache is None or not callable(download):
+            return None
+
+        model_id = str(entry.get("id") or "").strip()
+        record = self._cloud_model_record(model_id)
+        candidates: list[dict[str, Any]] = []
+        if record is not None:
+            candidates.append(self._cache_entry_from_cloud_record(entry, record))
+        candidates.append(entry)
+
+        seen_objects: set[str] = set()
+        for candidate in candidates:
+            try:
+                object_name = self._cache_snapshot_exists(candidate, dest)
+            except Exception as exc:
+                if record is not None:
+                    raise UserFacingError(
+                        "Cloud model cache is unavailable",
+                        hint=f"Check the {self._model_cache_label()} credentials and bucket/prefix settings, then retry.",
+                        code="MODEL_CACHE_UNAVAILABLE",
+                    ) from exc
+                continue
+
+            if not object_name or object_name in seen_objects:
+                continue
+            seen_objects.add(str(object_name))
+
+            try:
+                if not download(candidate, dest):
+                    continue
+            except Exception as exc:
+                raise UserFacingError(
+                    "Could not restore internal model from cloud cache",
+                    hint=f"Check that the internal model archive exists in {self._model_cache_label()} and that Studio has read access.",
+                    code="MODEL_CACHE_RESTORE_FAILED",
+                ) from exc
+
+            if not self._internal_asset_installed(entry, dest):
+                raise UserFacingError(
+                    "Cloud internal model archive is incomplete",
+                    hint="The restored archive did not contain a valid Diffusers snapshot. Rebuild and upload the internal model archive.",
+                    code="MODEL_CACHE_RESTORE_INVALID",
+                )
+
+            mode = str(record.get("mode") or "remote_cache") if record is not None else "remote_cache"
+            self._record_cloud_model(entry, str(object_name), mode=mode)
+            return dest
+
+        return None
+
+    def internal_asset_issue(self, model_id: str) -> str | None:
+        entry = self._find_entry(model_id)
+        if not entry:
+            return None
+        target = entry.get("target") or {}
+        engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
+        if engine != "internal":
+            return None
+        folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
+        path = self._internal_models_dir(folder) / model_id
+        if self._local_installed_path(entry) is not None:
+            return None
+        if _path_exists_safe(path):
+            if self._internal_asset_installed(entry, path):
+                return None
+            return "incomplete"
+        if self.is_model_available(model_id, probe_remote=True):
+            return None
+        return "missing"
+
+    def _find_existing_comfy_file(self, folder: str, ref: str) -> Path | None:
+        raw = str(ref or "").strip()
+        if not raw:
+            return None
+
+        candidates = {raw, Path(raw).name}
+        stem = Path(raw).stem
+        for model_dir in self._iter_comfy_model_dirs(folder):
+            try:
+                for candidate in candidates:
+                    match = model_dir / candidate
+                    if _path_exists_safe(match) and _path_is_file_safe(match):
+                        return match
+                if stem:
+                    for match in model_dir.glob("*"):
+                        try:
+                            if _path_is_file_safe(match) and match.stem == stem:
+                                return match
+                        except OSError as exc:
+                            logger.warning(
+                                "Skipping unreadable Comfy file candidate %s: %s",
+                                match,
+                                exc,
+                            )
+            except OSError as exc:
+                logger.warning(
+                    "Skipping unreadable Comfy model dir %s: %s",
+                    model_dir,
+                    exc,
+                )
+        return None
+
+    def resolve_comfy_asset(
+        self,
+        ref: str,
+        *,
+        folder: str,
+        allowed_kinds: set[str] | None = None,
+    ) -> dict[str, Any]:
+        raw = str(ref or "").strip()
+        if not raw:
+            raise UserFacingError("Missing model selection", hint=f"Pick a Studio {folder.rstrip('s')} first.")
+
+        entry = self._find_entry(raw)
+        if entry is None:
+            normalized_folder = str(folder or "checkpoints").strip().lower()
+            for candidate in self._all_entries():
+                if not isinstance(candidate, dict):
+                    continue
+                target = candidate.get("target") if isinstance(candidate.get("target"), dict) else {}
+                candidate_folder = str(target.get("folder") or "checkpoints").strip().lower()
+                filename = str(candidate.get("filename") or "").strip()
+                if candidate_folder != normalized_folder:
+                    continue
+                if filename == raw or Path(filename).stem == Path(raw).stem:
+                    entry = candidate
+                    break
+
+        if entry is not None:
+            kind = str(entry.get("kind") or "").strip().lower()
+            target = entry.get("target") if isinstance(entry.get("target"), dict) else {}
+            engine = str(target.get("engine") or entry.get("engine") or "comfyui").strip().lower()
+            if engine != "comfyui":
+                raise UserFacingError(
+                    f"{entry.get('name') or raw} is not a valid {folder.rstrip('s')} selection",
+                    hint="Pick a Studio ComfyUI asset for this workflow.",
+                )
+            if allowed_kinds and kind not in allowed_kinds:
+                expected = ", ".join(sorted(allowed_kinds))
+                raise UserFacingError(
+                    f"{entry.get('name') or raw} is not a valid {folder.rstrip('s')} selection",
+                    hint=f"Pick a Studio asset of type: {expected}.",
+                )
+
+            filename = str(
+                entry.get("filename")
+                or Path(str(entry.get("source_path") or "")).name
+                or raw
+            ).strip()
+            installed = self.resolve_installed_path(str(entry.get("id") or ""), materialize_remote=True)
+            resolved_path = installed or self._find_existing_comfy_file(folder, filename)
+            if resolved_path is None:
+                cloud_record = self._cloud_model_record(str(entry.get("id") or ""))
+                hint = "Install the asset in Model Manager, or import it as a local Studio model first."
+                if cloud_record is not None:
+                    hint = (
+                        "This asset is stored in the cloud cache only. Local ComfyUI needs a filesystem model path; "
+                        "restore it locally or use a remote worker that mounts/downloads the S3 cache."
+                    )
+                raise UserFacingError(
+                    f"{entry.get('name') or filename} is not installed",
+                    hint=hint,
+                )
+
+            return {
+                "id": entry.get("id"),
+                "name": entry.get("name") or Path(filename).stem,
+                "kind": entry.get("kind") or folder.rstrip("s"),
+                "filename": resolved_path.name,
+                "path": str(resolved_path),
+                "source": entry.get("source") or "local",
+                "folder": folder,
+            }
+
+        resolved_path = self._find_existing_comfy_file(folder, raw)
+        if resolved_path is None:
+            raise UserFacingError(
+                f"Unknown Studio asset: {raw}",
+                hint=f"Import the file into Models as a {folder.rstrip('s')} first, then retry.",
+            )
+
+        return {
+            "id": None,
+            "name": resolved_path.stem,
+            "kind": folder.rstrip("s"),
+            "filename": resolved_path.name,
+            "path": str(resolved_path),
+            "source": "local",
+            "folder": folder,
+        }
+
+    def resolve_internal_asset(
+        self,
+        ref: str,
+        *,
+        folder: str,
+        allowed_kinds: set[str] | None = None,
+    ) -> dict[str, Any]:
+        raw = str(ref or "").strip()
+        if not raw:
+            raise UserFacingError("Missing model selection", hint=f"Pick a Studio {folder.rstrip('s')} first.")
+
+        entry = self._find_entry(raw)
+        if entry is None:
+            for candidate in self._all_entries():
+                if not isinstance(candidate, dict):
+                    continue
+                target = candidate.get("target") if isinstance(candidate.get("target"), dict) else {}
+                candidate_folder = str(target.get("folder") or "").strip().lower()
+                if str(target.get("engine") or "").strip().lower() != "internal":
+                    continue
+                if candidate_folder != str(folder or "").strip().lower():
+                    continue
+                if str(candidate.get("id") or "").strip() == raw:
+                    entry = candidate
+                    break
+
+        if entry is None:
+            raise UserFacingError(
+                f"Unknown internal Studio asset: {raw}",
+                hint=f"Install an internal {folder.rstrip('s')} asset in Models first, then retry.",
+            )
+
+        kind = str(entry.get("kind") or "").strip().lower()
+        if allowed_kinds and kind not in allowed_kinds:
+            expected = ", ".join(sorted(allowed_kinds))
+            raise UserFacingError(
+                f"{entry.get('name') or raw} is not a valid {folder.rstrip('s')} selection",
+                hint=f"Pick a Studio internal asset of type: {expected}.",
+            )
+
+        target = entry.get("target") if isinstance(entry.get("target"), dict) else {}
+        engine = str(target.get("engine") or entry.get("engine") or "").strip().lower()
+        if engine != "internal":
+            raise UserFacingError(
+                f"{entry.get('name') or raw} is not an internal Studio asset",
+                hint="Pick an internal Studio asset for the internal diffusers path.",
+            )
+
+        model_id = str(entry.get("id") or "")
+        issue = self.internal_asset_issue(model_id)
+        if issue == "incomplete":
+            raise UserFacingError(
+                f"{entry.get('name') or raw} is not installed",
+                hint="Reinstall the asset in Model Manager. The current local snapshot is missing required weight files.",
+            )
+
+        resolved_path = self.resolve_installed_path(model_id, materialize_remote=True)
+        if resolved_path is None:
+            hint = "Install the asset in Model Manager, then retry."
+            if issue == "incomplete":
+                hint = "Reinstall the asset in Model Manager. The current local snapshot is missing required weight files."
+            elif self._cloud_model_record(model_id) is not None:
+                hint = (
+                    "This asset is stored in the cloud cache only. Studio tried to restore it locally for the internal "
+                    "renderer but could not materialize a valid Diffusers snapshot."
+                )
+            raise UserFacingError(
+                f"{entry.get('name') or raw} is not installed",
+                hint=hint,
+            )
+
+        return {
+            "id": entry.get("id"),
+            "name": entry.get("name") or raw,
+            "kind": entry.get("kind") or folder.rstrip("s"),
+            "path": str(resolved_path),
+            "source": entry.get("source") or "local",
+            "folder": folder,
+            "engine": "internal",
+            "family": entry.get("family"),
+        }
+
+    def resolve_loras(self, requested: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        resolved: list[dict[str, Any]] = []
+        for item in requested or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            asset = self.resolve_comfy_asset(name, folder="loras", allowed_kinds={"lora"})
+            weight = float(item.get("weight", 1.0))
+            clip_weight = item.get("clip_weight")
+            resolved.append(
+                {
+                    "id": asset.get("id"),
+                    "name": asset.get("name") or Path(asset["filename"]).stem,
+                    "filename": asset["filename"],
+                    "path": asset["path"],
+                    "weight": weight,
+                    "clip_weight": float(clip_weight) if clip_weight is not None else weight,
+                }
+            )
+        return resolved
 
     # ---- installers ----
     def _install_ollama(self, task: ModelTask, entry: dict[str, Any]) -> None:
@@ -430,7 +1538,7 @@ class ModelManager:
             if r.status_code in (401, 403):
                 raise UserFacingError(
                     "Download unauthorized",
-                    hint="Set an API token in Settings → Tokens (Hugging Face token for HF downloads, Civitai API key for Civitai downloads), then retry."
+                    hint="Run `hf auth login` on the backend, or set an API token in Settings → Tokens (Hugging Face token for HF downloads, Civitai API key for Civitai downloads), then retry."
                 )
             r.raise_for_status()
             total = int(r.headers.get("content-length") or 0)
@@ -449,6 +1557,162 @@ class ModelManager:
         ModelTaskManager.set_progress(task, 1.0)
         ModelTaskManager.log(task, f"Saved: {dest.name}")
 
+    def _run_hf_download_with_auth_fallback(
+        self,
+        task: ModelTask,
+        *,
+        resource: str,
+        candidates: list[HfTokenCandidate],
+        download: Callable[[str | bool], None],
+    ) -> None:
+        rejected_sources: list[str] = []
+        for candidate in candidates:
+            self._append_task_log(task, f"Using Hugging Face auth from {candidate.source}")
+            try:
+                download(candidate.token)
+                return
+            except Exception as exc:
+                if not _is_hf_auth_failure(exc):
+                    raise
+                rejected_sources.append(candidate.source)
+                self._append_task_log(
+                    task,
+                    f"Hugging Face auth from {candidate.source} was rejected; trying another credential.",
+                )
+
+        try:
+            # False prevents huggingface_hub from silently reusing a rejected cached token.
+            download(False)
+        except Exception as exc:
+            if not _is_hf_auth_failure(exc):
+                raise
+            if rejected_sources:
+                hint = (
+                    "Run `hf auth logout` followed by `hf auth login`, or replace the Hugging Face "
+                    "token in Settings → Tokens. If this model is gated, accept its license on "
+                    "Hugging Face before retrying."
+                )
+            else:
+                hint = (
+                    "Set a valid Hugging Face token in Settings → Tokens, or run `hf auth login`. "
+                    "If this model is gated, accept its license on Hugging Face before retrying."
+                )
+            raise UserFacingError(
+                f"Hugging Face denied access to {resource}",
+                hint=hint,
+                code="HF_AUTH_REQUIRED",
+            ) from exc
+
+        if rejected_sources:
+            self._append_task_log(
+                task,
+                "Downloaded without Hugging Face authentication after stored credentials were rejected.",
+            )
+
+    def _append_task_log(self, task: ModelTask, msg: str) -> None:
+        current = str(task.last_log or "").strip()
+        ModelTaskManager.log(task, f"{current}\n{msg}" if current else msg)
+
+    def _restore_from_model_cache(self, task: ModelTask, entry: dict[str, Any], dest: Path) -> bool:
+        cache = getattr(self, "model_cache", None)
+        if cache is None:
+            return False
+        cache_entry = self._cache_entry_from_cloud_record(
+            entry,
+            self._cloud_model_record(str(entry.get("id") or "").strip()),
+        )
+        try:
+            if not cache.download_model(cache_entry, dest):
+                return False
+        except Exception as exc:
+            self._append_task_log(task, f"{self._model_cache_label()} restore skipped: {exc}")
+            return False
+        ModelTaskManager.set_progress(task, 1.0)
+        ModelTaskManager.log(task, f"Restored from {self._model_cache_label()}: {dest.name}")
+        return True
+
+    def _restore_snapshot_from_model_cache(self, task: ModelTask, entry: dict[str, Any], dest: Path) -> bool:
+        cache = getattr(self, "model_cache", None)
+        download = getattr(cache, "download_model_directory", None)
+        if cache is None or not callable(download):
+            return False
+        cache_entry = self._cache_entry_from_cloud_record(
+            entry,
+            self._cloud_model_record(str(entry.get("id") or "").strip()),
+        )
+        try:
+            if not download(cache_entry, dest):
+                return False
+        except Exception as exc:
+            self._append_task_log(task, f"{self._model_cache_label()} restore skipped: {exc}")
+            return False
+        if not self._internal_asset_installed(entry, dest):
+            raise UserFacingError(
+                "Restored internal model archive is incomplete",
+                hint="Rebuild and upload the internal model archive. The restored Diffusers snapshot is missing required files.",
+                code="MODEL_CACHE_RESTORE_INVALID",
+            )
+        ModelTaskManager.set_progress(task, 1.0)
+        ModelTaskManager.log(task, f"Restored internal snapshot from {self._model_cache_label()}: {dest.name}")
+        return True
+
+    def _upload_to_model_cache(self, task: ModelTask, entry: dict[str, Any], path: Path, *, mode: str = "local_cache") -> str | None:
+        cache = getattr(self, "model_cache", None)
+        if cache is None:
+            return None
+        try:
+            object_name = cache.upload_model(entry, path)
+        except Exception as exc:
+            self._append_task_log(task, f"{self._model_cache_label()} upload skipped: {exc}")
+            return None
+        self._record_cloud_model(entry, object_name, mode=mode)
+        self._append_task_log(task, f"{self._model_cache_label()}: {object_name}")
+        return str(object_name)
+
+    def _upload_snapshot_to_model_cache(self, task: ModelTask, entry: dict[str, Any], path: Path, *, mode: str = "local_cache") -> str | None:
+        cache = getattr(self, "model_cache", None)
+        upload = getattr(cache, "upload_model_directory", None)
+        if cache is None or not callable(upload):
+            return None
+        try:
+            object_name = upload(entry, path)
+        except Exception as exc:
+            self._append_task_log(task, f"{self._model_cache_label()} snapshot upload skipped: {exc}")
+            return None
+        self._record_cloud_model(entry, object_name, mode=mode)
+        self._append_task_log(task, f"{self._model_cache_label()} snapshot: {object_name}")
+        return str(object_name)
+
+    def _restore_cloud_model(self, task: ModelTask, entry: dict[str, Any]) -> None:
+        mode, dest = self._models_dest(entry)
+        if self.model_cache is None:
+            raise UserFacingError(
+                "No model cache is enabled",
+                hint="Set EDMG_AWS_MODEL_CACHE=1 and EDMG_AWS_MODEL_CACHE_BUCKET, then restart Studio.",
+                code="MODEL_CACHE_REQUIRED",
+            )
+        if mode == "file":
+            if not self._restore_from_model_cache(task, entry, dest):
+                raise UserFacingError(
+                    f"{entry.get('name') or entry.get('id') or 'Model'} is not present in the model cache",
+                    hint="Install it in S3-only mode first, or install it locally from the original source.",
+                    code="MODEL_CACHE_MISS",
+                )
+            return
+        if mode == "snapshot":
+            if not self._restore_snapshot_from_model_cache(task, entry, dest):
+                raise UserFacingError(
+                    f"{entry.get('name') or entry.get('id') or 'Internal model'} is not present in the model cache",
+                    hint="Install it in S3-only mode first, or point the model entry at a valid S3 snapshot archive.",
+                    code="MODEL_CACHE_MISS",
+                )
+            return
+        raise UserFacingError(
+            "This model type cannot be restored from the model cache",
+            hint="Only single-file assets and internal Diffusers snapshot archives are supported.",
+            code="CACHE_RESTORE_UNSUPPORTED_MODEL",
+        )
+
     def _install_file_model(self, task: ModelTask, entry: dict[str, Any]) -> None:
         src = (entry.get("source") or "").lower()
         kind = (entry.get("kind") or "").lower()
@@ -460,16 +1724,47 @@ class ModelManager:
             fname = "model.safetensors"
 
         mode, dest = self._models_dest(entry)
+        storage_mode = self._model_storage_mode()
+        cloud_only = storage_mode == "cloud_only"
 
-        headers: dict[str, str] = {}
-        # optional HF token support (prefer SecretStore; fall back to env vars)
-        hf_token = ""
-        if self.secrets is not None:
-            hf_token = self.secrets.get("hf_token") or ""
-        if not hf_token:
-            hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or ""
-        if hf_token:
-            headers["Authorization"] = f"Bearer {hf_token}"
+        if mode == "file":
+            if cloud_only:
+                if self.model_cache is None:
+                    raise UserFacingError(
+                        "Cloud-only model storage requires an enabled model cache",
+                        hint="Set EDMG_AWS_MODEL_CACHE=1 and EDMG_AWS_MODEL_CACHE_BUCKET, then restart Studio.",
+                        code="MODEL_CACHE_REQUIRED",
+                    )
+                object_name = self._cache_model_exists(entry, dest)
+                if object_name:
+                    self._record_cloud_model(entry, object_name, mode="cloud_only")
+                    ModelTaskManager.set_progress(task, 1.0)
+                    ModelTaskManager.log(task, f"Already stored in {self._model_cache_label()}: {object_name}")
+                    return
+            elif src != "s3" and self._restore_from_model_cache(task, entry, dest):
+                return
+
+        if mode == "snapshot":
+            if cloud_only:
+                if self.model_cache is None:
+                    raise UserFacingError(
+                        "Cloud-only internal model storage requires an enabled model cache",
+                        hint="Set EDMG_AWS_MODEL_CACHE=1 and EDMG_AWS_MODEL_CACHE_BUCKET, then restart Studio.",
+                        code="MODEL_CACHE_REQUIRED",
+                    )
+                object_name = self._cache_snapshot_exists(entry, dest)
+                if object_name:
+                    self._record_cloud_model(entry, object_name, mode="cloud_only")
+                    ModelTaskManager.set_progress(task, 1.0)
+                    ModelTaskManager.log(task, f"Already stored in {self._model_cache_label()}: {object_name}")
+                    return
+            elif src != "s3" and self._restore_snapshot_from_model_cache(task, entry, dest):
+                return
+
+        # Optional HF token support. Prefer explicit env vars, then the modern
+        # `hf auth login` / Hub token cache, then Studio Settings.
+        hf_candidates = hf_token_candidates(secrets_store=self.secrets)
+        hf_token = hf_candidates[0].token if hf_candidates else ""
 
         civitai_key = ""
         if self.secrets is not None:
@@ -485,31 +1780,239 @@ class ModelManager:
                     raise RuntimeError("Missing hf_repo_id for snapshot install")
                 if snapshot_download is None:
                     raise RuntimeError("huggingface_hub is not installed (required for snapshot downloads)")
-                dest.mkdir(parents=True, exist_ok=True)
+                target_path = self._cloud_temp_path(dest) if cloud_only else dest
+                target_path.mkdir(parents=True, exist_ok=True)
                 ModelTaskManager.log(task, f"Downloading HF snapshot: {repo_id}")
-                snapshot_download(
-                    repo_id=repo_id,
-                    local_dir=str(dest),
-                    local_dir_use_symlinks=False,
-                    revision=str(entry.get("hf_revision") or "") or None,
-                    token=(hf_token or None),
-                    resume_download=True,
-                )
-                ModelTaskManager.set_progress(task, 1.0)
+                try:
+                    self._run_hf_download_with_auth_fallback(
+                        task,
+                        resource=repo_id,
+                        candidates=hf_candidates,
+                        download=lambda token: snapshot_download(
+                            repo_id=repo_id,
+                            local_dir=str(target_path),
+                            local_dir_use_symlinks=False,
+                            revision=str(entry.get("hf_revision") or "") or None,
+                            token=token,
+                            resume_download=True,
+                        ),
+                    )
+                    if cloud_only:
+                        object_name = self._upload_snapshot_to_model_cache(task, entry, target_path, mode="cloud_only")
+                        if not object_name:
+                            raise RuntimeError("Cloud-only internal snapshot upload failed")
+                        ModelTaskManager.set_progress(task, 1.0)
+                        self._append_task_log(task, f"Cloud-only internal install complete; no local snapshot kept: {object_name}")
+                    else:
+                        self._upload_snapshot_to_model_cache(task, entry, dest)
+                        ModelTaskManager.set_progress(task, 1.0)
+                finally:
+                    if cloud_only:
+                        shutil.rmtree(target_path.parent, ignore_errors=True)
                 return
             # file mode
             if not url:
                 raise RuntimeError("Missing hf_url")
-            self._download_stream(task, url, dest, headers=headers)
+            target_path = self._cloud_temp_path(dest) if cloud_only else dest
+            try:
+                self._run_hf_download_with_auth_fallback(
+                    task,
+                    resource=url,
+                    candidates=hf_candidates,
+                    download=lambda token: self._download_stream(
+                        task,
+                        url,
+                        target_path,
+                        headers={"Authorization": f"Bearer {token}"} if token else {},
+                    ),
+                )
+                if cloud_only:
+                    object_name = self._upload_to_model_cache(task, entry, target_path, mode="cloud_only")
+                    if not object_name:
+                        raise RuntimeError("Cloud-only upload failed")
+                    ModelTaskManager.set_progress(task, 1.0)
+                    self._append_task_log(task, f"Cloud-only install complete; no local model file kept: {object_name}")
+                else:
+                    self._upload_to_model_cache(task, entry, dest)
+            finally:
+                if cloud_only:
+                    try:
+                        target_path.unlink(missing_ok=True)
+                        target_path.parent.rmdir()
+                    except Exception:
+                        pass
             return
+
+        if src == "hf_bucket":
+            bucket_id = str(
+                entry.get("hf_bucket_id")
+                or entry.get("hf_bucket")
+                or (target.get("hf_bucket_id") if isinstance(target, dict) else "")
+                or ""
+            ).strip()
+            if not bucket_id:
+                raise RuntimeError("Missing hf_bucket_id for Hugging Face bucket install")
+            remote_path = str(
+                entry.get("hf_bucket_path")
+                or entry.get("bucket_path")
+                or (target.get("hf_bucket_path") if isinstance(target, dict) else "")
+                or ""
+            ).strip()
+
+            if mode == "snapshot":
+                if _hf_bucket_download_snapshot is None:
+                    raise RuntimeError(
+                        "huggingface_hub bucket support is not installed (required for hf_bucket snapshot installs)"
+                    )
+                target_path = self._cloud_temp_path(dest) if cloud_only else dest
+                target_path.mkdir(parents=True, exist_ok=True)
+                ModelTaskManager.log(task, f"Syncing HF bucket snapshot: {bucket_id}")
+                try:
+                    ok = _hf_bucket_download_snapshot(
+                        bucket=bucket_id,
+                        dest=target_path,
+                        remote_path=remote_path,
+                        token=(hf_token or None),
+                    )
+                    if not ok:
+                        raise UserFacingError(
+                            f"{entry.get('name') or entry.get('id') or 'Model'} was not found in the Hugging Face bucket",
+                            hint="Check hf_bucket_id / hf_bucket_path and that your HF token can read the bucket.",
+                            code="HF_BUCKET_MISS",
+                        )
+                    if cloud_only:
+                        object_name = self._upload_snapshot_to_model_cache(task, entry, target_path, mode="cloud_only")
+                        if not object_name:
+                            raise RuntimeError("Cloud-only internal snapshot upload failed")
+                        ModelTaskManager.set_progress(task, 1.0)
+                        self._append_task_log(task, f"Cloud-only internal install complete; no local snapshot kept: {object_name}")
+                    else:
+                        self._upload_snapshot_to_model_cache(task, entry, dest)
+                        ModelTaskManager.set_progress(task, 1.0)
+                        ModelTaskManager.log(task, f"Synced from HF bucket: {bucket_id}")
+                finally:
+                    if cloud_only:
+                        shutil.rmtree(target_path.parent, ignore_errors=True)
+                return
+
+            # file mode
+            if _hf_bucket_download_file is None:
+                raise RuntimeError(
+                    "huggingface_hub bucket support is not installed (required for hf_bucket file installs)"
+                )
+            file_remote = remote_path or fname
+            target_path = self._cloud_temp_path(dest) if cloud_only else dest
+            ModelTaskManager.log(task, f"Downloading HF bucket file: {bucket_id}/{file_remote}")
+            try:
+                ok = _hf_bucket_download_file(
+                    bucket=bucket_id,
+                    remote_path=file_remote,
+                    dest=target_path,
+                    token=(hf_token or None),
+                )
+                if not ok:
+                    raise UserFacingError(
+                        f"{entry.get('name') or entry.get('id') or 'Model'} was not found in the Hugging Face bucket",
+                        hint="Check hf_bucket_id / hf_bucket_path and that your HF token can read the bucket.",
+                        code="HF_BUCKET_MISS",
+                    )
+                if cloud_only:
+                    object_name = self._upload_to_model_cache(task, entry, target_path, mode="cloud_only")
+                    if not object_name:
+                        raise RuntimeError("Cloud-only upload failed")
+                    ModelTaskManager.set_progress(task, 1.0)
+                    self._append_task_log(task, f"Cloud-only install complete; no local model file kept: {object_name}")
+                else:
+                    self._upload_to_model_cache(task, entry, dest)
+                    ModelTaskManager.set_progress(task, 1.0)
+                    ModelTaskManager.log(task, f"Saved from HF bucket: {dest.name}")
+            finally:
+                if cloud_only:
+                    try:
+                        target_path.unlink(missing_ok=True)
+                        target_path.parent.rmdir()
+                    except Exception:
+                        pass
+            return
+
+        if src == "s3":
+            if self.model_cache is None:
+                raise UserFacingError(
+                    "S3 model source requires an enabled model cache",
+                    hint="Set EDMG_AWS_MODEL_CACHE=1 and EDMG_AWS_MODEL_CACHE_BUCKET, then restart Studio.",
+                    code="MODEL_CACHE_REQUIRED",
+                )
+            if mode == "file":
+                object_name = self._cache_model_exists(entry, dest)
+                if not object_name:
+                    raise UserFacingError(
+                        f"{entry.get('name') or entry.get('id') or 'Model'} was not found in S3",
+                        hint="Check the model entry's s3_uri/s3_key, bucket, prefix, and Studio AWS credentials.",
+                        code="MODEL_CACHE_MISS",
+                    )
+                self._record_cloud_model(entry, object_name, mode="cloud_only" if cloud_only else "remote_cache")
+                if cloud_only:
+                    ModelTaskManager.set_progress(task, 1.0)
+                    ModelTaskManager.log(task, f"Stored in {self._model_cache_label()}: {object_name}")
+                    return
+                if not self._restore_from_model_cache(task, entry, dest):
+                    raise UserFacingError(
+                        "Could not download S3 model source",
+                        hint="Check that Studio has read access to the configured S3 object.",
+                        code="MODEL_CACHE_RESTORE_FAILED",
+                    )
+                return
+            if mode == "snapshot":
+                object_name = self._cache_snapshot_exists(entry, dest)
+                if not object_name:
+                    raise UserFacingError(
+                        f"{entry.get('name') or entry.get('id') or 'Internal model'} was not found in S3",
+                        hint="Check the model entry's s3_uri/s3_key points at a .zip/.tar/.tar.gz Diffusers snapshot archive.",
+                        code="MODEL_CACHE_MISS",
+                    )
+                self._record_cloud_model(entry, object_name, mode="cloud_only" if cloud_only else "remote_cache")
+                if cloud_only:
+                    ModelTaskManager.set_progress(task, 1.0)
+                    ModelTaskManager.log(task, f"Stored in {self._model_cache_label()}: {object_name}")
+                    return
+                if not self._restore_snapshot_from_model_cache(task, entry, dest):
+                    raise UserFacingError(
+                        "Could not download S3 internal model source",
+                        hint="Check that Studio has read access to the configured S3 snapshot archive.",
+                        code="MODEL_CACHE_RESTORE_FAILED",
+                    )
+                return
+            raise UserFacingError(
+                "S3 model source is not supported for this model type",
+                hint="Use S3-hosted single-file assets or internal Diffusers snapshot archives.",
+                code="S3_SOURCE_UNSUPPORTED_MODEL",
+            )
 
         if src == "civitai":
             dl = str(entry.get("civitai_download_url") or "")
             if not dl:
                 raise RuntimeError("Missing civitai_download_url")
+            headers: dict[str, str] = {}
             if civitai_key:
                 headers["Authorization"] = f"Bearer {civitai_key}"
-            self._download_stream(task, dl, dest, headers=headers)
+            target_path = self._cloud_temp_path(dest) if cloud_only else dest
+            try:
+                self._download_stream(task, dl, target_path, headers=headers)
+                if cloud_only:
+                    object_name = self._upload_to_model_cache(task, entry, target_path, mode="cloud_only")
+                    if not object_name:
+                        raise RuntimeError("Cloud-only upload failed")
+                    ModelTaskManager.set_progress(task, 1.0)
+                    self._append_task_log(task, f"Cloud-only install complete; no local model file kept: {object_name}")
+                else:
+                    self._upload_to_model_cache(task, entry, dest)
+            finally:
+                if cloud_only:
+                    try:
+                        target_path.unlink(missing_ok=True)
+                        target_path.parent.rmdir()
+                    except Exception:
+                        pass
             return
 
         if src == "local":
@@ -520,34 +2023,82 @@ class ModelManager:
             srcp = Path(sp).expanduser()
             if not srcp.exists():
                 raise RuntimeError(f"File not found: {srcp}")
+            if cloud_only:
+                object_name = self._upload_to_model_cache(task, entry, srcp, mode="cloud_only")
+                if not object_name:
+                    raise RuntimeError("Cloud-only upload failed")
+                ModelTaskManager.set_progress(task, 1.0)
+                ModelTaskManager.log(task, f"Stored in {self._model_cache_label()} only: {object_name}")
+                return
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(srcp.read_bytes())
             ModelTaskManager.log(task, f"Copied: {srcp.name}")
             ModelTaskManager.set_progress(task, 1.0)
+            self._upload_to_model_cache(task, entry, dest)
             return
 
         raise RuntimeError(f"Unsupported source: {src}")
 
-    
     def installed_path(self, model_id: str) -> Path | None:
         """Return local path for an installed model (file or directory), else None."""
         entry = self._find_entry(model_id)
         if not entry:
             return None
-        target = entry.get("target") or {}
-        engine = (target.get("engine") if isinstance(target, dict) else "") or "comfyui"
-        folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
-        if engine == "internal":
-            p = (self._internal_models_dir(folder) / model_id)
-            return p if p.exists() else None
-        if engine == "runtime_bundle":
-            p = self._internal_models_dir(folder) / model_id
-            return p if p.exists() else None
-        fname = str(entry.get("filename") or "")
-        if not fname:
+        return self._local_installed_path(entry)
+
+    def _entry_is_available(self, entry: dict[str, Any], *, probe_remote: bool = True) -> bool:
+        model_id = str(entry.get("id") or "").strip()
+        if not model_id:
+            return False
+        if self._local_installed_path(entry) is not None:
+            return True
+        if not probe_remote:
+            return False
+        if self._cloud_model_record(model_id) is not None:
+            return True
+        cache = getattr(self, "model_cache", None)
+        if cache is None:
+            return False
+        mode, dest = self._models_dest(entry)
+        try:
+            if mode == "snapshot":
+                return bool(self._cache_snapshot_exists(entry, dest))
+            if mode == "file":
+                return bool(self._cache_model_exists(entry, dest))
+        except Exception:
+            return False
+        return False
+
+    def is_model_available(self, model_id: str, *, probe_remote: bool = True) -> bool:
+        """Return True when a model is installed locally or present in the model cache."""
+        entry = self._find_entry(model_id)
+        if not entry:
+            return False
+        return self._entry_is_available(entry, probe_remote=probe_remote)
+
+    def installed_internal_models(self) -> dict[str, bool]:
+        """Bucket-aware availability for built-in internal diffusion models."""
+        ids = ("hf_sd15_internal", "hf_sdxl_internal", "hf_sd35_medium_internal")
+        return {model_id: self.is_model_available(model_id, probe_remote=True) for model_id in ids}
+
+    def resolve_installed_path(self, model_id: str, *, materialize_remote: bool = True) -> Path | None:
+        """Return a local runtime path, restoring a cached remote model when requested."""
+        entry = self._find_entry(model_id)
+        if not entry:
             return None
-        p = self._comfy_models_dir(folder) / fname
-        return p if p.exists() else None
+
+        local = self._local_installed_path(entry)
+        if local is not None or not materialize_remote:
+            return local
+
+        mode, dest = self._models_dest(entry)
+        if mode == "snapshot" and dest.exists() and not self._internal_asset_installed(entry, dest):
+            self._clear_incomplete_snapshot(dest)
+        if mode == "file":
+            return self._materialize_file_from_model_cache(entry, dest)
+        if mode == "snapshot":
+            return self._materialize_snapshot_from_model_cache(entry, dest)
+        return None
 
 
     def import_local(self, file_path: str, name: str | None = None, folder: str = "checkpoints") -> dict[str, Any]:
@@ -560,16 +2111,18 @@ class ModelManager:
             raise UserFacingError("File not found", hint="Pick a valid local model file.")
         folder = (folder or "checkpoints").strip().lower()
         safe_folder = folder if folder in ("checkpoints","loras","embeddings","vae","controlnet","upscale_models") else "checkpoints"
-        dest_dir = self._comfy_models_dir(safe_folder)
-        dest = dest_dir / srcp.name
-        dest.write_bytes(srcp.read_bytes())
+        cloud_only = self._model_storage_mode() == "cloud_only"
+        if not cloud_only:
+            dest_dir = self._comfy_models_dir(safe_folder)
+            dest = dest_dir / srcp.name
+            dest.write_bytes(srcp.read_bytes())
 
         entry = {
             "id": f"local_{uuid.uuid4().hex[:8]}",
             "name": name or srcp.stem,
             "kind": safe_folder.rstrip("s") if safe_folder.endswith("s") else safe_folder,
             "source": "local",
-            "source_path": str(dest),
+            "source_path": str(srcp if cloud_only else dest),
             "filename": srcp.name,
             "target": {"engine": "comfyui", "folder": safe_folder},
             "license_id": "user-provided",
@@ -578,6 +2131,16 @@ class ModelManager:
             "recommended": "advanced",
             "notes": "User-provided local file. Ensure you have rights to use/distribute outputs as applicable.",
         }
+        if cloud_only:
+            if self.model_cache is None:
+                raise UserFacingError(
+                    "Cloud-only model storage requires an enabled model cache",
+                    hint="Set EDMG_AWS_MODEL_CACHE=1 and EDMG_AWS_MODEL_CACHE_BUCKET, then restart Studio.",
+                    code="MODEL_CACHE_REQUIRED",
+                )
+            object_name = self._upload_to_model_cache(ModelTask(id="import", name="Import local"), entry, srcp, mode="cloud_only")
+            if not object_name:
+                raise RuntimeError("Cloud-only upload failed")
         self.add_user_model(entry)
         return entry
 

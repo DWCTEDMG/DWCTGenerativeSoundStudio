@@ -1,31 +1,35 @@
-"""Repo-root compatibility shim for the vendored EDMG engine."""
+"""Repo-root compatibility wrapper for the vendored EDMG engine package."""
 
 from __future__ import annotations
 
-import sys as _sys
-from pathlib import Path as _Path
+import importlib.util
+import sys
+from pathlib import Path
 
-_PKG_DIR = _Path(__file__).resolve().parent
-_REPO_ROOT = _PKG_DIR.parent
-_BACKEND_ROOT = _REPO_ROOT / 'studio' / 'edmg-studio' / 'python_backend'
-_REAL_PKG = _BACKEND_ROOT / 'enhanced_deforum_music_generator'
 
-if not _REAL_PKG.exists():
-    raise ImportError(
-        'Vendored EDMG engine was not found at '
-        f'{_REAL_PKG}. Make sure the full repository is present.'
-    )
+_PKG_DIR = (
+    Path(__file__).resolve().parents[1]
+    / "studio"
+    / "edmg-studio"
+    / "python_backend"
+    / "enhanced_deforum_music_generator"
+)
+_INIT_FILE = _PKG_DIR / "__init__.py"
 
-_backend_str = str(_BACKEND_ROOT)
-if _backend_str not in _sys.path:
-    _sys.path.insert(0, _backend_str)
+if not _INIT_FILE.exists():
+    raise ImportError(f"Canonical package not found at {_INIT_FILE}")
 
-__path__ = [str(_REAL_PKG), str(_PKG_DIR)]  # type: ignore[name-defined]
-try:
-    __spec__.submodule_search_locations[:] = __path__  # type: ignore[attr-defined]
-except Exception:
-    pass
+_SPEC = importlib.util.spec_from_file_location(
+    __name__,
+    _INIT_FILE,
+    submodule_search_locations=[str(_PKG_DIR)],
+)
+if _SPEC is None or _SPEC.loader is None:
+    raise ImportError(f"Unable to load canonical package spec from {_INIT_FILE}")
 
-from .public_api import AudioAnalysis, DeforumMusicGenerator
-
-__all__ = ['AudioAnalysis', 'DeforumMusicGenerator']
+module = sys.modules[__name__]
+module.__file__ = str(_INIT_FILE)
+module.__package__ = __name__
+module.__path__ = [str(_PKG_DIR)]  # type: ignore[attr-defined]
+module.__spec__ = _SPEC  # type: ignore[attr-defined]
+_SPEC.loader.exec_module(module)

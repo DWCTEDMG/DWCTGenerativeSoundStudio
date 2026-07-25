@@ -1,6 +1,9 @@
+import sys
+import types
+
 import pytest
-from core.nlp_processor import LyricsProcessor
-from config.config_system import LyricsConfig
+from enhanced_deforum_music_generator.config.config_system import LyricsConfig
+from enhanced_deforum_music_generator.core.nlp_processor import LyricsProcessor
 
 
 def test_whisper_loads_model(monkeypatch):
@@ -11,7 +14,7 @@ def test_whisper_loads_model(monkeypatch):
         def transcribe(self, path):
             return {"segments": [{"start": 0.0, "end": 1.0, "text": "hello"}]}
 
-    monkeypatch.setattr("whisper.load_model", lambda m: FakeModel())
+    monkeypatch.setitem(sys.modules, "whisper", types.SimpleNamespace(load_model=lambda m: FakeModel()))
     result = processor.transcribe("fake_audio.wav")
 
     assert isinstance(result, list)

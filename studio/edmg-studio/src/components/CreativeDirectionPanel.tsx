@@ -3,6 +3,17 @@ import { apiGet, apiPost } from "./api";
 
 type PreviewTab = "prompt-pack" | "timeline" | "deforum" | "contract";
 
+type DirectorMode = "narrative" | "performance" | "abstract" | "lyric" | "product" | "ambient";
+
+const DIRECTOR_MODES: Array<{ id: DirectorMode; label: string }> = [
+  { id: "narrative", label: "Narrative" },
+  { id: "performance", label: "Performance" },
+  { id: "abstract", label: "Abstract" },
+  { id: "lyric", label: "Lyric" },
+  { id: "product", label: "Product" },
+  { id: "ambient", label: "Ambient" },
+];
+
 type CreativeDirectionPanelProps = {
   projectId: string;
   analysis: any;
@@ -15,7 +26,9 @@ type CreativeDirectionPanelProps = {
 type CreativeDirectionResponse = {
   ready: boolean;
   missing: string[];
-  preset: "cinematic" | "psychedelic" | "ambient";
+  preset: string;
+  director_mode?: DirectorMode;
+  director_profile?: { id?: string; label?: string; summary?: string };
   sensitivity: number;
   provider_mode: string;
   scene_source: string;
@@ -79,6 +92,13 @@ const PREVIEW_LABELS: Record<PreviewTab, string> = {
   contract: "LLM contract",
 };
 
+const PREVIEW_HELP: Record<PreviewTab, string> = {
+  "prompt-pack": "The readable scene-by-scene prompt bundle. Use this when you want to copy the direction into a prompt tool, compare scene language, or hand it to another generator.",
+  timeline: "The exact prompt-track payload that can be merged into Studio Timeline. Use this when you want Creative Direction to become real prompt and motion data in the canonical renderer timeline.",
+  deforum: "A Deforum-oriented preview of prompts and motion schedules. Use this as a compatibility layer when you want to inspect how the direction translates into Deforum-style settings before rendering.",
+  contract: "The structured backend payload describing what the creative-direction system believes the narrative package is. Use this for debugging, integrations, or checking what the LLM-facing contract actually contains.",
+};
+
 function clamp01(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
@@ -90,6 +110,23 @@ function formatSeconds(seconds: number) {
 
 function prettyJson(value: any) {
   return JSON.stringify(value ?? {}, null, 2);
+}
+
+const TRANSCRIPT_FALLBACK_PREFIXES = [
+  "no transcript cue available",
+  "no speech detected after vad",
+  "no transcript is available",
+  "transcription failed",
+  "transcription unavailable",
+  "audio-only analysis",
+  "transcription not enabled",
+];
+
+function usableTranscriptCue(value: string | null | undefined) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const lowered = text.toLowerCase();
+  return TRANSCRIPT_FALLBACK_PREFIXES.some((prefix) => lowered.startsWith(prefix)) ? "" : text;
 }
 
 function Meter({ label, value, tone }: { label: string; value: number; tone: string }) {
@@ -106,7 +143,7 @@ function Meter({ label, value, tone }: { label: string; value: number; tone: str
 
 export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
   const { projectId, analysis, plan, selectedVariant, compact = false, onNavigate } = props;
-  const [preset, setPreset] = useState<"cinematic" | "psychedelic" | "ambient">("cinematic");
+  const [directorMode, setDirectorMode] = useState<DirectorMode>("narrative");
   const [sensitivity, setSensitivity] = useState<number>(1.0);
   const [copyStatus, setCopyStatus] = useState<string>("");
   const [applyStatus, setApplyStatus] = useState<string>("");
@@ -135,7 +172,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
       setStatus("Loading backend creative direction...");
       try {
         const result = await apiGet(
-          `/v1/projects/${projectId}/creative_direction?variant_index=${selectedVariant}&preset=${preset}&sensitivity=${encodeURIComponent(String(sensitivity))}`,
+          `/v1/projects/${projectId}/creative_direction?variant_index=${selectedVariant}&director_mode=${directorMode}&preset=${directorMode}&sensitivity=${encodeURIComponent(String(sensitivity))}`,
         );
         if (!cancelled) {
           const nextPayload = result?.creative_direction || null;
@@ -156,7 +193,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [preset, projectId, selectedVariant, sensitivity]);
+  }, [directorMode, projectId, selectedVariant, sensitivity]);
 
   const hasPlan = Boolean(plan?.variants?.length);
   const hasAnalysis = Boolean(analysis);
@@ -171,6 +208,8 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
   const hooks = payload?.narrative_analysis?.hooks || [];
   const emotions = payload?.narrative_analysis?.emotions || [];
   const missing = payload?.missing || [];
+  const transcriptAnchor = usableTranscriptCue(payload?.transcript_summary || payload?.transcript_text || "");
+  const transcriptDriven = Boolean(usableTranscriptCue(payload?.transcript_text));
 
   const previewText = useMemo(() => {
     if (!payload) {
@@ -205,7 +244,8 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
     try {
       await apiPost(`/v1/projects/${projectId}/creative_direction/apply_timeline_patch`, {
         variant_index: selectedVariant,
-        preset,
+        director_mode: directorMode,
+        preset: directorMode,
         sensitivity,
         overwrite_tracks: true,
         overwrite_camera: false,
@@ -245,11 +285,16 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
 
       <div className="row" style={{ gap: 10, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
         <label className="small row" style={{ gap: 6, alignItems: "center" }}>
-          Preset
-          <select value={preset} onChange={(event) => setPreset(event.target.value as any)} style={{ width: 180 }}>
-            <option value="cinematic">Cinematic</option>
-            <option value="psychedelic">Psychedelic</option>
-            <option value="ambient">Ambient</option>
+          Director mode
+          <select
+            aria-label="Director mode"
+            value={directorMode}
+            onChange={(event) => setDirectorMode(event.target.value as DirectorMode)}
+            style={{ width: 180 }}
+          >
+            {DIRECTOR_MODES.map((mode) => (
+              <option key={mode.id} value={mode.id}>{mode.label}</option>
+            ))}
           </select>
         </label>
         <label className="small row" style={{ gap: 6, alignItems: "center" }}>
@@ -267,9 +312,16 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
         </label>
         <div className="badge">{hasAnalysis ? "Analysis ready" : "Needs analysis"}</div>
         <div className="badge">{hasPlan ? "Plan ready" : "Plan fallback"}</div>
+        {payload?.director_profile?.label ? <div className="badge">{payload.director_profile.label}</div> : null}
         {payload?.provider_mode ? <div className="badge">{payload.provider_mode}</div> : null}
         {payload?.scene_source ? <div className="badge">Scenes: {payload.scene_source}</div> : null}
       </div>
+
+      {payload?.director_profile?.summary ? (
+        <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
+          {payload.director_profile.summary}
+        </div>
+      ) : null}
 
       <div className="small" style={{ marginTop: 8 }}>
         {status || "Creative direction is unavailable until analysis and planning exist."}
@@ -348,12 +400,15 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
 
           {payload?.transcript_summary ? (
             <div className="insight-callout" style={{ marginTop: 10 }}>
-              <div className="small" style={{ fontWeight: 900 }}>Transcript anchor</div>
-              <div style={{ marginTop: 6 }}>{payload.transcript_summary}</div>
+              <div className="row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                <div className="small" style={{ fontWeight: 900 }}>{transcriptDriven ? "Transcript anchor" : "Audio analysis anchor"}</div>
+                <span className="badge">{transcriptDriven ? "lyric-driven" : "audio-driven"}</span>
+              </div>
+              <div style={{ marginTop: 6 }}>{transcriptAnchor || payload.transcript_summary}</div>
             </div>
           ) : null}
 
-          <div style={{ marginTop: 12 }}>
+          <div className="insight-sceneList" style={{ marginTop: 12 }}>
             {payload?.scenes?.length ? payload.scenes.map((scene) => (
               <div key={`${scene.index}-${scene.name}`} className="insight-scene-card">
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
@@ -364,7 +419,11 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
                   <div className="badge">{Math.round(scene.energy * 100)}% energy</div>
                 </div>
                 <div style={{ marginTop: 8 }}><strong>Base prompt:</strong> {scene.prompt}</div>
-                <div className="small" style={{ marginTop: 6 }}><strong>Transcript cue:</strong> {scene.transcript_cue}</div>
+                {usableTranscriptCue(scene.transcript_cue) ? (
+                  <div className="small" style={{ marginTop: 6 }}><strong>Transcript cue:</strong> {usableTranscriptCue(scene.transcript_cue)}</div>
+                ) : (
+                  <div className="small" style={{ marginTop: 6 }}><strong>Audio cue:</strong> This section is being driven by energy, continuity, and motion design rather than a transcript line.</div>
+                )}
                 <div className="small" style={{ marginTop: 6 }}><strong>Camera:</strong> {scene.camera_hint}</div>
                 <div className="small" style={{ marginTop: 6 }}><strong>Motion:</strong> {scene.motion_hint}</div>
               </div>
@@ -375,7 +434,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
             )}
           </div>
 
-          <details style={{ marginTop: 12 }} open={!compact}>
+          <details className="insight-details" style={{ marginTop: 12 }} open={!compact}>
             <summary style={{ cursor: "pointer", fontWeight: 800 }}>Exports and previews</summary>
             <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
               {(Object.keys(PREVIEW_LABELS) as PreviewTab[]).map((key) => (
@@ -389,13 +448,17 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
                 </button>
               ))}
             </div>
+            <div className="small" style={{ marginTop: 10 }}>
+              {PREVIEW_HELP[preview]}
+            </div>
             <textarea
+              className="insight-previewText"
               readOnly
               value={previewText}
               style={{ marginTop: 10, minHeight: compact ? 160 : 240 }}
             />
             {payload?.notes?.length ? (
-              <div style={{ marginTop: 10 }}>
+              <div className="insight-noteList" style={{ marginTop: 10 }}>
                 {payload.notes.map((note, index) => (
                   <div key={index} className="small">{note}</div>
                 ))}

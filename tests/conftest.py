@@ -1,32 +1,54 @@
 import sys
 import pathlib
+import os
+import tempfile
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
+_STUDIO = _ROOT / 'studio' / 'edmg-studio'
 _BACKEND = _ROOT / 'studio' / 'edmg-studio' / 'python_backend'
+
+
+def _configure_pytest_temproot() -> None:
+    if os.environ.get("PYTEST_DEBUG_TEMPROOT"):
+        return
+
+    candidates = []
+    override = os.environ.get("EDMG_PYTEST_TEMPROOT")
+    if override:
+        candidates.append(pathlib.Path(override))
+    candidates.extend([
+        pathlib.Path(tempfile.gettempdir()) / "edmg-studio-pytest",
+        _ROOT / ".pytest-tmp",
+    ])
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        os.environ["PYTEST_DEBUG_TEMPROOT"] = str(candidate)
+        return
+
+
+_configure_pytest_temproot()
+
+if _STUDIO.exists():
+    sys.path.insert(0, str(_STUDIO))
 if _BACKEND.exists():
     sys.path.insert(0, str(_BACKEND))
-sys.path.insert(0, str(_ROOT / 'src'))
 sys.path.insert(0, str(_ROOT))
 
 import pytest
 
+_TEST_AUDIO_FIXTURE = (
+    _ROOT
+    / "tests"
+    / "fixtures"
+    / "audio"
+    / "LANDR-Walkin' In That Rundown Town-Warm-Medium-REV_V1.wav"
+)
+
 @pytest.fixture(scope="session")
-def test_audio_file(tmp_path_factory):
-    """Provide a small dummy WAV file for tests."""
-    import wave
-    import numpy as np
-
-    path = tmp_path_factory.mktemp("data") / "test.wav"
-    framerate = 44100
-    duration = 1  # 1 second
-    amplitude = 16000
-    freq = 440.0  # A4 tone
-    t = np.linspace(0, duration, int(framerate * duration))
-    signal = (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.int16)
-
-    with wave.open(str(path), "w") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(framerate)
-        wav_file.writeframes(signal.tobytes())
-
-    return str(path)
+def test_audio_file():
+    """Provide the committed real-audio fixture for analyzer tests."""
+    assert _TEST_AUDIO_FIXTURE.exists(), f"Missing test audio fixture: {_TEST_AUDIO_FIXTURE}"
+    return str(_TEST_AUDIO_FIXTURE)

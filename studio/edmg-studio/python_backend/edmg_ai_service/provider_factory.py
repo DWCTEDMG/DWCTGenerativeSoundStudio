@@ -18,5 +18,12 @@ def build_provider(settings: Settings) -> PlanProvider:
             model=settings.openai_compat_model,
         )
 
-    # "none" or unknown provider -> safe fallback
+    if settings.provider in ("nemotron_cloud", "nvidia_nim", "nemotron"):
+        return OpenAICompatPlanner(
+            base_url=settings.nemotron_cloud_base_url,
+            api_key=settings.nemotron_cloud_api_key,
+            model=settings.nemotron_cloud_model,
+        )
+
+    # "none", "rule_based", or unknown provider -> safe fallback
     return RuleBasedPlanner()

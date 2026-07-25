@@ -37,11 +37,12 @@ analysis = analyzer.analyze(audio_path, enable_lyrics=True, enable_ai_prompts=Tr
 
 Dependencies (optional but recommended)
 -----------------------------------------------------------------
-- spaCy:          pip install spacy  &&  python -m spacy download en_core_web_sm
-- transformers:   pip install transformers torch
-- TextBlob:       pip install textblob  &&  python -m textblob.download_corpora
-- NLTK VADER:     pip install nltk     &&  python -c "import nltk; nltk.download('vader_lexicon')"
-- requests:       pip install requests  (for Claude HTTP API)
+- spaCy/TextBlob/NLTK: locked by the ``core`` capability.
+- transformers: locked by ``internal-video`` plus one accelerator profile.
+- requests: a base backend dependency used for provider HTTP APIs.
+
+Synchronize with uv, for example:
+    uv sync --frozen --extra cpu --extra core --extra internal-video
 
 The module degrades gracefully if any dependency is missing.
 """

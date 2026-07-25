@@ -27,7 +27,7 @@ function assertSourceCoverage() {
   assert.match(desktopArtifacts, /copied_path_fallback/, "desktopArtifacts.ts must preserve browser fallback");
   assert.match(desktopArtifacts, /hasDesktopPathBridge/, "desktopArtifacts.ts must detect Electron bridge");
 
-  for (const rel of ["src/pages/Render.tsx", "src/pages/Outputs.tsx", "src/pages/RenderQueue.tsx"]) {
+  for (const rel of ["src/pages/Render.tsx", "src/pages/Outputs.tsx", "src/shared/jobs/ProjectJobsPanel.tsx"]) {
     const text = read(rel);
     assert.match(text, /desktopArtifacts/, `${rel} must import desktop artifact helper`);
     assert.match(text, /desktopActionLabel\(/, `${rel} must render desktop action labels`);
@@ -81,6 +81,8 @@ async function assertPreloadContract() {
 
   assert.ok(exposed.edmg, "preload must expose window.edmg");
   assert.equal(typeof exposed.edmg.getBackendUrl, "function");
+  assert.equal(typeof exposed.edmg.getBackendAuthToken, "function");
+  assert.equal(typeof exposed.edmg.setBackendAuthToken, "function");
   assert.equal(typeof exposed.edmg.revealPath, "function");
   assert.equal(typeof exposed.edmg.openPath, "function");
   assert.equal(typeof exposed.__edmgTest?.writeReport, "function", "test bridge must be exposed in test mode");
@@ -108,7 +110,7 @@ function resolveElectronBinary() {
 }
 
 function canLaunchElectron() {
-  if (!resolveElectronBinary()) return { ok: false, reason: "Electron binary unavailable (likely npm install --ignore-scripts without postinstall download)." };
+  if (!resolveElectronBinary()) return { ok: false, reason: "Electron binary unavailable (likely pnpm install --ignore-scripts without postinstall download)." };
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     const xvfb = "/usr/bin/xvfb-run";
     if (!fs.existsSync(xvfb)) {

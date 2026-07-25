@@ -57,7 +57,7 @@ class PerformanceConfig:
         self.cache_size_mb = min(512, max(64, self.memory_gb * 32))
         
         # Processing limits
-        self.max_audio_length = 600  # 10 minutes
+        self.max_audio_length = 1800  # 30 minutes
         self.sample_rate_limit = 44100
         self.batch_size = 8
         
@@ -237,7 +237,7 @@ class StreamingAudioProcessor:
 class OptimizedAudioAnalyzer:
     """Optimized version of AudioAnalyzer with parallel processing."""
     
-    def __init__(self, max_duration: int = 600, config: Optional[PerformanceConfig] = None):
+    def __init__(self, max_duration: int = 1800, config: Optional[PerformanceConfig] = None):
         self.max_duration = max_duration
         self.config = config or PerformanceConfig()
         self.model_cache = ModelCache()
@@ -610,7 +610,8 @@ class BatchProcessor:
             results = []
             for i, future in enumerate(futures):
                 try:
-                    result = future.result(timeout=300)  # 5 minute timeout per file
+                    timeout_s = max(300, min(1800, int(self.analyzer.max_duration) + 120))
+                    result = future.result(timeout=timeout_s)
                     results.append(result)
                     print(f"Completed {i+1}/{len(audio_paths)}: {audio_paths[i]}")
                 except Exception as e:
@@ -677,7 +678,7 @@ class MemoryManager:
 
 
 # Integration functions for drop-in replacement
-def create_optimized_analyzer(max_duration: int = 600, **kwargs) -> OptimizedAudioAnalyzer:
+def create_optimized_analyzer(max_duration: int = 1800, **kwargs) -> OptimizedAudioAnalyzer:
     """Create an optimized analyzer with performance tuning."""
     config = PerformanceConfig()
     return OptimizedAudioAnalyzer(max_duration=max_duration, config=config)

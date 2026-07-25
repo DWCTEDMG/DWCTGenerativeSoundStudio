@@ -1,17 +1,81 @@
-import React from "react";
+import React, { useState } from "react";
+import { isStudioForgeEnabled } from "../features";
+import { preloadNavigationIntent, type Page } from "../pageRouting";
 
-export type Page =
-  | "dashboard"
-  | "projects"
-  | "workspace"
-  | "timeline"
-  | "render"
-  | "queue"
-  | "outputs"
-  | "cloud"
-  | "settings"
-  | "setup"
-  | "models";
+type NavGroupId = "flow" | "delivery" | "labs" | "system";
+
+type NavItem = {
+  page: Page;
+  label: string;
+  hint: string;
+};
+
+type NavGroup = {
+  id: NavGroupId;
+  label: string;
+  hint: string;
+  items: NavItem[];
+};
+
+function getNavGroups(): NavGroup[] {
+  const labs: NavItem[] = [
+    { page: "directorLab", label: "EDMG Director", hint: "combined planning + reactive" },
+    { page: "plannerLab", label: "AI Planner Lab", hint: "deep prompt authoring" },
+    { page: "reactiveLab", label: "Reactive Lab", hint: "audio-reactive scheduling" },
+  ];
+  if (isStudioForgeEnabled()) {
+    labs.push({ page: "studioForge", label: "Studio Forge", hint: "AI builder preview" });
+  }
+
+  return [
+    {
+      id: "flow",
+      label: "Core Flow",
+      hint: "Canonical studio path",
+      items: [
+        { page: "dashboard", label: "Dashboard", hint: "status + quick access" },
+        { page: "projects", label: "Projects", hint: "create and pick sessions" },
+        { page: "workspace", label: "Workspace", hint: "ingest, plan, reactive handoff" },
+        { page: "timeline", label: "Timeline", hint: "arrange full track and cues" },
+      ],
+    },
+    {
+      id: "delivery",
+      label: "Delivery",
+      hint: "Render and review",
+      items: [
+        { page: "render", label: "Render", hint: "launch outputs" },
+        { page: "queue", label: "Render Queue", hint: "logs, retries, progress" },
+        { page: "review", label: "Review", hint: "compare variants, approve results" },
+        { page: "outputs", label: "Outputs", hint: "browse generated media" },
+      ],
+    },
+    {
+      id: "labs",
+      label: "Labs",
+      hint: "Standalone specialist tools",
+      items: labs,
+    },
+    {
+      id: "system",
+      label: "System",
+      hint: "Models, setup, services",
+      items: [
+        { page: "cloud", label: "Cloud", hint: "remote integrations" },
+        { page: "models", label: "Models", hint: "packs and availability" },
+        { page: "settings", label: "Settings", hint: "paths and preferences" },
+        { page: "setup", label: "Setup", hint: "dependency health" },
+      ],
+    },
+  ];
+}
+
+const DEFAULT_GROUP_STATE: Record<NavGroupId, boolean> = {
+  flow: true,
+  delivery: true,
+  labs: false,
+  system: false,
+};
 
 export default function Sidebar({
   page,
@@ -20,61 +84,83 @@ export default function Sidebar({
   page: Page;
   onNavigate: (p: Page) => void;
 }) {
-  const items: Array<[Page, string]> = [
-    ["dashboard", "Dashboard"],
-    ["projects", "Projects"],
-    ["workspace", "Workspace"],
-    ["timeline", "Timeline"],
-    ["render", "Render"],
-    ["queue", "Render Queue"],
-    ["outputs", "Outputs"],
-    ["cloud", "Cloud"],
-    ["models", "Models"],
-    ["settings", "Settings"],
-    ["setup", "Setup"],
-  ];
+  const [openGroups, setOpenGroups] =
+    useState<Record<NavGroupId, boolean>>(DEFAULT_GROUP_STATE);
+  const navGroups = getNavGroups();
+
+  const activeItem =
+    navGroups.flatMap((group) => group.items).find((item) => item.page === page) || null;
 
   return (
     <div className="sidebar">
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <img
-          src="/studio-logo.png"
-          alt="EDMG Studio logo"
-          style={{
-            width: "100%",
-            maxWidth: 220,
-            aspectRatio: "1 / 1",
-            objectFit: "contain",
-            borderRadius: 24,
-            border: "1px solid rgba(70,214,224,0.28)",
-            background:
-              "radial-gradient(circle at top center, rgba(255,132,52,0.14), transparent 34%), rgba(5,17,19,0.94)",
-            boxShadow: "0 18px 40px rgba(0,0,0,0.32), 0 0 0 1px rgba(70,214,224,0.08)",
-          }}
-        />
-        <div style={{ fontSize: 18, fontWeight: 800, textAlign: "center" }}>EDMG Studio</div>
+      <div className="sidebar-brandBlock">
+        <div className="sidebar-logoShell">
+          <img
+            src="studio-logo.png"
+            alt="EDMG Studio logo"
+            className="sidebar-logo"
+          />
+        </div>
+        <div className="sidebar-brandText">
+          <div className="sidebar-eyebrow">Studio Control</div>
+          <div className="sidebar-brand">EDMG Studio</div>
+        </div>
       </div>
-      <div className="small" style={{ marginTop: 6, textAlign: "center" }}>
-        Desktop UI + local backend + ComfyUI + AI + EDMG Core
+      <div className="small sidebar-tagline">
+        Desktop UI + managed or external backend + internal renderer + optional ComfyUI + AI + EDMG Core
       </div>
 
-      <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-        {items.map(([k, label]) => (
-          <button
-            key={k}
-            onClick={() => onNavigate(k)}
-            style={{
-              textAlign: "left",
-              background: page === k ? "#1b1d2b" : "#141623"
-            }}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="sidebar-focusCard">
+        <div className="sidebar-focusLabel">Current focus</div>
+        <div className="sidebar-focusValue">{activeItem?.label || "Studio home"}</div>
+        <div className="small">{activeItem?.hint || "Use Workspace as the integrated hub."}</div>
       </div>
 
-      <div className="small" style={{ marginTop: 14 }}>
-        backend: 7863 • Ollama: 11434 • ComfyUI: 8188
+      <div className="sidebar-nav">
+        {navGroups.map((group) => {
+          const groupIsActive = group.items.some((item) => item.page === page);
+          const isOpen = groupIsActive || openGroups[group.id];
+
+          return (
+            <details
+              key={group.id}
+              className={`sidebar-group${groupIsActive ? " is-active" : ""}`}
+              open={isOpen}
+              onToggle={(event) => {
+                const nextOpen = (event.currentTarget as HTMLDetailsElement).open;
+                setOpenGroups((current) => ({ ...current, [group.id]: nextOpen }));
+              }}
+            >
+              <summary className="sidebar-groupSummary">
+                <span className="sidebar-groupTitle">{group.label}</span>
+                <span className="sidebar-groupMeta">{group.hint}</span>
+              </summary>
+
+              <div className="sidebar-groupBody">
+                {group.items.map((item) => (
+                  <button
+                    key={item.page}
+                    onClick={() => onNavigate(item.page)}
+                    onMouseEnter={() => preloadNavigationIntent(item.page)}
+                    onFocus={() => preloadNavigationIntent(item.page)}
+                    className={`sidebar-navButton${page === item.page ? " is-active" : ""}`}
+                  >
+                    <span className="sidebar-navCopy">
+                      <span className="sidebar-navText">{item.label}</span>
+                      <span className="sidebar-navMeta">{item.hint}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+
+      <div className="sidebar-footer">
+        <span className="badge">backend configurable</span>
+        <span className="badge">Ollama 11434</span>
+        <span className="badge">ComfyUI 8188</span>
       </div>
     </div>
   );

@@ -38,18 +38,11 @@ Point those fields at `D:\...` before clicking **Install Selected**.
 
 ## Build a standalone app (optional)
 
-You can package the GUI with PyInstaller:
+Use the same locked `uv` build toolchain that Studio release validation uses:
 
 ```bash
-./.venv/bin/python -m pip install pyinstaller
-./.venv/bin/pyinstaller --onefile --windowed installer_gui.py
-```
-
-On Windows:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install pyinstaller
-.\.venv\Scripts\pyinstaller.exe --onefile --windowed installer_gui.py
+uv sync --project studio/edmg-studio/python_backend --frozen --extra cpu --group build
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync --extra cpu --group build pyinstaller --onefile --windowed installer_gui.py
 ```
 
 The built executable will appear under `dist/`.

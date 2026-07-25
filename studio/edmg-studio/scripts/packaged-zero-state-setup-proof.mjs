@@ -170,7 +170,7 @@ async function waitForTask(baseUrl, taskId, timeoutMs = 90 * 60 * 1000) {
 
 async function main() {
   const appExe = resolvePackagedApp();
-  assert.ok(appExe, "Packaged app not found. Run npm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
+  assert.ok(appExe, "Packaged app not found. Run pnpm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
 
   await stopExistingPackagedProcesses();
 
@@ -186,7 +186,7 @@ async function main() {
   const externalDir = path.join(studioHome, "external");
   const expectedOllamaExe = path.join(externalDir, "ollama", "ollama.exe");
   const expectedSevenZip = path.join(externalDir, "bin", "7zr.exe");
-  const requestedModel = process.env.EDMG_STUDIO_ZERO_STATE_MODEL || "qwen2.5:0.5b";
+  const requestedModel = process.env.EDMG_STUDIO_ZERO_STATE_MODEL || "qwen3:4b";
 
   await fsp.mkdir(studioHome, { recursive: true });
   await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
@@ -288,10 +288,15 @@ async function main() {
   } finally {
     await killProcessTree(child);
     await stopProcessesByPathPrefix(path.join(studioHome, "external", "ollama"));
+    await stopProcessesByPathPrefix(path.join(studioHome, "external", "ComfyUI_windows_portable"));
     await stopExistingPackagedProcesses();
     await restoreBootstrap(bootstrapPath, bootstrapBackup);
     if (!KEEP_PROOF_HOME) {
-      await fsp.rm(studioHome, { recursive: true, force: true });
+      try {
+        await fsp.rm(studioHome, { recursive: true, force: true });
+      } catch (error) {
+        console.warn("[packaged-zero-state-setup] cleanup warning", error);
+      }
     }
   }
 }

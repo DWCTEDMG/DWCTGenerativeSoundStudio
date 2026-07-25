@@ -1,7 +1,7 @@
 """Enhanced Deforum Music Generator (EDMG) — embedded engine.
 
 This package is vendored into EDMG Studio and used as a backend library.
-Standalone UI entrypoints (Gradio/A1111 extension) are intentionally not shipped.
+Standalone UI entrypoints are intentionally not shipped.
 """
 
 from __future__ import annotations

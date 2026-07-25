@@ -16,11 +16,12 @@ def _load_script_module(script_path: Path):
 
 
 def test_build_run_command_smoke(tmp_path: Path) -> None:
-    script = Path(__file__).resolve().parents[1] / "scripts" / "video_model_bench.py"
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "studio" / "edmg-studio" / "scripts" / "video_model_bench.py"
     mod = _load_script_module(script)
 
     cmd = mod.build_run_command(
-        runner=str(Path("scripts") / "run_video_diffusers.py"),
+        runner=str(repo_root / "studio" / "edmg-studio" / "scripts" / "run_video_diffusers.py"),
         model_id="Org/Model",
         prompt="hello",
         out_path=str(tmp_path / "out.mp4"),

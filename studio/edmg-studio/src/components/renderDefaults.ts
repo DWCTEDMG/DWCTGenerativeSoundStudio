@@ -5,6 +5,25 @@ export type StudioRenderDefaults = {
   renderPreset?: "fast" | "balanced" | "quality" | "ultra";
   internalRenderTier?: "auto" | "draft" | "balanced" | "quality";
   internalResumeExisting?: boolean;
+  internalMotionStrategy?: "manual" | "storyboard_full_motion";
+  internalStoryboardShotMaxS?: number;
+  internalVideoApplyTimelineCamera?: boolean;
+  stillWidth?: number;
+  stillHeight?: number;
+  stillSteps?: number;
+  stillCfg?: number;
+  stillSampler?: string;
+  stillNegativePrompt?: string;
+  stillSeed?: string;
+  stillUpscaler?: string;
+  hiresFixEnabled?: boolean;
+  hiresFixScale?: number;
+  hiresFixSteps?: number;
+  hiresFixDenoise?: number;
+  refinerEnabled?: boolean;
+  refinerModel?: string;
+  refinerSwitchAt?: number;
+  refinerSteps?: number;
 };
 
 const KEY = "edmg_render_defaults";

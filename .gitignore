@@ -6,7 +6,11 @@ __pycache__/
 *$py.class
 *.so
 .pytest_cache/
+.pytest-runtime/
+.pytest-tmp/
 *.log
+*.bak
+nohup.out
 
 # ----------------------------
 # Python packaging / build
@@ -40,6 +44,7 @@ venv/
 support_bundles/
 install_profiles/
 models_store/
+/models/
 outputs/
 cache/
 data/
@@ -51,6 +56,7 @@ TEST_REPORT.json
 /stability_v2beta_openapi.json
 /output/
 /tmp/
+/Open-Sora/
 
 # ----------------------------
 # External apps
@@ -58,8 +64,6 @@ TEST_REPORT.json
 # ----------------------------
 external/*
 !external/
-!external/stable-diffusion-webui
-!external/stable-diffusion-webui/
 !external/ComfyUI
 !external/ComfyUI/
 
@@ -70,6 +74,7 @@ external/*
 desktop/electron/node_modules/
 node_modules/
 studio/edmg-studio/dist/
+studio/edmg-studio/dist-inno/
 studio/edmg-studio/dist-web/
 studio/edmg-studio/dist-audit/
 studio/edmg-studio/dist-sim/
@@ -78,15 +83,40 @@ studio/edmg-studio/.cache/
 studio/edmg-studio/tmp/
 studio/edmg-studio/data/
 studio/edmg-studio/models/
+studio/edmg-studio/python_backend/models/
+studio/edmg-studio/python_backend/temp_pytest/
+studio/edmg-studio/python_backend/.pytest-tmp/
 studio/edmg-studio/cache/
 studio/edmg-studio/logs/
+studio/edmg-studio/output/
 studio/edmg-studio/external/
 studio/edmg-studio/_legacy_migrations/
+studio/edmg-studio/python_backend/.codex-pyinstaller-build/
+studio/edmg-studio/python_backend/.codex-pyinstaller-dist/
 studio/edmg-studio/launcher_env.json
+studio/edmg-studio/.optimize_state.json
 studio/edmg-studio/electron/
+studio/edmg-studio/.env
+studio/edmg-studio/.env.local
+studio/edmg-studio/src/.env
+studio/edmg-studio/src/.env.local
+.env
+.env.local
 studio/edmg-studio/electron-resources/backend/*.exe
+studio/edmg-studio/electron-resources/backend/edmg-studio-backend
 studio/edmg-studio/electron-resources/backend/backend-bundle-manifest.json
 studio/edmg-studio/electron-resources/bin/*.exe
+studio/edmg-studio/electron-resources/bin/ffmpeg
+studio/edmg-studio/electron-resources/director/
+
+# Local deployment credentials and large NVIDIA runtime caches
+deployment/nvidia/.env.local
+starlift-data/
+
+# ----------------------------
+# Local agent / tunnel tooling (download binaries locally)
+# ----------------------------
+.codex-tools/
 
 # ----------------------------
 # OS / editor
@@ -96,6 +126,7 @@ Desktop.ini
 *.code-workspace
 .vs/
 .vscode/
+.secrets/
 DWCTGenerativeSoundStudio-main/
 Untitled-2 copy 2.jpg
 sdfsd copy.jpg

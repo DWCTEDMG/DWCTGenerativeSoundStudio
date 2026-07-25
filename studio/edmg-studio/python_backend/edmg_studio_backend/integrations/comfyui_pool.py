@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -7,6 +8,9 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from . import comfyui as comfy
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -147,12 +151,18 @@ class ComfyUINodePool:
             return
         node.last_check_ts = now
         try:
-            comfy.get_object_info(node.url)  # cheap if up
+            # Keep probes short: a refused/unreachable ComfyUI must not block setup/status.
+            comfy.get_object_info(node.url, timeout=2.0)
             node.healthy = True
             node.last_error = None
-        except Exception as e:
+        except Exception:
+            # An unavailable ComfyUI node is a normal optional-runtime state.
+            # Keep the first transition diagnostic, but do not emit a traceback
+            # on every throttled health probe while it remains offline.
+            if node.healthy:
+                logger.exception("ComfyUI health check failed for %s", node.url)
             node.healthy = False
-            node.last_error = str(e)
+            node.last_error = "ComfyUI health check failed"
 
     def _refresh_caps_if_needed(self, node: NodeStatus) -> None:
         now = time.time()
@@ -160,14 +170,15 @@ class ComfyUINodePool:
             return
         node.last_caps_ts = now
         try:
-            info = comfy.get_object_info(node.url)
+            info = comfy.get_object_info(node.url, timeout=5.0)
             node.node_classes = set((info or {}).keys())
             ckpt_names, known = self._extract_checkpoint_names(info)
             node.detected_checkpoints = ckpt_names
             node.detected_checkpoints_known = known
             node.caps_error = None
-        except Exception as e:
-            node.caps_error = str(e)
+        except Exception:
+            logger.exception("ComfyUI capability refresh failed for %s", node.url)
+            node.caps_error = "ComfyUI capability refresh failed"
             node.node_classes = set()
             node.detected_checkpoints = set()
             node.detected_checkpoints_known = False

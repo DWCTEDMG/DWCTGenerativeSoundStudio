@@ -17,7 +17,7 @@ class AudioConfig:
     sample_rate: int = 22050
     chunk_size: int = 30
     chunk_threshold: int = 60
-    max_duration: int = 600
+    max_duration: int = 1800
     cache_dir: Optional[str] = "data/cache"
     enable_noise_reduction: bool = True
     normalize_audio: bool = True
@@ -67,24 +67,6 @@ class AnimationConfig:
     zoom_range: float = 0.05
     rotation_range: float = 2.0
     translation_range: float = 10.0
-
-
-@dataclass
-class A1111Config:
-    """AUTOMATIC1111 WebUI API configuration."""
-    enabled: bool = True
-    host: str = "127.0.0.1"
-    port: int = 7860
-    timeout: int = 120
-    use_https: bool = False
-    auth_username: Optional[str] = None
-    auth_password: Optional[str] = None
-    model_checkpoint: Optional[str] = None
-    vae: Optional[str] = None
-    batch_size: int = 1
-    enable_hr: bool = False
-    hr_scale: float = 2.0
-    hr_upscaler: str = "Latent"
 
 
 @dataclass
@@ -148,7 +130,6 @@ class Config:
     lyrics: LyricsConfig = field(default_factory=LyricsConfig)
     ai: AIConfig = field(default_factory=AIConfig)
     animation: AnimationConfig = field(default_factory=AnimationConfig)
-    a1111: A1111Config = field(default_factory=A1111Config)
     cloud: CloudConfig = field(default_factory=CloudConfig)
     advanced: AdvancedConfig = field(default_factory=AdvancedConfig)
     interface: InterfaceConfig = field(default_factory=InterfaceConfig)
@@ -162,8 +143,6 @@ class Config:
     def _apply_env_overrides(self):
         """Apply environment variable overrides using DEFORUM_ prefix."""
         env_mapping = {
-            "DEFORUM_A1111_HOST": ("a1111", "host"),
-            "DEFORUM_A1111_PORT": ("a1111", "port"),
             "DEFORUM_SERVER_PORT": ("interface", "server_port"),
             "DEFORUM_CLOUD_PROVIDER": ("cloud", "provider"),
             "DEFORUM_CLOUD_BUCKET": ("cloud", "bucket_name"),
@@ -199,9 +178,6 @@ class Config:
         # Validate ports
         if not (1024 <= self.interface.server_port <= 65535):
             raise ValueError("Server port must be between 1024 and 65535")
-        
-        if not (1024 <= self.a1111.port <= 65535):
-            raise ValueError("A1111 port must be between 1024 and 65535")
 
     @classmethod
     def from_yaml(cls, path: str) -> "Config":
@@ -221,7 +197,7 @@ class Config:
         config = cls()
         
         # Update each section
-        for section_name in ["audio", "lyrics", "ai", "animation", "a1111", "cloud", "advanced", "interface", "logging"]:
+        for section_name in ["audio", "lyrics", "ai", "animation", "cloud", "advanced", "interface", "logging"]:
             if section_name in data:
                 section_obj = getattr(config, section_name)
                 section_data = data[section_name]
@@ -278,7 +254,7 @@ class Config:
 # Pydantic models for API validation
 class AudioConfigModel(BaseModel):
     sample_rate: int = 22050
-    max_duration: int = 600
+    max_duration: int = 1800
     enable_noise_reduction: bool = True
 
 class GenerationRequest(BaseModel):
