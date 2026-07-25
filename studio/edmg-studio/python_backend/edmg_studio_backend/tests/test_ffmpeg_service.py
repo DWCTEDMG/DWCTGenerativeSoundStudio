@@ -199,6 +199,7 @@ def test_rife_template_is_expanded_as_argv_without_a_shell(tmp_path, monkeypatch
     in_mp4.write_bytes(b"video")
 
     observed: dict[str, object] = {}
+    monkeypatch.delenv("EDMG_FFPROBE_PATH", raising=False)
 
     def fake_run(cmd, capture_output=True, text=True, shell=False):
         observed["cmd"] = cmd
