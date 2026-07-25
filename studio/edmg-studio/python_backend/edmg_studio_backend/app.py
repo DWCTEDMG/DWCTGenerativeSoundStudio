@@ -11212,7 +11212,11 @@ def render_auto(project_id: str, req: AutoAnimateRequest):
     if device_preference == "directml" and not bool((provider_status.get("directml") or {}).get("enabled", True)):
         device_preference = "cpu"
 
-    comfy_ok = _comfyui_available_quick()
+    requested_engine = str(req.engine or "auto").lower().strip()
+    comfy_probe_performed = requested_engine == "comfyui" or (
+        requested_engine == "auto" and str(preset.engine_hint or "auto").lower().strip() == "comfyui"
+    )
+    comfy_ok = _comfyui_available_quick() if comfy_probe_performed else False
     cfg = autoconfig.build_autoconfig(
         preset,
         engine=req.engine,
@@ -11235,6 +11239,7 @@ def render_auto(project_id: str, req: AutoAnimateRequest):
         "hardware": hw,
         "tier_plan": tier_plan,
         "comfyui_available": comfy_ok,
+        "comfyui_probe_performed": comfy_probe_performed,
         "launched": False,
     }
     if not req.run:
@@ -11429,10 +11434,78 @@ def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]
         refine_seed=int(payload.get("seed") or 0),
     )
 
+    video_abs = Path(str(res.get("video") or ""))
+    video_rel = None
     try:
-        video_rel = str(Path(res["video"]).relative_to(pdir))
+        video_rel = str(video_abs.relative_to(pdir))
     except Exception:
         video_rel = str(res.get("video"))
+
+    render_meta_path = video_abs.with_suffix(".render.json")
+    render_meta = {
+        "completed_at": time.time(),
+        "render_mode": "layered_animation",
+        "engine": "internal_layered_animation",
+        "motion_profile": str(payload.get("motion_profile") or ""),
+        "mode": str(res.get("mode") or payload.get("mode") or "parallax"),
+        "segmentation": str(res.get("segmentation") or ""),
+        "diffusion_refined": bool(res.get("diffusion_refined")),
+        "refined_frames": int(res.get("refined_frames") or 0),
+        "layers": list(res.get("layers") or []),
+        "frames": {
+            "expected": int(res.get("frames") or 0),
+            "present": len(list((video_abs.parent / "frames").glob("frame_*.png"))),
+            "dir": str(video_abs.parent / "frames"),
+        },
+        "outputs": {
+            "final_mp4": str(video_abs),
+            "checkpoint_json": None,
+        },
+        "settings": {
+            "fps": int(payload.get("fps", 24)),
+            "duration_s": float(payload.get("duration_s", 5.0)),
+            "width": int(payload.get("width", 768)),
+            "height": int(payload.get("height", 432)),
+            "bands": int(payload.get("bands", 3)),
+            "subject_motion": float(payload.get("subject_motion", 1.0)),
+            "background_motion": float(payload.get("background_motion", 0.12)),
+            "include_audio": bool(payload.get("include_audio")),
+            "source_asset": str(payload.get("source_asset") or ""),
+        },
+    }
+    try:
+        render_meta_path.write_text(json.dumps(render_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        from .store.artifacts import write_artifact_manifest
+
+        write_artifact_manifest(
+            video_abs,
+            project_dir=pdir,
+            project_id=project_id,
+            kind="video",
+            engine="internal_layered_animation",
+            model_id=None,
+            model_revision=None,
+            seed=int(payload.get("seed")) if payload.get("seed") is not None else None,
+            params={
+                "mode": str(res.get("mode") or payload.get("mode") or "parallax"),
+                "segmentation": str(res.get("segmentation") or ""),
+                "fps": int(payload.get("fps", 24)),
+                "duration_s": float(payload.get("duration_s", 5.0)),
+                "width": int(payload.get("width", 768)),
+                "height": int(payload.get("height", 432)),
+                "bands": int(payload.get("bands", 3)),
+                "diffusion_refined": bool(res.get("diffusion_refined")),
+            },
+            source_assets=[{"role": "source_image", "path": str(payload.get("source_asset") or ""), "sha256": None}],
+            parents=[render_meta_path.name] if render_meta_path.exists() else [],
+            extra={"render_meta": render_meta_path.name, "job_id": job_id},
+        )
+    except Exception:
+        pass
+
     if isinstance(proj.meta, dict):
         outputs = proj.meta.setdefault("outputs", {})
         videos = outputs.setdefault("videos", [])

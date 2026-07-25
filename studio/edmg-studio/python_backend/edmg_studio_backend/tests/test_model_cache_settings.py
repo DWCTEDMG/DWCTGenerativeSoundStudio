@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 from edmg_studio_backend.services.model_cache_settings import (
     DEFAULT_HF_BUCKET_ID,
@@ -15,6 +17,13 @@ def test_defaults_enabled_with_default_bucket(tmp_path) -> None:
     assert cfg["hf_bucket"]["enabled"] is True
     assert cfg["hf_bucket"]["bucket"] == DEFAULT_HF_BUCKET_ID
     assert cfg["hf_bucket"]["prefix"] == ""
+
+
+def test_tracked_launcher_defaults_keep_local_cache_mode() -> None:
+    defaults_path = Path(__file__).resolve().parents[3] / "launcher_env.defaults.json"
+    data = json.loads(defaults_path.read_text(encoding="utf-8"))
+
+    assert data["EDMG_MODEL_STORAGE_MODE"] == "local_cache"
 
 
 def test_update_persists_and_normalizes(tmp_path) -> None:

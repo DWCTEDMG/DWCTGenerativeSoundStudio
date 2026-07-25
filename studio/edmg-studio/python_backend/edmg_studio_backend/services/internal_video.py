@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover
     ImageOps = None  # type: ignore
 
 from .compositor import apply_timeline_layers
-from .ffmpeg import assemble_image_sequence, interpolate_video_fps, mux_audio
+from .ffmpeg import assemble_image_sequence, has_video_stream, interpolate_video_fps, mux_audio
 from .internal_video_models import generate_video_model_frames
 
 
@@ -518,6 +518,18 @@ def _require_pillow() -> None:
             code="INTERNAL_DEPS",
             status_code=500,
         )
+
+
+def _media_output_is_reusable(ffmpeg_path: str, media_path: Path) -> bool:
+    if not media_path.exists():
+        return False
+    try:
+        if media_path.stat().st_size <= 0:
+            return False
+    except OSError:
+        return False
+    stream_status = has_video_stream(ffmpeg_path, media_path)
+    return stream_status is not False
 
 
 @dataclass
@@ -2395,7 +2407,7 @@ def render_internal_video_variant(
             f"final={'yes' if cache_info['final_exists'] else 'no'}"
         )
 
-    if settings.resume_existing_frames and final_mp4.exists():
+    if settings.resume_existing_frames and _media_output_is_reusable(ffmpeg_path, final_mp4):
         final_mtime = final_mp4.stat().st_mtime
         audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
         if audio_ok:
@@ -2952,14 +2964,19 @@ def render_internal_video_variant(
         cancel_check_fn()
 
     if int(settings.fps_output) == int(fps_r):
-        if not interp_mp4.exists() or interp_mp4.stat().st_mtime < raw_mp4.stat().st_mtime:
+        if not _media_output_is_reusable(ffmpeg_path, interp_mp4) or interp_mp4.stat().st_mtime < raw_mp4.stat().st_mtime:
             interp_mp4.write_bytes(raw_mp4.read_bytes())
         if progress_fn:
             progress_fn("assembling", total_units - 1, total_units, f"Keeping FPS at {int(settings.fps_output)}")
         emit_checkpoint(stage="assembling", status="running", force=True, message=f"Keeping FPS at {int(settings.fps_output)}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": True})
         if log_fn:
             log_fn(f"Skipping interpolation because fps_output matches fps_render ({int(settings.fps_output)})")
-    elif settings.resume_existing_frames and interp_mp4.exists() and raw_mp4.exists() and interp_mp4.stat().st_mtime >= raw_mp4.stat().st_mtime:
+    elif (
+        settings.resume_existing_frames
+        and _media_output_is_reusable(ffmpeg_path, interp_mp4)
+        and raw_mp4.exists()
+        and interp_mp4.stat().st_mtime >= raw_mp4.stat().st_mtime
+    ):
         if progress_fn:
             progress_fn("assembling", total_units - 1, total_units, f"Reusing interpolated MP4 {interp_mp4.name}")
         emit_checkpoint(stage="assembling", status="running", force=True, message=f"Reusing interpolated MP4 {interp_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": True})
@@ -2982,10 +2999,10 @@ def render_internal_video_variant(
     if cancel_check_fn:
         cancel_check_fn()
 
-    if settings.resume_existing_frames and final_mp4.exists():
+    if settings.resume_existing_frames and _media_output_is_reusable(ffmpeg_path, final_mp4):
         final_mtime = final_mp4.stat().st_mtime
         audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
-        interp_ok = interp_mp4.exists() and final_mtime >= interp_mp4.stat().st_mtime
+        interp_ok = _media_output_is_reusable(ffmpeg_path, interp_mp4) and final_mtime >= interp_mp4.stat().st_mtime
     else:
         audio_ok = False
         interp_ok = False
@@ -3220,7 +3237,7 @@ def render_stability_hosted_video_variant(
             f"final={'yes' if cache_info['final_exists'] else 'no'}"
         )
 
-    if settings.resume_existing_frames and final_mp4.exists():
+    if settings.resume_existing_frames and _media_output_is_reusable(ffmpeg_path, final_mp4):
         final_mtime = final_mp4.stat().st_mtime
         audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
         if audio_ok:
@@ -3338,12 +3355,17 @@ def render_stability_hosted_video_variant(
         cancel_check_fn()
 
     if int(settings.fps_output) == int(fps_r):
-        if not interp_mp4.exists() or interp_mp4.stat().st_mtime < raw_mp4.stat().st_mtime:
+        if not _media_output_is_reusable(ffmpeg_path, interp_mp4) or interp_mp4.stat().st_mtime < raw_mp4.stat().st_mtime:
             interp_mp4.write_bytes(raw_mp4.read_bytes())
         if progress_fn:
             progress_fn("assembling", total_units - 1, total_units, f"Keeping FPS at {int(settings.fps_output)}")
         emit_checkpoint(stage="assembling", status="running", force=True, message=f"Keeping FPS at {int(settings.fps_output)}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": True})
-    elif settings.resume_existing_frames and interp_mp4.exists() and raw_mp4.exists() and interp_mp4.stat().st_mtime >= raw_mp4.stat().st_mtime:
+    elif (
+        settings.resume_existing_frames
+        and _media_output_is_reusable(ffmpeg_path, interp_mp4)
+        and raw_mp4.exists()
+        and interp_mp4.stat().st_mtime >= raw_mp4.stat().st_mtime
+    ):
         if progress_fn:
             progress_fn("assembling", total_units - 1, total_units, f"Reusing hosted interpolated MP4 {interp_mp4.name}")
         emit_checkpoint(stage="assembling", status="running", force=True, message=f"Reusing hosted interpolated MP4 {interp_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": True})
@@ -3362,10 +3384,10 @@ def render_stability_hosted_video_variant(
     if cancel_check_fn:
         cancel_check_fn()
 
-    if settings.resume_existing_frames and final_mp4.exists():
+    if settings.resume_existing_frames and _media_output_is_reusable(ffmpeg_path, final_mp4):
         final_mtime = final_mp4.stat().st_mtime
         audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
-        interp_ok = interp_mp4.exists() and final_mtime >= interp_mp4.stat().st_mtime
+        interp_ok = _media_output_is_reusable(ffmpeg_path, interp_mp4) and final_mtime >= interp_mp4.stat().st_mtime
     else:
         audio_ok = False
         interp_ok = False
@@ -4310,7 +4332,7 @@ def render_internal_proxy_video_variant(
 
     emit_checkpoint(stage="preparing", status="running", force=True, message="Preparing proxy render")
 
-    if settings.resume_existing_frames and final_mp4.exists():
+    if settings.resume_existing_frames and _media_output_is_reusable(ffmpeg_path, final_mp4):
         final_mtime = final_mp4.stat().st_mtime
         audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
         if audio_ok:
@@ -4383,12 +4405,16 @@ def render_internal_proxy_video_variant(
         )
 
     if fps_out == fps_r:
-        if not interp_mp4.exists() or interp_mp4.stat().st_mtime < raw_mp4.stat().st_mtime:
+        if not _media_output_is_reusable(ffmpeg_path, interp_mp4) or interp_mp4.stat().st_mtime < raw_mp4.stat().st_mtime:
             interp_mp4.write_bytes(raw_mp4.read_bytes())
         if progress_fn:
             progress_fn("assembling", total_units - 1, total_units, f"Keeping proxy FPS at {fps_out}")
         emit_checkpoint(stage="assembling", status="running", force=True, message=f"Keeping proxy FPS at {fps_out}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": True})
-    elif settings.resume_existing_frames and interp_mp4.exists() and interp_mp4.stat().st_mtime >= raw_mp4.stat().st_mtime:
+    elif (
+        settings.resume_existing_frames
+        and _media_output_is_reusable(ffmpeg_path, interp_mp4)
+        and interp_mp4.stat().st_mtime >= raw_mp4.stat().st_mtime
+    ):
         if progress_fn:
             progress_fn("assembling", total_units - 1, total_units, f"Reusing interpolated proxy MP4 {interp_mp4.name}")
         emit_checkpoint(stage="assembling", status="running", force=True, message=f"Reusing interpolated proxy MP4 {interp_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": True})
