@@ -30,14 +30,13 @@ backend extra instead of the generic backend bundle, use:
 
 ```bash
 cd studio/edmg-studio
-EDMG_BACKEND_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
 pnpm run dist:linux:cuda
 ```
 
-The CUDA build path uses `studio_bundle_cuda`, which adds TensorRT and
-`cuda-python` on top of the same internal Diffusers, AnimateDiff, and SVD backend
-code used by the standard Linux AppImage. The target machine still needs a
-matching NVIDIA driver and locally installed model weights.
+The CUDA build path performs `uv lock --check` and a frozen `cuda` profile sync.
+The fixed PyTorch CUDA index, TensorRT packages, and capability extras come from
+`pyproject.toml` and `uv.lock`. The target machine still needs a matching NVIDIA
+driver and locally installed model weights.
 
 ## Runtime expectations
 
@@ -47,6 +46,20 @@ matching NVIDIA driver and locally installed model weights.
 - the Windows-only managed 7-Zip and ComfyUI Portable installers do not apply on Linux
 - managed cloud notebooks such as Lightning may already provide a writable
   Python/conda environment and may not allow project-local virtualenv creation
+
+## Core audio and visual direction
+
+The packaged Linux backend applies the same core capability pipeline as the
+Windows desktop build:
+
+- Every audio analysis records multitrack metadata. A normal single audio file
+  uses the `mixed` track fallback, so no optional separator is required.
+- Every generated or imported plan receives Studio style direction. A recognized
+  style preference is used when supplied; otherwise Studio uses the
+  `cinematic` baseline.
+- `EDMG_DEV_PROFILING=true` records lightweight analysis-stage timings in the
+  project diagnostics. It is a development-only setting and is disabled by
+  default in the environment template.
 
 ## First-run notes
 
@@ -67,25 +80,24 @@ launcher in active-env mode instead of creating a virtualenv:
 ```bash
 cd studio/edmg-studio
 EDMG_BACKEND_ENV_MODE=active \
-EDMG_BACKEND_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
-EDMG_BACKEND_CUDA_BUNDLE=1 \
+EDMG_BACKEND_ACCELERATOR_PROFILE=cuda \
 bash scripts/start_lightning_backend.sh
 ```
 
 Notes:
 
-- `EDMG_BACKEND_ENV_MODE=active` avoids `python -m venv`.
-- `EDMG_BACKEND_TORCH_INDEX_URL` is optional on older GPUs, but is needed for
-  Blackwell-class machines that require current PyTorch CUDA wheels.
-- `EDMG_BACKEND_CUDA_BUNDLE=1` installs `studio_bundle_cuda`, including the
-  TensorRT Python bindings needed by Studio's TensorRT SD1.5 path.
-- The script pins the backend bundle to `numpy>=1.26,<2` to avoid SciPy/librosa
-  ABI failures from NumPy 2.x in shared cloud environments.
+- `EDMG_BACKEND_ENV_MODE=active` directs uv to synchronize the active
+  virtualenv/conda environment from the committed lock.
+- `EDMG_BACKEND_ACCELERATOR_PROFILE` accepts `cpu` or `cuda` on Linux and
+  selects exactly one locked accelerator profile.
+- PyTorch indexes, TensorRT, NumPy, and all backend capabilities are resolved
+  by the committed `uv.lock`; arbitrary package/index overrides are unsupported.
 - Keep the public Lightning/backend port at `7863`. The local desktop/dev UI
   should connect to the generated `https://7863-...cloudspaces.litng.ai` URL.
 
-If you already installed packages manually, you can skip bootstrap and only run
-the server:
+If the active environment was already synchronized from this lock, you can skip
+the write step. The launcher still runs a frozen `uv sync --check` and refuses
+an environment that differs from the selected profile:
 
 ```bash
 cd studio/edmg-studio
@@ -105,7 +117,6 @@ Install/start a Linux ComfyUI sidecar beside the backend:
 
 ```bash
 cd studio/edmg-studio
-COMFY_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
 COMFY_INSTALL_MODELS=1 \
 bash scripts/setup_linux_comfyui.sh
 ```
@@ -329,7 +340,8 @@ http://127.0.0.1:5173/?backendUrl=http://127.0.0.1:7863
 
 - **Proxy draft renders**: enabled by default. Disable in Settings → GPU / Render Runtime.
 - **Motion sequencer**: available on the Render page for Parseq-style motion schedules on internal renders.
-- **TensorRT path**: install with `EDMG_BACKEND_CUDA_BUNDLE=1` or build `pnpm run dist:linux:cuda`.
+- **TensorRT path**: set `EDMG_BACKEND_ACCELERATOR_PROFILE=cuda` for source
+  startup or build `pnpm run dist:linux:cuda`.
 
 CUDA release validation:
 

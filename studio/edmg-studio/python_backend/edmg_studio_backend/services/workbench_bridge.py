@@ -36,8 +36,12 @@ def _parse_clock(value: Any) -> float:
     text = str(value or "").strip()
     if not text:
         return 0.0
-    if re.fullmatch(r"[-+]?\d*\.?\d+", text):
-        return max(0.0, float(text))
+    if ":" not in text:
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, number) if math.isfinite(number) else 0.0
     parts = text.split(":")
     try:
         if len(parts) == 2:
@@ -236,15 +240,37 @@ def planner_lab_to_canonical_plan(
 
 
 def _parse_schedule_points(schedule: str) -> list[tuple[int, float]]:
+    text = str(schedule or "")
+    if len(text) > 65_536:
+        raise ValueError("Schedule text exceeds the 65536-character limit")
+    parts = text.split(",")
+    if len(parts) > 4_096:
+        raise ValueError("Schedule contains more than 4096 points")
+
     points: list[tuple[int, float]] = []
-    for part in str(schedule or "").split(","):
+    for part in parts:
         raw = part.strip()
         if not raw:
             continue
-        match = re.match(r"^(\d+)\s*:\s*\(?\s*([-+]?\d*\.?\d+)\s*\)?$", raw)
-        if not match:
+        frame_text, separator, value_text = raw.partition(":")
+        frame_text = frame_text.strip()
+        value_text = value_text.strip()
+        if not separator or not frame_text.isdecimal() or len(frame_text) > 12:
             continue
-        points.append((int(match.group(1)), float(match.group(2))))
+        if value_text.startswith("(") and value_text.endswith(")"):
+            value_text = value_text[1:-1].strip()
+        elif value_text.startswith("(") or value_text.endswith(")"):
+            continue
+        if not value_text or len(value_text) > 64:
+            continue
+        try:
+            frame = int(frame_text)
+            value = float(value_text)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(value):
+            continue
+        points.append((frame, value))
     return sorted(points, key=lambda item: item[0])
 
 

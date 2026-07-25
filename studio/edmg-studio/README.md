@@ -18,7 +18,9 @@ A desktop-style "studio" application:
 
 ### Prereqs
 - Node.js `20.19+` or `22.12+` (Node 22 LTS recommended; `.node-version` is provided)
-- Python `>=3.10,<3.14`
+- Python 3.12 (pinned by the repository `.python-version`)
+- `uv` 0.11.28 for source development; packaged apps include the backend and
+  require neither Python nor uv
 - FFmpeg on PATH for dev checkouts, or the bundled Studio FFmpeg for packaged builds (used for MP4 assembly)
 - ComfyUI only if you want ComfyUI-backed still or motion workflows (default `http://127.0.0.1:8188`)
 - Planning/transcription run **in-process** by default through the selected provider; no separate AI server is required for the normal Studio path.
@@ -27,16 +29,17 @@ A desktop-style "studio" application:
 
 ### Backend
 ```bash
-cd python_backend
-python -m venv venv
-# Windows PowerShell
-venv\Scripts\Activate.ps1
-# macOS/Linux
-source venv/bin/activate
-pip install -U pip
-pip install -e ".[studio_bundle,test]"
-edmg-studio-backend serve --host 127.0.0.1 --port 7863
+uv lock --project python_backend --check
+uv sync --project python_backend --frozen \
+  --extra cpu --extra core --extra audio --group test --group lint
+uv run --project python_backend --frozen \
+  --extra cpu --extra core --extra audio \
+  python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
+
+Replace `cpu` with exactly one of `directml` (Windows) or `cuda` when that is
+the environment you are validating. PyTorch indexes are fixed in
+`pyproject.toml` and `uv.lock`; do not supply an index URL at runtime.
 
 ### Lightning backend helpers
 From `studio/edmg-studio/`:
@@ -45,18 +48,18 @@ From `studio/edmg-studio/`:
 bash scripts/start_lightning_backend.sh
 ```
 
-On managed Linux environments where virtualenv creation is unavailable, use the
-active Python/conda environment:
+On managed Linux environments that require the active Python/conda environment,
+let uv synchronize that environment from the same lock:
 
 ```bash
 EDMG_BACKEND_ENV_MODE=active bash scripts/start_lightning_backend.sh
 ```
 
-For current Blackwell CUDA machines, set an explicit PyTorch wheel index:
+For NVIDIA machines, select the locked CUDA profile:
 
 ```bash
 EDMG_BACKEND_ENV_MODE=active \
-EDMG_BACKEND_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
+EDMG_BACKEND_ACCELERATOR_PROFILE=cuda \
 bash scripts/start_lightning_backend.sh
 ```
 
@@ -145,6 +148,7 @@ OpenClaw is not part of the required Studio install path. If you use it, treat i
 Release/operator runbook:
 - [Studio release runbook](../../docs/STUDIO_RELEASE_RUNBOOK.md)
 - [Release checklist](../../RELEASE.md)
+- [Python toolchain and lock policy](../../docs/PYTHON_TOOLCHAIN.md)
 - [Linux packaging notes](./packaging/linux/README.md)
 - [GCP GPU VM deploy](../../docs/GCP_GPU_VM_DEPLOY.md)
 
@@ -243,8 +247,79 @@ EDMG Core integration:
 6. Assemble MP4 (FFmpeg slideshow + audio)
 7. Export Deforum settings (optional)
 
+## Creator workflow features (2026 beta)
 
-## Default rendering path
+These surfaces ship on the `codex/uv-integration` branch and are documented here until the full documentation relaunch (P5-06) lands in `docs/`.
+
+### Understand — Music Graph v1
+
+After **Analyze**, open **Workspace → Audio** to inspect Music Graph v1: tempo, beats, sections with energy/confidence, stems, semantic tags, and ASR lyric lines. The same graph powers Director, Render Conductor, timeline section markers, and live cue export.
+
+- API: `GET /v1/projects/{id}/music_graph`
+- UI: `UnderstandPanel` on Workspace (no separate Understand route yet; P2-05 partial)
+
+### Review — variant compare and approval
+
+**Sidebar → Review** compares rendered artifacts side-by-side, records approve/reject/cherry-pick decisions, and surfaces continuity warnings from the Conductor.
+
+- API: `GET/POST /v1/projects/{id}/variant_review` (+ `/decision`)
+- Continuity: `GET /v1/projects/{id}/render/conductor/continuity`
+
+### Render Plan v1
+
+**Render** includes a **Render Plan** panel for the stored Conductor plan: task DAG, cache keys, estimates, warnings, and proxy→hero promote actions.
+
+- API: `GET /v1/projects/{id}/render/conductor/plan`
+- Promote: Conductor promote endpoint on Render Lab (see Render page)
+
+### Live cues and live assets
+
+From **Workspace** handoff and **Review → Labs**, preview cue protocols compiled from Music Graph and bounded live-asset modulation packs.
+
+- Cues: `GET /v1/projects/{id}/live_cues`
+- Publish (OSC/MIDI/WebSocket): `POST .../live_cues/publish/start|stop`, `GET .../publish/status`
+- Assets: `GET /v1/projects/{id}/live_assets`, `POST .../live_assets/modulation`
+
+### Template handoff
+
+**Workspace → Handoff** exports and imports versioned template packages (Visual DNA, director mode, stem modulation, and related project metadata).
+
+- API: `GET /v1/projects/{id}/template_package/export`, `POST .../template_package/import`
+
+### Release evidence
+
+Release builds emit CycloneDX SBOM and SHA-256 checksum manifests under `studio/edmg-studio/release/evidence/`. Generate manually:
+
+```powershell
+cd studio/edmg-studio
+pnpm run generate:release-evidence
+pnpm run generate:release-evidence:dist
+```
+
+See [RELEASE.md](../../RELEASE.md) for signing (credential-gated), clean-machine smoke, and acceptance gates.
+
+### API contract freeze (week of 2026-07-21)
+
+The following routes are **frozen for beta integration** — response shapes are mirrored in `src/shared/api/contracts.ts` and covered by route/contract tests. Breaking changes require a schema version bump:
+
+| Domain | Routes |
+|--------|--------|
+| System | `GET /v1/system/readiness`, `GET /v1/metrics/baseline` |
+| Project durability | `GET /v1/projects/{id}/health`, recovery/autosave/timeline |
+| Music Graph | `GET /v1/projects/{id}/music_graph` |
+| Render Conductor | `GET .../render/conductor/plan`, `GET .../render/conductor/continuity` |
+| Review | `GET/POST .../variant_review` |
+| Live | `GET .../live_cues`, `GET/POST .../live_assets` |
+| Templates | `GET/POST .../template_package/export|import` |
+| Performer | `GET/POST .../render/performer/plan` |
+
+### Baseline metrics (stub)
+
+**Settings → System readiness** includes read-only baseline timing budgets. Full W7-04 evidence requires named-hardware benchmark runs.
+
+- API: `GET /v1/metrics/baseline`
+- Inject CI samples: `EDMG_BASELINE_METRICS_JSON='{"analysis":45000}'`
+
 
 Studio's default render path is the **internal renderer** backed by the Studio backend runtime, local model installs, cache/history, and FFmpeg assembly.
 

@@ -2,9 +2,16 @@
 
 ## Run
 ```bash
-pip install -e ".[studio_bundle]"
-edmg-studio-backend serve --host 127.0.0.1 --port 7863
+uv lock --check
+uv sync --frozen --extra cpu --extra core --extra audio --extra asr --extra internal-video
+uv run --frozen --extra cpu --extra core --extra audio --extra asr --extra internal-video \
+  python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
+
+Python is pinned to 3.12 and uv to 0.11.28. Choose exactly one accelerator
+profile (`cpu`, `directml`, or `cuda`) and compose it with the capabilities the
+deployment needs. PyTorch sources are explicit lock inputs, not runtime index
+overrides.
 
 ## Docker (backend only)
 
@@ -38,11 +45,12 @@ Notes:
 - The image installs the Studio backend bundle plus FFmpeg, `libsndfile`, and OpenMP runtime support for the current analysis/transcription stack.
 
 ## Tests
-Install the same backend bundle Studio uses, plus the test extra:
+Synchronize the frozen CPU test environment and run pytest through uv:
 
 ```bash
-pip install -e ".[studio_bundle,test]"
-python -m pytest
+uv lock --check
+uv sync --frozen --extra cpu --extra core --extra audio --group test
+uv run --frozen --extra cpu --extra core --extra audio --group test python -m pytest
 ```
 
 Run that command from `studio/edmg-studio/python_backend/`. The backend-local
@@ -53,8 +61,8 @@ pytest scope covers both:
 
 From the repo root:
 
-- `python -m pytest` runs repo-level tests only
-- `python scripts/run_pytest_scopes.py` runs repo-level tests, then backend-local tests
+- `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --group test python -m pytest` runs repo-level tests only
+- `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py` runs repo-level tests, then backend-local tests
 
 ## S3-backed model hosting
 

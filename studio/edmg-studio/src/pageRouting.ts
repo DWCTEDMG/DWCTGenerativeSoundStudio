@@ -7,6 +7,7 @@ export type Page =
   | "timeline"
   | "render"
   | "queue"
+  | "review"
   | "outputs"
   | "cloud"
   | "settings"
@@ -24,6 +25,7 @@ const PAGE_LABELS: Record<Page, string> = {
   timeline: "Timeline",
   render: "Render",
   queue: "Render Queue",
+  review: "Review",
   outputs: "Outputs",
   cloud: "Cloud",
   settings: "Settings",
@@ -42,6 +44,7 @@ const PAGE_LOADING_DETAILS: Record<Page, string> = {
   timeline: "Preparing transport, cue, and arrangement controls.",
   render: "Loading render presets, engines, and output actions.",
   queue: "Loading queue state, progress, and retry controls.",
+  review: "Loading variant compare, continuity warnings, and review actions.",
   outputs: "Loading generated media, active jobs, and review actions.",
   cloud: "Loading remote integration settings and bundle actions.",
   settings: "Loading desktop backend, storage, and preference controls.",
@@ -58,6 +61,7 @@ const PAGE_LOADERS: Partial<Record<Page, () => Promise<unknown>>> = {
   timeline: () => import("./pages/Timeline"),
   render: () => import("./pages/Render"),
   queue: () => import("./pages/RenderQueue"),
+  review: () => import("./pages/Review"),
   outputs: () => import("./pages/Outputs"),
   cloud: () => import("./pages/Cloud"),
   settings: () => import("./pages/Settings"),
@@ -73,9 +77,10 @@ const PRELOAD_BY_PAGE: Record<Page, Page[]> = {
   projects: ["workspace", "dashboard"],
   workspace: ["timeline", "render", "directorLab", "plannerLab", "reactiveLab"],
   timeline: ["render", "outputs", "workspace"],
-  render: ["queue", "outputs", "timeline"],
-  queue: ["outputs", "render"],
-  outputs: ["render", "queue"],
+  render: ["queue", "review", "outputs", "timeline"],
+  queue: ["review", "outputs", "render"],
+  review: ["render", "outputs", "queue"],
+  outputs: ["review", "render", "queue"],
   cloud: ["settings", "models"],
   settings: ["setup", "cloud", "models"],
   setup: ["workspace", "models", "settings"],
@@ -93,6 +98,7 @@ const BASE_PAGES: Page[] = [
   "timeline",
   "render",
   "queue",
+  "review",
   "outputs",
   "cloud",
   "settings",

@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "studio/edmg-studio/**"
+      - ".python-version"
+      - "deployment/**"
       - "scripts/run_pytest_scopes.py"
       - "tests/**"
       - "pytest.ini"
@@ -12,12 +14,17 @@ on:
   pull_request:
     paths:
       - "studio/edmg-studio/**"
+      - ".python-version"
+      - "deployment/**"
       - "scripts/run_pytest_scopes.py"
       - "tests/**"
       - "pytest.ini"
       - "sitecustomize.py"
       - ".github/workflows/studio.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: studio-${{ github.workflow }}-${{ github.ref }}
@@ -48,12 +55,21 @@ jobs:
           cache: pnpm
           cache-dependency-path: studio/edmg-studio/pnpm-lock.yaml
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup pinned uv
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: studio/edmg-studio/python_backend/pyproject.toml
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: studio/edmg-studio/python_backend/uv.lock
+
+      - name: Install pinned Python
+        run: uv python install 3.12
+
+      - name: Validate and sync Studio backend lock
+        working-directory: studio/edmg-studio/python_backend
+        run: |
+          uv lock --check
+          uv sync --frozen --extra cpu --extra core --extra audio --group test --group lint
 
       - name: Provision pinned FFmpeg
         shell: pwsh
@@ -86,10 +102,17 @@ jobs:
           $archive = Join-Path $env:RUNNER_TEMP $asset
           $installRoot = Join-Path $env:RUNNER_TEMP "edmg-ffmpeg"
           $downloaded = $false
+          $checksumFailures = @()
           foreach ($url in $downloadUrls) {
             try {
               Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
               Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRetryCount 3
+              $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actualSha256 -ne $expectedSha256) {
+                $checksumFailures += "$url returned $actualSha256"
+                Write-Host "FFmpeg checksum mismatch from $url; trying the next pinned location."
+                continue
+              }
               $downloaded = $true
               break
             } catch {
@@ -97,11 +120,7 @@ jobs:
             }
           }
           if (-not $downloaded) {
-            throw "Unable to download pinned FFmpeg archive from: $($downloadUrls -join ', ')"
-          }
-          $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualSha256 -ne $expectedSha256) {
-            throw "FFmpeg archive checksum mismatch: expected $expectedSha256, got $actualSha256"
+            throw "Unable to download a checksum-valid pinned FFmpeg archive (expected $expectedSha256). Attempts: $($checksumFailures -join '; ')"
           }
 
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
@@ -130,7 +149,7 @@ jobs:
       - name: Verify FFmpeg discovery
         working-directory: studio/edmg-studio/python_backend
         run: >-
-          python -c "import shutil, subprocess; from pathlib import Path; from edmg_studio_backend.config import Settings;
+          uv run --frozen --extra cpu --extra core --extra audio --group test python -c "import shutil, subprocess; from pathlib import Path; from edmg_studio_backend.config import Settings;
           from edmg_studio_backend.services.ffmpeg import ensure_ffmpeg, ensure_ffprobe;
           configured = Settings().ffmpeg_path; ffmpeg = ensure_ffmpeg(configured); ffprobe = ensure_ffprobe(ffmpeg);
           path_ffmpeg = ensure_ffmpeg('ffmpeg'); path_ffprobe = shutil.which('ffprobe');
@@ -145,8 +164,16 @@ jobs:
         working-directory: studio/edmg-studio
         run: pnpm install --frozen-lockfile
 
-      - name: Install Studio backend test dependencies
-        run: python -m pip install -e "./studio/edmg-studio/python_backend[audio,test]"
+      - name: Python lint
+        run: >-
+          uv run --project studio/edmg-studio/python_backend --frozen
+          --extra cpu --group lint ruff check
+          studio/edmg-studio/python_backend/edmg_studio_backend/uv_toolchain.py
+          studio/edmg-studio/python_backend/pyinstaller_support.py
+          studio/edmg-studio/scripts/release_provenance.py
+          scripts/run_pytest_scopes.py scripts/check_clap_capability.py
+          tests/test_uv_migration_static.py tests/test_setup_wizard_uv.py
+          tests/test_uv_source_launcher.py tests/test_clap_capability.py
 
       - name: Check canonical tooling
         working-directory: studio/edmg-studio
@@ -173,7 +200,20 @@ jobs:
         run: pnpm run validate:electron-bridge
 
       - name: Python test scopes
-        run: python scripts/run_pytest_scopes.py
+        run: >-
+          uv run --project studio/edmg-studio/python_backend --frozen
+          --extra cpu --extra core --extra audio --group test
+          python scripts/run_pytest_scopes.py
+
+      - name: Validate frozen DirectML profile
+        if: runner.os == 'Windows'
+        working-directory: studio/edmg-studio/python_backend
+        run: uv sync --frozen --extra directml --extra core --extra audio --group test --dry-run
+
+      - name: Validate frozen CUDA profile resolution
+        if: runner.os == 'Linux'
+        working-directory: studio/edmg-studio/python_backend
+        run: uv sync --frozen --extra cuda --extra core --extra audio --group test --dry-run
 
       - name: Windows Electron integration smoke
         if: runner.os == 'Windows'

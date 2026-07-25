@@ -20,9 +20,8 @@ BACKEND_PORT="${BACKEND_PORT:-8080}"
 UI_PORT="${UI_PORT:-1111}"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 INSTALL_OLLAMA="${INSTALL_OLLAMA:-0}"
-BACKEND_CUDA_BUNDLE="${BACKEND_CUDA_BUNDLE:-1}"
-PIP_TORCH_INDEX_URL="${PIP_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}"
-BACKEND_NUMPY_CONSTRAINT="${BACKEND_NUMPY_CONSTRAINT:-numpy>=1.26,<2}"
+BACKEND_ACCELERATOR_PROFILE="${EDMG_BACKEND_ACCELERATOR_PROFILE:-cuda}"
+UV_BIN=""
 
 export DEBIAN_FRONTEND=noninteractive
 export EDMG_STUDIO_HOME="$STUDIO_HOME"
@@ -62,6 +61,7 @@ export EDMG_HF_BUCKET_MODEL_CACHE=1
 export EDMG_HF_BUCKET_ID=gulle1155/DWCTedmgAIStudioModels
 export EDMG_HF_BUCKET_PREFIX=
 export EDMG_MODEL_STORAGE_MODE=cloud_only
+export EDMG_BACKEND_ACCELERATOR_PROFILE=$BACKEND_ACCELERATOR_PROFILE
 export PATH=\$PATH:/workspace/bin
 DWCTPROFILEEOF
 
@@ -70,7 +70,7 @@ apt-get update
 apt-get install -y \
   git git-lfs curl wget ca-certificates unzip rsync ffmpeg \
   libsndfile1 libsndfile1-dev libgomp1 build-essential pkg-config \
-  cmake ninja-build tmux htop nvtop python3-venv python3-pip python-is-python3 \
+  cmake ninja-build tmux htop nvtop \
   p7zip-full jq
 
 git lfs install || true
@@ -96,31 +96,40 @@ fi
 git -C "$REPO_DIR" rev-parse --short HEAD | tee "$LOG_DIR/repo-head.txt"
 
 printf '\n[4/8] Installing backend bundle...\n'
+case "$BACKEND_ACCELERATOR_PROFILE" in
+  cpu|cuda) ;;
+  *) printf 'Unsupported EDMG_BACKEND_ACCELERATOR_PROFILE=%s (use cpu or cuda).\n' "$BACKEND_ACCELERATOR_PROFILE" >&2; exit 1 ;;
+esac
+# shellcheck source=scripts/uv_toolchain.sh
+source "$STUDIO_DIR/scripts/uv_toolchain.sh"
+UV_BIN="$(edmg_require_uv)"
 cd "$BACKEND_DIR"
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-if [[ "$BACKEND_CUDA_BUNDLE" == "1" ]]; then
-  python -m pip install --upgrade torch torchvision torchaudio --index-url "$PIP_TORCH_INDEX_URL"
-  python -m pip install -e ".[studio_bundle_cuda]" "$BACKEND_NUMPY_CONSTRAINT"
-else
-  python -m pip install -e ".[studio_bundle]"
-fi
-python - <<'PY'
-try:
-    import torch
-    print('torch=' + str(torch.__version__))
-    print('cuda_build=' + str(torch.version.cuda))
-    print('cuda_available=' + str(torch.cuda.is_available()))
-    if torch.cuda.is_available():
-        print('device_0=' + str(torch.cuda.get_device_name(0)))
-except Exception as exc:
-    print('torch_check_error=' + repr(exc))
+"$UV_BIN" python install 3.12
+"$UV_BIN" lock --check
+"$UV_BIN" sync --frozen \
+  --extra "$BACKEND_ACCELERATOR_PROFILE" \
+  --extra core --extra audio --extra asr --extra internal-video --extra aws
+edmg_assert_uv_python_312 "$UV_BIN" "$BACKEND_DIR" \
+  --extra "$BACKEND_ACCELERATOR_PROFILE" \
+  --extra core --extra audio --extra asr --extra internal-video --extra aws
+EDMG_EXPECT_CUDA="$([[ "$BACKEND_ACCELERATOR_PROFILE" == "cuda" ]] && printf 1 || printf 0)" \
+  "$UV_BIN" run --frozen --no-sync python - <<'PY'
+import os
+import sys
+import torch
+
+print('torch=' + str(torch.__version__))
+print('cuda_build=' + str(torch.version.cuda))
+print('cuda_available=' + str(torch.cuda.is_available()))
+if torch.cuda.is_available():
+    print('device_0=' + str(torch.cuda.get_device_name(0)))
+elif os.environ["EDMG_EXPECT_CUDA"] == "1":
+    sys.exit("The locked CUDA profile is installed, but CUDA is unavailable. Fix the NVIDIA driver before continuing.")
 PY
 
 printf '\n[5/8] Installing frontend deps...\n'
 cd "$STUDIO_DIR"
-pnpm install --frozen-lockfile || pnpm install
+pnpm install --frozen-lockfile
 
 printf '\n[6/8] Installing optional Ollama planner runtime...\n'
 if [[ "$INSTALL_OLLAMA" == "1" ]]; then
@@ -143,16 +152,15 @@ cat > /workspace/bin/dwct-start-backend <<DWCTBACKENDEOF
 #!/usr/bin/env bash
 set -euo pipefail
 source /etc/profile.d/dwct-edmg.sh
-cd /workspace/src/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend
-. .venv/bin/activate
-exec edmg-studio-backend serve --host 0.0.0.0 --port $BACKEND_PORT
+cd "$BACKEND_DIR"
+exec "$UV_BIN" run --project "$BACKEND_DIR" --frozen --no-sync edmg-studio-backend serve --host 0.0.0.0 --port $BACKEND_PORT
 DWCTBACKENDEOF
 
 cat > /workspace/bin/dwct-start-ui <<DWCTUIEOF
 #!/usr/bin/env bash
 set -euo pipefail
 source /etc/profile.d/dwct-edmg.sh
-cd /workspace/src/DWCTGenerativeSoundStudio/studio/edmg-studio
+cd "$STUDIO_DIR"
 corepack enable >/dev/null 2>&1 || true
 corepack prepare pnpm@10.33.0 --activate >/dev/null 2>&1 || true
 exec pnpm exec vite --host 0.0.0.0 --port $UI_PORT --strictPort
@@ -165,9 +173,8 @@ source /etc/profile.d/dwct-edmg.sh
 printf '=== GPU ===\n'
 nvidia-smi || true
 printf '\n=== CUDA/PyTorch ===\n'
-cd /workspace/src/DWCTGenerativeSoundStudio/studio/edmg-studio/python_backend
-. .venv/bin/activate
-python - <<'PY'
+cd "$BACKEND_DIR"
+"$UV_BIN" run --project "$BACKEND_DIR" --frozen --no-sync python - <<'PY'
 import torch
 print(f'torch={torch.__version__}')
 print(f'cuda_build={torch.version.cuda}')

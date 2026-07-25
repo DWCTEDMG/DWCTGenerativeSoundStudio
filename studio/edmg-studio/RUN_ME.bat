@@ -2,37 +2,33 @@
 setlocal
 cd /d %~dp0
 
-if not defined EDMG_INSTALL_CUDA set "EDMG_INSTALL_CUDA=auto"
-
 if /I "%~1"=="build-inno" goto build_inno
 if /I "%~1"=="inno" goto build_inno
 if /I "%~1"=="dist-inno" goto build_inno
 if /I "%~1"=="build-inno-skip" goto build_inno_skip
 
 if defined EDMG_STUDIO_PYTHON (
-  "%EDMG_STUDIO_PYTHON%" -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
+  "%EDMG_STUDIO_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)" >nul 2>nul
   if %errorlevel%==0 (
-    "%EDMG_STUDIO_PYTHON%" tools\launcher_gui.py
+    "%EDMG_STUDIO_PYTHON%" tools\run_uv_launcher.py
     goto :eof
   )
 )
 
 where py >nul 2>nul
 if %errorlevel%==0 (
-  py -3.13 -c "import sys" >nul 2>nul && (py -3.13 tools\launcher_gui.py & goto :eof)
-  py -3.12 -c "import sys" >nul 2>nul && (py -3.12 tools\launcher_gui.py & goto :eof)
-  py -3.11 -c "import sys" >nul 2>nul && (py -3.11 tools\launcher_gui.py & goto :eof)
-  py -3.10 -c "import sys" >nul 2>nul && (py -3.10 tools\launcher_gui.py & goto :eof)
+  py -3.12 -c "import sys" >nul 2>nul && (py -3.12 tools\run_uv_launcher.py & goto :eof)
+  py -3 -c "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)" >nul 2>nul && (py -3 tools\run_uv_launcher.py & goto :eof)
 )
 
 where python >nul 2>nul
 if %errorlevel%==0 (
-  python -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul && (python tools\launcher_gui.py & goto :eof)
+  python -c "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)" >nul 2>nul && (python tools\run_uv_launcher.py & goto :eof)
 )
 
-echo Could not find a supported Python interpreter.
-echo EDMG Studio requires Python 3.10 - 3.13 for the dev launcher.
-echo If you already have one installed, set EDMG_STUDIO_PYTHON to that python.exe and run again.
+echo Could not find Python 3.10+ to bootstrap the pinned uv toolchain.
+echo The source launcher uses uv 0.11.28 to acquire and run Python 3.12.
+echo Set EDMG_STUDIO_PYTHON to a bootstrap python.exe and run again.
 pause
 
 goto :eof

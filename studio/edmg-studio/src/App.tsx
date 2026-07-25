@@ -23,6 +23,7 @@ const Workspace = lazy(() => import("./pages/Workspace"));
 const Timeline = lazy(() => import("./pages/Timeline"));
 const Render = lazy(() => import("./pages/Render"));
 const RenderQueue = lazy(() => import("./pages/RenderQueue"));
+const Review = lazy(() => import("./pages/Review"));
 const Outputs = lazy(() => import("./pages/Outputs"));
 const Cloud = lazy(() => import("./pages/Cloud"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -180,6 +181,7 @@ export default function App() {
   if (page === "timeline") content = <Timeline {...commonProps} onNavigate={setPage as any} />;
   if (page === "render") content = <Render {...commonProps} onNavigate={setPage as any} />;
   if (page === "queue") content = <RenderQueue {...commonProps} onNavigate={setPage as any} />;
+  if (page === "review") content = <Review {...commonProps} onNavigate={setPage as any} />;
   if (page === "outputs") content = <Outputs {...commonProps} onNavigate={setPage as any} />;
   if (page === "cloud") content = <Cloud {...commonProps} />;
   if (page === "settings") content = <Settings {...commonProps} />;

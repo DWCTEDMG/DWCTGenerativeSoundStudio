@@ -296,3 +296,80 @@ def test_model_manager_keeps_s3_as_secondary_cache_when_hf_is_active(tmp_path, m
     ) == "hf/checkpoints/demo.safetensors"
     assert calls["hf_uploads"] == [str(model_path)]
     assert calls["s3_uploads"] == [str(model_path)]
+
+
+def test_snapshot_install_retries_a_rejected_cache_token_with_settings_token(tmp_path, monkeypatch) -> None:
+    manager = _offline_manager(tmp_path, monkeypatch)
+    cache_token = "oauth-" + ("cache" * 8)
+    settings_token = "hf_" + ("settings" * 6)
+    manager.secrets = _FakeSecrets(settings_token)
+    monkeypatch.setattr(hf_auth_module, "_hf_hub_cache_token", lambda: cache_token)
+    monkeypatch.setattr(hf_auth_module, "_hf_cli_token", lambda: "")
+
+    attempts: list[str | bool] = []
+
+    class _RejectedTokenError(RuntimeError):
+        response = type("Response", (), {"status_code": 401})()
+
+    def _fake_snapshot_download(*, local_dir, token, **_kwargs):
+        attempts.append(token)
+        if token == cache_token:
+            raise _RejectedTokenError("401 Client Error: invalid user token")
+        assert token == settings_token
+        target = Path(local_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "model_index.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(model_manager_module, "snapshot_download", _fake_snapshot_download)
+    entry = {
+        "id": "hf_auth_snapshot",
+        "name": "HF authenticated snapshot",
+        "kind": "diffusers",
+        "source": "hf",
+        "hf_repo_id": "example/internal-model",
+        "target": {"engine": "internal", "folder": "diffusers"},
+    }
+    task = model_manager_module.ModelTask(id="test", name="install")
+
+    manager._install_file_model(task, entry)
+
+    assert attempts == [cache_token, settings_token]
+    assert (tmp_path / "home" / "models" / "internal" / "diffusers" / "hf_auth_snapshot" / "model_index.json").exists()
+    assert "hf_cache was rejected" in task.last_log
+
+
+def test_file_install_retries_anonymously_after_rejected_hf_auth(tmp_path, monkeypatch) -> None:
+    manager = _offline_manager(tmp_path, monkeypatch)
+    cache_token = "oauth-" + ("cache" * 8)
+    manager.secrets = _FakeSecrets("")
+    monkeypatch.setattr(hf_auth_module, "_hf_hub_cache_token", lambda: cache_token)
+    monkeypatch.setattr(hf_auth_module, "_hf_cli_token", lambda: "")
+
+    attempts: list[dict[str, str]] = []
+
+    def _fake_download_stream(_task, _url, dest, headers=None):
+        attempts.append(dict(headers or {}))
+        if headers:
+            raise model_manager_module.UserFacingError("Download unauthorized")
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(b"weights")
+
+    monkeypatch.setattr(manager, "_download_stream", _fake_download_stream)
+    entry = {
+        "id": "hf_auth_checkpoint",
+        "name": "HF public checkpoint",
+        "kind": "checkpoint",
+        "source": "hf",
+        "filename": "model.safetensors",
+        "hf_url": "https://huggingface.co/example/model/resolve/main/model.safetensors",
+        "target": {"engine": "comfyui", "folder": "checkpoints"},
+    }
+    task = model_manager_module.ModelTask(id="test", name="install")
+
+    manager._install_file_model(task, entry)
+
+    assert len(attempts) == 2
+    assert attempts[0]["Authorization"] == f"Bearer {cache_token}"
+    assert attempts[1] == {}
+    assert (tmp_path / "home" / "models" / "checkpoints" / "model.safetensors").read_bytes() == b"weights"
+    assert "Downloaded without Hugging Face authentication" in task.last_log

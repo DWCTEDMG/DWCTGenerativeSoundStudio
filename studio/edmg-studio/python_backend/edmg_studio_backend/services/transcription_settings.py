@@ -115,9 +115,9 @@ def transcription_dependency_status() -> dict[str, Any]:
         "nemo_available": nemo_available,
         "torch_available": torch_available,
         "demucs_available": demucs_available,
-        "parakeet_install_hint": 'Install optional dependencies with `pip install -e ".[parakeet]"` from python_backend.',
+        "parakeet_install_hint": "Synchronize the locked `parakeet` capability with the active uv accelerator profile.",
         "parakeet_nim_hint": "Parakeet NIM uses your NVIDIA API key — no additional install required.",
-        "demucs_install_hint": 'Install optional dependencies with `pip install -e ".[source_separation]"` from python_backend.',
+        "demucs_install_hint": "Synchronize the locked `source-separation` capability with the active uv accelerator profile.",
     }
 
 

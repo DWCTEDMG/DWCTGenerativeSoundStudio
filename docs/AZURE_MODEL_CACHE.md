@@ -23,8 +23,8 @@ az account set --subscription YOUR_SUBSCRIPTION_ID
 Install the optional backend dependencies:
 
 ```powershell
-cd studio/edmg-studio/python_backend
-pip install -e ".[azure]"
+uv lock --project studio/edmg-studio/python_backend --check
+uv sync --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra azure
 ```
 
 ## Create Storage

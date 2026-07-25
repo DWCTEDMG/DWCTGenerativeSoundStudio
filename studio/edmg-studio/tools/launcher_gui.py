@@ -14,7 +14,6 @@ import time
 STUDIO_DIR = Path(__file__).resolve().parents[1]
 ROOT = STUDIO_DIR.parents[1]
 BACKEND_DIR = STUDIO_DIR / "python_backend"
-BACKEND_VENV = BACKEND_DIR / "venv"
 BUNDLED_FFMPEG = STUDIO_DIR / "electron-resources" / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
 PACKAGE_JSON_PATH = STUDIO_DIR / "package.json"
 DEFAULT_PACKAGE_MANAGER = "pnpm"
@@ -23,12 +22,23 @@ DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_UI_PORT = 5173
 LAUNCHER_ENV_PATH = STUDIO_DIR / "launcher_env.json"
 BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json"
-SUPPORTED_PYTHON_MIN = (3, 10)
-SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 14)
-PYTORCH_CUDA_INDEX_ROOT = "https://download.pytorch.org/whl"
-PYTORCH_CUDA_TAG_FALLBACKS = ("cu132", "cu130", "cu128", "cu126", "cu124", "cu121", "cu118")
-CUDA_TORCH_PACKAGES = ("torch", "torchvision", "torchaudio")
-TENSORRT_RUNTIME_PACKAGES = ("tensorrt>=11.0.0", "cuda-python>=12.0.0")
+SUPPORTED_PYTHON_MIN = (3, 12)
+SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 13)
+
+# The source launcher is intentionally stdlib-only.  Import the backend's
+# checked-in uv policy without requiring the project environment to exist yet.
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from edmg_studio_backend.uv_toolchain import (  # noqa: E402
+    RUNTIME_CAPABILITY_EXTRAS,
+    active_accelerator_profile,
+    frozen_run_command,
+    lock_sha256,
+    resolve_uv,
+    sync_frozen_project,
+    uv_version,
+)
 
 # ── Machine optimiser ──────────────────────────────────────────────────────────
 OPTIMIZE_STATE_PATH = STUDIO_DIR / ".optimize_state.json"
@@ -89,25 +99,28 @@ def _ps_elevated(ps_block: str) -> tuple[int, str]:
     Returns (0, "") on success, (-1, reason) if UAC was cancelled or failed.
     """
     import tempfile
-    tmp = tempfile.mktemp(suffix=".txt")
-    # Append exit code to temp file so we can read it after the elevated run
-    wrapped = ps_block.rstrip("; ") + f"; $null | Out-Null; [IO.File]::WriteAllText('{tmp}', $LASTEXITCODE)"
-    escaped = wrapped.replace("'", "''")
-    cmd = (
-        f"Start-Process powershell "
-        f"-Verb RunAs -Wait "
-        f"-WindowStyle Hidden "
-        f"-ArgumentList '-NoProfile', '-NonInteractive', '-Command', '{escaped}'"
-    )
-    rc, out = _ps(cmd)
-    if rc != 0:
-        return rc, out  # UAC declined or PowerShell not found
+    with tempfile.NamedTemporaryFile(prefix="edmg-elevated-", suffix=".txt", delete=False) as result_file:
+        tmp = Path(result_file.name)
     try:
-        result_code = int(Path(tmp).read_text(encoding="utf-8").strip())
-        Path(tmp).unlink(missing_ok=True)
-        return result_code, ""
-    except Exception:
-        return 0, ""  # elevated ran but temp file missing — assume ok
+        # Append exit code to temp file so we can read it after the elevated run.
+        wrapped = ps_block.rstrip("; ") + f"; $null | Out-Null; [IO.File]::WriteAllText('{tmp}', $LASTEXITCODE)"
+        escaped = wrapped.replace("'", "''")
+        cmd = (
+            f"Start-Process powershell "
+            f"-Verb RunAs -Wait "
+            f"-WindowStyle Hidden "
+            f"-ArgumentList '-NoProfile', '-NonInteractive', '-Command', '{escaped}'"
+        )
+        rc, out = _ps(cmd)
+        if rc != 0:
+            return rc, out  # UAC declined or PowerShell not found
+        try:
+            result_code = int(tmp.read_text(encoding="utf-8").strip())
+            return result_code, ""
+        except Exception:
+            return 0, ""  # elevated ran but result file missing — assume ok
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _svc_query(name: str) -> str:
@@ -140,18 +153,58 @@ def _load_optimize_state() -> dict:
 
 
 def _resolve_ffmpeg_path() -> str:
+    """Prefer this checkout's bundled FFmpeg over a stale user EDMG_FFMPEG_PATH."""
+    if BUNDLED_FFMPEG.exists():
+        return str(BUNDLED_FFMPEG)
+
     explicit = os.environ.get("EDMG_FFMPEG_PATH", "").strip()
     if explicit:
         if not os.path.isabs(explicit) or Path(explicit).exists():
             return explicit
 
-    if BUNDLED_FFMPEG.exists():
-        return str(BUNDLED_FFMPEG)
+    for candidate in _windows_ffmpeg_candidates():
+        if candidate.is_file():
+            return str(candidate)
+
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
 
     if explicit:
         return explicit
 
     return "ffmpeg"
+
+
+def _windows_ffmpeg_candidates() -> list[Path]:
+    if not sys.platform.startswith("win"):
+        return []
+    local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    return [
+        local / "Microsoft" / "WinGet" / "Links" / "ffmpeg.exe",
+        Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
+        Path(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
+        Path(r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe"),
+    ]
+
+
+def _resolve_7z_path() -> str | None:
+    explicit = os.environ.get("EDMG_7Z_PATH", "").strip()
+    if explicit and Path(explicit).exists():
+        return explicit
+    if sys.platform.startswith("win"):
+        for candidate in (
+            Path(r"C:\Program Files\7-Zip\7z.exe"),
+            Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
+        ):
+            if candidate.is_file():
+                return str(candidate)
+    return (
+        shutil.which("7z")
+        or shutil.which("7z.exe")
+        or shutil.which("7zz")
+        or shutil.which("7zz.exe")
+    )
 
 
 def _format_python_requirement() -> str:
@@ -234,28 +287,6 @@ def _resolve_supported_python_command() -> tuple[list[str], tuple[int, int, int]
     raise RuntimeError(f"Could not find a supported Python interpreter. Need {_format_python_requirement()}.{detail}")
 
 
-def _backend_venv_status() -> tuple[bool, str]:
-    py = _venv_python(BACKEND_VENV)
-    if not py.exists():
-        return False, "missing python executable"
-    version = _python_version_for_command([str(py)])
-    if version is None:
-        return False, "python executable is not runnable"
-    if not _is_supported_python_version(version):
-        return False, f"unsupported Python {_format_python_version(version)}"
-    return True, _format_python_version(version)
-
-
-def _reset_backend_venv(log_cb) -> None:
-    if BACKEND_VENV.exists():
-        shutil.rmtree(BACKEND_VENV, ignore_errors=True)
-    py = _venv_python(BACKEND_VENV)
-    if py.exists():
-        try:
-            py.unlink()
-        except Exception:
-            pass
-
 def _read_json(path: Path, default):
     try:
         if path.exists():
@@ -280,15 +311,138 @@ def _studio_package_manager_name() -> str:
     return DEFAULT_PACKAGE_MANAGER
 
 
+def _windows_node_candidate_dirs() -> list[Path]:
+    """Common Node install locations when the launcher was started without PATH."""
+    if not sys.platform.startswith("win"):
+        return []
+    home = Path.home()
+    local = Path(os.environ.get("LOCALAPPDATA") or (home / "AppData" / "Local"))
+    candidates = [
+        Path(r"C:\Program Files\nodejs"),
+        Path(r"C:\Program Files (x86)\nodejs"),
+        local / "Programs" / "nodejs",
+        Path(r"C:\nvm4w\nodejs"),
+        local / "nvm",
+    ]
+    nvm_root = Path(os.environ.get("NVM_HOME") or (local / "nvm"))
+    if nvm_root.is_dir():
+        try:
+            versions = sorted(
+                (p for p in nvm_root.iterdir() if p.is_dir() and (p / "node.exe").exists()),
+                key=lambda p: p.name,
+                reverse=True,
+            )
+            candidates.extend(versions[:5])
+        except OSError:
+            pass
+    seen: set[str] = set()
+    out: list[Path] = []
+    for d in candidates:
+        try:
+            key = str(d.resolve()).lower()
+        except OSError:
+            key = str(d).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if d.is_dir():
+            out.append(d)
+    return out
+
+
+def _windows_tool_candidate_dirs() -> list[Path]:
+    """Extra dirs for tools the launcher may need when PATH is incomplete."""
+    dirs = list(_windows_node_candidate_dirs())
+    if not sys.platform.startswith("win"):
+        return dirs
+    local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    extra = [
+        Path(r"C:\Program Files\7-Zip"),
+        Path(r"C:\Program Files (x86)\7-Zip"),
+        local / "Microsoft" / "WinGet" / "Links",
+        Path(r"C:\ffmpeg\bin"),
+        Path(r"C:\Program Files\ffmpeg\bin"),
+        BUNDLED_FFMPEG.parent if BUNDLED_FFMPEG.exists() else None,
+    ]
+    ffmpeg = _resolve_ffmpeg_path()
+    try:
+        ff_path = Path(ffmpeg)
+        if ff_path.is_file():
+            extra.append(ff_path.parent)
+    except OSError:
+        pass
+    seven = _resolve_7z_path()
+    if seven:
+        try:
+            extra.append(Path(seven).parent)
+        except OSError:
+            pass
+    seen = {str(d.resolve()).lower() for d in dirs if d.is_dir()}
+    for d in extra:
+        if d is None:
+            continue
+        try:
+            if not d.is_dir():
+                continue
+            key = str(d.resolve()).lower()
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        dirs.append(d)
+    return dirs
+
+
+def _which_on_path_or_node_dirs(exe: str) -> str | None:
+    found = shutil.which(exe)
+    if found:
+        return found
+    names = [exe]
+    if sys.platform.startswith("win"):
+        lower = exe.lower()
+        if not lower.endswith((".exe", ".cmd", ".bat", ".com")):
+            names = [f"{exe}.cmd", f"{exe}.exe", f"{exe}.bat", exe]
+    for directory in _windows_tool_candidate_dirs():
+        for name in names:
+            candidate = directory / name
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
 def _resolve_package_manager_command(name: str) -> tuple[list[str], str] | None:
-    direct = shutil.which(name)
+    direct = _which_on_path_or_node_dirs(name)
     if direct:
         return [direct], direct
     if name == "pnpm":
-        corepack = shutil.which("corepack")
+        corepack = _which_on_path_or_node_dirs("corepack")
         if corepack:
             return [corepack, "pnpm"], f"{corepack} pnpm"
     return None
+
+
+def _env_with_node_bin_dirs(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Ensure Node/pnpm/FFmpeg/7-Zip dirs are on PATH for child processes."""
+    out = dict(env if env is not None else os.environ)
+    path_key = "Path" if sys.platform.startswith("win") and "Path" in out and "PATH" not in out else "PATH"
+    current = out.get(path_key) or out.get("PATH") or ""
+    parts = [p for p in current.split(os.pathsep) if p]
+    prepend: list[str] = []
+    for directory in _windows_tool_candidate_dirs():
+        s = str(directory)
+        if s and s not in parts and s not in prepend:
+            prepend.append(s)
+    if prepend:
+        out[path_key] = os.pathsep.join([*prepend, *parts]) if parts else os.pathsep.join(prepend)
+        if path_key == "Path":
+            out["PATH"] = out[path_key]
+    ffmpeg_path = _resolve_ffmpeg_path()
+    out["EDMG_FFMPEG_PATH"] = ffmpeg_path
+    seven = _resolve_7z_path()
+    if seven:
+        out["EDMG_7Z_PATH"] = seven
+    return out
 
 def _user_appdata_dir() -> Path:
     if sys.platform.startswith("win"):
@@ -301,29 +455,155 @@ def _user_appdata_dir() -> Path:
 def _bootstrap_config_path() -> Path:
     return _user_appdata_dir() / "EDMG Studio" / BOOTSTRAP_CONFIG_BASENAME
 
+# Populated while resolving Studio storage paths; consumed by Launcher.__init__ for UI logs.
+_PATH_RESOLUTION_NOTES: list[str] = []
+
+
+def _note_path_resolution(message: str) -> None:
+    text = str(message).strip()
+    if text:
+        _PATH_RESOLUTION_NOTES.append(text)
+
+
+def _windows_drive_usable(path: Path) -> bool:
+    """Return False when path is on a missing/unmounted Windows drive letter."""
+    if os.name != "nt":
+        return True
+    anchor = path.anchor
+    if not anchor:
+        return True
+    try:
+        return bool(Path(anchor).exists())
+    except Exception:
+        return False
+
+
+def _available_windows_drive_letters() -> list[str]:
+    """Mounted Windows drive letters (A-Z) that currently exist."""
+    if os.name != "nt":
+        return []
+    letters: list[str] = []
+    for code in range(ord("A"), ord("Z") + 1):
+        letter = chr(code)
+        root = Path(f"{letter}:\\")
+        try:
+            if root.exists():
+                letters.append(letter)
+        except OSError:
+            continue
+    return letters
+
+
+def _discover_missing_drive_remaps(path: Path) -> list[Path]:
+    """Discover ``{host}:\\{letter}\\rest`` when ``{letter}:`` is missing.
+
+    Scans mounted drives for a folder named like the missing letter (common when
+    a volume is remounted under another drive). Prefer remaps whose full path
+    exists; otherwise return letter-root hits so callers can still choose.
+    """
+    if os.name != "nt":
+        return []
+    match = re.match(r"^([A-Za-z]):[\\/]*(.*)$", str(path))
+    if not match:
+        return []
+    letter = match.group(1).upper()
+    rest = match.group(2).replace("/", "\\").strip("\\")
+
+    existing: list[Path] = []
+    letter_root_hits: list[Path] = []
+    for host in _available_windows_drive_letters():
+        if host == letter:
+            continue
+        letter_root = Path(f"{host}:\\{letter}")
+        try:
+            if not letter_root.exists():
+                continue
+        except OSError:
+            continue
+        remapped = letter_root / rest if rest else letter_root
+        letter_root_hits.append(remapped)
+        try:
+            if remapped.exists():
+                existing.append(remapped)
+        except OSError:
+            continue
+    return existing or letter_root_hits
+
+
+def _host_letter_root(remapped: Path) -> Path | None:
+    """``E:\\G\\Users\\...`` -> ``E:\\G`` (the former drive letter mount root)."""
+    parts = remapped.parts
+    if len(parts) < 2:
+        return None
+    return Path(remapped.anchor) / parts[1]
+
+
+def _coerce_usable_path(path: Path) -> Path | None:
+    """Return path if usable, or a discovered remount under another drive letter."""
+    try:
+        resolved = path.expanduser().resolve()
+    except Exception:
+        try:
+            resolved = path.expanduser().absolute()
+        except Exception:
+            return None
+
+    if _windows_drive_usable(resolved):
+        return resolved
+
+    candidates = _discover_missing_drive_remaps(resolved)
+    if not candidates:
+        _note_path_resolution(
+            f"Ignoring unusable Studio path (missing drive, no remount discovered): {resolved}"
+        )
+        return None
+
+    # Prefer a remap whose full path exists; otherwise first discovered candidate.
+    chosen: Path | None = None
+    for remapped in candidates:
+        try:
+            remapped_resolved = remapped.resolve()
+        except Exception:
+            remapped_resolved = remapped
+
+        if not _windows_drive_usable(remapped_resolved):
+            continue
+
+        try:
+            path_exists = bool(remapped_resolved.exists())
+        except Exception:
+            path_exists = False
+
+        if path_exists:
+            chosen = remapped_resolved
+            break
+        if chosen is None:
+            chosen = remapped_resolved
+
+    if chosen is None:
+        _note_path_resolution(
+            f"Ignoring unusable Studio path (missing drive, remount candidates unusable): {resolved}"
+        )
+        return None
+
+    _note_path_resolution(f"Remapped missing-drive Studio path {resolved} -> {chosen}")
+    return chosen
+
+
 def _saved_path_if_usable(raw_value: str | None) -> Path | None:
     value = str(raw_value or "").strip()
     if not value:
         return None
-    candidate = Path(value).expanduser()
-    try:
-        resolved = candidate.resolve()
-    except Exception:
-        try:
-            resolved = candidate.absolute()
-        except Exception:
-            return None
+    return _coerce_usable_path(Path(value))
 
+
+def _local_fallback_studio_home() -> Path:
+    """Usable default when configured Studio home is on a missing drive."""
     if os.name == "nt":
-        anchor = resolved.anchor
-        if anchor:
-            try:
-                if not Path(anchor).exists():
-                    return None
-            except Exception:
-                return None
-
-    return resolved
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        return (base / "EDMG Studio" / "home").resolve()
+    xdg = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+    return (xdg / "edmg-studio" / "home").resolve()
 
 def _derive_studio_home(data_dir: Path) -> Path:
     return data_dir.expanduser().resolve().parent
@@ -416,11 +696,15 @@ def _default_data_dir() -> Path:
     # Keep runtime data OUTSIDE python_backend/ to avoid packaging issues.
     env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
     if env_home:
-        return (Path(env_home).expanduser().resolve() / "data")
+        usable_home = _saved_path_if_usable(env_home)
+        if usable_home is not None:
+            return (usable_home / "data")
 
     cur = os.environ.get("EDMG_STUDIO_DATA_DIR", "").strip()
     if cur:
-        return Path(cur).expanduser().resolve()
+        usable_data = _saved_path_if_usable(cur)
+        if usable_data is not None:
+            return usable_data
 
     bootstrap = _read_json(_bootstrap_config_path(), default={})
     if isinstance(bootstrap, dict):
@@ -441,15 +725,23 @@ def _default_data_dir() -> Path:
 
 def _ensure_data_dir_env() -> Path:
     # Priority: explicit env -> Studio bootstrap -> launcher config -> default.
+    # Env often comes from launcher_env.json via edmg_studio_backend.__init__;
+    # never trust those paths blindly on a missing Windows drive letter.
     env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
     if env_home:
-        _, p = _persist_studio_location(studio_home=Path(env_home))
-        return p
+        usable_home = _saved_path_if_usable(env_home)
+        if usable_home is not None:
+            _, p = _persist_studio_location(studio_home=usable_home)
+            return p
+        _note_path_resolution(f"Ignoring unusable EDMG_STUDIO_HOME from environment: {env_home}")
 
     cur = os.environ.get("EDMG_STUDIO_DATA_DIR", "").strip()
     if cur:
-        _, p = _persist_studio_location(data_dir=Path(cur))
-        return p
+        usable_data = _saved_path_if_usable(cur)
+        if usable_data is not None:
+            _, p = _persist_studio_location(data_dir=usable_data)
+            return p
+        _note_path_resolution(f"Ignoring unusable EDMG_STUDIO_DATA_DIR from environment: {cur}")
 
     bootstrap = _read_json(_bootstrap_config_path(), default={})
     if isinstance(bootstrap, dict):
@@ -469,8 +761,36 @@ def _ensure_data_dir_env() -> Path:
             _, p = _persist_studio_location(data_dir=saved)
             return p
 
-    _, p = _persist_studio_location(data_dir=_default_data_dir())
+    default_data = _default_data_dir()
+    _note_path_resolution(
+        f"No usable configured Studio home; using default data dir: {default_data}"
+    )
+    _, p = _persist_studio_location(data_dir=default_data)
     return p
+
+
+def _mkdir_or_fallback(path: Path, *, label: str) -> Path:
+    """Create path, or switch to a local fallback home if the drive is missing."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError as exc:
+        winerror = getattr(exc, "winerror", None)
+        _note_path_resolution(
+            f"Failed to create {label} at {path} ({exc}); "
+            f"falling back to a local Studio home"
+            + (f" [winerror={winerror}]" if winerror is not None else "")
+        )
+        fallback_home = _local_fallback_studio_home()
+        _, fallback_data = _persist_studio_location(studio_home=fallback_home)
+        if label == "studio home":
+            target = fallback_home
+        elif label == "studio log dir":
+            target = (fallback_data / "logs").resolve()
+        else:
+            target = fallback_data
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
 def _safe_merge_copy(src: Path, dst: Path) -> tuple[int, int]:
     """Copy src -> dst, merging directories.
@@ -510,7 +830,7 @@ def _migrate_legacy_data_dir(new_data_dir: Path) -> str | None:
     """Migrate legacy runtime data into new_data_dir.
 
     Legacy locations we support:
-      - studio/edmg-studio/python_backend/data   (the one that breaks pip install -e)
+      - studio/edmg-studio/python_backend/data   (must never be treated as project metadata)
 
     We never delete user data:
       - We merge-copy into new_data_dir
@@ -828,11 +1148,6 @@ def _find_free_port(host: str, start_port: int, *, max_tries: int = 50) -> int:
 
 LOG_MAX_CHARS = 200_000
 
-def _venv_python(venv: Path) -> Path:
-    if sys.platform.startswith("win"):
-        return venv / "Scripts" / "python.exe"
-    return venv / "bin" / "python"
-
 def _run_cmd(cmd, cwd=None, env=None, log_cb=None):
     p = subprocess.Popen(
         cmd,
@@ -870,191 +1185,42 @@ def _tail_file(path: Path, max_bytes: int = 200_000) -> str:
         return ""
 
 
-def _installed_torch_version(py: str) -> str | None:
-    """Return the base version (no +cpu/+cuXXX local tag) of torch in the venv, if any."""
-    try:
-        proc = subprocess.run(
-            [py, "-c", "import torch,sys; sys.stdout.write(torch.__version__.split('+')[0])"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode == 0:
-            version = str(proc.stdout or "").strip()
-            return version or None
-    except Exception:
-        pass
-    return None
-
-
-def _cuda_tag_code(tag: str) -> int | None:
-    m = re.fullmatch(r"cu(\d+)", str(tag or "").strip().lower())
-    return int(m.group(1)) if m else None
-
-
-def _detect_driver_cuda_code() -> int | None:
-    smi = shutil.which("nvidia-smi")
-    if not smi:
-        return None
-    try:
-        proc = subprocess.run([smi], capture_output=True, text=True, timeout=15)
-        text = (proc.stdout or "") + (proc.stderr or "")
-        # nvidia-smi header shows e.g. "CUDA Version: 13.3" / "CUDA UMD Version: 13.3".
-        m = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text, re.IGNORECASE)
-        if m:
-            return int(m.group(1)) * 10 + int(m.group(2))  # 13.3 -> 133
-    except Exception:
-        pass
-    return None
-
-
-def _available_pytorch_cuda_tags() -> set[str]:
-    try:
-        with urllib.request.urlopen(PYTORCH_CUDA_INDEX_ROOT + "/", timeout=8) as resp:
-            text = resp.read().decode("utf-8", errors="ignore")
-        tags = {f"cu{m}" for m in re.findall(r"cu(\d{3})/?", text, flags=re.IGNORECASE)}
-        if tags:
-            return tags
-    except Exception:
-        pass
-    return set(PYTORCH_CUDA_TAG_FALLBACKS)
-
-
-def _choose_cuda_wheel_tag(driver_cuda_code: int | None, available_tags: set[str] | tuple[str, ...] | list[str]) -> str:
-    candidates = []
-    for tag in available_tags or PYTORCH_CUDA_TAG_FALLBACKS:
-        norm = str(tag or "").strip().lower()
-        code = _cuda_tag_code(norm)
-        if code is not None:
-            candidates.append((code, norm))
-    if not candidates:
-        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in PYTORCH_CUDA_TAG_FALLBACKS]
-    candidates = sorted(set(candidates), reverse=True)
-    if driver_cuda_code is None:
-        return candidates[0][1]
-    for code, tag in candidates:
-        if code <= driver_cuda_code:
-            return tag
-    return candidates[-1][1]
-
-
-def _cuda_wheel_tag_candidates() -> list[str]:
-    override = os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip().lower()
-    if override:
-        return [override]
-
-    driver_cuda_code = _detect_driver_cuda_code()
-    available_tags = _available_pytorch_cuda_tags()
-    candidates = []
-    for tag in available_tags or PYTORCH_CUDA_TAG_FALLBACKS:
-        norm = str(tag or "").strip().lower()
-        code = _cuda_tag_code(norm)
-        if code is not None:
-            candidates.append((code, norm))
-    if not candidates:
-        candidates = [(_cuda_tag_code(tag) or 0, tag) for tag in PYTORCH_CUDA_TAG_FALLBACKS]
-    candidates = sorted(set(candidates), reverse=True)
-    if driver_cuda_code is None:
-        return [tag for _, tag in candidates]
-    compatible = [tag for code, tag in candidates if code <= driver_cuda_code]
-    return compatible or [candidates[-1][1]]
-
-
-def _detect_cuda_wheel_tag() -> str:
-    """Pick the newest PyTorch CUDA wheel channel compatible with the NVIDIA driver."""
-    return _cuda_wheel_tag_candidates()[0]
-
-
-def _cuda_wheel_index_url(tag: str) -> str:
-    return os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip() or f"{PYTORCH_CUDA_INDEX_ROOT}/{tag}"
-
-
-def _should_auto_install_cuda_runtime() -> bool:
-    flag = os.environ.get("EDMG_INSTALL_CUDA", "").strip().lower()
-    if flag in {"0", "false", "no", "off", "cpu", "skip"}:
-        return False
-    if flag in {"1", "true", "yes", "on", "cuda", "nvidia"}:
-        return True
-    if os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip() or os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip():
-        return True
-    return shutil.which("nvidia-smi") is not None
-
-
-def _install_cuda_runtime(py: str, log_cb, *, allow_without_gpu: bool = False) -> None:
-    if not shutil.which("nvidia-smi") and not os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip():
-        msg = "nvidia-smi not found; CUDA runtime install needs an NVIDIA driver or EDMG_CUDA_WHEEL_TAG override."
-        if not allow_without_gpu:
-            raise RuntimeError(msg)
-        log_cb("Warning: " + msg)
-        log_cb("Continuing with the newest visible PyTorch CUDA wheel channel.")
-
-    rc = 1
-    index_url = ""
-    for tag in _cuda_wheel_tag_candidates():
-        index_url = _cuda_wheel_index_url(tag)
-        log_cb(f"CUDA wheel channel: {tag} ({index_url})")
-        log_cb("Installing latest CUDA-enabled PyTorch packages — this may take a few minutes…")
-        rc = _run_cmd(
-            [
-                py,
-                "-m",
-                "pip",
-                "install",
-                "--upgrade",
-                "--force-reinstall",
-                "--index-url",
-                index_url,
-                *CUDA_TORCH_PACKAGES,
-            ],
-            cwd=BACKEND_DIR,
-            log_cb=log_cb,
-        )
-        if rc != 0:
-            log_cb("Combined torch/vision/audio install failed; retrying with torch only…")
-            rc = _run_cmd(
-                [py, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--index-url", index_url, "torch"],
-                cwd=BACKEND_DIR,
-                log_cb=log_cb,
-            )
-        if rc == 0:
-            break
-        if os.environ.get("EDMG_CUDA_WHEEL_TAG", "").strip() or os.environ.get("EDMG_CUDA_WHEEL_INDEX", "").strip():
-            break
-        log_cb(f"No usable PyTorch wheel found on {tag}; trying the next compatible CUDA channel…")
-
-    if rc != 0:
-        raise RuntimeError(
-            f"CUDA PyTorch install failed from {index_url}. "
-            "Check your NVIDIA driver, internet connection, or set EDMG_CUDA_WHEEL_TAG to a supported channel."
-        )
-
-    log_cb("Installing/updating TensorRT runtime packages for Studio TensorRT renders…")
-    rc = _run_cmd(
-        [py, "-m", "pip", "install", "--upgrade", *TENSORRT_RUNTIME_PACKAGES],
-        cwd=BACKEND_DIR,
-        log_cb=log_cb,
-    )
-    if rc != 0:
-        raise RuntimeError("TensorRT runtime package install failed")
-
-    log_cb("Verifying CUDA/TensorRT runtime…")
-    proc = _run_cmd(
+def _sync_locked_backend(profile: str, log_cb) -> None:
+    """Materialize and verify one lock-selected accelerator environment."""
+    capabilities = ", ".join(RUNTIME_CAPABILITY_EXTRAS)
+    log_cb(f"Checking uv.lock and syncing frozen `{profile}` profile ({capabilities})…")
+    uv = sync_frozen_project(profile, capability_extras=RUNTIME_CAPABILITY_EXTRAS, install_uv=True)
+    log_cb(f"uv {uv_version(uv)}: {uv}")
+    verify, env = frozen_run_command(
+        profile,
         [
-            py,
+            "python",
             "-c",
-            "import torch; print('torch', torch.__version__);"
-            "print('cuda build:', torch.version.cuda);"
-            "print('cuda available:', torch.cuda.is_available());"
-            "print('device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none');"
-            "import tensorrt; print('tensorrt', tensorrt.__version__)",
+            (
+                "import platform,torch,torchvision,torchaudio;"
+                "print('python', platform.python_version());"
+                "print('torch', torch.__version__);"
+                "print('torchvision', torchvision.__version__);"
+                "print('torchaudio', torchaudio.__version__)"
+            ),
         ],
-        cwd=BACKEND_DIR,
-        log_cb=log_cb,
+        capability_extras=RUNTIME_CAPABILITY_EXTRAS,
     )
-    if proc != 0:
-        log_cb("Warning: CUDA/TensorRT verification had an issue — check the log before rendering.")
-    else:
-        log_cb("CUDA/TensorRT runtime is ready for Studio renderer paths.")
+    if _run_cmd(verify, cwd=BACKEND_DIR, env=env, log_cb=log_cb) != 0:
+        log_cb(
+            f"Frozen `{profile}` verification found an incomplete package installation; "
+            "reinstalling the locked environment…"
+        )
+        uv = sync_frozen_project(
+            profile,
+            capability_extras=RUNTIME_CAPABILITY_EXTRAS,
+            install_uv=True,
+            reinstall=True,
+        )
+        log_cb(f"uv {uv_version(uv)}: {uv}")
+        if _run_cmd(verify, cwd=BACKEND_DIR, env=env, log_cb=log_cb) != 0:
+            raise RuntimeError(f"Frozen `{profile}` environment verification failed after repair")
+    log_cb(f"Frozen `{profile}` backend is ready (lock {lock_sha256()[:12]}…).")
 
 
 def _parse_backend_url_from_logs(text: str) -> tuple[str, int] | None:
@@ -1095,11 +1261,24 @@ class Launcher(tk.Tk):
 
         self._refresh_in_progress = False
 
+        _PATH_RESOLUTION_NOTES.clear()
         self.data_dir = _ensure_data_dir_env()
-        self.studio_home = Path(os.environ.get("EDMG_STUDIO_HOME", str(_derive_studio_home(self.data_dir)))).expanduser().resolve()
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+        usable_home = _saved_path_if_usable(env_home) if env_home else None
+        self.studio_home = usable_home or _derive_studio_home(self.data_dir)
+        self.data_dir = _mkdir_or_fallback(self.data_dir, label="data dir")
+        # mkdir fallback may have rewritten studio_home via persist
+        env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+        usable_home = _saved_path_if_usable(env_home) if env_home else None
+        self.studio_home = usable_home or _derive_studio_home(self.data_dir)
         self.studio_log_path = (self.data_dir / "logs" / "studio_dev.log").resolve()
-        self.studio_log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_parent = _mkdir_or_fallback(self.studio_log_path.parent, label="studio log dir")
+        self.studio_log_path = (log_parent / "studio_dev.log").resolve()
+        if log_parent != self.data_dir / "logs":
+            self.data_dir = log_parent.parent
+            env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+            usable_home = _saved_path_if_usable(env_home) if env_home else None
+            self.studio_home = usable_home or _derive_studio_home(self.data_dir)
 
         self._studio_log_pos = 0
         self._studio_log_poll_ms = 400
@@ -1108,6 +1287,7 @@ class Launcher(tk.Tk):
         self.backend_host, self.backend_port = _ensure_backend_env()
 
         self._startup_migration_msg = _migrate_legacy_data_dirs(self.data_dir)
+        self._startup_path_notes = list(_PATH_RESOLUTION_NOTES)
 
         self._build_ui()
         self._refresh_status()
@@ -1115,6 +1295,9 @@ class Launcher(tk.Tk):
         self.after(500, self._poll_studio_log)
 
         self.after(250, self._auto_attach_backend_if_found)
+        if self._startup_path_notes:
+            notes = list(self._startup_path_notes)
+            self.after(350, lambda: [self._log(n) for n in notes])
         if self._startup_migration_msg:
             self.after(400, lambda: self._log(self._startup_migration_msg))
 
@@ -1200,16 +1383,25 @@ class Launcher(tk.Tk):
         threading.Thread(target=runner, daemon=True).start()
 
     def _which(self, exe: str) -> str | None:
-        return shutil.which(exe)
+        return _which_on_path_or_node_dirs(exe)
 
     def _apply_studio_home(self, studio_home: Path, *, reason: str) -> None:
         migration_queued = _queue_studio_migration(self.studio_home, self.data_dir, studio_home)
         studio_home, data_dir = _persist_studio_location(studio_home=studio_home)
         self.studio_home = studio_home
-        self.data_dir = data_dir
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir = _mkdir_or_fallback(data_dir, label="data dir")
+        # mkdir fallback may have rewritten studio_home via persist
+        env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+        usable_home = _saved_path_if_usable(env_home) if env_home else None
+        self.studio_home = usable_home or _derive_studio_home(self.data_dir)
         self.studio_log_path = (self.data_dir / "logs" / "studio_dev.log").resolve()
-        self.studio_log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_parent = _mkdir_or_fallback(self.studio_log_path.parent, label="studio log dir")
+        self.studio_log_path = (log_parent / "studio_dev.log").resolve()
+        if log_parent != self.data_dir / "logs":
+            self.data_dir = log_parent.parent
+            env_home = os.environ.get("EDMG_STUDIO_HOME", "").strip()
+            usable_home = _saved_path_if_usable(env_home) if env_home else None
+            self.studio_home = usable_home or _derive_studio_home(self.data_dir)
         self._studio_log_pos = 0
 
         if hasattr(self, "var_studio_home"):
@@ -1733,10 +1925,14 @@ class Launcher(tk.Tk):
         try:
             py = sys.executable
             try:
-                bootstrap_cmd, bootstrap_version = _resolve_supported_python_command()
-                bootstrap_note = f" | bootstrap: {_describe_python_command(bootstrap_cmd)} ({_format_python_version(bootstrap_version)})"
+                uv = resolve_uv(install=False)
+                profile = active_accelerator_profile()
+                bootstrap_note = (
+                    f" | locked runtime: Python 3.12 | uv {uv_version(uv)} | "
+                    f"profile: {profile} | lock: {lock_sha256()[:12]}…"
+                )
             except Exception as e:
-                bootstrap_note = f" | bootstrap: NOT FOUND ({e})"
+                bootstrap_note = f" | locked runtime: NOT READY ({e})"
             node = self._which("node")
             package_manager_name = _studio_package_manager_name()
             package_manager = _resolve_package_manager_command(package_manager_name)
@@ -1948,73 +2144,19 @@ Get-ChildItem $base | ForEach-Object {
         self._run_bg("Restore Machine (OFF)", work)
 
     def install_cuda_torch(self) -> None:
-        """Install/update current CUDA PyTorch and TensorRT runtime packages."""
+        """Sync the immutable CUDA/TensorRT profile selected by uv.lock."""
         def work():
-            venv_ok, venv_detail = _backend_venv_status()
-            if not venv_ok or not BACKEND_VENV.exists():
-                raise RuntimeError(
-                    "Backend venv not found. Run 'Install/Update Backend' first, then refresh CUDA/TensorRT."
-                )
-            py = str(_venv_python(BACKEND_VENV))
-            _install_cuda_runtime(py, self._log, allow_without_gpu=True)
+            _sync_locked_backend("cuda", self._log)
+            os.environ["EDMG_BACKEND_ACCELERATOR_PROFILE"] = "cuda"
+            self._log("Active backend accelerator profile is now `cuda`.")
 
-        self._run_bg("Refresh CUDA/TensorRT Runtime", work)
+        self._run_bg("Sync locked CUDA/TensorRT profile", work)
 
     def install_backend(self) -> None:
         def work():
             BACKEND_DIR.mkdir(parents=True, exist_ok=True)
-            bootstrap_cmd, bootstrap_version = _resolve_supported_python_command()
-            self._log(
-                f"Using bootstrap Python: {_describe_python_command(bootstrap_cmd)} "
-                f"({_format_python_version(bootstrap_version)})"
-            )
-
-            venv_ok, venv_detail = _backend_venv_status()
-            if BACKEND_VENV.exists() and not venv_ok:
-                self._log(f"Backend venv is incompatible ({venv_detail}). Recreating it.")
-                _reset_backend_venv(self._log)
-
-            if not BACKEND_VENV.exists():
-                self._log(f"Creating venv: {BACKEND_VENV}")
-                rc = _run_cmd([*bootstrap_cmd, "-m", "venv", str(BACKEND_VENV)], cwd=BACKEND_DIR, log_cb=self._log)
-                if rc != 0:
-                    raise RuntimeError("venv creation failed")
-
-            py = str(_venv_python(BACKEND_VENV))
-            venv_ok, venv_detail = _backend_venv_status()
-            if not venv_ok:
-                raise RuntimeError(f"Backend venv is not usable after creation: {venv_detail}")
-
-            self._log("Upgrading pip…")
-            rc = _run_cmd([py, "-m", "pip", "install", "-U", "pip"], cwd=BACKEND_DIR, log_cb=self._log)
-            if rc != 0:
-                raise RuntimeError("pip upgrade failed")
-
-            self._log("Installing backend + bundled EDMG Core (editable)…")
-            rc = _run_cmd([py, "-m", "pip", "install", "-e", ".[studio_bundle]"], cwd=BACKEND_DIR, log_cb=self._log)
-            if rc != 0:
-                raise RuntimeError("backend install failed")
-
-            if _should_auto_install_cuda_runtime():
-                self._log("NVIDIA CUDA detected or requested; refreshing latest CUDA PyTorch + TensorRT runtime…")
-                _install_cuda_runtime(py, self._log)
-            else:
-                self._log(
-                    "CUDA/TensorRT runtime auto-install skipped (no NVIDIA GPU detected). "
-                    "Set EDMG_INSTALL_CUDA=1 or EDMG_CUDA_WHEEL_TAG to force it."
-                )
-
-            # Parakeet ASR (NVIDIA NeMo) — large/optional. Installed best-effort so a
-            # failure here never blocks the core backend install.
-            self._log("Installing Parakeet ASR extra (NVIDIA NeMo) — large download, optional…")
-            rc_parakeet = _run_cmd([py, "-m", "pip", "install", "-e", ".[parakeet]"], cwd=BACKEND_DIR, log_cb=self._log)
-            if rc_parakeet != 0:
-                self._log(
-                    "Warning: Parakeet ASR extra failed to install (optional). "
-                    "Core backend is still usable; you can retry this step later."
-                )
-            else:
-                self._log("Parakeet ASR extra installed.")
+            profile = active_accelerator_profile()
+            _sync_locked_backend(profile, self._log)
 
         self._run_bg("Install backend", work)
 
@@ -2026,7 +2168,12 @@ Get-ChildItem $base | ForEach-Object {
                 raise RuntimeError(f"{package_manager_name} not found. Install Node.js LTS, enable Corepack if needed, then retry.")
             if not PACKAGE_JSON_PATH.exists():
                 raise RuntimeError(f"package.json not found at {STUDIO_DIR}")
-            rc = _run_cmd([*package_manager[0], "install"], cwd=STUDIO_DIR, log_cb=self._log)
+            rc = _run_cmd(
+                [*package_manager[0], "install"],
+                cwd=STUDIO_DIR,
+                log_cb=self._log,
+                env=_env_with_node_bin_dirs(),
+            )
             if rc != 0:
                 raise RuntimeError(f"{package_manager_name} install failed")
 
@@ -2048,22 +2195,32 @@ Get-ChildItem $base | ForEach-Object {
                 self._log("Backend already running.")
                 return
 
-            venv_ok, venv_detail = _backend_venv_status()
-            if not BACKEND_VENV.exists() or not venv_ok:
-                self._log(f"Backend venv missing or incompatible ({venv_detail}). Running backend install first.")
-                self.install_backend()
-                raise RuntimeError("Backend not installed yet. Re-run Start Backend after install completes.")
-
             self._ensure_backend_port_available()
 
-            py = str(_venv_python(BACKEND_VENV))
-            env = os.environ.copy()
+            profile = active_accelerator_profile()
+            _sync_locked_backend(profile, self._log)
+            cmd, env = frozen_run_command(
+                profile,
+                [
+                    "python",
+                    "-m",
+                    "edmg_studio_backend",
+                    "serve",
+                    "--host",
+                    self.backend_host,
+                    "--port",
+                    str(self.backend_port),
+                ],
+                capability_extras=RUNTIME_CAPABILITY_EXTRAS,
+            )
+            env = _env_with_node_bin_dirs(env)
             for key, value in _default_storage_env(self.studio_home, self.data_dir).items():
                 env.setdefault(key, value)
-            ffmpeg_path = _resolve_ffmpeg_path()
+            ffmpeg_path = env.get("EDMG_FFMPEG_PATH") or _resolve_ffmpeg_path()
             env["EDMG_FFMPEG_PATH"] = ffmpeg_path
             self._log(f"Using FFmpeg: {ffmpeg_path}")
-            cmd = [py, "-m", "edmg_studio_backend", "serve", "--host", self.backend_host, "--port", str(self.backend_port)]
+            if env.get("EDMG_7Z_PATH"):
+                self._log(f"Using 7-Zip: {env['EDMG_7Z_PATH']}")
             self._log("Starting backend: " + " ".join(cmd))
             self.backend_proc = subprocess.Popen(cmd, cwd=str(BACKEND_DIR), env=env)
             time.sleep(0.25)
@@ -2195,7 +2352,7 @@ Get-ChildItem $base | ForEach-Object {
         self._auto_attach_backend_if_found()
         self._ensure_backend_port_available()
 
-        env = os.environ.copy()
+        env = _env_with_node_bin_dirs()
         env.setdefault("EDMG_STUDIO_SPAWN_BACKEND", "1")
         env.setdefault("EDMG_STUDIO_BACKEND_HOST", self.backend_host)
         env.setdefault("EDMG_STUDIO_BACKEND_PORT", str(self.backend_port))

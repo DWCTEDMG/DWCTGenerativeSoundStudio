@@ -9,6 +9,10 @@ set -euo pipefail
 
 EDMG_STUDIO_HOME="${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}"
 S3_PYTHON_BIN="${S3_PYTHON_BIN:-python}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=uv_toolchain.sh
+source "${SCRIPT_DIR}/uv_toolchain.sh"
+UV_BIN="$(edmg_require_uv)"
 EDMG_AWS_MODEL_CACHE_BUCKET="${EDMG_AWS_MODEL_CACHE_BUCKET:-${EDMG_AWS_MODEL_BUCKET:-${EDMG_S3_MODEL_CACHE_BUCKET:-}}}"
 EDMG_AWS_MODEL_CACHE_PREFIX="${EDMG_AWS_MODEL_CACHE_PREFIX:-${EDMG_S3_MODEL_CACHE_PREFIX:-models}}"
 EDMG_MODEL_STORAGE_MODE="${EDMG_MODEL_STORAGE_MODE:-local_cache}" # local_cache|cloud_only
@@ -58,7 +62,7 @@ mkdir -p "${EDMG_STUDIO_HOME}"
 
 if [[ "${S3_INSTALL_BOTO3}" == "1" ]]; then
   log "Ensuring boto3 is installed"
-  "${S3_PYTHON_BIN}" -m pip install -U boto3
+  "${UV_BIN}" pip install --python "${S3_PYTHON_BIN}" -U boto3
 fi
 
 log "Validating S3 model cache"

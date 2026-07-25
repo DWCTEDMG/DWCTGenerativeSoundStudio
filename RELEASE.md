@@ -8,13 +8,14 @@ Stable and preview promotion follows [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.
 
 ## Supported build environment
 
-- Python `>=3.10,<3.14`
+- Python `3.12` (repository `.python-version`)
+- `uv` `0.11.28`
 - Node.js LTS
 - `pnpm@10.33.0` via `studio/edmg-studio/package.json#packageManager`
 - Windows build host for `dist:win`
 
-Packaged Studio ships its own Electron runtime. Python is only a build-time
-requirement for source builds, backend bundling, and release packaging.
+Packaged Studio ships its own Electron runtime and PyInstaller backend. Python
+and uv are build-time requirements only; customers do not install either one.
 
 ## Canonical repo hygiene
 
@@ -45,8 +46,9 @@ From the repo root:
 
 That script now:
 
-- checks the supported Python version range
-- rebuilds the packaged backend bundle
+- checks the pinned uv release and Python 3.12 project metadata
+- checks `uv.lock`, performs a frozen DirectML-profile sync, and rebuilds the
+  packaged backend bundle through uv
 - stages bundled FFmpeg
 - installs UI dependencies
 - validates pnpm/lockfile/release metadata expectations
@@ -55,6 +57,20 @@ That script now:
 Primary artifact output:
 
 - `studio/edmg-studio/dist/`
+
+The Windows default is DirectML. Explicit profile builds are also available
+from `studio/edmg-studio/`:
+
+```powershell
+pnpm run dist:win:cpu
+pnpm run dist:win:directml
+pnpm run dist:win:cuda
+```
+
+Every release profile is resolved exclusively from `pyproject.toml` and the
+committed `uv.lock`. Environment variables that inject a package source,
+requirements file, project environment, bundle extra, or Torch index are
+release blockers.
 
 ## Required proof before shipping
 
@@ -70,6 +86,55 @@ That proof covers:
 - packaged customer flow
 - packaged upgrade and storage migration proof
 - packaged zero-state setup proof with Studio-managed Ollama and 7-Zip
+- backend manifest verification for Python version, uv version, lock SHA-256,
+  accelerator profile, Torch packages/index, PyInstaller version, source
+  fingerprint, and binary hash
+- CycloneDX SBOM export from the committed `uv.lock` under
+  `studio/edmg-studio/release/evidence/python-backend-<profile>.cyclonedx.json`
+- SHA-256 checksum manifests for bundled and installer artifacts under
+  `studio/edmg-studio/release/evidence/`
+
+Generate or refresh release evidence manually:
+
+```powershell
+cd studio/edmg-studio
+pnpm run generate:release-evidence
+pnpm run generate:release-evidence:dist
+```
+
+After a full Windows build:
+
+```powershell
+./studio/edmg-studio/packaging/windows/build_all.ps1
+```
+
+That script now also runs the env-gated signing hook stub and the clean-machine
+smoke checklist (`packaging/windows/smoke_clean_machine.ps1`).
+
+### Code signing (credentials required)
+
+Signing is optional and env-gated. Configure on a signing host:
+
+```powershell
+$env:EDMG_CODE_SIGN_CERT = "<thumbprint-or-pfx-path>"
+$env:EDMG_CODE_SIGN_PASSWORD = "<optional-pfx-password>"
+./studio/edmg-studio/packaging/windows/sign_release.ps1
+```
+
+The repository ships a stub hook only. Replace `sign_release.ps1` with real
+`signtool.exe` invocations once signing credentials are available.
+
+### Clean-machine smoke
+
+Automated local checklist (staged launch probe + evidence files):
+
+```powershell
+./studio/edmg-studio/packaging/windows/smoke_clean_machine.ps1
+```
+
+Use `-SkipLaunchProbe` to validate artifact/checksum presence without launching
+Electron. Full clean-VM acceptance still requires installing the packaged
+installer on a machine without dev tooling.
 
 Optional support-plane helper:
 
@@ -90,10 +155,38 @@ Minimum manual acceptance pass after automation:
 3. Run `Full Setup`.
 4. Create a project.
 5. Upload audio.
-6. Analyze.
-7. Plan.
-8. Render.
-9. Export and verify output files.
+6. Analyze — confirm **Workspace → Understand / Music Graph v1** shows sections, tags, and optional ASR lines.
+7. Plan — generate variants and apply one to the timeline.
+8. Render — inspect **Render Plan** panel and enqueue a proxy render.
+9. **Review** — compare artifacts and record an approval decision.
+10. **Workspace → Handoff** — export a template package (optional import smoke).
+11. Export and verify output files.
+12. **Settings → System readiness** — confirm baseline metrics budgets load (`GET /v1/metrics/baseline`).
+
+## Documentation relaunch (partial — P5-06)
+
+Creator-facing feature docs for the beta branch live in:
+
+- [studio/edmg-studio/README.md](./studio/edmg-studio/README.md) — Understand, Review, Render Plan, live cues, template handoff, contract freeze
+- [docs/STUDIO_RELEASE_RUNBOOK.md](docs/STUDIO_RELEASE_RUNBOOK.md) — install and recovery
+- [docs/VISUAL_DNA_AND_RENDER_CONDUCTOR_SPEC.md](docs/VISUAL_DNA_AND_RENDER_CONDUCTOR_SPEC.md) — intelligence layer
+- [docs/PYTHON_TOOLCHAIN.md](docs/PYTHON_TOOLCHAIN.md) — uv lock policy
+
+Still open for full P5-06: dedicated architecture diagram refresh, project-format migration guide, and consolidated known-issues page.
+
+## API contract freeze (2026-07-21)
+
+Beta integrators should treat `studio/edmg-studio/src/shared/api/contracts.ts` as the TypeScript source of truth for newly extracted routes (Music Graph, Render Plan GET, variant review, live assets/cues, template packages, performer plan, baseline metrics). Python response shapes in `edmg_studio_backend/api/routers.py` must stay compatible until schema versions increment.
+
+## Release evidence summary
+
+| Artifact | Location | Status |
+|----------|----------|--------|
+| CycloneDX SBOM | `release/evidence/python-backend-*.cyclonedx.json` | Automated via `pnpm run generate:release-evidence` |
+| SHA-256 checksums | `release/evidence/*-checksums*.json` | Automated |
+| Signing hook | `packaging/windows/sign_release.ps1` | Stub — requires `EDMG_CODE_SIGN_*` credentials |
+| Clean-machine smoke | `packaging/windows/smoke_clean_machine.ps1` | Local checklist; full VM proof still manual |
+| Baseline metrics | `GET /v1/metrics/baseline` | Stub budgets; W7-04 named-hardware runs pending |
 
 ## Upgrade proof
 
@@ -143,7 +236,7 @@ PyInstaller may still report optional-import noise from libraries such as:
 
 Those warnings are acceptable only when all of the following are true:
 
-- the build uses Python `>=3.10,<3.14`
+- the build uses Python 3.12, uv 0.11.28, and `uv sync --frozen`
 - `pnpm run validate:release` passes
 - the packaged app reports healthy setup status
 - the packaged customer flow and upgrade proof both pass
@@ -157,3 +250,4 @@ Use the Studio runbook for install and recovery:
 
 - [docs/STUDIO_RELEASE_RUNBOOK.md](docs/STUDIO_RELEASE_RUNBOOK.md)
 - [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md)
+- [docs/PYTHON_TOOLCHAIN.md](docs/PYTHON_TOOLCHAIN.md)

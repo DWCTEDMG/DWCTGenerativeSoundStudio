@@ -62,8 +62,8 @@ describe("Setup page", () => {
     expect(await screen.findByDisplayValue("/home/test/EDMG-Studio")).toBeTruthy();
     expect(await screen.findByText("0) Full System Setup (One-Click)")).toBeTruthy();
     expect(await screen.findByText(/Runs the Linux setup pipeline/)).toBeTruthy();
-    expect(await screen.findByRole("button", { name: "Full Setup (CPU)" })).toBeTruthy();
-    expect(await screen.findByRole("button", { name: "Full Setup (NVIDIA)" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Full Setup (CPU profile)" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Full Setup (CUDA profile)" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Install/Start Ollama Sidecar" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Install ComfyUI Sidecar (CPU)" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Install ComfyUI Sidecar (NVIDIA)" })).toBeTruthy();
@@ -89,6 +89,91 @@ describe("Setup page", () => {
 
     expect(await screen.findByRole("button", { name: "Start ComfyUI (NVIDIA)" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Start ComfyUI (CPU)" })).toBeTruthy();
+  });
+
+  it("summarizes locked toolchain provenance and sends exact accelerator profiles", async () => {
+    installEdmgBridge({ platform: "win32" });
+    const lockSha = "a".repeat(64);
+    const fetchMock = installFetchMock({
+      "/v1/setup/status": {
+        ollama: { ok: true, model_present: true },
+        comfyui: { ok: false },
+        ffmpeg: { ok: true },
+        toolchain: {
+          ok: true,
+          immutable: false,
+          python_version: "3.12.10",
+          uv_version: "0.11.28",
+          lock_sha256: lockSha,
+          accelerator_profile: "cpu",
+          torch_packages: [
+            { name: "torch", version: "2.11.0+cpu" },
+            { name: "torchvision", version: "0.26.0+cpu" },
+            { name: "torchaudio", version: "2.11.0+cpu" },
+          ],
+          torch_index: "https://download.pytorch.org/whl/cpu",
+          pyinstaller_version: "6.15.0",
+          lock_check: "ok",
+          sync_health: "ok",
+        },
+        sevenzip: { ok: true },
+        hardware: { supports_directml: true, directml_device_name: "AMD Radeon" },
+        ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
+      },
+      "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "POST /v1/setup/backend/install": { ok: true, task: { id: "sync123", status: "queued" } },
+    });
+
+    renderWithStudio(<Setup />);
+
+    expect(await screen.findByText("0.25) Locked Python Toolchain")).toBeTruthy();
+    expect((await screen.findByText(/Python:/)).textContent).toContain("3.12.10");
+    expect(screen.getByText(/uv.lock SHA-256:/).textContent).toContain(lockSha);
+    expect(screen.getByText(/Torch packages:/).textContent).toContain("torch 2.11.0+cpu");
+    expect(screen.getByText(/Torch index:/).textContent).toContain("https://download.pytorch.org/whl/cpu");
+    expect(screen.getByText(/PyInstaller:/).textContent).toContain("6.15.0");
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync CUDA profile" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url, init]) => (
+        String(url).endsWith("/v1/setup/backend/install") && String(init?.method).toUpperCase() === "POST"
+      ));
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ accelerator_profile: "cuda" });
+    });
+  });
+
+  it("treats packaged Python dependencies as immutable and self-contained", async () => {
+    installEdmgBridge({ platform: "win32" });
+    installFetchMock({
+      "/v1/setup/status": {
+        ollama: { ok: true, model_present: true },
+        comfyui: { ok: false },
+        ffmpeg: { ok: true },
+        toolchain: {
+          ok: true,
+          immutable: true,
+          python_version: "3.12.10",
+          uv_version: "0.11.28",
+          lock_sha256: "b".repeat(64),
+          accelerator_profile: "cuda",
+          torch_packages: [{ name: "torch", version: "2.11.0+cu130" }],
+          torch_index: "https://download.pytorch.org/whl/cu130",
+          pyinstaller_version: "6.15.0",
+          lock_check: "embedded-manifest",
+          sync_health: "bundled",
+        },
+        sevenzip: { ok: true },
+        ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
+      },
+      "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+    });
+
+    renderWithStudio(<Setup />);
+
+    expect(await screen.findByText(/do not need to install Python or uv/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sync CPU profile" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Complete External Setup (CUDA build)" })).toBeTruthy();
   });
 
   it("shows a cancel button for active installer tasks", async () => {

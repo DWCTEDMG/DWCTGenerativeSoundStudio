@@ -1,9 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, getBackendUrl } from "../components/api";
+import { apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { useStudioPageLayout } from "../components/studioLayout";
+import { JobActionButtons } from "../shared/jobs/JobActionButtons";
+import { postQueueJobAction, type QueueJobAction } from "../shared/jobs/jobActions";
+import { JobStatusChip } from "../shared/jobs/JobStatusChip";
+import { jobRecoveryHint, type StudioJob } from "../shared/jobs/jobStatus";
 import type { PageProps } from "../types/pageProps";
 
 type OutputsPanelId =
@@ -55,7 +59,7 @@ export default function Outputs(props: PageProps) {
     return () => window.clearInterval(timer);
   }, [projectId, autoRefresh, backendUrl]);
 
-  const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
+  const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pid, rel);
   const activeInternalJobs = (outs?.active_internal_jobs || []) as any[];
 
   const renderMetadataCard = (entry: any) => {
@@ -170,10 +174,10 @@ export default function Outputs(props: PageProps) {
     }
   };
 
-  const cancelInternalJob = async (job: any) => {
+  const runInternalJobAction = async (job: StudioJob, action: QueueJobAction) => {
     try {
       setErr(null);
-      await apiPost(`/v1/projects/${job.project_id}/jobs/${job.id}/cancel`, {});
+      await postQueueJobAction(job, action);
       await refreshOutputs(job.project_id);
     } catch (e: any) {
       setErr(String(e));
@@ -416,10 +420,15 @@ export default function Outputs(props: PageProps) {
         <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
           {activeInternalJobs.map((job: any) => {
             const cp = job?.progress?.runtime_checkpoint;
-            return (
-              <div key={job.id} style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 10 }}>
-                <div className="small"><b>{job.status}</b> • {job.type} • {job.progress?.stage || "queued"}</div>
-                {job.progress?.message ? <div className="small" style={{ marginTop: 4, opacity: 0.85 }}>{job.progress.message}</div> : null}
+          const progressMessage = job?.progress?.message ? String(job.progress.message) : null;
+          const recoveryHint = jobRecoveryHint(job as StudioJob);
+          return (
+            <div key={job.id} style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 10 }}>
+              <div className="small"><JobStatusChip status={job.status} /> • {job.type} • {job.progress?.stage || "queued"}</div>
+              {progressMessage ? <div className="small" style={{ marginTop: 4, opacity: 0.85 }}>{progressMessage}</div> : null}
+              {recoveryHint && recoveryHint !== progressMessage ? (
+                <div className="small" style={{ marginTop: 4, opacity: 0.85 }}>{recoveryHint}</div>
+              ) : null}
                 {cp ? (
                   <>
                     <div className="small" style={{ marginTop: 6 }}>
@@ -434,9 +443,12 @@ export default function Outputs(props: PageProps) {
                 <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
                   <button className="secondary" onClick={() => props.onNavigate?.("queue")}>Open queue</button>
                   {cp?.outputs?.checkpoint_json ? <button className="secondary" onClick={() => handleArtifactPathAction("checkpoint", cp.outputs.checkpoint_json, "reveal")}>{desktopActionLabel("reveal", "checkpoint")}</button> : null}
-                  <button className="secondary" onClick={() => resumeInternalJob(job)} disabled={job.status === "queued" || job.status === "running"}>Resume from checkpoint</button>
-                  <button className="secondary" onClick={() => restartInternalJobClean(job)} disabled={job.status === "queued" || job.status === "running"}>Restart clean</button>
-                  <button className="secondary" onClick={() => cancelInternalJob(job)} disabled={job.status !== "queued" && job.status !== "running"}>Cancel</button>
+                  <JobActionButtons
+                    job={job as StudioJob}
+                    onAction={(action) => runInternalJobAction(job as StudioJob, action)}
+                    onResumeFromCheckpoint={() => resumeInternalJob(job)}
+                    onRestartClean={() => restartInternalJobClean(job)}
+                  />
                 </div>
               </div>
             );

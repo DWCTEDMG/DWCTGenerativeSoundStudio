@@ -3,6 +3,89 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 
+export const SOURCE_RUNTIME_CAPABILITY_EXTRAS = Object.freeze([
+  "core",
+  "audio",
+  "asr",
+  "internal-video",
+  "aws",
+]);
+
+export function normalizeAcceleratorProfile(value, { isWindows = process.platform === "win32" } = {}) {
+  const aliases = { nvidia: "cuda", amd: "directml" };
+  const requested = String(value || "cpu").trim().toLowerCase();
+  const profile = aliases[requested] || requested;
+  if (!new Set(["cpu", "directml", "cuda"]).has(profile)) {
+    throw new Error(`Unsupported accelerator profile ${JSON.stringify(value)}; choose cpu, directml, or cuda.`);
+  }
+  if (profile === "directml" && !isWindows) {
+    throw new Error("The directml accelerator profile is supported only on Windows.");
+  }
+  return profile;
+}
+
+export function buildBackendLaunchSpec({
+  appIsPackaged,
+  resourcesPath,
+  rootDir,
+  isWindows,
+  backendHost,
+  backendPort,
+  env = process.env,
+}) {
+  if (appIsPackaged) {
+    const exeName = isWindows ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+    const command = path.join(resourcesPath, "backend", exeName);
+    return {
+      command,
+      args: ["serve", "--host", backendHost, "--port", String(backendPort)],
+      cwd: path.dirname(command),
+      label: "packaged-backend",
+    };
+  }
+
+  const acceleratorProfile = normalizeAcceleratorProfile(
+    env.EDMG_BACKEND_ACCELERATOR_PROFILE,
+    { isWindows },
+  );
+  const command = String(env.EDMG_UV_BIN || "uv").trim() || "uv";
+  const args = ["run", "--frozen", "--no-default-groups", "--python", "3.12"];
+  for (const extra of [acceleratorProfile, ...SOURCE_RUNTIME_CAPABILITY_EXTRAS]) {
+    args.push("--extra", extra);
+  }
+  args.push(
+    "python",
+    "-m",
+    "edmg_studio_backend",
+    "serve",
+    "--host",
+    backendHost,
+    "--port",
+    String(backendPort),
+  );
+  return {
+    command,
+    args,
+    cwd: path.join(rootDir, "python_backend"),
+    label: "uv-frozen-backend",
+    acceleratorProfile,
+  };
+}
+
+export function resolveStudioUiOrigin(devServerUrl, { isDev = true } = {}) {
+  if (!isDev) {
+    // Packaged Electron uses loadFile → browser Origin "null".
+    return "null";
+  }
+  const raw = String(devServerUrl || "").trim();
+  if (!raw) return "null";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "null";
+  }
+}
+
 export function createBackendRuntime({
   app,
   dialog,
@@ -19,9 +102,14 @@ export function createBackendRuntime({
   getStudioPaths,
   buildManagedStudioEnv,
   buildManagedAiEnv,
+  isDev = !app?.isPackaged,
+  devServerUrl = "",
+  studioUiOrigin = "",
 }) {
   let currentBackendUrl = backendUrl || `http://${backendHost}:${backendPort}`;
   let backendProc = null;
+  const uiOrigin =
+    String(studioUiOrigin || "").trim() || resolveStudioUiOrigin(devServerUrl, { isDev });
 
   function logBackendUrlMarker() {
     console.log(`EDMG_BACKEND_URL=${currentBackendUrl}`);
@@ -29,41 +117,6 @@ export function createBackendRuntime({
 
   function getCurrentBackendUrl() {
     return currentBackendUrl;
-  }
-
-  function getDevVenvPythonPath() {
-    if (isWindows) {
-      return path.join(rootDir, "python_backend", "venv", "Scripts", "python.exe");
-    }
-
-    return path.join(rootDir, "python_backend", "venv", "bin", "python");
-  }
-
-  function getDevPythonPath() {
-    const backendExplicit = String(process.env.EDMG_STUDIO_BACKEND_PYTHON ?? "").trim();
-    if (backendExplicit) return backendExplicit;
-
-    const venvPython = getDevVenvPythonPath();
-    if (pathExistsSync(venvPython)) {
-      const launcherPython = String(process.env.EDMG_STUDIO_PYTHON ?? "").trim();
-      if (launcherPython && launcherPython !== venvPython) {
-        console.log("[backend] using project venv for dev backend instead of EDMG_STUDIO_PYTHON", {
-          launcherPython,
-          venvPython,
-        });
-      }
-      return venvPython;
-    }
-
-    const launcherPython = String(process.env.EDMG_STUDIO_PYTHON ?? "").trim();
-    if (launcherPython) return launcherPython;
-
-    return venvPython;
-  }
-
-  function getPackagedBackendPath() {
-    const exeName = isWindows ? "edmg-studio-backend.exe" : "edmg-studio-backend";
-    return path.join(process.resourcesPath, "backend", exeName);
   }
 
   function resolveManagedFfmpegPath() {
@@ -95,25 +148,17 @@ export function createBackendRuntime({
   }
 
   function getBackendLaunchSpec() {
-    if (app.isPackaged) {
-      const command = getPackagedBackendPath();
-      return {
-        command,
-        args: ["serve", "--host", backendHost, "--port", String(backendPort)],
-        cwd: path.dirname(command),
-        label: "packaged-backend",
-      };
-    }
-
-    return {
-      command: getDevPythonPath(),
-      args: ["-m", "edmg_studio_backend", "serve", "--host", backendHost, "--port", String(backendPort)],
-      cwd: path.join(rootDir, "python_backend"),
-      label: "python-backend",
-    };
+    return buildBackendLaunchSpec({
+      appIsPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      rootDir,
+      isWindows,
+      backendHost,
+      backendPort,
+    });
   }
 
-  function buildBackendChildEnv(managedStudioEnv, ffmpegPath) {
+  function buildBackendChildEnv(managedStudioEnv, ffmpegPath, spec) {
     const env = {
       ...process.env,
       ...managedStudioEnv,
@@ -123,6 +168,10 @@ export function createBackendRuntime({
       EDMG_FFMPEG_PATH: ffmpegPath,
       MPLBACKEND: process.env.MPLBACKEND || "Agg",
     };
+    if (spec.acceleratorProfile) {
+      env.EDMG_BACKEND_ACCELERATOR_PROFILE = spec.acceleratorProfile;
+      env.NVIDIA_TENSORRT_DISABLE_INTERNAL_PIP = "1";
+    }
 
     for (const key of [
       "ELECTRON_RUN_AS_NODE",
@@ -178,6 +227,59 @@ export function createBackendRuntime({
     try {
       process.kill(pid);
     } catch {}
+  }
+
+  function findListeningPid(port) {
+    const target = Number(port);
+    if (!Number.isFinite(target) || target <= 0) return null;
+
+    if (isWindows) {
+      const result = spawnSync("netstat", ["-ano", "-p", "TCP"], {
+        windowsHide: true,
+        encoding: "utf8",
+        shell: false,
+      });
+      if (result.status !== 0) return null;
+      const pat = new RegExp(`:${target}\\s+LISTENING\\s+(\\d+)\\s*$`, "i");
+      const pat6 = new RegExp(`\\]:${target}\\s+LISTENING\\s+(\\d+)\\s*$`, "i");
+      for (const line of String(result.stdout || "").split(/\r?\n/)) {
+        const match = pat.exec(line.trim()) || pat6.exec(line.trim());
+        if (match) {
+          const pid = Number(match[1]);
+          return Number.isFinite(pid) && pid > 0 ? pid : null;
+        }
+      }
+      return null;
+    }
+
+    const result = spawnSync("lsof", ["-nP", `-iTCP:${target}`, "-sTCP:LISTEN", "-t"], {
+      encoding: "utf8",
+      shell: false,
+    });
+    if (result.status !== 0) return null;
+    const pid = Number(String(result.stdout || "").trim().split(/\r?\n/)[0]);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  }
+
+  async function reclaimStaleBackendPort(reason) {
+    const pid = findListeningPid(backendPort);
+    if (!pid) {
+      console.warn(`[backend] ${reason}; port ${backendPort} has no listener to reclaim`);
+      return false;
+    }
+
+    console.warn(
+      `[backend] ${reason}; terminating PID ${pid} on :${backendPort} so Desktop can spawn a fresh backend`,
+    );
+    terminateProcessTree(pid);
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (!(await probeBackend())) return true;
+      await delay(200);
+    }
+
+    return !(await probeBackend());
   }
 
   function quotePowerShell(value) {
@@ -255,11 +357,28 @@ export function createBackendRuntime({
     });
   }
 
+  async function probeBackendAllowsStudioOrigin(url = currentBackendUrl) {
+    const origin = uiOrigin || "null";
+    return new Promise((resolve) => {
+      const req = http.get(`${url}/health`, { headers: { Origin: origin } }, (res) => {
+        const allow = String(res.headers["access-control-allow-origin"] || "").trim();
+        res.resume();
+        resolve(allow === "*" || allow === origin);
+      });
+
+      req.on("error", () => resolve(false));
+      req.setTimeout(1500, () => {
+        req.destroy();
+        resolve(false);
+      });
+    });
+  }
+
   async function waitForBackendReady(timeoutMs = backendReadyTimeoutMs) {
     const started = Date.now();
 
     while (Date.now() - started < timeoutMs) {
-      if (await probeBackend()) {
+      if ((await probeBackend()) && (await probeBackendAllowsStudioOrigin())) {
         return true;
       }
       await delay(300);
@@ -276,16 +395,37 @@ export function createBackendRuntime({
     }
 
     if (await probeBackend()) {
-      console.log("[backend] already reachable:", currentBackendUrl);
-      logBackendUrlMarker();
-      return true;
+      if (await probeBackendAllowsStudioOrigin()) {
+        console.log("[backend] already reachable:", currentBackendUrl);
+        logBackendUrlMarker();
+        return true;
+      }
+
+      // Desktop cannot use a backend that rejects the Studio UI Origin.
+      // Reclaim the port and fall through to spawn instead of blocking the UI.
+      const reclaimed = await reclaimStaleBackendPort(
+        `${currentBackendUrl} answers /health but does not allow Origin ${uiOrigin} (CORS)`,
+      );
+      if (!reclaimed) {
+        const message =
+          `${currentBackendUrl} answers /health but does not allow Origin ${uiOrigin} (CORS),\n` +
+          `and Studio could not free port ${backendPort} automatically.\n\n` +
+          "1. In the launcher, click Stop Backend\n" +
+          "2. Or run: netstat -ano | findstr :7863  then  taskkill /PID <pid> /F\n" +
+          "3. Start Studio again so a fresh backend is spawned";
+        console.warn("[backend] refusing attach (missing Studio UI CORS):\n" + message);
+        if (!testMode) {
+          dialog.showErrorBox("Stale Studio backend (CORS)", message);
+        }
+        return false;
+      }
     }
 
     const spec = getBackendLaunchSpec();
     const managedStudioEnv = buildManagedStudioEnv();
     const backendDataDir = managedStudioEnv.EDMG_STUDIO_DATA_DIR;
     const ffmpegPath = resolveManagedFfmpegPath();
-    const childEnv = buildBackendChildEnv(managedStudioEnv, ffmpegPath);
+    const childEnv = buildBackendChildEnv(managedStudioEnv, ffmpegPath, spec);
     const logPaths = resolveBackendLogPaths(managedStudioEnv.EDMG_STUDIO_LOGS_DIR);
 
     if (app.isPackaged && !fs.existsSync(spec.command)) {

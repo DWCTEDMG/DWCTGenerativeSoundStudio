@@ -150,8 +150,10 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   const modelOk = !!status?.ollama?.model_present;
   const comfyOk = !!status?.comfyui?.ok;
   const ffOk = !!status?.ffmpeg?.ok;
-  const backendBundleOk = !!status?.backend_bundle?.ok;
-  const backendBundleDirectmlOk = !!status?.backend_bundle_directml?.ok;
+  const toolchain = status?.toolchain ?? status?.backend_bundle ?? null;
+  const toolchainOk = !!toolchain?.ok;
+  const toolchainImmutable = !!toolchain?.immutable;
+  const acceleratorProfile = String(toolchain?.accelerator_profile ?? toolchain?.profile ?? "cpu");
   const edmgOk = !!status?.edmg?.available;
   const sevenOk = !!status?.sevenzip?.ok;
   const aiConfig = status?.ai_config ?? null;
@@ -172,7 +174,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     ? "https://docs.comfy.org/installation/comfyui_portable_windows"
     : "https://docs.comfy.org/";
   const storageFieldConfigs = getStorageFieldConfigs(platformKind);
-  const setupReady = backendBundleOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
+  const setupReady = toolchainOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
   const fullSetupReady = managedSetupSupported && setupReady && (isWindows ? sevenOk : true);
 
   function deriveStorageLayout(studioHome: string): StorageDraft {
@@ -426,16 +428,16 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   <div className="small" style={{ marginTop: 6 }}>
     {isWindows ? (
       ollamaRequired
-      ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → managed Ollama install → pull model → optional ComfyUI Portable install + start for alternate still/motion workflows."
-      : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → optional ComfyUI Portable install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
+      ? "Runs the full installer pipeline: frozen backend profile → 7-Zip (if needed) → managed Ollama install → pull model → optional ComfyUI Portable install + start for alternate still/motion workflows."
+      : `Runs the full installer pipeline: frozen backend profile → 7-Zip (if needed) → optional ComfyUI Portable install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
     ) : isLinux ? (
       ollamaRequired
-        ? "Runs the Linux setup pipeline: backend runtime bundle → Ollama sidecar setup → pull model → optional ComfyUI sidecar install + start for alternate still/motion workflows."
-        : `Runs the Linux setup pipeline: backend runtime bundle → optional ComfyUI sidecar install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
+        ? "Runs the Linux setup pipeline: frozen backend profile → Ollama sidecar setup → pull model → optional ComfyUI sidecar install + start for alternate still/motion workflows."
+        : `Runs the Linux setup pipeline: frozen backend profile → optional ComfyUI sidecar install + start for alternate still/motion workflows. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`
     ) : (
       ollamaRequired
-        ? "macOS uses the manual setup path: install the backend runtime here, install Ollama system-wide if needed, pull the configured model, and run a local ComfyUI instance only if you want the optional ComfyUI workflows."
-        : `macOS uses the manual setup path: install the backend runtime here and add ComfyUI only if you want the optional ComfyUI workflows. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
+        ? "macOS uses the manual setup path: synchronize the locked CPU backend profile here, install Ollama system-wide if needed, pull the configured model, and run a local ComfyUI instance only if you want the optional ComfyUI workflows."
+        : `macOS uses the manual setup path: synchronize the locked CPU backend profile here and add ComfyUI only if you want the optional ComfyUI workflows. Ollama is optional because Studio AI is currently set to ${aiLabel}.`
     )}
   </div>
   <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
@@ -445,40 +447,47 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     {aiConfig?.provider === "openai_compat" ? <> • API key <b>{aiConfig?.openai_compat_api_key_configured ? "saved" : "not saved"}</b></> : null}
   </div>
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-    {isWindows ? (
+    {toolchainImmutable ? (
+      <button
+        disabled={!managedSetupSupported || !toolchainOk || busy === "full_packaged"}
+        onClick={() => run("full_packaged", "/v1/setup/full/install", { accelerator_profile: acceleratorProfile })}
+      >
+        {busy === "full_packaged" ? "Running…" : `Complete External Setup (${acceleratorProfile.toUpperCase()} build)`}
+      </button>
+    ) : isWindows ? (
       <>
         <button
           disabled={busy === "full_cpu"}
-          onClick={() => run("full_cpu", "/v1/setup/full/install", { flavor: "cpu" })}
+          onClick={() => run("full_cpu", "/v1/setup/full/install", { accelerator_profile: "cpu" })}
         >
-          {busy === "full_cpu" ? "Running…" : "Full Setup (CPU)"}
+          {busy === "full_cpu" ? "Running…" : "Full Setup (CPU profile)"}
         </button>
         <button
           disabled={busy === "full_nvidia"}
-          onClick={() => run("full_nvidia", "/v1/setup/full/install", { flavor: "nvidia" })}
+          onClick={() => run("full_nvidia", "/v1/setup/full/install", { accelerator_profile: "cuda" })}
         >
-          {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
+          {busy === "full_nvidia" ? "Running…" : "Full Setup (CUDA profile)"}
         </button>
         <button
           disabled={busy === "full_amd"}
-          onClick={() => run("full_amd", "/v1/setup/full/install", { flavor: "amd", bundle: "studio_bundle_directml" })}
+          onClick={() => run("full_amd", "/v1/setup/full/install", { accelerator_profile: "directml" })}
         >
-          {busy === "full_amd" ? "Running…" : "Full Setup (AMD / DirectML)"}
+          {busy === "full_amd" ? "Running…" : "Full Setup (DirectML profile)"}
         </button>
       </>
     ) : isLinux ? (
       <>
         <button
           disabled={busy === "full_cpu"}
-          onClick={() => run("full_cpu", "/v1/setup/full/install", { flavor: "cpu" })}
+          onClick={() => run("full_cpu", "/v1/setup/full/install", { accelerator_profile: "cpu" })}
         >
-          {busy === "full_cpu" ? "Running…" : "Full Setup (CPU)"}
+          {busy === "full_cpu" ? "Running…" : "Full Setup (CPU profile)"}
         </button>
         <button
           disabled={busy === "full_nvidia"}
-          onClick={() => run("full_nvidia", "/v1/setup/full/install", { flavor: "nvidia" })}
+          onClick={() => run("full_nvidia", "/v1/setup/full/install", { accelerator_profile: "cuda" })}
         >
-          {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
+          {busy === "full_nvidia" ? "Running…" : "Full Setup (CUDA profile)"}
         </button>
       </>
     ) : (
@@ -501,11 +510,16 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
 
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-    <div style={{ fontWeight: 800 }}>0.25) Backend Runtime Bundle</div>
-    <Badge ok={backendBundleOk} label={backendBundleOk ? "OK" : "Missing"} />
+    <div style={{ fontWeight: 800 }}>0.25) Locked Python Toolchain</div>
+    <Badge
+      ok={toolchainOk}
+      label={toolchainImmutable ? (toolchainOk ? "Bundled" : "Invalid build") : (toolchainOk ? "Synchronized" : "Needs sync")}
+    />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    Installs the backend audio, ASR, and internal-render Python dependencies into the Studio backend environment. The NVIDIA path also refreshes current CUDA PyTorch and TensorRT runtime packages.
+    {toolchainImmutable
+      ? "This installed application already contains its Python runtime and locked dependencies. You do not need to install Python or uv."
+      : "Source checkouts synchronize one exact accelerator profile from the committed uv.lock. Profile dependencies and PyTorch indexes are fixed by the project; Setup never resolves a wheel channel dynamically."}
   </div>
   {isWindows ? (
     <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
@@ -514,55 +528,64 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     </div>
   ) : isLinux ? (
     <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
-      Linux uses the standard backend runtime bundle plus the same NVIDIA CUDA + TensorRT setup path. DirectML remains Windows-only.
+      Linux supports the locked CPU and CUDA profiles. DirectML remains Windows-only.
     </div>
   ) : (
     <div className="small" style={{ marginTop: 8, opacity: 0.88 }}>
-      This platform uses the standard backend runtime bundle. DirectML remains Windows-only.
+      This platform uses the locked CPU profile. DirectML remains Windows-only.
     </div>
   )}
-  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-    <button
-      disabled={busy === "backend_bundle"}
-      onClick={() => run("backend_bundle", "/v1/setup/backend/install", { bundle: "studio_bundle", flavor: "cpu" })}
-    >
-      {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime (CPU)"}
-    </button>
-    <button
-      disabled={busy === "backend_bundle_cuda"}
-      onClick={() => run("backend_bundle_cuda", "/v1/setup/backend/install", { bundle: "studio_bundle", flavor: "nvidia" })}
-    >
-      {busy === "backend_bundle_cuda" ? "Installing…" : "Install Backend Runtime (NVIDIA CUDA + TensorRT)"}
-    </button>
-    {isWindows ? (
-      <button
-        disabled={busy === "backend_bundle_directml"}
-        onClick={() => run("backend_bundle_directml", "/v1/setup/backend/install", { bundle: "studio_bundle_directml", flavor: "cpu" })}
-      >
-        {busy === "backend_bundle_directml" ? "Installing…" : "Install AMD / DirectML Runtime"}
-      </button>
-    ) : null}
+  <div className="small" style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 8 }}>
+    <div>Python: <code>{toolchain?.python_version || "unavailable"}</code></div>
+    <div>uv: <code>{toolchain?.uv_version || "unavailable"}</code></div>
+    <div>Accelerator profile: <code>{acceleratorProfile}</code></div>
+    <div>Lock check: <b>{toolchain?.lock_check || "unknown"}</b></div>
+    <div>Sync health: <b>{toolchain?.sync_health || "unknown"}</b></div>
+    <div>PyInstaller: <code>{toolchain?.pyinstaller_version || "not installed in this environment"}</code></div>
+    <div style={{ gridColumn: "1 / -1", overflowWrap: "anywhere" }}>
+      uv.lock SHA-256: <code>{toolchain?.lock_sha256 || "unavailable"}</code>
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+      Torch packages:{" "}
+      {(toolchain?.torch_packages ?? []).length
+        ? (toolchain.torch_packages as any[]).map((item: any) => `${item.name} ${item.version || "missing"}`).join(" • ")
+        : "not recorded"}
+    </div>
+    <div style={{ gridColumn: "1 / -1", overflowWrap: "anywhere" }}>
+      Torch index: <code>{toolchain?.torch_index || "unavailable"}</code>
+    </div>
   </div>
-  {!backendBundleOk && status?.backend_bundle?.hint && (
-    <div className="small" style={{ marginTop: 10 }}>
-      Fix: {status.backend_bundle.hint}
-    </div>
-  )}
-  {!!status?.backend_bundle?.missing?.length && (
-    <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
-      Missing modules: <code>{status.backend_bundle.missing.join(", ")}</code>
-    </div>
-  )}
-  {isWindows && !backendBundleDirectmlOk && status?.backend_bundle_directml?.hint ? (
-    <div className="small" style={{ marginTop: 10 }}>
-      DirectML fix: {status.backend_bundle_directml.hint}
+  {!toolchainImmutable ? (
+    <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <button
+        disabled={busy === "backend_profile_cpu"}
+        onClick={() => run("backend_profile_cpu", "/v1/setup/backend/install", { accelerator_profile: "cpu" })}
+      >
+        {busy === "backend_profile_cpu" ? "Synchronizing…" : "Sync CPU profile"}
+      </button>
+      {(isWindows || isLinux) ? (
+        <button
+          disabled={busy === "backend_profile_cuda"}
+          onClick={() => run("backend_profile_cuda", "/v1/setup/backend/install", { accelerator_profile: "cuda" })}
+        >
+          {busy === "backend_profile_cuda" ? "Synchronizing…" : "Sync CUDA profile"}
+        </button>
+      ) : null}
+      {isWindows ? (
+        <button
+          disabled={busy === "backend_profile_directml"}
+          onClick={() => run("backend_profile_directml", "/v1/setup/backend/install", { accelerator_profile: "directml" })}
+        >
+          {busy === "backend_profile_directml" ? "Synchronizing…" : "Sync DirectML profile"}
+        </button>
+      ) : null}
     </div>
   ) : null}
-  {isWindows && !!status?.backend_bundle_directml?.missing?.length ? (
-    <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
-      DirectML modules: <code>{status.backend_bundle_directml.missing.join(", ")}</code>
+  {!toolchainOk && toolchain?.hint && (
+    <div className="small" style={{ marginTop: 10 }}>
+      Fix: {toolchain.hint}
     </div>
-  ) : null}
+  )}
 </div>
 
 <div className="card">
@@ -816,7 +839,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               disabled={busy === "install_edmg"}
-              onClick={() => run("install_edmg", "/v1/setup/edmg/install", { mode: "standard", backend: "cpu" })}
+              onClick={() => run("install_edmg", "/v1/setup/edmg/install", { mode: "standard", backend: acceleratorProfile })}
             >
               {busy === "install_edmg" ? "Installing…" : (edmgOk ? "Repair EDMG Core" : "Install EDMG Core")}
             </button>
@@ -911,8 +934,8 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
           <div style={{ fontWeight: 800 }}>Ready check</div>
           <div className="small" style={{ marginTop: 6 }}>
             {ollamaRequired
-              ? "When the backend runtime bundle + Ollama + a model + FFmpeg are all OK, EDMG Studio is ready for the default internal-render workflow. ComfyUI remains optional for alternate still/motion paths. EDMG Core is optional but recommended for the fully unified workflow."
-              : "When the backend runtime bundle + your active AI provider + FFmpeg are all OK, EDMG Studio is ready for the default internal-render workflow. ComfyUI remains optional for alternate still/motion paths. EDMG Core is optional but recommended for the fully unified workflow."}
+              ? "When the locked Python toolchain + Ollama + a model + FFmpeg are all OK, EDMG Studio is ready for the default internal-render workflow. ComfyUI remains optional for alternate still/motion paths. EDMG Core is optional but recommended for the fully unified workflow."
+              : "When the locked Python toolchain + your active AI provider + FFmpeg are all OK, EDMG Studio is ready for the default internal-render workflow. ComfyUI remains optional for alternate still/motion paths. EDMG Core is optional but recommended for the fully unified workflow."}
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
             <button

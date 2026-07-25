@@ -3,6 +3,17 @@ import { apiGet, apiPost } from "./api";
 
 type PreviewTab = "prompt-pack" | "timeline" | "deforum" | "contract";
 
+type DirectorMode = "narrative" | "performance" | "abstract" | "lyric" | "product" | "ambient";
+
+const DIRECTOR_MODES: Array<{ id: DirectorMode; label: string }> = [
+  { id: "narrative", label: "Narrative" },
+  { id: "performance", label: "Performance" },
+  { id: "abstract", label: "Abstract" },
+  { id: "lyric", label: "Lyric" },
+  { id: "product", label: "Product" },
+  { id: "ambient", label: "Ambient" },
+];
+
 type CreativeDirectionPanelProps = {
   projectId: string;
   analysis: any;
@@ -15,7 +26,9 @@ type CreativeDirectionPanelProps = {
 type CreativeDirectionResponse = {
   ready: boolean;
   missing: string[];
-  preset: "cinematic" | "psychedelic" | "ambient";
+  preset: string;
+  director_mode?: DirectorMode;
+  director_profile?: { id?: string; label?: string; summary?: string };
   sensitivity: number;
   provider_mode: string;
   scene_source: string;
@@ -130,7 +143,7 @@ function Meter({ label, value, tone }: { label: string; value: number; tone: str
 
 export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
   const { projectId, analysis, plan, selectedVariant, compact = false, onNavigate } = props;
-  const [preset, setPreset] = useState<"cinematic" | "psychedelic" | "ambient">("cinematic");
+  const [directorMode, setDirectorMode] = useState<DirectorMode>("narrative");
   const [sensitivity, setSensitivity] = useState<number>(1.0);
   const [copyStatus, setCopyStatus] = useState<string>("");
   const [applyStatus, setApplyStatus] = useState<string>("");
@@ -159,7 +172,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
       setStatus("Loading backend creative direction...");
       try {
         const result = await apiGet(
-          `/v1/projects/${projectId}/creative_direction?variant_index=${selectedVariant}&preset=${preset}&sensitivity=${encodeURIComponent(String(sensitivity))}`,
+          `/v1/projects/${projectId}/creative_direction?variant_index=${selectedVariant}&director_mode=${directorMode}&preset=${directorMode}&sensitivity=${encodeURIComponent(String(sensitivity))}`,
         );
         if (!cancelled) {
           const nextPayload = result?.creative_direction || null;
@@ -180,7 +193,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [preset, projectId, selectedVariant, sensitivity]);
+  }, [directorMode, projectId, selectedVariant, sensitivity]);
 
   const hasPlan = Boolean(plan?.variants?.length);
   const hasAnalysis = Boolean(analysis);
@@ -231,7 +244,8 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
     try {
       await apiPost(`/v1/projects/${projectId}/creative_direction/apply_timeline_patch`, {
         variant_index: selectedVariant,
-        preset,
+        director_mode: directorMode,
+        preset: directorMode,
         sensitivity,
         overwrite_tracks: true,
         overwrite_camera: false,
@@ -271,11 +285,16 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
 
       <div className="row" style={{ gap: 10, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
         <label className="small row" style={{ gap: 6, alignItems: "center" }}>
-          Preset
-          <select value={preset} onChange={(event) => setPreset(event.target.value as any)} style={{ width: 180 }}>
-            <option value="cinematic">Cinematic</option>
-            <option value="psychedelic">Psychedelic</option>
-            <option value="ambient">Ambient</option>
+          Director mode
+          <select
+            aria-label="Director mode"
+            value={directorMode}
+            onChange={(event) => setDirectorMode(event.target.value as DirectorMode)}
+            style={{ width: 180 }}
+          >
+            {DIRECTOR_MODES.map((mode) => (
+              <option key={mode.id} value={mode.id}>{mode.label}</option>
+            ))}
           </select>
         </label>
         <label className="small row" style={{ gap: 6, alignItems: "center" }}>
@@ -293,9 +312,16 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
         </label>
         <div className="badge">{hasAnalysis ? "Analysis ready" : "Needs analysis"}</div>
         <div className="badge">{hasPlan ? "Plan ready" : "Plan fallback"}</div>
+        {payload?.director_profile?.label ? <div className="badge">{payload.director_profile.label}</div> : null}
         {payload?.provider_mode ? <div className="badge">{payload.provider_mode}</div> : null}
         {payload?.scene_source ? <div className="badge">Scenes: {payload.scene_source}</div> : null}
       </div>
+
+      {payload?.director_profile?.summary ? (
+        <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
+          {payload.director_profile.summary}
+        </div>
+      ) : null}
 
       <div className="small" style={{ marginTop: 8 }}>
         {status || "Creative direction is unavailable until analysis and planning exist."}

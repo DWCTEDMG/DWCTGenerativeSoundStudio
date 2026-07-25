@@ -1,19 +1,23 @@
-# Stable branch and preview policy
+# Stable branch and release policy
 
-This document defines the target repository policy. It does not claim that GitHub settings have
-already been changed; the evidence snapshot below records the current external state honestly.
+This document defines the target repository policy for a protected production branch, a stable
+preview or integration lane, and short-lived implementation branches. It does not claim that GitHub
+settings have already been changed; the evidence snapshot below records the current external state
+honestly.
 
 ## Channels
 
-- `main` is the protected, releasable branch. It accepts changes through reviewed pull requests only.
-- `next` is the integration and preview channel. Completed work may soak there before promotion to
-  `main`; it is never presented as a stable release.
-- `codex/*`, `feature/*`, and equivalent short-lived branches are implementation branches. They are
-  deleted after merge and are not release channels.
+| Lane | Branch pattern | Purpose |
+| --- | --- | --- |
+| Default / production | `main` | Protected, releasable branch. It accepts changes through reviewed pull requests only. |
+| Preview / integration | `next` | Daily integration and preview channel. Completed work may soak there before promotion to `main`. |
+| Release | `release/x.y` | Freeze lane for packaging, SBOM generation, clean-machine smoke, and release evidence when needed. |
+| Implementation | `codex/*`, `feature/*`, equivalent short-lived branches | Work-package branches that are deleted after merge and are not release channels. |
 
 The current historical default branch, `codex/Unified`, must be migrated to `main` through an
-explicit repository-admin operation after the modernization branch is reviewed. No automation or
-local commit should silently retarget the default branch.
+explicit repository-admin operation after the modernization branch is reviewed. Existing temporary
+integration branches may continue during that transition, but no automation or local commit should
+silently retarget the repository default branch.
 
 ## Required `main` protection
 
@@ -36,6 +40,23 @@ The required check set is:
 Before making checks required, ensure each named workflow reports a terminal result on every pull
 request to `main`; path-filtered workflows that never start can otherwise leave a required check
 pending indefinitely.
+
+## Working rules
+
+1. Prefer small pull requests mapped to one blueprint work package or day-lane deliverable.
+2. Required checks before merge include frozen `uv lock --check`, backend pytest on the CPU profile,
+   frontend typecheck, lint, UI tests, and Studio workflow FFmpeg-aware jobs.
+3. Do not force-push shared integration or release branches.
+4. Experimental model work must stay behind capability or lane flags and must not claim production
+   readiness without benchmark evidence.
+5. Hotfixes may branch from the active release lane and must be reconciled back into the current
+   integration branch.
+
+## Review expectations
+
+- Behavior changes include tests.
+- Schema and migration changes include rollback notes.
+- UI-facing backend work includes Studio controls, not API-only surfaces.
 
 ## Promotion flow
 

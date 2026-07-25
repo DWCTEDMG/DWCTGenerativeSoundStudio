@@ -24,7 +24,7 @@ TensorRT built for a different CUDA toolkit (e.g. CUDA 13.x) is NOT used by this
 path and should not be on ``PATH`` at the same time to avoid DLL conflicts.
 
     # Into the backend venv (matches torch 2.6 + cu124):
-    python -m pip install torch-tensorrt==2.6.0
+    uv sync --frozen --extra cuda --extra internal-video
 
 Enable via the CLI flag ``--accel tensorrt`` or the environment variable
 ``EDMG_TRT_ACCEL=1``.
@@ -113,7 +113,7 @@ def accelerate_pipe(
             logger,
             "[trt-accel] requested but torch-tensorrt is not installed; "
             "continuing without acceleration. Install with: "
-            "python -m pip install torch-tensorrt==2.6.0",
+            "uv sync --frozen --extra cuda --extra internal-video",
         )
         return pipe
 

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 NO_SPEECH_AFTER_VAD_NOTE = "No speech detected after VAD."
 DEFAULT_MODEL_SIZE = "turbo"
@@ -20,7 +24,7 @@ def _load_faster_whisper_model(model_size: str, device: str, compute_type: str):
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception as e:
-        raise RuntimeError("ASR requires optional deps: pip install -e '.[asr]'") from e
+        raise RuntimeError("ASR requires the locked `asr` capability in the active uv profile.") from e
     return WhisperModel(model_size, device=device, compute_type=compute_type)
 
 
@@ -30,7 +34,7 @@ def _load_parakeet_model(model_name: str, device: str):
         import nemo.collections.asr as nemo_asr  # type: ignore
     except Exception as e:
         raise RuntimeError(
-            'Parakeet ASR requires optional deps: pip install -e ".[parakeet]"'
+            "Parakeet ASR requires the locked `parakeet` capability in the active uv profile."
         ) from e
 
     model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_name)
@@ -439,27 +443,29 @@ def transcribe_detailed(
                 api_key=nvidia_api_key,
                 nim_base_url=nim_base_url,
             )
-        except Exception as exc:
+        except Exception:
             if not fallback_to_whisper:
                 raise
+            logger.warning("Parakeet NIM transcription failed; using faster-whisper fallback", exc_info=True)
             fallback = _transcribe_faster_whisper(path, DEFAULT_MODEL_SIZE, device="cpu", compute_type="int8")
-            fallback["note"] = f"Parakeet NIM unavailable; used faster-whisper fallback: {exc}"
+            fallback["note"] = "Parakeet NIM unavailable; used faster-whisper fallback."
             fallback["requested_provider"] = "parakeet_nim"
             return fallback
 
     if normalized_provider == "parakeet":
         try:
             return _transcribe_parakeet(path, model_size, device=device)
-        except Exception as exc:
+        except Exception:
             if not fallback_to_whisper:
                 raise
+            logger.warning("Parakeet transcription failed; using faster-whisper fallback", exc_info=True)
             fallback = _transcribe_faster_whisper(
                 path,
                 DEFAULT_MODEL_SIZE,
                 device="cpu",
                 compute_type="int8",
             )
-            fallback["note"] = f"Parakeet unavailable; used faster-whisper fallback: {exc}"
+            fallback["note"] = "Parakeet unavailable; used faster-whisper fallback."
             fallback["requested_provider"] = "parakeet"
             fallback["requested_model_size"] = _normalize_parakeet_model(model_size)
             return fallback
@@ -484,7 +490,7 @@ def transcribe(
     """Transcribe audio to text using optional faster-whisper (CPU-friendly).
 
     Install:
-      pip install -e ".[asr]"
+      uv sync --frozen --extra cpu --extra asr
     """
     return str(
         transcribe_detailed(

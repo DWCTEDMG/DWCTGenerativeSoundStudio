@@ -12,7 +12,7 @@ def _require_blob_service_client():
         from azure.storage.blob import BlobServiceClient  # type: ignore
         return BlobServiceClient
     except Exception as exc:
-        raise RuntimeError("Azure integration requires optional deps: pip install -e '.[azure]'") from exc
+        raise RuntimeError("Azure integration requires the locked `azure` capability in the active uv profile.") from exc
 
 
 def _require_default_credential():
@@ -20,7 +20,7 @@ def _require_default_credential():
         from azure.identity import DefaultAzureCredential  # type: ignore
         return DefaultAzureCredential
     except Exception as exc:
-        raise RuntimeError("Azure CLI/AAD auth requires optional deps: pip install -e '.[azure]'") from exc
+        raise RuntimeError("Azure CLI/AAD auth requires the locked `azure` capability in the active uv profile.") from exc
 
 
 def _truthy(value: str | None) -> bool:

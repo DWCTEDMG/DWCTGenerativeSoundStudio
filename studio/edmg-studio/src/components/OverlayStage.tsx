@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { buildProjectFileUrl } from "./api";
 
 type AnyDict = Record<string, any>;
 
@@ -392,7 +393,7 @@ export function OverlayStage(props: {
   const selectedSet = useMemo(() => new Set<number>(selectedIndices || []), [selectedIndices]);
   const primaryIndex = selectedIndices?.length ? selectedIndices[selectedIndices.length - 1] : null;
 
-  const fileUrl = (rel: string) => `${backendUrl}/v1/projects/${projectId}/file?path=${encodeURIComponent(rel)}`;
+  const fileUrl = (rel: string) => buildProjectFileUrl(backendUrl, projectId, rel);
 
   useEffect(() => {
     const el = stageRef.current;

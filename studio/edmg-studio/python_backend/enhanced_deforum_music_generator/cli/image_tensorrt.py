@@ -24,7 +24,7 @@ def main():
     try:
         import tensorrt as trt
     except ImportError:
-        print("Error: tensorrt is not installed. Run: pip install tensorrt", file=sys.stderr)
+        print("Error: TensorRT requires the locked `cuda` accelerator profile.", file=sys.stderr)
         sys.exit(1)
 
     print(f"Initializing TensorRT inference for {model_dir.name}...")

@@ -14,11 +14,7 @@ def _ffmpeg_binary_name() -> str:
 
 
 def _default_ffmpeg_path() -> str:
-    explicit = os.getenv("EDMG_FFMPEG_PATH", "").strip()
-    if explicit:
-        if not os.path.isabs(explicit) or Path(explicit).exists():
-            return explicit
-
+    """Prefer this checkout/package bundled FFmpeg over a stale EDMG_FFMPEG_PATH."""
     candidates: list[Path] = []
     exe_name = _ffmpeg_binary_name()
 
@@ -35,6 +31,11 @@ def _default_ffmpeg_path() -> str:
     for candidate in candidates:
         if candidate.exists():
             return str(candidate)
+
+    explicit = os.getenv("EDMG_FFMPEG_PATH", "").strip()
+    if explicit:
+        if not os.path.isabs(explicit) or Path(explicit).exists():
+            return explicit
 
     if explicit:
         return explicit

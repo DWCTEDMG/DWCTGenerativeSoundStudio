@@ -12,7 +12,8 @@ EDMG provides a reproducible fetch+patch tool:
 ## Fetch workflows
 
 ```bash
-python studio/edmg-studio/scripts/fetch_comfyui_workflows.py --out comfyui_workflows/downloaded
+uv run --project studio/edmg-studio/python_backend --frozen --extra cpu \
+  python studio/edmg-studio/scripts/fetch_comfyui_workflows.py --out comfyui_workflows/downloaded
 ```
 
 ## Patch workflows to your local model filenames
@@ -21,7 +22,8 @@ If you already have models installed under `ComfyUI/models/**`, patch the downlo
 match *your* filenames:
 
 ```bash
-python studio/edmg-studio/scripts/fetch_comfyui_workflows.py \
+uv run --project studio/edmg-studio/python_backend --frozen --extra cpu \
+  python studio/edmg-studio/scripts/fetch_comfyui_workflows.py \
   --out comfyui_workflows/downloaded \
   --patch \
   --comfyui-root /path/to/ComfyUI
@@ -48,7 +50,8 @@ See: `comfyui_workflows/manifest.json` for sources and expected model filenames.
 If a workflow references model filenames you already have in a central store, you can link/copy them into the right `ComfyUI/models/*` folders:
 
 ```bash
-python studio/edmg-studio/scripts/wire_comfyui_models.py --comfyui-root /path/to/ComfyUI --models-root external/models --workflow path/to/workflow.json
+uv run --project studio/edmg-studio/python_backend --frozen --extra cpu \
+  python studio/edmg-studio/scripts/wire_comfyui_models.py --comfyui-root /path/to/ComfyUI --models-root external/models --workflow path/to/workflow.json
 ```
 
 Use `--mode copy` if symlinks are not allowed on your system.

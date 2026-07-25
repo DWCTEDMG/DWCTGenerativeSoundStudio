@@ -122,6 +122,7 @@ describe("CreativeDirectionPanel", () => {
         const body = JSON.parse(String(init?.body || "{}"));
         expect(body.variant_index).toBe(0);
         expect(body.overwrite_tracks).toBe(true);
+        expect(body.director_mode).toBe("narrative");
         return { ok: true, timeline: { tracks: [], layers: [], camera: { keyframes: [] } } };
       },
     });

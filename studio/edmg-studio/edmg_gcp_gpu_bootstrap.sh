@@ -20,9 +20,8 @@ INSTALL_OLLAMA="${INSTALL_OLLAMA:-0}"
 START_UI="${START_UI:-1}"
 ENABLE_BACKEND_SERVICE="${ENABLE_BACKEND_SERVICE:-1}"
 QUEUE_DEFAULT_MODELS="${QUEUE_DEFAULT_MODELS:-0}"
-PIP_TORCH_INDEX_URL="${PIP_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}"
-BACKEND_CUDA_BUNDLE="${BACKEND_CUDA_BUNDLE:-1}"
-BACKEND_NUMPY_CONSTRAINT="${BACKEND_NUMPY_CONSTRAINT:-numpy>=1.26,<2}"
+BACKEND_ACCELERATOR_PROFILE="${EDMG_BACKEND_ACCELERATOR_PROFILE:-cuda}"
+UV_BIN=""
 HF_TOKEN_VALUE="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 
 BOOTSTRAP_USER="${SUDO_USER:-$USER}"
@@ -88,17 +87,6 @@ append_once() {
   fi
 }
 
-pick_python_bin() {
-  local candidate
-  for candidate in python3.11 python3 python; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
 write_env_file() {
   step "Writing ${EDMG_ENV_FILE}"
   local external_ip=""
@@ -133,6 +121,7 @@ export EDMG_HF_BUCKET_ID=gulle1155/DWCTedmgAIStudioModels
 export EDMG_HF_BUCKET_PREFIX=
 export EDMG_MODEL_STORAGE_MODE=cloud_only
 export EDMG_COMFYUI_URL=http://127.0.0.1:8188
+export EDMG_BACKEND_ACCELERATOR_PROFILE=${BACKEND_ACCELERATOR_PROFILE}
 export PATH=${BIN_DIR}:\$PATH
 EOF
   append_once "${USER_HOME}/.bashrc" "source ${EDMG_ENV_FILE}"
@@ -149,10 +138,8 @@ ensure_backend_auth_token() {
     umask 077
     printf '%s' "${EDMG_BACKEND_AUTH_TOKEN}" >"${BACKEND_AUTH_TOKEN_FILE}"
   elif [[ ! -s "${BACKEND_AUTH_TOKEN_FILE}" ]]; then
-    local python_bin
-    python_bin="$(pick_python_bin)" || fail "No usable Python interpreter found for backend token generation."
     umask 077
-    "${python_bin}" -c "import secrets,sys; open(sys.argv[1], 'w', encoding='utf-8').write(secrets.token_urlsafe(48))" "${BACKEND_AUTH_TOKEN_FILE}"
+    openssl rand -hex 48 >"${BACKEND_AUTH_TOKEN_FILE}"
   fi
   chmod 600 "${BACKEND_AUTH_TOKEN_FILE}"
   step "Backend bearer authentication configured; token stored at ${BACKEND_AUTH_TOKEN_FILE}"
@@ -162,8 +149,8 @@ install_system_packages() {
   step "Installing system packages"
   "${SUDO[@]}" apt-get update
   "${SUDO[@]}" apt-get install -y \
-    git git-lfs curl wget ca-certificates ffmpeg libsndfile1 libsndfile1-dev libgomp1 \
-    build-essential pkg-config cmake ninja-build python3-venv python3-pip python-is-python3 \
+    git git-lfs curl wget ca-certificates openssl ffmpeg libsndfile1 libsndfile1-dev libgomp1 \
+    build-essential pkg-config cmake ninja-build \
     tmux htop nvtop unzip p7zip-full jq
   git lfs install || true
 }
@@ -206,24 +193,30 @@ sync_repo() {
 }
 
 install_backend() {
-  local python_bin
-  python_bin="$(pick_python_bin)" || fail "No usable Python interpreter found."
+  case "${BACKEND_ACCELERATOR_PROFILE}" in
+    cpu|cuda) ;;
+    *) fail "GCP bootstrap supports EDMG_BACKEND_ACCELERATOR_PROFILE=cpu or cuda, got ${BACKEND_ACCELERATOR_PROFILE}." ;;
+  esac
 
-  step "Installing backend bundle into ${BACKEND_DIR}/.venv"
+  # shellcheck source=scripts/uv_toolchain.sh
+  source "${STUDIO_DIR}/scripts/uv_toolchain.sh"
+  UV_BIN="$(edmg_require_uv)" || fail "Unable to install or validate pinned uv ${EDMG_UV_VERSION}."
+
+  step "Synchronizing frozen ${BACKEND_ACCELERATOR_PROFILE} backend environment"
   cd "${BACKEND_DIR}"
-  "${python_bin}" -m venv .venv
-  # shellcheck source=/dev/null
-  source .venv/bin/activate
-  python -m pip install --upgrade pip setuptools wheel
-  python -m pip install torch torchvision torchaudio --index-url "${PIP_TORCH_INDEX_URL}"
-  local bundle_extra="studio_bundle"
-  if [[ "${BACKEND_CUDA_BUNDLE}" == "1" ]]; then
-    bundle_extra="studio_bundle_cuda"
-  fi
-  python -m pip install -e ".[${bundle_extra}]" "${BACKEND_NUMPY_CONSTRAINT}"
+  "${UV_BIN}" python install 3.12
+  "${UV_BIN}" lock --check
+  "${UV_BIN}" sync --frozen \
+    --extra "${BACKEND_ACCELERATOR_PROFILE}" \
+    --extra core --extra audio --extra asr --extra internal-video --extra aws
+  edmg_assert_uv_python_312 "${UV_BIN}" "${BACKEND_DIR}" \
+    --extra "${BACKEND_ACCELERATOR_PROFILE}" \
+    --extra core --extra audio --extra asr --extra internal-video --extra aws
 
-  step "Validating CUDA visibility from PyTorch"
-  python - <<'PY'
+  step "Validating ${BACKEND_ACCELERATOR_PROFILE} PyTorch runtime"
+  EDMG_EXPECT_CUDA="$([[ "${BACKEND_ACCELERATOR_PROFILE}" == "cuda" ]] && printf 1 || printf 0)" \
+    "${UV_BIN}" run --frozen --no-sync python - <<'PY'
+import os
 import sys
 import torch
 
@@ -232,7 +225,7 @@ print("cuda_build", torch.version.cuda)
 print("cuda_available", torch.cuda.is_available())
 if torch.cuda.is_available():
     print("device", torch.cuda.get_device_name(0))
-else:
+elif os.environ["EDMG_EXPECT_CUDA"] == "1":
     sys.exit("PyTorch installed but CUDA is unavailable. Fix the NVIDIA driver before continuing.")
 PY
 }
@@ -242,7 +235,7 @@ install_frontend() {
   cd "${STUDIO_DIR}"
   corepack enable
   corepack prepare pnpm@10.33.0 --activate
-  pnpm install --frozen-lockfile || pnpm install
+  pnpm install --frozen-lockfile
   pnpm run typecheck
   pnpm run test:ui
   pnpm run build
@@ -256,8 +249,7 @@ write_helper_scripts() {
 set -euo pipefail
 source "${EDMG_ENV_FILE}"
 cd "${BACKEND_DIR}"
-source .venv/bin/activate
-exec edmg-studio-backend serve --host "${BACKEND_HOST}" --port "${BACKEND_PORT}"
+exec "${UV_BIN}" run --project "${BACKEND_DIR}" --frozen --no-sync edmg-studio-backend serve --host "${BACKEND_HOST}" --port "${BACKEND_PORT}"
 EOF
 
   cat >"${BIN_DIR}/edmg-start-ui" <<EOF
@@ -275,8 +267,7 @@ EOF
 set -euo pipefail
 source "${EDMG_ENV_FILE}"
 cd "${BACKEND_DIR}"
-source .venv/bin/activate
-python - <<'PY'
+"${UV_BIN}" run --project "${BACKEND_DIR}" --frozen --no-sync python - <<'PY'
 import torch
 print(f"torch={torch.__version__}")
 print(f"cuda_build={torch.version.cuda}")
@@ -291,8 +282,7 @@ EOF
 set -euo pipefail
 source "${EDMG_ENV_FILE}"
 cd "${BACKEND_DIR}"
-source .venv/bin/activate
-python - <<'PY'
+"${UV_BIN}" run --project "${BACKEND_DIR}" --frozen --no-sync python - <<'PY'
 import json
 import os
 import urllib.request
@@ -386,7 +376,7 @@ Wants=network-online.target
 Type=simple
 User=${BOOTSTRAP_USER}
 WorkingDirectory=${BACKEND_DIR}
-ExecStart=/bin/bash -lc 'source "${EDMG_ENV_FILE}" && source .venv/bin/activate && exec edmg-studio-backend serve --host "${BACKEND_HOST}" --port "${BACKEND_PORT}"'
+ExecStart=${BIN_DIR}/edmg-start-backend
 Restart=on-failure
 RestartSec=5
 

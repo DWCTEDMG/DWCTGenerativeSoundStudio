@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -13,6 +14,7 @@ from ..integrations.hf_model_manager import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _models_root() -> Path:
@@ -74,7 +76,8 @@ async def download(payload: Dict[str, Any]) -> Dict[str, Any]:
             token=token,
             revision=revision,
         )
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        logger.exception("Model catalog download failed for %s", model_name)
+        return {"ok": False, "error": "Model download failed. Check the server log for details."}
 
     return {"ok": True, "model_name": model_name, "local_path": str(local_dir)}

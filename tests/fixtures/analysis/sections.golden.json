@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "sections": [
+    {
+      "id": "intro",
+      "label": "Intro",
+      "start_s": 0.0,
+      "end_s": 1.0,
+      "energy": 0.35,
+      "role": "establish"
+    }
+  ],
+  "arc": ["establish"]
+}

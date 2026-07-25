@@ -172,6 +172,11 @@ pnpm run validate:release:linux
 That includes:
 
 - pnpm/package-manager and lockfile guardrails
+- Python 3.12 and uv 0.11.28 validation, `uv lock --check`, and a frozen
+  accelerator-profile PyInstaller build from the committed backend lock
+- backend manifest proof for the lock SHA-256, accelerator profile, resolved
+  Torch packages/index, Python/uv/PyInstaller versions, source fingerprint, and
+  binary hash
 - staged desktop validation
 - `validate:release` on Windows additionally runs packaged customer-flow proof, packaged upgrade-proof migration test, and the zero-state setup proof for Studio-managed Ollama and 7-Zip
 - `validate:release:linux` validates the desktop shell and produces the Linux AppImage without invoking the Windows-only installer proofs

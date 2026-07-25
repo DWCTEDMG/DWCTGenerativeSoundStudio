@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "audio_fixture": "audio/short_tone_1s.wav",
+  "expected": {
+    "duration_s": 1.0,
+    "sample_rate": 22050,
+    "channels": 1,
+    "sample_width_bytes": 2,
+    "min_size_bytes": 40000,
+    "max_size_bytes": 50000
+  }
+}

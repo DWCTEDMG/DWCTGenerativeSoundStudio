@@ -10,8 +10,11 @@ If you want to expose the main EDMG Studio backend on a custom domain, use:
 - Dockerfile path: `deployment/hyperlift/backend.Dockerfile`
 
 This exposes the FastAPI backend and starts it on `0.0.0.0:$PORT`.
-The Hyperlift backend image is intentionally lean and does not install the
-local `studio_bundle` runtime.
+The image checks the committed backend lock and performs a frozen `cpu`
+profile sync with the `core`, `audio`, `asr`, `internal-video`, and `aws`
+capabilities. Python 3.12, uv 0.11.28, and the exact dependency resolution are
+therefore the same release inputs used by CI; Hyperlift does not resolve an
+independent requirements set.
 
 Set these environment variables on the backend app:
 

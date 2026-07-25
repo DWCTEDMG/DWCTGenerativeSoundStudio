@@ -44,7 +44,7 @@ def run_render_review(
     if not status["installed"]:
         raise UserFacingError(
             "Codex SDK is not installed",
-            hint='Install it in the Studio backend environment with: pip install openai-codex',
+            hint="Synchronize the locked `codex` capability in the active uv accelerator profile.",
             code="CODEX_SDK_MISSING",
             status_code=400,
         )

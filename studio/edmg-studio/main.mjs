@@ -380,6 +380,69 @@ function ensureDirSync(targetPath) {
   }
 }
 
+function tryEnsureDirSync(targetPath) {
+  try {
+    ensureDirSync(targetPath);
+    return true;
+  } catch (error) {
+    console.warn(
+      `[storage] failed to ensure directory ${targetPath}:`,
+      error?.code || error?.errno || "",
+      error?.message || error,
+    );
+    return false;
+  }
+}
+
+function localFallbackCacheRoot() {
+  return path.join(app.getPath("userData"), "cache-fallback");
+}
+
+function buildCacheEnvPaths(cacheRoot) {
+  const root = path.resolve(cacheRoot);
+  return {
+    EDMG_STUDIO_CACHE_DIR: root,
+    PIP_CACHE_DIR: path.join(root, "pip"),
+    XDG_CACHE_HOME: path.join(root, "xdg"),
+    HF_HOME: path.join(root, "huggingface"),
+    HUGGINGFACE_HUB_CACHE: path.join(root, "huggingface", "hub"),
+    TRANSFORMERS_CACHE: path.join(root, "transformers"),
+    TORCH_HOME: path.join(root, "torch"),
+    NLTK_DATA: path.join(root, "nltk_data"),
+    WHISPER_CACHE_DIR: path.join(root, "whisper"),
+    MPLCONFIGDIR: path.join(root, "matplotlib"),
+    TMP: path.join(root, "tmp"),
+    TEMP: path.join(root, "tmp"),
+  };
+}
+
+function ensureManagedEnvDirs(managed) {
+  const failedKeys = [];
+  for (const [key, targetPath] of Object.entries(managed)) {
+    if (typeof targetPath !== "string" || !targetPath.trim()) continue;
+    if (!tryEnsureDirSync(targetPath)) {
+      failedKeys.push(key);
+    }
+  }
+
+  if (!failedKeys.length) {
+    return managed;
+  }
+
+  // Remounted/corrupt volumes (WinError 1392 / UNKNOWN mkdir) must not kill Electron.
+  // Keep data/models/home where they are; only relocate cache-derived paths locally.
+  const fallbackCache = localFallbackCacheRoot();
+  const remappedCache = buildCacheEnvPaths(fallbackCache);
+  Object.assign(managed, remappedCache);
+  for (const targetPath of Object.values(remappedCache)) {
+    ensureDirSync(targetPath);
+  }
+  console.warn(
+    `[storage] remapped cache paths to ${fallbackCache} after mkdir failures on: ${failedKeys.join(", ")}`,
+  );
+  return managed;
+}
+
 function pathExistsSync(targetPath) {
   try {
     return fs.existsSync(targetPath);
@@ -932,30 +995,13 @@ function buildManagedStudioEnv(studioHomeOverride = "", storageOverrideValues = 
     EDMG_STUDIO_HOME: paths.studioHome,
     EDMG_STUDIO_DATA_DIR: paths.dataDir,
     EDMG_STUDIO_MODELS_DIR: paths.modelsDir,
-    EDMG_STUDIO_CACHE_DIR: paths.cacheRoot,
     EDMG_STUDIO_LOGS_DIR: paths.logsDir,
     EDMG_STUDIO_EXTERNAL_DIR: paths.externalDir,
     OLLAMA_MODELS: path.join(paths.modelsDir, "ollama"),
-    PIP_CACHE_DIR: path.join(paths.cacheRoot, "pip"),
-    XDG_CACHE_HOME: path.join(paths.cacheRoot, "xdg"),
-    HF_HOME: path.join(paths.cacheRoot, "huggingface"),
-    HUGGINGFACE_HUB_CACHE: path.join(paths.cacheRoot, "huggingface", "hub"),
-    TRANSFORMERS_CACHE: path.join(paths.cacheRoot, "transformers"),
-    TORCH_HOME: path.join(paths.cacheRoot, "torch"),
-    NLTK_DATA: path.join(paths.cacheRoot, "nltk_data"),
-    WHISPER_CACHE_DIR: path.join(paths.cacheRoot, "whisper"),
-    MPLCONFIGDIR: path.join(paths.cacheRoot, "matplotlib"),
-    TMP: path.join(paths.cacheRoot, "tmp"),
-    TEMP: path.join(paths.cacheRoot, "tmp"),
+    ...buildCacheEnvPaths(paths.cacheRoot),
   };
 
-  for (const targetPath of Object.values(managed)) {
-    if (typeof targetPath === "string" && targetPath.trim()) {
-      ensureDirSync(targetPath);
-    }
-  }
-
-  return managed;
+  return ensureManagedEnvDirs(managed);
 }
 
 function syncStorageSettingsToProcessEnv(studioHome = "", storageOverrides = null) {
@@ -963,28 +1009,16 @@ function syncStorageSettingsToProcessEnv(studioHome = "", storageOverrides = nul
     studioHome || getConfiguredStudioHome() || path.dirname(getDefaultDataDir()),
     storageOverrides || {}
   );
-  const managed = {
+  const managed = ensureManagedEnvDirs({
     EDMG_STUDIO_HOME: paths.studioHome,
     EDMG_STUDIO_DATA_DIR: paths.dataDir,
     EDMG_STUDIO_MODELS_DIR: paths.modelsDir,
-    EDMG_STUDIO_CACHE_DIR: paths.cacheRoot,
     EDMG_STUDIO_LOGS_DIR: paths.logsDir,
     EDMG_STUDIO_EXTERNAL_DIR: paths.externalDir,
     OLLAMA_MODELS: path.join(paths.modelsDir, "ollama"),
-    PIP_CACHE_DIR: path.join(paths.cacheRoot, "pip"),
-    XDG_CACHE_HOME: path.join(paths.cacheRoot, "xdg"),
-    HF_HOME: path.join(paths.cacheRoot, "huggingface"),
-    HUGGINGFACE_HUB_CACHE: path.join(paths.cacheRoot, "huggingface", "hub"),
-    TRANSFORMERS_CACHE: path.join(paths.cacheRoot, "transformers"),
-    TORCH_HOME: path.join(paths.cacheRoot, "torch"),
-    NLTK_DATA: path.join(paths.cacheRoot, "nltk_data"),
-    WHISPER_CACHE_DIR: path.join(paths.cacheRoot, "whisper"),
-    MPLCONFIGDIR: path.join(paths.cacheRoot, "matplotlib"),
-    TMP: path.join(paths.cacheRoot, "tmp"),
-    TEMP: path.join(paths.cacheRoot, "tmp"),
-  };
+    ...buildCacheEnvPaths(paths.cacheRoot),
+  });
   for (const [key, value] of Object.entries(managed)) {
-    ensureDirSync(value);
     process.env[key] = value;
   }
   return {
@@ -1346,6 +1380,8 @@ const backendRuntime = createBackendRuntime({
   getStudioPaths,
   buildManagedStudioEnv,
   buildManagedAiEnv,
+  isDev: IS_DEV,
+  devServerUrl: DEV_SERVER_URL,
 });
 
 const directorRuntime = createDirectorRuntime({

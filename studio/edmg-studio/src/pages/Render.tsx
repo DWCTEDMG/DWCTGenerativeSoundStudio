@@ -1,11 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
+import { apiGet, apiPost, apiUpload, buildProjectFileUrl, getBackendUrl } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import { RenderPlanPanel } from "../components/RenderPlanPanel";
+import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
-import { copyPathValue, desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
+import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StructuredSummary } from "../components/StructuredSummary";
+import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
+import { useProjectJobs } from "../shared/jobs/useProjectJobs";
+import { isJobActive, type StudioJob } from "../shared/jobs/jobStatus";
 import type { PageProps } from "../types/pageProps";
 
 type CatalogEntry = {
@@ -115,7 +120,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState<string>("");
   const [project, setProject] = useState<any>(null);
-  const [visualDna, setVisualDna] = useState<any>(null);
   const [visualDnaHints, setVisualDnaHints] = useState<any>(null);
 
   const [plan, setPlan] = useState<any>(null);
@@ -123,6 +127,12 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [selectedVariant, setSelectedVariant] = useState<number>(0);
   const [conductorPlan, setConductorPlan] = useState<any>(null);
   const [conductorEnvironment, setConductorEnvironment] = useState<any>(null);
+  const [continuityReport, setContinuityReport] = useState<any>(null);
+  const [conductorPromoteStatus, setConductorPromoteStatus] = useState<string>("");
+  const [promotingScenes, setPromotingScenes] = useState(false);
+  const [performerPlan, setPerformerPlan] = useState<any>(null);
+  const [performerStatus, setPerformerStatus] = useState<string>("");
+  const [planningPerformer, setPlanningPerformer] = useState(false);
 
   const [renderPreset, setRenderPreset] = useState<"fast" | "balanced" | "quality" | "ultra">((savedRenderDefaults.renderPreset as any) || "balanced");
   const [checkpointName, setCheckpointName] = useState<string>("");
@@ -302,10 +312,29 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [projectAssets, setProjectAssets] = useState<{ refs: { path: string }[] }>({ refs: [] });
   const [validate, setValidate] = useState<any>(null);
   const [internalPreflight, setInternalPreflight] = useState<any>(null);
-  const [latestInternalJob, setLatestInternalJob] = useState<any>(null);
-  const [latestInternalDetail, setLatestInternalDetail] = useState<any>(null);
-  const [latestInternalLog, setLatestInternalLog] = useState<string>("");
   const [internalPolling, setInternalPolling] = useState<boolean>(true);
+  const [internalJobInfo, setInternalJobInfo] = useState<string | null>(null);
+  const {
+    jobs: projectJobs,
+    selectedLog: internalSelectedLog,
+    setSelectedLog: setInternalSelectedLog,
+    lastRefreshAt: internalJobsLastRefreshAt,
+    error: internalJobsError,
+    setError: setInternalJobsError,
+    refresh: refreshProjectJobs,
+    loadJobLog: loadInternalJobLog,
+    runJobAction: runInternalJobAction,
+    resumeFromCheckpoint: resumeInternalFromCheckpoint,
+    restartClean: restartInternalClean,
+  } = useProjectJobs({ projectId, autoRefresh: internalPolling, refreshIntervalMs: 3000 });
+  const internalJobs = useMemo(
+    () =>
+      projectJobs
+        .filter((job) => job.type === "internal_video")
+        .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))),
+    [projectJobs],
+  );
+  const latestInternalJob = internalJobs[0] ?? null;
   const [codexStatus, setCodexStatus] = useState<any>(null);
   const [codexReview, setCodexReview] = useState<any>(null);
   const [codexBusy, setCodexBusy] = useState<boolean>(false);
@@ -328,7 +357,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   const latestInternalVideoPath = String(project?.meta?.last_internal_render?.video || "");
   const latestInternalVideoUrl = latestInternalVideoPath
-    ? `${backendUrl}/v1/projects/${projectId}/file?path=${encodeURIComponent(latestInternalVideoPath)}`
+    ? buildProjectFileUrl(backendUrl, projectId, latestInternalVideoPath)
     : "";
   const effectiveInternalTemporalMode = internalMotionStrategy === "storyboard_full_motion" ? "video_model" : internalTemporalMode;
 
@@ -677,12 +706,15 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (!id) return;
     const d = await apiGet(`/v1/projects/${id}`);
     setProject(d.project);
-    setVisualDna(d.visual_dna || null);
     setVisualDnaHints(d.visual_dna_hints || null);
     setAnalysis(d.project?.meta?.analysis || null);
     setPlan(d.project?.meta?.last_plan || null);
     setTimeline(d.project?.meta?.timeline || { layers: [], camera: { keyframes: [] } });
     setTimelineDirty(false);
+    const storedPlan = d.project?.meta?.last_conductor_plan;
+    if (storedPlan && typeof storedPlan === "object") {
+      setConductorPlan(storedPlan);
+    }
   };
 
   const refreshValidate = async () => {
@@ -715,10 +747,26 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
+  const refreshStoredConductorPlan = async () => {
+    if (!projectId) return false;
+    try {
+      const d = await apiGet(`/v1/projects/${projectId}/render/conductor/plan?variant_index=${selectedVariant}`);
+      if (d?.plan) {
+        setConductorPlan(d.plan);
+        return true;
+      }
+    } catch {
+      /* stored plan optional */
+    }
+    return false;
+  };
+
   const refreshConductorPlan = async () => {
     if (!projectId || !(plan?.variants?.length || 0)) {
       setConductorPlan(null);
       setConductorEnvironment(null);
+      setContinuityReport(null);
+      setConductorPromoteStatus("");
       return;
     }
     try {
@@ -728,34 +776,89 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       });
       setConductorPlan(d?.plan || null);
       setConductorEnvironment(d?.environment || null);
+      setConductorPromoteStatus("");
       if (d?.visual_dna_hints) setVisualDnaHints(d.visual_dna_hints);
+      try {
+        const continuity = await apiGet(`/v1/projects/${projectId}/render/conductor/continuity?variant_index=${selectedVariant}`);
+        setContinuityReport(continuity?.continuity || null);
+      } catch {
+        setContinuityReport(null);
+      }
     } catch {
-      setConductorPlan(null);
-      setConductorEnvironment(null);
+      const loaded = await refreshStoredConductorPlan();
+      if (!loaded) {
+        setConductorPlan(null);
+        setConductorEnvironment(null);
+        setContinuityReport(null);
+      }
     }
   };
 
-  const refreshInternalStatus = async () => {
-    if (!projectId) return;
+  const promoteConductorScenes = async (sceneIds: string[] = []) => {
+    if (!projectId || !conductorPlan) return;
+    setPromotingScenes(true);
+    setConductorPromoteStatus("");
     try {
-      const d = await apiGet(`/v1/projects/${projectId}/jobs`);
-      const all = Array.isArray(d?.jobs) ? d.jobs : [];
-      const latest = all.filter((j: any) => j?.type === "internal_video").sort((a: any, b: any) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")))[0] || null;
-      setLatestInternalJob(latest);
-      if (latest) {
-        const detail = await apiGet(`/v1/projects/${projectId}/jobs/${latest.id}?tail_lines=120`);
-        setLatestInternalDetail(detail);
-        setLatestInternalLog(String(detail?.log_tail || ""));
-      } else {
-        setLatestInternalDetail(null);
-        setLatestInternalLog("");
-      }
+      const d = await apiPost(`/v1/projects/${projectId}/render/conductor/promote`, {
+        plan_id: conductorPlan.plan_id || null,
+        scene_ids: sceneIds,
+        target_engine: "internal",
+        quality_tier: renderPreset === "fast" ? "draft" : renderPreset,
+        reason: sceneIds.length ? `Promote ${sceneIds.join(", ")} to hero lane` : "Promote proxy scenes to hero lane",
+      });
+      setConductorPlan(d?.plan || conductorPlan);
+      const promoted = Array.isArray(d?.promoted_scene_ids) ? d.promoted_scene_ids : [];
+      setConductorPromoteStatus(
+        promoted.length
+          ? `Promoted ${promoted.length} scene(s) to internal/${renderPreset === "fast" ? "draft" : renderPreset}.`
+          : "No proxy scenes left to promote.",
+      );
     } catch (e: any) {
-      setLatestInternalJob(null);
-      setLatestInternalDetail(null);
-      setLatestInternalLog(String(e));
+      setConductorPromoteStatus(String(e));
+    } finally {
+      setPromotingScenes(false);
     }
   };
+
+  const refreshStoredPerformerPlan = async () => {
+    if (!projectId) return false;
+    try {
+      const d = await apiGet(`/v1/projects/${projectId}/render/performer/plan?variant_index=${selectedVariant}`);
+      if (d?.performer_plan) {
+        setPerformerPlan(d.performer_plan);
+        return true;
+      }
+    } catch {
+      /* optional */
+    }
+    return false;
+  };
+
+  const refreshPerformerPlan = async () => {
+    if (!projectId || !(plan?.variants?.length || 0)) {
+      setPerformerPlan(null);
+      setPerformerStatus("");
+      return;
+    }
+    setPlanningPerformer(true);
+    setPerformerStatus("");
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/performer/plan`, {
+        variant_index: selectedVariant,
+      });
+      setPerformerPlan(d?.performer_plan || null);
+      setPerformerStatus(d?.performer_plan?.summary || "Performer lane plan ready.");
+    } catch (e: any) {
+      const loaded = await refreshStoredPerformerPlan();
+      if (!loaded) {
+        setPerformerPlan(null);
+        setPerformerStatus(String(e));
+      }
+    } finally {
+      setPlanningPerformer(false);
+    }
+  };
+
 
   useEffect(() => {
     refreshProjects().catch(() => {});
@@ -820,6 +923,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   useEffect(() => {
     refreshConductorPlan().catch(() => {});
+    refreshStoredPerformerPlan().catch(() => {});
   }, [plan, projectId, renderPreset, selectedVariant]);
 
   useEffect(() => {
@@ -953,15 +1057,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     proxyRendersEnabled,
   ]);
 
-  useEffect(() => {
-    if (!projectId) return;
-    refreshInternalStatus().catch(() => {});
-    if (!internalPolling) return;
-    const t = window.setInterval(() => {
-      refreshInternalStatus().catch(() => {});
-    }, 3000);
-    return () => window.clearInterval(t);
-  }, [projectId, internalPolling]);
 
   const runPipeline = async () => {
     setErr(null);
@@ -982,7 +1077,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       const d = await apiPost(`/v1/projects/${projectId}/render/internal/video`, buildInternalPayload());
       setInfo(d);
       await refreshProject(projectId);
-      await refreshInternalStatus();
+      await refreshProjectJobs();
       await refreshInternalPreflight();
     } catch (e: any) {
       setErr(String(e));
@@ -1109,7 +1204,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       setAutoConfig(d);
       setInfo(d);
       await refreshProject(projectId);
-      await refreshInternalStatus();
+      await refreshProjectJobs();
     } catch (e: any) {
       setErr(String(e));
     } finally {
@@ -1117,52 +1212,30 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
-  const cancelLatestInternal = async () => {
-    if (!projectId || !latestInternalJob?.id) return;
+  const handleInternalJobAction = async (job: StudioJob, action: Parameters<typeof runInternalJobAction>[1]) => {
     setErr(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/cancel`, {});
-      setInfo(d);
-      await refreshInternalStatus();
-    } catch (e: any) {
-      setErr(String(e));
-    }
-  };
-
-  const retryLatestInternal = async () => {
-    if (!projectId || !latestInternalJob?.id) return;
-    setErr(null);
-    try {
-      const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/retry`, {});
-      setInfo(d);
-      await refreshInternalStatus();
+      await runInternalJobAction(job, action);
       await refreshInternalPreflight();
     } catch (e: any) {
       setErr(String(e));
     }
   };
 
-
-  const resumeLatestInternal = async () => {
-    if (!projectId || !latestInternalJob?.id) return;
+  const handleResumeInternalFromCheckpoint = async (job: StudioJob) => {
     setErr(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/resume_from_checkpoint`, {});
-      setInfo(d);
-      await refreshInternalStatus();
+      await resumeInternalFromCheckpoint(job);
       await refreshInternalPreflight();
     } catch (e: any) {
       setErr(String(e));
     }
   };
 
-  const restartLatestInternalClean = async () => {
-    if (!projectId || !latestInternalJob?.id) return;
+  const handleRestartInternalClean = async (job: StudioJob) => {
     setErr(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/restart_clean`, {});
-      setInfo(d);
-      await refreshInternalStatus();
+      await restartInternalClean(job);
       await refreshInternalPreflight();
     } catch (e: any) {
       setErr(String(e));
@@ -1176,7 +1249,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/clear_cached_frames`, {});
       setInfo(d);
       await refreshProject(projectId);
-      await refreshInternalStatus();
+      await refreshProjectJobs();
       await refreshInternalPreflight();
     } catch (e: any) {
       setErr(String(e));
@@ -1190,39 +1263,30 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/drop_checkpoint`, {});
       setInfo(d);
       await refreshProject(projectId);
-      await refreshInternalStatus();
+      await refreshProjectJobs();
       await refreshInternalPreflight();
     } catch (e: any) {
       setErr(String(e));
     }
   };
 
-  const copyPathToClipboard = async (label: string, value?: string | null) => {
+  const openLocalPath = async (label: string, value?: string | null) => {
     if (!value) return;
     setErr(null);
     try {
-      const result = await copyPathValue(label, value);
-      if (!result.ok) throw new Error(result.error || `Unable to copy ${label}`);
-      setInfo({ ...result, copied: label, value });
-    } catch (e: any) {
-      setErr(`Failed to copy ${label}: ${String(e)}`);
-    }
-  };
-
-  const revealLocalPath = async (label: string, value?: string | null, mode: "reveal" | "open" = "reveal") => {
-    if (!value) return;
-    setErr(null);
-    try {
-      const result = await runDesktopArtifactAction(label, value, mode);
-      if (!result.ok) throw new Error(result.error || `Unable to ${mode} ${label}`);
+      const result = await runDesktopArtifactAction(label, value, "open");
+      if (!result.ok) throw new Error(result.error || `Unable to open ${label}`);
       setInfo({ ...result, label, value });
     } catch (e: any) {
-      setErr(`Failed to ${mode} ${label}: ${String(e)}`);
+      setErr(`Failed to open ${label}: ${String(e)}`);
     }
   };
 
   const applyLatestInternalSettings = () => {
-    const p = latestInternalJob?.payload || project?.meta?.last_internal_render || null;
+    const jobPayload = latestInternalJob && "payload" in latestInternalJob
+      ? (latestInternalJob as StudioJob & { payload?: Record<string, unknown> }).payload
+      : null;
+    const p = jobPayload || project?.meta?.last_internal_render || null;
     if (!p) return;
     if (p.variant_index != null) setSelectedVariant(Number(p.variant_index));
     if (p.fps_output != null) setInternalFpsOut(Number(p.fps_output));
@@ -1523,7 +1587,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         batch_size: trtBatchSize,
       });
       setInfo(d);
-      await refreshInternalStatus(); // Poll for TRT job in the generic internal status widget for now
+      await refreshProjectJobs(); // Poll for TRT job in the generic internal status widget for now
     } catch (e: any) {
       setErr(String(e));
     }
@@ -1542,7 +1606,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         batch_size: trtBatchSize,
       });
       setInfo(d);
-      await refreshInternalStatus();
+      await refreshProjectJobs();
     } catch (e: any) {
       setErr(String(e));
     }
@@ -1690,7 +1754,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
-const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
+const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pid, rel);
   const sourceAssetPreviewUrl = sourceAsset ? fileUrl(projectId, sourceAsset) : "";
   const maskAssetPreviewUrl = stillMaskAsset ? fileUrl(projectId, stillMaskAsset) : "";
   const deforumExports = project?.meta?.exports?.deforum || [];
@@ -1762,27 +1826,48 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
           </div>
 
           {conductorPlan ? (
-            <div className="card" style={{ marginTop: 12, padding: 12 }}>
-              <div style={{ fontWeight: 800, marginBottom: 6 }}>Render Conductor</div>
-              <div className="small">{conductorPlan.summary || "Advisory multi-engine plan ready."}</div>
-              <div className="small" style={{ marginTop: 6 }}>
-                Route: {(Array.isArray(conductorPlan.sections) ? conductorPlan.sections : [])
-                  .slice(0, 4)
-                  .map((section: any) => `${section.scene_id}: ${section.engine}`)
-                  .join(" • ") || "No scene routes yet."}
-              </div>
-              {visualDnaHints?.core_themes?.length || visualDnaHints?.motifs?.length ? (
-                <div className="small" style={{ marginTop: 6 }}>
-                  Visual DNA: {[...(visualDnaHints?.core_themes || []), ...(visualDnaHints?.motifs || [])].slice(0, 4).join(" • ")}
-                </div>
-              ) : null}
-              {typeof visualDnaHints?.confidence === "number" ? (
-                <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
-                  Project memory confidence: {Math.round(Number(visualDnaHints.confidence) * 100)}%
-                </div>
-              ) : null}
-            </div>
+            <RenderPlanPanel
+              plan={conductorPlan}
+              continuityReport={continuityReport}
+              visualDnaHints={visualDnaHints}
+              conductorPromoteStatus={conductorPromoteStatus}
+              promotingScenes={promotingScenes}
+              onPromoteAll={() => promoteConductorScenes()}
+              onPromoteScene={(sceneId) => promoteConductorScenes([sceneId])}
+              onNavigateReview={onNavigate ? () => onNavigate("review") : undefined}
+              onRefresh={() => refreshConductorPlan().catch(() => {})}
+            />
           ) : null}
+
+          <div className="card" style={{ marginTop: 12, padding: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 800 }}>Performer workflow (W6-05 preview)</div>
+              <button className="secondary" type="button" disabled={!variantCount || planningPerformer} onClick={() => refreshPerformerPlan().catch(() => {})}>
+                {planningPerformer ? "Planning…" : "Plan performer lane"}
+              </button>
+            </div>
+            <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+              Audio-driven performance scenes route through the hosted/high-end lane with Wan S2V provenance. Experimental — not a normal desktop default.
+            </div>
+            {performerStatus ? (
+              <div className="small" style={{ marginTop: 8 }}>{performerStatus}</div>
+            ) : null}
+            {performerPlan?.tasks?.length ? (
+              <div style={{ marginTop: 10 }}>
+                {performerPlan.tasks.slice(0, 6).map((task: any) => (
+                  <div key={task.scene_id} className="small" style={{ marginBottom: 6 }}>
+                    <b>{task.scene_id}</b> • {task.engine} • {task.model?.display_name || "Wan S2V"}
+                    {task.audio_window ? <> • {Number(task.audio_window.start_s).toFixed(1)}s–{Number(task.audio_window.end_s).toFixed(1)}s</> : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {Array.isArray(performerPlan?.warnings) && performerPlan.warnings.length ? (
+              <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
+                {performerPlan.warnings.slice(0, 2).map((warning: any) => warning.message).join(" • ")}
+              </div>
+            ) : null}
+          </div>
 
           <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
             <button onClick={runPipeline} disabled={!variantCount}>Preset + Render (one click)</button>
@@ -2219,94 +2304,44 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                   )}
                 </div>
 
-                <div className="card" style={{ marginTop: 10 }}>
-                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-                    <div style={{ fontWeight: 900 }}>Latest internal render job</div>
-                    <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <label className="row small" style={{ gap: 6, alignItems: "center" }}>
-                        <input type="checkbox" checked={internalPolling} onChange={(e) => setInternalPolling(e.target.checked)} />
-                        Live polling
-                      </label>
-                      <button className="secondary" onClick={() => refreshInternalStatus().catch(() => {})}>Refresh detail</button>
-                      <button className="secondary" onClick={() => onNavigate?.("queue")}>Open Render Queue</button>
+                <ProjectJobsPanel
+                  backendUrl={backendUrl}
+                  jobs={internalJobs}
+                  selectedLog={internalSelectedLog}
+                  lastRefreshAt={internalJobsLastRefreshAt}
+                  error={internalJobsError}
+                  info={internalJobInfo}
+                  autoRefresh={internalPolling}
+                  onAutoRefreshChange={setInternalPolling}
+                  onRefresh={refreshProjectJobs}
+                  onViewLog={loadInternalJobLog}
+                  onCloseLog={() => setInternalSelectedLog(null)}
+                  onJobAction={handleInternalJobAction}
+                  onResumeFromCheckpoint={handleResumeInternalFromCheckpoint}
+                  onRestartClean={handleRestartInternalClean}
+                  onNavigateToQueue={onNavigate ? () => onNavigate("queue") : undefined}
+                  onDesktopActionMessage={setInternalJobInfo}
+                  onDesktopActionError={(message) => {
+                    setInternalJobInfo(null);
+                    setInternalJobsError(message);
+                  }}
+                  continuityBlockingCount={continuityReport?.blocking_count || 0}
+                  title="Internal render jobs"
+                  description="Latest internal/hosted video jobs for this project with the same pause, cancel, retry, and log controls as Render Queue."
+                />
+                {latestInternalJob ? (
+                  <div className="card" style={{ marginTop: 10 }}>
+                    <div style={{ fontWeight: 900, marginBottom: 8 }}>Internal job tools</div>
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      <button className="secondary" onClick={applyLatestInternalSettings}>Use latest job settings</button>
+                      <button className="secondary" onClick={clearLatestInternalCachedFrames} disabled={isJobActive(latestInternalJob.status)}>Clear cached frames</button>
+                      <button className="secondary" onClick={dropLatestInternalCheckpoint} disabled={isJobActive(latestInternalJob.status)}>Drop checkpoint</button>
+                      {latestInternalVideoUrl ? (
+                        <button className="secondary" onClick={() => openLocalPath("latest internal video", latestInternalVideoPath)}>{desktopActionLabel("open", "latest video")}</button>
+                      ) : null}
                     </div>
                   </div>
-                  {latestInternalJob ? (
-                    <div>
-                      <div className="small">
-                        Status: <b>{latestInternalJob.status}</b>
-                        {latestInternalJob?.progress?.percent != null ? <> • {latestInternalJob.progress.percent}%</> : null}
-                        {latestInternalJob?.progress?.stage ? <> • {latestInternalJob.progress.stage}</> : null}
-                        {latestInternalDetail?.job?.progress?.queue_action ? <> • action <b>{latestInternalDetail.job.progress.queue_action}</b></> : null}
-                      </div>
-                      {latestInternalJob?.progress?.message ? (
-                        <div className="small" style={{ marginTop: 4 }}>{latestInternalJob.progress.message}</div>
-                      ) : null}
-                      {latestInternalDetail?.runtime_checkpoint ? (
-                        <>
-                          <div className="small" style={{ marginTop: 6 }}>
-                            Resume <b>{latestInternalDetail.runtime_checkpoint.resume_percent ?? 0}%</b> • chunks <b>{latestInternalDetail.runtime_checkpoint.completed_chunks ?? 0}/{latestInternalDetail.runtime_checkpoint.estimated_chunks ?? 1}</b> • next frame <b>{Math.min(Number(latestInternalDetail.runtime_checkpoint.next_frame_index ?? 0) + 1, Number(latestInternalDetail.runtime_checkpoint.total_frames ?? 0) || 0)}/{latestInternalDetail.runtime_checkpoint.total_frames ?? 0}</b>
-                          </div>
-                          <div className="small" style={{ marginTop: 4, opacity: 0.82 }}>
-                            {latestInternalDetail.runtime_checkpoint.chunk_strategy || "single_pass"} • checkpoint every {latestInternalDetail.runtime_checkpoint.checkpoint_interval_frames ?? 0} frames • {latestInternalDetail.resume_ready ? "resume-ready" : "resume-limited"}
-                          </div>
-                          {latestInternalDetail.runtime_checkpoint.maintenance_action ? (
-                            <div className="small" style={{ marginTop: 4, opacity: 0.78 }}>
-                              Maintenance: <b>{latestInternalDetail.runtime_checkpoint.maintenance_action}</b>
-                            </div>
-                          ) : null}
-                        </>
-                      ) : null}
-                      <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                        {(latestInternalJob.status === "queued" || latestInternalJob.status === "running") ? (
-                          <button className="secondary" onClick={cancelLatestInternal}>Cancel latest internal job</button>
-                        ) : null}
-                        {(latestInternalJob.status === "failed" || latestInternalJob.status === "canceled") ? (
-                          <>
-                            <button className="secondary" onClick={retryLatestInternal}>Retry latest job</button>
-                            <button className="secondary" onClick={resumeLatestInternal}>Resume from checkpoint</button>
-                            <button className="secondary" onClick={restartLatestInternalClean}>Restart clean</button>
-                          </>
-                        ) : null}
-                        <button className="secondary" onClick={applyLatestInternalSettings}>Use latest job settings</button>
-                        <button className="secondary" onClick={clearLatestInternalCachedFrames} disabled={latestInternalJob.status === "queued" || latestInternalJob.status === "running"}>Clear cached frames</button>
-                        <button className="secondary" onClick={dropLatestInternalCheckpoint} disabled={latestInternalJob.status === "queued" || latestInternalJob.status === "running"}>Drop checkpoint</button>
-                        {latestInternalVideoUrl ? (
-                          <a className="secondary" href={latestInternalVideoUrl} target="_blank" rel="noreferrer">Open latest video</a>
-                        ) : null}
-                      </div>
-                      {latestInternalDetail?.outputs ? (
-                        <div style={{ marginTop: 10 }}>
-                          <div className="small" style={{ opacity: 0.82 }}>Checkpoint JSON: <b>{latestInternalDetail.outputs.checkpoint_json_relpath || latestInternalDetail.outputs.checkpoint_json_abspath || "n/a"}</b></div>
-                          {latestInternalDetail.outputs.cache_paths?.frames_dir ? <div className="small" style={{ marginTop: 4, opacity: 0.78 }}>Frames dir: {latestInternalDetail.outputs.cache_paths.frames_dir}</div> : null}
-                          {latestInternalDetail.outputs.cache_paths?.raw_mp4 ? <div className="small" style={{ marginTop: 4, opacity: 0.78 }}>Raw MP4: {latestInternalDetail.outputs.cache_paths.raw_mp4}</div> : null}
-                          {latestInternalDetail.outputs.cache_paths?.interp_mp4 ? <div className="small" style={{ marginTop: 4, opacity: 0.78 }}>Interp MP4: {latestInternalDetail.outputs.cache_paths.interp_mp4}</div> : null}
-                          {latestInternalDetail.outputs.cache_paths?.final_mp4 ? <div className="small" style={{ marginTop: 4, opacity: 0.78 }}>Final MP4: {latestInternalDetail.outputs.cache_paths.final_mp4}</div> : null}
-                          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                            {(latestInternalDetail.outputs.checkpoint_json_abspath || latestInternalDetail.outputs.checkpoint_json_relpath) ? <button className="secondary" onClick={() => copyPathToClipboard("checkpoint path", latestInternalDetail.outputs.checkpoint_json_abspath || latestInternalDetail.outputs.checkpoint_json_relpath)}>Copy checkpoint path</button> : null}
-                            {(latestInternalDetail.outputs.checkpoint_json_abspath || latestInternalDetail.outputs.checkpoint_json_relpath) ? <button className="secondary" onClick={() => revealLocalPath("checkpoint path", latestInternalDetail.outputs.checkpoint_json_abspath || latestInternalDetail.outputs.checkpoint_json_relpath, "reveal")}>{desktopActionLabel("reveal", "checkpoint")}</button> : null}
-                            {latestInternalDetail.outputs.cache_paths?.frames_dir ? <button className="secondary" onClick={() => copyPathToClipboard("frames dir", latestInternalDetail.outputs.cache_paths.frames_dir)}>Copy frames dir</button> : null}
-                            {latestInternalDetail.outputs.cache_paths?.frames_dir ? <button className="secondary" onClick={() => revealLocalPath("frames dir", latestInternalDetail.outputs.cache_paths.frames_dir, "open")}>{desktopActionLabel("open", "frames dir")}</button> : null}
-                            {latestInternalDetail.outputs.cache_paths?.final_mp4 ? <button className="secondary" onClick={() => copyPathToClipboard("final mp4", latestInternalDetail.outputs.cache_paths.final_mp4)}>Copy final mp4 path</button> : null}
-                            {latestInternalDetail.outputs.cache_paths?.final_mp4 ? <button className="secondary" onClick={() => revealLocalPath("final mp4", latestInternalDetail.outputs.cache_paths.final_mp4, "reveal")}>{desktopActionLabel("reveal", "final mp4")}</button> : null}
-                          </div>
-                        </div>
-                      ) : null}
-                      {latestInternalLog ? (
-                        <pre style={{ marginTop: 10, maxHeight: 220, overflow: "auto" }}>{latestInternalLog}</pre>
-                      ) : (
-                        <div className="small" style={{ marginTop: 6 }}>No log yet.</div>
-                      )}
-                      {latestInternalDetail?.log_exists ? (
-                        <div className="small" style={{ marginTop: 6, opacity: 0.75 }}>
-                          Log lines: <b>{latestInternalDetail.log_line_count ?? 0}</b> • {latestInternalDetail.log_path}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="small">No internal render job yet for this project.</div>
-                  )}
-                </div>
+                ) : null}
 
                 <div className="card" style={{ marginTop: 10 }}>
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -2354,7 +2389,7 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
                       ) : (
                         <>
                           <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                            <a className="secondary" href={latestInternalVideoUrl} target="_blank" rel="noreferrer">Open video</a>
+                            <button className="secondary" onClick={() => openLocalPath("latest internal video", latestInternalVideoPath)}>{desktopActionLabel("open", "video")}</button>
                             <a className="secondary" href={latestInternalVideoUrl} download>Download video</a>
                             <button className="secondary" onClick={() => { applyLatestInternalSettings(); setInternalResumeExisting(true); }}>Reuse settings + resume caches</button>
                           </div>
@@ -3712,12 +3747,9 @@ const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/
               <StructuredSummary value={conductorEnvironment} showJson />
             </>
           ) : null}
-          {visualDna ? (
-            <>
-              <div style={{ fontWeight: 800, margin: "14px 0 10px" }}>Visual DNA</div>
-              <StructuredSummary value={visualDna} showJson />
-            </>
-          ) : null}
+          <div style={{ marginTop: 14 }}>
+            <VisualDnaPanel projectId={projectId} compact />
+          </div>
 
           <hr />
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Last action result</div>

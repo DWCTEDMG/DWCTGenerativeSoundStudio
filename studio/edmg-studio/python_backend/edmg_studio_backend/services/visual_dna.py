@@ -545,10 +545,96 @@ def record_render_feedback(
     return updated
 
 
+def trait_id(scope: str, value: str) -> str:
+    return f"{str(scope).strip().lower()}:{_safe_text(value).casefold()}"
+
+
+def update_visual_dna(
+    dna: ProjectVisualDNA,
+    *,
+    identity: dict[str, Any] | None = None,
+    continuity: dict[str, Any] | None = None,
+    approve_trait_ids: list[str] | None = None,
+    deprecate_trait_ids: list[str] | None = None,
+    notes: str | None = None,
+) -> ProjectVisualDNA:
+    """Apply curated edits without silently rewriting the timeline."""
+    updated = dna.model_copy(deep=True)
+    source_label = "visual_dna_workspace"
+
+    if isinstance(identity, dict) and identity:
+        list_limits = {
+            "core_themes": 8,
+            "motifs": 10,
+            "lighting_language": 6,
+            "camera_language": 6,
+            "texture_language": 6,
+        }
+        for key, limit in list_limits.items():
+            if key in identity and isinstance(identity.get(key), list):
+                setattr(updated.identity, key, _unique_strings(list(identity.get(key) or []), limit=limit))
+        palette = identity.get("palette")
+        if isinstance(palette, dict):
+            if isinstance(palette.get("dominant"), list):
+                updated.identity.palette.dominant = _unique_strings(list(palette.get("dominant") or []), limit=8)
+            if isinstance(palette.get("avoid"), list):
+                updated.identity.palette.avoid = _unique_strings(list(palette.get("avoid") or []), limit=8)
+
+    if isinstance(continuity, dict) and continuity:
+        for key in ("subject_anchors", "environment_anchors", "transition_rules"):
+            if key in continuity and isinstance(continuity.get(key), list):
+                setattr(
+                    updated.continuity,
+                    key,
+                    _unique_strings(list(continuity.get(key) or []), limit=8),
+                )
+
+    approve = {str(item).strip().casefold() for item in (approve_trait_ids or []) if str(item).strip()}
+    deprecate = {str(item).strip().casefold() for item in (deprecate_trait_ids or []) if str(item).strip()}
+    for trait in updated.trait_memory:
+        tid = trait_id(str(trait.scope), trait.value).casefold()
+        if tid in approve:
+            trait.state = "declared"
+            trait.weight = min(1.0, max(trait.weight, 0.85))
+            if source_label not in trait.sources:
+                trait.sources.append(source_label)
+            updated.learning_state.sources["approved_traits"] = int(
+                updated.learning_state.sources.get("approved_traits", 0)
+            ) + 1
+        if tid in deprecate:
+            trait.state = "deprecated"
+            trait.weight = min(trait.weight, 0.2)
+            if source_label not in trait.sources:
+                trait.sources.append(source_label)
+            updated.learning_state.sources["deprecated_traits"] = int(
+                updated.learning_state.sources.get("deprecated_traits", 0)
+            ) + 1
+
+    note_text = _safe_text(notes, max_len=1000)
+    if note_text:
+        updated.learning_state.sources["workspace_notes"] = int(
+            updated.learning_state.sources.get("workspace_notes", 0)
+        ) + 1
+        _observe_trait(
+            updated,
+            scope="theme",
+            value=note_text[:160],
+            source=source_label,
+            state="declared",
+            weight=0.7,
+        )
+
+    updated.updated_at = _utc_now()
+    _sync_curated_fields(updated)
+    _recompute_confidence(updated)
+    return updated
+
+
 def build_prompt_hints(dna: ProjectVisualDNA, *, limit: int = 8) -> dict[str, Any]:
     return {
         "positive_fragments": list(dna.prompt_guidance.positive_fragments[:limit]),
         "negative_fragments": list(dna.prompt_guidance.negative_fragments[:limit]),
+        "core_themes": list(dna.identity.core_themes[:limit]),
         "motifs": list(dna.identity.motifs[:limit]),
         "palette": {
             "dominant": list(dna.identity.palette.dominant[: min(limit, 6)]),

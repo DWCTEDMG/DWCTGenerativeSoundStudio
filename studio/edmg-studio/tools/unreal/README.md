@@ -49,7 +49,8 @@ The importer expects these files inside the selected bundle directory:
 You can inspect the import plan without Unreal:
 
 ```bash
-python studio/edmg-studio/tools/unreal/import_unreal_bridge_bundle.py ^
+uv run --project studio/edmg-studio/python_backend --frozen --extra cpu ^
+  python studio/edmg-studio/tools/unreal/import_unreal_bridge_bundle.py ^
   --bundle-dir F:\path\to\bundle ^
   --dry-run ^
   --plan-json F:\path\to\bundle\unreal_import_plan.json
