@@ -113,6 +113,9 @@ studio/edmg-studio/electron-resources/director/
 deployment/nvidia/.env.local
 starlift-data/
 
+# Root developer credentials (copy .env.example; never commit .env)
+/.env
+
 # ----------------------------
 # Local agent / tunnel tooling (download binaries locally)
 # ----------------------------

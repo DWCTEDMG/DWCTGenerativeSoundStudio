@@ -1,0 +1,24 @@
+{
+  "id": "day1-fixture-project",
+  "name": "Day 1 Fixture Project",
+  "created_at": "2026-07-14 00:00:00",
+  "meta": {
+    "revision": 1,
+    "audio": {
+      "filename": "tiny_pulse.wav",
+      "size_bytes": 16044
+    },
+    "timeline": {
+      "fps": 30,
+      "duration_seconds": 1.0,
+      "clips": []
+    },
+    "reference_media": [
+      {
+        "id": "reference-frame",
+        "path": "../media/reference_frame.svg",
+        "role": "palette"
+      }
+    ]
+  }
+}

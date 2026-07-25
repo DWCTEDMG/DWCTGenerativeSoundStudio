@@ -1,8 +1,8 @@
 # DWCT Generative Sound Studio — Modernization Master Blueprint
 
-**Prepared:** 2026-07-14  
-**Repository:** [DWCTEDMG/DWCTGenerativeSoundStudio](https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio)  
-**Baseline:** `codex/Unified` at `6e2830c0634b939dcd8e0851fc0a17db66a4a132`  
+**Prepared:** 2026-07-14
+**Repository:** [DWCTEDMG/DWCTGenerativeSoundStudio](https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio)
+**Baseline:** `codex/Unified` at `6e2830c0634b939dcd8e0851fc0a17db66a4a132`
 **Purpose:** A product, experience, creative-technology, AI-model, engineering, release, and community plan that can be executed in the Codex desktop app.
 
 ---
