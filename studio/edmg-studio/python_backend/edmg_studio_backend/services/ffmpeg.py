@@ -145,6 +145,88 @@ def _probe_duration_seconds(ffmpeg_path: str, media_path: Path) -> float | None:
     return duration if duration > 0 else None
 
 
+def _probe_frame_rate(ffmpeg_path: str, media_path: Path) -> float | None:
+    if not media_path.exists():
+        return None
+    try:
+        ffprobe = ensure_ffprobe(ffmpeg_path)
+    except RuntimeError:
+        return None
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=avg_frame_rate,r_frame_rate",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(media_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return None
+    for line in (proc.stdout or "").splitlines():
+        value = str(line or "").strip()
+        if not value or value == "0/0":
+            continue
+        try:
+            if "/" in value:
+                num_s, den_s = value.split("/", 1)
+                num = float(num_s)
+                den = float(den_s)
+                if den == 0:
+                    continue
+                rate = num / den
+            else:
+                rate = float(value)
+        except Exception:
+            continue
+        if rate > 0:
+            return rate
+    return None
+
+
+def has_video_stream(ffmpeg_path: str, media_path: Path) -> bool | None:
+    """Best-effort probe for a video stream in a media container."""
+    if not media_path.exists():
+        return False
+    try:
+        ffprobe = ensure_ffprobe(ffmpeg_path)
+    except RuntimeError:
+        return None
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(media_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return False
+    stream_lines = [line.strip().lower() for line in (proc.stdout or "").splitlines() if line.strip()]
+    return any(line == "video" for line in stream_lines)
+
+
+def _video_output_is_usable(ffmpeg_path: str, media_path: Path) -> bool:
+    if not media_path.exists():
+        return False
+    try:
+        if media_path.stat().st_size <= 0:
+            return False
+    except OSError:
+        return False
+    stream_status = has_video_stream(ffmpeg_path, media_path)
+    return stream_status is not False
+
+
 def _normalize_video_duration(
     ffmpeg_path: str,
     *,
@@ -254,26 +336,48 @@ def assemble_image_sequence(
         [f"file {_ffconcat_quote(path)}" for path in frames],
     )
 
+    raw_out = out_mp4
+    if audio_path and audio_path.exists():
+        raw_out = out_mp4.with_name(f"{out_mp4.stem}.rawvideo{out_mp4.suffix}")
+
     cmd = [
         ffmpeg, "-y",
         "-r", str(int(fps)),
         "-f", "concat", "-safe", "0",
         "-i", str(list_file),
     ]
-    if audio_path and audio_path.exists():
-        cmd += ["-i", str(audio_path)]
     cmd += [
         "-vf", "format=yuv420p",
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
-        "-shortest",
-        str(out_mp4)
+        str(raw_out)
     ]
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"FFmpeg failed: {proc.stderr[:2000]}")
+        if audio_path and audio_path.exists():
+            mux_audio(ffmpeg_path=ffmpeg_path, video_mp4=raw_out, audio_path=audio_path, out_mp4=out_mp4)
+            try:
+                raw_duration = _probe_duration_seconds(ffmpeg_path, raw_out)
+                final_video_duration = _probe_duration_seconds(ffmpeg_path, out_mp4)
+                if (
+                    raw_duration is not None
+                    and final_video_duration is not None
+                    and abs(final_video_duration - raw_duration) > max(0.03, (1.0 / max(1, int(fps))) + 0.005)
+                ):
+                    _normalize_video_duration(
+                        ffmpeg_path,
+                        video_mp4=out_mp4,
+                        target_duration_s=raw_duration,
+                        actual_duration_s=final_video_duration,
+                    )
+                    remux_out = out_mp4.with_name(f"{out_mp4.stem}.remux{out_mp4.suffix}")
+                    mux_audio(ffmpeg_path=ffmpeg_path, video_mp4=out_mp4, audio_path=audio_path, out_mp4=remux_out)
+                    remux_out.replace(out_mp4)
+            finally:
+                raw_out.unlink(missing_ok=True)
     finally:
         list_file.unlink(missing_ok=True)
 
@@ -346,6 +450,12 @@ def interpolate_video_fps(
         raise ValueError("fps_out must be > 0")
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
 
+    input_fps = _probe_frame_rate(ffmpeg_path, in_mp4)
+    if input_fps is not None and math.isclose(input_fps, float(fps_out), rel_tol=0.0, abs_tol=0.01):
+        shutil.copyfile(in_mp4, out_mp4)
+        if _video_output_is_usable(ffmpeg_path, out_mp4):
+            return
+
     engine_l = (engine or "auto").lower().strip()
     rife_cmd = rife_cmd or os.getenv("EDMG_RIFE_CMD")
 
@@ -355,45 +465,68 @@ def interpolate_video_fps(
         cmd = _rife_command_args(rife_cmd, in_mp4=in_mp4, out_mp4=out_mp4, fps=fps_out)
         proc = subprocess.run(cmd, shell=False, capture_output=True, text=True)
         if proc.returncode != 0:
-            raise RuntimeError(f"RIFE command failed: {proc.stderr[:2000]}")
-        return
+            if engine_l == "rife":
+                raise RuntimeError(f"RIFE command failed: {proc.stderr[:2000]}")
+        elif _video_output_is_usable(ffmpeg_path, out_mp4):
+            return
+        elif engine_l == "rife":
+            raise RuntimeError("RIFE command produced an output without a video stream")
 
     ffmpeg = ensure_ffmpeg(ffmpeg_path)
 
-    # Prefer minterpolate if available.
-    use_mi = engine_l in ("auto", "minterpolate") and ffmpeg_has_filter(ffmpeg_path, "minterpolate")
-    if use_mi:
-        vf = f"minterpolate=fps={fps_out}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
-    else:
-        # Fallback: duplicate frames to reach target FPS.
-        vf = f"fps={fps_out}"
+    def _run_interpolation_filter(vf: str, *, normalize_duration: bool) -> None:
+        cmd = [
+            ffmpeg, "-y",
+            "-i", str(in_mp4),
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            str(out_mp4),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"FFmpeg interpolate failed: {proc.stderr[:2000]}")
+        if not _video_output_is_usable(ffmpeg_path, out_mp4):
+            return
+        if normalize_duration:
+            input_duration = _probe_duration_seconds(ffmpeg_path, in_mp4)
+            output_duration = _probe_duration_seconds(ffmpeg_path, out_mp4)
+            tolerance_s = max(0.03, (1.0 / max(1, fps_out)) + 0.005)
+            if (
+                input_duration is not None
+                and output_duration is not None
+                and abs(output_duration - input_duration) > tolerance_s
+            ):
+                _normalize_video_duration(
+                    ffmpeg_path,
+                    video_mp4=out_mp4,
+                    target_duration_s=input_duration,
+                    actual_duration_s=output_duration,
+                )
 
-    cmd = [
-        ffmpeg, "-y",
-        "-i", str(in_mp4),
-        "-vf", vf,
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        str(out_mp4),
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg interpolate failed: {proc.stderr[:2000]}")
+    # Prefer minterpolate when available, but short clips can produce a container
+    # with no streams. Fall back to plain FPS duplication and finally to the input
+    # clip rather than returning a false-success empty MP4.
+    use_mi = engine_l in ("auto", "minterpolate") and ffmpeg_has_filter(ffmpeg_path, "minterpolate")
+    filter_attempts: list[tuple[str, bool]] = []
     if use_mi:
-        input_duration = _probe_duration_seconds(ffmpeg_path, in_mp4)
-        output_duration = _probe_duration_seconds(ffmpeg_path, out_mp4)
-        tolerance_s = max(0.03, (1.0 / max(1, fps_out)) + 0.005)
-        if (
-            input_duration is not None
-            and output_duration is not None
-            and abs(output_duration - input_duration) > tolerance_s
-        ):
-            _normalize_video_duration(
-                ffmpeg_path,
-                video_mp4=out_mp4,
-                target_duration_s=input_duration,
-                actual_duration_s=output_duration,
-            )
+        filter_attempts.append((
+            f"minterpolate=fps={fps_out}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1",
+            True,
+        ))
+    filter_attempts.append((f"fps={fps_out}", False))
+
+    for vf, normalize_duration in filter_attempts:
+        _run_interpolation_filter(vf, normalize_duration=normalize_duration)
+        if _video_output_is_usable(ffmpeg_path, out_mp4):
+            return
+
+    if _video_output_is_usable(ffmpeg_path, in_mp4):
+        shutil.copyfile(in_mp4, out_mp4)
+        if _video_output_is_usable(ffmpeg_path, out_mp4):
+            return
+
+    raise RuntimeError(f"Interpolated output is missing a video stream: {out_mp4}")
 
 def mux_audio(
     ffmpeg_path: str,
@@ -404,16 +537,28 @@ def mux_audio(
     """Attach audio to a video (re-encodes audio to AAC for compatibility)."""
     ffmpeg = ensure_ffmpeg(ffmpeg_path)
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        ffmpeg, "-y",
-        "-i", str(video_mp4),
-        "-i", str(audio_path),
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-shortest",
-        str(out_mp4),
+    video_duration_s = _probe_duration_seconds(ffmpeg_path, video_mp4)
+    cmd = [ffmpeg, "-y", "-i", str(video_mp4), "-i", str(audio_path)]
+    if video_duration_s is not None:
+        cmd += [
+            "-filter_complex",
+            f"[1:a]apad,atrim=duration={video_duration_s:.6f}[aout]",
+            "-map",
+            "0:v:0",
+            "-map",
+            "[aout]",
+        ]
+    cmd += [
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
     ]
+    if video_duration_s is None:
+        cmd.append("-shortest")
+    cmd.append(str(out_mp4))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg mux failed: {proc.stderr[:2000]}")

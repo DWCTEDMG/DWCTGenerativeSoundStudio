@@ -50,7 +50,7 @@ Write-Host ""
 Write-Host "Manual clean-machine checklist:" -ForegroundColor Cyan
 Write-Host "  1. Use a VM or PC without Python, uv, Node, or prior EDMG Studio installs."
 Write-Host "  2. Copy the installer from studio/edmg-studio/dist/ plus release/evidence/."
-Write-Host "  3. Install to a non-C:\ Studio Home such as D:\EDMG-Studio."
+Write-Host "  3. Install to a Studio Home on any chosen drive with sufficient free space."
 Write-Host "  4. Run Full Setup, create a project, upload audio, analyze, plan, render, export."
 Write-Host "  5. Verify release/evidence/release-artifacts.sha256.json matches shipped files."
 Write-Host "  6. Optional signing pass: packaging/windows/sign_release.ps1 after setting EDMG_CODE_SIGN_CERT."

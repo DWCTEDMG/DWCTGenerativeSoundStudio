@@ -180,12 +180,22 @@ def _windows_ffmpeg_candidates() -> list[Path]:
     if not sys.platform.startswith("win"):
         return []
     local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
-    return [
-        local / "Microsoft" / "WinGet" / "Links" / "ffmpeg.exe",
-        Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
-        Path(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
-        Path(r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe"),
-    ]
+    candidates = [local / "Microsoft" / "WinGet" / "Links" / "ffmpeg.exe"]
+    candidates.extend(root / "ffmpeg" / "bin" / "ffmpeg.exe" for root in _windows_program_files_dirs())
+    return candidates
+
+
+def _windows_program_files_dirs() -> list[Path]:
+    if not sys.platform.startswith("win"):
+        return []
+    roots: list[Path] = []
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        raw = os.environ.get(env_name, "").strip()
+        if raw:
+            root = Path(raw)
+            if root not in roots:
+                roots.append(root)
+    return roots
 
 
 def _resolve_7z_path() -> str | None:
@@ -194,8 +204,7 @@ def _resolve_7z_path() -> str | None:
         return explicit
     if sys.platform.startswith("win"):
         for candidate in (
-            Path(r"C:\Program Files\7-Zip\7z.exe"),
-            Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
+            root / "7-Zip" / "7z.exe" for root in _windows_program_files_dirs()
         ):
             if candidate.is_file():
                 return str(candidate)
@@ -317,13 +326,8 @@ def _windows_node_candidate_dirs() -> list[Path]:
         return []
     home = Path.home()
     local = Path(os.environ.get("LOCALAPPDATA") or (home / "AppData" / "Local"))
-    candidates = [
-        Path(r"C:\Program Files\nodejs"),
-        Path(r"C:\Program Files (x86)\nodejs"),
-        local / "Programs" / "nodejs",
-        Path(r"C:\nvm4w\nodejs"),
-        local / "nvm",
-    ]
+    candidates = [root / "nodejs" for root in _windows_program_files_dirs()]
+    candidates.extend([local / "Programs" / "nodejs", local / "nvm"])
     nvm_root = Path(os.environ.get("NVM_HOME") or (local / "nvm"))
     if nvm_root.is_dir():
         try:
@@ -356,14 +360,12 @@ def _windows_tool_candidate_dirs() -> list[Path]:
     if not sys.platform.startswith("win"):
         return dirs
     local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
-    extra = [
-        Path(r"C:\Program Files\7-Zip"),
-        Path(r"C:\Program Files (x86)\7-Zip"),
+    extra = [root / "7-Zip" for root in _windows_program_files_dirs()]
+    extra.extend(root / "ffmpeg" / "bin" for root in _windows_program_files_dirs())
+    extra.extend([
         local / "Microsoft" / "WinGet" / "Links",
-        Path(r"C:\ffmpeg\bin"),
-        Path(r"C:\Program Files\ffmpeg\bin"),
         BUNDLED_FFMPEG.parent if BUNDLED_FFMPEG.exists() else None,
-    ]
+    ])
     ffmpeg = _resolve_ffmpeg_path()
     try:
         ff_path = Path(ffmpeg)
@@ -531,7 +533,7 @@ def _discover_missing_drive_remaps(path: Path) -> list[Path]:
 
 
 def _host_letter_root(remapped: Path) -> Path | None:
-    """``E:\\G\\Users\\...`` -> ``E:\\G`` (the former drive letter mount root)."""
+    """Return the former drive-letter mount root beneath a remapped host drive."""
     parts = remapped.parts
     if len(parts) < 2:
         return None

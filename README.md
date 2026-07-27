@@ -1,19 +1,27 @@
-# EDMG Studio Monolith Repo
+# Enhanced Deforum Music Generator (EDMG) — Studio Canonical Repo
 
-This repository is the single authoritative source tree for EDMG Studio.
+This repository now combines:
+- EDMG Studio, the primary desktop product
+- standalone EDMG engine flows
+- legacy A1111 / engine integration paths
+- installer and build tooling for compatibility and advanced workflows
 
-Studio is not a sidecar anymore. The desktop shell, React frontend, FastAPI
-backend, vendored EDMG engine packages, setup flow, release packaging, and
-support tooling all converge on one product path:
+EDMG Studio is the authoritative product surface. The other repo-root entrypoints
+remain available for compatibility, migration, and engine-specific workflows,
+but they are not equal alternatives to the Studio product.
+
+## Canonical product
+
+The primary desktop product lives under:
 
 - `studio/edmg-studio/`
 
-The older standalone-engine installers, duplicate Electron shell, and extra
-README entrypoints have been retired so the repo presents one product instead
-of multiple competing workflows.
+That tree contains the Electron shell, React/Vite frontend, FastAPI backend,
+vendored EDMG engine packages, packaging scripts, and release validation flow.
 
-The legacy standalone web UI prototypes have also been retired. Their planning
-and audio-reactive capabilities now live inside the Studio app workbenches:
+The legacy standalone web UI prototypes have been retired from the active product
+surface. Their planning and audio-reactive workflows now live inside Studio
+workbenches such as:
 
 - `studio/edmg-studio/src/workbenches/AiNlpWorkbench.tsx`
 - `studio/edmg-studio/src/workbenches/AudioReactiveWorkbench.tsx`
@@ -32,28 +40,29 @@ macOS/Linux:
 ./run_me.sh
 ```
 
-Those launchers open the Studio dev launcher in `studio/edmg-studio/tools/launcher_gui.py`, which
-keeps the UI, backend, and `Studio Home` storage aligned with the same settings
-used by the packaged app.
+Those launchers open the Studio dev launcher in
+`studio/edmg-studio/tools/launcher_gui.py`, which keeps the UI, backend, and
+Studio Home storage aligned with the same settings used by the packaged app.
 
-## Canonical product layout
+The launcher flow:
+- installs Studio backend/UI dev dependencies when needed
+- starts EDMG Studio
+- keeps runtime data and caches under your chosen Studio Home
+- lets Studio’s in-app Setup page handle Ollama, local OpenAI-compatible
+  providers, ComfyUI Portable, model packs, and EDMG Core repair/install
 
-- `studio/edmg-studio/`
-  Electron shell, preload, main-process runtime, React/Vite frontend, packaging
-  scripts, release validation, and the only Node/pnpm package root in the repo.
-- `studio/edmg-studio/python_backend/`
-  FastAPI backend plus the vendored `enhanced_deforum_music_generator` and
-  `deforum_music` engine packages that power planning, analysis, schedules, and
-  EDMG Core support.
-- `studio/edmg-studio/tools/launcher_gui.py`
-  Shared dev launcher and Studio Home bootstrap flow.
-- `studio/edmg-studio/packaging/windows/`
-  Windows-first release orchestration for the packaged Studio app.
+## Studio Setup
+
+Inside Studio:
+- set **Studio Home** to `D:\...` or another large volume if you want heavy
+  runtime state off the system drive
+- run **Full Setup** for Ollama + ComfyUI Portable
+- optionally install or repair **EDMG Core** from the same Setup page
 
 ## Studio Home
 
 Studio separates the app install directory from the heavy runtime storage root.
-The `Studio Home` contains:
+The `Studio Home` typically contains:
 
 - `data`
 - `models`
@@ -62,40 +71,127 @@ The `Studio Home` contains:
 - `external`
 - `electron`
 
-That keeps large downloads, render caches, and external tools off the app
-install path and allows migration to another drive or mount such as `D:\` on
-Windows or `/mnt/media/EDMG-Studio` on Linux.
+That keeps large downloads, model caches, render outputs, and external tools
+off the app install path and makes migration to another drive or mount easier.
 
-## JS Tooling
+## Secondary / compatibility paths
+
+These still exist, but they are not the primary product entry:
+
+- `start.bat`
+- `start.sh`
+- `install.ps1`
+- `install.sh`
+- `bootstrap_all.py`
+- `installer_gui.py`
+- `setup.py`
+- `desktop/electron/`
+- standalone engine / Gradio workflows
+- archived UI prototypes in `examples/archive-ui/`
+
+Treat them as compatibility or engine-specific workflows around the broader EDMG
+codebase, not as equal alternatives to Studio.
+
+### Engine install (secondary)
+
+Linux/Mac:
+
+```bash
+bash install.sh full cpu
+# or CUDA (example)
+bash install.sh full cu121
+```
+
+Windows:
+
+```powershell
+.\install.ps1 -Mode full -Cuda
+# or use the GUI installer to choose cu118/cu121/cu124
+
+# Example: keep the venv and caches on D:
+.\install.ps1 -Mode full -Backend cu121 -Venv D:\EDMG\venv -CacheRoot D:\EDMG\cache
+```
+
+### Run legacy standalone engine UI
+
+Linux/Mac:
+
+```bash
+./start.sh
+```
+
+Windows:
+
+```powershell
+.\start.bat
+```
+
+## UI default mode: Deforum JSON Expert
+
+The Gradio UI defaults to **Deforum JSON Expert** mode:
+- a full Deforum settings template is shown as editable JSON
+- EDMG generates audio-reactive schedules and prompts
+- your edited template overrides generated output keys when merged
+
+## Legacy desktop shell
+
+An older Electron shell still exists here:
+
+```text
+desktop/electron
+```
+
+It is superseded by `studio/edmg-studio`, which is the canonical desktop product.
+
+## A1111 / legacy integration
+
+This repo still contains legacy engine and integration paths, but it does not
+ship a bundled `a1111_extension/` folder anymore.
+
+If you need Automatic1111 integration, treat it as an external or legacy
+workflow alongside the standalone EDMG engine. The authoritative desktop product
+path remains:
+
+- `studio/edmg-studio/`
+
+## JS tooling
 
 - Run all JS/Electron commands from `studio/edmg-studio/`.
-- Use Node.js `20.19+` or `22.12+`; Node 22 LTS is pinned in `studio/edmg-studio/.node-version`.
-- The canonical package manager is `pnpm@10.33.0`, pinned in `studio/edmg-studio/package.json`.
-- The shipped desktop app version also comes from `studio/edmg-studio/package.json#version`.
+- Use Node.js `20.19+` or `22.12+`; Node 22 LTS is pinned in
+  `studio/edmg-studio/.node-version`.
+- The canonical package manager is `pnpm@10.33.0`, pinned in
+  `studio/edmg-studio/package.json`.
+- The shipped desktop app version also comes from
+  `studio/edmg-studio/package.json#version`.
 
 ## Python tooling
 
 - Python is pinned to 3.12 in `.python-version`.
 - `uv` 0.11.28 manages Python acquisition, the backend environment, locking,
-  tests, linting, and PyInstaller builds.
+  tests, linting, and PyInstaller builds for the Studio/backend path.
 - `studio/edmg-studio/python_backend/uv.lock` is committed release input.
-- Select exactly one accelerator extra: `cpu`, `directml`, or `cuda`; compose
-  it with capability extras such as `audio`, `asr`, and `internal-video`.
+- Select exactly one accelerator extra: `cpu`, `directml`, or `cuda`; compose it
+  with capability extras such as `audio`, `asr`, and `internal-video`.
 - Packaged Electron applications include the PyInstaller backend and do not
   require end users to install Python or uv.
 
 See [docs/PYTHON_TOOLCHAIN.md](./docs/PYTHON_TOOLCHAIN.md) for commands and the
 lock-update policy.
 
-## Release, strategy, and operator docs
+## Release / validation
 
+For Studio release operations, use:
+
+- [README_STUDIO.md](./README_STUDIO.md)
 - [studio/edmg-studio/README.md](./studio/edmg-studio/README.md)
-- [docs/TESTING_QUICKSTART.md](./docs/TESTING_QUICKSTART.md)
-- [docs/PYTHON_TOOLCHAIN.md](./docs/PYTHON_TOOLCHAIN.md)
-- [docs/UV_MIGRATION_INVENTORY.md](./docs/UV_MIGRATION_INVENTORY.md)
 - [RELEASE.md](./RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](./docs/STUDIO_RELEASE_RUNBOOK.md)
+
+Additional strategy and operator docs:
+
 - [docs/STUDIO_REPO_MAP.md](./docs/STUDIO_REPO_MAP.md)
+- [docs/TESTING_QUICKSTART.md](./docs/TESTING_QUICKSTART.md)
+- [docs/UV_MIGRATION_INVENTORY.md](./docs/UV_MIGRATION_INVENTORY.md)
 - [docs/MODEL_MANAGER.md](./docs/MODEL_MANAGER.md)
 - [studio/edmg-studio/docs/STUDIO_MODULARITY.md](./studio/edmg-studio/docs/STUDIO_MODULARITY.md)
 - [docs/STUDIO_FORGE.md](./docs/STUDIO_FORGE.md)
@@ -105,45 +201,30 @@ lock-update policy.
 - [docs/GCP_GPU_VM_DEPLOY.md](./docs/GCP_GPU_VM_DEPLOY.md)
 - [docs/AI_PROVIDERS.md](./docs/AI_PROVIDERS.md)
 - [docs/HF_VIDEO_MODELS.md](./docs/HF_VIDEO_MODELS.md)
+- [docs/AI_INTEGRATION.md](./docs/AI_INTEGRATION.md)
 
 ## Test strategy
 
 - Repo-level tests live under `tests/`; backend tests live under
   `studio/edmg-studio/python_backend/`.
-- Run both scopes from the repo root with
-  `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`.
+- Run both scopes from the repo root with:
+
+```bash
+uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py
+```
+
 - The runner checks the committed lock and performs a frozen CPU-profile sync
   before executing either scope.
 
-## Recommended Local Stack
+## Notes
 
-- Planner default: NVIDIA Nemotron Ultra via `nemotron_cloud` (NIM)
-- Local Ollama planner: `nemotron-3-ultra:cloud` or low-resource `qwen3:4b`
-- OpenAI-compatible default model: `nvidia/llama-3.1-nemotron-ultra-253b-v1`
-- Broad still-image default: SDXL Base 1.0
-- Fast still-image option: SD3.5 Large Turbo
-- Reference still guidance: SD3.5 ControlNet Blur, Canny, and Depth
-- Primary HF video backend: Wan2.2 TI2V 5B
-- Short image-to-video fallback: SVD XT Img2Vid
-
-## Hardware Tiers
-
-- Low-spec: `qwen3:4b` (Ollama) + SDXL Base 1.0
-- Mid-range: Nemotron cloud or `qwen3:8b` + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny
-- High-end: Nemotron cloud + SDXL Base 1.0 + SD3.5 Large Turbo + SD3.5 Blur/Canny/Depth + Wan2.2 TI2V 5B
+- This project installs Python dependencies but does not install GPU drivers.
+- First run of the legacy A1111 path can take time because Stable Diffusion WebUI
+  creates and populates its own environment.
 
 ## Compatibility shims
 
-- Repo-root `sitecustomize.py` and the repo-root `librosa/` package are source-tree compatibility shims for development and tests.
-- Packaged/backend install flows rely on the declared Python dependencies and do not package those repo-root shims.
-
-## Unreal bridge status
-
-- Studio-side bridge: usable. The repo can preview, export, build an Unreal import plan, and import returned renders back into canonical project outputs.
-- Unreal-side runtime integration: partial. There is no verified in-editor smoke test on this machine, no packaged Unreal plugin/module, no live OSC/WebSocket/Remote Control execution path, no one-click Unreal render job launcher, and no deeper Sequencer build beyond the first importer pass.
-
-## Compatibility note
-
-The repo root now keeps only thin launch aliases and monolith-level docs. The
-runtime code, packaging logic, backend engine packages, and operator tooling
-live under `studio/edmg-studio/`.
+- Repo-root `sitecustomize.py` and the repo-root `librosa/` package are
+  source-tree compatibility shims for development and tests.
+- Packaged/backend install flows rely on the declared Python dependencies and do
+  not package those repo-root shims.

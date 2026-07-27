@@ -46,10 +46,12 @@ function Resolve-Iscc($RequestedPath) {
     throw "Inno Setup compiler not found: $RequestedPath"
   }
 
+  $programRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
   $preferredCandidates = @(
-    "C:\Program Files\Inno Setup 7\ISCC.exe",
-    "C:\Program Files (x86)\Inno Setup 7\ISCC.exe",
-    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 7\ISCC.exe")
+    $programRoots | ForEach-Object { Join-Path $_ "Inno Setup 7\ISCC.exe" }
+    if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 7\ISCC.exe" }
   )
   foreach ($candidate in $preferredCandidates) {
     if (Test-Path $candidate) {
@@ -63,9 +65,8 @@ function Resolve-Iscc($RequestedPath) {
   }
 
   $legacyCandidates = @(
-    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-    "C:\Program Files\Inno Setup 6\ISCC.exe",
-    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+    $programRoots | ForEach-Object { Join-Path $_ "Inno Setup 6\ISCC.exe" }
+    if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe" }
   )
   foreach ($candidate in $legacyCandidates) {
     if (Test-Path $candidate) {
@@ -91,10 +92,12 @@ function Resolve-SevenZip($RequestedPath, $Root) {
     }
   }
 
+  $programRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
   $candidates = @(
-    "C:\Program Files\7-Zip\7z.exe",
-    "C:\Program Files (x86)\7-Zip\7z.exe",
-    (Join-Path $env:LOCALAPPDATA "Programs\7-Zip\7z.exe")
+    $programRoots | ForEach-Object { Join-Path $_ "7-Zip\7z.exe" }
+    if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "Programs\7-Zip\7z.exe" }
   )
   foreach ($candidate in $candidates) {
     if (Test-Path $candidate) {

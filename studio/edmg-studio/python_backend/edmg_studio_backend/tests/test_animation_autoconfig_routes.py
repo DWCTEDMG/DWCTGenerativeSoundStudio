@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -145,6 +146,36 @@ def test_auto_dry_run_image_animation_with_source(tmp_path, monkeypatch):
         assert data["config"]["internal_request"]["source_asset"] == "assets/refs/painting.png"
 
 
+def test_auto_run_layered_internal_skips_comfy_probe(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    ref = _upload_ref_image(store, proj)
+    probe_calls: list[str] = []
+
+    def _unexpected_probe() -> bool:
+        probe_calls.append("called")
+        raise AssertionError("ComfyUI availability probe should not run for internal layered auto renders")
+
+    monkeypatch.setattr(backend_app, "_comfyui_available_quick", _unexpected_probe)
+
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/auto",
+            json={"preset": "parallax_animation", "engine": "internal", "run": True, "source_asset": ref},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    assert probe_calls == []
+    assert data["ok"] is True
+    assert data["launched"] is True
+    assert data["engine"] == "internal"
+    assert data["animation_mode"] == "parallax"
+    assert data["comfyui_available"] is False
+    assert data["comfyui_probe_performed"] is False
+    assert data["job"]["type"] == "layered_animation"
+
+
 def test_auto_dry_run_comfyui_engine(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     _patch(monkeypatch, store, jobs, comfy_available=True)
@@ -158,6 +189,32 @@ def test_auto_dry_run_comfyui_engine(tmp_path, monkeypatch):
         assert data["engine"] == "comfyui"
         assert data["config"]["comfyui_request"]["engine"] == "animatediff"
         assert data["comfyui_available"] is True
+        assert data["comfyui_probe_performed"] is True
+
+
+def test_auto_dry_run_comfyui_preset_probes_availability(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs, comfy_available=False)
+    probe_calls: list[str] = []
+
+    def _probe() -> bool:
+        probe_calls.append("called")
+        return False
+
+    monkeypatch.setattr(backend_app, "_comfyui_available_quick", _probe)
+
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/auto",
+            json={"preset": "comfyui_animatediff", "engine": "auto", "run": False},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    assert probe_calls == ["called"]
+    assert data["engine"] == "internal"
+    assert data["comfyui_available"] is False
+    assert data["comfyui_probe_performed"] is True
 
 
 def test_auto_run_internal_launches_job(tmp_path, monkeypatch):
@@ -268,6 +325,68 @@ def test_auto_masked_preset_defers_to_animate_layers(tmp_path, monkeypatch):
         # masked needs explicit masks -> not auto-launched
         assert data["launched"] is False
         assert any("mask" in n.lower() for n in data.get("notes", []))
+
+
+def test_run_layered_animation_writes_render_metadata_and_artifact_manifest(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    ref = _upload_ref_image(store, proj, size=(320, 256))
+
+    job = jobs.create(
+        proj.id,
+        "layered_animation",
+        {
+            "source_asset": ref,
+            "mode": "parallax",
+            "motion_profile": "full_3d",
+            "motion_schedule": {
+                "translation_x": "0:(0), 24:(24)",
+                "translation_z": "0:(0), 24:(80)",
+            },
+            "bands": 3,
+            "masks": [],
+            "subject_motion": 1.0,
+            "background_motion": 0.12,
+            "fps": 12,
+            "duration_s": 1.0,
+            "width": 320,
+            "height": 256,
+            "include_audio": False,
+            "diffusion_refine": False,
+            "model_id": "auto",
+            "device_preference": "auto",
+            "refine_prompt": None,
+            "refine_negative": "blurry, low quality, watermark, text, logo",
+            "refine_denoise": 0.3,
+            "refine_steps": 20,
+            "refine_cfg": 7.0,
+            "seed": 123,
+        },
+    )
+
+    res = backend_app._run_layered_animation(proj.id, job.id, job.payload)
+
+    project_dir = store.project_dir(proj.id)
+    video_path = project_dir / res["video"]
+    render_meta_path = video_path.with_suffix(".render.json")
+    artifact_path = video_path.with_suffix(video_path.suffix + ".artifact.json")
+
+    assert video_path.exists()
+    assert render_meta_path.exists()
+    assert artifact_path.exists()
+
+    render_meta = json.loads(render_meta_path.read_text(encoding="utf-8"))
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+
+    assert render_meta["render_mode"] == "layered_animation"
+    assert render_meta["engine"] == "internal_layered_animation"
+    assert render_meta["mode"] == "parallax"
+    assert render_meta["outputs"]["final_mp4"] == str(video_path)
+    assert render_meta["frames"]["present"] == 12
+    assert artifact["engine"] == "internal_layered_animation"
+    assert artifact["kind"] == "video"
+    assert artifact["path"] == res["video"].replace("\\", "/")
+    assert artifact["extra"]["render_meta"] == render_meta_path.name
 
 
 def test_auto_requires_plan(tmp_path, monkeypatch):

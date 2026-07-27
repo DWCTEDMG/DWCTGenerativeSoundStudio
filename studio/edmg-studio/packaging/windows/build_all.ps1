@@ -127,7 +127,7 @@ function Doctor($RepoRoot, $StudioDir, $PyBackendDir, $BackendPkgDir, $BundledFf
   Write-Host ("RepoRoot: " + $repoPath)
   Write-Host ("Path length: " + $repoPath.Length)
   if ($repoPath.Length -gt 160) {
-    Write-Host "[warn] Repo path is long. Consider moving to C:\EDMG\ to avoid Windows path issues." -ForegroundColor Yellow
+    Write-Host "[warn] Repo path is long. Consider a shorter folder on any drive with sufficient space." -ForegroundColor Yellow
   }
 
   try {
