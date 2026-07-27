@@ -1066,11 +1066,12 @@ def check_ffmpeg(ffmpeg_path: str) -> dict[str, Any]:
             "version": (r.stdout.splitlines()[0] if r.stdout else None),
             "hint": None if ok else hint,
         }
-    except Exception as e:
+    except Exception:
+        logger.warning("FFmpeg status probe failed for %s", ffmpeg_path, exc_info=True)
         return {
             "ok": False,
             "path": ffmpeg_path,
-            "error": str(e),
+            "error": "FFmpeg status probe failed",
             "hint": hint,
         }
 

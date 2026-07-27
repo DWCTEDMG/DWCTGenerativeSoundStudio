@@ -52,6 +52,19 @@ def test_ollama_probe_does_not_expose_request_exception(monkeypatch):
     assert "secret request diagnostics" not in result["error"]
 
 
+def test_ffmpeg_probe_does_not_expose_process_exception(monkeypatch):
+    def fail_probe(*_args, **_kwargs):
+        raise RuntimeError("secret process diagnostics")
+
+    monkeypatch.setattr(setup_wizard.subprocess, "run", fail_probe)
+
+    result = setup_wizard.check_ffmpeg("ffmpeg")
+
+    assert result["ok"] is False
+    assert result["error"] == "FFmpeg status probe failed"
+    assert "secret process diagnostics" not in result["error"]
+
+
 def test_non_ollama_planner_skips_ollama_network_probe(monkeypatch):
     check_ollama_calls = 0
 
