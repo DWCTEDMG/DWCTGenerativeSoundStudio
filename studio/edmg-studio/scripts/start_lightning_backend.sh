@@ -26,18 +26,23 @@ case "${BACKEND_ACCELERATOR_PROFILE}" in
 esac
 
 export EDMG_STUDIO_HOME="${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}"
+export EDMG_STUDIO_DATA_DIR="${EDMG_STUDIO_DATA_DIR:-${EDMG_STUDIO_HOME}/data}"
+export EDMG_STUDIO_MODELS_DIR="${EDMG_STUDIO_MODELS_DIR:-${EDMG_STUDIO_HOME}/models}"
+export EDMG_STUDIO_CACHE_DIR="${EDMG_STUDIO_CACHE_DIR:-${EDMG_STUDIO_HOME}/cache}"
+export EDMG_STUDIO_LOGS_DIR="${EDMG_STUDIO_LOGS_DIR:-${EDMG_STUDIO_HOME}/logs}"
+export EDMG_STUDIO_EXTERNAL_DIR="${EDMG_STUDIO_EXTERNAL_DIR:-${EDMG_STUDIO_HOME}/external}"
 export EDMG_STUDIO_BACKEND_HOST="${EDMG_STUDIO_BACKEND_HOST:-0.0.0.0}"
 export EDMG_STUDIO_BACKEND_PORT="${EDMG_STUDIO_BACKEND_PORT:-7863}"
 export EDMG_FFMPEG_PATH="${EDMG_FFMPEG_PATH:-ffmpeg}"
 export EDMG_BACKEND_ACCELERATOR_PROFILE="${BACKEND_ACCELERATOR_PROFILE}"
-export UV_CACHE_DIR="${UV_CACHE_DIR:-${EDMG_STUDIO_HOME}/cache/uv}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${EDMG_STUDIO_CACHE_DIR}/uv}"
 
 mkdir -p \
-  "${EDMG_STUDIO_HOME}/data" \
-  "${EDMG_STUDIO_HOME}/models" \
-  "${EDMG_STUDIO_HOME}/cache" \
-  "${EDMG_STUDIO_HOME}/logs" \
-  "${EDMG_STUDIO_HOME}/external" \
+  "${EDMG_STUDIO_DATA_DIR}" \
+  "${EDMG_STUDIO_MODELS_DIR}" \
+  "${EDMG_STUDIO_CACHE_DIR}" \
+  "${EDMG_STUDIO_LOGS_DIR}" \
+  "${EDMG_STUDIO_EXTERNAL_DIR}" \
   "${EDMG_STUDIO_HOME}/config"
 
 if [[ "${EDMG_STUDIO_BACKEND_HOST}" != "127.0.0.1" && "${EDMG_STUDIO_BACKEND_HOST}" != "localhost" && "${EDMG_STUDIO_BACKEND_HOST}" != "::1" ]]; then
@@ -93,6 +98,11 @@ fi
 echo "[edmg] studio root: ${STUDIO_ROOT}"
 echo "[edmg] backend dir: ${BACKEND_DIR}"
 echo "[edmg] studio home: ${EDMG_STUDIO_HOME}"
+echo "[edmg] data dir: ${EDMG_STUDIO_DATA_DIR}"
+echo "[edmg] models dir: ${EDMG_STUDIO_MODELS_DIR}"
+echo "[edmg] cache dir: ${EDMG_STUDIO_CACHE_DIR}"
+echo "[edmg] logs dir: ${EDMG_STUDIO_LOGS_DIR}"
+echo "[edmg] external dir: ${EDMG_STUDIO_EXTERNAL_DIR}"
 echo "[edmg] backend url: http://${EDMG_STUDIO_BACKEND_HOST}:${EDMG_STUDIO_BACKEND_PORT}"
 echo "[edmg] python env mode: ${BACKEND_ENV_MODE}"
 echo "[edmg] uv: $("${UV_BIN}" --version)"

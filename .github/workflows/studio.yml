@@ -199,6 +199,13 @@ jobs:
         working-directory: studio/edmg-studio
         run: pnpm run validate:electron-bridge
 
+      - name: Linux release runtime tests
+        if: runner.os == 'Linux'
+        working-directory: studio/edmg-studio
+        run: |
+          pnpm run test:release-toolchain
+          pnpm run test:uv-runtime
+
       - name: Python test scopes
         run: >-
           uv run --project studio/edmg-studio/python_backend --frozen
@@ -219,3 +226,18 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: studio/edmg-studio
         run: pnpm run validate:desktop-integration:best-effort
+
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        working-directory: studio/edmg-studio
+        run: pnpm run dist:linux
+
+      - name: Verify Linux AppImage
+        if: runner.os == 'Linux'
+        working-directory: studio/edmg-studio
+        shell: bash
+        run: |
+          app_image="$(find dist -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "${app_image}"
+          test -x "${app_image}"
+          file "${app_image}"
