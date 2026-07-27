@@ -17,6 +17,7 @@ import {
   binaryMatchesManifest,
   bundleMatchesManifest,
   collectBundleEntries,
+  isHfRuntimeEvidencePath,
   materializeExternalBundleSymlinks,
   releaseUvEnvironment,
   releaseProvenanceMatches,
@@ -250,6 +251,37 @@ test("schema-4 onedir manifest validation and reuse reject provenance drift", ()
   assert.match(
     validateReleaseManifest({ ...manifest, hfRuntimeBundleEvidence: undefined }).join("; "),
     /hfRuntimeBundleEvidence/,
+  );
+});
+
+test("Hugging Face runtime evidence matching is linear and path constrained", () => {
+  assert.equal(
+    isHfRuntimeEvidencePath(
+      "hfTransferModule",
+      "_internal/hf_transfer/hf_transfer.abi3.so",
+    ),
+    true,
+  );
+  assert.equal(
+    isHfRuntimeEvidencePath(
+      "hfXetModule",
+      "_internal/hf_xet/hf_xet.pyd",
+    ),
+    true,
+  );
+  assert.equal(
+    isHfRuntimeEvidencePath(
+      "hfTransferModule",
+      `_internal/hf_transfer/hf_transfer.${".".repeat(100_000)}txt`,
+    ),
+    false,
+  );
+  assert.equal(
+    isHfRuntimeEvidencePath(
+      "hfXetModule",
+      "_internal/hf_xet/hf_xet.abi3.so/escaped",
+    ),
+    false,
   );
 });
 

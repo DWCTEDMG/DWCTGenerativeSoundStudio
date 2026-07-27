@@ -1334,9 +1334,9 @@ def describe_status(
             active = cache is not None
             if cache is not None:
                 transport_source = cache._transport.source
-        except Exception as exc:
+        except Exception:
             logger.exception("Hugging Face bucket status check failed")
-            active_error = str(exc)
+            active_error = "Hugging Face bucket status check failed"
 
     return {
         "ok": True,

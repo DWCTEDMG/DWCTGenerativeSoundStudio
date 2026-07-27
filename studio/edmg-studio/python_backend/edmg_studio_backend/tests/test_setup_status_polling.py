@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from edmg_studio_backend import app as backend_app
+from edmg_studio_backend.services import setup_wizard
 
 
 def test_setup_status_caches_expensive_diagnostics_and_refresh_bypasses_cache(monkeypatch):
@@ -36,6 +37,19 @@ def test_setup_task_list_never_runs_full_status_probes(monkeypatch):
 
     assert result["ok"] is True
     assert isinstance(result["tasks"], list)
+
+
+def test_ollama_probe_does_not_expose_request_exception(monkeypatch):
+    def fail_probe(*_args, **_kwargs):
+        raise RuntimeError("secret request diagnostics")
+
+    monkeypatch.setattr(setup_wizard.requests, "get", fail_probe)
+
+    result = setup_wizard.check_ollama("http://127.0.0.1:11434", "demo")
+
+    assert result["ok"] is False
+    assert result["error"] == "Ollama status probe failed"
+    assert "secret request diagnostics" not in result["error"]
 
 
 def test_non_ollama_planner_skips_ollama_network_probe(monkeypatch):

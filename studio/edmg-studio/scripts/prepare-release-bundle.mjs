@@ -17,6 +17,7 @@ import {
   assertValidReleaseManifest,
   bundleMatchesManifest,
   collectBundleEntries,
+  isHfRuntimeEvidencePath,
   materializeExternalBundleSymlinks,
   releaseProvenanceMatches,
   releaseUvEnvironment,
@@ -429,9 +430,11 @@ async function stageBackendBundle(sourceDirectory, expected) {
   if (!launcherDefaults) {
     throw new Error("Staged onedir backend inventory is missing launcher_env.defaults.json");
   }
-  const requireRuntimeEntry = (label, pattern) => {
+  const requireRuntimeEntry = (label, evidenceKey) => {
     const entry = bundleEntries.find(
-      (candidate) => candidate.type === "file" && pattern.test(candidate.path),
+      (candidate) =>
+        candidate.type === "file" &&
+        isHfRuntimeEvidencePath(evidenceKey, candidate.path),
     );
     if (!entry) throw new Error(`Staged onedir backend is missing ${label}`);
     return entry.path;
@@ -439,23 +442,23 @@ async function stageBackendBundle(sourceDirectory, expected) {
   const hfRuntimeBundleEvidence = {
     huggingfaceHubMetadata: requireRuntimeEntry(
       "huggingface-hub 0.36.2 metadata",
-      /^_internal\/huggingface_hub-0\.36\.2\.dist-info\/METADATA$/,
+      "huggingfaceHubMetadata",
     ),
     hfTransferMetadata: requireRuntimeEntry(
       "hf-transfer 0.1.9 metadata",
-      /^_internal\/hf_transfer-0\.1\.9\.dist-info\/METADATA$/,
+      "hfTransferMetadata",
     ),
     hfTransferModule: requireRuntimeEntry(
       "hf-transfer native module",
-      /^_internal\/hf_transfer\/hf_transfer(?:\.[^/]+)*\.(?:pyd|so)$/,
+      "hfTransferModule",
     ),
     hfXetMetadata: requireRuntimeEntry(
       "hf-xet 1.5.1 metadata",
-      /^_internal\/hf_xet-1\.5\.1\.dist-info\/METADATA$/,
+      "hfXetMetadata",
     ),
     hfXetModule: requireRuntimeEntry(
       "hf-xet native module",
-      /^_internal\/hf_xet\/hf_xet(?:\.[^/]+)*\.(?:pyd|so)$/,
+      "hfXetModule",
     ),
   };
   const manifest = {

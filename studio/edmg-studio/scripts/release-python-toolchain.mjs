@@ -212,6 +212,30 @@ function safeSymlinkTarget(entryPath, value) {
   return target;
 }
 
+export function isHfRuntimeEvidencePath(key, value) {
+  const entryPath = normalizedBundlePath(value);
+  if (!entryPath) return false;
+  const exactPaths = {
+    huggingfaceHubMetadata: "_internal/huggingface_hub-0.36.2.dist-info/METADATA",
+    hfTransferMetadata: "_internal/hf_transfer-0.1.9.dist-info/METADATA",
+    hfXetMetadata: "_internal/hf_xet-1.5.1.dist-info/METADATA",
+  };
+  if (Object.hasOwn(exactPaths, key)) return entryPath === exactPaths[key];
+
+  const packageName = key === "hfTransferModule"
+    ? "hf_transfer"
+    : key === "hfXetModule"
+      ? "hf_xet"
+      : "";
+  if (!packageName) return false;
+  const prefix = `_internal/${packageName}/${packageName}`;
+  if (!entryPath.startsWith(prefix)) return false;
+  const suffix = entryPath.slice(prefix.length);
+  return suffix.startsWith(".") &&
+    !suffix.includes("/") &&
+    (suffix.endsWith(".pyd") || suffix.endsWith(".so"));
+}
+
 function sameStringArray(left, right) {
   return Array.isArray(left) && Array.isArray(right) &&
     left.length === right.length && left.every((value, index) => value === right[index]);
@@ -386,19 +410,18 @@ export function validateReleaseManifest(manifest, { expectedProfile = "", expect
       "hfRuntimePackages must contain huggingface-hub==0.36.2, hf-transfer==0.1.9, and hf-xet==1.5.1",
     );
   }
-  const hfEvidenceRules = {
-    huggingfaceHubMetadata: /^_internal\/huggingface_hub-0\.36\.2\.dist-info\/METADATA$/,
-    hfTransferMetadata: /^_internal\/hf_transfer-0\.1\.9\.dist-info\/METADATA$/,
-    hfTransferModule: /^_internal\/hf_transfer\/hf_transfer(?:\.[^/]+)*\.(?:pyd|so)$/,
-    hfXetMetadata: /^_internal\/hf_xet-1\.5\.1\.dist-info\/METADATA$/,
-    hfXetModule: /^_internal\/hf_xet\/hf_xet(?:\.[^/]+)*\.(?:pyd|so)$/,
-  };
-  for (const [key, pattern] of Object.entries(hfEvidenceRules)) {
+  for (const key of [
+    "huggingfaceHubMetadata",
+    "hfTransferMetadata",
+    "hfTransferModule",
+    "hfXetMetadata",
+    "hfXetModule",
+  ]) {
     const entryPath = normalizedBundlePath(manifest.hfRuntimeBundleEvidence?.[key]);
     const entry = bundleEntries.find(
       (candidate) => candidate?.path === entryPath && candidate?.type === "file",
     );
-    if (!entryPath || !pattern.test(entryPath) || !entry) {
+    if (!isHfRuntimeEvidencePath(key, entryPath) || !entry) {
       errors.push(`hfRuntimeBundleEvidence.${key} is missing from bundleEntries`);
     }
   }

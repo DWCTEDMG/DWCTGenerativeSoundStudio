@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import re
@@ -33,6 +34,9 @@ try:
     import py7zr  # type: ignore
 except Exception:  # pragma: no cover
     py7zr = None
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -313,14 +317,15 @@ def check_ollama(ollama_url: str, model: str) -> dict[str, Any]:
             "model_present": present,
             "models": models[:50],
         }
-    except Exception as e:
+    except Exception:
+        logger.warning("Ollama status probe failed", exc_info=True)
         return {
             "ok": False,
             "url": base,
             "model": model,
             "model_present": False,
             "hint": "Install Ollama and ensure it is running (it exposes http://127.0.0.1:11434).",
-            "error": str(e),
+            "error": "Ollama status probe failed",
         }
 
 

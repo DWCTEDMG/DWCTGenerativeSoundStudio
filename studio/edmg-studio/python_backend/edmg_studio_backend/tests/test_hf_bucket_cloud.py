@@ -80,6 +80,30 @@ def test_describe_status_reports_env_configuration(tmp_path, monkeypatch):
     assert status["token_source"] == "env:HF_TOKEN"
 
 
+def test_describe_status_does_not_expose_transport_exception(tmp_path, monkeypatch):
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    _disable_cached_hf_auth(monkeypatch)
+    monkeypatch.setenv("EDMG_HF_BUCKET_MODEL_CACHE", "1")
+    monkeypatch.setenv("EDMG_HF_BUCKET_ID", "team/edmg-models")
+
+    class _BrokenCache:
+        @classmethod
+        def from_runtime(cls, **_kwargs):
+            raise RuntimeError("secret transport diagnostics")
+
+    monkeypatch.setattr(hf_bucket_integration, "HFBucketModelCache", _BrokenCache)
+
+    status = hf_bucket_integration.describe_status(
+        models_dir=models_dir,
+        secrets_store=_FakeSecrets(),
+    )
+
+    assert status["active"] is False
+    assert status["active_error"] == "Hugging Face bucket status check failed"
+    assert "secret transport diagnostics" not in status["active_error"]
+
+
 def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
     _disable_cached_hf_auth(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)
