@@ -246,6 +246,8 @@ def test_ci_and_release_paths_are_frozen() -> None:
             "uv run --frozen",
             "pnpm run dist:linux",
             "Verify Linux AppImage",
+            "autobuild-2026-07-26-13-28/ffmpeg-N-125773-g7002e01c19-linux64-gpl.tar.xz",
+            "5abcecd8f7899cf5491cb8fac00767886cf433d9e96fb3c0065132a3daa8fcac",
         ),
         STUDIO_ROOT / "scripts" / "release-python-toolchain.mjs": (
             'return ["lock", "--check"]',
