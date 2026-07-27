@@ -20,6 +20,20 @@ def _load_launcher_gui():
     return module
 
 
+def test_windows_tool_candidates_follow_configured_program_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launcher_gui = _load_launcher_gui()
+    primary = tmp_path / "program-files"
+    legacy = tmp_path / "legacy-program-files"
+    monkeypatch.setenv("ProgramFiles", str(primary))
+    monkeypatch.setenv("ProgramFiles(x86)", str(legacy))
+
+    assert launcher_gui._windows_program_files_dirs() == [primary, legacy]
+    assert primary / "ffmpeg" / "bin" / "ffmpeg.exe" in launcher_gui._windows_ffmpeg_candidates()
+
+
 def test_saved_path_if_usable_rejects_missing_windows_drive(monkeypatch):
     launcher_gui = _load_launcher_gui()
 
@@ -214,3 +228,6 @@ def test_sync_locked_backend_uses_one_fixed_profile_and_capability_set(monkeypat
     assert calls["sync"][0] == "cuda"
     assert "core" in calls["sync"][1]
     assert calls["run"][0] == "cuda"
+    verification_command = " ".join(calls["run"][1])
+    assert "hf_transfer" in verification_command
+    assert "hf_xet" in verification_command

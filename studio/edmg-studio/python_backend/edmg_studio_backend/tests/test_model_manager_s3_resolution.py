@@ -8,6 +8,9 @@ from urllib.parse import urlparse
 from edmg_studio_backend.integrations.aws import S3ModelCache, S3ModelCacheSettings
 from edmg_studio_backend.services import model_manager as model_manager_module
 from edmg_studio_backend.services.model_manager import ModelManager, ModelTask
+from edmg_studio_backend.tests.safetensors_test_utils import (
+    minimal_safetensors_bytes,
+)
 
 
 class FakeS3ModelCache:
@@ -173,7 +176,7 @@ def _diffusers_snapshot_files() -> dict[str, bytes]:
     }
     return {
         "model_index.json": json.dumps(model_index).encode("utf-8"),
-        "unet/diffusion_pytorch_model.safetensors": b"weights",
+        "unet/diffusion_pytorch_model.safetensors": minimal_safetensors_bytes(),
     }
 
 
@@ -251,7 +254,9 @@ def test_internal_snapshot_materializes_from_cloud_record(tmp_path, monkeypatch)
 
     assert resolved == tmp_path / "models" / "internal" / "diffusers" / "internal_cloud"
     assert (resolved / "model_index.json").exists()
-    assert (resolved / "unet" / "diffusion_pytorch_model.safetensors").read_bytes() == b"weights"
+    assert (
+        resolved / "unet" / "diffusion_pytorch_model.safetensors"
+    ).read_bytes() == minimal_safetensors_bytes()
     assert manager.model_cache.downloads == ["hosted/internal.zip"]
     assert manager.installed_path("internal_cloud") == resolved
 

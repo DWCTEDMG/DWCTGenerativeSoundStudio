@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { assertPinnedUvVersion } from "./release-python-toolchain.mjs";
-import { writeReleaseEvidence } from "./release-evidence-lib.mjs";
+import { RELEASE_ARTIFACT_SETS, writeReleaseEvidence } from "./release-evidence-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -12,6 +12,7 @@ const root = path.resolve(__dirname, "..");
 function parseArgs(argv) {
   let phase = "bundle";
   let profile = "";
+  let artifactSet = "";
   for (let index = 0; index < argv.length; index += 1) {
     const arg = String(argv[index] ?? "");
     if (arg === "--phase") {
@@ -32,12 +33,29 @@ function parseArgs(argv) {
       profile = arg.slice("--profile=".length).trim();
       continue;
     }
+    if (arg === "--artifact-set") {
+      artifactSet = String(argv[index + 1] ?? "").trim();
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--artifact-set=")) {
+      artifactSet = arg.slice("--artifact-set=".length).trim();
+      continue;
+    }
     throw new Error(`Unknown generate-release-evidence argument: ${arg}`);
   }
   if (!["bundle", "dist", "all"].includes(phase)) {
     throw new Error(`Invalid --phase ${JSON.stringify(phase)}. Expected bundle, dist, or all.`);
   }
-  return { phase, profile };
+  if ((phase === "dist" || phase === "all") && !RELEASE_ARTIFACT_SETS.includes(artifactSet)) {
+    throw new Error(
+      `--artifact-set is required for ${phase} evidence (${RELEASE_ARTIFACT_SETS.join(", ")})`,
+    );
+  }
+  if (phase === "bundle" && artifactSet) {
+    throw new Error("--artifact-set is only valid for dist or all evidence");
+  }
+  return { phase, profile, artifactSet };
 }
 
 function resolveUv() {
@@ -56,13 +74,14 @@ function resolveUv() {
 }
 
 async function main() {
-  const { phase, profile } = parseArgs(process.argv.slice(2));
+  const { phase, profile, artifactSet } = parseArgs(process.argv.slice(2));
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const uvCommand = resolveUv();
   const evidence = await writeReleaseEvidence({
     root,
     phase,
     profile,
+    artifactSet,
     uvCommand,
     version: String(packageJson.version || ""),
     env: process.env,
@@ -72,6 +91,7 @@ async function main() {
       {
         ok: true,
         phase,
+        artifactSet: artifactSet || undefined,
         evidenceDir: path.relative(root, evidence.evidenceDir).split(path.sep).join("/"),
         indexPath: path.relative(root, evidence.indexPath).split(path.sep).join("/"),
         checksumPath: path.relative(root, evidence.checksumPath).split(path.sep).join("/"),

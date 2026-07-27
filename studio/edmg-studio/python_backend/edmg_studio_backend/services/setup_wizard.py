@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import re
@@ -33,6 +34,9 @@ try:
     import py7zr  # type: ignore
 except Exception:  # pragma: no cover
     py7zr = None
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -245,12 +249,10 @@ def _find_ollama_exe(external_dir: Path | None = None) -> str:
 
     if platform.system() == "Windows" and not ignore_system:
         local_appdata = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
-        candidates.extend(
-            [
-                local_appdata / "Programs" / "Ollama" / "ollama.exe",
-                Path(r"C:\Program Files\Ollama\ollama.exe"),
-            ]
-        )
+        candidates.append(local_appdata / "Programs" / "Ollama" / "ollama.exe")
+        program_files = os.environ.get("ProgramFiles", "").strip()
+        if program_files:
+            candidates.append(Path(program_files) / "Ollama" / "ollama.exe")
 
     for candidate in candidates:
         if candidate.exists():
@@ -315,14 +317,15 @@ def check_ollama(ollama_url: str, model: str) -> dict[str, Any]:
             "model_present": present,
             "models": models[:50],
         }
-    except Exception as e:
+    except Exception:
+        logger.warning("Ollama status probe failed", exc_info=True)
         return {
             "ok": False,
             "url": base,
             "model": model,
             "model_present": False,
             "hint": "Install Ollama and ensure it is running (it exposes http://127.0.0.1:11434).",
-            "error": str(e),
+            "error": "Ollama status probe failed",
         }
 
 
@@ -698,10 +701,10 @@ def _find_7z_exe(external_dir: Path, data_dir: Path | None = None) -> str:
 
     candidates = []
     if platform.system() == "Windows" and not ignore_system:
-        candidates += [
-            Path(r"C:\Program Files\7-Zip\7z.exe"),
-            Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
-        ]
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            program_files = os.environ.get(env_name, "").strip()
+            if program_files:
+                candidates.append(Path(program_files) / "7-Zip" / "7z.exe")
     for c in candidates:
         if c.exists():
             return str(c)

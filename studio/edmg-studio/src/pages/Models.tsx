@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
+import { useAdaptivePolling } from "../hooks/useAdaptivePolling";
 import type { PageProps } from "../types/pageProps";
 
 type CatalogEntry = {
@@ -311,12 +312,105 @@ function HubResultCard({
   );
 }
 
+function taskStage(task: any): string {
+  const explicit = String(task?.stage || task?.phase || "").trim();
+  if (explicit) return explicit;
+  const log = String(task?.last_log || "").trim();
+  if (!log) return "";
+  return log.split(/\r?\n/).filter(Boolean).at(-1) || "";
+}
+
+function formatTaskBytes(value: unknown): string {
+  if (value == null || value === "") return "";
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && size >= 1024; index += 1) {
+    size /= 1024;
+    unit = units[index];
+  }
+  return `${size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${unit}`;
+}
+
+function ModelTaskProgress({
+  tasks,
+  isPolling,
+}: {
+  tasks: any[];
+  isPolling: boolean;
+}) {
+  return (
+    <section className="card" style={{ marginTop: 14 }} aria-labelledby="model-install-progress-heading">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <div id="model-install-progress-heading" style={{ fontWeight: 900 }}>Model install progress</div>
+        <div className="small" role="status" aria-live="polite">
+          {isPolling ? "Checking tasks…" : tasks.some((task) => task.status === "queued" || task.status === "running") ? "Install active" : "No active install"}
+        </div>
+      </div>
+      {tasks.length ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+          {tasks.slice(0, 12).map((task: any) => {
+            const progress = Number(task.progress);
+            const hasProgress = task.progress != null && Number.isFinite(progress);
+            const stage = taskStage(task);
+            const bytesCompleted = formatTaskBytes(task.bytes_completed);
+            const bytesTotal = formatTaskBytes(task.bytes_total);
+            const hasFilesCompleted = task.files_completed != null && Number.isFinite(Number(task.files_completed));
+            const hasFilesTotal = task.files_total != null && Number.isFinite(Number(task.files_total));
+            const filesCompleted = hasFilesCompleted ? Number(task.files_completed) : null;
+            const filesTotal = hasFilesTotal ? Number(task.files_total) : null;
+            const hasFileCounts = hasFilesCompleted || hasFilesTotal;
+            return (
+              <div key={task.id} style={{ padding: 10, borderRadius: 12, background: "#121422", border: "1px solid #22263a" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ fontWeight: 800 }}>{task.name}</div>
+                  <div className="small">
+                    {task.status}{hasProgress ? ` • ${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%` : ""}
+                  </div>
+                </div>
+                {(task.status === "queued" || task.status === "running") ? (
+                  <progress
+                    aria-label={`${task.name} progress`}
+                    value={hasProgress ? Math.max(0, Math.min(1, progress)) : undefined}
+                    max={1}
+                    style={{ width: "100%", marginTop: 8 }}
+                  />
+                ) : null}
+                {stage ? <div className="small" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>Stage: {stage}</div> : null}
+                {(bytesCompleted || bytesTotal || hasFileCounts) ? (
+                  <div className="small" style={{ marginTop: 6 }}>
+                    {bytesCompleted ? <>Downloaded <b>{bytesCompleted}</b>{bytesTotal ? <> of <b>{bytesTotal}</b></> : null}</> : null}
+                    {(bytesCompleted || bytesTotal) && hasFileCounts ? " • " : null}
+                    {hasFileCounts ? (
+                      <>Files <b>{filesCompleted ?? "?"}</b> of <b>{filesTotal ?? "?"}</b></>
+                    ) : null}
+                  </div>
+                ) : null}
+                {task.error ? <div className="small" role="alert" style={{ marginTop: 6, color: "#ffb7b7" }}>{task.error}</div> : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>No model install tasks yet.</div>
+      )}
+    </section>
+  );
+}
+
 export default function Models(props: PageProps) {
   const { mode } = useUiMode();
   const [data, setData] = useState<CatalogPayload | null>(null);
   const [tasks, setTasks] = useState<any[]>([]);
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [err, setErr] = useState<string>("");
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const catalogRequestRef = useRef<Promise<void> | null>(null);
+  const providersRequestRef = useRef<Promise<void> | null>(null);
+  const previousTaskStatesRef = useRef<string | null>(null);
 
   const [civitaiUrl, setCivitaiUrl] = useState("");
   const [importing, setImporting] = useState(false);
@@ -328,15 +422,67 @@ export default function Models(props: PageProps) {
   const [hubResults, setHubResults] = useState<HubResult[]>([]);
   const [hubError, setHubError] = useState<string>("");
 
+  const loadCatalog = useCallback((signal?: AbortSignal) => {
+    if (catalogRequestRef.current) return catalogRequestRef.current;
+    setCatalogLoading(true);
+    const request = apiGet("/v1/models/catalog", { signal, timeoutMs: 30_000 })
+      .then((payload) => {
+        setData(payload as CatalogPayload);
+      })
+      .finally(() => {
+        catalogRequestRef.current = null;
+        setCatalogLoading(false);
+      });
+    catalogRequestRef.current = request;
+    return request;
+  }, []);
+
+  const loadRenderProviders = useCallback((signal?: AbortSignal) => {
+    if (providersRequestRef.current) return providersRequestRef.current;
+    const request = apiGet("/v1/settings/render_providers", { signal, timeoutMs: 15_000 })
+      .then((payload) => {
+        setRenderProviders(payload);
+      })
+      .finally(() => {
+        providersRequestRef.current = null;
+      });
+    providersRequestRef.current = request;
+    return request;
+  }, []);
+
+  const pollModelTasks = useCallback(async (signal: AbortSignal) => {
+    const payload = await apiGet("/v1/models/tasks", { signal, timeoutMs: 10_000 });
+    const nextTasks = Array.isArray((payload as any)?.tasks) ? (payload as any).tasks : [];
+    const nextStates = nextTasks.map((task: any) => `${task.id}:${task.status}`).join("|");
+    const previousStates = previousTaskStatesRef.current;
+    previousTaskStatesRef.current = nextStates;
+    setTasks(nextTasks);
+
+    if (previousStates != null && previousStates !== nextStates) {
+      void loadCatalog().catch((error: any) => {
+        setErr(String(error?.message ?? error));
+      });
+    }
+
+    const active = nextTasks.some((task: any) => task.status === "queued" || task.status === "running");
+    return { active, continuePolling: active };
+  }, [loadCatalog]);
+
+  const {
+    isPolling: tasksPolling,
+    lastError: taskPollingError,
+    pollNow: pollModelTasksNow,
+  } = useAdaptivePolling({
+    poll: pollModelTasks,
+    activeIntervalMs: 1_000,
+    idleIntervalMs: 15_000,
+  });
+
   async function refresh() {
     setErr("");
+    pollModelTasksNow();
     try {
-      const d = await apiGet("/v1/models/catalog");
-      setData(d as any);
-      const t = await apiGet("/v1/models/tasks");
-      setTasks((t as any)?.tasks ?? []);
-      const rp = await apiGet("/v1/settings/render_providers");
-      setRenderProviders(rp);
+      await Promise.all([loadCatalog(), loadRenderProviders()]);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     }
@@ -368,10 +514,15 @@ export default function Models(props: PageProps) {
   }
 
   useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 2000);
-    return () => clearInterval(t);
-  }, []);
+    const controller = new AbortController();
+    void Promise.all([
+      loadCatalog(controller.signal),
+      loadRenderProviders(controller.signal),
+    ]).catch((error: any) => {
+      if (!controller.signal.aborted) setErr(String(error?.message ?? error));
+    });
+    return () => controller.abort();
+  }, [loadCatalog, loadRenderProviders]);
 
   const merged = useMemo(() => {
     const built = data?.catalog ?? [];
@@ -588,7 +739,7 @@ export default function Models(props: PageProps) {
       {
         id: "advanced" as const,
         label: "Advanced inventory",
-        description: "Optional models, user models, browser-only bundles, and install tasks.",
+        description: "Optional models, user models, and browser-only bundles.",
       },
     ],
     [],
@@ -929,22 +1080,6 @@ export default function Models(props: PageProps) {
           <div className="small" style={{ opacity: 0.8 }}>No user models yet.</div>
         )}
 
-        <h3 style={{ marginTop: 18 }}>Install tasks</h3>
-        {(tasks ?? []).length ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {(tasks ?? []).slice(0, 12).map((t: any) => (
-              <div key={t.id} style={{ padding: 10, borderRadius: 12, background: "#121422", border: "1px solid #22263a" }}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <div style={{ fontWeight: 800 }}>{t.name}</div>
-                  <div className="small">{t.status}{t.progress != null ? ` • ${Math.round(t.progress * 100)}%` : ""}</div>
-                </div>
-                {t.last_log ? <div className="small" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{t.last_log}</div> : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="small" style={{ opacity: 0.8 }}>No active tasks.</div>
-        )}
       </>
     ) : (
       <div className="card" style={{ marginTop: 14 }}>
@@ -962,17 +1097,26 @@ export default function Models(props: PageProps) {
       <div className="small" style={{ marginTop: 6 }}>
         EDMG ships with a curated model catalog, but does <b>not</b> bundle large weights in the installer. Use this page to install Studio-ready defaults, add community models, or browse curated Stability model families.
       </div>
-      <div className="small" style={{ marginTop: 8, opacity: 0.86 }}>
-        Storage mode: <b>{storageMode === "cloud_only" ? "cloud-only" : "local + cache"}</b>
-        {data?.model_cache ? <> • Cache: <b>{data.model_cache}</b> (priority over S3/Azure)</> : null}
+      <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <div className="small" style={{ opacity: 0.86 }}>
+          Storage mode: <b>{storageMode === "cloud_only" ? "cloud-only" : "local + cache"}</b>
+          {data?.model_cache ? <> • Cache: <b>{data.model_cache}</b> (priority over S3/Azure)</> : null}
+        </div>
+        <button className="secondary" disabled={catalogLoading} onClick={() => void refresh()}>
+          {catalogLoading ? "Refreshing models…" : "Refresh models"}
+        </button>
       </div>
 
-      {err && (
-        <div style={{ marginTop: 12, padding: 10, borderRadius: 10, background: "#2a1b1b", border: "1px solid #5b2424" }}>
+      {catalogLoading ? (
+        <div className="small" role="status" aria-live="polite" style={{ marginTop: 8 }}>Loading model catalog…</div>
+      ) : null}
+      {(err || taskPollingError) && (
+        <div role="alert" style={{ marginTop: 12, padding: 10, borderRadius: 10, background: "#2a1b1b", border: "1px solid #5b2424" }}>
           <div style={{ fontWeight: 800 }}>Error</div>
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{err}</pre>
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{err || taskPollingError}</pre>
         </div>
       )}
+      <ModelTaskProgress tasks={tasks} isPolling={tasksPolling} />
       <StudioLayoutCustomizer
         title="Model Manager layout"
         description="Reorder or hide major model-management sections without changing install queues, runtime choices, or the catalog itself."

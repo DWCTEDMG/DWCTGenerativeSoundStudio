@@ -15,8 +15,11 @@ makes that path configurable and persistent from the UI.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -60,9 +63,99 @@ def _read_json(path: Path, default: Any) -> Any:
 
 def _write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(obj, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        for attempt in range(6):
+            try:
+                os.replace(temporary_path, path)
+                temporary_path = None
+                break
+            except OSError as exc:
+                winerror = getattr(exc, "winerror", None)
+                transient = (
+                    isinstance(exc, PermissionError)
+                    or exc.errno in {errno.EACCES, errno.EBUSY, errno.EPERM}
+                    or winerror in {5, 32, 33}
+                )
+                if not transient or attempt == 5:
+                    raise
+                time.sleep(0.025 * (2**attempt))
+        _fsync_parent_directory(path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    """Persist the directory entry where the host filesystem supports it."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path.parent, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _valid_model_cache_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if isinstance(value.get("hf_bucket"), dict):
+        return True
+    return any(key in value for key in ("enabled", "bucket", "prefix", "storage_mode"))
+
+
+def _recover_stranded_legacy_temp(path: Path) -> dict[str, Any] | None:
+    """Recover the old fixed ``.tmp`` file left by a failed Windows replace.
+
+    Releases before the unique-temp writer used ``model_cache.json.tmp``.
+    When that file is newer and contains a valid settings object, the user's
+    successful UI save is more authoritative than the older destination.
+    """
+    legacy_temp = path.with_suffix(path.suffix + ".tmp")
+    if not legacy_temp.is_file():
+        return None
+    try:
+        if path.is_file() and legacy_temp.stat().st_mtime_ns <= path.stat().st_mtime_ns:
+            return None
+        recovered = json.loads(legacy_temp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not _valid_model_cache_payload(recovered):
+        return None
+    try:
+        _write_json(path, recovered)
+    except OSError:
+        # Still honor the newer valid selection for this process. The legacy
+        # temp remains available for another startup recovery attempt.
+        return recovered
+    try:
+        legacy_temp.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return recovered
 
 
 def _truthy(value: Any) -> bool:
@@ -98,7 +191,9 @@ class ModelCacheSettingsStore:
         self._path = _config_dir(data_dir) / "model_cache.json"
 
     def get(self) -> dict[str, Any]:
-        current = _read_json(self._path, default={})
+        current = _recover_stranded_legacy_temp(self._path)
+        if current is None:
+            current = _read_json(self._path, default={})
         return self._sanitize(current if isinstance(current, dict) else {})
 
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:

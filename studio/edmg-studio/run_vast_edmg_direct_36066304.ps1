@@ -1,4 +1,4 @@
-# Run from Windows PowerShell on Tyler's machine.
+# Run from Windows PowerShell.
 # Direct Vast.ai EDMG reinstall/bootstrap for instance 36066304.
 # This bypasses vast.py JSON parsing entirely and uses the direct IP/ports you pasted.
 
@@ -6,7 +6,7 @@ param(
   [string]$InstanceId = "36066304",
   [string]$PublicIp = "174.88.252.119",
   [string]$SshPort = "16370",
-  [string]$SshKey = "C:\Users\Tyler\.ssh\vast_ed25519_20260502",
+  [string]$SshKey = (Join-Path $HOME ".ssh\vast_ed25519_20260502"),
   [string]$RemoteScriptLocalPath = ".\edmg_remote_reinstall_ports.sh",
   [string]$RepoBranch = "codex/Unified",
   [string]$RepoUrl = "https://github.com/HIMOI890/DWCTGenerativeSoundStudio.git",

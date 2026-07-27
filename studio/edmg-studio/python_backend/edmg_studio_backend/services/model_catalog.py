@@ -44,8 +44,6 @@ def _local_sd15_tensorrt_bundle_path() -> str:
         os.getenv("EDMG_TENSORRT_SD15_BUNDLE", "").strip(),
         os.getenv("EDMG_TENSORRT_MODEL_DIR", "").strip(),
     ]
-    if os.name == "nt":
-        candidates.append(r"D:\my_tensorrt_models")
     for candidate in candidates:
         if not candidate:
             continue
@@ -122,10 +120,10 @@ def built_in_catalog() -> list[dict[str, Any]]:
             name="Stable Diffusion v1.5 (Internal / Diffusers)",
             kind="diffusers",
             source="hf",
-            hf_repo_id="runwayml/stable-diffusion-v1-5",
+            hf_repo_id="stable-diffusion-v1-5/stable-diffusion-v1-5",
             target={"engine": "internal", "folder": "diffusers"},
             license_id="openrail-m",
-            license_url="https://huggingface.co/runwayml/stable-diffusion-v1-5",
+            license_url="https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5",
             recommended="default",
             notes="CPU-friendlier internal fallback for proxy-safe video rendering and previews.",
             family="sd15",
@@ -148,7 +146,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             target={"engine": "runtime_bundle", "folder": "tensorrt"},
             installable=False,
             license_id="openrail-m",
-            license_url="https://huggingface.co/runwayml/stable-diffusion-v1-5",
+            license_url="https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5",
             recommended="advanced",
             notes=(
                 "Local SD1.5 TensorRT export. Studio uses the compiled UNet engine in this folder "
@@ -163,7 +161,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
                 "engine": "tensorrt_standalone",
                 "workflow_family": "sd15",
                 "render_modes": ["stills", "internal_video_keyframes"],
-                "base_model_id": "runwayml/stable-diffusion-v1-5",
+                "base_model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
                 "profile_width": 512,
                 "profile_height": 512,
                 "max_batch": 1,

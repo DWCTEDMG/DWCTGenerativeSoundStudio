@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-import os
-import shutil
-
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 DISK_WARN_FREE_GB = 5.0
@@ -54,12 +55,13 @@ def _probe_writable(path: Path) -> dict[str, Any]:
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
         return {"path": str(path), "writable": True, "exists": True}
-    except Exception as exc:
+    except Exception:
+        logger.warning("Studio path write probe failed for %s", path, exc_info=True)
         return {
             "path": str(path),
             "writable": False,
             "exists": path.exists(),
-            "error": str(exc),
+            "error": "Path is not writable",
         }
 
 
@@ -99,14 +101,15 @@ def _disk_usage_for(path: Path) -> dict[str, Any]:
                     "hint": f"Path does not exist and could not be measured: {path}",
                 }
             target = parent
-        except Exception as exc:
+        except Exception:
+            logger.warning("Disk space probe failed for %s", path, exc_info=True)
             return {
                 "path": str(path),
                 "volume_path": str(target),
                 "free_gb": 0.0,
                 "total_gb": 0.0,
                 "status": "blocked",
-                "hint": f"Unable to measure disk space for {path}: {exc}",
+                "hint": f"Unable to measure disk space for {path}.",
             }
 
 

@@ -244,6 +244,10 @@ def test_ci_and_release_paths_are_frozen() -> None:
             "uv sync --frozen --extra directml",
             "uv sync --frozen --extra cuda",
             "uv run --frozen",
+            "pnpm run dist:linux",
+            "Verify Linux AppImage",
+            "autobuild-2026-07-26-13-28/ffmpeg-N-125773-g7002e01c19-linux64-gpl.tar.xz",
+            "5abcecd8f7899cf5491cb8fac00767886cf433d9e96fb3c0065132a3daa8fcac",
         ),
         STUDIO_ROOT / "scripts" / "release-python-toolchain.mjs": (
             'return ["lock", "--check"]',
@@ -300,6 +304,32 @@ def test_ci_and_release_paths_are_frozen() -> None:
         assert re.search(
             r"\buv\s+run\b.{0,120}--frozen\b.{0,120}--no-sync\b", command_text
         )
+
+
+def test_linux_launchers_honor_independent_storage_directories() -> None:
+    expected_fragments = {
+        STUDIO_ROOT / "scripts" / "start_lightning_backend.sh": (
+            'EDMG_STUDIO_DATA_DIR="${EDMG_STUDIO_DATA_DIR:-',
+            'EDMG_STUDIO_MODELS_DIR="${EDMG_STUDIO_MODELS_DIR:-',
+            'EDMG_STUDIO_CACHE_DIR="${EDMG_STUDIO_CACHE_DIR:-',
+            'EDMG_STUDIO_LOGS_DIR="${EDMG_STUDIO_LOGS_DIR:-',
+            'EDMG_STUDIO_EXTERNAL_DIR="${EDMG_STUDIO_EXTERNAL_DIR:-',
+        ),
+        STUDIO_ROOT / "scripts" / "setup_linux_comfyui.sh": (
+            'COMFY_ROOT="${COMFY_ROOT:-${EDMG_STUDIO_EXTERNAL_DIR}/ComfyUI}"',
+            'COMFY_LOG_DIR="${COMFY_LOG_DIR:-${EDMG_STUDIO_LOGS_DIR}}"',
+        ),
+        STUDIO_ROOT / "scripts" / "setup_linux_ollama.sh": (
+            'OLLAMA_MODELS="${OLLAMA_MODELS:-${EDMG_STUDIO_MODELS_DIR}/ollama}"',
+            'OLLAMA_LOG_DIR="${OLLAMA_LOG_DIR:-${EDMG_STUDIO_LOGS_DIR}}"',
+        ),
+    }
+    for path, fragments in expected_fragments.items():
+        text = path.read_text(encoding="utf-8")
+        for fragment in fragments:
+            assert fragment in text, (
+                f"{path.relative_to(REPO_ROOT)} is missing portable storage fragment: {fragment}"
+            )
 
 
 def test_shell_uv_bootstrap_verifies_release_archives() -> None:

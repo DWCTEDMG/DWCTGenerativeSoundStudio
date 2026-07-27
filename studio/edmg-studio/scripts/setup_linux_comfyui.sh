@@ -9,11 +9,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 COMFY_REPO_URL="${COMFY_REPO_URL:-https://github.com/Comfy-Org/ComfyUI.git}"
-COMFY_ROOT="${COMFY_ROOT:-${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}/external/ComfyUI}"
+EDMG_STUDIO_HOME="${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}"
+EDMG_STUDIO_EXTERNAL_DIR="${EDMG_STUDIO_EXTERNAL_DIR:-${EDMG_STUDIO_HOME}/external}"
+EDMG_STUDIO_LOGS_DIR="${EDMG_STUDIO_LOGS_DIR:-${EDMG_STUDIO_HOME}/logs}"
+COMFY_ROOT="${COMFY_ROOT:-${EDMG_STUDIO_EXTERNAL_DIR}/ComfyUI}"
 COMFY_HOST="${COMFY_HOST:-127.0.0.1}"
 COMFY_PORT="${COMFY_PORT:-8188}"
 COMFY_PYTHON_BIN="${COMFY_PYTHON_BIN:-python}"
-COMFY_LOG_DIR="${COMFY_LOG_DIR:-${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}/logs}"
+COMFY_LOG_DIR="${COMFY_LOG_DIR:-${EDMG_STUDIO_LOGS_DIR}}"
 COMFY_LOG_FILE="${COMFY_LOG_FILE:-${COMFY_LOG_DIR}/comfyui.log}"
 COMFY_INSTALL_MODELS="${COMFY_INSTALL_MODELS:-0}"
 COMFY_START="${COMFY_START:-1}"
@@ -107,7 +110,10 @@ mkdir -p \
 
 if [[ "${COMFY_INSTALL_MODELS}" == "1" ]]; then
   log "Installing Hugging Face download helpers"
-  "${UV_BIN}" pip install --python "${COMFY_PYTHON_BIN}" -U huggingface_hub hf_transfer
+  "${UV_BIN}" pip install --python "${COMFY_PYTHON_BIN}" -U \
+    "huggingface_hub>=0.34.0,<1.0" \
+    "hf_transfer==0.1.9" \
+    "hf_xet==1.5.1"
 
   download_hf_file "stabilityai/stable-diffusion-xl-base-1.0" "sd_xl_base_1.0.safetensors" "${COMFY_ROOT}/models/checkpoints"
   download_hf_file "stabilityai/stable-video-diffusion-img2vid-xt-1-1" "svd_xt_1_1.safetensors" "${COMFY_ROOT}/models/svd"

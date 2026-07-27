@@ -61,6 +61,8 @@ hidden += safe_collect(collect_submodules, "boto3")
 hidden += safe_collect(collect_submodules, "botocore")
 hidden += safe_collect(collect_submodules, "s3transfer")
 hidden += safe_collect(collect_submodules, "jmespath")
+hidden += safe_collect(collect_submodules, "hf_transfer")
+hidden += safe_collect(collect_submodules, "hf_xet")
 hidden += [
     "matplotlib",
     "matplotlib.pyplot",
@@ -112,6 +114,8 @@ datas += safe_collect(copy_metadata, "boto3")
 datas += safe_collect(copy_metadata, "botocore")
 datas += safe_collect(copy_metadata, "s3transfer")
 datas += safe_collect(copy_metadata, "jmespath")
+datas += safe_collect(copy_metadata, "hf-transfer")
+datas += safe_collect(copy_metadata, "hf-xet")
 if nltk_data_dir.exists():
     datas.append((str(nltk_data_dir), "nltk_data"))
 
@@ -137,10 +141,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="edmg-studio-backend",
     debug=False,
     bootloader_ignore_signals=False,
@@ -154,4 +156,16 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+# Keep the backend as an onedir application. The CUDA profile is several
+# gigabytes; a onefile executable would unpack that entire runtime into a
+# temporary _MEI directory on every Studio launch.
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="edmg-studio-backend",
 )

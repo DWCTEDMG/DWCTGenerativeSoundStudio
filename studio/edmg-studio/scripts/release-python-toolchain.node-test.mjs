@@ -15,6 +15,11 @@ import {
   assertTorchIndexForProfile,
   assertTrackedCleanDependencyStatus,
   binaryMatchesManifest,
+  bundleMatchesManifest,
+  collectBundleEntries,
+  isHfRuntimeEvidencePath,
+  materializeExternalBundleSymlinks,
+  releaseUvEnvironment,
   releaseProvenanceMatches,
   resolveAcceleratorProfile,
   selectedExtras,
@@ -31,14 +36,65 @@ const studioRoot = path.resolve(__dirname, "..");
 
 function validManifest(overrides = {}) {
   const cpuIndex = "https://download.pytorch.org/whl/cpu";
+  const backendEntryPoint = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+  const helperEntryPoint = process.platform === "win32" ? "edmg-hf-bucket-helper.exe" : "edmg-hf-bucket-helper";
+  const binarySha256 = "3".repeat(64);
+  const binarySize = 123;
+  const helperSha256 = "7".repeat(64);
+  const helperSize = 45;
+  const defaultsSha256 = "8".repeat(64);
+  const defaultsSize = 67;
+  const hfRuntimeBundleEvidence = {
+    huggingfaceHubMetadata: "_internal/huggingface_hub-0.36.2.dist-info/METADATA",
+    hfTransferMetadata: "_internal/hf_transfer-0.1.9.dist-info/METADATA",
+    hfTransferModule: process.platform === "win32"
+      ? "_internal/hf_transfer/hf_transfer.pyd"
+      : "_internal/hf_transfer/hf_transfer.abi3.so",
+    hfXetMetadata: "_internal/hf_xet-1.5.1.dist-info/METADATA",
+    hfXetModule: process.platform === "win32"
+      ? "_internal/hf_xet/hf_xet.pyd"
+      : "_internal/hf_xet/hf_xet.abi3.so",
+  };
+  const hfRuntimeEntries = Object.values(hfRuntimeBundleEvidence).map((entryPath) => ({
+    path: entryPath,
+    type: "file",
+    size: 11,
+    sha256: "a".repeat(64),
+  }));
+  const bundleEntries = [
+    { path: helperEntryPoint, type: "file", size: helperSize, sha256: helperSha256 },
+    { path: backendEntryPoint, type: "file", size: binarySize, sha256: binarySha256 },
+    { path: "launcher_env.defaults.json", type: "file", size: defaultsSize, sha256: defaultsSha256 },
+    ...hfRuntimeEntries,
+  ].sort((left, right) => left.path.localeCompare(right.path));
   return {
-    schemaVersion: 2,
+    schemaVersion: 4,
     ok: true,
     sourceHash: "1".repeat(64),
     sourceFileCount: 10,
     lockSha256: "2".repeat(64),
-    binarySha256: "3".repeat(64),
-    binarySize: 123,
+    binarySha256,
+    binarySize,
+    bundleLayout: "onedir",
+    backendEntryPoint,
+    bundleEntries,
+    bundleEntryCount: bundleEntries.length,
+    bundleFileCount: bundleEntries.length,
+    bundleSize: binarySize + helperSize + defaultsSize + hfRuntimeEntries.length * 11,
+    hfBucketHelper: {
+      entryPoint: helperEntryPoint,
+      helperVersion: "1.0.0",
+      huggingfaceHubVersion: "1.20.1",
+      hfXetVersion: "1.5.1",
+      lockSha256: "8".repeat(64),
+      binarySha256: helperSha256,
+      binarySize: helperSize,
+    },
+    launcherEnvDefaults: {
+      entryPoint: "launcher_env.defaults.json",
+      sha256: defaultsSha256,
+      size: defaultsSize,
+    },
     acceleratorProfile: "cpu",
     capabilityExtras: [...RELEASE_CAPABILITY_EXTRAS],
     uvVersion: PINNED_UV_VERSION,
@@ -51,10 +107,19 @@ function validManifest(overrides = {}) {
       { name: "torchaudio", version: "2.8.0+cpu", index: cpuIndex },
       { name: "torchvision", version: "0.23.0+cpu", index: cpuIndex },
     ],
+    hfRuntimePackages: [
+      { name: "huggingface-hub", version: "0.36.2" },
+      { name: "hf-transfer", version: "0.1.9" },
+      { name: "hf-xet", version: "1.5.1" },
+    ],
+    hfRuntimeBundleEvidence,
     fingerprintInputs: [
       { path: ".python-version", sha256: "4".repeat(64) },
       { path: "studio/edmg-studio/python_backend/pyproject.toml", sha256: "5".repeat(64) },
       { path: "studio/edmg-studio/python_backend/uv.lock", sha256: "2".repeat(64) },
+      { path: "studio/edmg-studio/python_backend/hf_bucket_helper/pyproject.toml", sha256: "7".repeat(64) },
+      { path: "studio/edmg-studio/python_backend/hf_bucket_helper/uv.lock", sha256: "8".repeat(64) },
+      { path: "studio/edmg-studio/launcher_env.defaults.json", sha256: "8".repeat(64) },
     ],
     nltkResources: [
       {
@@ -128,6 +193,19 @@ test("frozen uv commands compose one accelerator with deterministic capabilities
   assert.equal(run.filter((value) => value === "--extra").length, 6);
 });
 
+test("release builds isolate accelerator environments from the source runtime", () => {
+  const sourceEnv = { KEEP_ME: "yes", UV_LINK_MODE: "hardlink" };
+  const releaseEnv = releaseUvEnvironment(studioRoot, "cuda", sourceEnv);
+  assert.equal(releaseEnv.KEEP_ME, "yes");
+  assert.equal(releaseEnv.UV_LINK_MODE, "copy");
+  assert.equal(
+    releaseEnv.UV_PROJECT_ENVIRONMENT,
+    path.join(studioRoot, "release", "uv-environments", "cuda"),
+  );
+  assert.equal(sourceEnv.UV_PROJECT_ENVIRONMENT, undefined);
+  assert.throws(() => releaseUvEnvironment(studioRoot, "unknown", {}), /Unsupported accelerator profile/);
+});
+
 test("uv, Python, and Torch provenance checks enforce the release pins", () => {
   assert.equal(assertPinnedUvVersion("uv 0.11.28 (build metadata)"), "0.11.28");
   assert.throws(() => assertPinnedUvVersion("uv 0.11.27"), /pinned uv 0\.11\.28/);
@@ -150,7 +228,7 @@ test("release dependency metadata must be tracked and clean", () => {
   );
 });
 
-test("schema-2 manifest validation and reuse reject provenance drift", () => {
+test("schema-4 onedir manifest validation and reuse reject provenance drift", () => {
   const manifest = validManifest();
   assert.deepEqual(validateReleaseManifest(manifest), []);
   assert.equal(releaseProvenanceMatches(manifest, manifest), true);
@@ -158,6 +236,53 @@ test("schema-2 manifest validation and reuse reject provenance drift", () => {
   assert.equal(releaseProvenanceMatches(manifest, { ...manifest, acceleratorProfile: "directml" }), false);
   assert.match(validateReleaseManifest({ ...manifest, pythonVersion: "3.13.0" }).join("; "), /Python 3\.12/);
   assert.match(validateReleaseManifest({ ...manifest, capabilityExtras: ["core"] }).join("; "), /capabilityExtras/);
+  assert.match(
+    validateReleaseManifest({ ...manifest, hfBucketHelper: undefined }).join("; "),
+    /hfBucketHelper/,
+  );
+  assert.match(
+    validateReleaseManifest({ ...manifest, launcherEnvDefaults: undefined }).join("; "),
+    /launcherEnvDefaults/,
+  );
+  assert.match(
+    validateReleaseManifest({ ...manifest, hfRuntimePackages: [] }).join("; "),
+    /hfRuntimePackages/,
+  );
+  assert.match(
+    validateReleaseManifest({ ...manifest, hfRuntimeBundleEvidence: undefined }).join("; "),
+    /hfRuntimeBundleEvidence/,
+  );
+});
+
+test("Hugging Face runtime evidence matching is linear and path constrained", () => {
+  assert.equal(
+    isHfRuntimeEvidencePath(
+      "hfTransferModule",
+      "_internal/hf_transfer/hf_transfer.abi3.so",
+    ),
+    true,
+  );
+  assert.equal(
+    isHfRuntimeEvidencePath(
+      "hfXetModule",
+      "_internal/hf_xet/hf_xet.pyd",
+    ),
+    true,
+  );
+  assert.equal(
+    isHfRuntimeEvidencePath(
+      "hfTransferModule",
+      `_internal/hf_transfer/hf_transfer.${".".repeat(100_000)}txt`,
+    ),
+    false,
+  );
+  assert.equal(
+    isHfRuntimeEvidencePath(
+      "hfXetModule",
+      "_internal/hf_xet/hf_xet.abi3.so/escaped",
+    ),
+    false,
+  );
 });
 
 test("binary reuse verifies both size and SHA-256", async () => {
@@ -175,23 +300,193 @@ test("binary reuse verifies both size and SHA-256", async () => {
   }
 });
 
+test("onedir reuse verifies every staged backend entry", async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-onedir-"));
+  const backendEntryPoint = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+  const launcherPath = path.join(tempDir, backendEntryPoint);
+  const helperEntryPoint = process.platform === "win32" ? "edmg-hf-bucket-helper.exe" : "edmg-hf-bucket-helper";
+  const helperPath = path.join(tempDir, helperEntryPoint);
+  const defaultsPath = path.join(tempDir, "launcher_env.defaults.json");
+  const runtimePath = path.join(tempDir, "_internal", "torch-runtime.bin");
+  try {
+    await fsp.mkdir(path.dirname(runtimePath), { recursive: true });
+    await fsp.writeFile(launcherPath, "launcher\n", "utf8");
+    await fsp.writeFile(helperPath, "helper\n", "utf8");
+    await fsp.writeFile(defaultsPath, "{}\n", "utf8");
+    await fsp.writeFile(runtimePath, "runtime\n", "utf8");
+    for (const evidencePath of Object.values(validManifest().hfRuntimeBundleEvidence)) {
+      const absoluteEvidencePath = path.join(tempDir, ...evidencePath.split("/"));
+      await fsp.mkdir(path.dirname(absoluteEvidencePath), { recursive: true });
+      await fsp.writeFile(absoluteEvidencePath, "runtime hf\n", "utf8");
+    }
+    const bundleEntries = await collectBundleEntries(tempDir);
+    const launcher = bundleEntries.find((entry) => entry.path === backendEntryPoint);
+    const helper = bundleEntries.find((entry) => entry.path === helperEntryPoint);
+    const defaults = bundleEntries.find((entry) => entry.path === "launcher_env.defaults.json");
+    const fingerprintInputs = validManifest().fingerprintInputs.map((entry) =>
+      entry.path.endsWith("launcher_env.defaults.json")
+        ? { ...entry, sha256: defaults.sha256 }
+        : entry
+    );
+    const manifest = validManifest({
+      backendEntryPoint,
+      bundleEntries,
+      bundleEntryCount: bundleEntries.length,
+      bundleFileCount: bundleEntries.filter((entry) => entry.type === "file").length,
+      bundleSize: bundleEntries
+        .filter((entry) => entry.type === "file")
+        .reduce((total, entry) => total + entry.size, 0),
+      binarySize: launcher.size,
+      binarySha256: launcher.sha256,
+      hfBucketHelper: {
+        entryPoint: helperEntryPoint,
+        helperVersion: "1.0.0",
+        huggingfaceHubVersion: "1.20.1",
+        hfXetVersion: "1.5.1",
+        lockSha256: "8".repeat(64),
+        binarySha256: helper.sha256,
+        binarySize: helper.size,
+      },
+      launcherEnvDefaults: {
+        entryPoint: "launcher_env.defaults.json",
+        sha256: defaults.sha256,
+        size: defaults.size,
+      },
+      fingerprintInputs,
+    });
+    assert.deepEqual(validateReleaseManifest(manifest), []);
+    assert.equal(await bundleMatchesManifest(tempDir, manifest), true);
+    await fsp.appendFile(runtimePath, "tampered\n", "utf8");
+    assert.equal(await bundleMatchesManifest(tempDir, manifest), false);
+    await fsp.writeFile(path.join(tempDir, "unexpected.txt"), "extra\n", "utf8");
+    assert.equal(await bundleMatchesManifest(tempDir, manifest), false);
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test(
+  "Linux bundle staging materializes external symlinks and preserves internal links",
+  { skip: process.platform === "win32" },
+  async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-symlinks-"));
+    const bundleDir = path.join(tempDir, "bundle");
+    const externalFile = path.join(tempDir, "system-library.so");
+    const bundledFile = path.join(bundleDir, "bundled-library.so");
+    const externalLink = path.join(bundleDir, "external-library.so");
+    const internalLink = path.join(bundleDir, "internal-library.so");
+    try {
+      await fsp.mkdir(bundleDir, { recursive: true });
+      await fsp.writeFile(externalFile, "external library\n", "utf8");
+      await fsp.writeFile(bundledFile, "bundled library\n", "utf8");
+      await fsp.symlink(externalFile, externalLink);
+      await fsp.symlink(path.basename(bundledFile), internalLink);
+
+      assert.equal(await materializeExternalBundleSymlinks(bundleDir), 1);
+      assert.equal((await fsp.lstat(externalLink)).isFile(), true);
+      assert.equal(await fsp.readFile(externalLink, "utf8"), "external library\n");
+      assert.equal((await fsp.lstat(internalLink)).isSymbolicLink(), true);
+
+      const entries = await collectBundleEntries(bundleDir);
+      assert.equal(entries.find((entry) => entry.path === "external-library.so")?.type, "file");
+      assert.deepEqual(
+        entries.find((entry) => entry.path === "internal-library.so"),
+        {
+          path: "internal-library.so",
+          type: "symlink",
+          target: "bundled-library.so",
+        },
+      );
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  },
+);
+
 test("supported release paths contain no pip or venv build fallback", () => {
   const prepare = fs.readFileSync(path.join(__dirname, "prepare-release-bundle.mjs"), "utf8");
   const windowsBuild = fs.readFileSync(path.join(studioRoot, "packaging", "windows", "build_all.ps1"), "utf8");
+  const gitignore = fs.readFileSync(path.resolve(studioRoot, "..", "..", ".gitignore"), "utf8");
   const pyinstallerSupport = fs.readFileSync(path.join(studioRoot, "python_backend", "pyinstaller_support.py"), "utf8");
   const pyinstallerSpec = fs.readFileSync(path.join(studioRoot, "python_backend", "pyinstaller.spec"), "utf8");
   assert.doesNotMatch(prepare, /(?:-m\s+pip|pip\s+install|-m\s+venv)/i);
   assert.doesNotMatch(windowsBuild, /(?:-m\s+pip|pip\s+install|-m\s+venv)/i);
   assert.doesNotMatch(pyinstallerSupport, /nltk\.download\s*\(/);
   assert.match(pyinstallerSpec, /upx=False/);
+  assert.match(pyinstallerSpec, /exclude_binaries=True/);
+  assert.match(pyinstallerSpec, /COLLECT\s*\(/);
+  assert.match(gitignore, /electron-resources\/backend\/\*/);
+  assert.match(gitignore, /!studio\/edmg-studio\/electron-resources\/backend\/\.gitkeep/);
+});
+
+test("release bundle builds and requires the isolated HF Bucket helper and launcher defaults", () => {
+  const prepare = fs.readFileSync(path.join(__dirname, "prepare-release-bundle.mjs"), "utf8");
+  const defaults = JSON.parse(
+    fs.readFileSync(path.join(studioRoot, "launcher_env.defaults.json"), "utf8"),
+  );
+  assert.match(prepare, /hf_bucket_helper/);
+  assert.match(prepare, /buildHfBucketHelper/);
+  assert.match(prepare, /validate Hugging Face Bucket helper lock/);
+  assert.match(prepare, /synchronize frozen Hugging Face Bucket helper environment/);
+  assert.match(prepare, /hfBucketHelperBinaryName/);
+  assert.match(prepare, /launcher_env\.defaults\.json/);
+  assert.equal(defaults.HF_HUB_ENABLE_HF_TRANSFER, "1");
+  assert.equal(defaults.HF_HUB_DISABLE_XET, "0");
+  assert.equal(defaults.HF_XET_HIGH_PERFORMANCE, "1");
+  const helper = validManifest().hfBucketHelper;
+  assert.equal(helper.huggingfaceHubVersion, "1.20.1");
+  assert.equal(helper.hfXetVersion, "1.5.1");
+});
+
+test("Director release stages a self-contained production hoisted install", () => {
+  const prepare = fs.readFileSync(path.join(__dirname, "prepare-release-bundle.mjs"), "utf8");
+  assert.match(prepare, /"--prod"/);
+  assert.match(prepare, /"--frozen-lockfile"/);
+  assert.match(prepare, /"--config\.node-linker=hoisted"/);
+  assert.match(prepare, /"--config\.package-import-method=copy"/);
+  assert.match(prepare, /inspectDirectorDependencyTree/);
+  assert.match(prepare, /load staged director entrypoint/);
+  assert.match(prepare, /await import/);
+  assert.doesNotMatch(prepare, /const copyEntries = \[[^\]]*"node_modules"/s);
 });
 
 test("package release commands select explicit profiles without changing pnpm", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(studioRoot, "package.json"), "utf8"));
   assert.equal(packageJson.packageManager, "pnpm@10.33.0");
+  for (const profile of ["cpu", "directml", "cuda"]) {
+    assert.equal(
+      packageJson.scripts[`prepare:release-bundle:${profile}`],
+      `node scripts/prepare-release-bundle.mjs --profile ${profile}`,
+    );
+  }
   assert.match(packageJson.scripts["dist:win:cpu"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:win:directml"], /prepare:release-bundle:directml/);
-  assert.match(packageJson.scripts["dist:win:cuda"], /prepare:release-bundle:cuda/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /dist:win:cuda:dir/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /build_inno_external\.ps1/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /--profile cuda/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /--artifact-set win-inno-cuda/);
+  assert.match(packageJson.scripts["dist:win:cuda:dir"], /prepare:release-bundle:cuda/);
+  assert.match(packageJson.scripts["dist:win:cuda:nsis"], /prepare:release-bundle:cuda/);
   assert.match(packageJson.scripts["dist:linux"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:linux:cuda"], /prepare:release-bundle:cuda/);
+});
+
+test("Inno external installer tracks extracted payload files for safe uninstall", () => {
+  const innoBuild = fs.readFileSync(
+    path.join(studioRoot, "packaging", "windows", "build_inno_external.ps1"),
+    "utf8",
+  );
+  assert.match(innoBuild, /VER < EncodeVer\(7,0,0\)/);
+  assert.match(innoBuild, /ArchiveExtraction=enhanced\/nopassword/);
+  assert.match(innoBuild, /PayloadExpandedSize/);
+  assert.match(innoBuild, /Security\.Cryptography\.SHA256\]::Create/);
+  assert.doesNotMatch(innoBuild, /Get-FileHash/);
+  assert.match(innoBuild, /ExternalSize: \{0\}; Hash: "\{1\}"/);
+  assert.match(innoBuild, /\[InstallDelete\]/);
+  assert.match(innoBuild, /Type: filesandordirs; Name: "\{app\}\\resources\\backend"/);
+  assert.doesNotMatch(innoBuild, /Type: filesandordirs; Name: "\{app\}"/);
+  assert.match(innoBuild, /external extractarchive recursesubdirs createallsubdirs ignoreversion/);
+  assert.doesNotMatch(innoBuild, /\[UninstallDelete\]/);
+  assert.doesNotMatch(innoBuild, /\{app\}\\\*/);
+  assert.doesNotMatch(innoBuild, /payload\\tools\\7zip/);
 });

@@ -2,6 +2,18 @@
 
 EDMG Studio already ships Linux-aware runtime branches in the Electron shell, Setup Wizard, desktop artifact helpers, and packaged smoke validation. The Linux packaged target is the Electron `AppImage`.
 
+## UI availability
+
+The Linux AppImage contains the full Studio GUI/UI, with the same React Studio
+pages and Electron bridge used by the Windows desktop build. Run it on an x64
+Linux workstation with a graphical desktop.
+
+On a headless Lightning, Vast, or other cloud Linux host, run only the backend
+there. Connect to it from a local EDMG Studio AppImage or other desktop build
+after selecting the external backend in **Settings**. For source development,
+the Vite browser UI can also connect to that backend; it is not the packaged
+Linux desktop distribution.
+
 ## Build on a Linux host
 
 ```bash
@@ -67,6 +79,12 @@ Windows desktop build:
 2. Launch the app.
 3. Open `Setup`.
 4. Choose a `Studio Home` on the storage volume you want for models, cache, logs, and external tools.
+
+`Studio Home` can be on any writable local or mounted volume. Advanced setups
+can place each category independently by setting `EDMG_STUDIO_DATA_DIR`,
+`EDMG_STUDIO_MODELS_DIR`, `EDMG_STUDIO_CACHE_DIR`, `EDMG_STUDIO_LOGS_DIR`, and
+`EDMG_STUDIO_EXTERNAL_DIR`; the Linux backend and sidecar launchers honor those
+paths instead of forcing them below one drive or mount.
 
 ## Validation scope
 

@@ -4,8 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 export EDMG_STUDIO_HOME="${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}"
+export EDMG_STUDIO_LOGS_DIR="${EDMG_STUDIO_LOGS_DIR:-${EDMG_STUDIO_HOME}/logs}"
 
-LOG_DIR="${EDMG_LIGHTNING_LOG_DIR:-${EDMG_STUDIO_HOME}/logs/lightning-backend}"
+LOG_DIR="${EDMG_LIGHTNING_LOG_DIR:-${EDMG_STUDIO_LOGS_DIR}/lightning-backend}"
 LOG_FILE="${EDMG_LIGHTNING_LOG_FILE:-${LOG_DIR}/backend.log}"
 PID_FILE="${EDMG_LIGHTNING_PID_FILE:-${LOG_DIR}/backend.pid}"
 

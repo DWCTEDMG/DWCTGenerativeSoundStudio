@@ -28,8 +28,25 @@ const childEnv = {
   ELECTRON_BUILDER_CACHE: electronBuilderCache,
 };
 
+function resolveEvidenceProfile() {
+  const configured = String(process.env.EDMG_BACKEND_ACCELERATOR_PROFILE || "").trim();
+  if (configured) return configured;
+
+  for (const manifestPath of [
+    path.join(root, "release", "staged-app", "electron-resources", "backend", "backend-bundle-manifest.json"),
+    path.join(root, "electron-resources", "backend", "backend-bundle-manifest.json"),
+  ]) {
+    if (!fs.existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const profile = String(manifest.acceleratorProfile || "").trim();
+    if (profile) return profile;
+  }
+  return "";
+}
+
 async function main() {
-  const result = spawnSync(process.execPath, [builderEntry, ...process.argv.slice(2)], {
+  const builderArgs = process.argv.slice(2);
+  const result = spawnSync(process.execPath, [builderEntry, ...builderArgs], {
     cwd: root,
     stdio: "inherit",
     shell: false,
@@ -44,18 +61,23 @@ async function main() {
     process.exit(result.status ?? 1);
   }
 
-  const wantsInstallerArtifacts = process.argv.slice(2).some(
-    (arg) => /^-w/i.test(arg) || /^--win/i.test(arg) || /^-l/i.test(arg) || /^--linux/i.test(arg),
-  );
+  const wantsWindows = builderArgs.some((arg) => /^-w(?:$|in)|^--win/i.test(arg));
+  const wantsLinux = builderArgs.some((arg) => /^-l(?:$|inux)|^--linux/i.test(arg));
+  const wantsInstallerArtifacts = wantsWindows || wantsLinux;
   if (!wantsInstallerArtifacts) {
     return;
   }
+  if (wantsWindows && wantsLinux) {
+    throw new Error("Release evidence requires one Electron Builder target at a time (Windows or Linux).");
+  }
+  const artifactSet = wantsWindows ? "win-nsis" : "linux-appimage";
 
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const evidence = await writeReleaseEvidence({
     root,
     phase: "dist",
-    profile: process.env.EDMG_BACKEND_ACCELERATOR_PROFILE || "",
+    profile: resolveEvidenceProfile(),
+    artifactSet,
     version: String(packageJson.version || ""),
     env: process.env,
   });

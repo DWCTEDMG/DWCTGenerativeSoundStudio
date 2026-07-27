@@ -1410,6 +1410,7 @@ const windowRuntime = createWindowRuntime({
   backendHost: BACKEND_HOST,
   backendPort: BACKEND_PORT,
   backendUrl: BACKEND_URL,
+  getBackendUrl: () => backendRuntime.getCurrentBackendUrl(),
   testMode: TEST_MODE,
   testPage: TEST_PAGE,
   testReportPath: TEST_REPORT_PATH,

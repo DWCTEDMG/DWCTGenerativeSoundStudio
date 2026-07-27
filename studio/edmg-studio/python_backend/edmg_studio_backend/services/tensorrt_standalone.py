@@ -13,7 +13,7 @@ from PIL import Image
 from ..errors import UserFacingError
 
 
-DEFAULT_SD15_BASE_MODEL = "runwayml/stable-diffusion-v1-5"
+DEFAULT_SD15_BASE_MODEL = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 
 
 def _runtime_store():
@@ -77,11 +77,6 @@ def _resolve_bundle_dir(model_id: str | None, payload: dict[str, Any]) -> Path:
 
     for env_name in ("EDMG_TENSORRT_SD15_BUNDLE", "EDMG_TENSORRT_MODEL_DIR"):
         path = _existing_path(os.getenv(env_name))
-        if path is not None:
-            return path
-
-    if os.name == "nt":
-        path = _existing_path(r"D:\my_tensorrt_models")
         if path is not None:
             return path
 

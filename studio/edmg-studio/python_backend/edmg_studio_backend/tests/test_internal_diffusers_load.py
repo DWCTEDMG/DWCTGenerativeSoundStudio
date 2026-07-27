@@ -6,6 +6,9 @@ import pytest
 
 from edmg_studio_backend.services import internal_video as iv
 from edmg_studio_backend.services.model_manager import ModelManager
+from edmg_studio_backend.tests.safetensors_test_utils import (
+    write_minimal_safetensors,
+)
 
 
 def _write_lfs_pointer(path: Path) -> None:
@@ -31,7 +34,9 @@ def test_diffusers_model_load_kwargs_uses_real_fp16_bin_when_safetensors_is_lfs_
     _write_lfs_pointer(tmp_path / "unet" / "diffusion_pytorch_model.fp16.safetensors")
     (tmp_path / "unet" / "diffusion_pytorch_model.fp16.bin").write_bytes(b"real fp16 bin weights")
     (tmp_path / "text_encoder").mkdir(parents=True)
-    (tmp_path / "text_encoder" / "model.fp16.safetensors").write_bytes(b"real fp16 safetensors")
+    write_minimal_safetensors(
+        tmp_path / "text_encoder" / "model.fp16.safetensors"
+    )
 
     kwargs = iv._diffusers_model_load_kwargs(tmp_path, "cuda")
 
@@ -43,7 +48,9 @@ def test_diffusers_model_load_kwargs_uses_real_fp16_bin_when_safetensors_peer_is
     (tmp_path / "unet").mkdir(parents=True)
     (tmp_path / "unet" / "diffusion_pytorch_model.fp16.bin").write_bytes(b"real fp16 bin weights")
     (tmp_path / "text_encoder").mkdir(parents=True)
-    (tmp_path / "text_encoder" / "model.fp16.safetensors").write_bytes(b"real fp16 safetensors")
+    write_minimal_safetensors(
+        tmp_path / "text_encoder" / "model.fp16.safetensors"
+    )
 
     kwargs = iv._diffusers_model_load_kwargs(tmp_path, "cuda")
 
@@ -53,12 +60,53 @@ def test_diffusers_model_load_kwargs_uses_real_fp16_bin_when_safetensors_peer_is
 
 def test_diffusers_model_load_kwargs_keeps_real_fp16_safetensors_preferred(tmp_path: Path) -> None:
     (tmp_path / "unet").mkdir(parents=True)
-    (tmp_path / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"real fp16 safetensors")
+    write_minimal_safetensors(
+        tmp_path / "unet" / "diffusion_pytorch_model.fp16.safetensors"
+    )
 
     kwargs = iv._diffusers_model_load_kwargs(tmp_path, "cuda")
 
     assert kwargs["variant"] == "fp16"
     assert kwargs["use_safetensors"] is True
+
+
+def test_diffusers_model_load_kwargs_prefers_complete_default_over_leftover_fp16(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "model_index.json").write_text(
+        '{"unet":["diffusers","UNet2DConditionModel"]}',
+        encoding="utf-8",
+    )
+    write_minimal_safetensors(
+        tmp_path / "unet" / "diffusion_pytorch_model.safetensors"
+    )
+    write_minimal_safetensors(
+        tmp_path / "unet" / "diffusion_pytorch_model.fp16.safetensors"
+    )
+
+    kwargs = iv._diffusers_model_load_kwargs(tmp_path, "cuda")
+
+    assert "variant" not in kwargs
+    assert kwargs["use_safetensors"] is True
+
+
+def test_diffusers_model_load_kwargs_uses_complete_default_bin_fallback(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "model_index.json").write_text(
+        '{"unet":["diffusers","UNet2DConditionModel"]}',
+        encoding="utf-8",
+    )
+    unet = tmp_path / "unet"
+    unet.mkdir()
+    (unet / "diffusion_pytorch_model.bin").write_bytes(b"default bin weights")
+    corrupt_safe = unet / "diffusion_pytorch_model.safetensors"
+    corrupt_safe.write_bytes((100).to_bytes(8, "little") + b"{}")
+
+    kwargs = iv._diffusers_model_load_kwargs(tmp_path, "cuda")
+
+    assert "variant" not in kwargs
+    assert kwargs["use_safetensors"] is False
 
 
 def test_diffusers_model_load_kwargs_falls_back_to_bin_only_snapshot_on_cpu(tmp_path: Path) -> None:
@@ -125,10 +173,12 @@ def test_missing_diffusers_components_reports_vae(tmp_path, monkeypatch) -> None
     )
     unet_dir = model_dir / "unet"
     unet_dir.mkdir()
-    (unet_dir / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+    write_minimal_safetensors(
+        unet_dir / "diffusion_pytorch_model.safetensors"
+    )
     text_dir = model_dir / "text_encoder"
     text_dir.mkdir()
-    (text_dir / "model.safetensors").write_bytes(b"weights")
+    write_minimal_safetensors(text_dir / "model.safetensors")
     vae_dir = model_dir / "vae"
     vae_dir.mkdir()
     (vae_dir / "config.json").write_text("{}", encoding="utf-8")

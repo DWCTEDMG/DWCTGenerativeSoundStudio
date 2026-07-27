@@ -10,6 +10,18 @@ This folder contains a **Windows-first** packaging pipeline that produces a DAW/
 - Node.js 18+ on PATH
 - `pnpm@10.33.0` available via `corepack enable` or a direct pnpm install
 - Git (optional, for fetching ComfyUI)
+- Inno Setup 7 or newer for the CUDA external-payload installer. Inno 7's
+  extended-length path support is required by the packaged Director dependency
+  tree. The build prefers standard per-user and Program Files Inno 7 locations.
+
+Install Inno Setup 7 per-user with:
+
+```powershell
+winget install --id JRSoftware.InnoSetup.7 -e --source winget --scope user
+```
+
+Use an Inno Setup license appropriate for your distribution; the free install
+identifies builds made without a commercial license as non-commercial use only.
 
 Recommended (for AI):
 
@@ -23,8 +35,16 @@ Open PowerShell in repo root and run:
 ./studio/edmg-studio/packaging/windows/build_all.ps1
 ```
 
-If the backend bundle is too large for NSIS, build the Inno Setup
-external-payload installer instead:
+The CUDA backend exceeds NSIS's 4 GiB archive limit, so `dist:win:cuda` uses
+the Inno Setup external-payload installer automatically:
+
+```powershell
+cd studio/edmg-studio
+pnpm run dist:win:cuda
+```
+
+For other oversized profiles, build the Inno Setup external-payload installer
+directly:
 
 ```powershell
 ./studio/edmg-studio/packaging/windows/build_inno_external.ps1
@@ -43,13 +63,17 @@ This produces:
 
 - `studio/edmg-studio/dist-inno/EDMG-Studio-Setup-<version>.exe`
 - `studio/edmg-studio/dist-inno/payload/win-unpacked.7z`
-- `studio/edmg-studio/dist-inno/payload/tools/7zip/`
+
+The CUDA command uses the parallel `dist-inno-cuda/` directory. The legacy
+single-file CUDA NSIS attempt remains available as `dist:win:cuda:nsis` for
+diagnostics, but the current locked CUDA payload is too large to succeed.
 
 Ship the setup EXE and `payload/` directory together. The setup EXE is small
 because Inno copies the large packaged app archive from the sibling payload
-folder at install time instead of embedding it. The installer uses the bundled
-7-Zip CLI from `payload/tools/7zip/` to extract the app, which avoids NSIS
-archive mmap limits and direct long-path recursion through `node_modules`.
+folder at install time instead of embedding it. Inno's native archive extractor
+tracks every installed payload file for a clean uninstall, so customer machines
+do not need 7-Zip. The setup EXE embeds the payload SHA-256 and rejects a missing
+or modified archive. The build machine still needs 7-Zip to create the archive.
 
 Outputs:
 
@@ -61,7 +85,9 @@ The packaged desktop version comes from `studio/edmg-studio/package.json#version
 version metadata drift is caught before packaging. The default Windows build
 uses the mutually exclusive `directml` profile. Use `pnpm run dist:win:cpu`,
 `pnpm run dist:win:directml`, or `pnpm run dist:win:cuda` when selecting an
-explicit release profile.
+explicit release profile. Release packaging uses isolated profile-specific uv
+environments under `release/uv-environments/`, so a running development backend
+cannot replace CUDA dependencies during a build.
 
 ## What gets bundled
 

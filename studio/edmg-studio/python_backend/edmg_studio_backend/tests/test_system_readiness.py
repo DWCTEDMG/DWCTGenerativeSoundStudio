@@ -149,6 +149,12 @@ def test_system_readiness_blocks_unwritable_paths(tmp_path: Path, monkeypatch):
         item["label"] == "data" and item["writable"] is False
         for item in report["checks"]["writable_paths"]["paths"]
     )
+    failed_path = next(
+        item for item in report["checks"]["writable_paths"]["paths"]
+        if item["label"] == "data"
+    )
+    assert failed_path["error"] == "Path is not writable"
+    assert "denied" not in failed_path["error"]
 
 
 def test_system_readiness_marks_low_disk_as_blocked(tmp_path: Path, monkeypatch):

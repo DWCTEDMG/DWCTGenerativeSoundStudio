@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -92,6 +92,23 @@ def test_packaged_status_uses_build_manifest_without_requiring_uv(monkeypatch):
     assert status["sync_health"] == "bundled"
     assert status["accelerator_profile"] == "cuda"
     assert status["python_version"] == "3.12.10"
+
+
+def test_source_status_does_not_expose_toolchain_exception(monkeypatch):
+    monkeypatch.setattr(uv_toolchain, "is_packaged_backend", lambda: False)
+    monkeypatch.setattr(
+        uv_toolchain,
+        "resolve_uv",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            uv_toolchain.ToolchainError("secret command diagnostics")
+        ),
+    )
+
+    status = uv_toolchain.toolchain_status(profile="cpu")
+
+    assert status["ok"] is False
+    assert status["error"] == "Backend toolchain validation failed"
+    assert "secret command diagnostics" not in status["error"]
 
 
 def test_uv_archive_extraction_rejects_path_traversal(tmp_path):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import logging
 import os
 import platform
 import shutil
@@ -16,6 +17,8 @@ import zipfile
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 UV_REQUIRED_VERSION = "0.11.28"
 PYTHON_REQUIRED_MINOR = (3, 12)
@@ -534,8 +537,9 @@ def toolchain_status(*, profile: str | None = None, check_sync: bool = True) -> 
             and status["lock_check"] == "ok"
             and (not check_sync or status["sync_health"] == "ok")
         )
-    except ToolchainError as exc:
-        status["error"] = str(exc)
+    except ToolchainError:
+        logger.warning("Backend toolchain validation failed", exc_info=True)
+        status["error"] = "Backend toolchain validation failed"
         status["hint"] = (
             f"Run the source launcher or `uv sync --frozen --extra {resolved_profile}` from python_backend."
         )

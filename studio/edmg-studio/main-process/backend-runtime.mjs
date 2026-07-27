@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import path from "node:path";
 
 export const SOURCE_RUNTIME_CAPABILITY_EXTRAS = Object.freeze([
@@ -10,6 +11,8 @@ export const SOURCE_RUNTIME_CAPABILITY_EXTRAS = Object.freeze([
   "internal-video",
   "aws",
 ]);
+
+const PACKAGED_BACKEND_LAUNCH_ATTEMPTS = 3;
 
 export function normalizeAcceleratorProfile(value, { isWindows = process.platform === "win32" } = {}) {
   const aliases = { nvidia: "cuda", amd: "directml" };
@@ -34,12 +37,13 @@ export function buildBackendLaunchSpec({
   env = process.env,
 }) {
   if (appIsPackaged) {
+    const pathApi = isWindows ? path.win32 : path;
     const exeName = isWindows ? "edmg-studio-backend.exe" : "edmg-studio-backend";
-    const command = path.join(resourcesPath, "backend", exeName);
+    const command = pathApi.join(resourcesPath, "backend", exeName);
     return {
       command,
       args: ["serve", "--host", backendHost, "--port", String(backendPort)],
-      cwd: path.dirname(command),
+      cwd: pathApi.dirname(command),
       label: "packaged-backend",
     };
   }
@@ -86,6 +90,55 @@ export function resolveStudioUiOrigin(devServerUrl, { isDev = true } = {}) {
   }
 }
 
+export function executablePathsEqual(
+  left,
+  right,
+  { isWindows = process.platform === "win32" } = {},
+) {
+  const leftValue = String(left || "").trim();
+  const rightValue = String(right || "").trim();
+  if (!leftValue || !rightValue) return false;
+
+  const pathApi = isWindows ? path.win32 : path;
+  const normalizedLeft = pathApi.resolve(leftValue);
+  const normalizedRight = pathApi.resolve(rightValue);
+  return isWindows
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+export function managedBackendUrl(host, port) {
+  const rawHost = String(host || "127.0.0.1").trim() || "127.0.0.1";
+  const publicHost = rawHost === "0.0.0.0"
+    ? "127.0.0.1"
+    : rawHost === "::"
+      ? "::1"
+      : rawHost;
+  const urlHost = publicHost.includes(":") && !publicHost.startsWith("[")
+    ? `[${publicHost}]`
+    : publicHost;
+  return `http://${urlHost}:${String(port)}`;
+}
+
+export function parseWindowsNetstatListeningPid(output, port) {
+  const targetPort = Number(port);
+  if (!Number.isFinite(targetPort) || targetPort <= 0) return null;
+
+  for (const rawLine of String(output || "").split(/\r?\n/)) {
+    const fields = rawLine.trim().split(/\s+/);
+    if (fields.length < 5 || String(fields[0]).toUpperCase() !== "TCP") continue;
+    const state = fields[3];
+    const rawPid = fields[4];
+    if (String(state).toUpperCase() !== "LISTENING") continue;
+    const localAddress = String(fields[1] || "");
+    const portMatch = /:(\d+)$/.exec(localAddress);
+    if (!portMatch || Number(portMatch[1]) !== targetPort) continue;
+    const pid = Number(rawPid);
+    if (Number.isFinite(pid) && pid > 0) return pid;
+  }
+  return null;
+}
+
 export function createBackendRuntime({
   app,
   dialog,
@@ -105,8 +158,11 @@ export function createBackendRuntime({
   isDev = !app?.isPackaged,
   devServerUrl = "",
   studioUiOrigin = "",
+  resourcesPath = process.resourcesPath,
+  runtimeOps = {},
 }) {
-  let currentBackendUrl = backendUrl || `http://${backendHost}:${backendPort}`;
+  let activeBackendPort = Number(backendPort);
+  let currentBackendUrl = backendUrl || managedBackendUrl(backendHost, activeBackendPort);
   let backendProc = null;
   const uiOrigin =
     String(studioUiOrigin || "").trim() || resolveStudioUiOrigin(devServerUrl, { isDev });
@@ -131,8 +187,8 @@ export function createBackendRuntime({
     const exeName = isWindows ? "ffmpeg.exe" : "ffmpeg";
     const candidates = app.isPackaged
       ? [
-          path.join(process.resourcesPath, "bin", exeName),
-          path.join(process.resourcesPath, "electron-resources", "bin", exeName),
+          path.join(resourcesPath, "bin", exeName),
+          path.join(resourcesPath, "electron-resources", "bin", exeName),
         ]
       : [
           path.join(rootDir, "electron-resources", "bin", exeName),
@@ -150,11 +206,11 @@ export function createBackendRuntime({
   function getBackendLaunchSpec() {
     return buildBackendLaunchSpec({
       appIsPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
+      resourcesPath,
       rootDir,
       isWindows,
       backendHost,
-      backendPort,
+      backendPort: activeBackendPort,
     });
   }
 
@@ -164,7 +220,7 @@ export function createBackendRuntime({
       ...managedStudioEnv,
       ...buildManagedAiEnv(),
       EDMG_STUDIO_BACKEND_HOST: backendHost,
-      EDMG_STUDIO_BACKEND_PORT: String(backendPort),
+      EDMG_STUDIO_BACKEND_PORT: String(activeBackendPort),
       EDMG_FFMPEG_PATH: ffmpegPath,
       MPLBACKEND: process.env.MPLBACKEND || "Agg",
     };
@@ -216,6 +272,10 @@ export function createBackendRuntime({
 
   function terminateProcessTree(pid) {
     if (!pid) return;
+    if (typeof runtimeOps.terminateProcessTree === "function") {
+      runtimeOps.terminateProcessTree(pid);
+      return;
+    }
     if (isWindows) {
       const result = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
         windowsHide: true,
@@ -232,6 +292,9 @@ export function createBackendRuntime({
   function findListeningPid(port) {
     const target = Number(port);
     if (!Number.isFinite(target) || target <= 0) return null;
+    if (typeof runtimeOps.findListeningPid === "function") {
+      return runtimeOps.findListeningPid(target);
+    }
 
     if (isWindows) {
       const result = spawnSync("netstat", ["-ano", "-p", "TCP"], {
@@ -240,16 +303,7 @@ export function createBackendRuntime({
         shell: false,
       });
       if (result.status !== 0) return null;
-      const pat = new RegExp(`:${target}\\s+LISTENING\\s+(\\d+)\\s*$`, "i");
-      const pat6 = new RegExp(`\\]:${target}\\s+LISTENING\\s+(\\d+)\\s*$`, "i");
-      for (const line of String(result.stdout || "").split(/\r?\n/)) {
-        const match = pat.exec(line.trim()) || pat6.exec(line.trim());
-        if (match) {
-          const pid = Number(match[1]);
-          return Number.isFinite(pid) && pid > 0 ? pid : null;
-        }
-      }
-      return null;
+      return parseWindowsNetstatListeningPid(result.stdout, target);
     }
 
     const result = spawnSync("lsof", ["-nP", `-iTCP:${target}`, "-sTCP:LISTEN", "-t"], {
@@ -261,15 +315,116 @@ export function createBackendRuntime({
     return Number.isFinite(pid) && pid > 0 ? pid : null;
   }
 
+  function resolveProcessExecutablePath(pid) {
+    const target = Number(pid);
+    if (!Number.isFinite(target) || target <= 0) return "";
+    if (typeof runtimeOps.resolveProcessExecutablePath === "function") {
+      return String(runtimeOps.resolveProcessExecutablePath(target) || "").trim();
+    }
+
+    if (isWindows) {
+      const result = spawnSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `(Get-CimInstance Win32_Process -Filter \"ProcessId=${target}\" -ErrorAction SilentlyContinue).ExecutablePath`,
+        ],
+        {
+          windowsHide: true,
+          encoding: "utf8",
+          shell: false,
+        },
+      );
+      return result.status === 0 ? String(result.stdout || "").trim() : "";
+    }
+
+    if (process.platform === "linux") {
+      try {
+        return fs.readlinkSync(`/proc/${target}/exe`);
+      } catch {
+        return "";
+      }
+    }
+
+    const result = spawnSync("ps", ["-p", String(target), "-o", "comm="], {
+      encoding: "utf8",
+      shell: false,
+    });
+    return result.status === 0 ? String(result.stdout || "").trim() : "";
+  }
+
+  function allocateAvailableBackendPort() {
+    if (typeof runtimeOps.allocateAvailableBackendPort === "function") {
+      return Promise.resolve(runtimeOps.allocateAvailableBackendPort(backendHost));
+    }
+    return new Promise((resolve, reject) => {
+      const server = net.createServer();
+      let settled = false;
+      const finish = (error, port) => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve(port);
+      };
+      server.unref();
+      server.once("error", (error) => finish(error));
+      server.listen({ host: backendHost, port: 0, exclusive: true }, () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? Number(address.port) : 0;
+        server.close((error) => {
+          if (error) finish(error);
+          else if (!Number.isFinite(port) || port <= 0) finish(new Error("Could not allocate a local backend port."));
+          else finish(null, port);
+        });
+      });
+    });
+  }
+
+  async function movePackagedBackendToAvailablePort(reason) {
+    const previousUrl = currentBackendUrl;
+    try {
+      activeBackendPort = await allocateAvailableBackendPort();
+    } catch (error) {
+      const message = `Could not allocate a private local port for the packaged backend: ${error?.message ?? error}`;
+      console.error("[backend]", message);
+      if (!testMode) dialog.showErrorBox("EDMG Studio backend port conflict", message);
+      return false;
+    }
+    currentBackendUrl = managedBackendUrl(backendHost, activeBackendPort);
+    console.warn(
+      `[backend] ${reason}; leaving ${previousUrl} untouched and using ${currentBackendUrl} for this Studio session`,
+    );
+    logBackendUrlMarker();
+    return true;
+  }
+
+  function inspectPackagedBackendPortOwner() {
+    if (!app.isPackaged) return { state: "not-packaged" };
+    const listenerPid = findListeningPid(activeBackendPort);
+    if (!listenerPid) return { state: "vacant" };
+    const expectedExecutable = getBackendLaunchSpec().command;
+    const listenerExecutable = resolveProcessExecutablePath(listenerPid);
+    return {
+      state: executablePathsEqual(listenerExecutable, expectedExecutable, { isWindows })
+        ? "packaged"
+        : "foreign",
+      listenerPid,
+      listenerExecutable,
+      expectedExecutable,
+    };
+  }
+
   async function reclaimStaleBackendPort(reason) {
-    const pid = findListeningPid(backendPort);
+    const pid = findListeningPid(activeBackendPort);
     if (!pid) {
-      console.warn(`[backend] ${reason}; port ${backendPort} has no listener to reclaim`);
+      console.warn(`[backend] ${reason}; port ${activeBackendPort} has no listener to reclaim`);
       return false;
     }
 
     console.warn(
-      `[backend] ${reason}; terminating PID ${pid} on :${backendPort} so Desktop can spawn a fresh backend`,
+      `[backend] ${reason}; terminating PID ${pid} on :${activeBackendPort} so Desktop can spawn a fresh backend`,
     );
     terminateProcessTree(pid);
 
@@ -287,6 +442,9 @@ export function createBackendRuntime({
   }
 
   function launchPackagedBackendWindows(spec, env, logPaths) {
+    if (typeof runtimeOps.launchPackagedBackendWindows === "function") {
+      return Promise.resolve(runtimeOps.launchPackagedBackendWindows(spec, env, logPaths));
+    }
     const argList = (spec.args || []).map((arg) => quotePowerShell(String(arg))).join(", ");
     const stdoutPath = logPaths?.stdoutPath || "";
     const stderrPath = logPaths?.stderrPath || "";
@@ -329,6 +487,7 @@ export function createBackendRuntime({
         resolve({
           pid,
           kind: "windows_start_process",
+          expectedExecutable: spec.command,
           logPaths,
           kill() {
             terminateProcessTree(pid);
@@ -343,6 +502,9 @@ export function createBackendRuntime({
   }
 
   async function probeBackend(url = currentBackendUrl) {
+    if (typeof runtimeOps.probeBackend === "function") {
+      return Boolean(await runtimeOps.probeBackend(url));
+    }
     return new Promise((resolve) => {
       const req = http.get(`${url}/health`, (res) => {
         res.resume();
@@ -358,6 +520,9 @@ export function createBackendRuntime({
   }
 
   async function probeBackendAllowsStudioOrigin(url = currentBackendUrl) {
+    if (typeof runtimeOps.probeBackendAllowsStudioOrigin === "function") {
+      return Boolean(await runtimeOps.probeBackendAllowsStudioOrigin(url, uiOrigin));
+    }
     const origin = uiOrigin || "null";
     return new Promise((resolve) => {
       const req = http.get(`${url}/health`, { headers: { Origin: origin } }, (res) => {
@@ -387,37 +552,106 @@ export function createBackendRuntime({
     return false;
   }
 
-  async function startBackendIfNeeded() {
+  async function retryPackagedBackendAfterOwnershipFailure(owner, launchAttempt) {
+    const ownerDetail = owner.listenerExecutable
+      ? `PID ${owner.listenerPid} (${owner.listenerExecutable})`
+      : owner.listenerPid
+        ? `PID ${owner.listenerPid} of unknown origin`
+        : "an unverifiable listener";
+    const reason = `${ownerDetail} claimed ${currentBackendUrl} while the bundled backend was starting`;
+    stopBackend();
+
+    if (launchAttempt + 1 >= PACKAGED_BACKEND_LAUNCH_ATTEMPTS) {
+      const message =
+        `${reason}. Studio stopped after ${PACKAGED_BACKEND_LAUNCH_ATTEMPTS} safe launch attempts ` +
+        "instead of attaching to an unverified process.";
+      console.error("[backend]", message);
+      if (!testMode) dialog.showErrorBox("EDMG Studio backend port conflict", message);
+      return false;
+    }
+
+    if (!(await movePackagedBackendToAvailablePort(reason))) return false;
+    return startBackendIfNeeded(launchAttempt + 1);
+  }
+
+  async function startBackendIfNeeded(launchAttempt = 0) {
     logBackendUrlMarker();
     if ((process.env.EDMG_STUDIO_SPAWN_BACKEND ?? "1") === "0") {
       console.log("[edmg] spawn backend=false");
       return false;
     }
 
+    if (app.isPackaged) {
+      const owner = inspectPackagedBackendPortOwner();
+      if (owner.state === "foreign") {
+        const detail = owner.listenerExecutable
+          ? `PID ${owner.listenerPid} (${owner.listenerExecutable}) owns port ${activeBackendPort}`
+          : `PID ${owner.listenerPid} of unknown origin owns port ${activeBackendPort}`;
+        if (!(await movePackagedBackendToAvailablePort(detail))) return false;
+      } else if (owner.state === "packaged") {
+        console.log(
+          `[backend] packaged backend PID ${owner.listenerPid} already owns port ${activeBackendPort}; waiting for readiness`,
+        );
+        const ready = await waitForBackendReady();
+        const verifiedOwner = ready ? inspectPackagedBackendPortOwner() : null;
+        if (ready && verifiedOwner?.state === "packaged") {
+          logBackendUrlMarker();
+          return true;
+        }
+        const reason = ready
+          ? `listener ownership changed while checking packaged backend PID ${owner.listenerPid} on port ${activeBackendPort}`
+          : `packaged backend PID ${owner.listenerPid} on port ${activeBackendPort} did not become ready`;
+        if (!(await movePackagedBackendToAvailablePort(
+          reason,
+        ))) return false;
+      }
+    }
+
     if (await probeBackend()) {
-      if (await probeBackendAllowsStudioOrigin()) {
-        console.log("[backend] already reachable:", currentBackendUrl);
-        logBackendUrlMarker();
-        return true;
+      if (app.isPackaged) {
+        const owner = inspectPackagedBackendPortOwner();
+        if (owner.state !== "packaged") {
+          const detail = owner.listenerExecutable
+            ? `listener ${owner.listenerExecutable} is not the bundled backend`
+            : "listener ownership could not be verified";
+          if (!(await movePackagedBackendToAvailablePort(detail))) return false;
+        }
       }
 
-      // Desktop cannot use a backend that rejects the Studio UI Origin.
-      // Reclaim the port and fall through to spawn instead of blocking the UI.
-      const reclaimed = await reclaimStaleBackendPort(
-        `${currentBackendUrl} answers /health but does not allow Origin ${uiOrigin} (CORS)`,
-      );
-      if (!reclaimed) {
-        const message =
-          `${currentBackendUrl} answers /health but does not allow Origin ${uiOrigin} (CORS),\n` +
-          `and Studio could not free port ${backendPort} automatically.\n\n` +
-          "1. In the launcher, click Stop Backend\n" +
-          "2. Or run: netstat -ano | findstr :7863  then  taskkill /PID <pid> /F\n" +
-          "3. Start Studio again so a fresh backend is spawned";
-        console.warn("[backend] refusing attach (missing Studio UI CORS):\n" + message);
-        if (!testMode) {
-          dialog.showErrorBox("Stale Studio backend (CORS)", message);
+      // A packaged listener mismatch moves currentBackendUrl, so only attach
+      // when the newly selected URL is itself reachable.
+      if (!(await probeBackend())) {
+        // Fall through and launch the bundled backend on the selected port.
+      } else if (await probeBackendAllowsStudioOrigin()) {
+        const verifiedOwner = app.isPackaged ? inspectPackagedBackendPortOwner() : null;
+        if (!app.isPackaged || verifiedOwner?.state === "packaged") {
+          console.log("[backend] already reachable:", currentBackendUrl);
+          logBackendUrlMarker();
+          return true;
         }
-        return false;
+        const detail = verifiedOwner?.listenerExecutable
+          ? `listener ownership changed to ${verifiedOwner.listenerExecutable}`
+          : "listener ownership changed and could not be verified";
+        if (!(await movePackagedBackendToAvailablePort(detail))) return false;
+      } else {
+        // Desktop cannot use a backend that rejects the Studio UI Origin.
+        // Reclaim the port and fall through to spawn instead of blocking the UI.
+        const reclaimed = await reclaimStaleBackendPort(
+          `${currentBackendUrl} answers /health but does not allow Origin ${uiOrigin} (CORS)`,
+        );
+        if (!reclaimed) {
+          const message =
+            `${currentBackendUrl} answers /health but does not allow Origin ${uiOrigin} (CORS),\n` +
+            `and Studio could not free port ${activeBackendPort} automatically.\n\n` +
+            "1. In the launcher, click Stop Backend\n" +
+            `2. Or run: netstat -ano | findstr :${activeBackendPort}  then  taskkill /PID <pid> /F\n` +
+            "3. Start Studio again so a fresh backend is spawned";
+          console.warn("[backend] refusing attach (missing Studio UI CORS):\n" + message);
+          if (!testMode) {
+            dialog.showErrorBox("Stale Studio backend (CORS)", message);
+          }
+          return false;
+        }
       }
     }
 
@@ -428,7 +662,7 @@ export function createBackendRuntime({
     const childEnv = buildBackendChildEnv(managedStudioEnv, ffmpegPath, spec);
     const logPaths = resolveBackendLogPaths(managedStudioEnv.EDMG_STUDIO_LOGS_DIR);
 
-    if (app.isPackaged && !fs.existsSync(spec.command)) {
+    if (app.isPackaged && !pathExistsSync(spec.command)) {
       console.error("[backend] packaged backend missing:", spec.command);
 
       if (!testMode) {
@@ -511,6 +745,12 @@ export function createBackendRuntime({
     }
 
     const ready = await waitForBackendReady();
+    if (app.isPackaged) {
+      const owner = inspectPackagedBackendPortOwner();
+      if (owner.state !== "packaged") {
+        return retryPackagedBackendAfterOwnershipFailure(owner, launchAttempt);
+      }
+    }
     if (!ready) {
       console.warn("[backend] not reachable:", currentBackendUrl);
       const stdoutTail = tailFileSync(logPaths.stdoutPath);
@@ -528,7 +768,23 @@ export function createBackendRuntime({
     if (!backendProc) return;
 
     try {
-      if (typeof backendProc.kill === "function") {
+      if (isWindows && backendProc.pid) {
+        // uv and PyInstaller both create child processes on Windows. Killing
+        // only the immediate child leaves Python serving on the managed port.
+        if (backendProc.kind === "windows_start_process") {
+          const actualExecutable = resolveProcessExecutablePath(backendProc.pid);
+          if (executablePathsEqual(actualExecutable, backendProc.expectedExecutable, { isWindows })) {
+            terminateProcessTree(backendProc.pid);
+          } else {
+            console.warn(
+              `[backend] refusing to terminate stale PID ${backendProc.pid}; ` +
+              `expected ${backendProc.expectedExecutable || "packaged backend"}, got ${actualExecutable || "no process"}`,
+            );
+          }
+        } else {
+          terminateProcessTree(backendProc.pid);
+        }
+      } else if (typeof backendProc.kill === "function") {
         backendProc.kill();
       } else if (backendProc.pid) {
         terminateProcessTree(backendProc.pid);
