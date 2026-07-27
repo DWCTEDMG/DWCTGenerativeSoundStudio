@@ -37,12 +37,13 @@ export function buildBackendLaunchSpec({
   env = process.env,
 }) {
   if (appIsPackaged) {
+    const pathApi = isWindows ? path.win32 : path;
     const exeName = isWindows ? "edmg-studio-backend.exe" : "edmg-studio-backend";
-    const command = path.join(resourcesPath, "backend", exeName);
+    const command = pathApi.join(resourcesPath, "backend", exeName);
     return {
       command,
       args: ["serve", "--host", backendHost, "--port", String(backendPort)],
-      cwd: path.dirname(command),
+      cwd: pathApi.dirname(command),
       label: "packaged-backend",
     };
   }
