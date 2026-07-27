@@ -11,6 +11,9 @@ from edmg_studio_backend.integrations.hf_bucket import (
 from edmg_studio_backend.services import hf_auth as hf_auth_module
 from edmg_studio_backend.services import model_manager as model_manager_module
 from edmg_studio_backend.services.model_manager import ModelManager
+from edmg_studio_backend.tests.safetensors_test_utils import (
+    write_minimal_safetensors,
+)
 
 
 class _FakeSecrets:
@@ -56,7 +59,9 @@ class FakeHFBucketModelCache:
         )
         unet_dir = dest / "unet"
         unet_dir.mkdir(parents=True, exist_ok=True)
-        (unet_dir / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+        write_minimal_safetensors(
+            unet_dir / "diffusion_pytorch_model.safetensors"
+        )
         return True
 
 
@@ -184,7 +189,9 @@ def test_install_hf_bucket_source_syncs_internal_controlnet(tmp_path, monkeypatc
         dest = Path(dest)
         dest.mkdir(parents=True, exist_ok=True)
         (dest / "config.json").write_text("{}", encoding="utf-8")
-        (dest / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+        write_minimal_safetensors(
+            dest / "diffusion_pytorch_model.safetensors"
+        )
         return True
 
     monkeypatch.setattr(model_manager_module, "_hf_bucket_download_snapshot", _fake_sync)
@@ -318,7 +325,15 @@ def test_snapshot_install_retries_a_rejected_cache_token_with_settings_token(tmp
         assert token == settings_token
         target = Path(local_dir)
         target.mkdir(parents=True, exist_ok=True)
-        (target / "model_index.json").write_text("{}", encoding="utf-8")
+        (target / "model_index.json").write_text(
+            json.dumps({"unet": ["diffusers", "UNet2DConditionModel"]}),
+            encoding="utf-8",
+        )
+        unet = target / "unet"
+        unet.mkdir(exist_ok=True)
+        write_minimal_safetensors(
+            unet / "diffusion_pytorch_model.safetensors"
+        )
 
     monkeypatch.setattr(model_manager_module, "snapshot_download", _fake_snapshot_download)
     entry = {
@@ -333,7 +348,7 @@ def test_snapshot_install_retries_a_rejected_cache_token_with_settings_token(tmp
 
     manager._install_file_model(task, entry)
 
-    assert attempts == [cache_token, settings_token]
+    assert attempts == [cache_token, settings_token, settings_token]
     assert (tmp_path / "home" / "models" / "internal" / "diffusers" / "hf_auth_snapshot" / "model_index.json").exists()
     assert "hf_cache was rejected" in task.last_log
 
@@ -358,7 +373,15 @@ def test_snapshot_install_falls_back_when_hf_transfer_is_enabled_but_missing(tmp
             )
         target = Path(local_dir)
         target.mkdir(parents=True, exist_ok=True)
-        (target / "model_index.json").write_text("{}", encoding="utf-8")
+        (target / "model_index.json").write_text(
+            json.dumps({"unet": ["diffusers", "UNet2DConditionModel"]}),
+            encoding="utf-8",
+        )
+        unet = target / "unet"
+        unet.mkdir(exist_ok=True)
+        write_minimal_safetensors(
+            unet / "diffusion_pytorch_model.safetensors"
+        )
 
     monkeypatch.setattr(model_manager_module, "snapshot_download", _fake_snapshot_download)
     entry = {
@@ -373,8 +396,8 @@ def test_snapshot_install_falls_back_when_hf_transfer_is_enabled_but_missing(tmp
 
     manager._install_file_model(task, entry)
 
-    assert attempts == 2
-    assert xet_disabled_during_download == [True, True]
+    assert attempts == 3
+    assert xet_disabled_during_download == [False, False, False]
     assert model_manager_module.hf_hub_constants.HF_TRANSFER_CONCURRENCY == 3
     assert model_manager_module.hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER is False
     assert model_manager_module.hf_hub_constants.HF_HUB_DISABLE_XET is False

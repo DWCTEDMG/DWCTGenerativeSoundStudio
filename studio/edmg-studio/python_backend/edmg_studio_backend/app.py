@@ -16,6 +16,7 @@ import logging
 import shutil
 import subprocess
 import sys
+import threading
 import wave
 from copy import deepcopy
 from dataclasses import replace
@@ -2994,14 +2995,28 @@ def _setup_ai_config() -> dict[str, Any]:
     }
 
 
-@app.get("/v1/setup/status")
-def setup_status():
+def _compute_setup_status(*, include_optional: bool = False) -> dict[str, Any]:
     """Installer GUI status for required components."""
     is_windows = platform.system() == "Windows"
     ai_config = _setup_ai_config()
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
-    ollama = check_ollama(ollama_url, ollama_model)
+    should_probe_ollama = bool(ai_config.get("ollama_required") or include_optional)
+    if should_probe_ollama:
+        ollama = check_ollama(ollama_url, ollama_model)
+    else:
+        ollama = {
+            "ok": False,
+            "model_present": False,
+            "url": ollama_url,
+            "model": ollama_model,
+            "optional": True,
+            "skipped": True,
+            "hint": (
+                f"Ollama health probing is paused because Studio AI is configured for "
+                f"{ai_config.get('label') or ai_config.get('provider') or 'another provider'}."
+            ),
+        }
     ollama_exe = None
     ollama_exe_error = None
     try:
@@ -3126,8 +3141,54 @@ def setup_status():
             "sevenzip": seven,
             "hardware": hw,
             "system_readiness": readiness,
-            "tasks": [t.to_dict() for t in setup_tasks.list()[:10]],
         }
+
+
+_SETUP_STATUS_CACHE_TTL_S = 30.0
+_setup_status_cache_lock = threading.Lock()
+_setup_status_cache: dict[bool, tuple[float, dict[str, Any]]] = {}
+
+
+def _clear_setup_status_cache() -> None:
+    with _setup_status_cache_lock:
+        _setup_status_cache.clear()
+
+
+@app.get("/v1/setup/status")
+def setup_status(refresh: bool = False, include_optional: bool = False):
+    """Return cached setup diagnostics plus the current lightweight task list."""
+    now = time.monotonic()
+    cache_key = bool(include_optional)
+    cached = False
+    with _setup_status_cache_lock:
+        entry = _setup_status_cache.get(cache_key)
+        if not refresh and entry and now - entry[0] < _SETUP_STATUS_CACHE_TTL_S:
+            checked_at, payload = entry
+            result = deepcopy(payload)
+            cached = True
+        else:
+            result = _compute_setup_status(include_optional=include_optional)
+            checked_at = time.monotonic()
+            _setup_status_cache[cache_key] = (checked_at, deepcopy(result))
+
+    result["tasks"] = [task.to_dict() for task in setup_tasks.list()[:10]]
+    result["status_cache"] = {
+        "cached": cached,
+        "age_seconds": round(max(0.0, time.monotonic() - checked_at), 3),
+        "ttl_seconds": _SETUP_STATUS_CACHE_TTL_S,
+    }
+    return result
+
+
+@app.get("/v1/setup/tasks")
+def setup_task_list():
+    """Lightweight progress endpoint; never runs external dependency probes."""
+    tasks = [task.to_dict() for task in setup_tasks.list()[:10]]
+    return {
+        "ok": True,
+        "active": any(task["status"] in ("queued", "running") for task in tasks),
+        "tasks": tasks,
+    }
 
 
 @app.post("/v1/setup/tasks/{task_id}/cancel")
@@ -10095,7 +10156,7 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     if not model_path:
         raise UserFacingError(
             "Local TensorRT SD1.5 bundle is not installed.",
-            hint="Keep D:\\my_tensorrt_models available or set EDMG_TENSORRT_SD15_BUNDLE to a folder containing engine/ and onnx/.",
+            hint="Set EDMG_TENSORRT_SD15_BUNDLE to any folder containing engine/ and onnx/.",
             code="TRT_MODEL_NOT_FOUND",
             status_code=400,
         )

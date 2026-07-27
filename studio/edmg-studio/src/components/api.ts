@@ -4,6 +4,11 @@ const BROWSER_BACKEND_URL_STORAGE_KEY = "edmg.backendUrl";
 let backendAuthToken = "";
 let backendAuthTokenLoaded = false;
 
+export type ApiRequestOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
 export function setBackendAuthTokenForSession(value: string): string {
   backendAuthToken = String(value || "").trim();
   backendAuthTokenLoaded = true;
@@ -232,14 +237,55 @@ export function ensureBrowserBridge(): void {
   };
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function apiFetch(
+  path: string,
+  init: RequestInit = {},
+  options: ApiRequestOptions = {},
+): Promise<Response> {
   const base = await getBackendUrlAsync();
   const headers = await backendAuthHeaders(init.headers);
   const target = new URL(/^https?:\/\//i.test(path) ? path : `${base}${path}`);
   if (target.origin !== new URL(base).origin) {
     throw new Error("Refusing to send Studio backend credentials to a different origin.");
   }
-  return fetch(target.toString(), { ...init, headers });
+
+  const callerSignal = options.signal ?? init.signal ?? undefined;
+  const timeoutMs = Number(options.timeoutMs ?? 0);
+  if (!callerSignal && !(timeoutMs > 0)) {
+    return fetch(target.toString(), { ...init, headers });
+  }
+
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
+  if (timeoutMs > 0) {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  }
+
+  try {
+    return await fetch(target.toString(), {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(`Studio backend request timed out after ${timeoutMs} ms`);
+    }
+    throw error;
+  } finally {
+    if (timeoutId != null) clearTimeout(timeoutId);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
+  }
 }
 
 function formatBackendError(d: any, fallback: string): string {
@@ -267,46 +313,46 @@ function formatBackendError(d: any, fallback: string): string {
   return fallback;
 }
 
-export async function apiGet(path: string) {
-  const r = await apiFetch(path);
+export async function apiGet(path: string, options: ApiRequestOptions = {}) {
+  const r = await apiFetch(path, {}, options);
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `GET ${path} failed`));
   return d;
 }
 
-export async function apiPost(path: string, body: any) {
+export async function apiPost(path: string, body: any, options: ApiRequestOptions = {}) {
   const r = await apiFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, options);
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `POST ${path} failed`));
   return d;
 }
 
-export async function apiPatch(path: string, body: any) {
+export async function apiPatch(path: string, body: any, options: ApiRequestOptions = {}) {
   const r = await apiFetch(path, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, options);
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `PATCH ${path} failed`));
   return d;
 }
 
-export async function apiDelete(path: string) {
-  const r = await apiFetch(path, { method: "DELETE" });
+export async function apiDelete(path: string, options: ApiRequestOptions = {}) {
+  const r = await apiFetch(path, { method: "DELETE" }, options);
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `DELETE ${path} failed`));
   return d;
 }
 
-export async function apiUpload(path: string, file: File) {
+export async function apiUpload(path: string, file: File, options: ApiRequestOptions = {}) {
   const fd = new FormData();
   fd.append("file", file);
-  const r = await apiFetch(path, { method: "POST", body: fd });
+  const r = await apiFetch(path, { method: "POST", body: fd }, options);
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(formatBackendError(d, `UPLOAD ${path} failed`));
   return d;

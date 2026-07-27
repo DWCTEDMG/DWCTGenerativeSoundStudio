@@ -2,5 +2,7 @@
   "_comment": "Tracked runtime defaults loaded by the backend at startup (see edmg_studio_backend/__init__.py). Provider and bucket choices come from persisted Studio settings so UI selections remain authoritative. Do NOT put secrets or machine-specific paths here.",
   "EDMG_MODEL_STORAGE_MODE": "local_cache",
   "HF_HUB_ENABLE_HF_TRANSFER": "1",
-  "EDMG_HF_TRANSFER_CONCURRENCY": "4"
+  "EDMG_HF_TRANSFER_CONCURRENCY": "4",
+  "HF_HUB_DISABLE_XET": "0",
+  "HF_XET_HIGH_PERFORMANCE": "1"
 }

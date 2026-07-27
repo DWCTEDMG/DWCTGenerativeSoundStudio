@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
 import { getDesktopPlatformKind, type DesktopPlatformKind } from "../components/desktopArtifacts";
+import { useAdaptivePolling } from "../hooks/useAdaptivePolling";
 
 type StorageDraft = {
   studioHome: string;
@@ -43,19 +44,15 @@ function joinStoragePath(basePath: string, segment: string, platformKind: Deskto
   return normalizedSegment ? `${normalizedBase}${separator}${normalizedSegment}` : normalizedBase;
 }
 
-function getStorageFieldConfigs(platformKind: DesktopPlatformKind): StorageFieldConfig[] {
-  const homePlaceholder = platformKind === "windows"
-    ? "D:\\EDMG-Studio"
-    : platformKind === "mac"
-      ? "/Users/tyler/EDMG-Studio"
-      : "/home/tyler/EDMG-Studio";
+function getStorageFieldConfigs(): StorageFieldConfig[] {
+  const derivedPlaceholder = "Derived from Studio home";
   return [
-    { key: "studioHome", label: "Studio home", placeholder: homePlaceholder },
-    { key: "dataDir", label: "Project data", placeholder: joinStoragePath(homePlaceholder, "data", platformKind) },
-    { key: "modelsDir", label: "Models", placeholder: joinStoragePath(homePlaceholder, "models", platformKind) },
-    { key: "cacheRoot", label: "Shared cache", placeholder: joinStoragePath(homePlaceholder, "cache", platformKind) },
-    { key: "logsDir", label: "Logs", placeholder: joinStoragePath(homePlaceholder, "logs", platformKind) },
-    { key: "externalDir", label: "External tools", placeholder: joinStoragePath(homePlaceholder, "external", platformKind) },
+    { key: "studioHome", label: "Studio home", placeholder: "Choose any folder" },
+    { key: "dataDir", label: "Project data", placeholder: derivedPlaceholder },
+    { key: "modelsDir", label: "Models", placeholder: derivedPlaceholder },
+    { key: "cacheRoot", label: "Shared cache", placeholder: derivedPlaceholder },
+    { key: "logsDir", label: "Logs", placeholder: derivedPlaceholder },
+    { key: "externalDir", label: "External tools", placeholder: derivedPlaceholder },
   ];
 }
 
@@ -85,47 +82,119 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   const [studioPaths, setStudioPaths] = useState<any>(null);
   const [storageDraft, setStorageDraft] = useState<StorageDraft>(EMPTY_STORAGE_DRAFT);
   const [packAccept, setPackAccept] = useState<Record<string, boolean>>({});
+  const [tasks, setTasks] = useState<any[]>([]);
   const [busy, setBusy] = useState<string>("");
   const [err, setErr] = useState<string>("");
+  const [statusLoading, setStatusLoading] = useState(false);
+  const statusRequestRef = useRef<Promise<void> | null>(null);
+  const catalogRequestRef = useRef<Promise<void> | null>(null);
+  const previousTaskStatesRef = useRef<string | null>(null);
+  const previousTaskActiveRef = useRef(false);
+
+  const loadStatus = useCallback((force = false, signal?: AbortSignal) => {
+    if (statusRequestRef.current) return statusRequestRef.current;
+    setStatusLoading(true);
+    const path = force ? "/v1/setup/status?refresh=true" : "/v1/setup/status";
+    const request = apiGet(path, { signal, timeoutMs: 30_000 })
+      .then((payload: any) => {
+        setStatus(payload);
+        if (Array.isArray(payload?.tasks)) setTasks(payload.tasks);
+      })
+      .finally(() => {
+        statusRequestRef.current = null;
+        setStatusLoading(false);
+      });
+    statusRequestRef.current = request;
+    return request;
+  }, []);
+
+  const loadModelsCatalog = useCallback((signal?: AbortSignal) => {
+    if (catalogRequestRef.current) return catalogRequestRef.current;
+    const request = apiGet("/v1/models/catalog", { signal, timeoutMs: 30_000 })
+      .then((payload) => {
+        setModelsCatalog(payload);
+      })
+      .finally(() => {
+        catalogRequestRef.current = null;
+      });
+    catalogRequestRef.current = request;
+    return request;
+  }, []);
+
+  const loadStudioPaths = useCallback(async () => {
+    if (!window.edmg?.getStudioPaths) return;
+    const paths = await window.edmg.getStudioPaths();
+    if (!paths?.ok) return;
+    setStudioPaths(paths);
+    setStorageDraft((current) => ({
+      studioHome: current.studioHome || String(paths.studioHome ?? ""),
+      dataDir: current.dataDir || String(paths.dataDir ?? ""),
+      modelsDir: current.modelsDir || String(paths.modelsDir ?? ""),
+      cacheRoot: current.cacheRoot || String(paths.cacheRoot ?? ""),
+      logsDir: current.logsDir || String(paths.logsDir ?? ""),
+      externalDir: current.externalDir || String(paths.externalDir ?? ""),
+    }));
+  }, []);
+
+  const pollSetupTasks = useCallback(async (signal: AbortSignal) => {
+    const payload = await apiGet("/v1/setup/tasks", { signal, timeoutMs: 10_000 });
+    const nextTasks = Array.isArray((payload as any)?.tasks) ? (payload as any).tasks : [];
+    const nextStates = nextTasks.map((task: any) => `${task.id}:${task.status}`).join("|");
+    const active = nextTasks.some((task: any) => task.status === "queued" || task.status === "running");
+    const previousStates = previousTaskStatesRef.current;
+    const wasActive = previousTaskActiveRef.current;
+    previousTaskStatesRef.current = nextStates;
+    previousTaskActiveRef.current = active;
+    setTasks(nextTasks);
+    setStatus((current: any) => current ? { ...current, tasks: nextTasks } : current);
+
+    if (previousStates != null && previousStates !== nextStates && wasActive && !active) {
+      void Promise.all([loadStatus(true), loadModelsCatalog()]).catch((error: any) => {
+        setErr(String(error?.message ?? error));
+      });
+    }
+
+    return { active, continuePolling: active };
+  }, [loadModelsCatalog, loadStatus]);
+
+  const {
+    isPolling: tasksPolling,
+    lastError: taskPollingError,
+    pollNow: pollSetupTasksNow,
+  } = useAdaptivePolling({
+    poll: pollSetupTasks,
+    activeIntervalMs: 1_000,
+    idleIntervalMs: 15_000,
+  });
 
   async function refresh() {
     setErr("");
     try {
-      const s = await apiGet("/v1/setup/status");
-      setStatus(s);
-      const mc = await apiGet("/v1/models/catalog");
-      setModelsCatalog(mc);
-      if (window.edmg?.getStudioPaths) {
-        const paths = await window.edmg.getStudioPaths();
-        if (paths?.ok) {
-          setStudioPaths(paths);
-          setStorageDraft((current) => ({
-            studioHome: current.studioHome || String(paths.studioHome ?? ""),
-            dataDir: current.dataDir || String(paths.dataDir ?? ""),
-            modelsDir: current.modelsDir || String(paths.modelsDir ?? ""),
-            cacheRoot: current.cacheRoot || String(paths.cacheRoot ?? ""),
-            logsDir: current.logsDir || String(paths.logsDir ?? ""),
-            externalDir: current.externalDir || String(paths.externalDir ?? ""),
-          }));
-        }
-      }
+      await Promise.all([loadStatus(true), loadModelsCatalog(), loadStudioPaths()]);
+      pollSetupTasksNow();
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     }
   }
 
   useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 2000);
-    return () => clearInterval(t);
-  }, []);
+    const controller = new AbortController();
+    void Promise.all([
+      loadStatus(false, controller.signal),
+      loadModelsCatalog(controller.signal),
+      loadStudioPaths(),
+    ]).catch((error: any) => {
+      if (!controller.signal.aborted) setErr(String(error?.message ?? error));
+    });
+    return () => controller.abort();
+  }, [loadModelsCatalog, loadStatus, loadStudioPaths]);
 
   async function run(action: string, path: string, body: any = {}) {
     setBusy(action);
     setErr("");
     try {
       await apiPost(path, body);
-      await refresh();
+      pollSetupTasksNow();
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -138,7 +207,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
     setErr("");
     try {
       await apiPost(`/v1/setup/tasks/${taskId}/cancel`, {});
-      await refresh();
+      pollSetupTasksNow();
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -173,7 +242,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   const comfyDocsUrl = isWindows
     ? "https://docs.comfy.org/installation/comfyui_portable_windows"
     : "https://docs.comfy.org/";
-  const storageFieldConfigs = getStorageFieldConfigs(platformKind);
+  const storageFieldConfigs = getStorageFieldConfigs();
   const setupReady = toolchainOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
   const fullSetupReady = managedSetupSupported && setupReady && (isWindows ? sevenOk : true);
 
@@ -334,15 +403,25 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
 
   return (
     <div>
-      <h2>Setup Wizard</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <h2>Setup Wizard</h2>
+        <button className="secondary" disabled={statusLoading} onClick={() => void refresh()}>
+          {statusLoading ? "Refreshing setup…" : "Refresh setup"}
+        </button>
+      </div>
       <div className="small" style={{ marginTop: 6 }}>
         This is the "installer GUI" inside EDMG Studio. It checks required components and lets you fix issues without using the command line.
       </div>
+      {(statusLoading || tasksPolling) ? (
+        <div className="small" role="status" aria-live="polite" style={{ marginTop: 8 }}>
+          {statusLoading ? "Checking system readiness…" : "Checking installer task progress…"}
+        </div>
+      ) : null}
 
-      {err && (
-        <div style={{ marginTop: 12, padding: 10, borderRadius: 10, background: "#2a1b1b", border: "1px solid #5b2424" }}>
+      {(err || taskPollingError) && (
+        <div role="alert" style={{ marginTop: 12, padding: 10, borderRadius: 10, background: "#2a1b1b", border: "1px solid #5b2424" }}>
           <div style={{ fontWeight: 800 }}>Setup error</div>
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{err}</pre>
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{err || taskPollingError}</pre>
         </div>
       )}
 
@@ -705,11 +784,11 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
               Refresh
             </button>
           </div>
-          {status?.tasks?.length ? (
+          {tasks.length ? (
             <div style={{ marginTop: 10 }}>
               <div className="small" style={{ fontWeight: 800 }}>Installer tasks</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-                {status.tasks.slice(0, 5).map((t: any) => (
+                {tasks.slice(0, 5).map((t: any) => (
                   <div key={t.id} style={{ padding: 8, borderRadius: 10, background: "#121422", border: "1px solid #22263a" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
                       <div style={{ fontWeight: 700 }}>{t.name}</div>

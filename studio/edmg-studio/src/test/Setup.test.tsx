@@ -1,10 +1,53 @@
 import React from "react";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Setup from "../pages/Setup";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
 describe("Setup page", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("loads full readiness once, stops while idle, and preserves manual refresh", async () => {
+    vi.useFakeTimers();
+    installEdmgBridge();
+    const fetchMock = installFetchMock({
+      "/v1/setup/status": {
+        ollama: { ok: false, model_present: false, skipped: true },
+        comfyui: { ok: false },
+        ffmpeg: { ok: true },
+        backend_bundle: { ok: true },
+        sevenzip: { ok: true },
+        ai_config: { label: "Rule-based fallback", ollama_required: false, model_required: false },
+      },
+      "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "/v1/setup/tasks": { tasks: [] },
+    });
+
+    renderWithStudio(<Setup />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("Setup Wizard")).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    let paths = fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname);
+    expect(paths.filter((path) => path === "/v1/setup/status")).toHaveLength(1);
+    expect(paths.filter((path) => path === "/v1/setup/tasks")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh setup" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const statusCalls = fetchMock.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1/setup/status");
+    expect(statusCalls).toHaveLength(2);
+    paths = fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname);
+    expect(paths.filter((path) => path === "/v1/models/catalog")).toHaveLength(2);
+  });
+
   it("shows the active AI path and Studio Home controls", async () => {
     installEdmgBridge();
     installFetchMock({
@@ -17,6 +60,7 @@ describe("Setup page", () => {
         ai_config: { label: "Local llama.cpp server", ollama_required: false, model_required: false },
       },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "/v1/setup/tasks": { tasks: [] },
     });
 
     renderWithStudio(<Setup />);
@@ -55,6 +99,7 @@ describe("Setup page", () => {
         ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
       },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "/v1/setup/tasks": { tasks: [] },
     });
 
     renderWithStudio(<Setup />);
@@ -83,6 +128,7 @@ describe("Setup page", () => {
         ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
       },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "/v1/setup/tasks": { tasks: [] },
     });
 
     renderWithStudio(<Setup />);
@@ -121,6 +167,7 @@ describe("Setup page", () => {
         ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
       },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "/v1/setup/tasks": { tasks: [] },
       "POST /v1/setup/backend/install": { ok: true, task: { id: "sync123", status: "queued" } },
     });
 
@@ -167,6 +214,7 @@ describe("Setup page", () => {
         ai_config: { label: "Local Ollama", ollama_required: true, model_required: true },
       },
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "/v1/setup/tasks": { tasks: [] },
     });
 
     renderWithStudio(<Setup />);
@@ -199,6 +247,18 @@ describe("Setup page", () => {
         ],
       }),
       "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+      "/v1/setup/tasks": () => ({
+        tasks: [
+          {
+            id: "task1234",
+            name: "install_7zip",
+            status: taskStatus,
+            progress: 0.42,
+            last_log: taskStatus === "canceled" ? "Cancel requested — stopping after current step." : "Downloading portable 7-Zip CLI",
+            cancel_requested: taskStatus === "canceled",
+          },
+        ],
+      }),
       "POST /v1/setup/tasks/task1234/cancel": () => {
         taskStatus = "canceled";
         return {

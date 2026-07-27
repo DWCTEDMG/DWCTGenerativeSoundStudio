@@ -17,7 +17,13 @@ function normalizePath(input: string | URL) {
 }
 
 function findRouteKey(routes: MockRouteMap, method: string, path: string) {
-  const exactKeys = [`${method} ${path}`, path];
+  const pathWithoutQuery = path.split("?", 1)[0];
+  const exactKeys = [
+    `${method} ${path}`,
+    path,
+    `${method} ${pathWithoutQuery}`,
+    pathWithoutQuery,
+  ];
   for (const key of exactKeys) {
     if (key in routes) return key;
   }

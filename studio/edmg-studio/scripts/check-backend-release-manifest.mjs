@@ -15,6 +15,7 @@ const root = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(root, "..", "..");
 const backendBinaryName = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
 const lockPath = path.join(root, "python_backend", "uv.lock");
+const hfBucketHelperLockPath = path.join(root, "python_backend", "hf_bucket_helper", "uv.lock");
 
 async function validateBundle(directory, expected = null) {
   const manifestPath = path.join(directory, "backend-bundle-manifest.json");
@@ -32,6 +33,11 @@ async function validateBundle(directory, expected = null) {
   assert.equal(stat.size, manifest.binarySize, `Backend binary size does not match ${manifestPath}`);
   assert.equal(await sha256File(binaryPath), manifest.binarySha256, `Backend binary hash does not match ${manifestPath}`);
   assert.equal(await sha256File(lockPath), manifest.lockSha256, `uv.lock hash does not match ${manifestPath}`);
+  assert.equal(
+    await sha256File(hfBucketHelperLockPath),
+    manifest.hfBucketHelper.lockSha256,
+    `HF Bucket helper uv.lock hash does not match ${manifestPath}`,
+  );
 
   for (const input of manifest.fingerprintInputs) {
     const sourcePath = path.resolve(repoRoot, input.path);

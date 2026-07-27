@@ -80,11 +80,6 @@ def _resolve_bundle_dir(model_id: str | None, payload: dict[str, Any]) -> Path:
         if path is not None:
             return path
 
-    if os.name == "nt":
-        path = _existing_path(r"D:\my_tensorrt_models")
-        if path is not None:
-            return path
-
     raise UserFacingError(
         f"TensorRT model {model_id or '(none)'} is not installed.",
         hint=(

@@ -44,8 +44,6 @@ def _local_sd15_tensorrt_bundle_path() -> str:
         os.getenv("EDMG_TENSORRT_SD15_BUNDLE", "").strip(),
         os.getenv("EDMG_TENSORRT_MODEL_DIR", "").strip(),
     ]
-    if os.name == "nt":
-        candidates.append(r"D:\my_tensorrt_models")
     for candidate in candidates:
         if not candidate:
             continue

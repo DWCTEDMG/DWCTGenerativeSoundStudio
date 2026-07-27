@@ -9,6 +9,9 @@ from edmg_studio_backend.integrations import comfyui as comfy
 from edmg_studio_backend.services.model_manager import ModelManager
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
+from edmg_studio_backend.tests.safetensors_test_utils import (
+    write_minimal_safetensors,
+)
 from PIL import Image
 
 
@@ -542,7 +545,7 @@ def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatc
     for component, filename in (
         ("text_encoder", "model.safetensors"),
         ("text_encoder_2", "model.safetensors"),
-        ("unet", "model.onnx"),
+        ("unet", "diffusion_pytorch_model.safetensors"),
         ("vae", "diffusion_pytorch_model.safetensors"),
     ):
         component_dir = model_dir / component
@@ -558,12 +561,12 @@ def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatc
     for component, filename in (
         ("text_encoder", "model.safetensors"),
         ("text_encoder_2", "model.safetensors"),
-        ("unet", "model.onnx"),
+        ("unet", "diffusion_pytorch_model.safetensors"),
         ("vae", "diffusion_pytorch_model.safetensors"),
     ):
         component_dir = model_dir / component
         component_dir.mkdir(parents=True, exist_ok=True)
-        (component_dir / filename).write_text("weights", encoding="utf-8")
+        write_minimal_safetensors(component_dir / filename)
     assert manager.installed_path("hf_sdxl_internal") == model_dir
     assert manager.internal_asset_issue("hf_sdxl_internal") is None
 
@@ -581,7 +584,9 @@ def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatc
         )
     assert "not installed" in str(exc.value).lower()
 
-    (controlnet_dir / "diffusion_pytorch_model.safetensors").write_text("weights", encoding="utf-8")
+    write_minimal_safetensors(
+        controlnet_dir / "diffusion_pytorch_model.safetensors"
+    )
     assert manager.installed_path("hf_sdxl_controlnet_canny_internal") == controlnet_dir
     resolved = manager.resolve_internal_asset(
         "hf_sdxl_controlnet_canny_internal",
@@ -607,20 +612,21 @@ def test_model_manager_requires_complete_internal_snapshots(tmp_path, monkeypatc
     )
     assert manager.installed_path("hf_svd_xt_1_1_internal") is None
     for component, filename in (
-        ("image_encoder", "model.fp16.safetensors"),
-        ("unet", "diffusion_pytorch_model.fp16.safetensors"),
-        ("vae", "diffusion_pytorch_model.fp16.safetensors"),
+        ("image_encoder", "model.safetensors"),
+        ("unet", "diffusion_pytorch_model.safetensors"),
+        ("vae", "diffusion_pytorch_model.safetensors"),
     ):
         component_dir = svd_dir / component
         component_dir.mkdir(parents=True, exist_ok=True)
-        (component_dir / filename).write_text("weights", encoding="utf-8")
+        write_minimal_safetensors(component_dir / filename)
     assert manager.installed_path("hf_svd_xt_1_1_internal") == svd_dir
 
     animatediff_dir = manager._internal_models_dir("video") / "hf_animatediff_motion_adapter_v15_2_internal"
     animatediff_dir.mkdir(parents=True, exist_ok=True)
     (animatediff_dir / "config.json").write_text("{}", encoding="utf-8")
     assert manager.installed_path("hf_animatediff_motion_adapter_v15_2_internal") is None
-    (animatediff_dir / "diffusion_pytorch_model.fp16.safetensors").write_text("weights", encoding="utf-8")
+    adapter_weights = animatediff_dir / "diffusion_pytorch_model.safetensors"
+    write_minimal_safetensors(adapter_weights)
     assert manager.installed_path("hf_animatediff_motion_adapter_v15_2_internal") == animatediff_dir
-    (animatediff_dir / "diffusion_pytorch_model.fp16.safetensors").write_text(lfs_pointer, encoding="utf-8")
+    adapter_weights.write_text(lfs_pointer, encoding="utf-8")
     assert manager.installed_path("hf_animatediff_motion_adapter_v15_2_internal") is None

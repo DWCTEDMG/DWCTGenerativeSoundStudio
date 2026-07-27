@@ -33,6 +33,11 @@ const pythonBackendDir = path.join(root, "python_backend");
 const pythonVersionPath = path.join(repoRoot, ".python-version");
 const pyprojectPath = path.join(pythonBackendDir, "pyproject.toml");
 const uvLockPath = path.join(pythonBackendDir, "uv.lock");
+const hfBucketHelperDir = path.join(pythonBackendDir, "hf_bucket_helper");
+const hfBucketHelperPyprojectPath = path.join(hfBucketHelperDir, "pyproject.toml");
+const hfBucketHelperLockPath = path.join(hfBucketHelperDir, "uv.lock");
+const hfBucketHelperSpecPath = path.join(hfBucketHelperDir, "pyinstaller.spec");
+const launcherDefaultsPath = path.join(root, "launcher_env.defaults.json");
 const provenanceScriptPath = path.join(__dirname, "release_provenance.py");
 const toolchainScriptPath = path.join(__dirname, "release-python-toolchain.mjs");
 const electronBackendDir = path.join(root, "electron-resources", "backend");
@@ -43,17 +48,29 @@ const directorAppDir = path.resolve(root, "..", "..", "chatgpt-apps", "edmg-dire
 const electronDirectorDir = path.join(root, "electron-resources", "director");
 const directorBundleManifestPath = path.join(electronDirectorDir, "director-bundle-manifest.json");
 const backendBinaryName = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+const hfBucketHelperBinaryName = process.platform === "win32" ? "edmg-hf-bucket-helper.exe" : "edmg-hf-bucket-helper";
+const builtHfBucketHelperPath = path.join(hfBucketHelperDir, "dist", hfBucketHelperBinaryName);
 const bundledBackendPath = path.join(electronBackendDir, backendBinaryName);
 const bundleManifestPath = path.join(electronBackendDir, "backend-bundle-manifest.json");
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
-const dependencyInputPaths = [pythonVersionPath, pyprojectPath, uvLockPath];
+const dependencyInputPaths = [
+  pythonVersionPath,
+  pyprojectPath,
+  uvLockPath,
+  hfBucketHelperPyprojectPath,
+  hfBucketHelperLockPath,
+  launcherDefaultsPath,
+];
 const requiredBackendSourceFiles = [
+  "edmg_studio_backend/__init__.py",
   "edmg_studio_backend/app.py",
+  "edmg_studio_backend/integrations/hf_bucket.py",
   "edmg_studio_backend/services/internal_video.py",
   "edmg_studio_backend/services/internal_video_models.py",
   "edmg_studio_backend/services/model_catalog.py",
   "edmg_studio_backend/services/model_manager.py",
+  "edmg_studio_backend/services/model_cache_settings.py",
   "edmg_studio_backend/services/tensorrt_standalone.py",
   "edmg_studio_backend/services/tensorrt_video.py",
 ];
@@ -109,6 +126,7 @@ function assertRequiredFiles() {
     ...dependencyInputPaths,
     provenanceScriptPath,
     toolchainScriptPath,
+    hfBucketHelperSpecPath,
     ...requiredBackendSourceFiles.map((relativePath) => path.join(pythonBackendDir, relativePath)),
   ].filter((filePath) => !fs.existsSync(filePath));
   if (missing.length) {
@@ -155,6 +173,49 @@ function synchronizeReleaseEnvironment(uvCommand, profile, env) {
   runChecked("synchronize frozen release environment", uvCommand, uvSyncArgs(profile), { cwd: pythonBackendDir, env });
 }
 
+function hfBucketHelperEnvironment(env) {
+  return {
+    ...env,
+    UV_PROJECT_ENVIRONMENT: path.join(root, "release", "uv-environments", "hf-bucket-helper"),
+    UV_LINK_MODE: "copy",
+  };
+}
+
+function buildHfBucketHelper(uvCommand, env) {
+  const helperEnv = hfBucketHelperEnvironment(env);
+  runChecked("validate Hugging Face Bucket helper lock", uvCommand, ["lock", "--check"], {
+    cwd: hfBucketHelperDir,
+    env: helperEnv,
+  });
+  runChecked(
+    "synchronize frozen Hugging Face Bucket helper environment",
+    uvCommand,
+    ["sync", "--frozen", "--no-default-groups", "--group", "build"],
+    { cwd: hfBucketHelperDir, env: helperEnv },
+  );
+  runChecked(
+    "build isolated Hugging Face Bucket helper",
+    uvCommand,
+    [
+      "run",
+      "--frozen",
+      "--no-sync",
+      "--no-default-groups",
+      "--group",
+      "build",
+      "pyinstaller",
+      "pyinstaller.spec",
+      "--clean",
+      "--noconfirm",
+    ],
+    { cwd: hfBucketHelperDir, env: helperEnv },
+  );
+  if (!fs.existsSync(builtHfBucketHelperPath) || !fs.statSync(builtHfBucketHelperPath).isFile()) {
+    throw new Error(`Hugging Face Bucket helper build is missing ${builtHfBucketHelperPath}`);
+  }
+  return builtHfBucketHelperPath;
+}
+
 function collectReleaseProvenance(uvCommand, profile, env) {
   const stdout = runCaptured(
     "collect release provenance",
@@ -180,6 +241,19 @@ function collectReleaseProvenance(uvCommand, profile, env) {
   if (!String(payload.pyinstallerVersion || "").trim()) throw new Error("Release provenance omitted PyInstaller version");
   if (!Array.isArray(payload.torchPackages) || payload.torchPackages.length !== 3) {
     throw new Error("Release provenance must include torch, torchvision, and torchaudio");
+  }
+  const hfRuntime = Object.fromEntries(
+    (Array.isArray(payload.hfRuntimePackages) ? payload.hfRuntimePackages : [])
+      .map((entry) => [String(entry?.name || ""), String(entry?.version || "")]),
+  );
+  for (const [name, version] of [
+    ["huggingface-hub", "0.36.2"],
+    ["hf-transfer", "0.1.9"],
+    ["hf-xet", "1.5.1"],
+  ]) {
+    if (hfRuntime[name] !== version) {
+      throw new Error(`Release provenance must include ${name}==${version}`);
+    }
   }
   if (!Array.isArray(payload.nltkResources) || payload.nltkResources.length === 0) {
     throw new Error("Release provenance must include pinned NLTK resources");
@@ -262,6 +336,7 @@ async function reusableBundle(expected) {
 }
 
 function buildBackendBundle(uvCommand, profile, env) {
+  const helper = buildHfBucketHelper(uvCommand, env);
   runChecked(
     "build backend bundle with frozen uv environment",
     uvCommand,
@@ -275,6 +350,8 @@ function buildBackendBundle(uvCommand, profile, env) {
       `Backend build completed but the onedir bundle ${path.relative(root, built)} was not complete`,
     );
   }
+  fs.copyFileSync(helper, path.join(built, hfBucketHelperBinaryName));
+  fs.copyFileSync(launcherDefaultsPath, path.join(built, "launcher_env.defaults.json"));
   return built;
 }
 
@@ -339,6 +416,45 @@ async function stageBackendBundle(sourceDirectory, expected) {
   const launcher = bundleEntries.find((entry) => entry.path === backendBinaryName && entry.type === "file");
   if (!launcher) throw new Error(`Staged onedir backend inventory is missing ${backendBinaryName}`);
   const bundleFiles = bundleEntries.filter((entry) => entry.type === "file");
+  const helper = bundleEntries.find(
+    (entry) => entry.path === hfBucketHelperBinaryName && entry.type === "file",
+  );
+  if (!helper) throw new Error(`Staged onedir backend inventory is missing ${hfBucketHelperBinaryName}`);
+  const launcherDefaults = bundleEntries.find(
+    (entry) => entry.path === "launcher_env.defaults.json" && entry.type === "file",
+  );
+  if (!launcherDefaults) {
+    throw new Error("Staged onedir backend inventory is missing launcher_env.defaults.json");
+  }
+  const requireRuntimeEntry = (label, pattern) => {
+    const entry = bundleEntries.find(
+      (candidate) => candidate.type === "file" && pattern.test(candidate.path),
+    );
+    if (!entry) throw new Error(`Staged onedir backend is missing ${label}`);
+    return entry.path;
+  };
+  const hfRuntimeBundleEvidence = {
+    huggingfaceHubMetadata: requireRuntimeEntry(
+      "huggingface-hub 0.36.2 metadata",
+      /^_internal\/huggingface_hub-0\.36\.2\.dist-info\/METADATA$/,
+    ),
+    hfTransferMetadata: requireRuntimeEntry(
+      "hf-transfer 0.1.9 metadata",
+      /^_internal\/hf_transfer-0\.1\.9\.dist-info\/METADATA$/,
+    ),
+    hfTransferModule: requireRuntimeEntry(
+      "hf-transfer native module",
+      /^_internal\/hf_transfer\/hf_transfer(?:\.[^/]+)*\.(?:pyd|so)$/,
+    ),
+    hfXetMetadata: requireRuntimeEntry(
+      "hf-xet 1.5.1 metadata",
+      /^_internal\/hf_xet-1\.5\.1\.dist-info\/METADATA$/,
+    ),
+    hfXetModule: requireRuntimeEntry(
+      "hf-xet native module",
+      /^_internal\/hf_xet\/hf_xet(?:\.[^/]+)*\.(?:pyd|so)$/,
+    ),
+  };
   const manifest = {
     schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
     ok: true,
@@ -356,6 +472,8 @@ async function stageBackendBundle(sourceDirectory, expected) {
     pyinstallerVersion: expected.pyinstallerVersion,
     torchIndex: expected.torchIndex,
     torchPackages: expected.torchPackages,
+    hfRuntimePackages: expected.hfRuntimePackages,
+    hfRuntimeBundleEvidence,
     nltkResources: expected.nltkResources,
     bundleLayout: "onedir",
     backendEntryPoint: backendBinaryName,
@@ -367,6 +485,20 @@ async function stageBackendBundle(sourceDirectory, expected) {
     sourceArtifact: path.relative(root, sourceDirectory).split(path.sep).join("/"),
     binarySha256: launcher.sha256,
     binarySize: launcher.size,
+    hfBucketHelper: {
+      entryPoint: hfBucketHelperBinaryName,
+      helperVersion: "1.0.0",
+      huggingfaceHubVersion: "1.20.1",
+      hfXetVersion: "1.5.1",
+      lockSha256: await sha256File(hfBucketHelperLockPath),
+      binarySha256: helper.sha256,
+      binarySize: helper.size,
+    },
+    launcherEnvDefaults: {
+      entryPoint: "launcher_env.defaults.json",
+      sha256: launcherDefaults.sha256,
+      size: launcherDefaults.size,
+    },
     reusedExistingBuild: false,
     preparedAt: new Date().toISOString(),
   };

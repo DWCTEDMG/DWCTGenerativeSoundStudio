@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -8,14 +9,31 @@ import shutil
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 import requests
 
-logger = logging.getLogger(__name__)
-_HF_SNAPSHOT_DOWNLOAD_LOCK = threading.Lock()
+from ..domain.model_lanes import (
+    annotate_entry,
+    can_promote,
+    infer_lane,
+    normalize_lane,
+    promotion_blockers,
+)
+from ..errors import UserFacingError
+from .hf_auth import HfTokenCandidate, hf_token_candidates
+from .model_catalog import built_in_catalog, built_in_packs
+from .model_weights import is_real_weight_file
+from .secrets import SecretStore
+from .setup_wizard import (
+    _ollama_base,  # reuse
+    comfy_portable_installed,
+    comfy_portable_root,
+)
 
 try:
     from huggingface_hub import constants as hf_hub_constants  # type: ignore
@@ -23,14 +41,6 @@ try:
 except Exception:  # pragma: no cover
     hf_hub_constants = None  # type: ignore
     snapshot_download = None  # type: ignore
-
-from ..errors import UserFacingError
-from .setup_wizard import _ollama_base  # reuse
-from .model_catalog import built_in_catalog, built_in_packs
-from ..domain.model_lanes import annotate_entry, can_promote, infer_lane, normalize_lane, promotion_blockers
-from ..services.setup_wizard import comfy_portable_installed, comfy_portable_root
-from .hf_auth import HfTokenCandidate, hf_token_candidates
-from .secrets import SecretStore
 
 try:
     from ..integrations.azure import AzureModelCache
@@ -44,12 +54,16 @@ except Exception:  # pragma: no cover - optional integration
 
 try:
     from ..integrations.hf_bucket import HFBucketModelCache
-    from ..integrations.hf_bucket import download_bucket_snapshot as _hf_bucket_download_snapshot
     from ..integrations.hf_bucket import download_bucket_file as _hf_bucket_download_file
+    from ..integrations.hf_bucket import download_bucket_snapshot as _hf_bucket_download_snapshot
 except Exception:  # pragma: no cover - optional integration
     HFBucketModelCache = None  # type: ignore
     _hf_bucket_download_snapshot = None  # type: ignore
     _hf_bucket_download_file = None  # type: ignore
+
+
+logger = logging.getLogger(__name__)
+_HF_SNAPSHOT_DOWNLOAD_LOCK = threading.Lock()
 
 
 # ------------------------------ persistence ------------------------------
@@ -58,18 +72,62 @@ def _config_dir(data_dir: Path) -> Path:
     return _ensure_managed_dir(data_dir / "config", label="config")
 
 def _read_json(path: Path, default: Any) -> Any:
+    candidates = [path, path.with_suffix(path.suffix + ".tmp")]
     try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+        candidates.extend(
+            sorted(
+                path.parent.glob(f".{path.name}.*.tmp"),
+                key=lambda candidate: candidate.stat().st_mtime_ns,
+                reverse=True,
+            )
+        )
+    except OSError:
+        pass
+    for candidate in dict.fromkeys(candidates):
+        try:
+            if not candidate.is_file():
+                continue
+            value = json.loads(candidate.read_text(encoding="utf-8"))
+            if candidate != path:
+                try:
+                    _replace_with_retry(candidate, path)
+                except OSError:
+                    pass
+            return value
+        except Exception:
+            continue
     return default
+
+
+def _replace_with_retry(source: Path, target: Path, *, attempts: int = 5) -> None:
+    for attempt in range(max(1, attempts)):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            retryable = (
+                getattr(exc, "winerror", None) in {5, 32, 33}
+                or exc.errno in {errno.EACCES, errno.EBUSY}
+            )
+            if not retryable or attempt + 1 >= attempts:
+                raise
+            time.sleep(0.04 * (attempt + 1))
+
 
 def _write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(obj, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_with_retry(tmp, path)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _is_hf_auth_failure(error: Exception) -> bool:
@@ -287,47 +345,332 @@ def _normalize_catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return annotate_entry(item)
 
 
+# Hugging Face snapshots often contain complete checkpoint exports, PyTorch
+# Diffusers trees, ONNX/OpenVINO exports, and several precision variants in the
+# same repository. Studio's internal renderer only needs one runnable PyTorch
+# Diffusers layout. These profiles make that selection explicit and testable.
+_HF_METADATA_PATTERNS = (
+    "*.json",
+    "**/*.json",
+    "*.txt",
+    "**/*.txt",
+    "*.model",
+    "**/*.model",
+    "*.tiktoken",
+    "**/*.tiktoken",
+    "*.yaml",
+    "**/*.yaml",
+    "*.yml",
+    "**/*.yml",
+)
+_HF_NON_PYTORCH_IGNORE_PATTERNS = (
+    "*.ckpt",
+    "**/*.ckpt",
+    "*.onnx",
+    "**/*.onnx",
+    "*.onnx_data",
+    "**/*.onnx_data",
+    "*.xml",
+    "**/*.xml",
+    "*.msgpack",
+    "**/*.msgpack",
+    "*.h5",
+    "**/*.h5",
+    "*.pb",
+    "**/*.pb",
+    "*.tflite",
+    "**/*.tflite",
+    "*.gguf",
+    "**/*.gguf",
+    "onnx/**",
+    "**/onnx/**",
+    "openvino/**",
+    "**/openvino/**",
+    "flax/**",
+    "**/flax/**",
+)
+_HF_DUPLICATE_VARIANT_IGNORE_PATTERNS = (
+    "*.fp16.safetensors",
+    "**/*.fp16.safetensors",
+    "*.bf16.safetensors",
+    "**/*.bf16.safetensors",
+    "*.fp32.safetensors",
+    "**/*.fp32.safetensors",
+    "*.non_ema.safetensors",
+    "**/*.non_ema.safetensors",
+    "*.fp16.bin",
+    "**/*.fp16.bin",
+    "*.bf16.bin",
+    "**/*.bf16.bin",
+    "*.fp32.bin",
+    "**/*.fp32.bin",
+    "*.non_ema.bin",
+    "**/*.non_ema.bin",
+    "*.fp16.safetensors.index.json",
+    "**/*.fp16.safetensors.index.json",
+    "*.bf16.safetensors.index.json",
+    "**/*.bf16.safetensors.index.json",
+    "*.fp32.safetensors.index.json",
+    "**/*.fp32.safetensors.index.json",
+    "*.non_ema.safetensors.index.json",
+    "**/*.non_ema.safetensors.index.json",
+    "*.fp16.bin.index.json",
+    "**/*.fp16.bin.index.json",
+    "*.bf16.bin.index.json",
+    "**/*.bf16.bin.index.json",
+    "*.fp32.bin.index.json",
+    "**/*.fp32.bin.index.json",
+    "*.non_ema.bin.index.json",
+    "**/*.non_ema.bin.index.json",
+)
+_HF_COMMON_DIFFUSERS_COMPONENTS = (
+    "unet",
+    "vae",
+    "text_encoder",
+    "text_encoder_2",
+    "text_encoder_3",
+    "transformer",
+    "image_encoder",
+    "controlnet",
+    "prior",
+    "decoder",
+    "vqvae",
+    "movq",
+)
+
+
+@dataclass(frozen=True)
+class HFSnapshotDownloadProfile:
+    name: str
+    allow_patterns: tuple[str, ...]
+    ignore_patterns: tuple[str, ...]
+
+
+def _hf_snapshot_download_profile(
+    entry: dict[str, Any],
+    *,
+    weight_format: str,
+    components: list[str] | tuple[str, ...] | None = None,
+) -> HFSnapshotDownloadProfile:
+    """Return the bounded artifact profile used for a Hub snapshot operation.
+
+    ``metadata`` fetches the Diffusers layout/config/tokenizer/scheduler plan.
+    ``safetensors`` fetches only default-precision safetensors. ``bin`` is a
+    compatibility fallback and should only be requested for components still
+    missing after the safetensors pass.
+    """
+
+    normalized_format = str(weight_format or "").strip().lower()
+    if normalized_format not in {"metadata", "safetensors", "bin"}:
+        raise ValueError(f"Unsupported Hugging Face snapshot profile: {weight_format}")
+
+    kind = str(entry.get("kind") or "").strip().lower()
+    pipeline_layout = kind in {"diffusers", "video_diffusers"}
+    allow: list[str] = list(_HF_METADATA_PATTERNS)
+    if normalized_format != "metadata":
+        extension = "safetensors" if normalized_format == "safetensors" else "bin"
+        if pipeline_layout:
+            selected_components = tuple(
+                dict.fromkeys(
+                    str(component).strip().strip("/")
+                    for component in (components or _HF_COMMON_DIFFUSERS_COMPONENTS)
+                    if str(component).strip().strip("/")
+                )
+            )
+            for component in selected_components:
+                allow.extend(
+                    (
+                        f"{component}/*.{extension}",
+                        f"{component}/**/*.{extension}",
+                    )
+                )
+        else:
+            # ControlNet, motion-adapter, and similar component repositories
+            # conventionally keep their inference weights at the repository root.
+            for stem in (
+                "diffusion_pytorch_model",
+                "pytorch_model",
+                "model",
+            ):
+                allow.append(f"{stem}*.{extension}")
+
+    return HFSnapshotDownloadProfile(
+        name=(
+            "metadata"
+            if normalized_format == "metadata"
+            else f"{normalized_format}-default-precision"
+        ),
+        allow_patterns=tuple(dict.fromkeys(allow)),
+        ignore_patterns=tuple(
+            dict.fromkeys(
+                _HF_NON_PYTORCH_IGNORE_PATTERNS
+                + _HF_DUPLICATE_VARIANT_IGNORE_PATTERNS
+            )
+        ),
+    )
+
+
+def _hf_profile_matches_path(path: str, profile: HFSnapshotDownloadProfile) -> bool:
+    normalized = str(path or "").replace("\\", "/").lstrip("/")
+    if not normalized:
+        return False
+    if not any(fnmatch(normalized, pattern) for pattern in profile.allow_patterns):
+        return False
+    return not any(fnmatch(normalized, pattern) for pattern in profile.ignore_patterns)
+
+
 # ------------------------------ tasks ------------------------------
 
 @dataclass
 class ModelTask:
     id: str
     name: str
-    status: str = "queued"  # queued|running|done|failed
-    progress: Optional[float] = None
+    status: str = "queued"  # queued|running|done|failed|interrupted
+    progress: float | None = None
     last_log: str = ""
-    error: Optional[str] = None
-    started_at: Optional[float] = None
-    ended_at: Optional[float] = None
-    model_id: Optional[str] = None
+    error: str | None = None
+    started_at: float | None = None
+    ended_at: float | None = None
+    model_id: str | None = None
+    stage: str = "queued"
+    bytes_completed: int = 0
+    bytes_total: int | None = None
+    files_completed: int = 0
+    files_total: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "status": self.status,
+            "progress": self.progress,
+            "last_log": self.last_log,
+            "error": self.error,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "model_id": self.model_id,
+            "stage": self.stage,
+            "bytes_completed": self.bytes_completed,
+            "bytes_total": self.bytes_total,
+            "files_completed": self.files_completed,
+            "files_total": self.files_total,
+        }
 
 
 class ModelTaskManager:
-    def __init__(self):
+    _ACTIVE_STATUSES = {"queued", "running"}
+
+    def __init__(self, persistence_path: Path | None = None):
         self._lock = threading.Lock()
         self._tasks: dict[str, ModelTask] = {}
+        self._persistence_path = persistence_path
+        self._last_progress_persist_at = 0.0
+        self._load()
+
+    def _load(self) -> None:
+        if self._persistence_path is None:
+            return
+        raw = _read_json(self._persistence_path, default={})
+        rows = raw.get("tasks") if isinstance(raw, dict) else raw
+        if not isinstance(rows, list):
+            return
+        interrupted = False
+        allowed = set(ModelTask.__dataclass_fields__)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            values = {key: value for key, value in row.items() if key in allowed}
+            try:
+                task = ModelTask(**values)
+            except (TypeError, ValueError):
+                continue
+            if task.status in self._ACTIVE_STATUSES:
+                interrupted = True
+                task.status = "interrupted"
+                task.stage = "interrupted"
+                task.ended_at = time.time()
+                task.error = "Studio stopped before this model operation completed."
+                suffix = "Interrupted by a Studio restart. Retry to resume the partial download."
+                task.last_log = f"{task.last_log.rstrip()}\n{suffix}".strip()
+            self._tasks[task.id] = task
+        if interrupted:
+            with self._lock:
+                self._persist_locked()
+
+    def _persist_locked(self) -> None:
+        if self._persistence_path is None:
+            return
+        try:
+            tasks = sorted(
+                self._tasks.values(),
+                key=lambda task: (task.started_at or 0.0, task.id),
+                reverse=True,
+            )[:100]
+            _write_json(
+                self._persistence_path,
+                {"version": 1, "tasks": [task.to_dict() for task in tasks]},
+            )
+        except Exception as exc:
+            logger.warning("Could not persist model tasks to %s: %s", self._persistence_path, exc)
 
     def list(self) -> list[ModelTask]:
         with self._lock:
             return sorted(self._tasks.values(), key=lambda t: (t.started_at or 0), reverse=True)
 
-    def start(self, name: str, fn, *args, **kwargs) -> ModelTask:
-        task = ModelTask(id=str(uuid.uuid4())[:8], name=name, status="queued")
+    def start(
+        self,
+        name: str,
+        fn,
+        *args,
+        model_id: str | None = None,
+        **kwargs,
+    ) -> ModelTask:
+        if model_id is None and args and isinstance(args[0], dict):
+            model_id = str(args[0].get("id") or "").strip() or None
         with self._lock:
+            if model_id:
+                existing = next(
+                    (
+                        candidate
+                        for candidate in self._tasks.values()
+                        if candidate.model_id == model_id
+                        and candidate.status in self._ACTIVE_STATUSES
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    return existing
+            task = ModelTask(
+                id=str(uuid.uuid4())[:8],
+                name=name,
+                status="queued",
+                model_id=model_id,
+            )
             self._tasks[task.id] = task
+            self._persist_locked()
 
         def runner():
-            task.status = "running"
-            task.started_at = time.time()
+            with self._lock:
+                task.status = "running"
+                task.stage = "starting"
+                task.started_at = time.time()
+                self._persist_locked()
             try:
                 fn(task, *args, **kwargs)
-                task.status = "done"
+                with self._lock:
+                    task.status = "done"
+                    task.stage = "complete"
+                    task.progress = 1.0
             except Exception as e:
-                task.status = "failed"
-                task.error = str(e)
-                task.last_log = (task.last_log + "\n" if task.last_log else "") + f"ERROR: {e}"
+                with self._lock:
+                    task.status = "failed"
+                    task.stage = "failed"
+                    task.error = str(e)
+                    task.last_log = (task.last_log + "\n" if task.last_log else "") + f"ERROR: {e}"
             finally:
-                task.ended_at = time.time()
+                with self._lock:
+                    task.ended_at = time.time()
+                    self._persist_locked()
 
         threading.Thread(target=runner, daemon=True).start()
         return task
@@ -337,8 +680,57 @@ class ModelTaskManager:
         task.last_log = msg
 
     @staticmethod
-    def set_progress(task: ModelTask, v: Optional[float]) -> None:
+    def set_progress(task: ModelTask, v: float | None) -> None:
         task.progress = v
+
+    def set_stage(
+        self,
+        task: ModelTask,
+        stage: str,
+        *,
+        progress: float | None = None,
+    ) -> None:
+        with self._lock:
+            task.stage = str(stage or "").strip() or task.stage
+            if progress is not None:
+                task.progress = max(0.0, min(1.0, float(progress)))
+            self._persist_locked()
+
+    def set_transfer(
+        self,
+        task: ModelTask,
+        *,
+        bytes_completed: int,
+        bytes_total: int | None = None,
+        files_completed: int | None = None,
+        files_total: int | None = None,
+        progress_floor: float = 0.1,
+        progress_ceiling: float = 0.8,
+        force_persist: bool = False,
+    ) -> None:
+        with self._lock:
+            task.bytes_completed = max(task.bytes_completed, 0, int(bytes_completed))
+            task.bytes_total = (
+                max(task.bytes_completed, int(bytes_total))
+                if bytes_total is not None and int(bytes_total) > 0
+                else None
+            )
+            if files_completed is not None:
+                task.files_completed = max(task.files_completed, 0, int(files_completed))
+            if files_total is not None:
+                task.files_total = max(task.files_completed, int(files_total))
+            if task.bytes_total:
+                fraction = min(1.0, task.bytes_completed / task.bytes_total)
+                task.progress = progress_floor + ((progress_ceiling - progress_floor) * fraction)
+            now = time.monotonic()
+            if force_persist or now - self._last_progress_persist_at >= 1.0:
+                self._last_progress_persist_at = now
+                self._persist_locked()
+
+    def persist(self, task: ModelTask | None = None) -> None:
+        del task
+        with self._lock:
+            self._persist_locked()
 
 
 # ------------------------------ manager ------------------------------
@@ -423,6 +815,17 @@ class _CompositeModelCache:
     def model_directory_exists(self, entry: dict[str, Any], path: Path) -> str | None:
         return self._call_exists("model_directory_exists", entry, path)
 
+    def model_directory_complete(
+        self,
+        remote_prefix: str,
+        *,
+        model_entry: dict[str, Any],
+    ) -> bool:
+        complete = getattr(self._last_cache, "model_directory_complete", None)
+        if not callable(complete):
+            return False
+        return bool(complete(remote_prefix, model_entry=model_entry))
+
     def download_model(self, entry: dict[str, Any], dest: Path) -> bool:
         return self._call_download("download_model", entry, dest)
 
@@ -452,10 +855,11 @@ class ModelManager:
         self.comfyui_url = comfyui_url.rstrip("/")
         self.ollama_url = _ollama_base(ollama_url)
         self.secrets = secrets
-        self.tasks = ModelTaskManager()
-        self.model_cache = self._build_model_cache()
 
         cfg = _config_dir(self.data_dir)
+        task_dir = _ensure_managed_dir(self.data_dir / "tasks", label="task history")
+        self.tasks = ModelTaskManager(task_dir / "model_tasks.json")
+        self.model_cache = self._build_model_cache()
         self._user_models_path = cfg / "models_user.json"
         self._accept_path = cfg / "licenses_accepted.json"
         self._cloud_models_path = cfg / "models_cloud.json"
@@ -463,6 +867,9 @@ class ModelManager:
         self._benchmarks_path = cfg / "model_benchmarks.json"
 
         self._lock = threading.Lock()
+        self._ollama_probe_lock = threading.Lock()
+        self._ollama_models_cache: set[str] = set()
+        self._ollama_models_cache_at = 0.0
 
     def refresh_model_cache(self):
         """Rebuild the active model cache after settings/env changes."""
@@ -569,12 +976,42 @@ class ModelManager:
             return None
         return exists(entry, dest)
 
-    def _cache_snapshot_exists(self, entry: dict[str, Any], dest: Path) -> str | None:
+    def _cache_snapshot_exists(
+        self,
+        entry: dict[str, Any],
+        dest: Path,
+        *,
+        require_complete: bool = False,
+    ) -> str | None:
         cache = getattr(self, "model_cache", None)
         exists = getattr(cache, "model_directory_exists", None)
         if cache is None or not callable(exists):
             return None
-        return exists(entry, dest)
+        remote_prefix = exists(entry, dest)
+        if not remote_prefix:
+            return None
+        if not require_complete:
+            return str(remote_prefix)
+        complete = getattr(cache, "model_directory_complete", None)
+        if not callable(complete):
+            logger.warning(
+                "Ignoring unvalidated remote model directory %s; cache does not expose completeness validation.",
+                remote_prefix,
+            )
+            return None
+        try:
+            return (
+                str(remote_prefix)
+                if complete(str(remote_prefix), model_entry=entry)
+                else None
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not validate remote model directory %s: %s",
+                remote_prefix,
+                exc,
+            )
+            return None
 
     def _cloud_temp_path(self, dest: Path) -> Path:
         root = _ensure_managed_dir(self.data_dir / "cache" / "model_transfers", label="model transfer cache")
@@ -848,19 +1285,59 @@ class ModelManager:
                     return root
         return None
 
+    def _cached_ollama_models(self, *, has_ollama_entries: bool) -> set[str]:
+        if not has_ollama_entries:
+            return set()
+        provider = (
+            os.getenv("EDMG_AI_PROVIDER", "nemotron_cloud").strip().lower()
+            or "nemotron_cloud"
+        )
+        explicit_probe = (
+            os.getenv("EDMG_MODEL_CATALOG_PROBE_OLLAMA", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if provider != "ollama" and not explicit_probe:
+            # Model catalog polling must not wait on an unused local service.
+            return set()
+        try:
+            ttl_seconds = max(
+                2.0,
+                min(
+                    300.0,
+                    float(os.getenv("EDMG_OLLAMA_CATALOG_CACHE_SECONDS", "30")),
+                ),
+            )
+        except ValueError:
+            ttl_seconds = 30.0
+        now = time.monotonic()
+        with self._ollama_probe_lock:
+            if now - self._ollama_models_cache_at < ttl_seconds:
+                return set(self._ollama_models_cache)
+            models: set[str] = set()
+            try:
+                response = requests.get(
+                    f"{self.ollama_url}/api/tags",
+                    timeout=(0.25, 0.75),
+                )
+                if response.ok:
+                    data = response.json() or {}
+                    for item in data.get("models") or []:
+                        if isinstance(item, dict) and item.get("name"):
+                            models.add(str(item["name"]))
+            except Exception:
+                pass
+            self._ollama_models_cache = models
+            self._ollama_models_cache_at = time.monotonic()
+            return set(models)
+
     def _installed_map(self, entries: list[dict[str, Any]]) -> dict[str, bool]:
         out: dict[str, bool] = {}
-        # for ollama, fetch tags once
-        ollama_models: set[str] = set()
-        try:
-            r = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
-            if r.ok:
-                data = r.json() or {}
-                for m in (data.get("models") or []):
-                    if isinstance(m, dict) and m.get("name"):
-                        ollama_models.add(str(m["name"]))
-        except Exception:
-            pass
+        ollama_models = self._cached_ollama_models(
+            has_ollama_entries=any(
+                str(entry.get("source") or "").strip().lower() == "ollama"
+                for entry in entries
+            )
+        )
 
         for e in entries:
             mid = str(e.get("id") or "")
@@ -911,50 +1388,126 @@ class ModelManager:
         return dirs
 
     def _is_model_weight_file(self, candidate: Path) -> bool:
-        try:
-            if not _path_exists_safe(candidate) or not _path_is_file_safe(candidate):
-                return False
-            if candidate.stat().st_size <= 0:
-                return False
-            if candidate.stat().st_size <= 4096:
-                with candidate.open("rb") as handle:
-                    prefix = handle.read(256)
-                if prefix.startswith(b"version https://git-lfs.github.com/spec"):
-                    return False
-        except OSError:
-            return False
-        return True
+        return is_real_weight_file(candidate)
 
-    def _internal_component_has_weights(self, component_dir: Path) -> bool:
+    def _internal_component_has_weights(
+        self,
+        component_dir: Path,
+        *,
+        weight_format: str | None = None,
+    ) -> bool:
         if not _path_exists_safe(component_dir) or not _path_is_dir_safe(component_dir):
             return False
-        patterns = (
-            "diffusion_pytorch_model*.safetensors",
-            "diffusion_pytorch_model*.bin",
-            "pytorch_model*.safetensors",
-            "pytorch_model*.bin",
-            "model*.safetensors",
-            "model*.bin",
-            "model.onnx",
-            "model.onnx_data",
-            "openvino_model.bin",
-            "flax_model.msgpack",
+        formats = (
+            (str(weight_format).strip().lower(),)
+            if weight_format is not None
+            else ("safetensors", "bin")
         )
-        try:
-            return any(
-                self._is_model_weight_file(candidate)
-                for pattern in patterns
-                for candidate in component_dir.glob(pattern)
-            )
-        except OSError as exc:
-            logger.warning(
-                "Treating unreadable component directory as missing weights: %s (%s)",
-                component_dir,
-                exc,
-            )
+        if any(extension not in {"safetensors", "bin"} for extension in formats):
             return False
+        stems = ("diffusion_pytorch_model", "pytorch_model", "model")
+        for extension in formats:
+            for stem in stems:
+                if self._is_model_weight_file(component_dir / f"{stem}.{extension}"):
+                    return True
+                index_file = component_dir / f"{stem}.{extension}.index.json"
+                try:
+                    payload = json.loads(index_file.read_text(encoding="utf-8"))
+                    weight_map = (
+                        payload.get("weight_map") if isinstance(payload, dict) else None
+                    )
+                    filenames = {
+                        str(filename).replace("\\", "/").strip()
+                        for filename in (weight_map or {}).values()
+                        if str(filename).strip()
+                    }
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    continue
+                shard_pattern = re.compile(
+                    rf"^{re.escape(stem)}-\d{{5}}-of-\d{{5}}\."
+                    rf"{re.escape(extension)}$",
+                    re.IGNORECASE,
+                )
+                if filenames and all(
+                    "/" not in filename
+                    and shard_pattern.fullmatch(filename) is not None
+                    and self._is_model_weight_file(component_dir / filename)
+                    for filename in filenames
+                ):
+                    return True
+        return False
+
+    def _snapshot_has_incomplete_markers(self, path: Path) -> bool:
+        if not _path_exists_safe(path) or not _path_is_dir_safe(path):
+            return False
+        marker_suffixes = (".incomplete", ".partial", ".part", ".tmp")
+        walk_error: OSError | None = None
+
+        def capture_error(exc: OSError) -> None:
+            nonlocal walk_error
+            walk_error = exc
+
+        try:
+            for current, directories, filenames in os.walk(path, onerror=capture_error):
+                # Hub local-dir cache markers are resumable transport state,
+                # not runtime artifacts. Pruning the private cache also avoids
+                # repeatedly scanning hundreds of old metadata/partial files
+                # during the catalog's installed-state check.
+                if _same_path(current, path):
+                    directories[:] = [
+                        directory
+                        for directory in directories
+                        if directory.lower() != ".cache"
+                    ]
+                if any(filename.lower().endswith(marker_suffixes) for filename in filenames):
+                    return True
+        except OSError as exc:
+            walk_error = exc
+        if walk_error is not None:
+            logger.warning(
+                "Treating unreadable snapshot as incomplete: %s (%s)",
+                path,
+                walk_error,
+            )
+            return True
+        return False
+
+    def _required_diffusers_components(self, path: Path) -> list[str]:
+        model_index = path / "model_index.json"
+        if not _path_exists_safe(model_index):
+            return []
+        try:
+            data = json.loads(model_index.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        if not isinstance(data, dict):
+            return []
+
+        weightless_markers = (
+            "Tokenizer",
+            "TokenizerFast",
+            "Scheduler",
+            "ImageProcessor",
+            "FeatureExtractor",
+            "SafetyChecker",
+        )
+        components: list[str] = []
+        for name, spec in data.items():
+            if not isinstance(name, str) or not isinstance(spec, list) or len(spec) < 2:
+                continue
+            class_name = str(spec[1] or "")
+            if not class_name:
+                # Diffusers uses [null, null] for optional components that are
+                # intentionally absent from this snapshot.
+                continue
+            if any(marker in class_name for marker in weightless_markers):
+                continue
+            components.append(name)
+        return components
 
     def _diffusers_snapshot_complete(self, path: Path) -> bool:
+        if self._snapshot_has_incomplete_markers(path):
+            return False
         model_index = path / "model_index.json"
         try:
             index_exists = model_index.exists()
@@ -976,29 +1529,21 @@ class ModelManager:
         if not isinstance(data, dict):
             return False
 
-        weightless_markers = (
-            "Tokenizer",
-            "TokenizerFast",
-            "Scheduler",
-            "ImageProcessor",
-            "FeatureExtractor",
-            "SafetyChecker",
-        )
-        required_components: list[str] = []
-        for name, spec in data.items():
-            if not isinstance(name, str) or not isinstance(spec, list) or len(spec) < 2:
-                continue
-            class_name = str(spec[1] or "")
-            if any(marker in class_name for marker in weightless_markers):
-                continue
-            required_components.append(name)
+        required_components = self._required_diffusers_components(path)
 
         if not required_components:
             return False
 
         try:
-            return all(
-                self._internal_component_has_weights(path / component) for component in required_components
+            return any(
+                all(
+                    self._internal_component_has_weights(
+                        path / component,
+                        weight_format=weight_format,
+                    )
+                    for component in required_components
+                )
+                for weight_format in ("safetensors", "bin")
             )
         except OSError as exc:
             logger.warning(
@@ -1031,21 +1576,8 @@ class ModelManager:
         if not isinstance(data, dict):
             return ["model_index.json"]
 
-        weightless_markers = (
-            "Tokenizer",
-            "TokenizerFast",
-            "Scheduler",
-            "ImageProcessor",
-            "FeatureExtractor",
-            "SafetyChecker",
-        )
         missing: list[str] = []
-        for name, spec in data.items():
-            if not isinstance(name, str) or not isinstance(spec, list) or len(spec) < 2:
-                continue
-            class_name = str(spec[1] or "")
-            if any(marker in class_name for marker in weightless_markers):
-                continue
+        for name in self._required_diffusers_components(path):
             if not self._internal_component_has_weights(path / name):
                 missing.append(name)
         return missing
@@ -1067,23 +1599,14 @@ class ModelManager:
         kind = str(entry.get("kind") or "").strip().lower()
         if kind in {"diffusers", "video_diffusers"}:
             return self._diffusers_snapshot_complete(path)
+        if self._snapshot_has_incomplete_markers(path):
+            return False
         if kind == "motion_adapter":
             try:
                 has_config = _path_exists_safe(path / "config.json") or _path_exists_safe(
                     path / "adapter_config.json"
                 )
-                has_weights = any(
-                    self._is_model_weight_file(candidate)
-                    for pattern in (
-                        "diffusion_pytorch_model*.safetensors",
-                        "diffusion_pytorch_model*.bin",
-                        "pytorch_model*.safetensors",
-                        "pytorch_model*.bin",
-                        "model*.safetensors",
-                        "model*.bin",
-                    )
-                    for candidate in path.glob(pattern)
-                )
+                has_weights = self._internal_component_has_weights(path)
             except OSError as exc:
                 logger.warning(
                     "Treating unreadable motion adapter as not installed: %s (%s)",
@@ -1096,11 +1619,7 @@ class ModelManager:
             if not _path_exists_safe(path / "config.json"):
                 return False
             try:
-                return any(
-                    self._is_model_weight_file(candidate)
-                    for pattern in ("diffusion_pytorch_model*.safetensors", "diffusion_pytorch_model*.bin")
-                    for candidate in path.glob(pattern)
-                )
+                return self._internal_component_has_weights(path)
             except OSError as exc:
                 logger.warning(
                     "Treating unreadable controlnet as not installed: %s (%s)",
@@ -1496,6 +2015,7 @@ class ModelManager:
         model = str(entry.get("ollama_model") or "")
         if not model:
             raise RuntimeError("Missing ollama_model")
+        self.tasks.set_stage(task, "downloading", progress=0.05)
         ModelTaskManager.log(task, f"Pulling {model} via Ollama…")
         with requests.post(
             f"{self.ollama_url}/api/pull",
@@ -1526,37 +2046,96 @@ class ModelManager:
                     last = status
         ModelTaskManager.set_progress(task, 1.0)
         ModelTaskManager.log(task, "Done.")
+        with self._ollama_probe_lock:
+            self._ollama_models_cache.add(model)
+            self._ollama_models_cache_at = time.monotonic()
 
-    def _download_stream(self, task: ModelTask, url: str, dest: Path, headers: Optional[dict[str, str]] = None) -> None:
+    def _download_stream(
+        self,
+        task: ModelTask,
+        url: str,
+        dest: Path,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        headers = headers or {}
+        headers = dict(headers or {})
+        self.tasks.set_stage(task, "downloading", progress=0.1)
         ModelTaskManager.log(task, f"Downloading…\n{url}")
         tmp = dest.with_suffix(dest.suffix + ".tmp")
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except Exception:
-                pass
+        resumed_bytes = 0
+        try:
+            if tmp.exists():
+                resumed_bytes = max(0, int(tmp.stat().st_size))
+        except OSError:
+            resumed_bytes = 0
+        if resumed_bytes:
+            headers["Range"] = f"bytes={resumed_bytes}-"
+            self._append_task_log(
+                task,
+                f"Resuming partial file at {resumed_bytes:,} bytes.",
+            )
         with requests.get(url, stream=True, timeout=60 * 60, headers=headers) as r:
             if r.status_code in (401, 403):
                 raise UserFacingError(
                     "Download unauthorized",
                     hint="Run `hf auth login` on the backend, or set an API token in Settings → Tokens (Hugging Face token for HF downloads, Civitai API key for Civitai downloads), then retry."
                 )
+            if r.status_code == 416 and resumed_bytes:
+                content_range = str(r.headers.get("content-range") or "")
+                match = re.search(r"/(\d+)$", content_range)
+                expected = int(match.group(1)) if match else 0
+                if expected and expected == resumed_bytes:
+                    os.replace(tmp, dest)
+                    self.tasks.set_transfer(
+                        task,
+                        bytes_completed=expected,
+                        bytes_total=expected,
+                        files_completed=1,
+                        files_total=1,
+                        force_persist=True,
+                    )
+                    ModelTaskManager.set_progress(task, 1.0)
+                    ModelTaskManager.log(task, f"Saved: {dest.name}")
+                    return
             r.raise_for_status()
-            total = int(r.headers.get("content-length") or 0)
-            got = 0
-            with open(tmp, "wb") as f:
+            append = resumed_bytes > 0 and r.status_code == 206
+            if not append:
+                resumed_bytes = 0
+            remaining = int(r.headers.get("content-length") or 0)
+            total = resumed_bytes + remaining if remaining else 0
+            got = resumed_bytes
+            self.tasks.set_transfer(
+                task,
+                bytes_completed=got,
+                bytes_total=total or None,
+                files_completed=0,
+                files_total=1,
+                force_persist=True,
+            )
+            with open(tmp, "ab" if append else "wb") as f:
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
                     if not chunk:
                         continue
                     f.write(chunk)
                     got += len(chunk)
-                    if total:
-                        ModelTaskManager.set_progress(task, max(0.0, min(0.99, got / total)))
+                    self.tasks.set_transfer(
+                        task,
+                        bytes_completed=got,
+                        bytes_total=total or None,
+                        files_completed=0,
+                        files_total=1,
+                    )
                 f.flush()
                 os.fsync(f.fileno())
         os.replace(tmp, dest)
+        self.tasks.set_transfer(
+            task,
+            bytes_completed=got,
+            bytes_total=total or got,
+            files_completed=1,
+            files_total=1,
+            force_persist=True,
+        )
         ModelTaskManager.set_progress(task, 1.0)
         ModelTaskManager.log(task, f"Saved: {dest.name}")
 
@@ -1615,52 +2194,359 @@ class ModelManager:
     def _download_hf_snapshot(self, task: ModelTask, **kwargs: Any) -> None:
         if snapshot_download is None:
             raise RuntimeError("huggingface_hub is not installed (required for snapshot downloads)")
-        with _HF_SNAPSHOT_DOWNLOAD_LOCK:
-            restore_xet_disabled: bool | None = None
-            if hf_hub_constants is not None and hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER:
-                try:
-                    requested_concurrency = int(os.getenv("EDMG_HF_TRANSFER_CONCURRENCY", "4"))
-                except ValueError:
-                    requested_concurrency = 4
-                concurrency = max(1, min(16, requested_concurrency))
-                hf_hub_constants.HF_TRANSFER_CONCURRENCY = concurrency
-                # Xet-backed repositories otherwise bypass hf_transfer entirely. Honor
-                # Studio's explicit fast-transfer setting for this snapshot operation;
-                # restore Xet immediately afterward for bucket and other Hub workflows.
-                restore_xet_disabled = bool(hf_hub_constants.HF_HUB_DISABLE_XET)
-                hf_hub_constants.HF_HUB_DISABLE_XET = True
-                self._append_task_log(task, f"Using hf_transfer with concurrency {concurrency}.")
-            try:
-                snapshot_download(**kwargs)
-            except ValueError as exc:
-                missing_transfer = (
-                    "HF_HUB_ENABLE_HF_TRANSFER=1" in str(exc)
-                    and "'hf_transfer' package is not available" in str(exc)
-                )
-                if not missing_transfer or hf_hub_constants is None:
-                    raise
+        local_dir = Path(str(kwargs.get("local_dir") or "")).expanduser()
+        stop_watcher = threading.Event()
+        active_profile = HFSnapshotDownloadProfile(
+            name="active",
+            allow_patterns=tuple(str(item) for item in (kwargs.get("allow_patterns") or ("**",))),
+            ignore_patterns=tuple(str(item) for item in (kwargs.get("ignore_patterns") or ())),
+        )
+        hub_download_cache = local_dir / ".cache" / "huggingface" / "download"
 
-                # huggingface_hub reads this flag once when its constants module is imported.
-                # Disable only its in-process cached value so an optional accelerator cannot
-                # prevent the standard resumable downloader from doing the requested install.
-                hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER = False
-                self._append_task_log(
-                    task,
-                    "hf_transfer is unavailable; continuing with the standard Hugging Face downloader.",
+        def incomplete_cache_bytes() -> int:
+            total = 0
+            try:
+                if hub_download_cache.is_dir():
+                    for candidate in hub_download_cache.rglob("*.incomplete"):
+                        try:
+                            total += max(0, int(candidate.stat().st_size))
+                        except OSError:
+                            continue
+            except OSError:
+                return total
+            return total
+
+        def has_incomplete_cache_files() -> bool:
+            try:
+                if not hub_download_cache.is_dir():
+                    return False
+                return any(
+                    _path_is_file_safe(candidate)
+                    for candidate in hub_download_cache.rglob("*.incomplete")
                 )
-                snapshot_download(**kwargs)
+            except OSError:
+                # An unreadable cache must never prevent restoration of the
+                # process-wide transfer flag or crash catalog/install state.
+                return False
+
+        baseline_incomplete_bytes = incomplete_cache_bytes()
+
+        def snapshot_stats() -> tuple[int, int]:
+            completed_bytes = 0
+            completed_files = 0
+            try:
+                if local_dir.is_dir():
+                    for candidate in local_dir.rglob("*"):
+                        try:
+                            if not candidate.is_file():
+                                continue
+                            relative = candidate.relative_to(local_dir)
+                            if tuple(part.lower() for part in relative.parts[:2]) == (
+                                ".cache",
+                                "huggingface",
+                            ):
+                                continue
+                            relative_name = relative.as_posix()
+                            if not _hf_profile_matches_path(relative_name, active_profile):
+                                continue
+                            name = candidate.name.lower()
+                            if name.endswith((".incomplete", ".partial", ".part", ".tmp")):
+                                continue
+                            completed_bytes += max(0, int(candidate.stat().st_size))
+                            completed_files += 1
+                        except (OSError, ValueError):
+                            continue
+            except OSError:
+                pass
+            transferred_partial_bytes = max(
+                0,
+                incomplete_cache_bytes() - baseline_incomplete_bytes,
+            )
+            return completed_bytes + transferred_partial_bytes, completed_files
+
+        def watch_snapshot() -> None:
+            while not stop_watcher.wait(0.5):
+                try:
+                    completed_bytes, completed_files = snapshot_stats()
+                    self.tasks.set_transfer(
+                        task,
+                        bytes_completed=completed_bytes,
+                        files_completed=completed_files,
+                    )
+                except Exception:
+                    continue
+
+        with _HF_SNAPSHOT_DOWNLOAD_LOCK:
+            transfer_was_enabled = (
+                hf_hub_constants is not None
+                and bool(getattr(hf_hub_constants, "HF_HUB_ENABLE_HF_TRANSFER", False))
+            )
+            resume_override = transfer_was_enabled and has_incomplete_cache_files()
+            watcher: threading.Thread | None = None
+            if resume_override and hf_hub_constants is not None:
+                # huggingface_hub 0.x deletes resumable local-dir partials when
+                # hf_transfer is enabled. Temporarily use Hub's standard/Xet
+                # path for this retry, then restore hf_transfer for fresh files.
+                hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER = False
+            try:
+                if resume_override:
+                    self._append_task_log(
+                        task,
+                        (
+                            "Resume compatibility fallback: continuing existing Hugging Face "
+                            "partials with the Hub/Xet downloader; Xet remains enabled and "
+                            "hf_transfer will be restored for fresh snapshot operations."
+                        ),
+                    )
+                elif transfer_was_enabled:
+                    try:
+                        requested_concurrency = int(
+                            os.getenv("EDMG_HF_TRANSFER_CONCURRENCY", "4")
+                        )
+                    except ValueError:
+                        requested_concurrency = 4
+                    concurrency = max(1, min(16, requested_concurrency))
+                    hf_hub_constants.HF_TRANSFER_CONCURRENCY = concurrency
+                    self._append_task_log(
+                        task,
+                        (
+                            f"hf_transfer is available with concurrency {concurrency}; "
+                            "Xet-backed repositories remain eligible for hf_xet."
+                        ),
+                    )
+                elif (
+                    hf_hub_constants is not None
+                    and not bool(getattr(hf_hub_constants, "HF_HUB_DISABLE_XET", False))
+                ):
+                    self._append_task_log(
+                        task,
+                        "Hugging Face Hub may use hf_xet for Xet-backed files.",
+                    )
+                watcher = threading.Thread(target=watch_snapshot, daemon=True)
+                watcher.start()
+                try:
+                    snapshot_download(**kwargs)
+                except ValueError as exc:
+                    missing_transfer = (
+                        "HF_HUB_ENABLE_HF_TRANSFER=1" in str(exc)
+                        and "'hf_transfer' package is not available" in str(exc)
+                    )
+                    if not missing_transfer or hf_hub_constants is None:
+                        raise
+
+                    # huggingface_hub reads this flag once when its constants module is imported.
+                    # Disable only its in-process cached value so an optional accelerator cannot
+                    # prevent the standard resumable downloader from doing the requested install.
+                    hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER = False
+                    self._append_task_log(
+                        task,
+                        "hf_transfer is unavailable; continuing with the standard Hugging Face downloader.",
+                    )
+                    snapshot_download(**kwargs)
             finally:
-                if restore_xet_disabled is not None and hf_hub_constants is not None:
-                    hf_hub_constants.HF_HUB_DISABLE_XET = restore_xet_disabled
+                stop_watcher.set()
+                if watcher is not None:
+                    watcher.join(timeout=1.0)
+                completed_bytes, completed_files = snapshot_stats()
+                self.tasks.set_transfer(
+                    task,
+                    bytes_completed=completed_bytes,
+                    files_completed=completed_files,
+                    force_persist=True,
+                )
+                if resume_override and hf_hub_constants is not None:
+                    hf_hub_constants.HF_HUB_ENABLE_HF_TRANSFER = transfer_was_enabled
+
+    def _download_hf_inference_snapshot(
+        self,
+        task: ModelTask,
+        *,
+        entry: dict[str, Any],
+        repo_id: str,
+        local_dir: Path,
+        revision: str | None,
+        token: str | bool,
+    ) -> None:
+        common_kwargs = {
+            "repo_id": repo_id,
+            "local_dir": str(local_dir),
+            "local_dir_use_symlinks": False,
+            "revision": revision,
+            "token": token,
+            "resume_download": True,
+        }
+
+        metadata_profile = _hf_snapshot_download_profile(entry, weight_format="metadata")
+        self.tasks.set_stage(task, "planning", progress=0.04)
+        self._append_task_log(
+            task,
+            "Selecting runnable Diffusers metadata, configs, tokenizers, and schedulers.",
+        )
+        self._download_hf_snapshot(
+            task,
+            **common_kwargs,
+            allow_patterns=list(metadata_profile.allow_patterns),
+            ignore_patterns=list(metadata_profile.ignore_patterns),
+        )
+
+        kind = str(entry.get("kind") or "").strip().lower()
+        components = (
+            self._required_diffusers_components(local_dir)
+            if kind in {"diffusers", "video_diffusers"}
+            else []
+        )
+        if kind in {"diffusers", "video_diffusers"} and not components:
+            components = list(_HF_COMMON_DIFFUSERS_COMPONENTS)
+
+        safe_profile = _hf_snapshot_download_profile(
+            entry,
+            weight_format="safetensors",
+            components=components,
+        )
+        self.tasks.set_stage(task, "downloading", progress=0.1)
+        if components:
+            selected = ", ".join(components)
+            self._append_task_log(
+                task,
+                (
+                    f"Selected inference plan: default-precision safetensors for "
+                    f"{len(components)} component(s): {selected}."
+                ),
+            )
+        else:
+            self._append_task_log(
+                task,
+                "Selected inference plan: root component config plus default-precision safetensors.",
+            )
+        self._download_hf_snapshot(
+            task,
+            **common_kwargs,
+            allow_patterns=list(safe_profile.allow_patterns),
+            ignore_patterns=list(safe_profile.ignore_patterns),
+        )
+
+        self.tasks.set_stage(task, "validating", progress=0.82)
+        if self._internal_asset_installed(entry, local_dir):
+            self._append_task_log(
+                task,
+                (
+                    f"Validated {task.files_completed} selected file(s), "
+                    f"{task.bytes_completed:,} bytes on disk."
+                ),
+            )
+            return
+        if self._snapshot_has_incomplete_markers(local_dir):
+            raise UserFacingError(
+                f"{entry.get('name') or entry.get('id') or 'Model'} download is incomplete",
+                hint="Retry the install. Studio kept the partial Hugging Face files so the download can resume.",
+                code="MODEL_SNAPSHOT_INCOMPLETE",
+            )
+
+        missing_components = (
+            [
+                component
+                for component in self._required_diffusers_components(local_dir)
+                if not self._internal_component_has_weights(
+                    local_dir / component,
+                    weight_format="safetensors",
+                )
+            ]
+            if kind in {"diffusers", "video_diffusers"}
+            else []
+        )
+        repair_profile = _hf_snapshot_download_profile(
+            entry,
+            weight_format="safetensors",
+            components=missing_components or components,
+        )
+        self.tasks.set_stage(task, "repairing_download", progress=0.35)
+        self._append_task_log(
+            task,
+            (
+                "Default safetensors are missing or structurally invalid"
+                + (
+                    f" for: {', '.join(missing_components)}"
+                    if missing_components
+                    else ""
+                )
+                + "; forcing one clean redownload before trying legacy weights."
+            ),
+        )
+        self._download_hf_snapshot(
+            task,
+            **common_kwargs,
+            allow_patterns=list(repair_profile.allow_patterns),
+            ignore_patterns=list(repair_profile.ignore_patterns),
+            force_download=True,
+        )
+        self.tasks.set_stage(task, "validating", progress=0.82)
+        if self._internal_asset_installed(entry, local_dir):
+            self._append_task_log(
+                task,
+                "Validated repaired default-safetensors inference layout.",
+            )
+            return
+
+        legacy_profile = _hf_snapshot_download_profile(
+            entry,
+            weight_format="bin",
+            # Diffusers selects weight format for the whole pipeline. Fetch a
+            # coherent default-bin layout, not a safetensors/bin component mix.
+            components=components,
+        )
+        self.tasks.set_stage(task, "downloading_fallback", progress=0.45)
+        self._append_task_log(
+            task,
+            (
+                "No runnable safetensors set was available"
+                + (
+                    f" for: {', '.join(missing_components)}"
+                    if missing_components
+                    else ""
+                )
+                + "; downloading a coherent legacy PyTorch .bin layout."
+            ),
+        )
+        self._download_hf_snapshot(
+            task,
+            **common_kwargs,
+            allow_patterns=list(legacy_profile.allow_patterns),
+            ignore_patterns=list(legacy_profile.ignore_patterns),
+        )
+        self.tasks.set_stage(task, "validating", progress=0.82)
+        if not self._internal_asset_installed(entry, local_dir):
+            missing = (
+                ", ".join(missing_components)
+                if missing_components
+                else "required weights or config"
+            )
+            raise UserFacingError(
+                f"{entry.get('name') or entry.get('id') or 'Model'} snapshot is incomplete",
+                hint=(
+                    f"Missing {missing}. Retry to resume; Studio will not mark or mirror "
+                    "this partial snapshot as installed."
+                ),
+                code="MODEL_SNAPSHOT_INCOMPLETE",
+            )
+        self._append_task_log(
+            task,
+            (
+                f"Validated legacy fallback: {task.files_completed} selected file(s), "
+                f"{task.bytes_completed:,} bytes on disk."
+            ),
+        )
 
     def _append_task_log(self, task: ModelTask, msg: str) -> None:
         current = str(task.last_log or "").strip()
         ModelTaskManager.log(task, f"{current}\n{msg}" if current else msg)
+        self.tasks.persist(task)
 
     def _restore_from_model_cache(self, task: ModelTask, entry: dict[str, Any], dest: Path) -> bool:
         cache = getattr(self, "model_cache", None)
         if cache is None:
             return False
+        self.tasks.set_stage(task, "restoring", progress=0.05)
+        self._append_task_log(task, f"Checking {self._model_cache_label()} for a local restore.")
         cache_entry = self._cache_entry_from_cloud_record(
             entry,
             self._cloud_model_record(str(entry.get("id") or "").strip()),
@@ -1673,6 +2559,7 @@ class ModelManager:
             return False
         ModelTaskManager.set_progress(task, 1.0)
         ModelTaskManager.log(task, f"Restored from {self._model_cache_label()}: {dest.name}")
+        self.tasks.persist(task)
         return True
 
     def _restore_snapshot_from_model_cache(self, task: ModelTask, entry: dict[str, Any], dest: Path) -> bool:
@@ -1680,6 +2567,8 @@ class ModelManager:
         download = getattr(cache, "download_model_directory", None)
         if cache is None or not callable(download):
             return False
+        self.tasks.set_stage(task, "restoring", progress=0.05)
+        self._append_task_log(task, f"Checking {self._model_cache_label()} for an internal snapshot restore.")
         cache_entry = self._cache_entry_from_cloud_record(
             entry,
             self._cloud_model_record(str(entry.get("id") or "").strip()),
@@ -1698,12 +2587,15 @@ class ModelManager:
             )
         ModelTaskManager.set_progress(task, 1.0)
         ModelTaskManager.log(task, f"Restored internal snapshot from {self._model_cache_label()}: {dest.name}")
+        self.tasks.persist(task)
         return True
 
     def _upload_to_model_cache(self, task: ModelTask, entry: dict[str, Any], path: Path, *, mode: str = "local_cache") -> str | None:
         cache = getattr(self, "model_cache", None)
         if cache is None:
             return None
+        self.tasks.set_stage(task, "mirroring", progress=0.9)
+        self._append_task_log(task, f"Mirroring model to {self._model_cache_label()}.")
         try:
             object_name = cache.upload_model(entry, path)
         except Exception as exc:
@@ -1718,6 +2610,8 @@ class ModelManager:
         upload = getattr(cache, "upload_model_directory", None)
         if cache is None or not callable(upload):
             return None
+        self.tasks.set_stage(task, "mirroring", progress=0.9)
+        self._append_task_log(task, f"Mirroring validated snapshot to {self._model_cache_label()}.")
         try:
             object_name = upload(entry, path)
         except Exception as exc:
@@ -1728,6 +2622,7 @@ class ModelManager:
         return str(object_name)
 
     def _restore_cloud_model(self, task: ModelTask, entry: dict[str, Any]) -> None:
+        self.tasks.set_stage(task, "restoring", progress=0.03)
         mode, dest = self._models_dest(entry)
         if self.model_cache is None:
             raise UserFacingError(
@@ -1758,10 +2653,9 @@ class ModelManager:
         )
 
     def _install_file_model(self, task: ModelTask, entry: dict[str, Any]) -> None:
+        self.tasks.set_stage(task, "preparing", progress=0.01)
         src = (entry.get("source") or "").lower()
-        kind = (entry.get("kind") or "").lower()
         target = entry.get("target") or {}
-        folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
         fname = str(entry.get("filename") or "")
         if not fname:
             # for civitai user entries we may set filename later
@@ -1796,7 +2690,11 @@ class ModelManager:
                         hint="Set EDMG_AWS_MODEL_CACHE=1 and EDMG_AWS_MODEL_CACHE_BUCKET, then restart Studio.",
                         code="MODEL_CACHE_REQUIRED",
                     )
-                object_name = self._cache_snapshot_exists(entry, dest)
+                object_name = self._cache_snapshot_exists(
+                    entry,
+                    dest,
+                    require_complete=True,
+                )
                 if object_name:
                     self._record_cloud_model(entry, object_name, mode="cloud_only")
                     ModelTaskManager.set_progress(task, 1.0)
@@ -1832,14 +2730,13 @@ class ModelManager:
                         task,
                         resource=repo_id,
                         candidates=hf_candidates,
-                        download=lambda token: self._download_hf_snapshot(
+                        download=lambda token: self._download_hf_inference_snapshot(
                             task,
+                            entry=entry,
                             repo_id=repo_id,
-                            local_dir=str(target_path),
-                            local_dir_use_symlinks=False,
+                            local_dir=target_path,
                             revision=str(entry.get("hf_revision") or "") or None,
                             token=token,
-                            resume_download=True,
                         ),
                     )
                     if cloud_only:
@@ -1851,6 +2748,7 @@ class ModelManager:
                     else:
                         self._upload_snapshot_to_model_cache(task, entry, dest)
                         ModelTaskManager.set_progress(task, 1.0)
+                    self.tasks.set_stage(task, "complete", progress=1.0)
                 finally:
                     if cloud_only:
                         shutil.rmtree(target_path.parent, ignore_errors=True)
@@ -1911,6 +2809,7 @@ class ModelManager:
                     )
                 target_path = self._cloud_temp_path(dest) if cloud_only else dest
                 target_path.mkdir(parents=True, exist_ok=True)
+                self.tasks.set_stage(task, "downloading", progress=0.1)
                 ModelTaskManager.log(task, f"Syncing HF bucket snapshot: {bucket_id}")
                 try:
                     ok = _hf_bucket_download_snapshot(
@@ -1925,6 +2824,16 @@ class ModelManager:
                             hint="Check hf_bucket_id / hf_bucket_path and that your HF token can read the bucket.",
                             code="HF_BUCKET_MISS",
                         )
+                    self.tasks.set_stage(task, "validating", progress=0.82)
+                    if not self._internal_asset_installed(entry, target_path):
+                        raise UserFacingError(
+                            f"{entry.get('name') or entry.get('id') or 'Model'} bucket snapshot is incomplete",
+                            hint=(
+                                "Retry the sync. Studio kept the partial files and will not "
+                                "mark or mirror the snapshot until all runnable weights are present."
+                            ),
+                            code="MODEL_SNAPSHOT_INCOMPLETE",
+                        )
                     if cloud_only:
                         object_name = self._upload_snapshot_to_model_cache(task, entry, target_path, mode="cloud_only")
                         if not object_name:
@@ -1935,6 +2844,7 @@ class ModelManager:
                         self._upload_snapshot_to_model_cache(task, entry, dest)
                         ModelTaskManager.set_progress(task, 1.0)
                         ModelTaskManager.log(task, f"Synced from HF bucket: {bucket_id}")
+                    self.tasks.set_stage(task, "complete", progress=1.0)
                 finally:
                     if cloud_only:
                         shutil.rmtree(target_path.parent, ignore_errors=True)
@@ -2138,7 +3048,10 @@ class ModelManager:
 
         mode, dest = self._models_dest(entry)
         if mode == "snapshot" and dest.exists() and not self._internal_asset_installed(entry, dest):
-            self._clear_incomplete_snapshot(dest)
+            # Keep Hub ``.incomplete`` payloads in place so a user retry can
+            # resume them. Runtime resolution must not erase a large partial
+            # download or mistake it for a loadable snapshot.
+            return None
         if mode == "file":
             return self._materialize_file_from_model_cache(entry, dest)
         if mode == "snapshot":

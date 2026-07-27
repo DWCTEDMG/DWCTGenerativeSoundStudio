@@ -90,7 +90,6 @@ async function ensureAudioFixture() {
 function chooseHomeRoot() {
   const preferred = process.env.EDMG_STUDIO_PROOF_ROOT;
   if (preferred) return preferred;
-  if (process.platform === "win32" && fs.existsSync("D:\\")) return "D:\\";
   return os.tmpdir();
 }
 

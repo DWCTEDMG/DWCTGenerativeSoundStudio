@@ -245,12 +245,10 @@ def _find_ollama_exe(external_dir: Path | None = None) -> str:
 
     if platform.system() == "Windows" and not ignore_system:
         local_appdata = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
-        candidates.extend(
-            [
-                local_appdata / "Programs" / "Ollama" / "ollama.exe",
-                Path(r"C:\Program Files\Ollama\ollama.exe"),
-            ]
-        )
+        candidates.append(local_appdata / "Programs" / "Ollama" / "ollama.exe")
+        program_files = os.environ.get("ProgramFiles", "").strip()
+        if program_files:
+            candidates.append(Path(program_files) / "Ollama" / "ollama.exe")
 
     for candidate in candidates:
         if candidate.exists():
@@ -698,10 +696,10 @@ def _find_7z_exe(external_dir: Path, data_dir: Path | None = None) -> str:
 
     candidates = []
     if platform.system() == "Windows" and not ignore_system:
-        candidates += [
-            Path(r"C:\Program Files\7-Zip\7z.exe"),
-            Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
-        ]
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            program_files = os.environ.get(env_name, "").strip()
+            if program_files:
+                candidates.append(Path(program_files) / "7-Zip" / "7z.exe")
     for c in candidates:
         if c.exists():
             return str(c)

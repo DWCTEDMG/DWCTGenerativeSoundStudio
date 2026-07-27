@@ -35,10 +35,38 @@ const studioRoot = path.resolve(__dirname, "..");
 function validManifest(overrides = {}) {
   const cpuIndex = "https://download.pytorch.org/whl/cpu";
   const backendEntryPoint = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+  const helperEntryPoint = process.platform === "win32" ? "edmg-hf-bucket-helper.exe" : "edmg-hf-bucket-helper";
   const binarySha256 = "3".repeat(64);
   const binarySize = 123;
+  const helperSha256 = "7".repeat(64);
+  const helperSize = 45;
+  const defaultsSha256 = "8".repeat(64);
+  const defaultsSize = 67;
+  const hfRuntimeBundleEvidence = {
+    huggingfaceHubMetadata: "_internal/huggingface_hub-0.36.2.dist-info/METADATA",
+    hfTransferMetadata: "_internal/hf_transfer-0.1.9.dist-info/METADATA",
+    hfTransferModule: process.platform === "win32"
+      ? "_internal/hf_transfer/hf_transfer.pyd"
+      : "_internal/hf_transfer/hf_transfer.abi3.so",
+    hfXetMetadata: "_internal/hf_xet-1.5.1.dist-info/METADATA",
+    hfXetModule: process.platform === "win32"
+      ? "_internal/hf_xet/hf_xet.pyd"
+      : "_internal/hf_xet/hf_xet.abi3.so",
+  };
+  const hfRuntimeEntries = Object.values(hfRuntimeBundleEvidence).map((entryPath) => ({
+    path: entryPath,
+    type: "file",
+    size: 11,
+    sha256: "a".repeat(64),
+  }));
+  const bundleEntries = [
+    { path: helperEntryPoint, type: "file", size: helperSize, sha256: helperSha256 },
+    { path: backendEntryPoint, type: "file", size: binarySize, sha256: binarySha256 },
+    { path: "launcher_env.defaults.json", type: "file", size: defaultsSize, sha256: defaultsSha256 },
+    ...hfRuntimeEntries,
+  ].sort((left, right) => left.path.localeCompare(right.path));
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     ok: true,
     sourceHash: "1".repeat(64),
     sourceFileCount: 10,
@@ -47,12 +75,24 @@ function validManifest(overrides = {}) {
     binarySize,
     bundleLayout: "onedir",
     backendEntryPoint,
-    bundleEntries: [
-      { path: backendEntryPoint, type: "file", size: binarySize, sha256: binarySha256 },
-    ],
-    bundleEntryCount: 1,
-    bundleFileCount: 1,
-    bundleSize: binarySize,
+    bundleEntries,
+    bundleEntryCount: bundleEntries.length,
+    bundleFileCount: bundleEntries.length,
+    bundleSize: binarySize + helperSize + defaultsSize + hfRuntimeEntries.length * 11,
+    hfBucketHelper: {
+      entryPoint: helperEntryPoint,
+      helperVersion: "1.0.0",
+      huggingfaceHubVersion: "1.20.1",
+      hfXetVersion: "1.5.1",
+      lockSha256: "8".repeat(64),
+      binarySha256: helperSha256,
+      binarySize: helperSize,
+    },
+    launcherEnvDefaults: {
+      entryPoint: "launcher_env.defaults.json",
+      sha256: defaultsSha256,
+      size: defaultsSize,
+    },
     acceleratorProfile: "cpu",
     capabilityExtras: [...RELEASE_CAPABILITY_EXTRAS],
     uvVersion: PINNED_UV_VERSION,
@@ -65,10 +105,19 @@ function validManifest(overrides = {}) {
       { name: "torchaudio", version: "2.8.0+cpu", index: cpuIndex },
       { name: "torchvision", version: "0.23.0+cpu", index: cpuIndex },
     ],
+    hfRuntimePackages: [
+      { name: "huggingface-hub", version: "0.36.2" },
+      { name: "hf-transfer", version: "0.1.9" },
+      { name: "hf-xet", version: "1.5.1" },
+    ],
+    hfRuntimeBundleEvidence,
     fingerprintInputs: [
       { path: ".python-version", sha256: "4".repeat(64) },
       { path: "studio/edmg-studio/python_backend/pyproject.toml", sha256: "5".repeat(64) },
       { path: "studio/edmg-studio/python_backend/uv.lock", sha256: "2".repeat(64) },
+      { path: "studio/edmg-studio/python_backend/hf_bucket_helper/pyproject.toml", sha256: "7".repeat(64) },
+      { path: "studio/edmg-studio/python_backend/hf_bucket_helper/uv.lock", sha256: "8".repeat(64) },
+      { path: "studio/edmg-studio/launcher_env.defaults.json", sha256: "8".repeat(64) },
     ],
     nltkResources: [
       {
@@ -177,7 +226,7 @@ test("release dependency metadata must be tracked and clean", () => {
   );
 });
 
-test("schema-3 onedir manifest validation and reuse reject provenance drift", () => {
+test("schema-4 onedir manifest validation and reuse reject provenance drift", () => {
   const manifest = validManifest();
   assert.deepEqual(validateReleaseManifest(manifest), []);
   assert.equal(releaseProvenanceMatches(manifest, manifest), true);
@@ -185,6 +234,22 @@ test("schema-3 onedir manifest validation and reuse reject provenance drift", ()
   assert.equal(releaseProvenanceMatches(manifest, { ...manifest, acceleratorProfile: "directml" }), false);
   assert.match(validateReleaseManifest({ ...manifest, pythonVersion: "3.13.0" }).join("; "), /Python 3\.12/);
   assert.match(validateReleaseManifest({ ...manifest, capabilityExtras: ["core"] }).join("; "), /capabilityExtras/);
+  assert.match(
+    validateReleaseManifest({ ...manifest, hfBucketHelper: undefined }).join("; "),
+    /hfBucketHelper/,
+  );
+  assert.match(
+    validateReleaseManifest({ ...manifest, launcherEnvDefaults: undefined }).join("; "),
+    /launcherEnvDefaults/,
+  );
+  assert.match(
+    validateReleaseManifest({ ...manifest, hfRuntimePackages: [] }).join("; "),
+    /hfRuntimePackages/,
+  );
+  assert.match(
+    validateReleaseManifest({ ...manifest, hfRuntimeBundleEvidence: undefined }).join("; "),
+    /hfRuntimeBundleEvidence/,
+  );
 });
 
 test("binary reuse verifies both size and SHA-256", async () => {
@@ -206,13 +271,30 @@ test("onedir reuse verifies every staged backend entry", async () => {
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-onedir-"));
   const backendEntryPoint = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
   const launcherPath = path.join(tempDir, backendEntryPoint);
+  const helperEntryPoint = process.platform === "win32" ? "edmg-hf-bucket-helper.exe" : "edmg-hf-bucket-helper";
+  const helperPath = path.join(tempDir, helperEntryPoint);
+  const defaultsPath = path.join(tempDir, "launcher_env.defaults.json");
   const runtimePath = path.join(tempDir, "_internal", "torch-runtime.bin");
   try {
     await fsp.mkdir(path.dirname(runtimePath), { recursive: true });
     await fsp.writeFile(launcherPath, "launcher\n", "utf8");
+    await fsp.writeFile(helperPath, "helper\n", "utf8");
+    await fsp.writeFile(defaultsPath, "{}\n", "utf8");
     await fsp.writeFile(runtimePath, "runtime\n", "utf8");
+    for (const evidencePath of Object.values(validManifest().hfRuntimeBundleEvidence)) {
+      const absoluteEvidencePath = path.join(tempDir, ...evidencePath.split("/"));
+      await fsp.mkdir(path.dirname(absoluteEvidencePath), { recursive: true });
+      await fsp.writeFile(absoluteEvidencePath, "runtime hf\n", "utf8");
+    }
     const bundleEntries = await collectBundleEntries(tempDir);
     const launcher = bundleEntries.find((entry) => entry.path === backendEntryPoint);
+    const helper = bundleEntries.find((entry) => entry.path === helperEntryPoint);
+    const defaults = bundleEntries.find((entry) => entry.path === "launcher_env.defaults.json");
+    const fingerprintInputs = validManifest().fingerprintInputs.map((entry) =>
+      entry.path.endsWith("launcher_env.defaults.json")
+        ? { ...entry, sha256: defaults.sha256 }
+        : entry
+    );
     const manifest = validManifest({
       backendEntryPoint,
       bundleEntries,
@@ -223,6 +305,21 @@ test("onedir reuse verifies every staged backend entry", async () => {
         .reduce((total, entry) => total + entry.size, 0),
       binarySize: launcher.size,
       binarySha256: launcher.sha256,
+      hfBucketHelper: {
+        entryPoint: helperEntryPoint,
+        helperVersion: "1.0.0",
+        huggingfaceHubVersion: "1.20.1",
+        hfXetVersion: "1.5.1",
+        lockSha256: "8".repeat(64),
+        binarySha256: helper.sha256,
+        binarySize: helper.size,
+      },
+      launcherEnvDefaults: {
+        entryPoint: "launcher_env.defaults.json",
+        sha256: defaults.sha256,
+        size: defaults.size,
+      },
+      fingerprintInputs,
     });
     assert.deepEqual(validateReleaseManifest(manifest), []);
     assert.equal(await bundleMatchesManifest(tempDir, manifest), true);
@@ -249,6 +346,25 @@ test("supported release paths contain no pip or venv build fallback", () => {
   assert.match(pyinstallerSpec, /COLLECT\s*\(/);
   assert.match(gitignore, /electron-resources\/backend\/\*/);
   assert.match(gitignore, /!studio\/edmg-studio\/electron-resources\/backend\/\.gitkeep/);
+});
+
+test("release bundle builds and requires the isolated HF Bucket helper and launcher defaults", () => {
+  const prepare = fs.readFileSync(path.join(__dirname, "prepare-release-bundle.mjs"), "utf8");
+  const defaults = JSON.parse(
+    fs.readFileSync(path.join(studioRoot, "launcher_env.defaults.json"), "utf8"),
+  );
+  assert.match(prepare, /hf_bucket_helper/);
+  assert.match(prepare, /buildHfBucketHelper/);
+  assert.match(prepare, /validate Hugging Face Bucket helper lock/);
+  assert.match(prepare, /synchronize frozen Hugging Face Bucket helper environment/);
+  assert.match(prepare, /hfBucketHelperBinaryName/);
+  assert.match(prepare, /launcher_env\.defaults\.json/);
+  assert.equal(defaults.HF_HUB_ENABLE_HF_TRANSFER, "1");
+  assert.equal(defaults.HF_HUB_DISABLE_XET, "0");
+  assert.equal(defaults.HF_XET_HIGH_PERFORMANCE, "1");
+  const helper = validManifest().hfBucketHelper;
+  assert.equal(helper.huggingfaceHubVersion, "1.20.1");
+  assert.equal(helper.hfXetVersion, "1.5.1");
 });
 
 test("Director release stages a self-contained production hoisted install", () => {

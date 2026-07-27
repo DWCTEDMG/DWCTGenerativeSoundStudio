@@ -19,6 +19,7 @@ describe("backend URL resolution", () => {
 
   afterEach(() => {
     setBackendAuthTokenForSession("");
+    vi.useRealTimers();
   });
 
   it("prefers the live Electron bridge URL over stale browser storage", async () => {
@@ -80,6 +81,47 @@ describe("backend URL resolution", () => {
       "different origin",
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts a request at the configured timeout", async () => {
+    vi.useFakeTimers();
+    window.__EDMG_BACKEND_URL__ = FRESH_TUNNEL;
+    const fetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      })
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = apiGet("/v1/setup/tasks", { timeoutMs: 250 });
+    const rejection = expect(request).rejects.toThrow("timed out after 250 ms");
+    await vi.advanceTimersByTimeAsync(250);
+    await rejection;
+  });
+
+  it("forwards a caller AbortSignal without waiting for a timeout", async () => {
+    window.__EDMG_BACKEND_URL__ = FRESH_TUNNEL;
+    const fetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        if (init?.signal?.aborted) {
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      })
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const request = apiGet("/v1/setup/tasks", { signal: controller.signal });
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).signal?.aborted).toBe(true);
   });
 
   it("builds encoded project file URLs from validated backend and project paths", () => {

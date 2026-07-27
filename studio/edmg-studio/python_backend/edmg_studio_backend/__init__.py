@@ -3,11 +3,35 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 __all__ = ['app']
 
 _ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _launcher_env_candidates() -> list[Path]:
+    roots = [Path(__file__).resolve().parents[2]]
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+        bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)).resolve()
+        roots.extend((bundle_root, bundle_root.parent))
+
+    unique_roots: list[Path] = []
+    for root in roots:
+        if root not in unique_roots:
+            unique_roots.append(root)
+
+    candidates: list[Path] = []
+    override = os.getenv("EDMG_LAUNCHER_ENV", "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+    # Machine-specific config always precedes tracked defaults, regardless of
+    # whether PyInstaller placed the package under an `_internal` directory.
+    candidates.extend(root / "launcher_env.json" for root in unique_roots)
+    candidates.extend(root / "launcher_env.defaults.json" for root in unique_roots)
+    return candidates
 
 
 def _load_launcher_env() -> None:
@@ -33,15 +57,7 @@ def _load_launcher_env() -> None:
     Secrets (tokens, keys) are never stored here - HF auth uses the locally
     saved ``hf auth login`` token.
     """
-    studio_root = Path(__file__).resolve().parents[2]
-    candidates: list[Path] = []
-    override = os.getenv("EDMG_LAUNCHER_ENV", "").strip()
-    if override:
-        candidates.append(Path(override).expanduser())
-    candidates.append(studio_root / "launcher_env.json")
-    candidates.append(studio_root / "launcher_env.defaults.json")
-
-    for path in candidates:
+    for path in _launcher_env_candidates():
         try:
             if not path.is_file():
                 continue

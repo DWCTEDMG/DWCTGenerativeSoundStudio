@@ -86,11 +86,22 @@ def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
     monkeypatch.delenv("EDMG_HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
 
-    class _FakeApi:
-        def list_bucket_tree(self, bucket, *, prefix=None, recursive=False, token=None):
+    class _FakeTransport:
+        source = "test-helper"
+
+        def capabilities(self):
+            return {
+                "huggingface_hub_version": "1.20.1",
+                "hf_xet_version": "1.5.1",
+            }
+
+        def bucket_info(self, bucket):
             assert bucket == "team/edmg-models"
-            assert token == "settings-token-1234567890"
-            return [SimpleNamespace(path="checkpoints/demo.safetensors")]
+            return {"id": bucket}
+
+        def list_entries(self, bucket, *, prefix="", recursive=False):
+            assert bucket == "team/edmg-models"
+            return [{"type": "file", "path": "checkpoints/demo.safetensors"}]
 
     class _FakeCache:
         settings = SimpleNamespace(
@@ -98,7 +109,7 @@ def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
             prefix="",
             models_dir=Path("/tmp/models"),
         )
-        _api = _FakeApi()
+        _transport = _FakeTransport()
         _token = "settings-token-1234567890"
 
         def _bucket_uri(self, remote_dir: str) -> str:
@@ -124,14 +135,25 @@ def test_test_credentials_uses_settings_token_when_env_missing(monkeypatch):
     assert result["ok"] is True
     assert result["token_source"] == "settings"
     assert result["sample_paths"] == ["checkpoints/demo.safetensors"]
+    assert result["capabilities"]["huggingface_hub_version"] == "1.20.1"
+    assert result["capabilities"]["hf_xet_version"] == "1.5.1"
 
 
-def test_test_credentials_falls_back_when_list_bucket_tree_missing(monkeypatch):
+def test_test_credentials_surfaces_transport_failure(monkeypatch):
     _disable_cached_hf_auth(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)
 
-    class _LegacyApi:
-        pass
+    class _FailingTransport:
+        source = "test-helper"
+
+        def capabilities(self):
+            return {
+                "huggingface_hub_version": "1.20.1",
+                "hf_xet_version": "1.5.1",
+            }
+
+        def bucket_info(self, bucket):
+            raise RuntimeError("helper capability missing")
 
     class _FakeCache:
         settings = SimpleNamespace(
@@ -139,7 +161,7 @@ def test_test_credentials_falls_back_when_list_bucket_tree_missing(monkeypatch):
             prefix="",
             models_dir=Path("/tmp/models"),
         )
-        _api = _LegacyApi()
+        _transport = _FailingTransport()
         _token = "settings-token-1234567890"
 
         def _bucket_uri(self, remote_dir: str) -> str:
@@ -155,36 +177,67 @@ def test_test_credentials_falls_back_when_list_bucket_tree_missing(monkeypatch):
         ),
     )
     monkeypatch.setattr(hf_bucket_integration, "HFBucketModelCache", lambda settings: _FakeCache())
-    monkeypatch.setattr(
-        hf_bucket_integration,
-        "_list_bucket_tree",
-        lambda api, bucket_id, *, prefix=None, recursive=False, token=None: [
-            SimpleNamespace(path="checkpoints/legacy.safetensors")
-        ],
-    )
-
-    result = hf_bucket_integration.test_credentials(
-        bucket="team/edmg-models",
-        models_dir=Path("/tmp/models"),
-        secrets_store=_FakeSecrets("settings-token-1234567890"),
-    )
-
-    assert result["ok"] is True
-    assert result["sample_paths"] == ["checkpoints/legacy.safetensors"]
+    with pytest.raises(RuntimeError, match="helper capability missing"):
+        hf_bucket_integration.test_credentials(
+            bucket="team/edmg-models",
+            models_dir=Path("/tmp/models"),
+            secrets_store=_FakeSecrets("settings-token-1234567890"),
+        )
 
 
-def test_test_credentials_requires_a_token(monkeypatch):
+def test_test_credentials_allows_anonymous_public_bucket(monkeypatch):
     _disable_cached_hf_auth(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("EDMG_HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
 
-    with pytest.raises(RuntimeError, match="No Hugging Face token found"):
-        hf_bucket_integration.test_credentials(
-            bucket="team/edmg-models",
+    class _AnonymousTransport:
+        source = "test-helper"
+
+        def capabilities(self):
+            return {
+                "huggingface_hub_version": "1.20.1",
+                "hf_xet_version": "1.5.1",
+            }
+
+        def bucket_info(self, bucket):
+            return {"id": bucket, "private": False}
+
+        def list_entries(self, bucket, *, prefix="", recursive=False):
+            return [{"type": "file", "path": "public/model.safetensors"}]
+
+    class _AnonymousCache:
+        settings = SimpleNamespace(
+            bucket="team/public-models",
+            prefix="",
             models_dir=Path("/tmp/models"),
-            secrets_store=_FakeSecrets(""),
         )
+        _transport = _AnonymousTransport()
+
+        def _bucket_uri(self, remote_dir: str) -> str:
+            return f"hf://buckets/team/public-models/{remote_dir}".rstrip("/")
+
+    monkeypatch.setattr(
+        hf_bucket_integration,
+        "settings_from_env",
+        lambda **_kwargs: _AnonymousCache.settings,
+    )
+    monkeypatch.setattr(
+        hf_bucket_integration,
+        "HFBucketModelCache",
+        lambda _settings: _AnonymousCache(),
+    )
+
+    result = hf_bucket_integration.test_credentials(
+        bucket="team/public-models",
+        models_dir=Path("/tmp/models"),
+        secrets_store=_FakeSecrets(""),
+    )
+
+    assert result["ok"] is True
+    assert result["token_source"] is None
+    assert result["authentication"] == "anonymous"
+    assert result["sample_paths"] == ["public/model.safetensors"]
 
 
 def test_cloud_hf_routes_expose_status_and_test(tmp_path, monkeypatch):

@@ -6,6 +6,9 @@ import pytest
 
 from edmg_studio_backend.errors import UserFacingError
 from edmg_studio_backend.services import internal_video_models as ivm
+from edmg_studio_backend.tests.safetensors_test_utils import (
+    write_minimal_safetensors,
+)
 
 
 def _write_lfs_pointer(path: Path) -> None:
@@ -22,7 +25,9 @@ def test_video_model_load_kwargs_uses_real_fp16_bin_when_safetensors_is_lfs_poin
     _write_lfs_pointer(tmp_path / "unet" / "diffusion_pytorch_model.fp16.safetensors")
     (tmp_path / "unet" / "diffusion_pytorch_model.fp16.bin").write_bytes(b"real fp16 bin weights")
     (tmp_path / "text_encoder").mkdir(parents=True)
-    (tmp_path / "text_encoder" / "model.fp16.safetensors").write_bytes(b"real fp16 safetensors")
+    write_minimal_safetensors(
+        tmp_path / "text_encoder" / "model.fp16.safetensors"
+    )
 
     kwargs = ivm._video_model_base_load_kwargs(tmp_path, "cuda")
 
@@ -32,7 +37,9 @@ def test_video_model_load_kwargs_uses_real_fp16_bin_when_safetensors_is_lfs_poin
 
 def test_video_model_load_kwargs_keeps_real_fp16_safetensors_preferred(tmp_path: Path) -> None:
     (tmp_path / "unet").mkdir(parents=True)
-    (tmp_path / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"real fp16 safetensors")
+    write_minimal_safetensors(
+        tmp_path / "unet" / "diffusion_pytorch_model.fp16.safetensors"
+    )
 
     kwargs = ivm._video_model_base_load_kwargs(tmp_path, "cuda")
 

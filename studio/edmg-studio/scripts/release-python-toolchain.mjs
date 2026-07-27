@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 export const PINNED_UV_VERSION = "0.11.28";
-export const RELEASE_MANIFEST_SCHEMA_VERSION = 3;
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 4;
 export const ACCELERATOR_PROFILES = Object.freeze(["cpu", "directml", "cuda"]);
 export const RELEASE_CAPABILITY_EXTRAS = Object.freeze([
   "core",
@@ -228,6 +228,16 @@ function normalizedTorchPackages(packages) {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+function normalizedHfRuntimePackages(packages) {
+  if (!Array.isArray(packages)) return [];
+  return packages
+    .map((entry) => ({
+      name: String(entry?.name ?? ""),
+      version: String(entry?.version ?? ""),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 export function validateReleaseManifest(manifest, { expectedProfile = "", expectedUvVersion = PINNED_UV_VERSION } = {}) {
   const errors = [];
   if (!manifest || typeof manifest !== "object") return ["manifest is not an object"];
@@ -304,6 +314,46 @@ export function validateReleaseManifest(manifest, { expectedProfile = "", expect
     } else if (launcher.size !== manifest.binarySize || launcher.sha256 !== manifest.binarySha256) {
       errors.push("backendEntryPoint metadata does not match binary provenance");
     }
+
+    const helperEntryPoint = normalizedBundlePath(manifest.hfBucketHelper?.entryPoint);
+    const helper = bundleEntries.find(
+      (entry) => entry?.path === helperEntryPoint && entry?.type === "file",
+    );
+    if (!helperEntryPoint || !helper) {
+      errors.push("hfBucketHelper.entryPoint is missing from bundleEntries");
+    } else {
+      if (manifest.hfBucketHelper?.helperVersion !== "1.0.0") {
+        errors.push("hfBucketHelper.helperVersion must be 1.0.0");
+      }
+      if (manifest.hfBucketHelper?.huggingfaceHubVersion !== "1.20.1") {
+        errors.push("hfBucketHelper.huggingfaceHubVersion must be 1.20.1");
+      }
+      if (manifest.hfBucketHelper?.hfXetVersion !== "1.5.1") {
+        errors.push("hfBucketHelper.hfXetVersion must be 1.5.1");
+      }
+      if (!isSha256(manifest.hfBucketHelper?.lockSha256)) {
+        errors.push("hfBucketHelper.lockSha256 must be a SHA-256 digest");
+      }
+      if (
+        helper.size !== manifest.hfBucketHelper?.binarySize ||
+        helper.sha256 !== manifest.hfBucketHelper?.binarySha256
+      ) {
+        errors.push("hfBucketHelper metadata does not match its bundled executable");
+      }
+    }
+
+    const defaultsEntryPoint = normalizedBundlePath(manifest.launcherEnvDefaults?.entryPoint);
+    const defaults = bundleEntries.find(
+      (entry) => entry?.path === defaultsEntryPoint && entry?.type === "file",
+    );
+    if (!defaultsEntryPoint || !defaults) {
+      errors.push("launcherEnvDefaults.entryPoint is missing from bundleEntries");
+    } else if (
+      defaults.size !== manifest.launcherEnvDefaults?.size ||
+      defaults.sha256 !== manifest.launcherEnvDefaults?.sha256
+    ) {
+      errors.push("launcherEnvDefaults metadata does not match the bundled defaults");
+    }
   }
 
   const torchPackages = normalizedTorchPackages(manifest.torchPackages);
@@ -325,13 +375,60 @@ export function validateReleaseManifest(manifest, { expectedProfile = "", expect
     }
   }
 
+  const hfRuntimePackages = normalizedHfRuntimePackages(manifest.hfRuntimePackages);
+  const expectedHfRuntimePackages = [
+    { name: "hf-transfer", version: "0.1.9" },
+    { name: "hf-xet", version: "1.5.1" },
+    { name: "huggingface-hub", version: "0.36.2" },
+  ];
+  if (JSON.stringify(hfRuntimePackages) !== JSON.stringify(expectedHfRuntimePackages)) {
+    errors.push(
+      "hfRuntimePackages must contain huggingface-hub==0.36.2, hf-transfer==0.1.9, and hf-xet==1.5.1",
+    );
+  }
+  const hfEvidenceRules = {
+    huggingfaceHubMetadata: /^_internal\/huggingface_hub-0\.36\.2\.dist-info\/METADATA$/,
+    hfTransferMetadata: /^_internal\/hf_transfer-0\.1\.9\.dist-info\/METADATA$/,
+    hfTransferModule: /^_internal\/hf_transfer\/hf_transfer(?:\.[^/]+)*\.(?:pyd|so)$/,
+    hfXetMetadata: /^_internal\/hf_xet-1\.5\.1\.dist-info\/METADATA$/,
+    hfXetModule: /^_internal\/hf_xet\/hf_xet(?:\.[^/]+)*\.(?:pyd|so)$/,
+  };
+  for (const [key, pattern] of Object.entries(hfEvidenceRules)) {
+    const entryPath = normalizedBundlePath(manifest.hfRuntimeBundleEvidence?.[key]);
+    const entry = bundleEntries.find(
+      (candidate) => candidate?.path === entryPath && candidate?.type === "file",
+    );
+    if (!entryPath || !pattern.test(entryPath) || !entry) {
+      errors.push(`hfRuntimeBundleEvidence.${key} is missing from bundleEntries`);
+    }
+  }
+
   if (!Array.isArray(manifest.fingerprintInputs) || manifest.fingerprintInputs.length < 3) {
     errors.push("fingerprintInputs must include the Python and lock metadata");
   } else {
-    const requiredSuffixes = [".python-version", "python_backend/pyproject.toml", "python_backend/uv.lock"];
+    const requiredSuffixes = [
+      ".python-version",
+      "python_backend/pyproject.toml",
+      "python_backend/uv.lock",
+      "python_backend/hf_bucket_helper/pyproject.toml",
+      "python_backend/hf_bucket_helper/uv.lock",
+      "launcher_env.defaults.json",
+    ];
     for (const suffix of requiredSuffixes) {
       const entry = manifest.fingerprintInputs.find((candidate) => String(candidate?.path ?? "").replaceAll("\\", "/").endsWith(suffix));
       if (!entry || !isSha256(entry.sha256)) errors.push(`fingerprintInputs is missing ${suffix}`);
+    }
+    const helperLock = manifest.fingerprintInputs.find((candidate) =>
+      String(candidate?.path ?? "").replaceAll("\\", "/").endsWith("python_backend/hf_bucket_helper/uv.lock")
+    );
+    if (helperLock?.sha256 !== manifest.hfBucketHelper?.lockSha256) {
+      errors.push("hfBucketHelper.lockSha256 does not match its fingerprint input");
+    }
+    const launcherDefaults = manifest.fingerprintInputs.find((candidate) =>
+      String(candidate?.path ?? "").replaceAll("\\", "/").endsWith("launcher_env.defaults.json")
+    );
+    if (launcherDefaults?.sha256 !== manifest.launcherEnvDefaults?.sha256) {
+      errors.push("launcherEnvDefaults.sha256 does not match its fingerprint input");
     }
   }
   if (!Array.isArray(manifest.nltkResources) || !manifest.nltkResources.length) {
@@ -363,6 +460,7 @@ export function releaseProvenanceMatches(manifest, expected) {
     manifest.pyinstallerVersion === expected.pyinstallerVersion &&
     manifest.torchIndex === expected.torchIndex &&
     JSON.stringify(normalizedTorchPackages(manifest.torchPackages)) === JSON.stringify(normalizedTorchPackages(expected.torchPackages)) &&
+    JSON.stringify(normalizedHfRuntimePackages(manifest.hfRuntimePackages)) === JSON.stringify(normalizedHfRuntimePackages(expected.hfRuntimePackages)) &&
     JSON.stringify(manifest.nltkResources) === JSON.stringify(expected.nltkResources) &&
     JSON.stringify(manifest.fingerprintInputs) === JSON.stringify(expected.fingerprintInputs) &&
     sameStringArray(manifest.capabilityExtras, expected.capabilityExtras);

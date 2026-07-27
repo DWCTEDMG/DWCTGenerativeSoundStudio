@@ -12,6 +12,7 @@ from typing import Any
 
 
 TORCH_PACKAGES = ("torch", "torchaudio", "torchvision")
+HF_RUNTIME_PACKAGES = ("huggingface-hub", "hf-transfer", "hf-xet")
 CPU_TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 CUDA_TORCH_INDEX_PATTERN = re.compile(r"^https://download\.pytorch\.org/whl/cu\d+$")
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "python_backend"
@@ -90,6 +91,12 @@ def collect_provenance(lock_path: Path, profile: str) -> dict[str, Any]:
     torch_index = next(iter(indexes))
     _validate_torch_index(profile, torch_index)
 
+    hf_runtime_packages: list[dict[str, str]] = []
+    for package_name in HF_RUNTIME_PACKAGES:
+        version = importlib.metadata.version(package_name)
+        _locked_registry(lock, package_name, version)
+        hf_runtime_packages.append({"name": package_name, "version": version})
+
     # The helper is launched by absolute path from the frozen project, so
     # Python places this script directory (not python_backend) on sys.path.
     backend_root = str(BACKEND_ROOT)
@@ -103,6 +110,7 @@ def collect_provenance(lock_path: Path, profile: str) -> dict[str, Any]:
         "pyinstallerVersion": importlib.metadata.version("pyinstaller"),
         "torchIndex": torch_index,
         "torchPackages": torch_packages,
+        "hfRuntimePackages": hf_runtime_packages,
         "nltkResources": pinned_nltk_resource_manifest(),
     }
 
