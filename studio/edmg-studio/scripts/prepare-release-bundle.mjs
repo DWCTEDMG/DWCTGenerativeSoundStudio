@@ -14,8 +14,10 @@ import {
   assertPython312,
   assertTorchIndexForProfile,
   assertTrackedCleanDependencyStatus,
+  assertValidReleaseManifest,
   bundleMatchesManifest,
   collectBundleEntries,
+  materializeExternalBundleSymlinks,
   releaseProvenanceMatches,
   releaseUvEnvironment,
   resolveAcceleratorProfile,
@@ -405,6 +407,7 @@ async function stageBackendBundle(sourceDirectory, expected) {
     force: true,
     dereference: false,
   });
+  await materializeExternalBundleSymlinks(backendStagingDir);
   // Preserve the tracked placeholder when replacing the generated directory.
   // It is intentionally part of the full-tree inventory below.
   await fsp.writeFile(path.join(backendStagingDir, ".gitkeep"), "", "utf8");
@@ -502,6 +505,7 @@ async function stageBackendBundle(sourceDirectory, expected) {
     reusedExistingBuild: false,
     preparedAt: new Date().toISOString(),
   };
+  assertValidReleaseManifest(manifest, { expectedProfile: expected.acceleratorProfile });
   await fsp.writeFile(
     path.join(backendStagingDir, path.basename(bundleManifestPath)),
     JSON.stringify(manifest, null, 2) + "\n",

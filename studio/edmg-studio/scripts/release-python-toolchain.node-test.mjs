@@ -17,6 +17,7 @@ import {
   binaryMatchesManifest,
   bundleMatchesManifest,
   collectBundleEntries,
+  materializeExternalBundleSymlinks,
   releaseUvEnvironment,
   releaseProvenanceMatches,
   resolveAcceleratorProfile,
@@ -331,6 +332,44 @@ test("onedir reuse verifies every staged backend entry", async () => {
     await fsp.rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test(
+  "Linux bundle staging materializes external symlinks and preserves internal links",
+  { skip: process.platform === "win32" },
+  async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-symlinks-"));
+    const bundleDir = path.join(tempDir, "bundle");
+    const externalFile = path.join(tempDir, "system-library.so");
+    const bundledFile = path.join(bundleDir, "bundled-library.so");
+    const externalLink = path.join(bundleDir, "external-library.so");
+    const internalLink = path.join(bundleDir, "internal-library.so");
+    try {
+      await fsp.mkdir(bundleDir, { recursive: true });
+      await fsp.writeFile(externalFile, "external library\n", "utf8");
+      await fsp.writeFile(bundledFile, "bundled library\n", "utf8");
+      await fsp.symlink(externalFile, externalLink);
+      await fsp.symlink(path.basename(bundledFile), internalLink);
+
+      assert.equal(await materializeExternalBundleSymlinks(bundleDir), 1);
+      assert.equal((await fsp.lstat(externalLink)).isFile(), true);
+      assert.equal(await fsp.readFile(externalLink, "utf8"), "external library\n");
+      assert.equal((await fsp.lstat(internalLink)).isSymbolicLink(), true);
+
+      const entries = await collectBundleEntries(bundleDir);
+      assert.equal(entries.find((entry) => entry.path === "external-library.so")?.type, "file");
+      assert.deepEqual(
+        entries.find((entry) => entry.path === "internal-library.so"),
+        {
+          path: "internal-library.so",
+          type: "symlink",
+          target: "bundled-library.so",
+        },
+      );
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("supported release paths contain no pip or venv build fallback", () => {
   const prepare = fs.readFileSync(path.join(__dirname, "prepare-release-bundle.mjs"), "utf8");

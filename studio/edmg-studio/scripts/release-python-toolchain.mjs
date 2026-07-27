@@ -528,6 +528,43 @@ export async function collectBundleEntries(bundleDirectory, {
   return entries.sort((left, right) => left.path.localeCompare(right.path));
 }
 
+export async function materializeExternalBundleSymlinks(bundleDirectory) {
+  const root = path.resolve(bundleDirectory);
+  let materialized = 0;
+
+  async function walk(directory) {
+    for (const child of await fsp.readdir(directory, { withFileTypes: true })) {
+      const absolutePath = path.join(directory, child.name);
+      if (child.isSymbolicLink()) {
+        const target = await fsp.readlink(absolutePath);
+        const resolvedTarget = path.resolve(path.dirname(absolutePath), target);
+        const relativeTarget = path.relative(root, resolvedTarget);
+        const staysInsideBundle = relativeTarget === "" ||
+          (!path.isAbsolute(relativeTarget) &&
+            relativeTarget !== ".." &&
+            !relativeTarget.startsWith(`..${path.sep}`));
+        if (staysInsideBundle && !path.isAbsolute(target)) continue;
+
+        const realTarget = await fsp.realpath(absolutePath);
+        const targetStat = await fsp.stat(realTarget);
+        if (!targetStat.isFile()) {
+          throw new Error(`External backend symlink must resolve to a file: ${absolutePath} -> ${target}`);
+        }
+        const temporaryPath = `${absolutePath}.edmg-materializing-${process.pid}`;
+        await fsp.copyFile(realTarget, temporaryPath);
+        await fsp.chmod(temporaryPath, targetStat.mode);
+        await fsp.rename(temporaryPath, absolutePath);
+        materialized += 1;
+      } else if (child.isDirectory()) {
+        await walk(absolutePath);
+      }
+    }
+  }
+
+  await walk(root);
+  return materialized;
+}
+
 export async function bundleMatchesManifest(bundleDirectory, manifest) {
   if (!fs.existsSync(bundleDirectory) || !Array.isArray(manifest?.bundleEntries)) return false;
   try {
