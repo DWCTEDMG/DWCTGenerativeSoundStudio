@@ -114,6 +114,52 @@ function buildIsolatedDesktopEnv(fixtureRoot) {
   };
 }
 
+async function probeBundledBackendRunJobCli(backendExe) {
+  const fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-packaged-backend-cli-"));
+  const projectId = "packaged-cli-probe-project";
+  const jobId = "packaged-cli-probe-job";
+  try {
+    const result = spawnSync(
+      backendExe,
+      ["run-job", "--project", projectId, "--job", jobId],
+      {
+        cwd: path.dirname(backendExe),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          EDMG_AI_PROVIDER: "rule_based",
+          EDMG_STUDIO_SPAWN_BACKEND: "0",
+          ...buildIsolatedDesktopEnv(fixtureRoot),
+        },
+        maxBuffer: 4 * 1024 * 1024,
+        timeout: 120000,
+        windowsHide: true,
+      },
+    );
+
+    if (result.error) throw result.error;
+    const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+    assert.equal(
+      result.status,
+      2,
+      `Bundled backend missing-job CLI probe should exit 2, received ${result.status}: ${output}`,
+    );
+    assert.match(
+      output,
+      new RegExp(`Job not found: project=${projectId} job=${jobId}`),
+      `Bundled backend did not reach the run-job handler: ${output}`,
+    );
+    assert.doesNotMatch(
+      output,
+      /invalid choice:\s*['"]?edmg_studio_backend/i,
+      "Bundled backend must receive run-job directly, without the source-only '-m edmg_studio_backend' prefix",
+    );
+    return { ok: true, expectedExitCode: 2, projectId, jobId };
+  } finally {
+    await fsp.rm(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
 async function waitForFile(filePath, timeoutMs = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -176,6 +222,7 @@ async function runStagedAppProbe() {
   summary.resources = resources;
   summary.ffmpegMode = bundledFfmpeg ? "bundled" : "system-or-EDMG_FFMPEG_PATH";
   summary.backendManifest = backendManifest;
+  summary.backendRunJobCli = await probeBundledBackendRunJobCli(resources.backendExe);
 
   if (!support.ok) {
     return summary;
@@ -240,6 +287,15 @@ async function runStagedAppProbe() {
 }
 
 async function main() {
+  if (process.argv.slice(2).includes("--backend-cli-only")) {
+    const backendExe = bundledResourcePaths(root).backendExe;
+    assert.ok(fs.existsSync(backendExe), `Bundled backend not found: ${backendExe}`);
+    const backendRunJobCli = await probeBundledBackendRunJobCli(backendExe);
+    log("bundled backend run-job CLI probe passed");
+    console.log(JSON.stringify({ ok: true, backendRunJobCli }, null, 2));
+    return;
+  }
+
   assertDesktopArtifacts();
   log("build artifact checks passed");
 

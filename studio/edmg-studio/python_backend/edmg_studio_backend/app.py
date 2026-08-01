@@ -6803,6 +6803,20 @@ def _job_in_subprocess_enabled() -> bool:
     return True
 
 
+def _render_worker_command(project_id: str, job_id: str) -> list[str]:
+    """Build the CLI command for an isolated render worker.
+
+    Source launches need Python's module selector. A PyInstaller-frozen backend
+    executable already enters ``edmg_studio_backend.cli`` directly, so passing
+    ``-m edmg_studio_backend`` would be parsed as invalid CLI arguments.
+    """
+    cmd = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        cmd.extend(["-m", "edmg_studio_backend"])
+    cmd.extend(["run-job", "--project", project_id, "--job", job_id])
+    return cmd
+
+
 def _run_job_in_subprocess(job) -> None:
     """Execute a claimed job in a separate Python process.
 
@@ -6811,16 +6825,7 @@ def _run_job_in_subprocess(job) -> None:
     CPU/GIL-bound rendering out of the API process so the UI stays responsive
     and cancellation (a file-based status flag) still works.
     """
-    cmd = [
-        sys.executable,
-        "-m",
-        "edmg_studio_backend",
-        "run-job",
-        "--project",
-        job.project_id,
-        "--job",
-        job.id,
-    ]
+    cmd = _render_worker_command(job.project_id, job.id)
     jobs.append_log(job.project_id, job.id, "Dispatching to isolated render process")
     popen_kwargs: dict[str, Any] = {"env": os.environ.copy()}
     if os.name == "nt":

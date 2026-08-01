@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -148,13 +149,32 @@ class ProjectStore:
 
     def _write_atomic(self, project_path: Path, payload: dict[str, Any]) -> None:
         project_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = project_path.with_name(project_path.name + ".tmp")
+        tmp = project_path.with_name(f"{project_path.name}.{uuid.uuid4().hex}.tmp")
         text = json.dumps(payload, ensure_ascii=False, indent=2)
-        with tmp.open("w", encoding="utf-8") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, project_path)
+        try:
+            with tmp.open("x", encoding="utf-8") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            for attempt in range(6):
+                try:
+                    os.replace(tmp, project_path)
+                    break
+                except OSError as exc:
+                    winerror = getattr(exc, "winerror", None)
+                    transient = (
+                        isinstance(exc, PermissionError)
+                        or exc.errno in {errno.EACCES, errno.EBUSY, errno.EPERM}
+                        or winerror in {5, 32, 33}
+                    )
+                    if not transient or attempt == 5:
+                        raise
+                    time.sleep(0.025 * (2**attempt))
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Cannot remove temporary project document %s: %s", tmp, exc)
 
     def _to_project(self, data: dict[str, Any]) -> Project:
         validated = validate_project_document(data)

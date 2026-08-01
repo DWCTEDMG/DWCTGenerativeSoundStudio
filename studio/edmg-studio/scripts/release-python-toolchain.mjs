@@ -4,8 +4,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 export const PINNED_UV_VERSION = "0.11.28";
-export const RELEASE_MANIFEST_SCHEMA_VERSION = 4;
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 5;
 export const ACCELERATOR_PROFILES = Object.freeze(["cpu", "directml", "cuda"]);
+export const RELEASE_PLATFORMS = Object.freeze(["linux", "win32"]);
 export const RELEASE_CAPABILITY_EXTRAS = Object.freeze([
   "core",
   "audio",
@@ -87,6 +88,15 @@ export function resolveAcceleratorProfile({ argv = [], env = process.env, platfo
     throw new Error("The directml release profile is supported only on Windows");
   }
   return profile;
+}
+
+export function backendEntryPointForPlatform(platform = process.platform) {
+  const normalized = String(platform ?? "").trim();
+  if (normalized === "win32") return "edmg-studio-backend.exe";
+  if (normalized === "linux") return "edmg-studio-backend";
+  throw new Error(
+    `Unsupported release platform ${JSON.stringify(normalized)}. Expected one of: ${RELEASE_PLATFORMS.join(", ")}`,
+  );
 }
 
 export function selectedExtras(profile) {
@@ -262,7 +272,15 @@ function normalizedHfRuntimePackages(packages) {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function validateReleaseManifest(manifest, { expectedProfile = "", expectedUvVersion = PINNED_UV_VERSION } = {}) {
+export function validateReleaseManifest(
+  manifest,
+  {
+    expectedProfile = "",
+    expectedPlatform = "",
+    expectedBackendEntryPoint = "",
+    expectedUvVersion = PINNED_UV_VERSION,
+  } = {},
+) {
   const errors = [];
   if (!manifest || typeof manifest !== "object") return ["manifest is not an object"];
   if (manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) {
@@ -285,8 +303,24 @@ export function validateReleaseManifest(manifest, { expectedProfile = "", expect
   if (!Number.isInteger(manifest.sourceFileCount) || manifest.sourceFileCount <= 0) errors.push("sourceFileCount is invalid");
   if (!Number.isInteger(manifest.binarySize) || manifest.binarySize <= 0) errors.push("binarySize is invalid");
   if (manifest.bundleLayout !== "onedir") errors.push("bundleLayout must be onedir");
+  const releasePlatform = String(manifest.platform ?? "");
+  if (!RELEASE_PLATFORMS.includes(releasePlatform)) {
+    errors.push("platform is invalid");
+  }
+  if (expectedPlatform && releasePlatform !== expectedPlatform) {
+    errors.push(`platform must be ${expectedPlatform}`);
+  }
   const backendEntryPoint = normalizedBundlePath(manifest.backendEntryPoint);
   if (!backendEntryPoint) errors.push("backendEntryPoint must be a safe bundle-relative path");
+  if (RELEASE_PLATFORMS.includes(releasePlatform)) {
+    const platformEntryPoint = backendEntryPointForPlatform(releasePlatform);
+    if (backendEntryPoint !== platformEntryPoint) {
+      errors.push(`backendEntryPoint must be ${platformEntryPoint} on ${releasePlatform}`);
+    }
+  }
+  if (expectedBackendEntryPoint && backendEntryPoint !== expectedBackendEntryPoint) {
+    errors.push(`backendEntryPoint must be ${expectedBackendEntryPoint}`);
+  }
 
   const bundleEntries = Array.isArray(manifest.bundleEntries) ? manifest.bundleEntries : [];
   if (!bundleEntries.length) {
@@ -474,8 +508,17 @@ export function assertValidReleaseManifest(manifest, options = {}) {
 }
 
 export function releaseProvenanceMatches(manifest, expected) {
-  if (validateReleaseManifest(manifest, { expectedProfile: expected.acceleratorProfile }).length) return false;
-  return manifest.sourceHash === expected.sourceHash &&
+  const expectedPlatform = String(expected?.platform ?? "");
+  const expectedBackendEntryPoint = normalizedBundlePath(expected?.backendEntryPoint);
+  if (!RELEASE_PLATFORMS.includes(expectedPlatform) || !expectedBackendEntryPoint) return false;
+  if (validateReleaseManifest(manifest, {
+    expectedProfile: expected.acceleratorProfile,
+    expectedPlatform,
+    expectedBackendEntryPoint,
+  }).length) return false;
+  return manifest.platform === expectedPlatform &&
+    manifest.backendEntryPoint === expectedBackendEntryPoint &&
+    manifest.sourceHash === expected.sourceHash &&
     manifest.lockSha256 === expected.lockSha256 &&
     manifest.uvVersion === expected.uvVersion &&
     manifest.pythonVersion === expected.pythonVersion &&

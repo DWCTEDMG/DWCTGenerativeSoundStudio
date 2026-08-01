@@ -1,4 +1,6 @@
 import importlib.util
+import sys
+import types
 import zipfile
 from pathlib import Path
 
@@ -13,6 +15,48 @@ def _load_pyinstaller_support():
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _load_tensorrt_hook(monkeypatch, *, is_linux, collected_binaries):
+    repo_root = Path(__file__).resolve().parents[1]
+    hook_path = (
+        repo_root
+        / "studio"
+        / "edmg-studio"
+        / "python_backend"
+        / "pyinstaller_hooks"
+        / "hook-tensorrt_libs.py"
+    )
+    calls = []
+
+    pyinstaller_module = types.ModuleType("PyInstaller")
+    pyinstaller_module.__path__ = []
+    compat_module = types.ModuleType("PyInstaller.compat")
+    compat_module.is_linux = is_linux
+    utils_module = types.ModuleType("PyInstaller.utils")
+    utils_module.__path__ = []
+    hooks_module = types.ModuleType("PyInstaller.utils.hooks")
+    hooks_module.PY_DYLIB_PATTERNS = ("*.dll", "*.dylib")
+
+    def collect_dynamic_libs(package, *, search_patterns):
+        calls.append((package, tuple(search_patterns)))
+        return list(collected_binaries)
+
+    hooks_module.collect_dynamic_libs = collect_dynamic_libs
+    pyinstaller_module.compat = compat_module
+    pyinstaller_module.utils = utils_module
+    utils_module.hooks = hooks_module
+
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller_module)
+    monkeypatch.setitem(sys.modules, "PyInstaller.compat", compat_module)
+    monkeypatch.setitem(sys.modules, "PyInstaller.utils", utils_module)
+    monkeypatch.setitem(sys.modules, "PyInstaller.utils.hooks", hooks_module)
+
+    spec = importlib.util.spec_from_file_location("tensorrt_hook_test_module", hook_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module, calls
 
 
 def test_required_nltk_resources_include_vader_and_punkt_tab():
@@ -103,3 +147,45 @@ def test_local_scipy_hook_avoids_missing_cdflib_false_positive():
     assert 'hiddenimports = ["scipy.special._ufuncs_cxx"]' in hook_text
     assert '"scipy.special._special_ufuncs"' in hook_text
     assert '"scipy.special._cdflib"' not in hook_text
+
+
+def test_linux_tensorrt_hook_excludes_only_windows_cross_builder_resources(monkeypatch):
+    collected_binaries = [
+        (
+            "/opt/tensorrt_libs/libnvinfer_builder_resource_win_sm86.so.10.15.1",
+            "tensorrt_libs",
+        ),
+        (
+            "/opt/tensorrt_libs/libnvinfer_builder_resource_sm86.so.10.15.1",
+            "tensorrt_libs",
+        ),
+        ("/opt/tensorrt_libs/libnvinfer.so.10", "tensorrt_libs"),
+    ]
+
+    hook, calls = _load_tensorrt_hook(
+        monkeypatch,
+        is_linux=True,
+        collected_binaries=collected_binaries,
+    )
+
+    assert calls == [("tensorrt_libs", ("*.dll", "*.dylib", "*.so.*"))]
+    assert hook.binaries == collected_binaries[1:]
+
+
+def test_windows_tensorrt_hook_preserves_upstream_collection(monkeypatch):
+    collected_binaries = [
+        (r"C:\\TensorRT\\nvinfer_10.dll", "tensorrt_libs"),
+        (
+            r"C:\\TensorRT\\libnvinfer_builder_resource_win_sm86.so.10.15.1",
+            "tensorrt_libs",
+        ),
+    ]
+
+    hook, calls = _load_tensorrt_hook(
+        monkeypatch,
+        is_linux=False,
+        collected_binaries=collected_binaries,
+    )
+
+    assert calls == [("tensorrt_libs", ("*.dll", "*.dylib"))]
+    assert hook.binaries == collected_binaries

@@ -15,6 +15,7 @@ import {
   assertTorchIndexForProfile,
   assertTrackedCleanDependencyStatus,
   assertValidReleaseManifest,
+  backendEntryPointForPlatform,
   bundleMatchesManifest,
   collectBundleEntries,
   isHfRuntimeEvidencePath,
@@ -50,7 +51,8 @@ const backendPreviousDir = path.join(electronResourcesDir, "backend.previous");
 const directorAppDir = path.resolve(root, "..", "..", "chatgpt-apps", "edmg-director");
 const electronDirectorDir = path.join(root, "electron-resources", "director");
 const directorBundleManifestPath = path.join(electronDirectorDir, "director-bundle-manifest.json");
-const backendBinaryName = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
+const releasePlatform = process.platform;
+const backendBinaryName = backendEntryPointForPlatform(releasePlatform);
 const hfBucketHelperBinaryName = process.platform === "win32" ? "edmg-hf-bucket-helper.exe" : "edmg-hf-bucket-helper";
 const builtHfBucketHelperPath = path.join(hfBucketHelperDir, "dist", hfBucketHelperBinaryName);
 const bundledBackendPath = path.join(electronBackendDir, backendBinaryName);
@@ -465,6 +467,7 @@ async function stageBackendBundle(sourceDirectory, expected) {
     schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
     ok: true,
     builder: "scripts/prepare-release-bundle.mjs",
+    platform: expected.platform,
     sourceHash: expected.sourceHash,
     sourceFileCount: expected.sourceFileCount,
     requiredBackendSources: expected.requiredBackendSources,
@@ -482,7 +485,7 @@ async function stageBackendBundle(sourceDirectory, expected) {
     hfRuntimeBundleEvidence,
     nltkResources: expected.nltkResources,
     bundleLayout: "onedir",
-    backendEntryPoint: backendBinaryName,
+    backendEntryPoint: expected.backendEntryPoint,
     bundleEntries,
     bundleEntryCount: bundleEntries.length,
     bundleFileCount: bundleFiles.length,
@@ -673,6 +676,8 @@ async function main() {
     fingerprintInputs: fingerprint.fingerprintInputs,
     lockSha256,
     acceleratorProfile,
+    platform: releasePlatform,
+    backendEntryPoint: backendBinaryName,
     capabilityExtras: [...RELEASE_CAPABILITY_EXTRAS],
     uvVersion,
     ...provenance,

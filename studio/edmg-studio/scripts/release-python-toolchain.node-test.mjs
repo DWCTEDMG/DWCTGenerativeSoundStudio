@@ -13,6 +13,7 @@ import {
   assertPinnedUvVersion,
   assertPython312,
   assertTorchIndexForProfile,
+  backendEntryPointForPlatform,
   assertTrackedCleanDependencyStatus,
   binaryMatchesManifest,
   bundleMatchesManifest,
@@ -36,8 +37,9 @@ const studioRoot = path.resolve(__dirname, "..");
 
 function validManifest(overrides = {}) {
   const cpuIndex = "https://download.pytorch.org/whl/cpu";
-  const backendEntryPoint = process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend";
-  const helperEntryPoint = process.platform === "win32" ? "edmg-hf-bucket-helper.exe" : "edmg-hf-bucket-helper";
+  const platform = overrides.platform ?? process.platform;
+  const backendEntryPoint = overrides.backendEntryPoint ?? backendEntryPointForPlatform(platform);
+  const helperEntryPoint = platform === "win32" ? "edmg-hf-bucket-helper.exe" : "edmg-hf-bucket-helper";
   const binarySha256 = "3".repeat(64);
   const binarySize = 123;
   const helperSha256 = "7".repeat(64);
@@ -47,11 +49,11 @@ function validManifest(overrides = {}) {
   const hfRuntimeBundleEvidence = {
     huggingfaceHubMetadata: "_internal/huggingface_hub-0.36.2.dist-info/METADATA",
     hfTransferMetadata: "_internal/hf_transfer-0.1.9.dist-info/METADATA",
-    hfTransferModule: process.platform === "win32"
+    hfTransferModule: platform === "win32"
       ? "_internal/hf_transfer/hf_transfer.pyd"
       : "_internal/hf_transfer/hf_transfer.abi3.so",
     hfXetMetadata: "_internal/hf_xet-1.5.1.dist-info/METADATA",
-    hfXetModule: process.platform === "win32"
+    hfXetModule: platform === "win32"
       ? "_internal/hf_xet/hf_xet.pyd"
       : "_internal/hf_xet/hf_xet.abi3.so",
   };
@@ -68,8 +70,9 @@ function validManifest(overrides = {}) {
     ...hfRuntimeEntries,
   ].sort((left, right) => left.path.localeCompare(right.path));
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     ok: true,
+    platform,
     sourceHash: "1".repeat(64),
     sourceFileCount: 10,
     lockSha256: "2".repeat(64),
@@ -228,7 +231,7 @@ test("release dependency metadata must be tracked and clean", () => {
   );
 });
 
-test("schema-4 onedir manifest validation and reuse reject provenance drift", () => {
+test("schema-5 onedir manifest validation and reuse reject provenance drift", () => {
   const manifest = validManifest();
   assert.deepEqual(validateReleaseManifest(manifest), []);
   assert.equal(releaseProvenanceMatches(manifest, manifest), true);
@@ -251,6 +254,47 @@ test("schema-4 onedir manifest validation and reuse reject provenance drift", ()
   assert.match(
     validateReleaseManifest({ ...manifest, hfRuntimeBundleEvidence: undefined }).join("; "),
     /hfRuntimeBundleEvidence/,
+  );
+});
+
+test("release bundle reuse is scoped to the current platform and backend entry point", () => {
+  const windowsManifest = validManifest({ platform: "win32" });
+  const linuxManifest = validManifest({ platform: "linux" });
+
+  assert.deepEqual(validateReleaseManifest(windowsManifest), []);
+  assert.deepEqual(validateReleaseManifest(linuxManifest), []);
+  assert.equal(releaseProvenanceMatches(windowsManifest, windowsManifest), true);
+  assert.equal(releaseProvenanceMatches(linuxManifest, linuxManifest), true);
+
+  assert.equal(
+    releaseProvenanceMatches(windowsManifest, {
+      ...windowsManifest,
+      platform: "linux",
+      backendEntryPoint: "edmg-studio-backend",
+    }),
+    false,
+  );
+  assert.equal(
+    releaseProvenanceMatches(linuxManifest, {
+      ...linuxManifest,
+      platform: "win32",
+      backendEntryPoint: "edmg-studio-backend.exe",
+    }),
+    false,
+  );
+  assert.equal(
+    releaseProvenanceMatches(windowsManifest, {
+      ...windowsManifest,
+      backendEntryPoint: "edmg-studio-backend",
+    }),
+    false,
+  );
+  assert.match(
+    validateReleaseManifest({
+      ...linuxManifest,
+      backendEntryPoint: "edmg-studio-backend.exe",
+    }).join("; "),
+    /backendEntryPoint must be edmg-studio-backend on linux/,
   );
 });
 
