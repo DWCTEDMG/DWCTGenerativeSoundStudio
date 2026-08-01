@@ -149,7 +149,15 @@ def test_render_settings_exposes_imagineart(tmp_path):
         (studio_app.render_imagineart_assemble, "imagineart", "imagineart_v0_muxed"),
     ],
 )
-def test_hosted_assemble_uses_project_dir_and_muxes_audio(tmp_path, monkeypatch, route, provider, stem):
+@pytest.mark.parametrize("audio_layout", ["uploaded", "legacy_fallback"])
+def test_hosted_assemble_uses_project_dir_and_muxes_audio(
+    tmp_path,
+    monkeypatch,
+    route,
+    provider,
+    stem,
+    audio_layout,
+):
     store = ProjectStore(tmp_path / "data")
     proj = store.create("Hosted assemble")
     proj.meta = {
@@ -164,24 +172,30 @@ def test_hosted_assemble_uses_project_dir_and_muxes_audio(tmp_path, monkeypatch,
             ]
         }
     }
-    store.save(proj)
     project_dir = store.project_dir(proj.id)
+    if audio_layout == "uploaded":
+        audio_path = project_dir / "assets" / "audio" / "soundtrack.wav"
+        proj.meta["audio"] = {"filename": audio_path.name}
+    else:
+        audio_path = project_dir / "audio.wav"
+    store.save(proj)
     stills_dir = project_dir / "stills" / "variant_0"
     stills_dir.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (32, 32), color=(10, 20, 30)).save(stills_dir / "scene_0000.png")
-    (project_dir / "audio.wav").write_bytes(b"audio")
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"audio")
 
     calls: dict[str, object] = {}
 
-    def fake_assemble_slideshow(*, ffmpeg_path, image_paths, durations_s, out_path, fps):
+    def fake_assemble_slideshow(*, ffmpeg_path, image_paths, durations_s, out_mp4, fps):
         calls["assemble"] = {
             "image_paths": list(image_paths),
             "durations_s": list(durations_s),
-            "out_path": out_path,
+            "out_path": out_mp4,
             "fps": fps,
         }
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(b"video")
+        out_mp4.parent.mkdir(parents=True, exist_ok=True)
+        out_mp4.write_bytes(b"video")
 
     def fake_mux_audio(ffmpeg_path, video_mp4, audio_path, out_mp4):
         calls["mux"] = {
@@ -190,8 +204,10 @@ def test_hosted_assemble_uses_project_dir_and_muxes_audio(tmp_path, monkeypatch,
             "out_mp4": out_mp4,
         }
         assert video_mp4.exists()
-        assert audio_path == project_dir / "audio.wav"
+        assert audio_path == expected_audio_path
         out_mp4.write_bytes(video_mp4.read_bytes() + b"+audio")
+
+    expected_audio_path = audio_path
 
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "assemble_slideshow", fake_assemble_slideshow)
@@ -205,3 +221,46 @@ def test_hosted_assemble_uses_project_dir_and_muxes_audio(tmp_path, monkeypatch,
     assert (project_dir / result["video"]).read_bytes() == b"video+audio"
     assert calls["assemble"]
     assert calls["mux"]
+
+
+@pytest.mark.parametrize(
+    "route",
+    [studio_app.render_firefly_assemble, studio_app.render_imagineart_assemble],
+)
+def test_hosted_assemble_ignores_unconfined_legacy_audio_path(tmp_path, monkeypatch, route):
+    store = ProjectStore(tmp_path / "data")
+    proj = store.create("Hosted assemble path confinement")
+    external_audio = tmp_path / "outside.wav"
+    external_audio.write_bytes(b"must not be read")
+    proj.meta = {
+        "audio_path": str(external_audio),
+        "last_plan": {
+            "variants": [
+                {
+                    "name": "v1",
+                    "scenes": [{"start_s": 0.0, "end_s": 1.0, "prompt": "safe"}],
+                }
+            ]
+        },
+    }
+    store.save(proj)
+    project_dir = store.project_dir(proj.id)
+    stills_dir = project_dir / "stills" / "variant_0"
+    stills_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (16, 16)).save(stills_dir / "scene_0000.png")
+
+    def fake_assemble_slideshow(*, out_mp4, **_kwargs):
+        out_mp4.parent.mkdir(parents=True, exist_ok=True)
+        out_mp4.write_bytes(b"video")
+
+    def fail_mux(*_args, **_kwargs):
+        raise AssertionError("unconfined audio path reached FFmpeg mux")
+
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "assemble_slideshow", fake_assemble_slideshow)
+    monkeypatch.setattr(studio_app, "mux_audio", fail_mux)
+
+    result = route(proj.id, {"variant_index": 0, "fps": 24})
+
+    assert result["ok"] is True
+    assert result["video"].endswith("_v0.mp4")

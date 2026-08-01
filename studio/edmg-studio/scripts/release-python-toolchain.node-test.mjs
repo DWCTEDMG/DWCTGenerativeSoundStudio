@@ -489,4 +489,14 @@ test("Inno external installer tracks extracted payload files for safe uninstall"
   assert.doesNotMatch(innoBuild, /\[UninstallDelete\]/);
   assert.doesNotMatch(innoBuild, /\{app\}\\\*/);
   assert.doesNotMatch(innoBuild, /payload\\tools\\7zip/);
+  assert.match(innoBuild, /Invoke-WindowsSigning \$StudioDir \$PayloadSignables "pre-archive payload"/);
+  assert.match(innoBuild, /Invoke-WindowsSigning \$StudioDir @\(\$SetupPath\) "post-compile setup"/);
+  assert.ok(
+    innoBuild.indexOf("pre-archive payload") < innoBuild.indexOf("7-Zip payload archive"),
+    "payload executables must be signed before their archive hash is computed",
+  );
+  assert.ok(
+    innoBuild.indexOf("Inno Setup compile") < innoBuild.indexOf("post-compile setup"),
+    "the compiled setup must be signed after ISCC finishes",
+  );
 });

@@ -15,6 +15,22 @@ function Invoke-Checked($Label, [scriptblock]$Action) {
   }
 }
 
+function Invoke-WindowsSigning($StudioRoot, $Artifacts, $Phase) {
+  $signScript = Join-Path $StudioRoot "packaging\windows\sign_release.ps1"
+  if (-not (Test-Path -LiteralPath $signScript -PathType Leaf)) {
+    throw "Windows signing script not found: $signScript"
+  }
+  foreach ($artifact in @($Artifacts)) {
+    if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { continue }
+    Write-Host ("[sign] " + $Phase + ": " + $artifact) -ForegroundColor Cyan
+    & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $signScript `
+      -StudioDir $StudioRoot -ArtifactPaths $artifact
+    if ($LASTEXITCODE -ne 0) {
+      throw "$Phase signing failed with exit code $LASTEXITCODE"
+    }
+  }
+}
+
 function Get-FullPath($Path) {
   return [IO.Path]::GetFullPath($Path)
 }
@@ -178,6 +194,13 @@ if (-not (Test-Path $WinUnpackedDir)) {
   throw "Electron unpacked app not found: $WinUnpackedDir. Run without -SkipElectronDirBuild first."
 }
 
+$PayloadSignables = @(
+  (Join-Path $WinUnpackedDir "EDMG Studio.exe"),
+  (Join-Path $WinUnpackedDir "resources\backend\edmg-studio-backend.exe"),
+  (Join-Path $WinUnpackedDir "resources\backend\edmg-hf-bucket-helper.exe")
+) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+Invoke-WindowsSigning $StudioDir $PayloadSignables "pre-archive payload"
+
 New-Item -ItemType Directory -Force -Path $OutDirAbs | Out-Null
 foreach ($previousSetup in Get-ChildItem -LiteralPath $OutDirAbs -File -Filter "EDMG-Studio-Setup-*.exe") {
   Assert-ChildPath $OutDirAbs $previousSetup.FullName "previous setup executable"
@@ -284,7 +307,13 @@ Invoke-Checked "Inno Setup compile" {
   & $ResolvedIscc $GeneratedIss
 }
 
+$SetupPath = Join-Path $OutDirAbs ($OutputBaseFilename + ".exe")
+if (-not (Test-Path -LiteralPath $SetupPath -PathType Leaf)) {
+  throw "Inno Setup completed but the setup executable is missing: $SetupPath"
+}
+Invoke-WindowsSigning $StudioDir @($SetupPath) "post-compile setup"
+
 Write-Host "Done. Inno external-payload release:" -ForegroundColor Green
-Write-Host ("  Setup:   " + (Join-Path $OutDirAbs ($OutputBaseFilename + ".exe"))) -ForegroundColor Green
+Write-Host ("  Setup:   " + $SetupPath) -ForegroundColor Green
 Write-Host ("  Payload: " + $PayloadRoot) -ForegroundColor Green
 Write-Host "Ship the setup EXE and payload directory together." -ForegroundColor Cyan

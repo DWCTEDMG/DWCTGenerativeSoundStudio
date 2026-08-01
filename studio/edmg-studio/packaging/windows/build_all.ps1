@@ -271,10 +271,10 @@ Invoke-Checked "pnpm run dist:win" {
 }
 Pop-Location
 
-Write-Host "[post] Optional code-signing hook (env-gated)..." -ForegroundColor Cyan
+Write-Host "[post] Authenticode signing and verification (credential/requirement gated)..." -ForegroundColor Cyan
 $signScript = Join-Path $StudioDir "packaging/windows/sign_release.ps1"
 if (Test-Path $signScript) {
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $signScript -StudioDir $StudioDir
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $signScript -StudioDir $StudioDir -VerifyOnly
   if ($LASTEXITCODE -ne 0) {
     throw "sign_release.ps1 failed with exit code $LASTEXITCODE"
   }

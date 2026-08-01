@@ -108,21 +108,34 @@ After a full Windows build:
 ./studio/edmg-studio/packaging/windows/build_all.ps1
 ```
 
-That script now also runs the env-gated signing hook stub and the clean-machine
+That script also runs the env-gated Authenticode signing/verification lane and the clean-machine
 smoke checklist (`packaging/windows/smoke_clean_machine.ps1`).
 
 ### Code signing (credentials required)
 
-Signing is optional and env-gated. Configure on a signing host:
+Developer signing is optional, but production signing is fail-closed. Configure
+one of a local PFX/P12 file or a SHA1 certificate-store thumbprint on the
+Windows signing host:
 
 ```powershell
 $env:EDMG_CODE_SIGN_CERT = "<thumbprint-or-pfx-path>"
 $env:EDMG_CODE_SIGN_PASSWORD = "<optional-pfx-password>"
-./studio/edmg-studio/packaging/windows/sign_release.ps1
+$env:EDMG_CODE_SIGN_TIMESTAMP_URL = "http://timestamp.digicert.com"
+$env:EDMG_REQUIRE_CODE_SIGNING = "1"
+./studio/edmg-studio/packaging/windows/build_all.ps1
 ```
 
-The repository ships a stub hook only. Replace `sign_release.ps1` with real
-`signtool.exe` invocations once signing credentials are available.
+The packaging lane maps the custom credential variables into electron-builder
+native signing, enables `forceCodeSigning`, signs EDMG-owned backend/helper
+executables before packaging, and verifies final executables/installers through
+both `Get-AuthenticodeSignature` and `signtool verify`. The password is never
+logged. SDK SignTool discovery is automatic; `EDMG_SIGNTOOL_PATH` is available
+for nonstandard SDK installations.
+
+Each signing/verification pass appends
+`release/evidence/windows-signatures.json`. Installer checksum evidence is
+generated only after final signatures, so the recorded SHA-256 values describe
+the bytes that are shipped.
 
 ### Clean-machine smoke
 
@@ -184,7 +197,7 @@ Beta integrators should treat `studio/edmg-studio/src/shared/api/contracts.ts` a
 |----------|----------|--------|
 | CycloneDX SBOM | `release/evidence/python-backend-*.cyclonedx.json` | Automated via `pnpm run generate:release-evidence` |
 | SHA-256 checksums | `release/evidence/*-checksums*.json` | Automated |
-| Signing hook | `packaging/windows/sign_release.ps1` | Stub — requires `EDMG_CODE_SIGN_*` credentials |
+| Authenticode signatures | `release/evidence/windows-signatures.json` | Automated; production requires `EDMG_REQUIRE_CODE_SIGNING=1` and `EDMG_CODE_SIGN_CERT` |
 | Clean-machine smoke | `packaging/windows/smoke_clean_machine.ps1` | Local checklist; full VM proof still manual |
 | Baseline metrics | `GET /v1/metrics/baseline` | Stub budgets; W7-04 named-hardware runs pending |
 

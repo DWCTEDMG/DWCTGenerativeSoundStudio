@@ -8642,20 +8642,20 @@ def render_firefly_assemble(project_id: str, payload: dict[str, Any]):
         ffmpeg_path=settings.ffmpeg_path,
         image_paths=imgs,
         durations_s=durations,
-        out_path=out_path,
+        out_mp4=out_path,
         fps=int((payload or {}).get("fps") or 24),
     )
 
-    audio_path = Path(proj.meta.get("audio_path") or "")
+    audio_path = _project_audio_path(proj)
     fallback_audio = project_dir / "audio.wav"
-    if (audio_path.is_absolute() and audio_path.exists()) or fallback_audio.exists():
-        resolved_audio = audio_path if audio_path.is_absolute() and audio_path.exists() else fallback_audio
+    if audio_path is not None or fallback_audio.exists():
+        resolved_audio = audio_path or fallback_audio
         muxed = out_path.with_name(out_path.stem + "_muxed.mp4")
         try:
             mux_audio(settings.ffmpeg_path, video_mp4=out_path, audio_path=resolved_audio, out_mp4=muxed)
             out_path = muxed
         except Exception:
-            pass
+            logger.warning("Firefly audio mux failed", exc_info=True)
 
     rel = out_path.relative_to(project_dir).as_posix()
     return {"ok": True, "provider": "adobe-firefly", "video": rel, "video_abs": str(out_path)}
@@ -8875,20 +8875,20 @@ def render_imagineart_assemble(project_id: str, payload: dict[str, Any]):
         ffmpeg_path=settings.ffmpeg_path,
         image_paths=imgs,
         durations_s=durations,
-        out_path=out_path,
+        out_mp4=out_path,
         fps=int((payload or {}).get("fps") or 24),
     )
 
-    audio_path = Path(proj.meta.get("audio_path") or "")
+    audio_path = _project_audio_path(proj)
     fallback_audio = project_dir / "audio.wav"
-    if (audio_path.is_absolute() and audio_path.exists()) or fallback_audio.exists():
-        resolved_audio = audio_path if audio_path.is_absolute() and audio_path.exists() else fallback_audio
+    if audio_path is not None or fallback_audio.exists():
+        resolved_audio = audio_path or fallback_audio
         muxed = out_path.with_name(out_path.stem + "_muxed.mp4")
         try:
             mux_audio(settings.ffmpeg_path, video_mp4=out_path, audio_path=resolved_audio, out_mp4=muxed)
             out_path = muxed
         except Exception:
-            pass
+            logger.warning("ImagineArt audio mux failed", exc_info=True)
 
     rel = out_path.relative_to(project_dir).as_posix()
     return {"ok": True, "provider": "imagineart", "video": rel, "video_abs": str(out_path)}

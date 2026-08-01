@@ -120,7 +120,7 @@ export function resolveCodeSigningConfig(env = process.env) {
     timestampUrl,
     tool: process.platform === "win32" ? "signtool.exe" : process.platform === "darwin" ? "codesign" : "osslsigncode",
     reason: enabled
-      ? "EDMG_CODE_SIGN_CERT is configured; signing runs when dist artifacts exist."
+      ? "EDMG_CODE_SIGN_CERT is configured for the Windows packaging signing lane."
       : "Set EDMG_CODE_SIGN_CERT to a Windows certificate thumbprint or PFX path to enable signing.",
   };
 }
@@ -144,10 +144,72 @@ export function planCodeSigning(config, artifactPaths, root = process.cwd()) {
     };
   }
   return {
-    attempted: true,
+    attempted: false,
     signed: [],
     skipped: signable.map((filePath) => repoRelative(root, filePath)),
-    reason: "Signing hook is configured but intentionally stubbed in this repository slice.",
+    reason: "Signing is performed and verified by packaging/windows/sign_release.ps1; inspect windows-signatures.json.",
+  };
+}
+
+export function readWindowsSignatureEvidence(root, artifactPaths = null) {
+  const evidencePath = path.join(root, RELEASE_EVIDENCE_DIR, "windows-signatures.json");
+  const allowedPaths = Array.isArray(artifactPaths)
+    ? new Set(
+        artifactPaths
+          .filter((filePath) => /\.(exe|msi)$/i.test(filePath))
+          .map((filePath) => repoRelative(root, filePath).toLowerCase()),
+      )
+    : null;
+  if (!fs.existsSync(evidencePath)) {
+    return {
+      exists: false,
+      evidencePath,
+      attempted: false,
+      valid: [],
+      skipped: [],
+      failed: [],
+    };
+  }
+
+  let document;
+  try {
+    document = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+  } catch (error) {
+    throw new Error(`Windows signature evidence is invalid JSON: ${error.message}`);
+  }
+  if (document?.schemaVersion !== 1 || !Array.isArray(document?.runs)) {
+    throw new Error("Windows signature evidence must use schemaVersion 1 with a runs array.");
+  }
+
+  const latestByPath = new Map();
+  for (const run of document.runs) {
+    for (const artifact of Array.isArray(run?.artifacts) ? run.artifacts : []) {
+      const artifactPath = String(artifact?.path || "").trim().replaceAll("\\", "/");
+      const normalizedPath = artifactPath.toLowerCase();
+      if (!artifactPath || (allowedPaths && !allowedPaths.has(normalizedPath))) continue;
+      latestByPath.set(normalizedPath, { artifactPath, artifact });
+    }
+  }
+
+  const valid = [];
+  const skipped = [];
+  const failed = [];
+  for (const { artifactPath, artifact } of latestByPath.values()) {
+    if (artifact.authenticodeStatus === "Valid" && artifact.signToolVerified === true) {
+      valid.push(artifactPath);
+    } else if (artifact.action === "skipped") {
+      skipped.push(artifactPath);
+    } else {
+      failed.push(artifactPath);
+    }
+  }
+  return {
+    exists: true,
+    evidencePath,
+    attempted: document.runs.length > 0,
+    valid: valid.sort(),
+    skipped: skipped.sort(),
+    failed: failed.sort(),
   };
 }
 
@@ -247,6 +309,10 @@ export async function writeReleaseEvidence({
 
   const signing = resolveCodeSigningConfig(env);
   const signingPlan = planCodeSigning(signing, artifactPaths, root);
+  const windowsSignatures = readWindowsSignatureEvidence(root, artifactPaths);
+  const signingReason = windowsSignatures.exists
+    ? `Authenticode evidence: ${windowsSignatures.valid.length} verified, ${windowsSignatures.skipped.length} skipped, ${windowsSignatures.failed.length} failed.`
+    : signingPlan.reason;
   const checksumManifest = await buildChecksumManifest({
     root,
     artifactPaths,
@@ -262,12 +328,14 @@ export async function writeReleaseEvidence({
         componentCount: sbom.componentCount,
       },
       codeSigning: {
-        enabled: signing.enabled,
-        attempted: signingPlan.attempted,
+        enabled: signing.enabled || windowsSignatures.valid.length > 0,
+        attempted: signingPlan.attempted || windowsSignatures.attempted,
         tool: signing.tool,
-        reason: signingPlan.reason,
-        signedCount: signingPlan.signed.length,
-        skippedCount: signingPlan.skipped.length,
+        reason: signingReason,
+        evidencePath: windowsSignatures.exists ? repoRelative(root, windowsSignatures.evidencePath) : undefined,
+        signedCount: windowsSignatures.valid.length,
+        skippedCount: windowsSignatures.exists ? windowsSignatures.skipped.length : signingPlan.skipped.length,
+        failedCount: windowsSignatures.failed.length,
       },
     },
   });

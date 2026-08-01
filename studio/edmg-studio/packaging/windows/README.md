@@ -109,8 +109,39 @@ require Python or uv on the customer machine.
 - SBOM: `release/evidence/python-backend-<profile>.cyclonedx.json`
 - Bundle checksums: `release/evidence/bundle-artifacts.sha256.json`
 - Installer checksums: `release/evidence/release-artifacts.sha256.json`
-- Signing hook stub: `packaging/windows/sign_release.ps1` (`EDMG_CODE_SIGN_CERT`)
+- Authenticode evidence: `release/evidence/windows-signatures.json`
+- Signing/verification lane: `packaging/windows/sign_release.ps1`
 - Clean-machine smoke: `packaging/windows/smoke_clean_machine.ps1`
+
+## Authenticode signing
+
+Release signing supports either a local PFX/P12 file or the SHA1 thumbprint of
+a valid Code Signing certificate with a private key in the Windows
+`CurrentUser\My` or `LocalMachine\My` store:
+
+```powershell
+$env:EDMG_CODE_SIGN_CERT = "C:\secure\edmg-release.pfx" # or 40-character SHA1 thumbprint
+$env:EDMG_CODE_SIGN_PASSWORD = "<pfx-password>"         # PFX only; never committed
+$env:EDMG_CODE_SIGN_TIMESTAMP_URL = "http://timestamp.digicert.com"
+$env:EDMG_REQUIRE_CODE_SIGNING = "1"
+./studio/edmg-studio/packaging/windows/build_all.ps1
+```
+
+`EDMG_REQUIRE_CODE_SIGNING=1` is the production fail-closed switch. It makes
+packaging fail before unsigned EDMG-owned executables can be archived and also
+sets electron-builder `forceCodeSigning`. The custom certificate variables are
+mapped into electron-builder's native Windows signing configuration, while the
+PowerShell lane signs the bundled backend/helper and verifies the application
+and installer with both `Get-AuthenticodeSignature` and `signtool verify`.
+
+`signtool.exe` is discovered from `PATH` or installed Windows SDK directories.
+Set `EDMG_SIGNTOOL_PATH` only when using a nonstandard SDK layout. Signature
+evidence is appended to `release/evidence/windows-signatures.json`; installer
+checksum evidence is generated afterward so it describes the signed bytes.
+
+Without `EDMG_REQUIRE_CODE_SIGNING`, developer builds may remain unsigned, but
+the signing evidence records those artifacts as skipped. Never distribute that
+state as a production release.
 
 ## Runtime defaults
 

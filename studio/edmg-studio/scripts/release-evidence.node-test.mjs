@@ -10,6 +10,7 @@ import {
   buildChecksumManifest,
   collectReleaseArtifactPaths,
   planCodeSigning,
+  readWindowsSignatureEvidence,
   resolveCodeSigningConfig,
 } from "./release-evidence-lib.mjs";
 import { uvExportCycloneDxArgs } from "./release-python-toolchain.mjs";
@@ -92,6 +93,60 @@ test("code signing hook stays disabled without credentials", () => {
   const plan = planCodeSigning(config, [path.join(studioRoot, "dist", "EDMG Studio Setup 1.1.0.exe")], studioRoot);
   assert.equal(plan.attempted, false);
   assert.match(plan.reason, /EDMG_CODE_SIGN_CERT/);
+});
+
+test("Windows Authenticode evidence summarizes the latest result for each artifact", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "edmg-signature-evidence-"));
+  const evidenceDir = path.join(tempRoot, "release", "evidence");
+  fs.mkdirSync(evidenceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(evidenceDir, "windows-signatures.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      runs: [
+        {
+          artifacts: [
+            {
+              path: "dist/EDMG Studio Setup.exe",
+              action: "skipped",
+              authenticodeStatus: "NotSigned",
+              signToolVerified: false,
+            },
+          ],
+        },
+        {
+          artifacts: [
+            {
+              path: "dist/EDMG Studio Setup.exe",
+              action: "signed",
+              authenticodeStatus: "Valid",
+              signToolVerified: true,
+            },
+            {
+              path: "dist/old-release.exe",
+              action: "signed",
+              authenticodeStatus: "Valid",
+              signToolVerified: true,
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  try {
+    const summary = readWindowsSignatureEvidence(tempRoot);
+    assert.equal(summary.exists, true);
+    assert.deepEqual(summary.valid, ["dist/EDMG Studio Setup.exe", "dist/old-release.exe"]);
+    assert.deepEqual(summary.skipped, []);
+    assert.deepEqual(summary.failed, []);
+
+    const currentRelease = readWindowsSignatureEvidence(tempRoot, [
+      path.join(tempRoot, "dist", "EDMG Studio Setup.exe"),
+    ]);
+    assert.deepEqual(currentRelease.valid, ["dist/EDMG Studio Setup.exe"]);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("prepare-release-bundle and run-electron-builder integrate release evidence hooks", () => {

@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 import { writeReleaseEvidence } from "./release-evidence-lib.mjs";
+import { resolveWindowsSigningPlan } from "./windows-signing-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -22,12 +23,6 @@ if (!fs.existsSync(builderEntry)) {
   throw new Error(`electron-builder entry point not found: ${builderEntry}`);
 }
 
-const childEnv = {
-  ...process.env,
-  ELECTRON_CACHE: electronCache,
-  ELECTRON_BUILDER_CACHE: electronBuilderCache,
-};
-
 function resolveEvidenceProfile() {
   const configured = String(process.env.EDMG_BACKEND_ACCELERATOR_PROFILE || "").trim();
   if (configured) return configured;
@@ -44,8 +39,92 @@ function resolveEvidenceProfile() {
   return "";
 }
 
+function existingFiles(paths) {
+  return paths.filter((filePath) => fs.existsSync(filePath) && fs.statSync(filePath).isFile());
+}
+
+function stagedOwnedExecutables() {
+  const backendRoot = path.join(root, "release", "staged-app", "electron-resources", "backend");
+  return existingFiles([
+    path.join(backendRoot, "edmg-studio-backend.exe"),
+    path.join(backendRoot, "edmg-hf-bucket-helper.exe"),
+  ]);
+}
+
+function packagedOwnedExecutables() {
+  const unpackedRoot = path.join(root, "dist", "win-unpacked");
+  const backendRoot = path.join(unpackedRoot, "resources", "backend");
+  const artifacts = existingFiles([
+    path.join(unpackedRoot, "EDMG Studio.exe"),
+    path.join(backendRoot, "edmg-studio-backend.exe"),
+    path.join(backendRoot, "edmg-hf-bucket-helper.exe"),
+  ]);
+  const distDir = path.join(root, "dist");
+  if (fs.existsSync(distDir) && fs.statSync(distDir).isDirectory()) {
+    artifacts.push(
+      ...fs
+        .readdirSync(distDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /\.(?:exe|msi)$/i.test(entry.name))
+        .map((entry) => path.join(distDir, entry.name)),
+    );
+  }
+  return [...new Set(artifacts)];
+}
+
+function invokeWindowsSigning(artifactPaths, signingPlan, childEnv, phase, { verifyOnly = false } = {}) {
+  if (!signingPlan.windowsTarget) return;
+  const signScript = path.join(root, "packaging", "windows", "sign_release.ps1");
+  if (!fs.existsSync(signScript)) {
+    throw new Error(`Windows signing script is missing: ${signScript}`);
+  }
+  if (!artifactPaths.length && signingPlan.required) {
+    throw new Error(`Required Windows signing phase ${phase} found no EDMG-owned executable artifacts.`);
+  }
+
+  for (const artifactPath of artifactPaths) {
+    const args = [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      signScript,
+      "-StudioDir",
+      root,
+      "-ArtifactPaths",
+      artifactPath,
+    ];
+    if (signingPlan.required) args.push("-RequireSigning");
+    if (verifyOnly) args.push("-VerifyOnly");
+    const result = spawnSync("powershell.exe", args, {
+      cwd: root,
+      stdio: "inherit",
+      shell: false,
+      env: childEnv,
+    });
+    if (result.error) throw new Error(`Windows ${phase} signing failed: ${result.error.message}`);
+    if (result.status !== 0) {
+      throw new Error(`Windows ${phase} signing failed with exit code ${result.status ?? "unknown"}.`);
+    }
+  }
+}
+
 async function main() {
-  const builderArgs = process.argv.slice(2);
+  const requestedBuilderArgs = process.argv.slice(2);
+  const signingPlan = resolveWindowsSigningPlan({
+    root,
+    builderArgs: requestedBuilderArgs,
+    env: process.env,
+    platform: process.platform,
+  });
+  const builderArgs = signingPlan.builderArgs;
+  const childEnv = {
+    ...signingPlan.childEnv,
+    ELECTRON_CACHE: electronCache,
+    ELECTRON_BUILDER_CACHE: electronBuilderCache,
+  };
+
+  invokeWindowsSigning(stagedOwnedExecutables(), signingPlan, childEnv, "pre-pack");
   const result = spawnSync(process.execPath, [builderEntry, ...builderArgs], {
     cwd: root,
     stdio: "inherit",
@@ -61,8 +140,10 @@ async function main() {
     process.exit(result.status ?? 1);
   }
 
-  const wantsWindows = builderArgs.some((arg) => /^-w(?:$|in)|^--win/i.test(arg));
-  const wantsLinux = builderArgs.some((arg) => /^-l(?:$|inux)|^--linux/i.test(arg));
+  invokeWindowsSigning(packagedOwnedExecutables(), signingPlan, childEnv, "post-pack", { verifyOnly: true });
+
+  const wantsWindows = requestedBuilderArgs.some((arg) => /^-w(?:$|in)|^--win/i.test(arg));
+  const wantsLinux = requestedBuilderArgs.some((arg) => /^-l(?:$|inux)|^--linux/i.test(arg));
   const wantsInstallerArtifacts = wantsWindows || wantsLinux;
   if (!wantsInstallerArtifacts) {
     return;
