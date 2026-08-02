@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBackendRuntime } from "./main-process/backend-runtime.mjs";
 import { createDirectorRuntime } from "./main-process/director-runtime.mjs";
+import { buildCacheEnvPaths } from "./main-process/storage-env.mjs";
 import { createWindowRuntime } from "./main-process/window-runtime.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -396,24 +397,6 @@ function tryEnsureDirSync(targetPath) {
 
 function localFallbackCacheRoot() {
   return path.join(app.getPath("userData"), "cache-fallback");
-}
-
-function buildCacheEnvPaths(cacheRoot) {
-  const root = path.resolve(cacheRoot);
-  return {
-    EDMG_STUDIO_CACHE_DIR: root,
-    PIP_CACHE_DIR: path.join(root, "pip"),
-    XDG_CACHE_HOME: path.join(root, "xdg"),
-    HF_HOME: path.join(root, "huggingface"),
-    HUGGINGFACE_HUB_CACHE: path.join(root, "huggingface", "hub"),
-    TRANSFORMERS_CACHE: path.join(root, "transformers"),
-    TORCH_HOME: path.join(root, "torch"),
-    NLTK_DATA: path.join(root, "nltk_data"),
-    WHISPER_CACHE_DIR: path.join(root, "whisper"),
-    MPLCONFIGDIR: path.join(root, "matplotlib"),
-    TMP: path.join(root, "tmp"),
-    TEMP: path.join(root, "tmp"),
-  };
 }
 
 function ensureManagedEnvDirs(managed) {
@@ -1478,10 +1461,10 @@ function registerIpcHandlers() {
       EDMG_STUDIO_HOME: studioHome,
       EDMG_STUDIO_DATA_DIR: targetPaths.dataDir,
       EDMG_STUDIO_MODELS_DIR: targetPaths.modelsDir,
-      EDMG_STUDIO_CACHE_DIR: targetPaths.cacheRoot,
       EDMG_STUDIO_LOGS_DIR: targetPaths.logsDir,
       EDMG_STUDIO_EXTERNAL_DIR: targetPaths.externalDir,
       OLLAMA_MODELS: path.join(targetPaths.modelsDir, "ollama"),
+      ...buildCacheEnvPaths(targetPaths.cacheRoot),
     });
 
     return {

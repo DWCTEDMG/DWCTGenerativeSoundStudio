@@ -1,59 +1,66 @@
 # Studio Forge
 
-Studio Forge is an experimental, opt-in AI builder workbench for EDMG Studio.
+Studio Forge is the default-visible, Studio-side 1.0 readiness and guided-workflow surface for EDMG Studio. It reports what the current machine, selected project, selected variant, models, providers, storage, and render routes can actually do, then sends the user to the canonical Studio page that owns the next safe action.
 
-It is currently read-only. It does not replace:
+Forge is available by default. To hide it for a packaging or support fallback, set:
 
-- Electron shell
-- React frontend
-- FastAPI backend
-- Setup Wizard
-- internal renderer
-- ComfyUI integration
-- model manager
-- render queue
-- packaging scripts
+```bash
+VITE_EDMG_DISABLE_STUDIO_FORGE=1
+```
 
-Enable in development with:
+The earlier `VITE_EDMG_ENABLE_STUDIO_FORGE` flag remains a compatibility control, but a normal build no longer needs an opt-in value.
 
-`VITE_EDMG_ENABLE_STUDIO_FORGE=1`
+## Studio-side 1.0 scope
 
-Current features:
+Forge provides:
 
-- runtime status overview
-- runtime-aware recommendations
-- template preview
-- workflow recipe preview
-- Unreal bridge preview cards
-- backend Unreal bridge contract preview via `/v1/projects/{project_id}/unreal/preview`
-- backend Unreal bridge export bundle via `POST /v1/projects/{project_id}/export/unreal`
-- backend Unreal bridge import-plan generation via `POST /v1/projects/{project_id}/unreal/import-plan`
-- backend Unreal bridge return import via `POST /v1/projects/{project_id}/import/unreal`
-- one-click Unreal bundle export/import-plan/import actions in Outputs, with returned media registered back into canonical project outputs
-- Unreal-side importer script at `tools/unreal/import_unreal_bridge_bundle.py` for creating a Level Sequence from the exported bundle inside Unreal Editor
-- validation checklist
+- live system, storage, CUDA/accelerator, provider, model, and task readiness derived from existing Studio APIs
+- active-project and selected-variant readiness, including audio, analysis, plan, output, Deforum, Unreal, and live-publisher state
+- selectable recipes whose stages are labeled completed, current, or blocked
+- safe calls to action into the canonical `Setup`, `Models`, `Workspace`, `Render`, `Review`, and `Outputs` pages
+- partial-failure, offline, degraded, loading, error, and empty states without presenting missing data as ready
+- Unreal bridge status and handoff links without making Unreal a required runtime
 
-## Current Unreal bridge status
+Forge does not own setup, model installation, project mutation, rendering, review publishing, or output import/export. Those actions remain on their canonical pages. Forge also does not generate code, execute shell commands, install runtimes, or silently fall back in a way that presents a failed capability as available.
 
-Finished now:
+## Live publishers
 
-- Studio can preview, export, build an Unreal import plan, and import returned renders back into canonical project outputs.
-- The Unreal-side importer script exists at `tools/unreal/import_unreal_bridge_bundle.py`.
-- The backend/service contract exists under `studio/edmg-studio/python_backend/edmg_studio_backend/services/unreal_bridge_consumer.py`.
-- The Outputs page can drive the controlled bundle export/import-plan/import flow.
+`Review` owns the existing OSC, MIDI, and WebSocket live-publisher controls and status. Forge can report that readiness and route the user to Review, but it does not duplicate or replace the publisher implementation.
 
-Not finished:
+These publishers are Studio handoffs. They are not a direct Unreal Remote Control integration.
 
-- No verified in-editor Unreal smoke test on this machine.
-- No packaged Unreal plugin or module yet.
-- No live OSC, WebSocket, or Remote Control execution path yet.
-- No one-click "launch Unreal render job" path from Studio yet.
-- No deeper Sequencer scene build beyond the first importer pass with cameras, cuts, markers, and plan metadata.
+## Unreal bridge status
 
-Honest state:
+Supported on the Studio side:
 
-- Studio-side bridge: usable
-- Unreal-side runtime integration: partial
-- Full Unreal support: not finished
+- preview the Unreal bridge contract for the active project and variant
+- export a controlled Unreal bundle
+- generate the bundle import plan
+- import returned media into canonical project outputs
+- route the user to `Workspace` and `Outputs`, where the authoritative preview/export/import-plan/returned-media actions live
+- use `studio/edmg-studio/tools/unreal/import_unreal_bridge_bundle.py` as the first Unreal-side consumer
 
-Studio Forge v1 does not generate code, run workflows, write files, install runtimes, or mutate project data.
+Current backend contracts include:
+
+- `GET /v1/projects/{project_id}/unreal/preview`
+- `POST /v1/projects/{project_id}/export/unreal`
+- `POST /v1/projects/{project_id}/unreal/import-plan`
+- `POST /v1/projects/{project_id}/import/unreal`
+
+The importer remains a first-pass Sequencer consumer: it creates cameras, cuts, markers, and plan metadata. It does not yet ingest or construct the full scene, control Unreal directly, or launch a render.
+
+Explicitly outside the current completion claim:
+
+- no verified in-editor Unreal smoke test
+- no packaged Unreal plugin or module
+- no direct Unreal Remote Control integration
+- no Movie Render Queue (MRQ) automation
+- no one-click Unreal editor or render-job launch
+- no full editor, scene-build, or returned-render automation
+
+Honest status:
+
+- Studio Forge readiness and guided routing: Studio-side 1.0
+- Studio Unreal preview/export/import-plan/returned-media handoffs: supported through canonical pages
+- Unreal importer: first-pass and not yet proven in-editor
+- full Unreal automation: not implemented

@@ -7,7 +7,7 @@ Make EDMG Studio more personal and modular without changing the core application
 - keep top-level tabs stable
 - let users customize the panels inside pages
 - allow theme selection and future theme packs
-- evolve Studio Forge into the builder and preview surface for these capabilities
+- use Studio Forge as the readiness, guided-routing, builder, and preview surface for these capabilities
 - keep Unreal Engine optional if it is added later
 
 This plan is additive only. It does not replace:
@@ -28,7 +28,7 @@ This plan is additive only. It does not replace:
 3. Layout state is user-scoped UI state, not project content.
 4. Themes are frontend-only token sets.
 5. Runtime integrations remain optional providers or bridges.
-6. Studio Forge should preview and advise before it executes.
+6. Studio Forge reports and guides; canonical pages own execution and project mutation.
 
 ## Current Progress
 
@@ -40,6 +40,9 @@ The current frontend implementation already includes:
 - local layout profile slots (`Personal`, `Focus`, `Technical`, `Presentation`)
 - modular rollout on `Dashboard`, `Projects`, `Settings`, `Models`, `Studio Forge`, `Outputs`, `Render Queue`, `Cloud`, `AI Planner Lab`, `Reactive Lab`, and `EDMG Director`
 - phase-2 progress already landed for named layout profiles and Studio Forge layout/preview surfaces
+- Studio Forge is default-visible, with `VITE_EDMG_DISABLE_STUDIO_FORGE=1` available as an explicit packaging or support opt-out
+- Studio Forge derives live system, model, storage, CUDA/provider/task, project, and variant readiness from existing APIs
+- guided recipes show completed, current, and blocked stages and route to the canonical action owner
 
 These changes are frontend-only. They do not alter backend contracts, Setup Wizard flow,
 model installs, render defaults, desktop backend spawning, or packaging behavior.
@@ -91,16 +94,16 @@ Future extensions:
 
 ## Studio Forge Role
 
-Studio Forge should evolve into the read-only builder shell for modular Studio behavior:
+Studio Forge is the Studio-side 1.0 readiness and guided-workflow shell for modular Studio behavior:
 
-- runtime capability inspection
-- theme preview
-- page layout preview
-- workflow compatibility preview
-- patch/export preview
-- optional bridge preview for external runtimes
+- truthful runtime, storage, accelerator, provider, model, and task inspection
+- active-project and selected-variant readiness
+- selectable recipes with completed, current, and blocked stages
+- theme and page-layout preview
+- workflow compatibility and bridge previews
+- safe calls to action into `Setup`, `Models`, `Workspace`, `Render`, `Review`, and `Outputs`
 
-Studio Forge should not bypass the canonical Workspace, Render, Models, or Setup flows.
+Forge is deliberately non-authoritative. Setup owns runtime configuration, Models owns model installs and restores, Workspace owns project planning, Render owns render dispatch, Review owns OSC/MIDI/WebSocket live publishing, and Outputs owns Unreal export/import-plan/returned-media actions. Forge reports their state and routes users to them; it does not duplicate their mutations.
 
 ## Unreal Engine Direction
 
@@ -110,7 +113,7 @@ Recommended shapes:
 
 - export target for shot and scene metadata
 - render handoff target
-- control bridge over files, HTTP, WebSocket, OSC, or Remote Control
+- control bridge over files and the Studio live-publisher handoffs
 - optional provider surfaced by Studio Forge previews
 
 Not recommended:
@@ -122,8 +125,11 @@ Not recommended:
 Current status:
 
 - the repo now has a non-destructive Unreal bridge MVP for preview, export bundles, import-plan generation, and return-import back into Studio outputs
+- Forge links those handoffs through the canonical Workspace and Outputs pages
+- Review owns the existing OSC, MIDI, and WebSocket publishers; those publishers are not direct Unreal Remote Control
+- the Unreal importer remains a first-pass cameras/cuts/markers consumer and has no verified in-editor smoke test
 - Unreal remains optional, preview-oriented, and non-authoritative
-- there is still no required Unreal runtime dependency, packaged plugin, or live control execution path
+- there is still no required Unreal runtime dependency, packaged plugin, direct Unreal Remote Control integration, Movie Render Queue automation, or full editor automation
 
 ## Phase Plan
 
@@ -153,7 +159,7 @@ exists, but the roadmap below remains the intended direction.
 
 ## Current Implementation Boundary
 
-The first implementation pass should stay away from:
+The implementation boundary stays away from:
 
 - backend contracts
 - setup/install flows
@@ -162,6 +168,8 @@ The first implementation pass should stay away from:
 - backend spawning
 - packaging scripts
 
-Only UI presentation, ordering, visibility, and appearance should change.
-The current Unreal bridge MVP and Outputs import/export surfaces are the main
-exception, and they remain additive rather than execution-authoritative.
+Forge may read existing backend contracts to present readiness and guidance, but
+it does not move their mutation logic into the frontend. The Unreal bridge and
+Outputs import/export surfaces remain additive rather than execution-authoritative.
+There is no claim of a packaged Unreal plugin, direct Remote Control, MRQ, full
+scene construction, or verified in-editor automation.

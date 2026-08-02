@@ -332,6 +332,55 @@ def test_linux_launchers_honor_independent_storage_directories() -> None:
             )
 
 
+def test_linux_launchers_override_inherited_hugging_face_cache_paths() -> None:
+    managed_hf_keys = (
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HF_XET_CACHE",
+        "HF_ASSETS_CACHE",
+        "HUGGINGFACE_HUB_CACHE",
+        "HUGGINGFACE_ASSETS_CACHE",
+        "TRANSFORMERS_CACHE",
+    )
+    expected_fragments = {
+        STUDIO_ROOT / "scripts" / "start_lightning_backend.sh": {
+            "HF_HOME": 'export HF_HOME="${EDMG_STUDIO_CACHE_DIR}/huggingface"',
+            "HF_HUB_CACHE": 'export HF_HUB_CACHE="${HF_HOME}/hub"',
+            "HF_XET_CACHE": 'export HF_XET_CACHE="${HF_HOME}/xet"',
+            "HF_ASSETS_CACHE": 'export HF_ASSETS_CACHE="${HF_HOME}/assets"',
+            "HUGGINGFACE_HUB_CACHE": 'export HUGGINGFACE_HUB_CACHE="${HF_HUB_CACHE}"',
+            "HUGGINGFACE_ASSETS_CACHE": 'export HUGGINGFACE_ASSETS_CACHE="${HF_ASSETS_CACHE}"',
+            "TRANSFORMERS_CACHE": 'export TRANSFORMERS_CACHE="${EDMG_STUDIO_CACHE_DIR}/transformers"',
+        },
+        STUDIO_ROOT / "edmg_gcp_gpu_bootstrap.sh": {
+            "HF_HOME": "export HF_HOME=${HF_HOME_DIR}",
+            "HF_HUB_CACHE": "export HF_HUB_CACHE=${HF_HUB_CACHE_DIR}",
+            "HF_XET_CACHE": "export HF_XET_CACHE=${HF_XET_CACHE_DIR}",
+            "HF_ASSETS_CACHE": "export HF_ASSETS_CACHE=${HF_ASSETS_CACHE_DIR}",
+            "HUGGINGFACE_HUB_CACHE": "export HUGGINGFACE_HUB_CACHE=${HF_HUB_CACHE_DIR}",
+            "HUGGINGFACE_ASSETS_CACHE": "export HUGGINGFACE_ASSETS_CACHE=${HF_ASSETS_CACHE_DIR}",
+            "TRANSFORMERS_CACHE": "export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE_DIR}",
+        },
+        STUDIO_ROOT / "edmg_remote_reinstall_ports.sh": {
+            "HF_HOME": 'export HF_HOME="$CACHE_DIR/huggingface"',
+            "HF_HUB_CACHE": 'export HF_HUB_CACHE="$HF_HOME/hub"',
+            "HF_XET_CACHE": 'export HF_XET_CACHE="$HF_HOME/xet"',
+            "HF_ASSETS_CACHE": 'export HF_ASSETS_CACHE="$HF_HOME/assets"',
+            "HUGGINGFACE_HUB_CACHE": 'export HUGGINGFACE_HUB_CACHE="$HF_HUB_CACHE"',
+            "HUGGINGFACE_ASSETS_CACHE": 'export HUGGINGFACE_ASSETS_CACHE="$HF_ASSETS_CACHE"',
+            "TRANSFORMERS_CACHE": 'export TRANSFORMERS_CACHE="$CACHE_DIR/transformers"',
+        },
+    }
+
+    for path, fragments in expected_fragments.items():
+        text = path.read_text(encoding="utf-8")
+        assert set(fragments) == set(managed_hf_keys)
+        for key, fragment in fragments.items():
+            assert fragment in text, (
+                f"{path.relative_to(REPO_ROOT)} must override inherited {key} from the selected cache root"
+            )
+
+
 def test_shell_uv_bootstrap_verifies_release_archives() -> None:
     helper = (STUDIO_ROOT / "scripts" / "uv_toolchain.sh").read_text(encoding="utf-8")
     assert "astral.sh/uv" not in helper
@@ -370,6 +419,16 @@ def test_generated_lightning_bundle_is_lock_derived(
     assert "lock --check" in startup
     assert "sync --frozen" in startup
     assert "run --frozen --no-sync" in startup
+    for key in (
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HF_XET_CACHE",
+        "HF_ASSETS_CACHE",
+        "HUGGINGFACE_HUB_CACHE",
+        "HUGGINGFACE_ASSETS_CACHE",
+        "TRANSFORMERS_CACHE",
+    ):
+        assert f"export {key}=" in startup
 
     manifest = json.loads(
         (output / "lightning-bundle-manifest.json").read_text(encoding="utf-8")

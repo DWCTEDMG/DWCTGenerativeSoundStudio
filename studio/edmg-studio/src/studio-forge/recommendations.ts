@@ -5,6 +5,8 @@ import type {
   StudioForgeRecipe,
   StudioForgeTemplate,
   StudioForgeTemplateKind,
+  StudioForgePrerequisite,
+  StudioForgeAction,
 } from "./types";
 
 export type StudioForgeRecommendationStatus = "ready" | "optionalBoost" | "blocked";
@@ -18,6 +20,8 @@ export type StudioForgeRecommendation = {
   status: StudioForgeRecommendationStatus;
   missingRequired: StudioForgeCapability[];
   missingOptional: StudioForgeCapability[];
+  missingPrerequisites: StudioForgePrerequisite[];
+  action: StudioForgeAction;
 };
 
 type StudioForgeRecommendationTarget = {
@@ -28,6 +32,8 @@ type StudioForgeRecommendationTarget = {
   kindLabel: string;
   requiredCapabilities: StudioForgeCapability[];
   optionalCapabilities: StudioForgeCapability[];
+  requiredPrerequisites: StudioForgePrerequisite[];
+  action: StudioForgeAction;
 };
 
 function templateKindLabel(kind: StudioForgeTemplateKind): string {
@@ -55,6 +61,7 @@ function sortCapabilities(capabilities: StudioForgeCapability[]) {
 function evaluateTarget(
   target: StudioForgeRecommendationTarget,
   availableCapabilitySet: Set<StudioForgeCapability>,
+  availablePrerequisiteSet: Set<StudioForgePrerequisite>,
 ): StudioForgeRecommendation {
   const missingRequired = sortCapabilities(
     target.requiredCapabilities.filter((capability) => !availableCapabilitySet.has(capability)),
@@ -62,7 +69,10 @@ function evaluateTarget(
   const missingOptional = sortCapabilities(
     target.optionalCapabilities.filter((capability) => !availableCapabilitySet.has(capability)),
   );
-  const status: StudioForgeRecommendationStatus = missingRequired.length
+  const missingPrerequisites = [...target.requiredPrerequisites]
+    .filter((prerequisite) => !availablePrerequisiteSet.has(prerequisite))
+    .sort((left, right) => left.localeCompare(right));
+  const status: StudioForgeRecommendationStatus = missingRequired.length || missingPrerequisites.length
     ? "blocked"
     : missingOptional.length
       ? "optionalBoost"
@@ -76,6 +86,8 @@ function evaluateTarget(
     status,
     missingRequired,
     missingOptional,
+    missingPrerequisites,
+    action: target.action,
   };
 }
 
@@ -90,13 +102,16 @@ export function buildStudioForgeRecommendations({
   templates,
   recipes,
   availableCapabilities,
+  availablePrerequisites = [],
 }: {
   bridges: StudioForgeBridge[];
   templates: StudioForgeTemplate[];
   recipes: StudioForgeRecipe[];
   availableCapabilities: StudioForgeCapability[];
+  availablePrerequisites?: StudioForgePrerequisite[];
 }): StudioForgeRecommendation[] {
   const availableCapabilitySet = new Set(availableCapabilities);
+  const availablePrerequisiteSet = new Set(availablePrerequisites);
   const targets: StudioForgeRecommendationTarget[] = [
     ...templates.map((template) => ({
       id: template.id,
@@ -106,6 +121,8 @@ export function buildStudioForgeRecommendations({
       kindLabel: templateKindLabel(template.kind),
       requiredCapabilities: template.requiredCapabilities,
       optionalCapabilities: template.optionalCapabilities ?? [],
+      requiredPrerequisites: template.requiredPrerequisites ?? [],
+      action: template.action,
     })),
     ...recipes.map((recipe) => ({
       id: recipe.id,
@@ -115,6 +132,8 @@ export function buildStudioForgeRecommendations({
       kindLabel: "Workflow recipe",
       requiredCapabilities: recipe.requiredCapabilities,
       optionalCapabilities: recipe.optionalCapabilities ?? [],
+      requiredPrerequisites: recipe.requiredPrerequisites ?? [],
+      action: recipe.action,
     })),
     ...bridges.map((bridge) => ({
       id: bridge.id,
@@ -124,11 +143,13 @@ export function buildStudioForgeRecommendations({
       kindLabel: bridgeKindLabel(bridge.kind),
       requiredCapabilities: bridge.requiredCapabilities,
       optionalCapabilities: bridge.optionalCapabilities ?? [],
+      requiredPrerequisites: bridge.requiredPrerequisites ?? [],
+      action: bridge.action,
     })),
   ];
 
   return targets
-    .map((target) => evaluateTarget(target, availableCapabilitySet))
+    .map((target) => evaluateTarget(target, availableCapabilitySet, availablePrerequisiteSet))
     .sort((left, right) => {
       const statusDiff = statusRank(left.status) - statusRank(right.status);
       if (statusDiff) return statusDiff;

@@ -79,4 +79,39 @@ def _load_launcher_env() -> None:
         # Continue to lower-priority sources; setdefault keeps earlier wins.
 
 
+def _normalize_managed_cache_env() -> None:
+    """Make the selected Studio cache authoritative for HF-family caches.
+
+    Direct and external backend launches load the desktop-selected storage
+    paths from ``launcher_env.json``. Hugging Face gives several more-specific
+    variables priority over ``HF_HOME``, so every managed cache variable must
+    be rewritten together after the selected Studio root is known.
+    """
+    cache_root_raw = os.getenv("EDMG_STUDIO_CACHE_DIR", "").strip()
+    if cache_root_raw:
+        cache_root = Path(cache_root_raw).expanduser().resolve()
+    else:
+        studio_home_raw = os.getenv("EDMG_STUDIO_HOME", "").strip()
+        if not studio_home_raw:
+            return
+        cache_root = (Path(studio_home_raw).expanduser().resolve() / "cache").resolve()
+        os.environ["EDMG_STUDIO_CACHE_DIR"] = str(cache_root)
+
+    huggingface_root = cache_root / "huggingface"
+    huggingface_hub = huggingface_root / "hub"
+    huggingface_assets = huggingface_root / "assets"
+    managed = {
+        "HF_HOME": huggingface_root,
+        "HF_HUB_CACHE": huggingface_hub,
+        "HF_XET_CACHE": huggingface_root / "xet",
+        "HF_ASSETS_CACHE": huggingface_assets,
+        "HUGGINGFACE_HUB_CACHE": huggingface_hub,
+        "HUGGINGFACE_ASSETS_CACHE": huggingface_assets,
+        "TRANSFORMERS_CACHE": cache_root / "transformers",
+    }
+    for key, value in managed.items():
+        os.environ[key] = str(value)
+
+
 _load_launcher_env()
+_normalize_managed_cache_env()

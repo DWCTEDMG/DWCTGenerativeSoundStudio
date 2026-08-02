@@ -196,6 +196,48 @@ def test_ensure_data_dir_env_persists_discovered_remount(monkeypatch, tmp_path):
     assert persisted_bootstrap["studioHome"] == str(remapped_home.resolve())
 
 
+def test_persisted_studio_home_overrides_inherited_hugging_face_cache_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launcher_gui = _load_launcher_gui()
+    bootstrap_path = tmp_path / "bootstrap.json"
+    launcher_env_path = tmp_path / "launcher_env.json"
+    selected_home = tmp_path / "selected-studio-home"
+    managed_keys = (
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HF_XET_CACHE",
+        "HF_ASSETS_CACHE",
+        "HUGGINGFACE_HUB_CACHE",
+        "HUGGINGFACE_ASSETS_CACHE",
+        "TRANSFORMERS_CACHE",
+    )
+    for key in managed_keys:
+        monkeypatch.setenv(key, rf"G:\stale-cache\{key}")
+
+    monkeypatch.setattr(launcher_gui, "LAUNCHER_ENV_PATH", launcher_env_path)
+    monkeypatch.setattr(launcher_gui, "_bootstrap_config_path", lambda: bootstrap_path)
+
+    launcher_gui._persist_studio_location(studio_home=selected_home)
+
+    cache = selected_home.resolve() / "cache"
+    huggingface = cache / "huggingface"
+    expected = {
+        "HF_HOME": str(huggingface),
+        "HF_HUB_CACHE": str(huggingface / "hub"),
+        "HF_XET_CACHE": str(huggingface / "xet"),
+        "HF_ASSETS_CACHE": str(huggingface / "assets"),
+        "HUGGINGFACE_HUB_CACHE": str(huggingface / "hub"),
+        "HUGGINGFACE_ASSETS_CACHE": str(huggingface / "assets"),
+        "TRANSFORMERS_CACHE": str(cache / "transformers"),
+    }
+    persisted_env = json.loads(launcher_env_path.read_text(encoding="utf-8"))
+    for key, value in expected.items():
+        assert launcher_gui.os.environ[key] == value
+        assert persisted_env[key] == value
+
+
 def test_launcher_accepts_only_python_312_for_the_locked_backend():
     launcher_gui = _load_launcher_gui()
 

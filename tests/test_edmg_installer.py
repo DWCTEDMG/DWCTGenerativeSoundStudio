@@ -9,6 +9,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "edmg_installer.py"
+INSTALLER_GUI_PATH = REPO_ROOT / "installer_gui.py"
 
 
 def _load_module():
@@ -19,6 +20,29 @@ def _load_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_installer_gui_module():
+    spec = importlib.util.spec_from_file_location(
+        "installer_gui_test_module", INSTALLER_GUI_PATH
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _expected_hugging_face_cache_env(cache_root: Path) -> dict[str, str]:
+    huggingface = cache_root / "huggingface"
+    return {
+        "HF_HOME": str(huggingface),
+        "HF_HUB_CACHE": str(huggingface / "hub"),
+        "HF_XET_CACHE": str(huggingface / "xet"),
+        "HF_ASSETS_CACHE": str(huggingface / "assets"),
+        "HUGGINGFACE_HUB_CACHE": str(huggingface / "hub"),
+        "HUGGINGFACE_ASSETS_CACHE": str(huggingface / "assets"),
+        "TRANSFORMERS_CACHE": str(cache_root / "transformers"),
+    }
 
 
 @pytest.mark.parametrize(
@@ -145,9 +169,15 @@ def test_install_uses_current_python_when_venv_is_disabled(
     ]
 
 
-def test_managed_env_routes_uv_and_python_caches(tmp_path: Path) -> None:
+def test_managed_env_routes_uv_python_and_hugging_face_caches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     module = _load_module()
     cache_root = tmp_path / "cache-root"
+    expected_hugging_face = _expected_hugging_face_cache_env(cache_root)
+    for key in expected_hugging_face:
+        monkeypatch.setenv(key, rf"G:\stale-cache\{key}")
 
     env = module._managed_env(cache_root)
 
@@ -155,3 +185,21 @@ def test_managed_env_routes_uv_and_python_caches(tmp_path: Path) -> None:
     assert env["UV_CACHE_DIR"] == str(cache_root / "uv")
     assert env["UV_PYTHON_INSTALL_DIR"] == str(cache_root / "python")
     assert env["EDMG_UV_INSTALL_ROOT"] == str(cache_root / "toolchain" / "uv")
+    for key, value in expected_hugging_face.items():
+        assert env[key] == value
+
+
+def test_legacy_gui_installer_overrides_inherited_hugging_face_caches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_gui_module()
+    cache_root = tmp_path / "installer-cache"
+    expected = _expected_hugging_face_cache_env(cache_root)
+    for key in expected:
+        monkeypatch.setenv(key, rf"G:\stale-cache\{key}")
+
+    env = module.build_managed_env(cache_root)
+
+    for key, value in expected.items():
+        assert env[key] == value

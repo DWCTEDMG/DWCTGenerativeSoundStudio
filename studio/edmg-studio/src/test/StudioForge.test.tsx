@@ -1,17 +1,18 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import App from "../App";
 import StudioForge from "../pages/StudioForge";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
 const ORIGINAL_STUDIO_FORGE_FLAG = import.meta.env.VITE_EDMG_ENABLE_STUDIO_FORGE;
+const ORIGINAL_STUDIO_FORGE_DISABLE_FLAG = import.meta.env.VITE_EDMG_DISABLE_STUDIO_FORGE;
 
 const READY_STATUS = {
   ollama: {
-    ok: true,
-    model_present: true,
-    model: "qwen3:8b",
+    ok: false,
+    model_present: false,
+    model: "",
     url: "http://127.0.0.1:11434",
   },
   comfyui: {
@@ -29,9 +30,45 @@ const READY_STATUS = {
     available: true,
   },
   ai_config: {
-    label: "Local Ollama",
-    ollama_required: true,
-    model_required: true,
+    label: "Rule-based planner",
+    provider: "rule_based",
+    ollama_required: false,
+    model_required: false,
+  },
+  tasks: [],
+};
+
+const SYSTEM_READINESS = {
+  ok: true,
+  ready: true,
+  status: "ok",
+  summary: "Ready",
+  checks: {
+    ffmpeg: { ok: true, status: "ok", path: "ffmpeg" },
+    runtime: { ok: true, status: "ok" },
+    gpu: { ok: true, status: "ok", device_name: "RTX 4050", vram_gb: 6 },
+    disk: { ok: true, status: "ok" },
+    writable_paths: {
+      ok: true,
+      status: "ok",
+      paths: [
+        { label: "models", path: "D:\\EDMG Studio\\models", writable: true },
+        { label: "cache", path: "D:\\EDMG Studio\\cache", writable: true },
+      ],
+    },
+    models: { ok: true, status: "ok", models_dir: "D:\\EDMG Studio\\models" },
+  },
+};
+
+const PROJECT = {
+  id: "p1",
+  name: "Forge Demo",
+  meta: {
+    audio: { filename: "source.wav", path: "assets/audio/source.wav", duration_s: 8 },
+    analysis: { features: { duration_s: 8, bpm: 124 } },
+    last_plan: {
+      variants: [{ title: "Performance Cut", scenes: [{ id: "scene-1" }] }],
+    },
   },
 };
 
@@ -41,7 +78,19 @@ const FETCH_FIXTURES = {
     projects: [{ id: "p1", name: "Forge Demo" }],
   },
   "/v1/projects/p1": {
-    project: { id: "p1", name: "Forge Demo" },
+    project: PROJECT,
+  },
+  "/v1/projects/p1/outputs": {
+    videos: [{ path: "outputs/videos/forge-demo.mp4" }],
+    images: [],
+    deforum_exports: [{ path: "outputs/deforum/forge-demo.json" }],
+    unreal_exports: [{ path: "outputs/unreal/forge-demo.zip" }],
+    unreal_returns: [{ path: "outputs/unreal/returned.mov" }],
+  },
+  "/v1/projects/p1/jobs": { jobs: [] },
+  "/v1/projects/p1/live_cues/publish/status": {
+    ok: true,
+    publish: { running: true, osc: true, websocket: true, midi: false },
   },
   "/v1/projects/p1/unreal/preview?variant_index=0": {
     ok: true,
@@ -97,67 +146,95 @@ const FETCH_FIXTURES = {
   },
   "/v1/config": {
     ai_mode: "local",
-    ai_provider: "ollama",
-    model: "qwen3:8b",
+    ai_provider: "rule_based",
+    model: "director_lite",
   },
+  "/v1/system/readiness": SYSTEM_READINESS,
   "/v1/setup/status": READY_STATUS,
-  "/v1/comfyui/capabilities": {
+  "/v1/ai/status": {
     ok: true,
+    ai: { ok: true, provider: "rule_based", model: "director_lite" },
+  },
+  "/v1/settings/render_providers": {
+    ok: true,
+    cuda: { available: true, enabled: true, active: true, device_name: "RTX 4050", vram_gb: 6 },
+    directml: { available: false, enabled: false },
+    proxy: { available: true, active: false },
+  },
+  "/v1/comfyui/capabilities": {
+    ok: false,
     nodes: [],
   },
+  "/v1/models/catalog": {
+    catalog: [
+      { id: "hf_sd15_internal", name: "Stable Diffusion 1.5" },
+      { id: "hf_animatediff_motion_adapter_v15_2_internal", name: "AnimateDiff" },
+    ],
+    installed: {
+      hf_sd15_internal: true,
+      hf_animatediff_motion_adapter_v15_2_internal: true,
+    },
+    cloud: {},
+    storage_mode: "local_cache",
+    model_cache: "D:\\EDMG Studio\\cache\\huggingface",
+  },
+  "/v1/models/tasks": { tasks: [] },
 };
 
 describe("Studio Forge", () => {
   afterEach(() => {
     vi.stubEnv("VITE_EDMG_ENABLE_STUDIO_FORGE", ORIGINAL_STUDIO_FORGE_FLAG ?? "");
+    vi.stubEnv("VITE_EDMG_DISABLE_STUDIO_FORGE", ORIGINAL_STUDIO_FORGE_DISABLE_FLAG ?? "");
+    window.localStorage.clear();
     window.history.pushState({}, "", "/");
   });
 
-  it("renders the read-only page shell and template previews", async () => {
+  it("renders truthful runtime, project, recipe, and handoff state", async () => {
+    const onNavigate = vi.fn();
     installEdmgBridge();
     installFetchMock(FETCH_FIXTURES);
 
     renderWithStudio(
-      <StudioForge backendUrl="http://127.0.0.1:7863" config={FETCH_FIXTURES["/v1/config"]} />,
+      <StudioForge
+        backendUrl="http://127.0.0.1:7863"
+        config={FETCH_FIXTURES["/v1/config"]}
+        onNavigate={onNavigate}
+      />,
     );
 
     expect(await screen.findByRole("heading", { name: /Studio Forge/i })).toBeTruthy();
-    expect(screen.getByText(/Read-only preview mode/i)).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /Runtime Recommendations/i })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /Unreal Bridge Previews/i })).toBeTruthy();
-    expect((await screen.findAllByText(/Ready now/i)).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/Render Queue Dashboard/i)).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/Unreal Shot Metadata Export/i)).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/Preview payload/i)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Studio-side 1.0/i)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Runtime Status/i })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Project Readiness/i })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Guided Recipes/i })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Unreal and World Handoffs/i })).toBeTruthy();
     expect(await screen.findByText(/forge_demo_MainSequence/i)).toBeTruthy();
-    expect(await screen.findByText(/Live preview payloads are coming from the active Studio project/i)).toBeTruthy();
-    expect((await screen.findAllByText(/Audio -> Analysis -> AI Plan -> Render -> Assemble/i)).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Developer validation commands only/i)).toBeTruthy();
+    expect((await screen.findAllByText(/Audio ready/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Live publisher running/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Preview details/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Ready now/i)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/never executes shell commands, installers, model downloads, or render jobs/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Review / Live" }));
+    expect(onNavigate).toHaveBeenCalledWith("review");
   });
 
-  it("surfaces setup-needed recommendations when runtime capabilities are missing", async () => {
+  it("surfaces cloud-only models, disabled CUDA, and partial probe failures", async () => {
     installEdmgBridge();
     installFetchMock({
       ...FETCH_FIXTURES,
-      "/v1/setup/status": {
-        ...READY_STATUS,
-        ollama: {
-          ok: false,
-          model_present: false,
-          model: "",
-          url: "http://127.0.0.1:11434",
-        },
-        comfyui: {
-          ok: false,
-          url: "http://127.0.0.1:8188",
-        },
-        ffmpeg: {
-          ok: false,
-          path: "ffmpeg",
-        },
-        edmg: {
-          available: false,
-        },
+      "/v1/settings/render_providers": {
+        ok: true,
+        cuda: { available: true, enabled: false, active: false, device_name: "RTX 4050", vram_gb: 6 },
+        directml: { available: false, enabled: false },
+        proxy: { available: true, active: true },
+      },
+      "/v1/models/catalog": {
+        catalog: [{ id: "hf_sd15_internal", name: "Stable Diffusion 1.5" }],
+        installed: {},
+        cloud: { hf_sd15_internal: { size_bytes: 4_000_000_000 } },
+        storage_mode: "cloud_only",
+        model_cache: "team/cache",
       },
       "/v1/comfyui/capabilities": () => {
         throw new Error("ComfyUI offline");
@@ -168,12 +245,16 @@ describe("Studio Forge", () => {
       <StudioForge backendUrl="http://127.0.0.1:7863" config={FETCH_FIXTURES["/v1/config"]} />,
     );
 
+    expect(await screen.findByText(/stored in team\/cache; restore needed/i)).toBeTruthy();
     expect((await screen.findAllByText(/Setup needed/i)).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/Missing required capabilities/i)).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/Optional boosts not detected/i)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/CUDA is detected but disabled in Settings/i)).toBeTruthy();
+    expect(screen.getByText(/Proxy is a draft fallback, not proof that CUDA model inference works/i)).toBeTruthy();
+    expect(screen.getByText(/comfyCapabilities: ComfyUI offline/i)).toBeTruthy();
   });
 
-  it("falls back to dashboard when direct page access is disabled", async () => {
+  it("falls back to Dashboard only when the explicit opt-out is set", async () => {
+    vi.stubEnv("VITE_EDMG_ENABLE_STUDIO_FORGE", "");
+    vi.stubEnv("VITE_EDMG_DISABLE_STUDIO_FORGE", "1");
     installEdmgBridge();
     installFetchMock(FETCH_FIXTURES);
     window.history.pushState({}, "", "/?page=studioForge");
@@ -184,8 +265,9 @@ describe("Studio Forge", () => {
     expect(screen.queryByRole("button", { name: /Studio Forge/i })).toBeNull();
   });
 
-  it("enables direct page access and labs navigation when the flag is on", async () => {
-    vi.stubEnv("VITE_EDMG_ENABLE_STUDIO_FORGE", "1");
+  it("enables direct page access and navigation by default", async () => {
+    vi.stubEnv("VITE_EDMG_ENABLE_STUDIO_FORGE", "");
+    vi.stubEnv("VITE_EDMG_DISABLE_STUDIO_FORGE", "");
     installEdmgBridge();
     installFetchMock(FETCH_FIXTURES);
     window.history.pushState({}, "", "/?page=studioForge");

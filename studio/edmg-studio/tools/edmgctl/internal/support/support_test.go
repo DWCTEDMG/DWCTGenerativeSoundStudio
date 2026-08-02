@@ -103,6 +103,47 @@ func TestBuildManagedBackendEnvIncludesCoreKeys(t *testing.T) {
 	}
 }
 
+func TestBuildManagedBackendEnvOverridesInheritedHuggingFaceCaches(t *testing.T) {
+	managedKeys := []string{
+		"HF_HOME",
+		"HF_HUB_CACHE",
+		"HF_XET_CACHE",
+		"HF_ASSETS_CACHE",
+		"HUGGINGFACE_HUB_CACHE",
+		"HUGGINGFACE_ASSETS_CACHE",
+		"TRANSFORMERS_CACHE",
+	}
+	for _, key := range managedKeys {
+		t.Setenv(key, `G:\stale-cache\`+key)
+	}
+
+	paths := DefaultStoragePaths(filepath.Join(t.TempDir(), "selected-studio-home"))
+	flattened := BuildManagedBackendEnv(BootstrapConfig{}, paths, "127.0.0.1", 7863, "")
+	env := make(map[string]string, len(flattened))
+	for _, raw := range flattened {
+		key, value, found := strings.Cut(raw, "=")
+		if found {
+			env[key] = value
+		}
+	}
+
+	huggingFaceRoot := filepath.Join(paths.CacheRoot, "huggingface")
+	expected := map[string]string{
+		"HF_HOME":                  huggingFaceRoot,
+		"HF_HUB_CACHE":             filepath.Join(huggingFaceRoot, "hub"),
+		"HF_XET_CACHE":             filepath.Join(huggingFaceRoot, "xet"),
+		"HF_ASSETS_CACHE":          filepath.Join(huggingFaceRoot, "assets"),
+		"HUGGINGFACE_HUB_CACHE":    filepath.Join(huggingFaceRoot, "hub"),
+		"HUGGINGFACE_ASSETS_CACHE": filepath.Join(huggingFaceRoot, "assets"),
+		"TRANSFORMERS_CACHE":       filepath.Join(paths.CacheRoot, "transformers"),
+	}
+	for key, value := range expected {
+		if env[key] != value {
+			t.Fatalf("expected %s=%q, got %q", key, value, env[key])
+		}
+	}
+}
+
 func TestCompareArtifactSetsMatch(t *testing.T) {
 	expected := []ArtifactStatus{
 		{Label: "backend bundle", Path: `D:\out\backend.exe`, Exists: true, Size: 10, SHA256: "abc"},

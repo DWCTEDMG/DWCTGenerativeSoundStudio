@@ -71,6 +71,16 @@ cd "$(dirname "$0")"
 source ./uv_toolchain.sh
 UV_BIN="$(edmg_require_uv)"
 PROFILE={profile}
+export EDMG_STUDIO_HOME="${{EDMG_STUDIO_HOME:-${{HOME}}/edmg-studio-home}}"
+export EDMG_STUDIO_CACHE_DIR="${{EDMG_STUDIO_CACHE_DIR:-${{EDMG_STUDIO_HOME}}/cache}}"
+export HF_HOME="${{EDMG_STUDIO_CACHE_DIR}}/huggingface"
+export HF_HUB_CACHE="${{HF_HOME}}/hub"
+export HF_XET_CACHE="${{HF_HOME}}/xet"
+export HF_ASSETS_CACHE="${{HF_HOME}}/assets"
+export HUGGINGFACE_HUB_CACHE="${{HF_HUB_CACHE}}"
+export HUGGINGFACE_ASSETS_CACHE="${{HF_ASSETS_CACHE}}"
+export TRANSFORMERS_CACHE="${{EDMG_STUDIO_CACHE_DIR}}/transformers"
+mkdir -p "${{HF_HUB_CACHE}}" "${{HF_XET_CACHE}}" "${{HF_ASSETS_CACHE}}" "${{TRANSFORMERS_CACHE}}"
 "${{UV_BIN}}" python install 3.12
 "${{UV_BIN}}" lock --check
 "${{UV_BIN}}" sync --frozen \\

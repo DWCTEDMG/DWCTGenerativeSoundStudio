@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { apiGet } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
@@ -11,38 +11,62 @@ import {
   type StudioForgeRecommendationStatus,
 } from "../studio-forge/recommendations";
 import { STUDIO_FORGE_RECIPES } from "../studio-forge/recipes";
+import {
+  deriveStudioForgeProject,
+  deriveStudioForgeRuntime,
+  evaluateStudioForgeRecipeStages,
+  STUDIO_FORGE_CAPABILITY_LABELS,
+  STUDIO_FORGE_PREREQUISITE_LABELS,
+  type StudioForgeRecipeStageState,
+  type StudioForgeStatusCard,
+  type StudioForgeStatusLevel,
+} from "../studio-forge/runtimeStatus";
 import { STUDIO_FORGE_TEMPLATES } from "../studio-forge/templates";
 import type {
   StudioForgeBridge,
   StudioForgeBridgeTransport,
   StudioForgeCapability,
+  StudioForgeDestination,
+  StudioForgePrerequisite,
   StudioForgeRecipe,
   StudioForgeTemplate,
 } from "../studio-forge/types";
 import type { PageProps } from "../types/pageProps";
 
-type RuntimeStatus = "available" | "missing" | "optional" | "required" | "unknown" | "error";
-type BadgeStatus = RuntimeStatus | "preview";
-type StudioForgeSectionId = "runtime" | "recommendations" | "templates" | "recipes" | "bridges" | "validation";
+type BadgeStatus = StudioForgeStatusLevel | "supported" | "preview";
+type StudioForgeSectionId =
+  | "runtime"
+  | "project"
+  | "recommendations"
+  | "templates"
+  | "recipes"
+  | "bridges"
+  | "validation";
 
-type RuntimeCard = {
-  id: string;
-  label: string;
-  role: string;
-  status: RuntimeStatus;
-  detail: string;
-  impact: string;
-};
+type RuntimeProbeKey =
+  | "health"
+  | "systemReadiness"
+  | "setupStatus"
+  | "backendConfig"
+  | "aiStatus"
+  | "renderProviders"
+  | "comfyCapabilities"
+  | "modelCatalog"
+  | "modelTasks";
 
-const CAPABILITY_LABELS: Record<StudioForgeCapability, string> = {
-  backend: "Backend",
-  ollama: "Ollama",
-  openaiCompatible: "OpenAI-Compatible",
-  comfyui: "ComfyUI",
-  ffmpeg: "FFmpeg",
-  internalRenderer: "Internal Renderer",
-  edmgCore: "EDMG Core",
-};
+type ProjectProbeKey = "project" | "outputs" | "jobs" | "unrealPreview" | "livePublishStatus";
+
+const RUNTIME_PROBES: Array<{ key: RuntimeProbeKey; path: string; timeoutMs: number }> = [
+  { key: "health", path: "/health", timeoutMs: 8_000 },
+  { key: "systemReadiness", path: "/v1/system/readiness", timeoutMs: 20_000 },
+  { key: "setupStatus", path: "/v1/setup/status", timeoutMs: 30_000 },
+  { key: "backendConfig", path: "/v1/config", timeoutMs: 10_000 },
+  { key: "aiStatus", path: "/v1/ai/status", timeoutMs: 12_000 },
+  { key: "renderProviders", path: "/v1/settings/render_providers", timeoutMs: 15_000 },
+  { key: "comfyCapabilities", path: "/v1/comfyui/capabilities", timeoutMs: 10_000 },
+  { key: "modelCatalog", path: "/v1/models/catalog", timeoutMs: 30_000 },
+  { key: "modelTasks", path: "/v1/models/tasks", timeoutMs: 10_000 },
+];
 
 const VALIDATION_COMMANDS = [
   "pnpm run typecheck",
@@ -50,7 +74,6 @@ const VALIDATION_COMMANDS = [
   "pnpm run test:ui",
   "pnpm run build",
   "pnpm run validate:desktop",
-  "pnpm run build:electron",
   "pnpm run dist:win",
   "pnpm run dist:linux",
 ];
@@ -63,26 +86,41 @@ const BRIDGE_TRANSPORT_LABELS: Record<StudioForgeBridgeTransport, string> = {
   remoteControl: "Remote Control",
 };
 
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error ?? "Unknown error");
+}
+
 function statusStyle(status: BadgeStatus): React.CSSProperties {
+  if (status === "supported") {
+    return { background: "#15352e", border: "1px solid #286a5a", color: "#b9ffe7" };
+  }
   if (status === "preview") {
     return { background: "#24163a", border: "1px solid #47305f", color: "#dcc2ff" };
   }
-  if (status === "available") {
+  if (status === "ready") {
     return { background: "#163a1f", border: "1px solid #245b32", color: "#b7ffcb" };
   }
-  if (status === "missing" || status === "error") {
+  if (status === "running") {
+    return { background: "#16283a", border: "1px solid #2c5c82", color: "#b7dcff" };
+  }
+  if (status === "blocked") {
     return { background: "#3a1616", border: "1px solid #5b2424", color: "#ffb7b7" };
   }
-  if (status === "optional") {
-    return { background: "#16283a", border: "1px solid #24415b", color: "#b7dcff" };
-  }
-  if (status === "required") {
+  if (status === "degraded") {
     return { background: "#3a3116", border: "1px solid #5b4d24", color: "#ffe6a0" };
   }
   return { background: "#232530", border: "1px solid #363a4a", color: "#d2d7ea" };
 }
 
 function statusLabel(status: BadgeStatus): string {
+  if (status === "supported") return "Supported path";
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
@@ -96,6 +134,7 @@ function StatusBadge({ status, label }: { status: BadgeStatus; label?: string })
         fontWeight: 800,
         letterSpacing: 0.3,
         padding: "4px 10px",
+        whiteSpace: "nowrap",
       }}
     >
       {label ?? statusLabel(status)}
@@ -113,100 +152,137 @@ function CapabilityList({
   return (
     <div className="small" style={{ display: "grid", gap: 4 }}>
       <div style={{ fontWeight: 800 }}>{label}</div>
-      <div>{capabilities.map((capability) => CAPABILITY_LABELS[capability]).join(", ")}</div>
+      <div>{capabilities.map((capability) => STUDIO_FORGE_CAPABILITY_LABELS[capability]).join(", ")}</div>
     </div>
   );
 }
 
-function TemplateCard({ template }: { template: StudioForgeTemplate }) {
+function PrerequisiteList({
+  label,
+  prerequisites,
+}: {
+  label: string;
+  prerequisites: StudioForgePrerequisite[];
+}) {
+  return (
+    <div className="small" style={{ display: "grid", gap: 4 }}>
+      <div style={{ fontWeight: 800 }}>{label}</div>
+      <div>{prerequisites.map((item) => STUDIO_FORGE_PREREQUISITE_LABELS[item]).join(", ")}</div>
+    </div>
+  );
+}
+
+function RuntimeCard({ card }: { card: StudioForgeStatusCard }) {
   return (
     <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
         <div>
-          <div className="timeline-kicker">Template Preview</div>
+          <div className="timeline-kicker">{card.role}</div>
+          <div style={{ fontWeight: 900 }}>{card.label}</div>
+        </div>
+        <StatusBadge status={card.status} />
+      </div>
+      <div className="small" style={{ marginTop: 10 }}>{card.detail}</div>
+      <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>{card.impact}</div>
+    </div>
+  );
+}
+
+function TemplateCard({
+  template,
+  onNavigate,
+}: {
+  template: StudioForgeTemplate;
+  onNavigate?: (destination: StudioForgeDestination) => void;
+}) {
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <div>
+          <div className="timeline-kicker">Studio Surface</div>
           <div style={{ fontWeight: 900 }}>{template.name}</div>
         </div>
         <StatusBadge status={template.status} />
       </div>
-      <div className="small" style={{ marginTop: 8 }}>
-        {template.description}
-      </div>
+      <div className="small" style={{ marginTop: 8 }}>{template.description}</div>
       <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
         <div className="small">Kind: <b>{template.kind}</b></div>
         <CapabilityList label="Required capabilities" capabilities={template.requiredCapabilities} />
+        {template.requiredPrerequisites?.length ? (
+          <PrerequisiteList label="Project requirements" prerequisites={template.requiredPrerequisites} />
+        ) : null}
         {template.optionalCapabilities?.length ? (
-          <CapabilityList label="Optional capabilities" capabilities={template.optionalCapabilities} />
+          <CapabilityList label="Optional boosts" capabilities={template.optionalCapabilities} />
         ) : null}
-        <div className="small">Execution: read-only preview only</div>
+        <button className="secondary" onClick={() => onNavigate?.(template.action.destination)}>
+          {template.action.label}
+        </button>
       </div>
     </div>
   );
 }
 
-function RecipeCard({ recipe }: { recipe: StudioForgeRecipe }) {
-  return (
-    <div className="card">
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-        <div>
-          <div className="timeline-kicker">Workflow Recipe</div>
-          <div style={{ fontWeight: 900 }}>{recipe.name}</div>
-        </div>
-        <StatusBadge status={recipe.status} />
-      </div>
-      <div className="small" style={{ marginTop: 8 }}>
-        {recipe.description}
-      </div>
-      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-        <div className="small">
-          Flow: <b>{recipe.stages.join(" -> ")}</b>
-        </div>
-        <CapabilityList label="Required capabilities" capabilities={recipe.requiredCapabilities} />
-        {recipe.optionalCapabilities?.length ? (
-          <CapabilityList label="Optional capabilities" capabilities={recipe.optionalCapabilities} />
-        ) : null}
-        <div className="small">Execution: preview only, no writes or runtime control</div>
-      </div>
-    </div>
-  );
+function stageStatus(stageState: StudioForgeRecipeStageState): StudioForgeStatusLevel {
+  if (stageState.state === "complete") return "ready";
+  if (stageState.state === "current") return "degraded";
+  return "blocked";
 }
 
-function BridgeCard({
-  bridge,
-  previewPayload,
+function RecipeDetail({
+  recipe,
+  capabilities,
+  prerequisites,
+  onNavigate,
 }: {
-  bridge: StudioForgeBridge;
-  previewPayload?: Record<string, unknown> | null;
+  recipe: StudioForgeRecipe;
+  capabilities: StudioForgeCapability[];
+  prerequisites: StudioForgePrerequisite[];
+  onNavigate?: (destination: StudioForgeDestination) => void;
 }) {
-  const payload = previewPayload ?? bridge.previewPayload;
+  const stages = evaluateStudioForgeRecipeStages(recipe, capabilities, prerequisites);
+  const current = stages.find((stage) => stage.state === "current");
+  const allComplete = stages.every((stage) => stage.state === "complete");
+  const action = current?.stage
+    ? { label: `Continue: ${current.stage.label}`, destination: current.stage.destination }
+    : recipe.action;
+
   return (
     <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
         <div>
-          <div className="timeline-kicker">Unreal Bridge Preview</div>
-          <div style={{ fontWeight: 900 }}>{bridge.name}</div>
+          <div className="timeline-kicker">Guided Workflow</div>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>{recipe.name}</div>
         </div>
-        <StatusBadge status={bridge.status} />
+        <StatusBadge status={allComplete ? "ready" : recipe.status} label={allComplete ? "Complete" : undefined} />
       </div>
-      <div className="small" style={{ marginTop: 8 }}>
-        {bridge.description}
-      </div>
-      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-        <div className="small">
-          Transport: <b>{bridge.transports.map((transport) => BRIDGE_TRANSPORT_LABELS[transport]).join(" -> ")}</b>
-        </div>
-        <div className="small">
-          Outputs: <b>{bridge.outputs.join(", ")}</b>
-        </div>
-        <CapabilityList label="Required capabilities" capabilities={bridge.requiredCapabilities} />
-        {bridge.optionalCapabilities?.length ? (
-          <CapabilityList label="Optional capabilities" capabilities={bridge.optionalCapabilities} />
-        ) : null}
-        <div>
-          <div className="small" style={{ fontWeight: 800, marginBottom: 8 }}>Preview payload</div>
-          <StructuredSummary value={payload} showJson maxItems={12} />
-        </div>
-        <div className="small">{bridge.limitations}</div>
-      </div>
+      <div className="small" style={{ marginTop: 8 }}>{recipe.description}</div>
+      <ol style={{ display: "grid", gap: 10, margin: "16px 0 0", paddingLeft: 22 }}>
+        {stages.map((stageState) => (
+          <li key={stageState.stage.id} style={{ paddingLeft: 4 }}>
+            <div style={{ display: "flex", gap: 10, justifyContent: "space-between", alignItems: "center" }}>
+              <b>{stageState.stage.label}</b>
+              <StatusBadge
+                status={stageStatus(stageState)}
+                label={stageState.state === "complete" ? "Complete" : stageState.state === "current" ? "Next" : "Waiting"}
+              />
+            </div>
+            <div className="small" style={{ marginTop: 4 }}>{stageState.stage.description}</div>
+            {stageState.state !== "complete" && stageState.missingCapabilities.length ? (
+              <div className="small" style={{ marginTop: 4 }}>
+                Needs capability: {stageState.missingCapabilities.map((item) => STUDIO_FORGE_CAPABILITY_LABELS[item]).join(" or ")}
+              </div>
+            ) : null}
+            {stageState.state !== "complete" && stageState.missingPrerequisites.length ? (
+              <div className="small" style={{ marginTop: 4 }}>
+                Needs project state: {stageState.missingPrerequisites.map((item) => STUDIO_FORGE_PREREQUISITE_LABELS[item]).join(", ")}
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+      <button style={{ marginTop: 16 }} onClick={() => onNavigate?.(action.destination)}>
+        {allComplete ? recipe.action.label : action.label}
+      </button>
     </div>
   );
 }
@@ -214,35 +290,17 @@ function BridgeCard({
 function recommendationBadgeStatus(
   status: StudioForgeRecommendationStatus,
 ): { badge: BadgeStatus; label: string } {
-  if (status === "ready") return { badge: "available", label: "Ready now" };
-  if (status === "optionalBoost") return { badge: "optional", label: "Optional boosts" };
-  return { badge: "missing", label: "Setup needed" };
-}
-
-function formatCapabilityList(
-  capabilities: StudioForgeCapability[],
-  capabilityLabels: Record<StudioForgeCapability, string>,
-): string {
-  return capabilities.map((capability) => capabilityLabels[capability]).join(", ");
-}
-
-function recommendationSummary(
-  recommendation: StudioForgeRecommendation,
-  capabilityLabels: Record<StudioForgeCapability, string>,
-): string {
-  if (recommendation.status === "ready") {
-    return "Ready with the currently detected runtime stack.";
-  }
-  if (recommendation.status === "optionalBoost") {
-    return `Ready now. Optional boosts not detected: ${formatCapabilityList(recommendation.missingOptional, capabilityLabels)}.`;
-  }
-  return `Needs before previewing a live path: ${formatCapabilityList(recommendation.missingRequired, capabilityLabels)}.`;
+  if (status === "ready") return { badge: "ready", label: "Ready now" };
+  if (status === "optionalBoost") return { badge: "degraded", label: "Optional boosts" };
+  return { badge: "blocked", label: "Setup needed" };
 }
 
 function RecommendationCard({
   recommendation,
+  onNavigate,
 }: {
   recommendation: StudioForgeRecommendation;
+  onNavigate?: (destination: StudioForgeDestination) => void;
 }) {
   const badge = recommendationBadgeStatus(recommendation.status);
   return (
@@ -254,286 +312,251 @@ function RecommendationCard({
         </div>
         <StatusBadge status={badge.badge} label={badge.label} />
       </div>
-      <div className="small" style={{ marginTop: 8 }}>
-        {recommendation.description}
-      </div>
+      <div className="small" style={{ marginTop: 8 }}>{recommendation.description}</div>
       <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-        <div className="small">{recommendationSummary(recommendation, CAPABILITY_LABELS)}</div>
         {recommendation.missingRequired.length ? (
-          <CapabilityList
-            label="Missing required capabilities"
-            capabilities={recommendation.missingRequired}
-          />
-        ) : (
-          <div className="small">All required capabilities are currently detected.</div>
-        )}
+          <CapabilityList label="Missing required capabilities" capabilities={recommendation.missingRequired} />
+        ) : null}
+        {recommendation.missingPrerequisites.length ? (
+          <PrerequisiteList label="Missing project requirements" prerequisites={recommendation.missingPrerequisites} />
+        ) : null}
         {recommendation.missingOptional.length ? (
-          <CapabilityList
-            label="Optional boosts not detected"
-            capabilities={recommendation.missingOptional}
-          />
-        ) : (
-          <div className="small">No optional capability gaps for this preview.</div>
-        )}
+          <CapabilityList label="Optional boosts not detected" capabilities={recommendation.missingOptional} />
+        ) : null}
+        {!recommendation.missingRequired.length && !recommendation.missingPrerequisites.length ? (
+          <div className="small">All required runtime and project conditions are currently present.</div>
+        ) : null}
+        <button className="secondary" onClick={() => onNavigate?.(recommendation.action.destination)}>
+          {recommendation.action.label}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BridgeCard({
+  bridge,
+  previewPayload,
+  hasProject,
+  hasPlan,
+  hasAnalysis,
+  onNavigate,
+}: {
+  bridge: StudioForgeBridge;
+  previewPayload?: Record<string, unknown> | null;
+  hasProject: boolean;
+  hasPlan: boolean;
+  hasAnalysis: boolean;
+  onNavigate?: (destination: StudioForgeDestination) => void;
+}) {
+  const payload = previewPayload ?? bridge.previewPayload;
+  const requiresPlan = bridge.requiredPrerequisites?.includes("plan");
+  const requiresAnalysis = bridge.requiredPrerequisites?.includes("analysis");
+  const prepareFirst = !hasProject || (requiresPlan && !hasPlan) || (requiresAnalysis && !hasAnalysis);
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <div>
+          <div className="timeline-kicker">Unreal / World Handoff</div>
+          <div style={{ fontWeight: 900 }}>{bridge.name}</div>
+        </div>
+        <StatusBadge status={bridge.status} />
+      </div>
+      <div className="small" style={{ marginTop: 8 }}>{bridge.description}</div>
+      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+        <div className="small">
+          Transport: <b>{bridge.transports.map((transport) => BRIDGE_TRANSPORT_LABELS[transport]).join(" • ")}</b>
+        </div>
+        <div className="small">Outputs: <b>{bridge.outputs.join(", ")}</b></div>
+        <div>
+          <div className="small" style={{ fontWeight: 800, marginBottom: 8 }}>Preview details</div>
+          <StructuredSummary value={payload} showJson maxItems={12} />
+        </div>
+        <div className="small">{bridge.limitations}</div>
+        <button
+          className="secondary"
+          onClick={() => onNavigate?.(prepareFirst ? "workspace" : bridge.action.destination)}
+        >
+          {prepareFirst ? "Prepare project in Workspace" : bridge.action.label}
+        </button>
       </div>
     </div>
   );
 }
 
 export default function StudioForge({ backendUrl, config, onNavigate }: PageProps) {
-  const { projectId, selectedVariant } = useStudioWorkbenchProject();
-  const [health, setHealth] = useState<any>(null);
-  const [healthError, setHealthError] = useState<string>("");
-  const [setupStatus, setSetupStatus] = useState<any>(null);
-  const [setupError, setSetupError] = useState<string>("");
-  const [backendConfig, setBackendConfig] = useState<any>(null);
-  const [backendConfigError, setBackendConfigError] = useState<string>("");
-  const [comfyCapabilities, setComfyCapabilities] = useState<any>(null);
-  const [comfyError, setComfyError] = useState<string>("");
-  const [unrealPreview, setUnrealPreview] = useState<any>(null);
-  const [unrealPreviewError, setUnrealPreviewError] = useState<string>("");
+  const {
+    projects,
+    projectId,
+    setProjectId,
+    selectedVariant,
+    setSelectedVariant,
+    project: workbenchProject,
+  } = useStudioWorkbenchProject();
+  const [runtimePayloads, setRuntimePayloads] = useState<Partial<Record<RuntimeProbeKey, unknown>>>({});
+  const [runtimeErrors, setRuntimeErrors] = useState<Partial<Record<RuntimeProbeKey, string>>>({});
+  const [runtimeLoading, setRuntimeLoading] = useState(true);
+  const [projectPayloads, setProjectPayloads] = useState<Partial<Record<ProjectProbeKey, unknown>>>({});
+  const [projectErrors, setProjectErrors] = useState<Partial<Record<ProjectProbeKey, string>>>({});
+  const [projectLoading, setProjectLoading] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [selectedRecipeId, setSelectedRecipeId] = useState(STUDIO_FORGE_RECIPES[0]?.id ?? "");
 
   useEffect(() => {
-    if (!backendUrl) return;
+    if (!backendUrl) {
+      setRuntimeLoading(false);
+      setRuntimeErrors({ health: "No Studio backend URL is configured." });
+      return;
+    }
+    const controller = new AbortController();
     let alive = true;
+    setRuntimeLoading(true);
 
-    const load = async (
-      path: string,
-      onSuccess: (value: any) => void,
-      onError: (message: string) => void,
-    ) => {
-      try {
-        const value = await apiGet(path);
-        if (!alive) return;
-        onSuccess(value);
-        onError("");
-      } catch (error: any) {
-        if (!alive) return;
-        onError(String(error?.message ?? error));
+    void Promise.all(
+      RUNTIME_PROBES.map(async (probe) => {
+        try {
+          const value = await apiGet(probe.path, { signal: controller.signal, timeoutMs: probe.timeoutMs });
+          return { key: probe.key, value, error: "" };
+        } catch (error) {
+          return { key: probe.key, value: undefined, error: errorMessage(error) };
+        }
+      }),
+    ).then((results) => {
+      if (!alive) return;
+      const values: Partial<Record<RuntimeProbeKey, unknown>> = {};
+      const errors: Partial<Record<RuntimeProbeKey, string>> = {};
+      for (const result of results) {
+        if (result.value !== undefined) values[result.key] = result.value;
+        if (result.error) errors[result.key] = result.error;
       }
-    };
-
-    void load("/health", setHealth, setHealthError);
-    void load("/v1/config", setBackendConfig, setBackendConfigError);
-    void load("/v1/setup/status", setSetupStatus, setSetupError);
-    void load("/v1/comfyui/capabilities", setComfyCapabilities, setComfyError);
+      setRuntimePayloads(values);
+      setRuntimeErrors(errors);
+      setRuntimeLoading(false);
+    });
 
     return () => {
       alive = false;
+      controller.abort();
     };
-  }, [backendUrl]);
+  }, [backendUrl, refreshVersion]);
 
   useEffect(() => {
     if (!backendUrl || !projectId) {
-      setUnrealPreview(null);
-      setUnrealPreviewError("");
+      setProjectPayloads({});
+      setProjectErrors({});
+      setProjectLoading(false);
       return;
     }
+    const controller = new AbortController();
     let alive = true;
-    apiGet(`/v1/projects/${projectId}/unreal/preview?variant_index=${selectedVariant}`)
-      .then((value) => {
-        if (!alive) return;
-        setUnrealPreview(value?.preview ?? null);
-        setUnrealPreviewError("");
-      })
-      .catch((error: any) => {
-        if (!alive) return;
-        setUnrealPreview(null);
-        setUnrealPreviewError(String(error?.message ?? error));
-      });
+    setProjectLoading(true);
+
+    const probes: Array<{ key: ProjectProbeKey; path: string; timeoutMs: number; select?: (value: unknown) => unknown }> = [
+      { key: "project", path: `/v1/projects/${projectId}`, timeoutMs: 15_000, select: (value) => objectValue(value).project },
+      { key: "outputs", path: `/v1/projects/${projectId}/outputs`, timeoutMs: 20_000 },
+      { key: "jobs", path: `/v1/projects/${projectId}/jobs`, timeoutMs: 12_000 },
+      {
+        key: "unrealPreview",
+        path: `/v1/projects/${projectId}/unreal/preview?variant_index=${selectedVariant}`,
+        timeoutMs: 15_000,
+        select: (value) => objectValue(value).preview,
+      },
+      { key: "livePublishStatus", path: `/v1/projects/${projectId}/live_cues/publish/status`, timeoutMs: 10_000 },
+    ];
+
+    void Promise.all(
+      probes.map(async (probe) => {
+        try {
+          const response = await apiGet(probe.path, { signal: controller.signal, timeoutMs: probe.timeoutMs });
+          return { key: probe.key, value: probe.select ? probe.select(response) : response, error: "" };
+        } catch (error) {
+          return { key: probe.key, value: undefined, error: errorMessage(error) };
+        }
+      }),
+    ).then((results) => {
+      if (!alive) return;
+      const values: Partial<Record<ProjectProbeKey, unknown>> = {};
+      const errors: Partial<Record<ProjectProbeKey, string>> = {};
+      for (const result of results) {
+        if (result.value !== undefined) values[result.key] = result.value;
+        if (result.error) errors[result.key] = result.error;
+      }
+      setProjectPayloads(values);
+      setProjectErrors(errors);
+      setProjectLoading(false);
+    });
+
     return () => {
       alive = false;
+      controller.abort();
     };
-  }, [backendUrl, projectId, selectedVariant]);
+  }, [backendUrl, projectId, refreshVersion, selectedVariant]);
 
-  const aiConfig = setupStatus?.ai_config ?? {};
-  const activeConfig = backendConfig ?? config ?? {};
-  const ollamaRequired = !!aiConfig?.ollama_required;
-  const modelRequired = !!aiConfig?.model_required;
-  const backendBundleOk = !!setupStatus?.backend_bundle?.ok;
-  const ffmpegOk = !!setupStatus?.ffmpeg?.ok;
-  const ollamaOk = !!setupStatus?.ollama?.ok;
-  const modelOk = !modelRequired || !!setupStatus?.ollama?.model_present;
-  const setupReady = backendBundleOk && ffmpegOk && (!ollamaRequired || (ollamaOk && modelOk));
-  const missingSetupParts = [
-    !backendBundleOk ? "backend bundle" : null,
-    !ffmpegOk ? "FFmpeg" : null,
-    ollamaRequired && !ollamaOk ? "Ollama" : null,
-    modelRequired && !modelOk ? "default model" : null,
-  ].filter(Boolean);
+  const runtime = useMemo(
+    () => deriveStudioForgeRuntime({
+      ...runtimePayloads,
+      backendConfig: runtimePayloads.backendConfig ?? config,
+    }),
+    [config, runtimePayloads],
+  );
+  const projectReadiness = useMemo(
+    () => deriveStudioForgeProject({
+      projectId,
+      project: projectPayloads.project ?? workbenchProject,
+      selectedVariant,
+      outputs: projectPayloads.outputs,
+      jobs: projectPayloads.jobs,
+      unrealPreview: projectPayloads.unrealPreview,
+      livePublishStatus: projectPayloads.livePublishStatus,
+    }),
+    [projectId, projectPayloads, selectedVariant, workbenchProject],
+  );
 
-  const ollamaUrl = String(setupStatus?.ollama?.url ?? "http://127.0.0.1:11434");
-  const ollamaModel = String(
-    setupStatus?.ollama?.model ??
-    activeConfig?.ai_model ??
-    activeConfig?.model ??
-    aiConfig?.model ??
-    "",
-  ).trim();
-  const comfyUrl = String(setupStatus?.comfyui?.url ?? "http://127.0.0.1:8188");
-  const comfyConfigured = !!setupStatus?.comfyui?.ok;
-  const comfyAvailable = !comfyError && !!comfyCapabilities;
-  const ffmpegPath = String(setupStatus?.ffmpeg?.path ?? "ffmpeg");
-  const edmgAvailable = !!setupStatus?.edmg?.available;
-  const activeAiProvider = String(
-    activeConfig?.ai_provider ??
-    activeConfig?.provider ??
-    aiConfig?.provider ??
-    "",
-  ).toLowerCase();
-  const activeAiMode = String(activeConfig?.ai_mode ?? activeConfig?.mode ?? "").toLowerCase();
-  const openaiCompatibleConfigured = activeAiProvider === "openai_compat" || activeAiMode === "openai_compat";
+  useEffect(() => {
+    if (projectReadiness.variantCount > 0 && !projectReadiness.selectedVariantValid) {
+      setSelectedVariant(0);
+    }
+  }, [projectReadiness.selectedVariantValid, projectReadiness.variantCount, setSelectedVariant]);
 
-  const availableCapabilities = useMemo<StudioForgeCapability[]>(() => {
-    const capabilities: StudioForgeCapability[] = [];
-    if (health?.ok && !healthError) capabilities.push("backend");
-    if (backendBundleOk && !setupError) capabilities.push("internalRenderer");
-    if (ffmpegOk && !setupError) capabilities.push("ffmpeg");
-    if (ollamaOk && !setupError && (!ollamaRequired || modelOk)) capabilities.push("ollama");
-    if (openaiCompatibleConfigured) capabilities.push("openaiCompatible");
-    if (comfyAvailable) capabilities.push("comfyui");
-    if (edmgAvailable) capabilities.push("edmgCore");
-    return capabilities;
-  }, [
-    backendBundleOk,
-    comfyAvailable,
-    edmgAvailable,
-    ffmpegOk,
-    health?.ok,
-    healthError,
-    modelOk,
-    ollamaOk,
-    ollamaRequired,
-    openaiCompatibleConfigured,
-    setupError,
-  ]);
+  useEffect(() => {
+    if (!runtime.activeTaskCount && !projectReadiness.projectActiveTaskCount) return;
+    const timeout = window.setTimeout(() => setRefreshVersion((value) => value + 1), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [projectReadiness.projectActiveTaskCount, refreshVersion, runtime.activeTaskCount]);
+
   const recommendations = useMemo(
-    () =>
-      buildStudioForgeRecommendations({
-        bridges: STUDIO_FORGE_BRIDGES,
-        templates: STUDIO_FORGE_TEMPLATES,
-        recipes: STUDIO_FORGE_RECIPES,
-        availableCapabilities,
-      }),
-    [availableCapabilities],
+    () => buildStudioForgeRecommendations({
+      bridges: STUDIO_FORGE_BRIDGES,
+      templates: STUDIO_FORGE_TEMPLATES,
+      recipes: STUDIO_FORGE_RECIPES,
+      availableCapabilities: runtime.capabilities,
+      availablePrerequisites: projectReadiness.prerequisites,
+    }),
+    [projectReadiness.prerequisites, runtime.capabilities],
   );
-  const liveBridgePreviewById = useMemo<Record<string, Record<string, unknown>>>(
-    () =>
-      unrealPreview
-        ? {
-            "unreal-shot-metadata-export": unrealPreview.shot_metadata_export as Record<string, unknown>,
-            "unreal-render-handoff": unrealPreview.render_handoff as Record<string, unknown>,
-            "unreal-live-control-bridge": unrealPreview.live_control_bridge as Record<string, unknown>,
-          }
-        : {},
-    [unrealPreview],
-  );
+  const selectedRecipe = STUDIO_FORGE_RECIPES.find((recipe) => recipe.id === selectedRecipeId)
+    ?? STUDIO_FORGE_RECIPES[0];
+  const unrealPreview = objectValue(projectPayloads.unrealPreview);
+  const liveBridgePreviewById = useMemo<Record<string, Record<string, unknown>>>(() => ({
+    "unreal-shot-metadata-export": objectValue(unrealPreview.shot_metadata_export),
+    "unreal-render-handoff": objectValue(unrealPreview.render_handoff),
+    "unreal-live-control-bridge": objectValue(unrealPreview.live_control_bridge),
+  }), [unrealPreview]);
 
-  const runtimeCards: RuntimeCard[] = [
-    {
-      id: "backend",
-      label: "Backend",
-      role: "Required",
-      status: healthError ? "error" : health?.ok ? "available" : "unknown",
-      detail: healthError || backendUrl,
-      impact: "Local FastAPI services remain the source of truth for project, setup, and render operations.",
-    },
-    {
-      id: "setup",
-      label: "Setup Wizard",
-      role: "Required",
-      status: setupError ? "error" : setupStatus ? (setupReady ? "available" : "missing") : "unknown",
-      detail: setupError || (
-        setupReady
-          ? "Backend bundle, FFmpeg, and the active AI path are ready."
-          : `Still needs ${missingSetupParts.join(", ")}.`
-      ),
-      impact: "Studio Forge reads setup health only; the existing Setup page remains the only place for installs and repair.",
-    },
-    {
-      id: "ollama",
-      label: "Ollama",
-      role: ollamaRequired ? "Required" : "Optional",
-      status: setupError
-        ? "unknown"
-        : ollamaRequired
-          ? (ollamaOk && modelOk ? "available" : "missing")
-          : (ollamaOk ? "available" : "optional"),
-      detail: ollamaOk
-        ? `${ollamaUrl}${ollamaModel ? ` • model ${ollamaModel}` : ""}${modelRequired ? (modelOk ? " • default model present" : " • default model missing") : ""}`
-        : `${ollamaUrl} not detected${ollamaRequired ? " for the current AI mode." : "."}`,
-      impact: ollamaRequired
-        ? "The current AI mode expects a reachable local Ollama endpoint."
-        : "Studio can still run with an external AI path when Ollama is not required.",
-    },
-    {
-      id: "comfyui",
-      label: "ComfyUI",
-      role: "Optional",
-      status: comfyAvailable ? "available" : (comfyConfigured ? "unknown" : (comfyError ? "optional" : "optional")),
-      detail: comfyAvailable
-        ? `${comfyUrl} responded to capability discovery.`
-        : `${comfyUrl} is unavailable or not configured for this session.`,
-      impact: "Internal renderer remains the default path even when ComfyUI is missing.",
-    },
-    {
-      id: "ffmpeg",
-      label: "FFmpeg",
-      role: "Required",
-      status: setupError ? "unknown" : (ffmpegOk ? "available" : "missing"),
-      detail: ffmpegOk ? ffmpegPath : `${ffmpegPath} is not ready for assembly.`,
-      impact: "Assembly and export still rely on the existing FFmpeg integration and packaging flow.",
-    },
-    {
-      id: "models",
-      label: "Models",
-      role: modelRequired ? "Required" : "Optional",
-      status: setupError
-        ? "unknown"
-        : modelRequired
-          ? (modelOk ? "available" : "missing")
-          : (modelOk ? "available" : "optional"),
-      detail: ollamaModel
-        ? `${ollamaModel}${modelOk ? " is ready." : " is configured but not present yet."}`
-        : "Model configuration is available through the existing Models and Setup flows.",
-      impact: edmgAvailable
-        ? "Installed models can stay aligned with EDMG Core and the internal renderer."
-        : "Model management remains owned by the current Models page and setup flow.",
-    },
-  ];
+  const runtimeErrorEntries = Object.entries(runtimeErrors).filter(([, message]) => Boolean(message));
+  const projectErrorEntries = Object.entries(projectErrors).filter(([, message]) => Boolean(message));
+  const refresh = () => setRefreshVersion((value) => value + 1);
+  const navigate = (destination: StudioForgeDestination) => onNavigate?.(destination);
 
   const sectionDefinitions = useMemo(
     () => [
-      {
-        id: "runtime" as const,
-        label: "Runtime Status",
-        description: "Read-only health for backend, setup, AI, ComfyUI, FFmpeg, and models.",
-      },
-      {
-        id: "recommendations" as const,
-        label: "Runtime Recommendations",
-        description: "Read-only guidance that ranks Forge previews against the capabilities detected right now.",
-      },
-      {
-        id: "templates" as const,
-        label: "Builder Templates",
-        description: "Static registry of preview-only panel, workflow, and model-profile concepts.",
-      },
-      {
-        id: "recipes" as const,
-        label: "Workflow Recipes",
-        description: "Canonical workflow previews that stay compatible with the existing Studio flow.",
-      },
-      {
-        id: "validation" as const,
-        label: "Validation Checklist",
-        description: "Developer validation commands surfaced as documentation, not executable actions.",
-      },
-      {
-        id: "bridges" as const,
-        label: "Unreal Bridge Previews",
-        description: "Preview-only Unreal export, handoff, and live-control targets that keep Unreal optional.",
-      },
+      { id: "runtime" as const, label: "Runtime Status", description: "Live backend, storage, accelerator, model, provider, and task readiness." },
+      { id: "project" as const, label: "Project Readiness", description: "Active project, plan variant, output, Unreal, and live-publisher state." },
+      { id: "recipes" as const, label: "Guided Recipes", description: "Selectable workflows that route each next step into canonical Studio pages." },
+      { id: "recommendations" as const, label: "Recommendations", description: "Capability and project-aware guidance for the current machine and session." },
+      { id: "templates" as const, label: "Studio Surfaces", description: "Safe launch points for existing Studio tools and operational pages." },
+      { id: "bridges" as const, label: "Unreal and World Handoffs", description: "Project-backed previews and safe routes into Outputs and Review." },
+      { id: "validation" as const, label: "Developer Validation", description: "Documented release commands; Forge never executes shell commands." },
     ],
     [],
   );
@@ -551,10 +574,9 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
     sectionDefinitions.map((section) => section.id),
   );
   const sectionDefinitionById = useMemo(
-    () =>
-      Object.fromEntries(
-        sectionDefinitions.map((definition) => [definition.id, definition]),
-      ) as Record<StudioForgeSectionId, (typeof sectionDefinitions)[number]>,
+    () => Object.fromEntries(
+      sectionDefinitions.map((definition) => [definition.id, definition]),
+    ) as Record<StudioForgeSectionId, (typeof sectionDefinitions)[number]>,
     [sectionDefinitions],
   );
   const sectionControlItems = layoutState.order.map((sectionId, index) => ({
@@ -568,155 +590,232 @@ export default function StudioForge({ backendUrl, config, onNavigate }: PageProp
 
   const sectionContent: Record<StudioForgeSectionId, React.ReactNode> = {
     runtime: (
-      <div>
-        <h2 style={{ marginBottom: 10 }}>Runtime Status</h2>
-        <div className="small" style={{ marginBottom: 10 }}>
-          Existing backend and setup endpoints only. Graceful read-only probes: <code>/health</code>,
-          <code> /v1/config</code>, <code> /v1/setup/status</code>, and <code> /v1/comfyui/capabilities</code>.
+      <section aria-labelledby="forge-runtime-heading">
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
+          <div>
+            <h2 id="forge-runtime-heading" style={{ marginBottom: 4 }}>Runtime Status</h2>
+            <div className="small">Canonical readiness, provider, model catalog, storage, CUDA, and task APIs.</div>
+          </div>
+          <StatusBadge status={runtimeLoading ? "running" : runtime.overall} label={runtimeLoading ? "Checking" : undefined} />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
-          {runtimeCards.map((card) => (
-            <div key={card.id} className="card">
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                <div>
-                  <div className="timeline-kicker">{card.role}</div>
-                  <div style={{ fontWeight: 900 }}>{card.label}</div>
-                </div>
-                <StatusBadge status={card.status} />
-              </div>
-              <div className="small" style={{ marginTop: 10 }}>{card.detail}</div>
-              <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>{card.impact}</div>
+        {runtimeLoading ? <div className="small" role="status" aria-live="polite">Checking Studio runtime readiness…</div> : null}
+        {runtimeErrorEntries.length ? (
+          <div className="card" role="status" aria-live="polite" style={{ marginBottom: 12 }}>
+            <b>Probe notes</b>
+            <div className="small" style={{ marginTop: 6 }}>
+              {runtimeErrorEntries.map(([key, message]) => <div key={key}>{key}: {message}</div>)}
             </div>
-          ))}
-        </div>
-        {backendConfigError ? (
-          <div className="small" style={{ marginTop: 10, opacity: 0.84 }}>
-            Config read note: {backendConfigError}
           </div>
         ) : null}
-      </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 12 }}>
+          {runtime.cards.map((card) => <RuntimeCard key={card.id} card={card} />)}
+        </div>
+      </section>
     ),
-    recommendations: (
-      <div>
-        <h2 style={{ marginBottom: 10 }}>Runtime Recommendations</h2>
-        <div className="small" style={{ marginBottom: 10 }}>
-          Read-only guidance that scores Forge templates and workflow recipes against the runtime
-          capabilities detected by the existing backend and setup probes.
+    project: (
+      <section aria-labelledby="forge-project-heading">
+        <div className="card">
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <div>
+              <div className="timeline-kicker">Canonical Studio Session</div>
+              <h2 id="forge-project-heading" style={{ margin: "4px 0 0" }}>Project Readiness</h2>
+            </div>
+            <StatusBadge
+              status={projectLoading ? "running" : projectReadiness.hasProject ? (projectReadiness.selectedVariantValid ? "ready" : "degraded") : "blocked"}
+              label={projectLoading ? "Refreshing" : undefined}
+            />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 14 }}>
+            <label className="small">
+              Active project
+              <select
+                aria-label="Forge project"
+                value={projectId}
+                onChange={(event) => setProjectId(event.target.value)}
+                style={{ width: "100%", marginTop: 6 }}
+              >
+                {!projects.length ? <option value="">No projects available</option> : null}
+                {projects.map((project: Record<string, unknown>) => (
+                  <option key={String(project.id)} value={String(project.id)}>
+                    {String(project.name || project.id)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="small">
+              Plan variant
+              <select
+                aria-label="Forge plan variant"
+                value={projectReadiness.selectedVariantValid ? selectedVariant : 0}
+                onChange={(event) => setSelectedVariant(Number(event.target.value) || 0)}
+                disabled={!projectReadiness.variantCount}
+                style={{ width: "100%", marginTop: 6 }}
+              >
+                {projectReadiness.variantCount
+                  ? Array.from({ length: projectReadiness.variantCount }, (_, index) => (
+                    <option key={index} value={index}>Variant {index + 1}</option>
+                  ))
+                  : <option value={0}>No plan variants</option>}
+              </select>
+            </label>
+          </div>
+          <div className="small" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+            <StatusBadge status={projectReadiness.hasAudio ? "ready" : "blocked"} label={projectReadiness.hasAudio ? "Audio ready" : "Audio missing"} />
+            <StatusBadge status={projectReadiness.hasAnalysis ? "ready" : "blocked"} label={projectReadiness.hasAnalysis ? "Analysis ready" : "Analysis missing"} />
+            <StatusBadge status={projectReadiness.selectedVariantValid ? "ready" : "blocked"} label={projectReadiness.selectedVariantValid ? `${projectReadiness.variantCount} plan variant${projectReadiness.variantCount === 1 ? "" : "s"}` : "Plan missing"} />
+            <StatusBadge status={projectReadiness.hasRenderOutput ? "ready" : "degraded"} label={`${projectReadiness.outputCount} registered output${projectReadiness.outputCount === 1 ? "" : "s"}`} />
+            <StatusBadge status={projectReadiness.livePublisherRunning ? "running" : "unknown"} label={projectReadiness.livePublisherRunning ? "Live publisher running" : "Live publisher stopped"} />
+          </div>
+          <div className="small" style={{ marginTop: 12 }}>
+            Unreal: <b>{projectReadiness.unrealPreviewReady ? "live preview ready" : "preview unavailable"}</b>
+            {" • "}{projectReadiness.unrealBundleCount} bundle{projectReadiness.unrealBundleCount === 1 ? "" : "s"}
+            {" • "}{projectReadiness.unrealReturnCount} returned-media record{projectReadiness.unrealReturnCount === 1 ? "" : "s"}
+            {" • "}{projectReadiness.deforumExportCount} Deforum export{projectReadiness.deforumExportCount === 1 ? "" : "s"}
+          </div>
+          {projectErrorEntries.length ? (
+            <div className="small" role="status" aria-live="polite" style={{ marginTop: 10 }}>
+              {projectErrorEntries.map(([key, message]) => <div key={key}>{key}: {message}</div>)}
+            </div>
+          ) : null}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+            <button onClick={refresh}>Refresh readiness</button>
+            <button className="secondary" onClick={() => navigate("workspace")}>Open Workspace</button>
+            <button className="secondary" onClick={() => navigate("render")} disabled={!projectReadiness.selectedVariantValid}>Open Render</button>
+            <button className="secondary" onClick={() => navigate("outputs")} disabled={!projectReadiness.hasProject}>Open Outputs</button>
+            <button className="secondary" onClick={() => navigate("review")} disabled={!projectReadiness.hasProject}>Open Review / Live</button>
+          </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
-          {recommendations.map((recommendation) => (
-            <RecommendationCard key={recommendation.id} recommendation={recommendation} />
-          ))}
-        </div>
-      </div>
-    ),
-    templates: (
-      <div>
-        <h2 style={{ marginBottom: 10 }}>Builder Templates</h2>
-        <div className="small" style={{ marginBottom: 10 }}>
-          Static preview registry for additive page, panel, workflow, and model-profile concepts.
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
-          {STUDIO_FORGE_TEMPLATES.map((template) => (
-            <TemplateCard key={template.id} template={template} />
-          ))}
-        </div>
-      </div>
+      </section>
     ),
     recipes: (
-      <div>
-        <h2 style={{ marginBottom: 10 }}>Workflow Recipes</h2>
+      <section aria-labelledby="forge-recipes-heading">
+        <h2 id="forge-recipes-heading" style={{ marginBottom: 6 }}>Guided Recipes</h2>
         <div className="small" style={{ marginBottom: 10 }}>
-          Preview-only recipes that stay compatible with the current Workspace, Timeline, Render, Queue, and Outputs flow.
+          Forge evaluates saved project state and routes the next step to the page that owns it. It does not silently launch renders or installs.
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
-          {STUDIO_FORGE_RECIPES.map((recipe) => (
-            <RecipeCard key={recipe.id} recipe={recipe} />
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 0.65fr) minmax(320px, 1.35fr)", gap: 12 }}>
+          <div className="card" role="list" aria-label="Studio Forge recipes">
+            {STUDIO_FORGE_RECIPES.map((recipe) => (
+              <button
+                key={recipe.id}
+                className={recipe.id === selectedRecipe?.id ? "" : "secondary"}
+                onClick={() => setSelectedRecipeId(recipe.id)}
+                aria-pressed={recipe.id === selectedRecipe?.id}
+                style={{ width: "100%", marginBottom: 8, textAlign: "left" }}
+              >
+                {recipe.name}
+              </button>
+            ))}
+          </div>
+          {selectedRecipe ? (
+            <RecipeDetail
+              recipe={selectedRecipe}
+              capabilities={runtime.capabilities}
+              prerequisites={projectReadiness.prerequisites}
+              onNavigate={navigate}
+            />
+          ) : null}
+        </div>
+      </section>
+    ),
+    recommendations: (
+      <section aria-labelledby="forge-recommendations-heading">
+        <h2 id="forge-recommendations-heading" style={{ marginBottom: 6 }}>Runtime and Project Recommendations</h2>
+        <div className="small" style={{ marginBottom: 10 }}>
+          “Ready now” requires both the runtime capabilities and active-project prerequisites declared by the workflow.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))", gap: 12 }}>
+          {recommendations.map((recommendation) => (
+            <RecommendationCard key={`${recommendation.source}:${recommendation.id}`} recommendation={recommendation} onNavigate={navigate} />
           ))}
         </div>
-      </div>
+      </section>
+    ),
+    templates: (
+      <section aria-labelledby="forge-surfaces-heading">
+        <h2 id="forge-surfaces-heading" style={{ marginBottom: 6 }}>Studio Surfaces</h2>
+        <div className="small" style={{ marginBottom: 10 }}>
+          Supported launch points into existing Studio pages. These cards do not create code or bypass page ownership.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))", gap: 12 }}>
+          {STUDIO_FORGE_TEMPLATES.map((template) => (
+            <TemplateCard key={template.id} template={template} onNavigate={navigate} />
+          ))}
+        </div>
+      </section>
     ),
     bridges: (
-      <div>
-        <h2 style={{ marginBottom: 10 }}>Unreal Bridge Previews</h2>
+      <section aria-labelledby="forge-bridges-heading">
+        <h2 id="forge-bridges-heading" style={{ marginBottom: 6 }}>Unreal and World Handoffs</h2>
         <div className="small" style={{ marginBottom: 10 }}>
-          Optional bridge concepts only. These previews describe export, handoff, and control shapes for Unreal without
-          adding an Unreal dependency to Setup, packaging, or the default internal renderer flow.
+          Forge previews active project contracts. Outputs owns Unreal bundle export/import, and Review owns existing OSC, MIDI, and WebSocket publishers.
         </div>
-        {projectId && unrealPreview ? (
-          <div className="small" style={{ marginBottom: 10 }}>
-            Live preview payloads are coming from the active Studio project <b>{projectId}</b> on variant{" "}
-            <b>{selectedVariant}</b>. Static contract cards remain as the fallback shape when no project preview is available.
-          </div>
-        ) : null}
-        {projectId && unrealPreviewError ? (
-          <div className="small" style={{ marginBottom: 10, opacity: 0.84 }}>
-            Live preview unavailable for <b>{projectId}</b>: {unrealPreviewError}
-          </div>
-        ) : null}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
           {STUDIO_FORGE_BRIDGES.map((bridge) => (
             <BridgeCard
               key={bridge.id}
               bridge={bridge}
-              previewPayload={liveBridgePreviewById[bridge.id]}
+              previewPayload={Object.keys(liveBridgePreviewById[bridge.id] ?? {}).length ? liveBridgePreviewById[bridge.id] : null}
+              hasProject={projectReadiness.hasProject}
+              hasPlan={projectReadiness.selectedVariantValid}
+              hasAnalysis={projectReadiness.hasAnalysis}
+              onNavigate={navigate}
             />
           ))}
         </div>
-      </div>
+      </section>
     ),
     validation: (
-      <div className="card">
-        <h2 style={{ marginBottom: 10 }}>Validation Checklist</h2>
+      <section className="card" aria-labelledby="forge-validation-heading">
+        <h2 id="forge-validation-heading" style={{ marginBottom: 10 }}>Developer Validation</h2>
         <div className="small" style={{ marginBottom: 10 }}>
-          Developer validation commands only. Studio Forge v1 does not execute shell commands from the frontend.
+          Documentation only. Studio Forge never executes shell commands, installers, model downloads, or render jobs.
         </div>
         <div style={{ display: "grid", gap: 8 }}>
-          {VALIDATION_COMMANDS.map((command) => (
-            <div key={command} className="small">
-              <code>{command}</code>
-            </div>
-          ))}
+          {VALIDATION_COMMANDS.map((command) => <div key={command} className="small"><code>{command}</code></div>)}
         </div>
-      </div>
+      </section>
     ),
   };
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div className="card">
-        <div className="timeline-kicker">Experimental Workbench</div>
-        <h1>Studio Forge</h1>
-        <div className="small" style={{ marginTop: 8, maxWidth: 900 }}>
-          Experimental AI builder workbench. Read-only preview mode. This surface inspects current
-          runtime state and previews future builder templates without writing files, changing setup,
-          pulling models, launching renders, or mutating project data.
-        </div>
-        {onNavigate ? (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-            <button className="secondary" onClick={() => onNavigate("setup")}>Open Setup</button>
-            <button className="secondary" onClick={() => onNavigate("models")}>Open Models</button>
-            <button className="secondary" onClick={() => onNavigate("render")}>Open Render</button>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div>
+            <div className="timeline-kicker">Studio-side 1.0</div>
+            <h1>Studio Forge</h1>
           </div>
-        ) : null}
+          <StatusBadge status={runtimeLoading ? "running" : runtime.overall} />
+        </div>
+        <div className="small" style={{ marginTop: 8, maxWidth: 920 }}>
+          A supported, non-destructive workbench for runtime truth, project readiness, guided recipes, and external handoffs. Canonical Studio pages still own setup, models, project edits, renders, live publishing, and outputs. Packaged Unreal plugins, Unreal Editor automation, and Movie Render Queue execution remain outside Studio-side Forge 1.0.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <button onClick={refresh}>Refresh all</button>
+          <button className="secondary" onClick={() => navigate("workspace")}>Workspace</button>
+          <button className="secondary" onClick={() => navigate("setup")}>Setup</button>
+          <button className="secondary" onClick={() => navigate("models")}>Models</button>
+          <button className="secondary" onClick={() => navigate("render")}>Render</button>
+          <button className="secondary" onClick={() => navigate("review")}>Review / Live</button>
+          <button className="secondary" onClick={() => navigate("outputs")}>Outputs</button>
+        </div>
       </div>
 
-      <div style={{ display: "grid", gap: 14 }}>
-        <StudioLayoutCustomizer
-          title="Studio Forge layout"
-          description="Reorder or hide preview panels for your own working style. This only changes the local page layout."
-          items={sectionControlItems}
-          profileOptions={profileOptions}
-          activeProfile={activeProfile}
-          onSelectProfile={setActiveProfile}
-          onMove={movePanel}
-          onToggleHidden={updateHidden}
-          onReset={resetLayout}
-        />
-        {visibleOrder.map((sectionId) => (
-          <React.Fragment key={sectionId}>{sectionContent[sectionId]}</React.Fragment>
-        ))}
-      </div>
+      <StudioLayoutCustomizer
+        title="Studio Forge layout"
+        description="Reorder or hide Forge panels for this local UI profile. Project and runtime data are not changed."
+        items={sectionControlItems}
+        profileOptions={profileOptions}
+        activeProfile={activeProfile}
+        onSelectProfile={setActiveProfile}
+        onMove={movePanel}
+        onToggleHidden={updateHidden}
+        onReset={resetLayout}
+      />
+      {visibleOrder.map((sectionId) => (
+        <React.Fragment key={sectionId}>{sectionContent[sectionId]}</React.Fragment>
+      ))}
     </div>
   );
 }

@@ -53,7 +53,7 @@ const PAGE_LOADING_DETAILS: Record<Page, string> = {
   directorLab: "Preparing combined planning, reactive, and optional ChatGPT handoff controls.",
   plannerLab: "Preparing AI planning tools and Studio handoff controls.",
   reactiveLab: "Preparing audio-reactive scheduling and handoff controls.",
-  studioForge: "Preparing runtime preview cards and builder recipe registries.",
+  studioForge: "Checking live Studio readiness, project state, and guided handoff routes.",
 };
 
 const PAGE_LOADERS: Partial<Record<Page, () => Promise<unknown>>> = {
@@ -88,7 +88,7 @@ const PRELOAD_BY_PAGE: Record<Page, Page[]> = {
   directorLab: ["workspace", "timeline", "render"],
   plannerLab: ["workspace", "timeline", "render"],
   reactiveLab: ["workspace", "timeline", "outputs"],
-  studioForge: ["setup", "models", "render"],
+  studioForge: ["workspace", "setup", "models", "render", "review", "outputs"],
 };
 
 const BASE_PAGES: Page[] = [

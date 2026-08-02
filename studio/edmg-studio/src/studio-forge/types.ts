@@ -1,11 +1,51 @@
 export type StudioForgeCapability =
   | "backend"
+  | "systemReady"
   | "ollama"
   | "openaiCompatible"
   | "comfyui"
+  | "comfyMotion"
   | "ffmpeg"
   | "internalRenderer"
+  | "internalMotion"
+  | "cuda"
+  | "hostedRenderer"
   | "edmgCore";
+
+export type StudioForgePrerequisite =
+  | "project"
+  | "audio"
+  | "analysis"
+  | "plan"
+  | "renderOutput"
+  | "deforumExport"
+  | "unrealBundle";
+
+export type StudioForgeDestination =
+  | "workspace"
+  | "timeline"
+  | "render"
+  | "queue"
+  | "review"
+  | "outputs"
+  | "settings"
+  | "setup"
+  | "models";
+
+export type StudioForgeAction = {
+  label: string;
+  destination: StudioForgeDestination;
+};
+
+export type StudioForgeRecipeStage = {
+  id: string;
+  label: string;
+  description: string;
+  destination: StudioForgeDestination;
+  requiredCapabilities?: StudioForgeCapability[];
+  anyCapabilities?: StudioForgeCapability[];
+  requiredPrerequisites?: StudioForgePrerequisite[];
+};
 
 export type StudioForgeBridgeKind =
   | "metadataExport"
@@ -33,19 +73,23 @@ export type StudioForgeTemplate = {
   description: string;
   requiredCapabilities: StudioForgeCapability[];
   optionalCapabilities?: StudioForgeCapability[];
+  requiredPrerequisites?: StudioForgePrerequisite[];
+  action: StudioForgeAction;
   destructive: false;
-  status: "preview";
+  status: "supported" | "preview";
 };
 
 export type StudioForgeRecipe = {
   id: string;
   name: string;
   description: string;
-  stages: string[];
+  stages: StudioForgeRecipeStage[];
   requiredCapabilities: StudioForgeCapability[];
   optionalCapabilities?: StudioForgeCapability[];
+  requiredPrerequisites?: StudioForgePrerequisite[];
+  action: StudioForgeAction;
   destructive: false;
-  status: "preview";
+  status: "supported" | "preview";
 };
 
 export type StudioForgeBridge = {
@@ -59,6 +103,8 @@ export type StudioForgeBridge = {
   limitations: string;
   requiredCapabilities: StudioForgeCapability[];
   optionalCapabilities?: StudioForgeCapability[];
+  requiredPrerequisites?: StudioForgePrerequisite[];
+  action: StudioForgeAction;
   destructive: false;
-  status: "preview";
+  status: "supported" | "preview";
 };

@@ -3,11 +3,14 @@
  * Keep these aligned with FastAPI responses from `edmg_studio_backend.api.routers` and `app.py`.
  */
 
-export type SystemReadinessStatus = "ready" | "degraded" | "blocked" | string;
+export type SystemReadinessStatus = "ok" | "warn" | "blocked" | string;
 
 export type SystemReadinessReport = {
   ok: boolean;
   status: SystemReadinessStatus;
+  ready?: boolean;
+  summary?: string;
+  schema_version?: number;
   checked_at?: string;
   checks?: Record<string, unknown>;
   blockers?: Array<{ code?: string; message?: string }>;

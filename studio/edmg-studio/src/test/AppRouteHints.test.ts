@@ -10,7 +10,7 @@ describe("App route hints", () => {
     const loading = getPageLoadingDetails("studioForge");
 
     expect(loading.label).toBe("Studio Forge");
-    expect(loading.detail).toMatch(/runtime preview cards/i);
+    expect(loading.detail).toMatch(/live Studio readiness/i);
   });
 
   it("preloads likely next routes for workspace flow", () => {
@@ -23,11 +23,14 @@ describe("App route hints", () => {
     ]);
   });
 
-  it("preloads setup and render-adjacent pages for Studio Forge", () => {
+  it("preloads the canonical pages owned by Studio Forge handoffs", () => {
     expect(getPagesToPreload("studioForge")).toEqual([
+      "workspace",
       "setup",
       "models",
       "render",
+      "review",
+      "outputs",
     ]);
   });
 

@@ -4,6 +4,7 @@ import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
 import { useAdaptivePolling } from "../hooks/useAdaptivePolling";
+import { buildInternalModelReadiness } from "../shared/internalModelReadiness";
 import type { PageProps } from "../types/pageProps";
 
 type CatalogEntry = {
@@ -667,38 +668,14 @@ export default function Models(props: PageProps) {
   const cacheLabel = data?.model_cache || "cloud cache";
 
   const internalSummary = useMemo(() => {
-    const built = merged.built ?? [];
-    const sd15 = built.find((m) => m.id === "hf_sd15_internal");
-    const sdxl = built.find((m) => m.id === "hf_sdxl_internal");
-    const sd35 = built.find((m) => m.id === "hf_sd35_medium_internal");
-    const svd = built.find((m) => m.id === "hf_svd_xt_1_1_internal");
-    const animatediff = built.find((m) => m.id === "hf_animatediff_motion_adapter_v15_2_internal");
-    const installedInternal = {
-      sd15: !!installedMap["hf_sd15_internal"],
-      sdxl: !!installedMap["hf_sdxl_internal"],
-      sd35: !!installedMap["hf_sd35_medium_internal"],
-      svd: !!installedMap["hf_svd_xt_1_1_internal"],
-      animatediff: !!installedMap["hf_animatediff_motion_adapter_v15_2_internal"],
-    };
-    const cloudInternal = {
-      sd15: !!cloudMap["hf_sd15_internal"],
-      sdxl: !!cloudMap["hf_sdxl_internal"],
-      sd35: !!cloudMap["hf_sd35_medium_internal"],
-      svd: !!cloudMap["hf_svd_xt_1_1_internal"],
-      animatediff: !!cloudMap["hf_animatediff_motion_adapter_v15_2_internal"],
-    };
-    const availableInternal = {
-      sd15: installedInternal.sd15 || cloudInternal.sd15,
-      sdxl: installedInternal.sdxl || cloudInternal.sdxl,
-      sd35: installedInternal.sd35 || cloudInternal.sd35,
-      svd: installedInternal.svd || cloudInternal.svd,
-      animatediff: installedInternal.animatediff || cloudInternal.animatediff,
-    };
-    const preferred = availableInternal.sd35 ? "SD3.5 Medium" : availableInternal.sdxl ? "SDXL" : availableInternal.sd15 ? "SD 1.5" : "none";
-    const status = (key: "sd15" | "sdxl" | "sd35" | "svd" | "animatediff") =>
-      installedInternal[key] ? "installed locally" : cloudInternal[key] ? `stored in ${cacheLabel}` : "missing";
-    return { sd15, sdxl, sd35, svd, animatediff, installedInternal, cloudInternal, availableInternal, preferred, status };
-  }, [merged, installedMap, cloudMap, cacheLabel]);
+    return buildInternalModelReadiness({
+      catalog: merged.built,
+      installed: installedMap,
+      cloud: cloudMap,
+      modelCache: cacheLabel,
+      tasks,
+    });
+  }, [merged.built, installedMap, cloudMap, cacheLabel, tasks]);
 
   const defaultModels = (merged.built ?? []).filter((m) => m.recommended === "default" && m.installable !== false);
   const advancedModels = (merged.built ?? []).filter((m) => m.recommended !== "default" && m.installable !== false);

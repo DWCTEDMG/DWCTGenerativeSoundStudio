@@ -120,3 +120,32 @@ def test_frozen_runtime_searches_executable_sibling_for_launcher_defaults(
     assert packaged_local in candidates
     assert packaged_defaults in candidates
     assert candidates.index(packaged_local) < candidates.index(packaged_defaults)
+
+
+def test_selected_studio_cache_overrides_inherited_hugging_face_paths(
+    tmp_path, monkeypatch
+) -> None:
+    cache_root = (tmp_path / "selected-cache").resolve()
+    managed_keys = (
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HF_XET_CACHE",
+        "HF_ASSETS_CACHE",
+        "HUGGINGFACE_HUB_CACHE",
+        "HUGGINGFACE_ASSETS_CACHE",
+        "TRANSFORMERS_CACHE",
+    )
+    monkeypatch.setenv("EDMG_STUDIO_CACHE_DIR", str(cache_root))
+    for key in managed_keys:
+        monkeypatch.setenv(key, rf"G:\stale-cache\{key}")
+
+    backend_package._normalize_managed_cache_env()
+
+    huggingface_root = cache_root / "huggingface"
+    assert os.environ["HF_HOME"] == str(huggingface_root)
+    assert os.environ["HF_HUB_CACHE"] == str(huggingface_root / "hub")
+    assert os.environ["HF_XET_CACHE"] == str(huggingface_root / "xet")
+    assert os.environ["HF_ASSETS_CACHE"] == str(huggingface_root / "assets")
+    assert os.environ["HUGGINGFACE_HUB_CACHE"] == str(huggingface_root / "hub")
+    assert os.environ["HUGGINGFACE_ASSETS_CACHE"] == str(huggingface_root / "assets")
+    assert os.environ["TRANSFORMERS_CACHE"] == str(cache_root / "transformers")

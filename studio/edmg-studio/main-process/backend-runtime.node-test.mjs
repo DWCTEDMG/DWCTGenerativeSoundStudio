@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -11,6 +12,7 @@ import {
   parseWindowsNetstatListeningPid,
   resolveStudioUiOrigin,
 } from "./backend-runtime.mjs";
+import { buildCacheEnvPaths } from "./storage-env.mjs";
 
 const base = {
   resourcesPath: "C:\\Program Files\\EDMG Studio\\resources",
@@ -19,6 +21,38 @@ const base = {
   backendHost: "127.0.0.1",
   backendPort: 7863,
 };
+
+test("selected Studio cache overrides hostile inherited Hugging Face cache paths", () => {
+  const selectedCacheRoot = path.resolve("selected-studio-cache");
+  const hostileInheritedEnv = {
+    HF_HOME: "G:\\stale\\huggingface",
+    HF_HUB_CACHE: "G:\\stale\\huggingface\\hub",
+    HF_XET_CACHE: "G:\\stale\\huggingface\\xet",
+    HF_ASSETS_CACHE: "G:\\stale\\huggingface\\assets",
+    HUGGINGFACE_HUB_CACHE: "G:\\legacy\\hub",
+    HUGGINGFACE_ASSETS_CACHE: "G:\\legacy\\assets",
+    TRANSFORMERS_CACHE: "G:\\stale\\transformers",
+  };
+
+  const launchEnv = {
+    ...hostileInheritedEnv,
+    ...buildCacheEnvPaths(selectedCacheRoot),
+  };
+  const huggingFaceRoot = path.join(selectedCacheRoot, "huggingface");
+
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(hostileInheritedEnv).map((key) => [key, launchEnv[key]])),
+    {
+      HF_HOME: huggingFaceRoot,
+      HF_HUB_CACHE: path.join(huggingFaceRoot, "hub"),
+      HF_XET_CACHE: path.join(huggingFaceRoot, "xet"),
+      HF_ASSETS_CACHE: path.join(huggingFaceRoot, "assets"),
+      HUGGINGFACE_HUB_CACHE: path.join(huggingFaceRoot, "hub"),
+      HUGGINGFACE_ASSETS_CACHE: path.join(huggingFaceRoot, "assets"),
+      TRANSFORMERS_CACHE: path.join(selectedCacheRoot, "transformers"),
+    },
+  );
+});
 
 test("source backend runs exactly one profile through the frozen uv project", () => {
   const spec = buildBackendLaunchSpec({
