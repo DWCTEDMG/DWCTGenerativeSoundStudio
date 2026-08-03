@@ -59,7 +59,7 @@ from .schemas import (
     BuildUnrealImportPlanRequest,
     StoryboardVariantUpdateRequest,
     CloudAwsTestRequest, CloudAwsBundleRequest, CloudAzureTestRequest, CloudHfBucketTestRequest, CloudHfBucketSettingsRequest, CloudLightningBundleRequest,
-    ProjectSnapshot, RenderConductorPlanRequest, RenderConductorPromoteRequest, PerformerWorkflowPlanRequest, RenderIntent, VisualDNAFeedbackRequest,
+    ProjectSnapshot, RenderConductorPlanRequest, RenderConductorPromoteRequest, PerformerWorkflowPlanRequest, PerformerWorkflowRunRequest, RenderIntent, VisualDNAFeedbackRequest,
     VisualDNAUpdateRequest,
     UnrealBridgePreviewResponse,
     AutoAnimateRequest,
@@ -6739,6 +6739,15 @@ def _execute_job(job):
             else:
                 job.result = res
                 job.status = "succeeded"
+        elif job.type == "performer_video":
+            res = _run_performer_video(job.project_id, job.id, job.payload)
+            latest = jobs.get(job.project_id, job.id)
+            if latest and latest.status == "canceled":
+                job.status = "canceled"
+                job.result = latest.result
+            else:
+                job.result = res
+                job.status = "succeeded"
         elif job.type == "tensorrt_standalone":
             res = _run_tensorrt_standalone(job.project_id, job.id, job.payload)
             job.result = res
@@ -11017,6 +11026,11 @@ def render_performer_plan(project_id: str, req: PerformerWorkflowPlanRequest) ->
         duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
     )
     environment = _build_render_conductor_environment()
+    performer_engines = environment.setdefault("engines", {})
+    performer_hosted = dict(performer_engines.get("hosted_video") or {})
+    performer_hosted["available"] = _performer_high_end_available()
+    performer_hosted["capability"] = "audio_driven_performance_video"
+    performer_engines["hosted_video"] = performer_hosted
     performer_plan = build_performer_workflow_plan(
         project_id=project_id,
         variant_index=vi,
@@ -11034,6 +11048,116 @@ def render_performer_plan(project_id: str, req: PerformerWorkflowPlanRequest) ->
         "performer_plan": performer_plan,
         "music_graph": music_graph,
         "environment": environment,
+    }
+
+
+def _performer_high_end_available() -> bool:
+    """High-end stays unavailable until a supported Wan S2V adapter ships.
+
+    Generic hosted still/video credentials are not audio-driven performer
+    capability and must never be reported as Wan S2V execution.
+    """
+    return False
+
+
+def _run_performer_video(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    provider = str(payload.get("selected_provider") or "mock")
+    if provider != "mock":
+        raise UserFacingError(
+            "The configured high-end performer adapter is not available in this build",
+            hint="Enable mock fallback or configure a supported Wan S2V provider adapter.",
+        )
+
+    jobs.append_log(project_id, job_id, "Performer provider=mock; rendering an explicit local proxy fallback")
+    render_payload = dict(payload.get("render_settings") or {})
+    render_payload.update(
+        {
+            "variant_index": int(payload.get("variant_index") or 0),
+            "render_mode": "proxy",
+            "allow_proxy_fallback": True,
+        }
+    )
+    result = _run_internal_video(project_id, job_id, render_payload)
+    return {
+        **result,
+        "performer": {
+            "plan_id": payload.get("plan_id"),
+            "requested_provider": payload.get("requested_provider"),
+            "selected_provider": provider,
+            "fallback_used": bool(payload.get("fallback_used")),
+            "model": payload.get("model"),
+            "task_count": len(payload.get("tasks") or []),
+            "provenance": payload.get("provenance"),
+        },
+    }
+
+
+@app.post("/v1/projects/{project_id}/render/performer/run")
+def render_performer_run(project_id: str, req: PerformerWorkflowRunRequest) -> dict[str, Any]:
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    stored = proj.meta.get("last_performer_plan") if isinstance(proj.meta.get("last_performer_plan"), dict) else None
+    if not stored:
+        raise HTTPException(400, "No performer plan available. Plan the performer lane first.")
+    if int(stored.get("variant_index") or 0) != int(req.variant_index):
+        raise HTTPException(400, "Performer plan does not match the selected variant")
+    if req.plan_id and str(stored.get("plan_id") or "") != str(req.plan_id):
+        raise HTTPException(400, "Performer plan_id does not match the saved plan")
+    if not list(stored.get("tasks") or []):
+        raise HTTPException(400, "Performer plan has no render tasks")
+
+    requested = str(req.provider or "auto")
+    high_end_available = _performer_high_end_available()
+    selected = "high_end" if requested in {"auto", "high_end"} and high_end_available else "mock"
+    fallback_used = selected == "mock" and requested != "mock"
+    if requested == "high_end" and not high_end_available and not req.allow_mock_fallback:
+        raise HTTPException(409, "High-end Wan S2V provider is unavailable and mock fallback is disabled")
+
+    payload = {
+        "variant_index": int(req.variant_index),
+        "plan_id": stored.get("plan_id"),
+        "requested_provider": requested,
+        "selected_provider": selected,
+        "fallback_used": fallback_used,
+        "model": stored.get("model"),
+        "tasks": list(stored.get("tasks") or []),
+        "render_settings": dict(req.render_settings or {}),
+        "provenance": {
+            "workflow": "W6-05",
+            "source_plan_id": stored.get("plan_id"),
+            "audio_driven": True,
+            "honest_fallback": True,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    }
+    job = jobs.create(project_id, "performer_video", payload)
+    job.progress = {
+        "stage": "queued",
+        "current": 0,
+        "total": max(1, len(payload["tasks"])),
+        "percent": 0.0,
+        "message": f"Queued performer workflow via {selected}",
+    }
+    jobs.save(job)
+    proj.meta.setdefault("jobs", []).append(job.__dict__)
+    proj.meta["last_performer_run"] = {
+        "job_id": job.id,
+        "plan_id": stored.get("plan_id"),
+        "requested_provider": requested,
+        "selected_provider": selected,
+        "fallback_used": fallback_used,
+    }
+    store.save(proj)
+    return {
+        "ok": True,
+        "job": job.__dict__,
+        "selection": proj.meta["last_performer_run"],
+        "message": (
+            "Queued explicit mock/proxy performer fallback; this is not Wan S2V output."
+            if selected == "mock"
+            else "Queued high-end performer render."
+        ),
     }
 
 

@@ -3,7 +3,8 @@ param(
   [string]$PnpmExe = "pnpm",
   [string]$IsccExe = "",
   [string]$SevenZipExe = "",
-  [string]$OutDir = "dist-inno"
+  [string]$OutDir = "dist-inno",
+  [switch]$ReusePayloadArchive
 )
 
 $ErrorActionPreference = "Stop"
@@ -206,7 +207,9 @@ foreach ($previousSetup in Get-ChildItem -LiteralPath $OutDirAbs -File -Filter "
   Assert-ChildPath $OutDirAbs $previousSetup.FullName "previous setup executable"
   Remove-Item -Force -LiteralPath $previousSetup.FullName
 }
-Remove-DirectoryIfExists $PayloadRoot $OutDirAbs "payload directory"
+if (-not $ReusePayloadArchive) {
+  Remove-DirectoryIfExists $PayloadRoot $OutDirAbs "payload directory"
+}
 New-Item -ItemType Directory -Force -Path $PayloadRoot | Out-Null
 
 $ResolvedSevenZip = Resolve-SevenZip $SevenZipExe $StudioDir
@@ -214,14 +217,22 @@ if (-not $ResolvedSevenZip) {
   throw "7-Zip was not found. Install 7-Zip or rerun with -SevenZipExe <path-to-7z.exe>."
 }
 
-Write-Host ("[info] Creating external payload archive: " + $PayloadArchive) -ForegroundColor Cyan
-Push-Location $WinUnpackedDir
-try {
-  Invoke-Checked "7-Zip payload archive" {
-    & $ResolvedSevenZip a -t7z -mx=0 -mmt=on $PayloadArchive ".\*"
+if ($ReusePayloadArchive) {
+  if (-not (Test-Path -LiteralPath $PayloadArchive -PathType Leaf)) {
+    throw "Reusable payload archive not found: $PayloadArchive"
   }
-} finally {
-  Pop-Location
+  Write-Host ("[info] Validating reusable external payload archive: " + $PayloadArchive) -ForegroundColor Cyan
+  Invoke-Checked "7-Zip reusable payload validation" { & $ResolvedSevenZip t $PayloadArchive }
+} else {
+  Write-Host ("[info] Creating external payload archive: " + $PayloadArchive) -ForegroundColor Cyan
+  Push-Location $WinUnpackedDir
+  try {
+    Invoke-Checked "7-Zip payload archive" {
+      & $ResolvedSevenZip a -t7z -mx=0 -mmt=on $PayloadArchive ".\*"
+    }
+  } finally {
+    Pop-Location
+  }
 }
 $ExtendedWinUnpackedDir = if ($WinUnpackedDir.StartsWith("\\")) {
   "\\?\UNC\" + $WinUnpackedDir.Substring(2)

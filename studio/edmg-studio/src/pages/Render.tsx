@@ -133,6 +133,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [performerPlan, setPerformerPlan] = useState<any>(null);
   const [performerStatus, setPerformerStatus] = useState<string>("");
   const [planningPerformer, setPlanningPerformer] = useState(false);
+  const [runningPerformer, setRunningPerformer] = useState(false);
+  const [performerProvider, setPerformerProvider] = useState<"auto" | "high_end" | "mock">("auto");
+  const [performerFallback, setPerformerFallback] = useState(true);
 
   const [renderPreset, setRenderPreset] = useState<"fast" | "balanced" | "quality" | "ultra">((savedRenderDefaults.renderPreset as any) || "balanced");
   const [checkpointName, setCheckpointName] = useState<string>("");
@@ -856,6 +859,30 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       }
     } finally {
       setPlanningPerformer(false);
+    }
+  };
+
+  const runPerformerWorkflow = async () => {
+    if (!projectId || !performerPlan) return;
+    setRunningPerformer(true);
+    setPerformerStatus("");
+    setErr(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/performer/run`, {
+        variant_index: selectedVariant,
+        plan_id: performerPlan.plan_id,
+        provider: performerProvider,
+        allow_mock_fallback: performerFallback,
+        render_settings: buildInternalPayload(),
+      });
+      setPerformerStatus(d?.message || `Performer job ${d?.job?.id || ""} queued.`);
+      await refreshProject(projectId);
+      await refreshProjectJobs();
+    } catch (e: any) {
+      setPerformerStatus(String(e));
+      setErr(String(e));
+    } finally {
+      setRunningPerformer(false);
     }
   };
 
@@ -1841,13 +1868,30 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
 
           <div className="card" style={{ marginTop: 12, padding: 12 }}>
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <div style={{ fontWeight: 800 }}>Performer workflow (W6-05 preview)</div>
+              <div style={{ fontWeight: 800 }}>Performer workflow (W6-05)</div>
               <button className="secondary" type="button" disabled={!variantCount || planningPerformer} onClick={() => refreshPerformerPlan().catch(() => {})}>
                 {planningPerformer ? "Planning…" : "Plan performer lane"}
               </button>
             </div>
             <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-              Audio-driven performance scenes route through the hosted/high-end lane with Wan S2V provenance. Experimental — not a normal desktop default.
+              Queue audio-driven performance scenes through the high-end lane, with explicit local mock fallback and full provenance. Mock output is never labeled as Wan S2V.
+            </div>
+            <div className="row" style={{ marginTop: 10, gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+              <label style={{ minWidth: 190 }}>
+                <span className="small">Execution provider</span>
+                <select value={performerProvider} onChange={(e) => setPerformerProvider(e.target.value as any)}>
+                  <option value="auto">Auto (high-end, then mock)</option>
+                  <option value="high_end">High-end Wan S2V</option>
+                  <option value="mock">Local mock/proxy proof</option>
+                </select>
+              </label>
+              <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", paddingBottom: 8 }}>
+                <input type="checkbox" checked={performerFallback} onChange={(e) => setPerformerFallback(e.target.checked)} />
+                Allow labeled mock fallback
+              </label>
+              <button type="button" disabled={!performerPlan?.tasks?.length || runningPerformer} onClick={() => runPerformerWorkflow().catch(() => {})}>
+                {runningPerformer ? "Queueing…" : "Queue performer render"}
+              </button>
             </div>
             {performerStatus ? (
               <div className="small" style={{ marginTop: 8 }}>{performerStatus}</div>
@@ -1874,6 +1918,15 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
             <button className="secondary" onClick={runInternalVideo} disabled={!variantCount}>Internal / Hosted</button>
             <button className="secondary" onClick={assemble} disabled={!variantCount}>Assemble only</button>
           </div>
+          {!variantCount ? (
+            <div className="small" role="alert" style={{ marginTop: 8, color: "var(--danger, #ff8f8f)" }}>
+              Nothing can queue for this project yet. Go to Workspace, upload audio, run Analyze + Plan, then return here. “Plan performer lane” does not replace the main project plan.
+            </div>
+          ) : (
+            <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>
+              Use <b>Internal / Hosted</b> for the settings below, or <b>Preset + Render</b> to let Studio choose.
+            </div>
+          )}
 
           <div className="card" style={{ marginTop: 12, padding: 12 }}>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>AI Auto-Render</div>

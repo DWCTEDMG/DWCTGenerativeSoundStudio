@@ -757,6 +757,14 @@ class PerformerWorkflowPlanRequest(BaseModel):
     model_id: str = Field(default="wan_s2v_14b", max_length=120)
 
 
+class PerformerWorkflowRunRequest(BaseModel):
+    variant_index: int = Field(default=0, ge=0)
+    plan_id: str | None = Field(default=None, max_length=160)
+    provider: Literal["auto", "high_end", "mock"] = "auto"
+    allow_mock_fallback: bool = True
+    render_settings: dict[str, Any] = Field(default_factory=dict)
+
+
 class VisualDNAUpdateRequest(BaseModel):
     identity: dict[str, Any] | None = None
     continuity: dict[str, Any] | None = None

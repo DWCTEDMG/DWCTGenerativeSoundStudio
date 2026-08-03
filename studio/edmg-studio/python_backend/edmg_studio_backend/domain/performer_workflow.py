@@ -42,7 +42,7 @@ def build_performer_workflow_plan(
     scene_ids: list[str] | None = None,
     model_id: str = "wan_s2v_14b",
 ) -> dict[str, Any]:
-    """Plan audio-driven performer scenes through the external/high-end lane (W6-05 partial)."""
+    """Plan audio-driven performer scenes through the external/high-end lane."""
     selected_ids = {str(item).strip() for item in (scene_ids or []) if str(item).strip()}
     engines = (environment or {}).get("engines") if isinstance((environment or {}).get("engines"), dict) else {}
     hosted = engines.get("hosted_video") if isinstance(engines.get("hosted_video"), dict) else {}
@@ -114,7 +114,7 @@ def build_performer_workflow_plan(
             {
                 "code": "hosted_lane_unavailable",
                 "severity": "warning",
-                "message": "Hosted/high-end performer lane is unavailable in the current environment; plan is advisory only.",
+                "message": "High-end performer execution is unavailable; Run will use a clearly labeled local mock/proxy fallback unless fallback is disabled.",
             }
         )
     warnings.append(
@@ -131,7 +131,14 @@ def build_performer_workflow_plan(
         "project_id": project_id,
         "variant_index": int(variant_index),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "advisory_only": True,
+        "advisory_only": False,
+        "execution": {
+            "queue_endpoint": f"/v1/projects/{project_id}/render/performer/run",
+            "high_end_available": hosted_available,
+            "mock_fallback_available": True,
+            "supports_cancel": True,
+            "provenance_required": True,
+        },
         "model": model,
         "tasks": tasks,
         "warnings": warnings,

@@ -222,6 +222,20 @@ const installRenderMocks = () => {
       },
     },
     "POST /v1/projects/p1/render/internal/preflight": { ok: true, mode: "proxy" },
+    "/v1/projects/p1/render/performer/plan*": { ok: true, performer_plan: null },
+    "POST /v1/projects/p1/render/performer/plan": {
+      ok: true,
+      performer_plan: {
+        plan_id: "performer-ui-test",
+        advisory_only: false,
+        tasks: [{ scene_id: "scene-1", engine: "hosted_video", model: { display_name: "Wan2.2 S2V 14B" } }],
+      },
+    },
+    "POST /v1/projects/p1/render/performer/run": {
+      ok: true,
+      message: "Queued explicit mock/proxy performer fallback; this is not Wan S2V output.",
+      job: { id: "performer-job-1", type: "performer_video", status: "queued" },
+    },
     "/v1/projects/p1/render/motion_sequencer*": {
       ok: true,
       active: null,
@@ -263,6 +277,24 @@ const installRenderMocks = () => {
 };
 
 describe("Render page", () => {
+  it("plans and queues the W6-05 performer workflow with explicit fallback", async () => {
+    const fetchMock = installRenderMocks();
+    renderWithStudio(<Render />);
+
+    const planButton = await screen.findByRole("button", { name: "Plan performer lane" });
+    await waitFor(() => expect((planButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(planButton);
+    const queueButton = await screen.findByRole("button", { name: "Queue performer render" });
+    await waitFor(() => expect((queueButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(queueButton);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        String(url).includes("/render/performer/run") && String(init?.body || "").includes('"provider":"auto"'),
+      )).toBe(true);
+    });
+  }, 10000);
+
   it("renders and navigates to Outputs from the top action bar", async () => {
     const onNavigate = vi.fn();
     installRenderMocks();
