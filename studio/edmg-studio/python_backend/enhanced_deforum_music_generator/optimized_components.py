@@ -16,12 +16,13 @@ import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from functools import lru_cache
 import tempfile
+import json
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, Iterator
 import time
 import hashlib
-import pickle
 from pathlib import Path
+from types import SimpleNamespace
 
 # Optional performance libraries
 try:
@@ -255,34 +256,27 @@ class OptimizedAudioAnalyzer:
 
     def _save_analysis_cache(self, cache_key: str, analysis):
         """Save analysis to cache."""
-        cache_file = self.model_cache.cache_dir / f"analysis_{cache_key}.pkl"
+        cache_file = self.model_cache.cache_dir / f"analysis_{cache_key}.json"
         try:
-            with open(cache_file, 'wb') as f:
-                pickle.dump(analysis.to_dict(), f)
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(dict(vars(analysis)), f, ensure_ascii=False)
         except Exception:
             pass  # Ignore cache save errors
 
     def _load_analysis_cache(self, cache_key: str):
         """Load analysis from cache."""
-        cache_file = self.model_cache.cache_dir / f"analysis_{cache_key}.pkl"
+        cache_file = self.model_cache.cache_dir / f"analysis_{cache_key}.json"
         try:
             if cache_file.exists():
-                with open(cache_file, 'rb') as f:
-                    data = pickle.load(f)
-                    # Reconstruct analysis object
-                    from deforum_music.core import AudioAnalysis
-                    analysis = AudioAnalysis()
-                    for key, value in data.items():
-                        setattr(analysis, key, value)
-                    return analysis
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return SimpleNamespace(**data)
         except Exception:
             pass
         return None
 
     def analyze_parallel(self, audio_path: str, enable_lyrics: bool = False) -> 'AudioAnalysis':
         """Optimized analysis with parallel processing and caching."""
-        from deforum_music.core import AudioAnalysis
-        
         # Check cache first
         cache_key = self._get_cache_key(audio_path, enable_lyrics)
         cached_result = self._load_analysis_cache(cache_key)
@@ -293,7 +287,7 @@ class OptimizedAudioAnalyzer:
         print("Starting optimized audio analysis...")
         start_time = time.time()
         
-        analysis = AudioAnalysis()
+        analysis = SimpleNamespace(raw={})
         analysis.filepath = audio_path
         
         if not os.path.exists(audio_path):

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import zipfile
+
+import pytest
 
 from edmg_studio_backend.services import setup_wizard
 
@@ -91,3 +94,18 @@ def test_linux_comfyui_installed_detection_uses_sidecar_layout(tmp_path, monkeyp
 
     assert setup_wizard.comfy_portable_root(external_dir) == root
     assert setup_wizard.comfy_portable_installed(external_dir) is True
+
+
+def test_extract_zip_rejects_path_traversal_entries(tmp_path) -> None:
+    archive_path = tmp_path / "payload.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../evil.txt", "owned")
+
+    task = setup_wizard.SetupTask(id="task", name="comfy")
+    dest_dir = tmp_path / "extract"
+
+    with pytest.raises(ValueError, match="Unsafe path in archive"):
+        setup_wizard._extract_zip_with_cancel(task, archive_path, dest_dir)
+
+    assert not (tmp_path / "evil.txt").exists()
+    assert not any(dest_dir.rglob("*"))

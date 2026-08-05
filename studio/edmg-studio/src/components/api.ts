@@ -1,3 +1,5 @@
+import { normalizeExternalUrl } from "./externalUrl";
+
 export const BACKEND_URL_CHANGED_EVENT = "edmg:backend-url-changed";
 
 const BROWSER_BACKEND_URL_STORAGE_KEY = "edmg.backendUrl";
@@ -232,7 +234,10 @@ export function ensureBrowserBridge(): void {
     getBackendUrl: async () => getBrowserFallbackBackendUrl(),
     setBackendUrl: async (url: string) => setBrowserBackendUrl(url),
     openExternal: async (url: string) => {
-      window.open(String(url), "_blank", "noopener,noreferrer");
+      const externalUrl = normalizeExternalUrl(url);
+      if (!externalUrl) return "";
+      window.open(externalUrl, "_blank", "noopener,noreferrer");
+      return externalUrl;
     },
   };
 }
