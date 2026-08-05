@@ -270,6 +270,35 @@ def test_long_form_audio_defaults_allow_30_minutes():
     assert create_optimized_analyzer().max_duration == 1800
 
 
+def test_optimized_audio_analysis_cache_round_trips_as_json(tmp_path):
+    analyzer = create_optimized_analyzer()
+    analyzer.model_cache.cache_dir = tmp_path / "cache"
+    analyzer.model_cache.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_key = "round-trip"
+    original = SimpleNamespace(
+        filepath="song.wav",
+        tempo_bpm=127.4,
+        beat_frames=[10, 25, 50],
+        spectral_features={"rms": [0.1, 0.2]},
+        raw={"source": "test"},
+    )
+
+    analyzer._save_analysis_cache(cache_key, original)
+
+    cache_file = analyzer.model_cache.cache_dir / f"analysis_{cache_key}.json"
+    assert cache_file.exists()
+    assert not (analyzer.model_cache.cache_dir / f"analysis_{cache_key}.pkl").exists()
+
+    restored = analyzer._load_analysis_cache(cache_key)
+    assert restored is not None
+    assert restored.filepath == "song.wav"
+    assert restored.tempo_bpm == pytest.approx(127.4)
+    assert restored.beat_frames == [10, 25, 50]
+    assert restored.spectral_features == {"rms": [0.1, 0.2]}
+    assert restored.raw == {"source": "test"}
+
+
 def test_ai_service_upload_helper_streams_chunks_to_tempfile():
     class FakeUpload:
         def __init__(self, chunks):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -90,6 +91,44 @@ def test_job_store_pauses_queued_work_without_letting_a_worker_claim_it(tmp_path
     assert "paused" in event_types
     assert "resumed" in event_types
     store.close()
+
+
+def test_job_store_claim_is_atomic_across_store_instances(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    db_path = tmp_path / "jobs.sqlite"
+    store_a = JobStore(projects, db_path=db_path)
+    store_b = JobStore(projects, db_path=db_path)
+    try:
+        job = store_a.create("proj5", "internal_video", {})
+        barrier = threading.Barrier(2)
+        results: list[tuple[str, object | None]] = []
+        errors: list[BaseException] = []
+
+        def worker(store: JobStore, owner: str) -> None:
+            try:
+                barrier.wait(timeout=5)
+                results.append((owner, store.claim_next_queued(owner=owner)))
+            except BaseException as exc:  # pragma: no cover - surfaced by assertions
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=worker, args=(store_a, "worker-a")),
+            threading.Thread(target=worker, args=(store_b, "worker-b")),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert not errors
+        assert all(not thread.is_alive() for thread in threads)
+        claimed = [result for _, result in results if result is not None]
+        assert len(claimed) == 1
+        assert claimed[0].id == job.id
+        assert any(result is None for _, result in results)
+    finally:
+        store_a.close()
+        store_b.close()
 
 
 def test_job_store_migrate_skips_unreadable_project_dirs(tmp_path: Path) -> None:

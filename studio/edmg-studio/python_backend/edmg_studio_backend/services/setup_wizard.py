@@ -185,12 +185,22 @@ def _run_subprocess(
 
 
 def _extract_zip_with_cancel(task: SetupTask, archive_path: Path, dest_dir: Path) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = dest_dir.resolve()
     with zipfile.ZipFile(archive_path) as archive:
         members = archive.infolist()
         total = max(1, len(members))
         for index, member in enumerate(members, start=1):
             SetupTaskManager.check_canceled(task)
-            archive.extract(member, dest_dir)
+            target_path = (dest_dir / Path(member.filename)).resolve()
+            if not target_path.is_relative_to(base_dir):
+                raise ValueError(f"Unsafe path in archive: {member.filename}")
+            if member.is_dir():
+                target_path.mkdir(parents=True, exist_ok=True)
+            else:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member, "r") as source, target_path.open("wb") as target:
+                    shutil.copyfileobj(source, target)
             SetupTaskManager.set_progress(task, max(task.progress or 0.0, min(0.98, 0.8 + (index / total) * 0.18)))
 
 

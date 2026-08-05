@@ -494,69 +494,74 @@ class JobStore:
         claim_owner = owner or f"worker-{uuid.uuid4().hex[:8]}"
         now = time.time()
         with self._lock:
-            # Re-queue expired leases so interrupted workers can recover.
-            self._conn.execute(
-                """
-                UPDATE jobs
-                SET status = 'queued',
-                    lease_owner = NULL,
-                    lease_expires_at = NULL,
-                    updated_at = ?
-                WHERE status = 'running'
-                  AND lease_expires_at IS NOT NULL
-                  AND lease_expires_at < ?
-                """,
-                (self._now(), now),
-            )
-            row = self._conn.execute(
-                """
-                SELECT * FROM jobs
-                WHERE status = 'queued'
-                ORDER BY created_at ASC, id ASC
-                LIMIT 1
-                """
-            ).fetchone()
-            if row is None:
-                self._conn.commit()
-                return None
-            job = self._row_to_job(row)
-            latest = self.get(job.project_id, job.id)
-            if not latest or latest.status != "queued":
-                self._conn.commit()
-                return None
-            latest.status = "running"
-            latest.updated_at = self._now()
-            self._conn.execute(
-                """
-                UPDATE jobs
-                SET status = 'running',
-                    updated_at = ?,
-                    lease_owner = ?,
-                    lease_expires_at = ?,
-                    attempt = attempt + 1
-                WHERE project_id = ? AND id = ? AND status = 'queued'
-                """,
-                (
-                    latest.updated_at,
-                    claim_owner,
-                    now + float(lease_seconds),
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Re-queue expired leases so interrupted workers can recover.
+                self._conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'queued',
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = ?
+                    WHERE status = 'running'
+                      AND lease_expires_at IS NOT NULL
+                      AND lease_expires_at < ?
+                    """,
+                    (self._now(), now),
+                )
+                row = self._conn.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE status = 'queued'
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if row is None:
+                    self._conn.commit()
+                    return None
+                job = self._row_to_job(row)
+                latest = self.get(job.project_id, job.id)
+                if not latest or latest.status != "queued":
+                    self._conn.commit()
+                    return None
+                latest.status = "running"
+                latest.updated_at = self._now()
+                lease_update = self._conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'running',
+                        updated_at = ?,
+                        lease_owner = ?,
+                        lease_expires_at = ?,
+                        attempt = attempt + 1
+                    WHERE project_id = ? AND id = ? AND status = 'queued'
+                    """,
+                    (
+                        latest.updated_at,
+                        claim_owner,
+                        now + float(lease_seconds),
+                        latest.project_id,
+                        latest.id,
+                    ),
+                )
+                if lease_update.rowcount != 1:
+                    self._conn.commit()
+                    return None
+                latest.attempt = int(latest.attempt or 0) + 1
+                self._record_event(
                     latest.project_id,
                     latest.id,
-                ),
-            )
-            if self._conn.total_changes == 0:
+                    "claimed",
+                    {"owner": claim_owner, "lease_seconds": lease_seconds},
+                )
                 self._conn.commit()
-                return None
-            latest.attempt = int(latest.attempt or 0) + 1
-            self._record_event(
-                latest.project_id,
-                latest.id,
-                "claimed",
-                {"owner": claim_owner, "lease_seconds": lease_seconds},
-            )
-            self._conn.commit()
-            self._mirror_json(latest)
-            return latest
+                self._mirror_json(latest)
+                return latest
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def list_events(self, project_id: str, job_id: str) -> list[dict[str, Any]]:
         with self._lock:

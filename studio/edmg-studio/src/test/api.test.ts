@@ -46,6 +46,22 @@ describe("backend URL resolution", () => {
     expect(window.localStorage.getItem("edmg.backendUrl")).toBe(FRESH_TUNNEL);
   });
 
+  it("normalizes browser bridge external URLs before opening a new tab", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    ensureBrowserBridge();
+
+    await expect(
+      window.edmg?.openExternal?.(" https://example.com/docs/?feature=studio#top "),
+    ).resolves.toBe("https://example.com/docs?feature=studio#top");
+    await expect(window.edmg?.openExternal?.("javascript:alert(1)")).resolves.toBe("");
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://example.com/docs?feature=studio#top",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
   it("persists a resolved backend URL when localStorage is empty", () => {
     window.localStorage.removeItem("edmg.backendUrl");
     window.__EDMG_BACKEND_URL__ = `${FRESH_TUNNEL}/v1`;

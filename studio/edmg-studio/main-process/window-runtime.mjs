@@ -1,6 +1,7 @@
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { canNavigateWithinApp, normalizeExternalUrl } from "./security.mjs";
 
 export function resolveWindowBackendUrl(backendUrl, getBackendUrl) {
   if (typeof getBackendUrl === "function") {
@@ -13,6 +14,7 @@ export function resolveWindowBackendUrl(backendUrl, getBackendUrl) {
 export function createWindowRuntime({
   app,
   BrowserWindow,
+  shell,
   rootDir,
   appName,
   isDev,
@@ -191,6 +193,30 @@ export function createWindowRuntime({
     });
   }
 
+  function attachWindowSecurityGuards(win) {
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      const externalUrl = normalizeExternalUrl(url);
+      if (externalUrl) {
+        void shell.openExternal(externalUrl).catch((error) => {
+          console.error("[window] failed to open external URL", externalUrl, error);
+        });
+        return { action: "deny" };
+      }
+
+      if (canNavigateWithinApp(url, win.webContents.getURL(), { testMode })) {
+        return { action: "allow" };
+      }
+
+      return { action: "deny" };
+    });
+
+    win.webContents.on("will-navigate", (event, url) => {
+      if (!canNavigateWithinApp(url, win.webContents.getURL(), { testMode })) {
+        event.preventDefault();
+      }
+    });
+  }
+
   async function createMainWindow() {
     const currentBackendUrl = resolveWindowBackendUrl(backendUrl, getBackendUrl);
     const win = new BrowserWindow({
@@ -219,6 +245,7 @@ export function createWindowRuntime({
     });
 
     attachWindowDiagnostics(win);
+    attachWindowSecurityGuards(win);
 
     if (testMode) {
       appendTestTrace("createMainWindow:created");

@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBackendRuntime } from "./main-process/backend-runtime.mjs";
 import { createDirectorRuntime } from "./main-process/director-runtime.mjs";
+import { assertTrustedRendererIpc, normalizeExternalUrl } from "./main-process/security.mjs";
 import { buildCacheEnvPaths } from "./main-process/storage-env.mjs";
 import { createWindowRuntime } from "./main-process/window-runtime.mjs";
 
@@ -1386,6 +1387,7 @@ const directorRuntime = createDirectorRuntime({
 const windowRuntime = createWindowRuntime({
   app,
   BrowserWindow,
+  shell,
   rootDir: __dirname,
   appName: APP_NAME,
   isDev: IS_DEV,
@@ -1408,22 +1410,32 @@ const windowRuntime = createWindowRuntime({
 console.log(`EDMG_currentBackendUrl=${backendRuntime.getCurrentBackendUrl()}`);
 
 function registerIpcHandlers() {
-  ipcMain.handle("edmg:getBackendUrl", async () => backendRuntime.getCurrentBackendUrl());
-  ipcMain.handle("edmg:getBackendAuthToken", async () => {
+  const trustedHandle = (channel, handler) => {
+    ipcMain.handle(channel, async (event, ...args) => {
+      assertTrustedRendererIpc(event, channel, {
+        devServerUrl: DEV_SERVER_URL,
+        testMode: TEST_MODE,
+      });
+      return handler(event, ...args);
+    });
+  };
+
+  trustedHandle("edmg:getBackendUrl", async () => backendRuntime.getCurrentBackendUrl());
+  trustedHandle("edmg:getBackendAuthToken", async () => {
     const result = readBackendAuthToken();
     return { ok: true, configured: !!result.token, ...result };
   });
-  ipcMain.handle("edmg:setBackendAuthToken", async (_event, token = "") =>
+  trustedHandle("edmg:setBackendAuthToken", async (_event, token = "") =>
     writeBackendAuthToken(token),
   );
-  ipcMain.handle("edmg:getBackendSettings", async () => ({
+  trustedHandle("edmg:getBackendSettings", async () => ({
     ok: true,
     ...getConfiguredBackendSettings(),
     currentBackendUrl: backendRuntime.getCurrentBackendUrl(),
   }));
-  ipcMain.handle("edmg:getDirectorStatus", async () => directorRuntime.getDirectorStatus());
-  ipcMain.handle("edmg:getStudioPaths", async () => ({ ok: true, ...getStudioPaths() }));
-  ipcMain.handle("edmg:getAiSettings", async () => ({ ok: true, ...getConfiguredAiSettings() }));
+  trustedHandle("edmg:getDirectorStatus", async () => directorRuntime.getDirectorStatus());
+  trustedHandle("edmg:getStudioPaths", async () => ({ ok: true, ...getStudioPaths() }));
+  trustedHandle("edmg:getAiSettings", async () => ({ ok: true, ...getConfiguredAiSettings() }));
 
   const saveStorageSettings = async (nextSettings = {}) => {
     const requested = nextSettings && typeof nextSettings === "object" ? nextSettings : {};
@@ -1476,15 +1488,15 @@ function registerIpcHandlers() {
     };
   };
 
-  ipcMain.handle("edmg:setStorageSettings", async (_event, nextSettings = {}) =>
+  trustedHandle("edmg:setStorageSettings", async (_event, nextSettings = {}) =>
     saveStorageSettings(nextSettings)
   );
 
-  ipcMain.handle("edmg:setStudioHome", async (_event, targetPath) =>
+  trustedHandle("edmg:setStudioHome", async (_event, targetPath) =>
     saveStorageSettings({ studioHome: targetPath })
   );
 
-  ipcMain.handle("edmg:setAiSettings", async (_event, nextSettings = {}) => {
+  trustedHandle("edmg:setAiSettings", async (_event, nextSettings = {}) => {
     const aiSettings = syncAiSettingsToProcessEnv(nextSettings);
     const nextConfig = {
       ...readBootstrapConfig(),
@@ -1512,7 +1524,7 @@ function registerIpcHandlers() {
     };
   });
 
-  ipcMain.handle("edmg:setBackendSettings", async (_event, nextSettings = {}) => {
+  trustedHandle("edmg:setBackendSettings", async (_event, nextSettings = {}) => {
     const backendSettings = syncBackendSettingsToProcessEnv(nextSettings);
     const nextConfig = {
       ...readBootstrapConfig(),
@@ -1537,7 +1549,7 @@ function registerIpcHandlers() {
     };
   });
 
-  ipcMain.handle("edmg:setDirectorSettings", async (_event, nextSettings = {}) => {
+  trustedHandle("edmg:setDirectorSettings", async (_event, nextSettings = {}) => {
     const directorSettings = syncDirectorSettingsToProcessEnv(nextSettings);
     const nextConfig = {
       ...readBootstrapConfig(),
@@ -1559,7 +1571,16 @@ function registerIpcHandlers() {
     };
   });
 
-  ipcMain.handle("edmg:openPath", async (_event, targetPath) => {
+  trustedHandle("edmg:openExternal", async (_event, rawUrl) => {
+    const externalUrl = normalizeExternalUrl(rawUrl);
+    if (!externalUrl) {
+      return "";
+    }
+    await shell.openExternal(externalUrl);
+    return externalUrl;
+  });
+
+  trustedHandle("edmg:openPath", async (_event, targetPath) => {
     const resolved = path.resolve(String(targetPath ?? ""));
 
     if (FAKE_PATH_ACTIONS) {
@@ -1584,7 +1605,7 @@ function registerIpcHandlers() {
     };
   });
 
-  ipcMain.handle("edmg:revealPath", async (_event, targetPath) => {
+  trustedHandle("edmg:revealPath", async (_event, targetPath) => {
     const resolved = path.resolve(String(targetPath ?? ""));
 
     if (FAKE_PATH_ACTIONS) {
@@ -1605,7 +1626,7 @@ function registerIpcHandlers() {
     };
   });
 
-  ipcMain.handle("edmg:pickFile", async (_event, options = {}) => {
+  trustedHandle("edmg:pickFile", async (_event, options = {}) => {
     const result = await dialog.showOpenDialog(windowRuntime.getMainWindow() ?? undefined, {
       title: options?.title ?? "Select file",
       defaultPath: options?.defaultPath,
@@ -1622,7 +1643,7 @@ function registerIpcHandlers() {
     return { ok: true, canceled: false, paths: result.filePaths };
   });
 
-  ipcMain.handle("edmg:pickDirectory", async (_event, options = {}) => {
+  trustedHandle("edmg:pickDirectory", async (_event, options = {}) => {
     const result = await dialog.showOpenDialog(windowRuntime.getMainWindow() ?? undefined, {
       title: options?.title ?? "Select folder",
       defaultPath: options?.defaultPath,
@@ -1636,13 +1657,13 @@ function registerIpcHandlers() {
     return { ok: true, canceled: false, path: result.filePaths[0] };
   });
 
-  ipcMain.handle("edmg:relaunch", async () => {
+  trustedHandle("edmg:relaunch", async () => {
     app.relaunch();
     app.exit(0);
     return { ok: true };
   });
 
-  ipcMain.handle("edmg:testWriteReport", async (_event, payload) => {
+  trustedHandle("edmg:testWriteReport", async (_event, payload) => {
     return windowRuntime.writeTestReport(payload);
   });
 }

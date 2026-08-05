@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, shell } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -83,7 +83,7 @@ contextBridge.exposeInMainWorld("edmg", {
   setBackendSettings: (settings) => ipcRenderer.invoke("edmg:setBackendSettings", settings),
   setDirectorSettings: (settings) => ipcRenderer.invoke("edmg:setDirectorSettings", settings),
 
-  openExternal: (url) => shell.openExternal(String(url)),
+  openExternal: (url) => ipcRenderer.invoke("edmg:openExternal", String(url || "")),
   openPath: (targetPath) => ipcRenderer.invoke("edmg:openPath", targetPath),
   showItemInFolder: (targetPath) => ipcRenderer.invoke("edmg:revealPath", targetPath),
   revealPath: (targetPath) => ipcRenderer.invoke("edmg:revealPath", targetPath),
