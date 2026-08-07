@@ -10,7 +10,7 @@ import requests
 from PIL import Image, ImageOps
 
 from ..errors import UserFacingError
-
+from ..version import STUDIO_VERSION
 
 ALLOWED_ASPECT_RATIOS = ("21:9", "16:9", "3:2", "5:4", "1:1", "4:5", "2:3", "9:16", "9:21")
 STYLE_PRESETS = (
@@ -135,7 +135,7 @@ class StabilityPlatformClient:
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
             "stability-client-id": "EDMG Studio",
-            "stability-client-version": "1.1.0",
+            "stability-client-version": STUDIO_VERSION,
         }
         files: list[tuple[str, tuple[Any, ...]]] = [
             ("prompt", (None, str(prompt or "").strip() or "cinematic")),

@@ -43,6 +43,30 @@ export function installEdmgBridge(
   window.edmg = {
     backendUrl: () => "http://127.0.0.1:7863",
     getBackendUrl: async () => "http://127.0.0.1:7863",
+    getBuildIdentity: async () => ({
+      ok: true,
+      desktop: {
+        version: "1.2.0",
+        packaged: false,
+        platform: "win32",
+        arch: "x64",
+        electronVersion: "39.2.7",
+      },
+      backendBundle: {
+        available: false,
+        binaryVerified: false,
+        schemaVersion: null,
+        builder: "",
+        platform: "",
+        backendEntryPoint: "",
+        acceleratorProfile: "",
+        pythonVersion: "",
+        sourceHash: "",
+        sourceFileCount: null,
+        lockSha256: "",
+        binarySha256: "",
+      },
+    }),
     getBackendAuthToken: async () => ({
       ok: true,
       token: "",
@@ -129,7 +153,7 @@ export function installEdmgBridge(
     revealPath: async (value: string) => ({ ok: true, action: "reveal_path", path: value }),
     showItemInFolder: async (value: string) => ({ ok: true, action: "show_item", path: value }),
     openPath: async (value: string) => ({ ok: true, action: "open_path", path: value }),
-    openExternal: async () => {},
+    openExternal: async (value: string) => value,
     getStudioPaths: async () => ({
       ok: true,
       platform: "win32",

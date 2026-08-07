@@ -4,6 +4,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBackendRuntime } from "./main-process/backend-runtime.mjs";
+import { buildIdentity } from "./main-process/build-identity.mjs";
 import { createDirectorRuntime } from "./main-process/director-runtime.mjs";
 import { assertTrustedRendererIpc, normalizeExternalUrl } from "./main-process/security.mjs";
 import { buildCacheEnvPaths } from "./main-process/storage-env.mjs";
@@ -1421,6 +1422,11 @@ function registerIpcHandlers() {
   };
 
   trustedHandle("edmg:getBackendUrl", async () => backendRuntime.getCurrentBackendUrl());
+  trustedHandle("edmg:getBuildIdentity", async () => buildIdentity({
+    app,
+    resourcesPath: process.resourcesPath,
+    rootDir: __dirname,
+  }));
   trustedHandle("edmg:getBackendAuthToken", async () => {
     const result = readBackendAuthToken();
     return { ok: true, configured: !!result.token, ...result };

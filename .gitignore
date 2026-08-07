@@ -11,6 +11,8 @@ __pycache__/
 *.log
 *.bak
 nohup.out
+/.playwright-cli/
+/.tmp/
 
 # ----------------------------
 # Python packaging / build
@@ -76,6 +78,8 @@ node_modules/
 studio/edmg-studio/dist/
 studio/edmg-studio/dist-inno/
 studio/edmg-studio/dist-inno-cuda/
+studio/edmg-studio/dist-inno-cuda.zip
+studio/edmg-studio/dist-linux-cuda/
 studio/edmg-studio/dist-web/
 studio/edmg-studio/dist-audit/
 studio/edmg-studio/dist-sim/
@@ -109,6 +113,9 @@ studio/edmg-studio/electron-resources/backend.staging/
 studio/edmg-studio/electron-resources/backend.previous/
 studio/edmg-studio/electron-resources/bin/*.exe
 studio/edmg-studio/electron-resources/bin/ffmpeg
+studio/edmg-studio/electron-resources/bin/ffprobe
+studio/edmg-studio/electron-resources/bin/FFmpeg-LICENSE.txt
+studio/edmg-studio/electron-resources/bin/FFmpeg-SOURCE.txt
 studio/edmg-studio/electron-resources/director/
 
 # Local deployment credentials and large NVIDIA runtime caches
@@ -117,6 +124,11 @@ starlift-data/
 
 # Root developer credentials (copy .env.example; never commit .env)
 /.env
+
+# The release-authoritative Python lock lives under the canonical Studio backend.
+# The repo-root Python project is a legacy compatibility path and must not become
+# a second release dependency authority through a locally generated lock.
+/uv.lock
 
 # ----------------------------
 # Local agent / tunnel tooling (download binaries locally)

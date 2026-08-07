@@ -12,6 +12,7 @@ import {
   assertValidReleaseManifest,
   sha256File,
 } from "./release-python-toolchain.mjs";
+import { resolvePinnedMediaAsset } from "./stage-media-tools.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -37,6 +38,59 @@ function bundledResourcePaths(appDir) {
     backendExe: path.join(appDir, "electron-resources", "backend", process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend"),
     backendManifest: path.join(appDir, "electron-resources", "backend", "backend-bundle-manifest.json"),
     ffmpegExe: path.join(appDir, "electron-resources", "bin", process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg"),
+    ffprobeExe: path.join(appDir, "electron-resources", "bin", process.platform === "win32" ? "ffprobe.exe" : "ffprobe"),
+    ffmpegLicense: path.join(appDir, "electron-resources", "bin", "FFmpeg-LICENSE.txt"),
+    ffmpegSourceNotice: path.join(appDir, "electron-resources", "bin", "FFmpeg-SOURCE.txt"),
+  };
+}
+
+function assertRunnableBundledMediaTool(toolPath, toolName) {
+  assert.ok(fs.existsSync(toolPath), `staged app missing bundled ${toolName}: ${toolPath}`);
+  const stat = fs.statSync(toolPath);
+  assert.ok(stat.isFile() && stat.size > 0, `staged app bundled ${toolName} is empty or not a file: ${toolPath}`);
+  const result = spawnSync(toolPath, ["-version"], {
+    encoding: "utf8",
+    maxBuffer: 2 * 1024 * 1024,
+    timeout: 15000,
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  assert.equal(result.status, 0, `staged app bundled ${toolName} failed its version probe: ${output.trim()}`);
+  assert.match(output, new RegExp(`^${toolName} version`, "im"));
+}
+
+function assertBundledMediaDistributionEvidence(resources) {
+  const asset = resolvePinnedMediaAsset({ platform: process.platform, arch: process.arch });
+  for (const [label, filePath] of [
+    ["FFmpeg license", resources.ffmpegLicense],
+    ["FFmpeg source notice", resources.ffmpegSourceNotice],
+  ]) {
+    assert.ok(fs.existsSync(filePath), `staged app missing bundled ${label}: ${filePath}`);
+    const stat = fs.statSync(filePath);
+    assert.ok(stat.isFile() && stat.size > 0, `staged app bundled ${label} is empty or not a file: ${filePath}`);
+  }
+
+  const licenseText = fs.readFileSync(resources.ffmpegLicense, "utf8");
+  assert.match(licenseText, /GNU GENERAL PUBLIC LICENSE[\s\S]{0,200}Version 3/i);
+
+  const sourceNotice = fs.readFileSync(resources.ffmpegSourceNotice, "utf8");
+  for (const expectedValue of [
+    asset.releaseTag,
+    asset.archiveName,
+    asset.sha256,
+    asset.distributionNotice.ffmpegSource.commit,
+    asset.distributionNotice.buildSource.commit,
+  ]) {
+    assert.ok(
+      sourceNotice.includes(expectedValue),
+      `staged app FFmpeg source notice does not identify ${expectedValue}`,
+    );
+  }
+  return {
+    license: resources.ffmpegLicense,
+    sourceNotice: resources.ffmpegSourceNotice,
+    archiveSha256: asset.sha256,
   };
 }
 
@@ -192,9 +246,12 @@ async function runStagedAppProbe() {
   assert.ok(fs.existsSync(path.join(appDir, 'electron-builder.yml')), 'staged app electron-builder.yml missing');
   assert.ok(fs.existsSync(resources.backendExe), `staged app missing bundled backend: ${resources.backendExe}`);
   assert.ok(fs.existsSync(resources.backendManifest), `staged app missing backend bundle manifest: ${resources.backendManifest}`);
-  const bundledFfmpeg = fs.existsSync(resources.ffmpegExe);
-  if (process.platform === "win32") {
-    assert.ok(bundledFfmpeg, `staged app missing bundled ffmpeg: ${resources.ffmpegExe}`);
+  const bundledFfmpeg = fs.existsSync(resources.ffmpegExe) && fs.statSync(resources.ffmpegExe).isFile();
+  const bundledFfprobe = fs.existsSync(resources.ffprobeExe) && fs.statSync(resources.ffprobeExe).isFile();
+  if (process.platform === "win32" || process.platform === "linux") {
+    assertRunnableBundledMediaTool(resources.ffmpegExe, "ffmpeg");
+    assertRunnableBundledMediaTool(resources.ffprobeExe, "ffprobe");
+    summary.mediaDistributionEvidence = assertBundledMediaDistributionEvidence(resources);
   }
   const backendManifest = JSON.parse(await fsp.readFile(resources.backendManifest, "utf8"));
   assertValidReleaseManifest(backendManifest);
@@ -220,7 +277,7 @@ async function runStagedAppProbe() {
     "backend release manifest must preserve the deterministic capability extras",
   );
   summary.resources = resources;
-  summary.ffmpegMode = bundledFfmpeg ? "bundled" : "system-or-EDMG_FFMPEG_PATH";
+  summary.ffmpegMode = bundledFfmpeg && bundledFfprobe ? "bundled-ffmpeg-and-ffprobe" : "unsupported-platform-fallback";
   summary.backendManifest = backendManifest;
   summary.backendRunJobCli = await probeBundledBackendRunJobCli(resources.backendExe);
 

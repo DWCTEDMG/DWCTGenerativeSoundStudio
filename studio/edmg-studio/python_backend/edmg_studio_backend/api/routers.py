@@ -547,6 +547,20 @@ def create_models_router(*, get_models: Callable[[], Any]) -> APIRouter:
     def models_tasks() -> dict[str, Any]:
         return {"tasks": [t.__dict__ for t in get_models().tasks.list()]}
 
+    @router.get("/v1/models/tensorrt/legacy-status")
+    def models_tensorrt_legacy_status() -> dict[str, Any]:
+        return get_models().legacy_tensorrt_status()
+
+    @router.post("/v1/models/tensorrt/import-legacy")
+    def models_tensorrt_import_legacy() -> dict[str, Any]:
+        task = get_models().import_legacy_tensorrt()
+        return {"task": task.__dict__}
+
+    @router.post("/v1/models/tensorrt/cancel-import")
+    def models_tensorrt_cancel_import(req: dict[str, Any]) -> dict[str, Any]:
+        task = get_models().cancel_legacy_tensorrt_import(str(req.get("task_id") or ""))
+        return {"task": task.__dict__}
+
     @router.post("/v1/models/accept")
     def models_accept(req: dict[str, Any]) -> dict[str, Any]:
         model_id = str(req.get("model_id") or "")

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import Render from "../pages/Render";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
-const installRenderMocks = () => {
+const installRenderMocks = (options: { tensorRtInstalled?: boolean } = {}) => {
   installEdmgBridge();
   return installFetchMock({
     "/v1/projects": { projects: [{ id: "p1", name: "Demo Project" }] },
@@ -118,7 +118,7 @@ const installRenderMocks = () => {
         local_lora_neon: true,
         hf_sdxl_internal: true,
         hf_sd35_medium_internal: true,
-        local_sd15_tensorrt_bundle: true,
+        local_sd15_tensorrt_bundle: options.tensorRtInstalled ?? true,
         hf_svd_xt_1_1_tensorrt_bundle: true,
       },
     },
@@ -222,6 +222,11 @@ const installRenderMocks = () => {
       },
     },
     "POST /v1/projects/p1/render/internal/preflight": { ok: true, mode: "proxy" },
+    "POST /v1/projects/p1/render/internal/video": {
+      ok: true,
+      job: { id: "internal-trt-1", type: "internal_video", status: "queued" },
+      preflight: { mode: "tensorrt" },
+    },
     "/v1/projects/p1/render/performer/plan*": { ok: true, performer_plan: null },
     "POST /v1/projects/p1/render/performer/plan": {
       ok: true,
@@ -475,6 +480,68 @@ describe("Render page", () => {
         }),
       ).toBe(true);
     });
+
+    const renderButton = await screen.findByRole("button", { name: "Internal / Hosted" });
+    await waitFor(() => expect((renderButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(renderButton);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => {
+          if (!String(url).includes("/v1/projects/p1/render/internal/video")) return false;
+          const body = String(init?.body || "");
+          return String(init?.method || "GET").toUpperCase() === "POST"
+            && body.includes('"render_mode":"tensorrt"')
+            && body.includes('"model_id":"local_sd15_tensorrt_bundle"')
+            && body.includes('"device_preference":"cuda"');
+        }),
+      ).toBe(true);
+    });
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/tensorrt-deforum")),
+    ).toBe(false);
+  }, 10000);
+
+  it("blocks internal TensorRT video until its required bundle is installed", async () => {
+    const fetchMock = installRenderMocks({ tensorRtInstalled: false });
+
+    renderWithStudio(<Render />);
+
+    const tensorRtOption = await screen.findByRole("option", { name: "TensorRT SD1.5 keyframe assembly" });
+    const renderModeSelect = tensorRtOption.closest("select");
+    expect(renderModeSelect).toBeTruthy();
+    fireEvent.change(renderModeSelect!, { target: { value: "tensorrt" } });
+
+    const renderButton = await screen.findByRole("button", { name: "Internal / Hosted" });
+    await waitFor(() => expect((renderButton as HTMLButtonElement).disabled).toBe(true));
+    expect((await screen.findByRole("status", { name: "TensorRT bundle status" })).textContent).toMatch(/Bundle status: missing/i);
+    expect(screen.getByRole("button", { name: "Open Models to install TensorRT bundle" })).toBeTruthy();
+
+    fireEvent.click(renderButton);
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/v1/projects/p1/render/internal/video")),
+    ).toBe(false);
+  }, 10000);
+
+  it("hides standalone TensorRT controls for a non-TensorRT still model", async () => {
+    installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    expect(await screen.findByDisplayValue(/Stable Diffusion XL Base 1\.0/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Render TensorRT still" })).toBeNull();
+  }, 10000);
+
+  it("disables standalone TensorRT rendering when its selected bundle is not installed", async () => {
+    installRenderMocks({ tensorRtInstalled: false });
+
+    renderWithStudio(<Render />);
+
+    const stillModelSelect = await screen.findByDisplayValue(/Stable Diffusion XL Base 1\.0/);
+    fireEvent.change(stillModelSelect, { target: { value: "local_sd15_tensorrt_bundle" } });
+
+    const renderButton = await screen.findByRole("button", { name: "Render TensorRT still" });
+    expect((renderButton as HTMLButtonElement).disabled).toBe(true);
   }, 10000);
 
   it("hides unsupported TensorRT runtime bundles from internal video model selection", async () => {

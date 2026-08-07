@@ -1,40 +1,162 @@
-# DWCT Generative Sound Studio Modernization Status
+# DWCT Generative Sound Studio Release-Convergence Status
 
-Last updated: 2026-07-14
-Integration branch: `codex/one-week-modernization`
-Local baseline: `5f7c3a7` (`fix(deps): resolve Dependabot alerts`)
-Remote default baseline: `ce195b8` on `codex/Unified`
+Current review date: 2026-08-06
+Canonical product: `studio/edmg-studio`
+Canonical Python lock: `studio/edmg-studio/python_backend/uv.lock`
 
-This file is the integration ledger for the seven-day modernization blueprint. A package is
-`Complete` only when its implementation, tests, documentation, and required evidence are present.
-`Blocked evidence` means the code or documentation can proceed, but the named external proof is not
-available. Existing rendering, timeline, audio-analysis, Visual DNA, Render Conductor,
-model-management, Unreal, and live-control paths remain compatibility requirements. In particular,
-`studio/edmg-studio/python_backend/edmg_studio_backend/services/internal_video.py` remains the
-canonical internal renderer and must be integrated through adapters rather than rewritten.
+This document now separates **current verified truth** from the historical seven-day implementation
+ledger. The day-by-day tables later in this file are retained as planning history from 2026-07-14;
+their individual `Partial` and `Not started` labels are not current implementation claims.
 
-## Recorded baseline
+A capability is release-complete only when implementation, Studio UI, contracts, tests,
+documentation, packaged behavior, and required external evidence all agree. Code that exists but
+lacks clean-machine, signing, upgrade, GPU, or platform evidence remains release-incomplete.
+
+The canonical internal renderer remains
+`studio/edmg-studio/python_backend/edmg_studio_backend/services/internal_video.py`. Modernization
+must extract bounded services around that behavior and preserve golden outputs; it must not create
+a second canonical render loop.
+
+## Current release baseline
+
+This table identifies the canonical gate and the evidence still required from the exact candidate.
+It does not preserve a branch name, commit snapshot, or test count as if that were current release
+proof. Refresh every command-derived row after the final candidate commit and artifact build.
+
+| Gate | Candidate requirement | Status |
+|---|---|---|
+| Git scope | Record the final candidate commit and a clean, reviewed release scope immediately before packaging | Refresh at release |
+| Python toolchain | Python 3.12, uv 0.11.28, and the canonical frozen lock select exactly one CPU/DirectML/CUDA profile | Implemented; revalidate |
+| Repository suite | Run the canonical frozen repository scopes and evaluate the current skip/warning set | Refresh at release |
+| Backend suite | Run the canonical frozen CPU/core/audio backend suite from the committed lock | Refresh at release |
+| Backend lint | Run focused changed-file checks and record the current full-tree Ruff baseline separately; do not present focused lint as full-tree lint or a security scan | Cleanup and refresh required |
+| Frontend lint | Run the canonical Studio ESLint gate on the final source candidate | Refresh at release |
+| Frontend type contract | Verify the browser and Electron adapters against the current typecheck and runtime suites | Refresh at release |
+| Frontend UI suite | Run the complete current UI suite, including Studio Forge coverage | Refresh at release |
+| Release tooling | Run the complete release-toolchain suite and evaluate only its current platform skips | Refresh at release |
+| Desktop runtime | Run the backend/build-identity/window runtime suites on the final source candidate | Refresh at release |
+| Frontend production build | Produce a fresh Vite build from the final source candidate | Refresh at release |
+| DirectML backend bundle provenance | Regenerate staging only from committed, clean dependency inputs and require the staged manifest to match the candidate lock, source, platform, profile, and binary | Rebuild required |
+| JavaScript dependency audit | Run production and complete development/build audits against the final lockfile and retain their current reports | Refresh at release |
+| Production signing gate | Configure the authorized signing identity and require the fail-closed production gate; do not infer credential or signature state from this document | Credential evidence required |
+| Installed baseline | EDMG Studio 1.1.0 CUDA onedir installation with a schema-5 backend manifest | Available for read-only upgrade evidence |
+| Installed CUDA runtime | Python 3.12.10, PyTorch 2.11.0+cu130, TensorRT 10.15.1.29, Torch-TensorRT, CUDA Python 13.0.3 | Present |
+| Candidate signatures | Verify Authenticode signatures and timestamps on every freshly built shipped executable and installer | Release blocker until evidenced |
+| Active Studio Home legacy TensorRT engines | Four safe root-level engines detected read-only (4,636,659,776 bytes); canonical bundle absent; E: has sufficient copy capacity | Eligible for explicit copy; not executed |
+| D: capacity | Windows reports zero free bytes; Triton and external model folders on D: remain read-only and excluded | Operational blocker for any D: write/build/cache |
+
+Update this table whenever a named gate is rerun. Do not infer a green release from an older build
+directory or from unit tests alone.
+
+## Current implementation truth
+
+The repository contains substantially more implementation than the historical ledger recorded:
+
+- versioned project manifests, validation, migrations, backups, and atomic writes;
+- SQLite/WAL jobs and events with leases, retries, idempotency, and recovery coverage;
+- autosave/recovery journals and project-health paths;
+- typed v1 domain contracts and compatibility adapters;
+- timeline commands with undo/redo foundations;
+- Music Graph v1, corrections/reverts, Director modes, Visual DNA, motion grammar, and stem
+  modulation;
+- Render Plan v1, continuity validation, variant review, provider/model lanes, and promotion paths;
+- live cues/assets, world adapters, template packages, and performer workflow foundations;
+- frozen uv accelerator profiles and release-bundle provenance;
+- CycloneDX/checksum generation and fail-closed Windows signing hooks;
+- packaged customer-flow, migration, upgrade, and zero-state proof harnesses;
+- read-only installed-baseline inspection with strict newer-candidate and path-confinement rules;
+- in-app packaged build identity with source, binary, and dependency-lock fingerprints; and
+- a source-preserving legacy TensorRT engine migration with conservative readiness plus exact,
+  server-resolved bundle-path handoffs for dedicated video and SVD/AnimateDiff anchors;
+- retirement of the simulated TensorRT Deforum renderer, with the deprecated route/job contract
+  preserved only as a tested adapter into the canonical internal renderer; and
+- private TensorRT filesystem paths resolved only at execution and removed from public preflight
+  evidence and newly persisted TensorRT job payloads.
+
+These areas are still structurally or evidentially incomplete:
+
+- `edmg_studio_backend/app.py` remains an oversized composition and route module;
+- Render, Timeline, Settings, and several workbench pages remain multi-thousand-line feature
+  monoliths;
+- HTTP and Electron/browser contracts are not yet generated and enforced from one authority;
+- not every task uses one uniform durable job state machine and recovery UI;
+- model manifests and provider adapters do not yet enforce every license, checksum, revision,
+  resource, cancellation, provenance, and fallback field;
+- accessibility, reduced-motion, scaling, keyboard, and flash-safety evidence is incomplete;
+- named-hardware render quality/performance/cancel/recovery evidence is incomplete; and
+- packaged provenance fingerprints exact source, binary, and lock content but does not yet record
+  an archive-safe Git commit/dirty identity;
+- signed installers, clean-machine install, real previous-version upgrade, rollback, and publication
+  evidence remain required.
+
+## Canonical and compatibility paths
+
+The detailed retirement policy and removal gates live in `docs/COMPATIBILITY_MATRIX.md`.
+
+| Path | Classification | Rule |
+|---|---|---|
+| `studio/edmg-studio` | Canonical desktop product | All normal product, UI, backend, packaging, and release work lands here |
+| Repository root | Active workspace/orchestration | Keep cross-scope tests, docs, deployment, and compatibility launchers; do not create a second app |
+| `studio/edmg-studio/python_backend/edmg_studio_backend` | Canonical Studio backend | Extract by domain while preserving routes and persisted formats |
+| `studio/edmg-studio/python_backend/enhanced_deforum_music_generator` | Canonical bundled engine package | Access through stable facades and tests |
+| Root `enhanced_deforum_music_generator`, `utils`, `config`, `core`, and `edmg` wrappers | Compatibility | No new imports; retain only while existing consumers are inventoried and tested |
+| Root `librosa` package | Source/test compatibility shadow | Namespace and retire before a future Python upgrade |
+| `desktop/electron` | Legacy shell | Freeze; remove after supported migration and launch evidence |
+| `chatgpt-apps/edmg-director` | Optional sidecar | Share backend contracts; never own separate canonical project state |
+| ComfyUI | Optional provider | Capability-gated adapter, not a parallel product architecture |
+| Triton Inference Server | Research-only optional provider | Excluded from 1.2.0 release requirements; see `docs/TRITON_PROVIDER_READINESS.md` |
+
+## Release blockers in execution order
+
+1. Review and commit the current implementation, including the changed backend dependency inputs,
+   then record immutable source, lock, package, and installed-baseline evidence for the candidate.
+2. Run complete source gates and contract-drift checks on Windows and Ubuntu.
+3. Build and qualify a fresh signed DirectML candidate from the frozen lock; if CPU or CUDA are
+   public SKUs, build, sign, inspect, and qualify each separately. The default production command
+   is not a three-profile matrix gate, and stale bundles/evidence must not be reused.
+4. Sign the desktop executable, backend/helper executables, installer, and uninstaller, then verify
+   signatures and timestamps independently.
+5. Run zero-state install and customer flow on a clean supported Windows machine.
+6. Run a real upgrade from a separately identified installed baseline; never treat the candidate as
+   its own previous version and never mutate the baseline during inspection.
+7. Prove custom install directory, custom Studio Home, migration, restart recovery, cancellation,
+   uninstall data retention, and rollback. Include legacy TensorRT partial/unsafe/disk rejection,
+   cancellation cleanup, unchanged source hashes, atomic publication, and the engine-only
+   canonical bundle's explicit not-ready state.
+8. Produce named-hardware CUDA/TensorRT model, quality, VRAM, latency, cancellation, and recovery
+   evidence. Prove the completed bundle becomes ready only with all required assets/metadata, both
+   render flows receive the exact server-resolved bundle path, base/temporal paths remain distinct,
+   and a client filesystem path supplied as `model_id` is rejected.
+9. Complete security, accessibility, known-issues, and branch-protection evidence before public
+    promotion.
+
+## Historical seven-day ledger
+
+The following material records the July 14 planning checkpoint. It is useful for package IDs and
+original acceptance criteria only. Consult the current sections above and live tests before using a
+historical status label.
+
+### Historical recorded baseline
 
 - GitHub Actions run [29313230364](https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio/actions/runs/29313230364)
-  passed the Studio workflow on Windows and Ubuntu, including checksummed FFmpeg 7.0.2 discovery,
-  all current Python scopes, frontend gates, and the Windows Electron smoke test.
-- Studio dependency baseline after remediation: frozen pnpm install, audit, typecheck, lint, 66 UI
-  tests in 24 files, production build, and Electron bridge validation all pass.
-- Director dependency baseline after remediation: frozen pnpm install, audit, typecheck, 7 tests in
-  2 files, and production build all pass.
-- Local Python baseline on Python 3.12.10: 77 repo tests passed with 4 opt-in live-smoke skips and
-  188 backend tests passed (265 passed, 4 skipped, no failures in total).
-- Both pnpm production and development audits report zero known vulnerabilities locally. GitHub's
-  existing Dependabot alerts cannot clear until the approved commit reaches the default branch.
-- GitHub currently reports `codex/Unified` as the default branch. `main` exists, but
-  `codex/Unified` is not protected; no remote branch settings will be changed without approval.
+  recorded the then-configured Studio workflow on Windows and Ubuntu, including FFmpeg discovery,
+  Python/frontend gates, and the Windows Electron smoke path. It is historical, not current proof.
+- The historical Studio and Director dependency baselines recorded frozen installs, audits,
+  typecheck/lint/build gates, and their then-current test suites without failures. Re-run the
+  current suites instead of carrying their old totals forward.
+- The historical local Python baseline recorded clean repository and backend suite results with
+  documented opt-in live-smoke skips. Its exact totals are intentionally omitted because the suite
+  has since changed.
+- Historical local dependency audits and remote alert/branch settings are not release evidence for
+  the current candidate. Reinspect both the final lockfile and live repository governance before
+  promotion; do not infer current default-branch or protection state from this ledger.
 - The public repository currently reports no detected license. License intent therefore needs to be
   made explicit without implying an unapproved open-source grant.
 
 ## Status legend
 
 - `Complete`: acceptance criteria and evidence are satisfied.
-- `In progress`: owned by the current Day 1 integration branch.
+- `In progress`: implementation or evidence work is actively underway.
 - `Partial`: useful implementation exists, but the blueprint contract is incomplete.
 - `Not started`: no qualifying implementation exists yet.
 - `Blocked evidence`: an external credential, hardware target, repository setting, or release action
@@ -45,12 +167,12 @@ canonical internal renderer and must be integrated through adapters rather than 
 | ID | Status | Dependencies | Files owned | Tests / evidence | Blockers or remaining work |
 |---|---|---|---|---|---|
 | P0-01 | Complete | None | `.github/workflows/studio.yml`; `scripts/run_pytest_scopes.py`; FFmpeg tests | GitHub run 29313230364 passed Windows and Ubuntu | None |
-| P0-02 | Blocked evidence | Repository admin approval | `docs/BRANCH_POLICY.md`; `CONTRIBUTING.md`; `RELEASE.md` | Policy documents name `main`, `next`, required checks, promotion, and rollback; live GitHub settings inspected | Remote default remains unprotected `codex/Unified`; protected `main`, remote `next`, and required checks require an approved push/admin mutation |
+| P0-02 | Blocked evidence | Repository admin approval | `docs/BRANCH_POLICY.md`; `CONTRIBUTING.md`; `RELEASE.md` | Policy documents name `main`, `next`, required checks, promotion, and rollback | Live default-branch, protection, and required-check settings must be reinspected and any mutation requires explicit approval |
 | P0-03 | Complete | None | `.gitignore`; `.env.example`; `LICENSE`; `SECURITY.md`; `CHANGELOG.md` | Root `.env` is untracked/ignored; placeholder scan and documentation checks | All-rights-reserved notice preserves the repository's existing no-license-grant posture; owner may approve a different license later |
 | P0-04 | In progress | W1-01 | readiness service/contracts; `/v1/system/readiness`; Studio System/Setup UI | Backend contract/failure tests; UI state tests; typecheck/lint/build | Unified typed disk, writable-path, runtime, GPU, FFmpeg, and model-completeness report still needed |
 | P0-05 | Complete | W1-01 | `tests/fixtures/day1/**`; `scripts/generate_day1_fixtures.py`; `tests/test_day1_fixture_inventory.py`; `docs/TEST_FIXTURES.md` | Determinism, SHA-256, size, WAV, SVG, and legacy-project adapter tests | Existing 73 MB real-audio fixture is retained but excluded from the redistributable manifest until separate provenance is recorded |
-| P0-06 | Complete | P0-05, W1-01 | `scripts/benchmark_day1_baseline.py`; benchmark tests; `docs/BENCHMARKING.md`; `docs/benchmarks/day1-baseline-windows-2026-07-14.json` | Clean commit `b004cc2`: backend launch, project open, timeline, analysis, strict Electron launch, and 280 passing Python tests recorded on named HP Victus hardware | Installed production-build launch, browser paint, render, cancel, and recovery timings remain explicitly later P5-02/W7-04 evidence |
-| W1-01 | Complete | None | `edmg_studio_backend/contracts/**`; `src/contracts/v1.ts`; contract tests; `docs/CONTRACTS_V1.md` | 5 Python contract tests and 2 frontend contract tests pass; Studio typecheck passes | Full gates remain part of the Day 1 integration gate; current stores/render paths are unchanged |
+| P0-06 | Complete | P0-05, W1-01 | `scripts/benchmark_day1_baseline.py`; benchmark tests; `docs/BENCHMARKING.md`; `docs/benchmarks/day1-baseline-windows-2026-07-14.json` | The dated benchmark artifact records backend launch, project open, timeline, analysis, and strict Electron launch on named HP Victus hardware | Installed production-build launch, browser paint, render, cancel, and recovery timings remain explicitly later P5-02/W7-04 evidence |
+| W1-01 | Complete | None | `edmg_studio_backend/contracts/**`; `src/contracts/v1.ts`; contract tests; `docs/CONTRACTS_V1.md` | Python/frontend contract coverage and the Studio typecheck were recorded at the checkpoint; rerun their current forms | Full gates remain part of the Day 1 integration gate; current stores/render paths are unchanged |
 | UV-01 | In progress | Toolchain inventory | `.python-version`; uv pin/config; backend `pyproject.toml`; supported setup/build/CI paths; uv docs/tests | Windows parity tests and CI/static entry-point checks | Ubuntu parity after edits requires CI; lockfile and frozen project commands are explicitly UV-02/UV-03 work |
 
 ## Day 2 - Make projects, jobs, and artifacts durable
@@ -147,7 +269,7 @@ canonical internal renderer and must be integrated through adapters rather than 
 
 The gate passes when:
 
-1. the remote default baseline remains green and the local Day 1 branch passes every supported full
+1. the remote default baseline remains green and the candidate source passes every supported full
    gate;
 2. each implementation lane compiles against W1-01 versioned contracts;
 3. legacy project and existing render-path compatibility tests pass;

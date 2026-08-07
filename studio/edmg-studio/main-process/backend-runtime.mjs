@@ -139,6 +139,30 @@ export function parseWindowsNetstatListeningPid(output, port) {
   return null;
 }
 
+export function parseLinuxSsListeningPid(output, port) {
+  const targetPort = Number(port);
+  if (!Number.isInteger(targetPort) || targetPort <= 0 || targetPort > 65535) return null;
+
+  for (const rawLine of String(output || "").split(/\r?\n/)) {
+    const fields = rawLine.trim().split(/\s+/);
+    if (fields.length < 5 || String(fields[0]).toUpperCase() !== "LISTEN") continue;
+
+    const localAddress = String(fields[3] || "");
+    const portMatch = /:(\d+)$/.exec(localAddress);
+    if (!portMatch || Number(portMatch[1]) !== targetPort) continue;
+
+    const processMetadataIndex = rawLine.indexOf("users:(");
+    if (processMetadataIndex < 0) continue;
+    const processMetadata = rawLine.slice(processMetadataIndex);
+    const pidPattern = /(?:^|[,(])\s*pid=(\d+)(?=\s*[,)]|$)/g;
+    for (const match of processMetadata.matchAll(pidPattern)) {
+      const pid = Number(match[1]);
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
+    }
+  }
+  return null;
+}
+
 export function createBackendRuntime({
   app,
   dialog,
@@ -306,13 +330,21 @@ export function createBackendRuntime({
       return parseWindowsNetstatListeningPid(result.stdout, target);
     }
 
-    const result = spawnSync("lsof", ["-nP", `-iTCP:${target}`, "-sTCP:LISTEN", "-t"], {
+    const lsofResult = spawnSync("lsof", ["-nP", `-iTCP:${target}`, "-sTCP:LISTEN", "-t"], {
       encoding: "utf8",
       shell: false,
     });
-    if (result.status !== 0) return null;
-    const pid = Number(String(result.stdout || "").trim().split(/\r?\n/)[0]);
-    return Number.isFinite(pid) && pid > 0 ? pid : null;
+    if (lsofResult.status === 0) {
+      const pid = Number(String(lsofResult.stdout || "").trim().split(/\r?\n/)[0]);
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
+    }
+
+    const ssResult = spawnSync("ss", ["-H", "-ltnp"], {
+      encoding: "utf8",
+      shell: false,
+    });
+    if (ssResult.status !== 0) return null;
+    return parseLinuxSsListeningPid(ssResult.stdout, target);
   }
 
   function resolveProcessExecutablePath(pid) {

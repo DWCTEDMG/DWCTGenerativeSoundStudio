@@ -9,6 +9,7 @@ import {
   executablePathsEqual,
   managedBackendUrl,
   normalizeAcceleratorProfile,
+  parseLinuxSsListeningPid,
   parseWindowsNetstatListeningPid,
   resolveStudioUiOrigin,
 } from "./backend-runtime.mjs";
@@ -142,6 +143,47 @@ test("Windows netstat parsing finds IPv4 and IPv6 listeners with foreign-address
   assert.equal(parseWindowsNetstatListeningPid(output, 17863), 9568);
   assert.equal(parseWindowsNetstatListeningPid(output, 7864), null);
   assert.equal(parseWindowsNetstatListeningPid(output, "invalid"), null);
+});
+
+test("Linux ss parsing finds an IPv4 listener and ignores other ports", () => {
+  const output = [
+    'LISTEN 0 4096 127.0.0.1:7864 0.0.0.0:* users:(("other",pid=42,fd=3))',
+    'LISTEN 0 4096 127.0.0.1:7863 0.0.0.0:* users:(("edmg-studio-backend",pid=18556,fd=7))',
+  ].join("\n");
+
+  assert.equal(parseLinuxSsListeningPid(output, 7863), 18556);
+});
+
+test("Linux ss parsing finds bracketed and unbracketed IPv6 listeners", () => {
+  const output = [
+    'LISTEN 0 4096 [::1]:17863 [::]:* users:(("python",pid=9568,fd=6))',
+    'LISTEN 0 4096 :::27863 :::* users:(("python",pid=9569,fd=7))',
+  ].join("\n");
+
+  assert.equal(parseLinuxSsListeningPid(output, 17863), 9568);
+  assert.equal(parseLinuxSsListeningPid(output, 27863), 9569);
+});
+
+test("Linux ss parsing returns the first valid PID for multiple process owners", () => {
+  const output = [
+    'LISTEN 0 4096 127.0.0.1:7863 0.0.0.0:* users:(("pid=9999",pid=0,fd=3),("backend",pid=2401,fd=4),("backend",pid=2402,fd=5))',
+  ].join("\n");
+
+  assert.equal(parseLinuxSsListeningPid(output, 7863), 2401);
+});
+
+test("Linux ss parsing rejects missing process metadata and invalid ports", () => {
+  const output = [
+    "LISTEN 0 4096 127.0.0.1:7863 0.0.0.0:*",
+    'LISTEN 0 4096 127.0.0.1:7864 0.0.0.0:* users:(("backend",fd=4))',
+  ].join("\n");
+
+  assert.equal(parseLinuxSsListeningPid(output, 7863), null);
+  assert.equal(parseLinuxSsListeningPid(output, 7864), null);
+  assert.equal(parseLinuxSsListeningPid(output, "invalid"), null);
+  assert.equal(parseLinuxSsListeningPid(output, 0), null);
+  assert.equal(parseLinuxSsListeningPid(output, 65536), null);
+  assert.equal(parseLinuxSsListeningPid(output, 7863.5), null);
 });
 
 test("packaged runtime preserves a foreign listener and launches on a private dynamic port", async () => {

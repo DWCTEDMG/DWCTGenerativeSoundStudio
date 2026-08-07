@@ -9,7 +9,7 @@ param(
   [string]$SshKey = (Join-Path $HOME ".ssh\vast_ed25519_20260502"),
   [string]$RemoteScriptLocalPath = ".\edmg_remote_reinstall_ports.sh",
   [string]$RepoBranch = "codex/Unified",
-  [string]$RepoUrl = "https://github.com/HIMOI890/DWCTGenerativeSoundStudio.git",
+  [string]$RepoUrl = "https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio.git",
   [string]$HfToken = "",
   [string]$BackendContainerPort = "8080",
   [string]$UiContainerPort = "1111",

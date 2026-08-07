@@ -11,7 +11,11 @@ from typing import Any
 from PIL import Image
 
 from ..errors import UserFacingError
-
+from .tensorrt_bundle_migration import (
+    EXTERNAL_BUNDLE_ENV_VARS,
+    TensorRTBundleContract,
+    TensorRTBundleMigration,
+)
 
 DEFAULT_SD15_BASE_MODEL = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 
@@ -26,6 +30,12 @@ def _runtime_jobs():
     from .. import app as studio_app
 
     return studio_app.jobs
+
+
+def _runtime_model_manager():
+    from .. import app as studio_app
+
+    return studio_app.models
 
 
 def _update_progress(
@@ -54,76 +64,62 @@ def _update_progress(
     jobs.save(job)
 
 
-def _existing_path(value: Any) -> Path | None:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    try:
-        path = Path(raw).expanduser()
-    except Exception:
-        return None
-    return path if path.exists() else None
-
-
-def _resolve_bundle_dir(model_id: str | None, payload: dict[str, Any]) -> Path:
-    for key in ("model_path", "bundle_path", "source_path"):
-        path = _existing_path(payload.get(key))
-        if path is not None:
-            return path
-
-    model_path = _existing_path(model_id)
-    if model_path is not None:
-        return model_path
-
-    for env_name in ("EDMG_TENSORRT_SD15_BUNDLE", "EDMG_TENSORRT_MODEL_DIR"):
-        path = _existing_path(os.getenv(env_name))
-        if path is not None:
-            return path
-
-    raise UserFacingError(
-        f"TensorRT model {model_id or '(none)'} is not installed.",
-        hint=(
-            "Install or import a TensorRT runtime bundle in Models, or set "
-            "EDMG_TENSORRT_SD15_BUNDLE to a folder containing engine/ and onnx/."
-        ),
-        code="TRT_MODEL_NOT_FOUND",
-        status_code=400,
-    )
-
-
-def _find_unet_engine(bundle_dir: Path) -> Path:
-    candidates = [
-        bundle_dir / "engine" / "unet.engine",
-        bundle_dir / "engine" / "unet.plan",
-        bundle_dir / "engine" / "unet_b1_workspace4096.engine",
+def _resolve_bundle_contract(model_id: str | None, payload: dict[str, Any]) -> TensorRTBundleContract:
+    additional_paths = [
+        str(payload.get(key) or "").strip()
+        for key in ("model_path", "bundle_path", "source_path")
+        if str(payload.get(key) or "").strip()
     ]
-    engine_dir = bundle_dir / "engine"
-    if engine_dir.exists():
-        candidates.extend(sorted(engine_dir.glob("*unet*.engine")))
-        candidates.extend(sorted(engine_dir.glob("*unet*.plan")))
-        candidates.extend(sorted(engine_dir.glob("*.engine")))
-        candidates.extend(sorted(engine_dir.glob("*.plan")))
-    candidates.extend(sorted(bundle_dir.rglob("*.engine")))
-    candidates.extend(sorted(bundle_dir.rglob("*.plan")))
+    try:
+        manager = _runtime_model_manager()
+    except Exception:
+        manager = None
+    if manager is not None and hasattr(manager, "resolve_tensorrt_bundle"):
+        contract = manager.resolve_tensorrt_bundle(
+            additional_paths=additional_paths,
+            verify_engine_hashes=True,
+        )
+        if isinstance(contract, TensorRTBundleContract):
+            return contract
 
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            if candidate.is_file() and candidate.stat().st_size > 0:
-                return candidate
-        except OSError:
-            continue
-
-    raise UserFacingError(
-        f"No usable UNet .engine or .plan file found in {bundle_dir}.",
-        hint="The failed 0-byte unet.engine is ignored. Build or copy a non-empty TensorRT UNet engine into the bundle's engine folder.",
-        code="TRT_ENGINE_NOT_FOUND",
-        status_code=400,
+    # Import-safe fallback for focused tests and standalone service reuse.  The
+    # normal Studio path above reuses Model Manager's long-lived hash cache.
+    validator = TensorRTBundleMigration(Path.cwd())
+    contract = validator.resolve_preferred_bundle(
+        external_paths=additional_paths,
+        verify_engine_hashes=True,
     )
+    if contract is not None:
+        return contract
+
+    configured = bool(additional_paths) or any(
+        str(os.getenv(env_name) or "").strip() for env_name in EXTERNAL_BUNDLE_ENV_VARS
+    )
+    raise UserFacingError(
+        (
+            "The configured TensorRT bundle is not verified for execution."
+            if configured
+            else f"TensorRT model {model_id or '(none)'} is not installed."
+        ),
+        hint=(
+            "Complete the explicit EDMG manifest, ONNX inventory, compiled profile, pinned base-model revision, "
+            "and engine SHA-256 verification in Models before rendering."
+        ),
+        code="TRT_BUNDLE_UNVERIFIED" if configured else "TRT_MODEL_NOT_FOUND",
+        status_code=409 if configured else 400,
+    )
+
+
+def _find_unet_engine(contract: TensorRTBundleContract) -> Path:
+    engine = contract.engine_paths.get("unet")
+    if engine is None:
+        raise UserFacingError(
+            "The verified TensorRT manifest does not select a UNet engine.",
+            hint="Re-verify the bundle manifest before rendering.",
+            code="TRT_ENGINE_NOT_FOUND",
+            status_code=409,
+        )
+    return engine
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -134,43 +130,27 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _infer_base_model_ref(bundle_dir: Path, payload: dict[str, Any]) -> str:
-    explicit_path = str(payload.get("base_model_path") or "").strip()
-    if explicit_path:
-        return explicit_path
-
-    config = _read_json(bundle_dir / "onnx" / "unet" / "config.json")
-    name_or_path = str(config.get("_name_or_path") or "").strip()
-    if name_or_path:
-        path = Path(name_or_path)
-        if path.name == "unet":
-            path = path.parent
-        if path.exists() and (path / "model_index.json").exists():
-            return str(path)
-
-    explicit_model_id = str(payload.get("base_model_id") or "").strip()
-    if explicit_model_id:
-        return explicit_model_id
-
-    env_model = str(os.getenv("EDMG_TENSORRT_BASE_MODEL") or "").strip()
-    return env_model or DEFAULT_SD15_BASE_MODEL
+def _infer_base_model_ref(contract: TensorRTBundleContract) -> tuple[str, str]:
+    return contract.base_model_id, contract.base_model_revision
 
 
-def _component_ref(base_model_ref: str, subfolder: str) -> tuple[str, dict[str, Any]]:
-    base_path = Path(base_model_ref)
-    if base_path.exists():
-        return str(base_path / subfolder), {}
-    return base_model_ref, {"subfolder": subfolder}
+def _component_ref(
+    base_model_ref: str,
+    base_model_revision: str,
+    subfolder: str,
+) -> tuple[str, dict[str, Any]]:
+    return base_model_ref, {
+        "subfolder": subfolder,
+        "revision": base_model_revision,
+    }
 
 
-def _compiled_profile_size(bundle_dir: Path) -> tuple[int, int]:
-    config = _read_json(bundle_dir / "onnx" / "unet" / "config.json")
-    sample_size = int(config.get("sample_size") or 64)
-    return sample_size * 8, sample_size * 8
+def _compiled_profile_size(contract: TensorRTBundleContract) -> tuple[int, int]:
+    return contract.profile_width, contract.profile_height
 
 
-def _validate_profile(bundle_dir: Path, payload: dict[str, Any]) -> tuple[int, int]:
-    profile_width, profile_height = _compiled_profile_size(bundle_dir)
+def _validate_profile(contract: TensorRTBundleContract, payload: dict[str, Any]) -> tuple[int, int]:
+    profile_width, profile_height = _compiled_profile_size(contract)
     width = int(payload.get("width") or profile_width)
     height = int(payload.get("height") or profile_height)
     if width != profile_width or height != profile_height:
@@ -183,10 +163,13 @@ def _validate_profile(bundle_dir: Path, payload: dict[str, Any]) -> tuple[int, i
             code="TRT_PROFILE_MISMATCH",
             status_code=400,
         )
-    if int(payload.get("batch_size") or 1) != 1:
+    requested_batch = int(payload.get("batch_size") or contract.batch_size)
+    if requested_batch != contract.batch_size:
         raise UserFacingError(
-            "This TensorRT engine was compiled for batch size 1.",
-            hint="Set TRT Batch Size to 1, or rebuild the engine with a larger max batch profile.",
+            f"This TensorRT engine was compiled for batch size {contract.batch_size}.",
+            hint=(
+                f"Set TRT Batch Size to {contract.batch_size}, or rebuild and re-verify the engine profile."
+            ),
             code="TRT_BATCH_UNSUPPORTED",
             status_code=400,
         )
@@ -213,11 +196,22 @@ def _prompt_from_project(project_id: str, payload: dict[str, Any]) -> str:
     return "cinematic music video keyframe, detailed, high quality"
 
 
-def _load_scheduler(bundle_dir: Path, base_model_ref: str, sampler: str):
-    from diffusers import DDIMScheduler, DPMSolverMultistepScheduler, EulerDiscreteScheduler, PNDMScheduler
+def _load_scheduler(
+    contract: TensorRTBundleContract,
+    base_model_ref: str,
+    base_model_revision: str,
+    sampler: str,
+):
+    from diffusers import (
+        DDIMScheduler,
+        DPMSolverMultistepScheduler,
+        EulerDiscreteScheduler,
+        PNDMScheduler,
+    )
 
     sampler_name = str(sampler or "").strip().lower()
-    config = _read_json(bundle_dir / "onnx" / "scheduler" / "scheduler_config.json")
+    scheduler_config_path = contract.onnx_paths["scheduler_config"]
+    config = _read_json(scheduler_config_path)
     class_name = str(config.get("_class_name") or "PNDMScheduler")
     scheduler_cls: Any
     if sampler_name in {"euler", "euler_ancestral"}:
@@ -234,16 +228,17 @@ def _load_scheduler(bundle_dir: Path, base_model_ref: str, sampler: str):
             "PNDMScheduler": PNDMScheduler,
         }.get(class_name, PNDMScheduler)
 
-    scheduler_dir = bundle_dir / "onnx" / "scheduler"
-    if scheduler_dir.exists():
+    scheduler_dir = scheduler_config_path.parent
+    if scheduler_dir.is_dir():
         return scheduler_cls.from_pretrained(str(scheduler_dir))
-    ref, kwargs = _component_ref(base_model_ref, "scheduler")
+    ref, kwargs = _component_ref(base_model_ref, base_model_revision, "scheduler")
     return scheduler_cls.from_pretrained(ref, **kwargs)
 
 
 def _encode_prompt(
     *,
     base_model_ref: str,
+    base_model_revision: str,
     prompt: str,
     negative_prompt: str,
     device: str,
@@ -252,13 +247,21 @@ def _encode_prompt(
     import torch
     from transformers import CLIPTextModel, CLIPTokenizer
 
-    tokenizer_ref, tokenizer_kwargs = _component_ref(base_model_ref, "tokenizer")
-    text_ref, text_kwargs = _component_ref(base_model_ref, "text_encoder")
+    tokenizer_ref, tokenizer_kwargs = _component_ref(
+        base_model_ref,
+        base_model_revision,
+        "tokenizer",
+    )
+    text_ref, text_kwargs = _component_ref(
+        base_model_ref,
+        base_model_revision,
+        "text_encoder",
+    )
     tokenizer = CLIPTokenizer.from_pretrained(tokenizer_ref, **tokenizer_kwargs)
     text_encoder = CLIPTextModel.from_pretrained(text_ref, torch_dtype=dtype, **text_kwargs)
     text_encoder = text_encoder.to(device)
 
-    def encode(text: str):
+    def encode(text: str, encoder):
         tokens = tokenizer(
             text,
             padding="max_length",
@@ -267,10 +270,10 @@ def _encode_prompt(
             return_tensors="pt",
         )
         with torch.no_grad():
-            return text_encoder(tokens.input_ids.to(device))[0].to(dtype=dtype)
+            return encoder(tokens.input_ids.to(device))[0].to(dtype=dtype)
 
-    prompt_embeds = encode(prompt)
-    negative_embeds = encode(negative_prompt)
+    prompt_embeds = encode(prompt, text_encoder)
+    negative_embeds = encode(negative_prompt, text_encoder)
     del text_encoder
     torch.cuda.empty_cache()
     return prompt_embeds, negative_embeds
@@ -387,12 +390,19 @@ class _TRTUnetRunner:
         )
 
 
-def _decode_latents(base_model_ref: str, latents, *, device: str, dtype: Any) -> Image.Image:
+def _decode_latents(
+    base_model_ref: str,
+    base_model_revision: str,
+    latents,
+    *,
+    device: str,
+    dtype: Any,
+) -> Image.Image:
     import numpy as np
     import torch
     from diffusers import AutoencoderKL
 
-    vae_ref, vae_kwargs = _component_ref(base_model_ref, "vae")
+    vae_ref, vae_kwargs = _component_ref(base_model_ref, base_model_revision, "vae")
     vae = AutoencoderKL.from_pretrained(vae_ref, torch_dtype=torch.float32, **vae_kwargs)
     # Decode on CPU for the standalone TensorRT path. The UNet is accelerated by
     # TensorRT; CPU VAE decode avoids CUDA/cuDNN version mismatches in mixed local
@@ -431,9 +441,10 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
         )
 
     model_id = str(payload.get("model_id") or "").strip()
-    bundle_dir = _resolve_bundle_dir(model_id, payload)
-    engine_path = _find_unet_engine(bundle_dir)
-    width, height = _validate_profile(bundle_dir, payload)
+    contract = _resolve_bundle_contract(model_id, payload)
+    bundle_dir = contract.root
+    engine_path = _find_unet_engine(contract)
+    width, height = _validate_profile(contract, payload)
     workflow_family = str(payload.get("workflow_family") or "sd15").strip().lower()
     if workflow_family not in {"sd15", "stable-diffusion-v1-5", "stable_diffusion_v1_5"}:
         raise UserFacingError(
@@ -450,7 +461,7 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
     seed = payload.get("seed")
     seed_value = int(seed if seed is not None else time.time()) & 0xFFFFFFFF
     sampler = str(payload.get("sampler") or "pndm")
-    base_model_ref = _infer_base_model_ref(bundle_dir, payload)
+    base_model_ref, base_model_revision = _infer_base_model_ref(contract)
 
     device = "cuda"
     dtype = torch.float16
@@ -466,13 +477,19 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
 
     prompt_embeds, negative_embeds = _encode_prompt(
         base_model_ref=base_model_ref,
+        base_model_revision=base_model_revision,
         prompt=prompt,
         negative_prompt=negative_prompt,
         device=device,
         dtype=dtype,
     )
 
-    scheduler = _load_scheduler(bundle_dir, base_model_ref, sampler)
+    scheduler = _load_scheduler(
+        contract,
+        base_model_ref,
+        base_model_revision,
+        sampler,
+    )
     scheduler.set_timesteps(steps, device=device)
     generator = torch.Generator(device=device).manual_seed(seed_value)
     latents = torch.randn(
@@ -543,7 +560,13 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
         total=total,
         message="Decoding TensorRT latents with SD1.5 VAE",
     )
-    image = _decode_latents(base_model_ref, latents, device=device, dtype=dtype)
+    image = _decode_latents(
+        base_model_ref,
+        base_model_revision,
+        latents,
+        device=device,
+        dtype=dtype,
+    )
 
     out_dir = _runtime_store().project_dir(project_id) / "renders" / "tensorrt"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -563,6 +586,7 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
         "engine_used": str(engine_path),
         "bundle_dir": str(bundle_dir),
         "base_model": base_model_ref,
+        "base_model_revision": base_model_revision,
         "output_path": str(out_file),
         "prompt": prompt,
         "seed": seed_value,

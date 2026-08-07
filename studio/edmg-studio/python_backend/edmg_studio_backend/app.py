@@ -71,6 +71,7 @@ from .services import animation_autoconfig as autoconfig
 from .services import layer_animation as layeranim
 from .services import parseq_adapter
 from .store.projects import ProjectStore
+from .version import STUDIO_VERSION
 from .store.jobs import JobStore
 from .api import create_models_router, create_project_router, create_system_router
 from .domain.director_modes import (
@@ -323,7 +324,7 @@ async def _app_lifespan(_app: FastAPI):
 
 backend_security = BackendSecuritySettings.from_env()
 
-app = FastAPI(title="EDMG Studio Backend", version="1.1.0", lifespan=_app_lifespan)
+app = FastAPI(title="EDMG Studio Backend", version=STUDIO_VERSION, lifespan=_app_lifespan)
 
 app.add_middleware(BackendSecurityMiddleware, settings=backend_security)
 
@@ -684,6 +685,68 @@ def _request_payload(model: Any) -> dict[str, Any]:
     if callable(legacy):
         return legacy()
     raise TypeError(f"Object {type(model)!r} is not a supported request model")
+
+
+_PRIVATE_RENDER_PATH_KEYS = frozenset(
+    {
+        "base_model_path",
+        "bundle_path",
+        "model_path",
+        "source_path",
+        "tensorrt_keyframe_bundle_path",
+        "video_model_path",
+    }
+)
+_PRIVATE_RENDER_PATH_SUFFIXES = ("_path", "_paths", "_dir", "_abspath")
+_OMIT_PRIVATE_RENDER_VALUE = object()
+
+
+def _is_private_render_path_key(value: Any) -> bool:
+    key = str(value or "").strip().lower()
+    return key in _PRIVATE_RENDER_PATH_KEYS or key.endswith(_PRIVATE_RENDER_PATH_SUFFIXES)
+
+
+def _is_absolute_filesystem_location(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    if not candidate:
+        return False
+    lowered = candidate.lower()
+    return (
+        lowered.startswith("file:")
+        or candidate.startswith(("/", "\\"))
+        or bool(re.match(r"^[A-Za-z]:[\\/]", candidate))
+    )
+
+
+def _without_private_render_paths(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[Any, Any] = {}
+        for key, item in value.items():
+            if _is_private_render_path_key(key):
+                continue
+            public_item = _without_private_render_paths(item)
+            if public_item is not _OMIT_PRIVATE_RENDER_VALUE:
+                sanitized[key] = public_item
+        return sanitized
+    if isinstance(value, (list, tuple)):
+        sanitized_items = []
+        for item in value:
+            public_item = _without_private_render_paths(item)
+            if public_item is not _OMIT_PRIVATE_RENDER_VALUE:
+                sanitized_items.append(public_item)
+        return sanitized_items
+    if _is_absolute_filesystem_location(value):
+        return _OMIT_PRIVATE_RENDER_VALUE
+    return deepcopy(value)
+
+
+def _public_render_preflight(preflight: dict[str, Any]) -> dict[str, Any]:
+    """Return preflight evidence without backend-only filesystem locations."""
+
+    sanitized = _without_private_render_paths(preflight)
+    return sanitized if isinstance(sanitized, dict) else {}
 
 
 def _project_variant_for_render(proj: Any, variant_index: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1878,7 +1941,12 @@ def _enqueue_internal_job_from_source(project_id: str, source_job: Any, *, resum
     if proj:
         proj.meta.setdefault("jobs", []).append(job.__dict__)
         store.save(proj)
-    return {"ok": True, "job": job.__dict__, "preflight": preflight, "source_job": source_job.__dict__}
+    return {
+        "ok": True,
+        "job": job.__dict__,
+        "preflight": _public_render_preflight(preflight),
+        "source_job": source_job.__dict__,
+    }
 
 
 def _tier_rank(name: str) -> int:
@@ -6710,6 +6778,21 @@ def _run_assemble_variant(project_id: str, payload: dict[str, Any]) -> dict[str,
     req = AssembleVideoRequest(**(payload or {}))
     return assemble_video(project_id, req)
 
+
+def _tensorrt_deforum_compatibility_result(result: dict[str, Any] | None) -> dict[str, Any]:
+    sanitized = _without_private_render_paths(result or {})
+    compatible = sanitized if isinstance(sanitized, dict) else {}
+    compatible.pop("video_abs", None)
+    relative_output = compatible.get("video") or compatible.get("output_path")
+    compatible.pop("output_path", None)
+    if isinstance(relative_output, str) and not _is_absolute_filesystem_location(relative_output):
+        compatible["output_path"] = relative_output
+    compatible["compatibility_route"] = "tensorrt-deforum"
+    compatible["execution_mode"] = "canonical_tensorrt_keyframe_video"
+    compatible["legacy_deforum_schedule_applied"] = False
+    return compatible
+
+
 def _execute_job(job):
     jobs.append_log(job.project_id, job.id, f"Started job type={job.type}")
 
@@ -6753,10 +6836,20 @@ def _execute_job(job):
             job.result = res
             job.status = "succeeded"
         elif job.type == "tensorrt_deforum":
-            from .services.tensorrt_deforum import run_deforum_job
-            res = run_deforum_job(job.project_id, job.id, job.payload)
-            job.result = res
-            job.status = "succeeded"
+            compatibility_payload = dict(job.payload or {})
+            for private_key in _PRIVATE_RENDER_PATH_KEYS:
+                compatibility_payload.pop(private_key, None)
+            compatibility_payload["model_id"] = TENSORRT_VIDEO_MODEL_ID
+            compatibility_payload["render_mode"] = "tensorrt"
+            job.payload = compatibility_payload
+            res = _run_internal_video(job.project_id, job.id, compatibility_payload)
+            latest = jobs.get(job.project_id, job.id)
+            if latest and latest.status == "canceled":
+                job.status = "canceled"
+                job.result = _tensorrt_deforum_compatibility_result(latest.result)
+            else:
+                job.result = _tensorrt_deforum_compatibility_result(res)
+                job.status = "succeeded"
         elif job.type == "layered_animation":
             res = _run_layered_animation(job.project_id, job.id, job.payload)
             job.result = res
@@ -6770,6 +6863,8 @@ def _execute_job(job):
         latest = jobs.get(job.project_id, job.id)
         if latest and latest.result:
             job.result = latest.result
+        if job.type == "tensorrt_deforum":
+            job.result = _tensorrt_deforum_compatibility_result(job.result)
         jobs.append_log(job.project_id, job.id, str(e) or "Job canceled during execution")
     except Exception as exc:
         logger.error(
@@ -7695,7 +7790,9 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
 
 def _run_tensorrt_standalone(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     from .services import tensorrt_standalone as trt_service
-    return trt_service.run_job(project_id, job_id, payload)
+
+    execution_payload = _resolved_tensorrt_execution_payload(payload)
+    return trt_service.run_job(project_id, job_id, execution_payload)
 
 def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     preflight = _internal_render_preflight_data(project_id, payload)
@@ -7816,7 +7913,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
             "resume_existing_frames": settings_obj.resume_existing_frames,
             "variant_index": variant_index,
             "completed_at": time.time(),
-            "preflight": preflight,
+            "preflight": _public_render_preflight(preflight),
             "runtime_checkpoint": checkpoint_summary,
         }
         proj.meta["last_internal_render"] = render_entry
@@ -7825,7 +7922,14 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         if isinstance(hist, list) and len(hist) > 20:
             proj.meta["internal_render_history"] = hist[-20:]
         store.save(proj)
-        return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "proxy", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
+        return {
+            "ok": True,
+            "video": rel_video,
+            "video_abs": str(out),
+            "mode": "proxy",
+            "preflight": _public_render_preflight(preflight),
+            "runtime_checkpoint": checkpoint_summary,
+        }
 
     if preflight.get("mode") == "hosted":
         provider_cfg = dict((render_settings.get().get("stability") or {}))
@@ -7973,7 +8077,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
             "resume_existing_frames": settings_obj.resume_existing_frames,
             "variant_index": variant_index,
             "completed_at": time.time(),
-            "preflight": preflight,
+            "preflight": _public_render_preflight(preflight),
             "runtime_checkpoint": checkpoint_summary,
             "hosted_provider": preflight.get("hosted_provider"),
         }
@@ -7983,22 +8087,21 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         if isinstance(hist, list) and len(hist) > 20:
             proj.meta["internal_render_history"] = hist[-20:]
         store.save(proj)
-        return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "hosted", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
+        return {
+            "ok": True,
+            "video": rel_video,
+            "video_abs": str(out),
+            "mode": "hosted",
+            "preflight": _public_render_preflight(preflight),
+            "runtime_checkpoint": checkpoint_summary,
+        }
 
     if preflight.get("mode") == "tensorrt":
         proj = store.get(project_id)
         if not proj:
             raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
-        plan = proj.meta.get("last_plan")
-        if not plan or not (plan.get("variants") or []):
-            raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
-
         variant_index = int(payload.get("variant_index", 0))
-        variants = plan["variants"]
-        if variant_index < 0 or variant_index >= len(variants):
-            raise UserFacingError("variant_index out of range", hint="Pick a valid variant index.")
-
-        variant = variants[variant_index]
+        variant, _used_fallback = _internal_render_variant_or_fallback(proj, variant_index)
         scenes = variant.get("scenes") or []
         pdir = store.project_dir(project_id)
         audio_meta = proj.meta.get("audio")
@@ -8009,6 +8112,15 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
                 audio_path = None
 
         model_id = str(preflight.get("model_id") or _tensorrt_model_id_from_payload(payload))
+        bundle_path_raw = str(preflight.get("model_path") or "").strip()
+        if not bundle_path_raw:
+            raise UserFacingError(
+                "TensorRT preflight did not resolve an installed bundle path",
+                hint="Open Models and verify the canonical TensorRT bundle, then retry.",
+                code="TRT_MODEL_NOT_FOUND",
+                status_code=400,
+            )
+        bundle_path = Path(bundle_path_raw).expanduser().resolve()
         trt_payload = dict(payload)
         trt_payload.update({"width": 512, "height": 512})
         settings_obj = _internal_settings_from_payload(
@@ -8074,6 +8186,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
             scenes=scenes,
             audio_path=audio_path,
             settings=settings_obj,
+            bundle_path=bundle_path,
             model_id=model_id,
             log_fn=_log,
             progress_fn=_progress,
@@ -8104,7 +8217,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
             "resume_existing_frames": False,
             "variant_index": variant_index,
             "completed_at": time.time(),
-            "preflight": preflight,
+            "preflight": _public_render_preflight(preflight),
             "runtime_checkpoint": runtime_checkpoint,
         }
         proj.meta["last_internal_render"] = render_entry
@@ -8113,9 +8226,23 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         if isinstance(hist, list) and len(hist) > 20:
             proj.meta["internal_render_history"] = hist[-20:]
         store.save(proj)
-        return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "tensorrt", "preflight": preflight, "runtime_checkpoint": runtime_checkpoint}
+        return {
+            "ok": True,
+            "video": rel_video,
+            "video_abs": str(out),
+            "mode": "tensorrt",
+            "preflight": _public_render_preflight(preflight),
+            "runtime_checkpoint": runtime_checkpoint,
+        }
 
-    proj, variant, model_id, model_path, settings_obj = _resolve_internal_render_request(project_id, payload)
+    (
+        proj,
+        variant,
+        model_id,
+        model_path,
+        tensorrt_keyframe_bundle_path,
+        settings_obj,
+    ) = _resolve_internal_render_request(project_id, payload)
     scenes = variant.get("scenes") or []
     pdir = store.project_dir(project_id)
     audio_meta = proj.meta.get("audio")
@@ -8206,6 +8333,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         audio_path=audio_path,
         model_dir=model_path,
         settings=settings_obj,
+        tensorrt_bundle_path=tensorrt_keyframe_bundle_path,
         timeline=(proj.meta.get("timeline") or None),
         log_fn=_log,
         progress_fn=_progress,
@@ -8246,7 +8374,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         "resume_existing_frames": settings_obj.resume_existing_frames,
         "variant_index": int(payload.get("variant_index", 0)),
         "completed_at": time.time(),
-        "preflight": preflight,
+        "preflight": _public_render_preflight(preflight),
         "runtime_checkpoint": checkpoint_summary,
     }
     proj.meta["last_internal_render"] = render_entry
@@ -8255,7 +8383,14 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
     if isinstance(hist, list) and len(hist) > 20:
         proj.meta["internal_render_history"] = hist[-20:]
     store.save(proj)
-    return {"ok": True, "video": rel_video, "video_abs": str(out), "mode": "diffusion", "preflight": preflight, "runtime_checkpoint": checkpoint_summary}
+    return {
+        "ok": True,
+        "video": rel_video,
+        "video_abs": str(out),
+        "mode": "diffusion",
+        "preflight": _public_render_preflight(preflight),
+        "runtime_checkpoint": checkpoint_summary,
+    }
 
 
 @app.post("/v1/projects/{project_id}/render/cosmos/scene")
@@ -9020,6 +9155,66 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
 
 
 
+def _server_resolved_tensorrt_payload(req: TensorRTStandaloneRenderRequest) -> dict[str, Any]:
+    """Validate a public model ID without persisting its trusted local path.
+
+    Public TensorRT requests never accept or reinterpret filesystem paths.
+    Workers resolve the private installation path immediately before execution.
+    """
+
+    supported_model_id = TENSORRT_VIDEO_MODEL_ID
+    requested_model_id = str(req.model_id or supported_model_id).strip()
+    if requested_model_id != supported_model_id:
+        raise UserFacingError(
+            "This TensorRT model is not executable by Studio's standalone renderer",
+            hint=f"Select {supported_model_id} in Models. Other TensorRT catalog entries are discovery-only.",
+            code="TRT_MODEL_UNSUPPORTED",
+            status_code=400,
+        )
+    if _resolve_installed_model_path(supported_model_id, materialize_remote=True) is None:
+        raise UserFacingError(
+            "Local TensorRT SD 1.5 bundle is not installed",
+            hint="Open Models and verify the canonical TensorRT bundle, then retry.",
+            code="TRT_MODEL_NOT_FOUND",
+            status_code=400,
+        )
+
+    payload = _request_payload(req)
+    payload["model_id"] = supported_model_id
+    entry = _catalog_entry(supported_model_id)
+    if entry is not None:
+        render_meta = entry.get("render") if isinstance(entry.get("render"), dict) else {}
+        payload["workflow_family"] = str(render_meta.get("workflow_family") or entry.get("family") or "")
+        if render_meta.get("base_model_id"):
+            payload["base_model_id"] = str(render_meta.get("base_model_id"))
+    return payload
+
+
+def _resolved_tensorrt_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Inject the trusted bundle path only into an in-memory execution payload."""
+
+    model_id = str(payload.get("model_id") or TENSORRT_VIDEO_MODEL_ID).strip()
+    if model_id != TENSORRT_VIDEO_MODEL_ID:
+        raise UserFacingError(
+            "This TensorRT model is not executable by Studio's standalone renderer",
+            hint=f"Select {TENSORRT_VIDEO_MODEL_ID} in Models.",
+            code="TRT_MODEL_UNSUPPORTED",
+            status_code=400,
+        )
+    model_path = _resolve_installed_model_path(model_id, materialize_remote=True)
+    if model_path is None:
+        raise UserFacingError(
+            "Local TensorRT SD 1.5 bundle is not installed",
+            hint="Open Models and verify the canonical TensorRT bundle, then retry.",
+            code="TRT_MODEL_NOT_FOUND",
+            status_code=400,
+        )
+    execution_payload = dict(payload)
+    execution_payload["model_id"] = TENSORRT_VIDEO_MODEL_ID
+    execution_payload["model_path"] = str(Path(model_path).expanduser().resolve())
+    return execution_payload
+
+
 @app.post("/v1/projects/{project_id}/render/tensorrt-standalone")
 def render_tensorrt_standalone(project_id: str, req: TensorRTStandaloneRenderRequest):
     """Enqueue a standalone TensorRT image render job."""
@@ -9030,24 +9225,14 @@ def render_tensorrt_standalone(project_id: str, req: TensorRTStandaloneRenderReq
     if not plan or not (plan.get("variants") or []):
         raise HTTPException(400, "No plan generated")
 
-    payload = _request_payload(req)
-    entry = _catalog_entry(req.model_id)
-    if entry is not None:
-        render_meta = entry.get("render") if isinstance(entry.get("render"), dict) else {}
-        payload["workflow_family"] = str(render_meta.get("workflow_family") or entry.get("family") or "")
-        if render_meta.get("base_model_id"):
-            payload["base_model_id"] = str(render_meta.get("base_model_id"))
-    if req.model_id:
-        model_path = _resolve_installed_model_path(req.model_id, materialize_remote=True)
-        if model_path is not None:
-            payload["model_path"] = str(model_path)
+    payload = _server_resolved_tensorrt_payload(req)
     job = jobs.create(project_id, "tensorrt_standalone", payload)
     job.progress = {
         "stage": "queued",
         "current": 0,
         "total": 1,
         "percent": 0.0,
-        "message": f"Queued TensorRT standalone render for model {req.model_id}",
+        "message": f"Queued TensorRT standalone render for model {payload['model_id']}",
     }
     jobs.save(job)
     proj.meta.setdefault("jobs", []).append(job.__dict__)
@@ -9055,36 +9240,72 @@ def render_tensorrt_standalone(project_id: str, req: TensorRTStandaloneRenderReq
     return {"ok": True, "job": job.__dict__}
 
 
-@app.post("/v1/projects/{project_id}/render/tensorrt-deforum")
-def render_tensorrt_deforum(project_id: str, req: TensorRTStandaloneRenderRequest):
-    """Enqueue a native TensorRT Deforum image sequence generation job."""
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-        
-    payload = _request_payload(req)
-    
-    # Grab the Deforum settings from the project meta if they ran the workbench
-    # Or expect them directly in the payload
-    deforum_preview = proj.meta.get("creative_payload", {}).get("deforum_preview", {})
-    if not deforum_preview and "deforum_settings" not in payload:
-        raise HTTPException(400, "No Deforum schedule settings found. Please run the Audio Reactive Workbench first.")
-        
-    if "deforum_settings" not in payload:
-        payload["deforum_settings"] = deforum_preview.get("settings", {})
-        
-    job = jobs.create(project_id, "tensorrt_deforum", payload)
+def _enqueue_internal_video_job(
+    project_id: str,
+    proj: Any,
+    payload: dict[str, Any],
+    *,
+    job_type: str = "internal_video",
+    queued_message: str | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    """Apply canonical motion/preflight rules and persist one video-render job."""
+
+    resolved_payload, _parseq = _apply_active_parseq_motion(proj, payload)
+    preflight = _internal_render_preflight_data(project_id, resolved_payload)
+    resolved_payload["render_mode"] = str(
+        preflight.get("mode") or resolved_payload.get("render_mode") or "auto"
+    )
+    estimated_total = max(1, int(preflight.get("estimated_frames", 1)) + 3)
+    if str(preflight.get("mode") or "").strip().lower() == "tensorrt":
+        estimated_total += max(0, int(preflight.get("estimated_keyframes", 0)))
+    job = jobs.create(project_id, job_type, resolved_payload)
     job.progress = {
         "stage": "queued",
         "current": 0,
-        "total": 1,
+        "total": estimated_total,
         "percent": 0.0,
-        "message": f"Queued TensorRT Deforum render for model {req.model_id}",
+        "message": queued_message
+        or f"Queued internal render for model {preflight.get('model_id')}",
     }
     jobs.save(job)
     proj.meta.setdefault("jobs", []).append(job.__dict__)
     store.save(proj)
-    return {"ok": True, "job": job.__dict__}
+    return job, preflight
+
+
+@app.post("/v1/projects/{project_id}/render/tensorrt-deforum", deprecated=True)
+def render_tensorrt_deforum(project_id: str, req: TensorRTStandaloneRenderRequest):
+    """Compatibility route for the canonical TensorRT keyframe-video renderer.
+
+    The former implementation generated simulated noise frames after merely
+    deserializing an engine.  Release builds must never present that as model
+    inference, so this route now performs the same server-side preflight and
+    queues the canonical internal TensorRT video path.
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    payload = _server_resolved_tensorrt_payload(req)
+    payload["render_mode"] = "tensorrt"
+    payload["compatibility_source"] = "tensorrt-deforum"
+    job, preflight = _enqueue_internal_video_job(
+        project_id,
+        proj,
+        payload,
+        job_type="tensorrt_deforum",
+        queued_message=f"Queued canonical TensorRT compatibility render for model {payload['model_id']}",
+    )
+    return {
+        "ok": True,
+        "job": job.__dict__,
+        "preflight": _public_render_preflight(preflight),
+        "compatibility": {
+            "route": "tensorrt-deforum",
+            "execution_mode": "canonical_tensorrt_keyframe_video",
+            "legacy_deforum_schedule_applied": False,
+        },
+    }
 
 
 
@@ -9098,25 +9319,15 @@ def render_tensorrt_standalone_preview(project_id: str, req: TensorRTStandaloneR
     from .services import tensorrt_standalone
     # Run the generation synchronously in the request thread
     try:
-        payload = _request_payload(req)
-        entry = _catalog_entry(req.model_id)
-        if entry is not None:
-            render_meta = entry.get("render") if isinstance(entry.get("render"), dict) else {}
-            payload["workflow_family"] = str(render_meta.get("workflow_family") or entry.get("family") or "")
-            if render_meta.get("base_model_id"):
-                payload["base_model_id"] = str(render_meta.get("base_model_id"))
-        if req.model_id:
-            model_path = _resolve_installed_model_path(req.model_id, materialize_remote=True)
-            if model_path is not None:
-                payload["model_path"] = str(model_path)
+        payload = _resolved_tensorrt_execution_payload(_server_resolved_tensorrt_payload(req))
         # Override steps for fast preview
         payload["steps"] = min(payload.get("steps", 8), 8)
         
         # We need a custom run_preview in tensorrt_standalone
         result = tensorrt_standalone.run_preview(project_id, payload)
         return {"ok": True, "image": result["image"], "engine_used": result["engine_used"]}
-    except UserFacingError as e:
-        raise HTTPException(e.status_code, str(e.message))
+    except UserFacingError:
+        raise
     except Exception as exc:
         logger.exception("TensorRT preview render failed")
         raise HTTPException(500, "TensorRT preview render failed") from exc
@@ -9130,21 +9341,16 @@ def render_internal_video(project_id: str, req: InternalVideoRenderRequest):
     if not proj:
         raise HTTPException(404, "Project not found")
 
-    payload, _parseq = _apply_active_parseq_motion(proj, _request_payload(req))
-    preflight = _internal_render_preflight_data(project_id, payload)
-    payload["render_mode"] = str(preflight.get("mode") or payload.get("render_mode") or "auto")
-    job = jobs.create(project_id, "internal_video", payload)
-    job.progress = {
-        "stage": "queued",
-        "current": 0,
-        "total": max(1, int(preflight.get("estimated_frames", 1)) + 3),
-        "percent": 0.0,
-        "message": f"Queued internal render for model {preflight.get('model_id')}",
+    job, preflight = _enqueue_internal_video_job(
+        project_id,
+        proj,
+        _request_payload(req),
+    )
+    return {
+        "ok": True,
+        "job": job.__dict__,
+        "preflight": _public_render_preflight(preflight),
     }
-    jobs.save(job)
-    proj.meta.setdefault("jobs", []).append(job.__dict__)
-    store.save(proj)
-    return {"ok": True, "job": job.__dict__, "preflight": preflight}
 
 
 @app.get("/v1/projects/{project_id}/render/motion_sequencer")
@@ -9464,7 +9670,10 @@ def _internal_render_variant_or_fallback(proj: Any, variant_index: int) -> tuple
     raise UserFacingError("No plan generated", hint="Run Analyze + Plan first, then retry.")
 
 
-def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -> tuple[Any, dict[str, Any], str, Path, InternalVideoSettings]:
+def _resolve_internal_render_request(
+    project_id: str,
+    payload: dict[str, Any],
+) -> tuple[Any, dict[str, Any], str, Path, Path | None, InternalVideoSettings]:
     proj = store.get(project_id)
     if not proj:
         raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
@@ -9612,6 +9821,7 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             keyframe_interval_s=min(float(settings_obj.keyframe_interval_s), float(settings_obj.storyboard_shot_max_s)),
             source_asset=None,
         )
+    tensorrt_keyframe_bundle_path: Path | None = None
     if settings_obj.temporal_mode == "video_model":
         engine, video_model_id, video_model_path = _resolve_internal_video_model_selection(
             payload,
@@ -9624,7 +9834,34 @@ def _resolve_internal_render_request(project_id: str, payload: dict[str, Any]) -
             video_model_path=str(video_model_path),
         )
         settings_obj = _apply_internal_video_model_memory_safety(settings_obj, hw)
-    return proj, variant, model_id, model_path, settings_obj
+        if normalize_video_model_keyframe_renderer(settings_obj.video_model_keyframe_renderer) == "tensorrt_sd15":
+            settings_obj = replace(
+                settings_obj,
+                video_model_keyframe_model_id=TENSORRT_VIDEO_MODEL_ID,
+            )
+            resolved_bundle = _resolve_installed_model_path(
+                TENSORRT_VIDEO_MODEL_ID,
+                materialize_remote=False,
+            )
+            if not resolved_bundle:
+                raise UserFacingError(
+                    "The TensorRT SD 1.5 storyboard-anchor bundle is not installed",
+                    hint=(
+                        "Open Models and verify the canonical TensorRT bundle. Studio requires its "
+                        "engine, ONNX, base-model, and compiled-profile metadata before rendering."
+                    ),
+                    code="TRT_ANCHOR_BUNDLE_NOT_INSTALLED",
+                    status_code=400,
+                )
+            tensorrt_keyframe_bundle_path = Path(resolved_bundle).expanduser().resolve()
+    return (
+        proj,
+        variant,
+        model_id,
+        model_path,
+        tensorrt_keyframe_bundle_path,
+        settings_obj,
+    )
 
 
 def _proxy_render_preflight_data(
@@ -10170,7 +10407,11 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     if not model_path:
         raise UserFacingError(
             "Local TensorRT SD1.5 bundle is not installed.",
-            hint="Set EDMG_TENSORRT_SD15_BUNDLE to any folder containing engine/ and onnx/.",
+            hint=(
+                "Open Models and verify the canonical TensorRT bundle. Advanced compatibility "
+                "setups may explicitly set EDMG_TENSORRT_SD15_BUNDLE to a complete bundle with "
+                "verified engine, ONNX, base-model, and compiled-profile metadata."
+            ),
             code="TRT_MODEL_NOT_FOUND",
             status_code=400,
         )
@@ -10262,7 +10503,14 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         return _tensorrt_render_preflight_data(project_id, payload)
 
     try:
-        proj, variant, model_id, model_path, settings_obj = _resolve_internal_render_request(project_id, payload)
+        (
+            proj,
+            variant,
+            model_id,
+            model_path,
+            tensorrt_keyframe_bundle_path,
+            settings_obj,
+        ) = _resolve_internal_render_request(project_id, payload)
     except UserFacingError as e:
         if e.code in {"MODEL_NOT_INSTALLED", "DIRECTML_MODEL_UNSUPPORTED", "MODEL_UNSUPPORTED_FOR_HARDWARE"} and _hosted_stability_ready(payload):
             return _hosted_render_preflight_data(project_id, payload, reason=e.message)
@@ -10332,6 +10580,12 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             warnings.append(
                 "TensorRT SD1.5 storyboard anchors are enabled: Studio generates fast SD1.5 keyframes first, then SVD can animate those anchors directly. AnimateDiff still uses its SD1.5 Diffusers base and only uses these anchors for start/end/loop blending."
             )
+            requested_anchor_model = str(payload.get("video_model_keyframe_model_id") or "").strip()
+            if requested_anchor_model and requested_anchor_model != TENSORRT_VIDEO_MODEL_ID:
+                warnings.append(
+                    f"Requested TensorRT anchor bundle {requested_anchor_model} is discovery-only. "
+                    f"Studio mapped the request to the executable {TENSORRT_VIDEO_MODEL_ID} bundle."
+                )
         for warning in list(video_model_preflight.get("warnings") or []):
             warnings.append(str(warning))
         for warning in _internal_video_model_memory_warnings(settings_obj, hw):
@@ -10380,6 +10634,11 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         "variant_index": int(payload.get("variant_index", 0)),
         "model_id": model_id,
         "model_path": str(model_path),
+        "tensorrt_keyframe_bundle_path": (
+            str(tensorrt_keyframe_bundle_path)
+            if tensorrt_keyframe_bundle_path is not None
+            else None
+        ),
         "duration_s": duration_s,
         "duration_sources": duration_sources,
         "estimated_frames": total_frames,
@@ -10443,7 +10702,7 @@ def render_internal_preflight(project_id: str, req: InternalVideoRenderRequest):
     if not proj:
         raise HTTPException(404, "Project not found")
     payload, _parseq = _apply_active_parseq_motion(proj, _request_payload(req))
-    return _internal_render_preflight_data(project_id, payload)
+    return _public_render_preflight(_internal_render_preflight_data(project_id, payload))
 
 @app.post("/v1/projects/{project_id}/render/comfyui/motion_scenes")
 def render_motion_scenes(project_id: str, req: RenderMotionRequest):

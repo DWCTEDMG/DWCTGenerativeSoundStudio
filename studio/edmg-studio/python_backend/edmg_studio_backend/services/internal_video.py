@@ -1217,6 +1217,7 @@ def _generate_tensorrt_sd15_keyframe(
     sampler: str,
     seed: int,
     model_id: str | None,
+    model_path: Path,
 ) -> "Image.Image":
     if not project_id:
         raise UserFacingError(
@@ -1235,11 +1236,21 @@ def _generate_tensorrt_sd15_keyframe(
 
     from . import tensorrt_standalone
 
+    resolved_model_path = Path(model_path).expanduser().resolve()
+    if not resolved_model_path.is_dir():
+        raise UserFacingError(
+            "The TensorRT storyboard-anchor bundle is unavailable",
+            hint="Open Models and verify the canonical SD 1.5 TensorRT bundle, then retry.",
+            code="TRT_ANCHOR_BUNDLE_NOT_INSTALLED",
+            status_code=400,
+        )
+
     result = tensorrt_standalone.run_job(
         project_id,
         None,
         {
             "model_id": str(model_id or "local_sd15_tensorrt_bundle"),
+            "model_path": str(resolved_model_path),
             "workflow_family": "sd15",
             "prompt": str(prompt or "cinematic music video keyframe"),
             "negative_prompt": str(negative_prompt or "blurry, low quality, watermark, text, logo"),
@@ -2301,6 +2312,7 @@ def render_internal_video_variant(
     audio_path: Path | None,
     model_dir: Path,
     settings: InternalVideoSettings,
+    tensorrt_bundle_path: Path | None = None,
     timeline: dict[str, Any] | None = None,
     log_fn=None,
     progress_fn=None,
@@ -2325,6 +2337,23 @@ def render_internal_video_variant(
     device = _device_auto(settings.device_preference)
     keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
     use_tensorrt_keyframes = settings.temporal_mode == "video_model" and keyframe_renderer == "tensorrt_sd15"
+    resolved_tensorrt_bundle_path: Path | None = None
+    if use_tensorrt_keyframes:
+        if tensorrt_bundle_path is None:
+            raise UserFacingError(
+                "The TensorRT storyboard-anchor bundle is not installed",
+                hint="Open Models and verify the canonical SD 1.5 TensorRT bundle, then retry.",
+                code="TRT_ANCHOR_BUNDLE_NOT_INSTALLED",
+                status_code=400,
+            )
+        resolved_tensorrt_bundle_path = Path(tensorrt_bundle_path).expanduser().resolve()
+        if not resolved_tensorrt_bundle_path.is_dir():
+            raise UserFacingError(
+                "The TensorRT storyboard-anchor bundle is unavailable",
+                hint="Open Models and verify the canonical SD 1.5 TensorRT bundle, then retry.",
+                code="TRT_ANCHOR_BUNDLE_NOT_INSTALLED",
+                status_code=400,
+            )
     if use_tensorrt_keyframes and device != "cuda":
         raise UserFacingError(
             "TensorRT SD1.5 storyboard anchors require CUDA",
@@ -2466,6 +2495,7 @@ def render_internal_video_variant(
                 sampler=settings.sampler,
                 seed=seed,
                 model_id=settings.video_model_keyframe_model_id or "local_sd15_tensorrt_bundle",
+                model_path=resolved_tensorrt_bundle_path,
             )
         else:
             pe = _encode_prompt(pipes, p)  # type: ignore[arg-type]
@@ -3525,16 +3555,28 @@ def _proxy_camera_at_time(timeline: dict[str, Any] | None, t: float) -> dict[str
         return _pick(pts[0][1])
     if t >= pts[-1][0]:
         return _pick(pts[-1][1])
+
+    def _lerp(
+        before: dict[str, Any],
+        after: dict[str, Any],
+        weight: float,
+        key: str,
+        default_value: float,
+    ) -> float:
+        start = float(before.get(key, default_value) or default_value)
+        end = float(after.get(key, default_value) or default_value)
+        return start * (1.0 - weight) + end * weight
+
     for i in range(len(pts) - 1):
         ta, ka = pts[i]
         tb, kb = pts[i + 1]
         if ta <= t <= tb:
             w = (t - ta) / max(1e-6, tb - ta)
-
-            def _lerp(key: str, dflt: float) -> float:
-                return float(ka.get(key, dflt) or dflt) * (1.0 - w) + float(kb.get(key, dflt) or dflt) * w
-
-            return {"zoom": _lerp("zoom", 1.0), "pan_x": _lerp("pan_x", 0.0), "pan_y": _lerp("pan_y", 0.0)}
+            return {
+                "zoom": _lerp(ka, kb, w, "zoom", 1.0),
+                "pan_x": _lerp(ka, kb, w, "pan_x", 0.0),
+                "pan_y": _lerp(ka, kb, w, "pan_y", 0.0),
+            }
     return default
 
 

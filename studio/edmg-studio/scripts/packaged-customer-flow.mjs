@@ -9,6 +9,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import {
+  buildHermeticPackagedProofEnv,
+  resolveHermeticProofProfile,
+} from "./packaged-proof-environment.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const DEFAULT_REQUEST_TIMEOUT_MS = Number(process.env.EDMG_STUDIO_PROOF_REQUEST_TIMEOUT_MS || (10 * 60 * 1000));
@@ -91,37 +96,6 @@ function chooseHomeRoot() {
   const preferred = process.env.EDMG_STUDIO_PROOF_ROOT;
   if (preferred) return preferred;
   return os.tmpdir();
-}
-
-function resolveBootstrapPaths() {
-  const appDataDir = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-  const localAppDataDir = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-  const bootstrapDir = path.join(appDataDir, "EDMG Studio");
-  return {
-    appDataDir,
-    localAppDataDir,
-    bootstrapDir,
-    bootstrapPath: path.join(bootstrapDir, "bootstrap.json"),
-  };
-}
-
-async function backupBootstrap(bootstrapPath, stamp) {
-  if (!fs.existsSync(bootstrapPath)) {
-    return { existed: false, backupPath: "" };
-  }
-  const backupPath = `${bootstrapPath}.codex-backup-${stamp}`;
-  await fsp.copyFile(bootstrapPath, backupPath);
-  return { existed: true, backupPath };
-}
-
-async function restoreBootstrap(bootstrapPath, backup) {
-  if (backup?.existed && backup.backupPath && fs.existsSync(backup.backupPath)) {
-    await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
-    await fsp.copyFile(backup.backupPath, bootstrapPath);
-    await fsp.rm(backup.backupPath, { force: true });
-    return;
-  }
-  await fsp.rm(bootstrapPath, { force: true });
 }
 
 async function allocatePort() {
@@ -295,8 +269,7 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
   const homeRoot = chooseHomeRoot();
   const studioHome = path.join(homeRoot, `EDMG-Packaged-Proof-${stamp}`);
-  const { appDataDir, localAppDataDir, bootstrapPath } = resolveBootstrapPaths();
-  const bootstrapBackup = await backupBootstrap(bootstrapPath, stamp);
+  const { appDataDir, localAppDataDir, bootstrapPath } = resolveHermeticProofProfile(studioHome);
   await fsp.mkdir(studioHome, { recursive: true });
   await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
   await fsp.rm(bootstrapPath, { force: true });
@@ -312,16 +285,7 @@ async function main() {
   log(`using heavy request timeout ${heavyRequestTimeoutMs}ms for ${path.basename(audioFixture)} (${audioBytes} bytes)`);
   const child = spawn(appExe, [], {
     cwd: path.dirname(appExe),
-    env: {
-      ...process.env,
-      EDMG_STUDIO_HOME: studioHome,
-      EDMG_STUDIO_BACKEND_HOST: "127.0.0.1",
-      EDMG_STUDIO_BACKEND_PORT: String(port),
-      EDMG_STUDIO_TEST_MODE: "1",
-      EDMG_STUDIO_TEST_PAGE: testPage,
-      EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
-      ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
-    },
+    env: buildHermeticPackagedProofEnv({ studioHome, port, testPage }),
     stdio: "ignore",
   });
 
@@ -496,7 +460,6 @@ async function main() {
   } finally {
     await killProcessTree(child);
     await stopExistingPackagedProcesses();
-    await restoreBootstrap(bootstrapPath, bootstrapBackup);
   }
 }
 

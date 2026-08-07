@@ -37,6 +37,55 @@ type CatalogPayload = {
   cloud?: Record<string, any>;
   storage_mode?: string;
   model_cache?: string | null;
+  tensorrt_migration?: TensorRtMigrationStatus;
+};
+
+type TensorRtEngineFileStatus = {
+  role: string;
+  name?: string | null;
+  present: boolean;
+  non_empty: boolean;
+  safe_regular_file: boolean;
+  size_bytes: number;
+  sha256?: string | null;
+  hash_state: string;
+};
+
+type TensorRtMigrationStatus = {
+  legacy: {
+    detected: boolean;
+    status: "absent" | "partial" | "ready_to_import";
+    expected_file_count: number;
+    usable_file_count: number;
+    total_bytes: number;
+    files: TensorRtEngineFileStatus[];
+    missing_roles: string[];
+    unusable_roles: string[];
+    source_preserved: boolean;
+  };
+  canonical: {
+    exists: boolean;
+    status: string;
+    manifest: { valid: boolean; schema_version?: number | null };
+    engine_files_verified: boolean;
+    unet_engine_ready: boolean;
+    onnx_ready: boolean;
+    profile_metadata_ready: boolean;
+    base_model_metadata_ready: boolean;
+    renderer_ready: boolean;
+    gaps: string[];
+  };
+  migration: {
+    available: boolean;
+    blocked_reason?: string | null;
+    copy_only: boolean;
+    source_will_be_preserved: boolean;
+    disk: {
+      required_free_bytes: number;
+      available_free_bytes?: number | null;
+      enough_space: boolean;
+    };
+  };
 };
 
 type HubResult = {
@@ -336,6 +385,128 @@ function formatTaskBytes(value: unknown): string {
   return `${size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${unit}`;
 }
 
+function tensorRtRoleLabel(role: string): string {
+  return {
+    text_encoder: "Text encoder",
+    unet: "UNet",
+    vae_decoder: "VAE decoder",
+    vae_encoder: "VAE encoder",
+  }[role] || role;
+}
+
+function LegacyTensorRtCard({
+  status,
+  activeTask,
+  busy,
+  message,
+  onImport,
+  onCancel,
+}: {
+  status?: TensorRtMigrationStatus;
+  activeTask?: any;
+  busy: boolean;
+  message: string;
+  onImport: () => void;
+  onCancel: (taskId: string) => void;
+}) {
+  const legacy = status?.legacy;
+  const canonical = status?.canonical;
+  const disk = status?.migration?.disk;
+  const blockedRoles = [...(legacy?.missing_roles ?? []), ...(legacy?.unusable_roles ?? [])];
+  const importActive = !!activeTask && (activeTask.status === "queued" || activeTask.status === "running");
+
+  let summary = "Checking the Studio-managed legacy engine folder…";
+  if (legacy?.status === "absent") {
+    summary = "No root-level legacy TensorRT engine set was detected in the current Studio Home.";
+  } else if (legacy?.status === "partial") {
+    summary = "A partial legacy engine set was found. Studio will not copy it until all four expected engines are non-empty and safe to read.";
+  } else if (legacy?.status === "ready_to_import") {
+    summary = `Found ${legacy.usable_file_count} safe, non-empty engine candidates (${formatTaskBytes(legacy.total_bytes)}). SHA-256 verification occurs during the copy task.`;
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 900 }}>Legacy TensorRT engine migration</div>
+        <div className="small">
+          {canonical?.renderer_ready
+            ? "Renderer ready"
+            : canonical?.exists
+              ? "Engine copy present — setup incomplete"
+              : legacy?.status === "ready_to_import"
+                ? "Ready to verify and copy"
+                : "Not ready to copy"}
+        </div>
+      </div>
+      <div className="small" style={{ marginTop: 6 }}>{summary}</div>
+      <div className="small" style={{ marginTop: 6, opacity: 0.88 }}>
+        This is a copy-only migration into the canonical <code>local_sd15_tensorrt_bundle</code> layout. Studio never moves, renames, or deletes the legacy engines.
+      </div>
+
+      {legacy?.detected ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8, marginTop: 10 }}>
+          {legacy.files.map((file) => (
+            <div key={file.role} style={{ padding: 8, borderRadius: 10, background: "#121422", border: "1px solid #22263a" }}>
+              <div className="small" style={{ fontWeight: 800 }}>{tensorRtRoleLabel(file.role)}</div>
+              <div className="small" style={{ marginTop: 3, opacity: 0.84 }}>
+                {file.present && file.non_empty && file.safe_regular_file
+                  ? `${file.name} • ${formatTaskBytes(file.size_bytes)}`
+                  : file.present
+                    ? `${file.name || "Engine"} • unusable`
+                    : "Missing"}
+              </div>
+              {file.sha256 ? (
+                <div className="small" title={file.sha256} style={{ marginTop: 3, opacity: 0.7 }}>
+                  SHA-256 {file.sha256.slice(0, 12)}…
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {blockedRoles.length ? (
+        <div className="small" role="alert" style={{ marginTop: 8, color: "#ffcf9f" }}>
+          Repair required: {Array.from(new Set(blockedRoles)).map(tensorRtRoleLabel).join(", ")}.
+        </div>
+      ) : null}
+
+      {canonical?.exists && !canonical.renderer_ready ? (
+        <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#241f13", border: "1px solid #5b4b24" }}>
+          <div className="small" style={{ fontWeight: 800 }}>Canonical bundle is intentionally not marked ready</div>
+          <div className="small" style={{ marginTop: 4 }}>
+            The engine copy is preserved, but Studio will not advertise it as installed or renderer-ready until all compatibility requirements are verified.
+          </div>
+          {canonical.gaps.length ? (
+            <ul className="small" style={{ marginTop: 6, marginBottom: 0, paddingLeft: 20 }}>
+              {canonical.gaps.map((gap) => <li key={gap}>{gap}</li>)}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      {status?.migration?.blocked_reason === "insufficient_disk_space" && disk ? (
+        <div className="small" role="alert" style={{ marginTop: 8, color: "#ffcf9f" }}>
+          Free space required: {formatTaskBytes(disk.required_free_bytes)}. Available: {formatTaskBytes(disk.available_free_bytes)}.
+        </div>
+      ) : null}
+
+      {message ? <div className="small" role="status" aria-live="polite" style={{ marginTop: 8 }}>{message}</div> : null}
+      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {importActive ? (
+          <button className="secondary" disabled={busy} onClick={() => onCancel(String(activeTask.id))}>
+            {busy ? "Requesting cancellation…" : "Cancel safe copy"}
+          </button>
+        ) : (
+          <button disabled={!status?.migration?.available || busy} onClick={onImport}>
+            {busy ? "Starting verification…" : "Verify and copy engines"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ModelTaskProgress({
   tasks,
   isPolling,
@@ -416,6 +587,8 @@ export default function Models(props: PageProps) {
   const [civitaiUrl, setCivitaiUrl] = useState("");
   const [importing, setImporting] = useState(false);
   const [localFolder, setLocalFolder] = useState("checkpoints");
+  const [tensorRtBusy, setTensorRtBusy] = useState(false);
+  const [tensorRtMessage, setTensorRtMessage] = useState("");
 
   const [hubCollectionId, setHubCollectionId] = useState<string>(HUB_COLLECTIONS[0].id);
   const [hubQuery, setHubQuery] = useState<string>("");
@@ -661,11 +834,66 @@ export default function Models(props: PageProps) {
     await refresh();
   }
 
+  async function importLegacyTensorRt() {
+    const confirmed = window.confirm(
+      "Verify and copy the four legacy TensorRT engines into the canonical Studio bundle? " +
+      "This can take several minutes and requires enough free space for a complete second copy. " +
+      "The original files will remain unchanged."
+    );
+    if (!confirmed) return;
+    setTensorRtBusy(true);
+    setTensorRtMessage("");
+    setErr("");
+    try {
+      const payload = await apiPost("/v1/models/tensorrt/import-legacy", {}, { timeoutMs: 30_000 });
+      const task = (payload as any)?.task;
+      if (task?.id) {
+        setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      }
+      setTensorRtMessage(
+        "Verification and safe copy started. The legacy source will remain in place, and Studio will publish only a fully hash-verified engine copy."
+      );
+      pollModelTasksNow();
+      await loadCatalog();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setTensorRtBusy(false);
+    }
+  }
+
+  async function cancelLegacyTensorRtImport(taskId: string) {
+    setTensorRtBusy(true);
+    setTensorRtMessage("");
+    setErr("");
+    try {
+      const payload = await apiPost(
+        "/v1/models/tensorrt/cancel-import",
+        { task_id: taskId },
+        { timeoutMs: 15_000 },
+      );
+      const task = (payload as any)?.task;
+      if (task?.id) {
+        setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      }
+      setTensorRtMessage("Cancellation requested. Studio will remove only its temporary copy and leave every legacy engine unchanged.");
+      pollModelTasksNow();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setTensorRtBusy(false);
+    }
+  }
+
   const acceptedMap = data?.accepted ?? {};
   const installedMap = data?.installed ?? {};
   const cloudMap = data?.cloud ?? {};
   const storageMode = data?.storage_mode ?? "local_cache";
   const cacheLabel = data?.model_cache || "cloud cache";
+  const activeTensorRtTask = tasks.find(
+    (task: any) => task.model_id === "local_sd15_tensorrt_bundle"
+      && (task.status === "queued" || task.status === "running"),
+  );
 
   const internalSummary = useMemo(() => {
     return buildInternalModelReadiness({
@@ -706,7 +934,7 @@ export default function Models(props: PageProps) {
       {
         id: "imports" as const,
         label: "Imports",
-        description: "Bring community and local models into the Studio-managed catalog.",
+        description: "Safely migrate legacy runtimes or bring community and local models into Studio.",
       },
       {
         id: "defaults" as const,
@@ -923,6 +1151,15 @@ export default function Models(props: PageProps) {
     ),
     imports: (
       <>
+        <LegacyTensorRtCard
+          status={data?.tensorrt_migration}
+          activeTask={activeTensorRtTask}
+          busy={tensorRtBusy}
+          message={tensorRtMessage}
+          onImport={() => void importLegacyTensorRt()}
+          onCancel={(taskId) => void cancelLegacyTensorRtImport(taskId)}
+        />
+
         <div className="card" style={{ marginTop: 14 }}>
           <div style={{ fontWeight: 900 }}>Add community model (Civitai)</div>
           <div className="small" style={{ marginTop: 6 }}>

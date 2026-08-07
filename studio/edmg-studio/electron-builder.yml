@@ -3,6 +3,7 @@
   "appId": "com.dwct.edmgstudio",
   "productName": "EDMG Studio",
   "icon": "electron-resources/app-icon.png",
+  "afterPack": "./scripts/electron-builder-after-pack.mjs",
   "directories": {
     "output": "dist",
     "buildResources": "electron-resources"

@@ -4,7 +4,7 @@ set -euo pipefail
 # EDMG Studio reinstall/bootstrap for a Vast.ai PyTorch instance.
 # Supports arbitrary exposed container ports through BACKEND_PORT and UI_PORT.
 
-REPO_URL="${REPO_URL:-https://github.com/HIMOI890/DWCTGenerativeSoundStudio.git}"
+REPO_URL="${REPO_URL:-https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio.git}"
 REPO_BRANCH="${REPO_BRANCH:-codex/Unified}"
 REPO_DIR="${REPO_DIR:-/workspace/src/DWCTGenerativeSoundStudio}"
 STUDIO_DIR="$REPO_DIR/studio/edmg-studio"

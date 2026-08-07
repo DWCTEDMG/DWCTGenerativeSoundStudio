@@ -7,7 +7,7 @@ This folder contains a **Windows-first** packaging pipeline that produces a DAW/
 - Windows 10/11 x64
 - `uv` 0.11.28. The repository pins Python 3.12 and uv acquires the matching
   interpreter for the frozen release environment.
-- Node.js 18+ on PATH
+- Node.js 20.19+ or 22.12+ on PATH (Node 22 LTS recommended)
 - `pnpm@10.33.0` available via `corepack enable` or a direct pnpm install
 - Git (optional, for fetching ComfyUI)
 - Inno Setup 7 or newer for the CUDA external-payload installer. Inno 7's
@@ -63,6 +63,7 @@ This produces:
 
 - `studio/edmg-studio/dist-inno/EDMG-Studio-Setup-<version>.exe`
 - `studio/edmg-studio/dist-inno/payload/win-unpacked.7z`
+- `studio/edmg-studio/dist-inno/payload/payload-integrity.json`
 
 The CUDA command uses the parallel `dist-inno-cuda/` directory. The legacy
 single-file CUDA NSIS attempt remains available as `dist:win:cuda:nsis` for
@@ -73,7 +74,11 @@ because Inno copies the large packaged app archive from the sibling payload
 folder at install time instead of embedding it. Inno's native archive extractor
 tracks every installed payload file for a clean uninstall, so customer machines
 do not need 7-Zip. The setup EXE embeds the payload SHA-256 and rejects a missing
-or modified archive. The build machine still needs 7-Zip to create the archive.
+or modified archive. The integrity sidecar binds that archive hash to the exact
+desktop version, accelerator profile, desktop executable, final backend
+manifest, and backend binary. The archive is always rebuilt from the current
+`dist/win-unpacked` tree; release packaging has no stale-payload reuse switch.
+The build machine still needs 7-Zip to create the archive.
 
 Outputs:
 
@@ -93,13 +98,32 @@ cannot replace CUDA dependencies during a build.
 
 - Electron UI
 - Python backend compiled into `edmg-studio-backend.exe` from `uv.lock`
-- A place to drop runtime deps:
+- Checksum-verified, pinned media tools:
   - `studio/edmg-studio/electron-resources/bin/ffmpeg.exe`
-  - `studio/edmg-studio/electron-resources/backend/edmg-studio-backend.exe`
+  - `studio/edmg-studio/electron-resources/bin/ffprobe.exe`
+- `studio/edmg-studio/electron-resources/backend/edmg-studio-backend.exe`
+
+`prepare-electron-build.mjs` obtains FFmpeg and FFprobe from the immutable archive
+recorded in `packaging/media-tools-assets.json`; it never copies an arbitrary
+PATH installation or downloads a moving `latest` build. The verified archive is
+reused from `.cache/media-tools/` by default. Set
+`EDMG_STUDIO_BUILD_CACHE_ROOT` to put that cache on another build volume.
+
+The same archive's GPLv3 `LICENSE.txt` is copied byte-for-byte into the package
+as `electron-resources/bin/FFmpeg-LICENSE.txt`. A deterministic
+`FFmpeg-SOURCE.txt` beside it records the exact FFmpeg source commit, BtbN build
+source commit, release tag, archive name, size, and SHA-256. Packaging fails
+closed if the archive license is missing, ambiguous, or not the expected GPLv3
+text; the packaged-desktop smoke inventory requires both evidence files.
 
 The staged backend manifest records Python/uv/PyInstaller versions, the lock
 SHA-256, accelerator profile, resolved Torch packages/index, source fingerprint,
-and binary hash. Release evidence (SBOM + checksum manifests) is written to
+and binary hash. On Windows, Electron Builder signs the backend and helper while
+copying them into the packaged application. Its `afterPack` gate then verifies
+the configured signer, regenerates the packaged manifest from those exact final
+PE bytes, and fully revalidates it before NSIS or Inno can archive them. Unsigned local QA
+builds retain an explicit `unsigned-local` manifest state and cannot be promoted
+through the fail-closed production gate. Release evidence (SBOM + checksum manifests) is written to
 `studio/edmg-studio/release/evidence/` during `prepare-release-bundle` and after
 installer builds. Installed applications run the executable directly and do not
 require Python or uv on the customer machine.
@@ -131,8 +155,16 @@ $env:EDMG_REQUIRE_CODE_SIGNING = "1"
 packaging fail before unsigned EDMG-owned executables can be archived and also
 sets electron-builder `forceCodeSigning`. The custom certificate variables are
 mapped into electron-builder's native Windows signing configuration, while the
-PowerShell lane signs the bundled backend/helper and verifies the application
-and installer with both `Get-AuthenticodeSignature` and `signtool verify`.
+PowerShell lane verifies the copied backend/helper, application, and installer
+with both `Get-AuthenticodeSignature` and `signtool verify`. A
+valid signature from a different certificate is rejected; the signer thumbprint
+must match the configured release certificate.
+
+The oversized Inno lane supplies this same fail-closed signer to the Inno
+compiler. In production, Inno signs both Setup and its generated uninstaller;
+the outer Setup is verified again after compilation. Signing only the finished
+Setup after compilation is not sufficient because it would leave the installed
+`unins000.exe` unsigned.
 
 `signtool.exe` is discovered from `PATH` or installed Windows SDK directories.
 Set `EDMG_SIGNTOOL_PATH` only when using a nonstandard SDK layout. Signature
