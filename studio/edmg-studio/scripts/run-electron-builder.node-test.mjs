@@ -177,7 +177,7 @@ test("requires a filename-safe Linux profile and leaves non-Linux arguments unch
   );
 });
 
-async function createBackendSigningFixture(t) {
+async function createBackendSigningFixture(t, { extraFiles = [] } = {}) {
   const backendDirectory = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-signed-manifest-"));
   t.after(() => fsp.rm(backendDirectory, { recursive: true, force: true }));
 
@@ -195,6 +195,7 @@ async function createBackendSigningFixture(t) {
     [helperEntryPoint, "unsigned helper bytes"],
     ["launcher_env.defaults.json", "{}\n"],
     ...Object.values(hfRuntimeBundleEvidence).map((entryPath) => [entryPath, `fixture:${entryPath}`]),
+    ...extraFiles,
   ]);
   for (const [relativePath, contents] of fileContents) {
     const filePath = path.join(backendDirectory, ...relativePath.split("/"));
@@ -286,23 +287,37 @@ async function createBackendSigningFixture(t) {
 }
 
 test("finalizes signed backend and helper bytes from their final packaged inventory", async (t) => {
-  const fixture = await createBackendSigningFixture(t);
+  const fixture = await createBackendSigningFixture(t, {
+    extraFiles: [["_internal/torch/bin/protoc.exe", "unsigned nested executable"]],
+  });
   await fsp.appendFile(fixture.backendPath, "::authenticode", "utf8");
   await fsp.appendFile(fixture.helperPath, "::authenticode", "utf8");
+  await fsp.appendFile(
+    path.join(fixture.backendDirectory, "_internal", "torch", "bin", "protoc.exe"),
+    "::authenticode",
+    "utf8",
+  );
+
+  let verifiedPaths = [];
 
   const finalized = await finalizeStagedWindowsBackendManifest({
     backendDirectory: fixture.backendDirectory,
     signingRequired: true,
     signingConfigured: true,
     finalizedAt: "2026-08-06T12:00:00.000Z",
+    verifyExecutablePaths: async (executablePaths) => {
+      verifiedPaths = executablePaths;
+    },
   });
 
   assert.equal(finalized.windowsAuthenticode.status, "verified");
   assert.equal(finalized.windowsAuthenticode.required, true);
   assert.deepEqual(finalized.windowsAuthenticode.changedExecutablePaths, [
+    "_internal/torch/bin/protoc.exe",
     "edmg-hf-bucket-helper.exe",
     "edmg-studio-backend.exe",
   ]);
+  assert.deepEqual(verifiedPaths, finalized.windowsAuthenticode.executablePaths);
   assert.notEqual(finalized.binarySha256, fixture.manifest.binarySha256);
   assert.notEqual(finalized.hfBucketHelper.binarySha256, fixture.manifest.hfBucketHelper.binarySha256);
   assert.equal(await bundleMatchesManifest(fixture.backendDirectory, finalized), true);
@@ -341,6 +356,49 @@ test("Electron Builder afterPack finalizes the copied unsigned QA backend manife
   );
 });
 
+test("Electron Builder omissions are recorded without weakening file-set drift checks", async (t) => {
+  const fixture = await createBackendSigningFixture(t, {
+    extraFiles: [
+      [".gitkeep", ""],
+      ["_internal/nltk_data/tokenizers/punkt/.DS_Store", "finder metadata"],
+    ],
+  });
+  await fsp.rm(path.join(fixture.backendDirectory, ".gitkeep"));
+  await fsp.rm(
+    path.join(
+      fixture.backendDirectory,
+      "_internal",
+      "nltk_data",
+      "tokenizers",
+      "punkt",
+      ".DS_Store",
+    ),
+  );
+
+  const finalized = await finalizeStagedWindowsBackendManifest({
+    backendDirectory: fixture.backendDirectory,
+    signingConfigured: false,
+  });
+
+  assert.deepEqual(finalized.windowsAuthenticode.packagerOmittedPaths, [
+    ".gitkeep",
+    "_internal/nltk_data/tokenizers/punkt/.DS_Store",
+  ]);
+  assert.equal(await bundleMatchesManifest(fixture.backendDirectory, finalized), true);
+
+  const unexpected = await createBackendSigningFixture(t, {
+    extraFiles: [["runtime-required.json", "required"]],
+  });
+  await fsp.rm(path.join(unexpected.backendDirectory, "runtime-required.json"));
+  await assert.rejects(
+    finalizeStagedWindowsBackendManifest({
+      backendDirectory: unexpected.backendDirectory,
+      signingConfigured: false,
+    }),
+    /staged backend file set changed/,
+  );
+});
+
 test("refuses to hide non-executable or unsigned byte drift in a refreshed manifest", async (t) => {
   const nonExecutable = await createBackendSigningFixture(t);
   await fsp.appendFile(nonExecutable.defaultsPath, "tampered", "utf8");
@@ -348,6 +406,7 @@ test("refuses to hide non-executable or unsigned byte drift in a refreshed manif
     finalizeStagedWindowsBackendManifest({
       backendDirectory: nonExecutable.backendDirectory,
       signingConfigured: true,
+      verifyExecutablePaths: async () => {},
     }),
     /Non-signable backend bundle entry changed/,
   );

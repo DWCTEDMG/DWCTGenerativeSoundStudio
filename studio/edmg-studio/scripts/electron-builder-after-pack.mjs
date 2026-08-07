@@ -30,14 +30,23 @@ export function resolvePackagedBackendDirectory(context) {
   return backendDirectory;
 }
 
-function verifyPackagedAuthenticode(backendDirectory, env, spawn = spawnSync) {
+function verifyPackagedAuthenticode(
+  backendDirectory,
+  executablePaths,
+  env,
+  spawn = spawnSync,
+) {
   const signScript = path.join(studioRoot, "packaging", "windows", "sign_release.ps1");
   if (!fs.existsSync(signScript) || !fs.statSync(signScript).isFile()) {
     throw new Error(`Windows signing verification script is missing: ${signScript}`);
   }
 
-  for (const executableName of ["edmg-studio-backend.exe", "edmg-hf-bucket-helper.exe"]) {
-    const executablePath = path.join(backendDirectory, executableName);
+  for (const executableName of executablePaths) {
+    const executablePath = path.resolve(backendDirectory, ...executableName.split("/"));
+    const relative = path.relative(backendDirectory, executablePath);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`Packaged Windows executable escapes the backend directory: ${executableName}`);
+    }
     if (!fs.existsSync(executablePath) || !fs.statSync(executablePath).isFile()) {
       throw new Error(`Packaged Windows executable is missing: ${executablePath}`);
     }
@@ -96,16 +105,16 @@ export async function finalizeWindowsPackagedBackend(
   }
 
   const backendDirectory = resolvePackagedBackendDirectory(context);
-  if (signingConfigured) {
-    // electron-builder signs executable extraResources while copying them. Verify
-    // those exact packaged bytes before rebasing the embedded provenance hashes.
-    verifyPackagedAuthenticode(backendDirectory, env, spawn);
-  }
-
   const manifest = await finalizeStagedWindowsBackendManifest({
     backendDirectory,
     signingRequired,
     signingConfigured,
+    ...(signingConfigured
+      ? {
+          verifyExecutablePaths: (executablePaths) =>
+            verifyPackagedAuthenticode(backendDirectory, executablePaths, env, spawn),
+        }
+      : {}),
     ...(finalizedAt ? { finalizedAt } : {}),
   });
   console.log(
