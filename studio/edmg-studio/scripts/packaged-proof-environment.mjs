@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildCacheEnvPaths } from "../main-process/storage-env.mjs";
 
 export const INSTALLED_APP_DIR_ENV = "EDMG_STUDIO_INSTALLED_APP_DIR";
+export const TEST_BOOTSTRAP_CONFIG_PATH_ENV = "EDMG_STUDIO_TEST_BOOTSTRAP_CONFIG_PATH";
 
 export function buildStudioProofPaths(studioHome) {
   const resolvedHome = path.resolve(studioHome);
@@ -73,6 +74,7 @@ export function buildHermeticPackagedProofEnv({
     EDMG_DIRECTOR_BASE_URL: "http://127.0.0.1:9",
     EDMG_STUDIO_TEST_MODE: "1",
     EDMG_STUDIO_TEST_SKIP_MIGRATION: "0",
+    [TEST_BOOTSTRAP_CONFIG_PATH_ENV]: profile.bootstrapPath,
     EDMG_STUDIO_TEST_PAGE: path.resolve(testPage),
     EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
     ELECTRON_DISABLE_SECURITY_WARNINGS: "1",

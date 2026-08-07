@@ -18,6 +18,7 @@ import {
   resolveInstalledAppDir,
 } from "./packaged-upgrade-proof-lib.mjs";
 import {
+  TEST_BOOTSTRAP_CONFIG_PATH_ENV,
   buildHermeticPackagedProofEnv,
   buildStudioProofPaths,
   resolveHermeticProofProfile,
@@ -53,6 +54,7 @@ test("packaged proofs replace hostile inherited storage and backend settings wit
       EDMG_STUDIO_SPAWN_BACKEND: "0",
       EDMG_STUDIO_BACKEND_URL: "https://remote.example.invalid",
       EDMG_BACKEND_AUTH_TOKEN: "real-secret",
+      [TEST_BOOTSTRAP_CONFIG_PATH_ENV]: "C:\\Users\\real\\AppData\\Roaming\\EDMG Studio\\bootstrap.json",
       [INSTALLED_APP_DIR_ENV]: "C:\\Program Files\\EDMG Studio",
     },
     studioHome,
@@ -72,6 +74,7 @@ test("packaged proofs replace hostile inherited storage and backend settings wit
   assert.equal(environment.EDMG_BACKEND_AUTH_TOKEN, "");
   assert.equal(environment.EDMG_DIRECTOR_SPAWN, "0");
   assert.equal(environment.EDMG_AI_PROVIDER, "rule_based");
+  assert.equal(environment[TEST_BOOTSTRAP_CONFIG_PATH_ENV], profile.bootstrapPath);
   assert.equal(environment[INSTALLED_APP_DIR_ENV], undefined);
   assert.equal(environment.TEMP.startsWith(paths.cacheRoot), true);
   assert.equal(environment.HF_HOME.startsWith(paths.cacheRoot), true);
@@ -89,12 +92,17 @@ test("proof-specific AI settings may change without overriding hermetic storage 
       EDMG_AI_OLLAMA_URL: "http://127.0.0.1:11434",
       EDMG_STUDIO_HOME: "G:\\escape",
       EDMG_STUDIO_BACKEND_URL: "https://remote.example.invalid",
+      [TEST_BOOTSTRAP_CONFIG_PATH_ENV]: "G:\\escape\\bootstrap.json",
     },
   });
 
   assert.equal(environment.EDMG_AI_PROVIDER, "ollama");
   assert.equal(environment.EDMG_STUDIO_HOME, studioHome);
   assert.equal(environment.EDMG_STUDIO_BACKEND_URL, "http://127.0.0.1:27863");
+  assert.equal(
+    environment[TEST_BOOTSTRAP_CONFIG_PATH_ENV],
+    resolveHermeticProofProfile(studioHome).bootstrapPath,
+  );
 });
 
 async function createPackagedApp(root, { version = "1.0.0", backendContent = "backend binary\n" } = {}) {

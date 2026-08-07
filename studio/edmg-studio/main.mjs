@@ -452,6 +452,13 @@ function resolveConfiguredPath(rawValue) {
 }
 
 function getBootstrapConfigPath() {
+  const testOverride = String(process.env.EDMG_STUDIO_TEST_BOOTSTRAP_CONFIG_PATH ?? "").trim();
+  if (testOverride && (process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1") {
+    if (!path.isAbsolute(testOverride)) {
+      throw new Error("EDMG_STUDIO_TEST_BOOTSTRAP_CONFIG_PATH must be an absolute path");
+    }
+    return path.normalize(testOverride);
+  }
   return path.join(app.getPath("appData"), APP_NAME, BOOTSTRAP_CONFIG_BASENAME);
 }
 
