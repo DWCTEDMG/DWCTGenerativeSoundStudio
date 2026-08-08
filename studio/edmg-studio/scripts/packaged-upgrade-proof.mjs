@@ -213,11 +213,9 @@ async function main() {
   }
 
   let child = null;
-  let cleanupPackagedProcesses = false;
   let summary = null;
   let primaryError = null;
   try {
-    cleanupPackagedProcesses = true;
     await stopExistingPackagedProcesses();
 
     await fsp.mkdir(targetHome, { recursive: true });
@@ -321,9 +319,7 @@ async function main() {
     }
   };
   await attemptCleanup("stop launched candidate process tree", () => killProcessTree(child));
-  if (cleanupPackagedProcesses) {
-    await attemptCleanup("stop residual packaged candidate processes", () => stopExistingPackagedProcesses());
-  }
+  await attemptCleanup("stop residual packaged candidate processes", () => stopExistingPackagedProcesses());
   if (installedBaselineBefore) {
     await attemptCleanup("verify read-only installed baseline integrity", async () => {
       const installedBaselineAfter = await inspectInstalledAppBaseline(installedBaselineBefore.appDir);

@@ -61,11 +61,12 @@ in the Packaging row.
 
 This produces:
 
-- `studio/edmg-studio/dist-inno/EDMG-Studio-Setup-<version>.exe`
+- `studio/edmg-studio/dist-inno/EDMG-Studio-<version>-windows-x64-<profile>-Setup.exe`
 - `studio/edmg-studio/dist-inno/payload/win-unpacked.7z`
 - `studio/edmg-studio/dist-inno/payload/payload-integrity.json`
 
-The CUDA command uses the parallel `dist-inno-cuda/` directory. The legacy
+The CUDA command uses the parallel `dist-inno-cuda/` directory and names its
+installer `EDMG-Studio-<version>-windows-x64-cuda-Setup.exe`. The legacy
 single-file CUDA NSIS attempt remains available as `dist:win:cuda:nsis` for
 diagnostics, but the current locked CUDA payload is too large to succeed.
 
@@ -82,8 +83,14 @@ The build machine still needs 7-Zip to create the archive.
 
 Outputs:
 
-- `studio/edmg-studio/dist/` (final electron-builder output: installer + unpacked app)
+- `studio/edmg-studio/dist/` (final electron-builder output: profile-qualified installer + unpacked app)
 - `studio/edmg-studio/release/staged-app/` (intermediate staged app passed to electron-builder)
+
+Windows NSIS installers use
+`EDMG-Studio-<version>-windows-x64-<profile>-Setup.exe`, where `<profile>` is
+the immutable packaged backend profile: `cpu`, `directml`, or `cuda`. This
+keeps installers for mutually exclusive runtimes from overwriting or being
+mistaken for one another.
 
 The packaged desktop version comes from `studio/edmg-studio/package.json#version`.
 `build_all.ps1` runs `pnpm run check:tooling` before `dist:win` so lockfile and

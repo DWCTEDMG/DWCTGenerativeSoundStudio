@@ -1002,6 +1002,9 @@ export default function Settings(props: PageProps) {
                 <> • Electron {buildIdentity.desktop.electronVersion}</>
               ) : null}
             </div>
+            <div aria-label="Desktop executable location" style={{ wordBreak: "break-all" }}>
+              Running from <code>{buildIdentity?.desktop?.executablePath || "unavailable"}</code>
+            </div>
             <div aria-label="Backend build version">
               Backend <b>{backendHealth?.version || "unavailable"}</b>
               {(buildIdentity?.backendBundle?.acceleratorProfile || systemReadiness?.checks?.runtime?.accelerator_profile) ? (

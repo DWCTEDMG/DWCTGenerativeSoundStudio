@@ -31,7 +31,11 @@ test("build identity uses Electron version metadata and the packaged backend man
     }));
 
     const identity = buildIdentity({
-      app: { getVersion: () => "1.2.0", isPackaged: true },
+      app: {
+        getVersion: () => "1.2.0",
+        getPath: (name) => name === "exe" ? "E:\\EDMG Studio\\EDMG Studio.exe" : "",
+        isPackaged: true,
+      },
       resourcesPath,
       platform: "win32",
       arch: "x64",
@@ -44,6 +48,7 @@ test("build identity uses Electron version metadata and the packaged backend man
       platform: "win32",
       arch: "x64",
       electronVersion: "39.2.7",
+      executablePath: "E:\\EDMG Studio\\EDMG Studio.exe",
     });
     assert.equal(identity.backendBundle.available, true);
     assert.equal(identity.backendBundle.binaryVerified, true);
@@ -72,6 +77,7 @@ test("build identity fails closed when provenance is missing or malformed", () =
   assert.equal(identity.ok, true);
   assert.equal(identity.desktop.version, "1.2.0-dev");
   assert.equal(identity.desktop.packaged, false);
+  assert.equal(identity.desktop.executablePath, "");
   assert.deepEqual(identity.backendBundle, {
     available: false,
     binaryVerified: false,
@@ -86,6 +92,23 @@ test("build identity fails closed when provenance is missing or malformed", () =
     lockSha256: "",
     binarySha256: "",
   });
+});
+
+test("build identity fails closed when Electron cannot resolve the executable path", () => {
+  const identity = buildIdentity({
+    app: {
+      getVersion: () => "1.2.0",
+      getPath: () => {
+        throw new Error("app path unavailable");
+      },
+      isPackaged: true,
+    },
+    resourcesPath: "Z:\\missing-resources",
+    platform: "win32",
+  });
+
+  assert.equal(identity.ok, true);
+  assert.equal(identity.desktop.executablePath, "");
 });
 
 test("packaged build identity does not expose malformed manifest digests", () => {

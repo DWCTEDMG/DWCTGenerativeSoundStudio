@@ -18,6 +18,8 @@ export const REQUIRED_LINUX_SETUP_SCRIPTS = Object.freeze([
   "scripts/setup_linux_ollama.sh",
   "scripts/setup_linux_comfyui.sh",
 ]);
+export const REQUIRED_FASTER_WHISPER_VAD_ASSET =
+  "_internal/faster_whisper/assets/silero_vad_v6.onnx";
 
 const DYNAMIC_DEPENDENCY_ENV_VARS = Object.freeze([
   "EDMG_BACKEND_BUNDLE_EXTRA",
@@ -415,6 +417,16 @@ export function validateReleaseManifest(
       defaults.sha256 !== manifest.launcherEnvDefaults?.sha256
     ) {
       errors.push("launcherEnvDefaults metadata does not match the bundled defaults");
+    }
+    const fasterWhisperVadAsset = bundleEntries.find(
+      (entry) =>
+        entry?.path === REQUIRED_FASTER_WHISPER_VAD_ASSET &&
+        entry?.type === "file" &&
+        Number.isInteger(entry?.size) &&
+        entry.size > 0,
+    );
+    if (!fasterWhisperVadAsset) {
+      errors.push(`${REQUIRED_FASTER_WHISPER_VAD_ASSET} is missing or empty in the backend bundle`);
     }
     if (releasePlatform === "linux") {
       for (const entryPoint of REQUIRED_LINUX_SETUP_SCRIPTS) {

@@ -20,6 +20,7 @@ const stagedBackendManifestRelativePath = path.join(
 
 const WINDOWS_TARGET_FLAGS = new Set(["-w", "--win", "--windows"]);
 const LINUX_TARGET_FLAGS = new Set(["-l", "--linux"]);
+const RELEASE_ACCELERATOR_PROFILES = new Set(["cpu", "directml", "cuda"]);
 
 function normalizedFlagName(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -87,23 +88,148 @@ export function requireStagedBackendPlatform({
   return manifest;
 }
 
-export function withLinuxProfileArtifactName(builderArgs, { targetPlatform, acceleratorProfile } = {}) {
-  if (targetPlatform !== "linux") return [...builderArgs];
-
-  const hasArtifactName = builderArgs.some((arg) =>
-    /^(?:-c|--config)\.artifactname(?:=|$)/i.test(String(arg ?? "").trim()),
-  );
-  if (hasArtifactName) return [...builderArgs];
-
+function normalizedArtifactProfile(acceleratorProfile, targetPlatform) {
+  const platformName = targetPlatform === "win32" ? "Windows" : "Linux";
   const profile = String(acceleratorProfile ?? "").trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(profile)) {
-    throw new Error("The staged Linux backend manifest must declare a filename-safe acceleratorProfile.");
+    throw new Error(
+      `The staged ${platformName} backend manifest must declare a filename-safe acceleratorProfile.`,
+    );
+  }
+  if (!RELEASE_ACCELERATOR_PROFILES.has(profile)) {
+    throw new Error(
+      `The staged ${platformName} backend manifest acceleratorProfile must be cpu, directml, or cuda.`,
+    );
+  }
+  return profile;
+}
+
+function profileQualifiedArtifactName(targetPlatform, profile, version, extension) {
+  return targetPlatform === "linux"
+    ? `EDMG-Studio-${version}-linux-x64-${profile}.${extension}`
+    : `EDMG-Studio-${version}-windows-x64-${profile}-Setup.${extension}`;
+}
+
+export function withProfileArtifactName(builderArgs, { targetPlatform, acceleratorProfile } = {}) {
+  if (targetPlatform !== "linux" && targetPlatform !== "win32") return [...builderArgs];
+
+  const profile = normalizedArtifactProfile(acceleratorProfile, targetPlatform);
+  const hasArtifactName = builderArgs.some((arg) => {
+    const value = String(arg ?? "").trim();
+    return targetPlatform === "win32"
+      ? /^(?:-c|--config)\.(?:win\.)?artifactname(?:=|$)/i.test(value)
+      : /^(?:-c|--config)\.(?:linux\.)?artifactname(?:=|$)/i.test(value);
+  });
+  if (hasArtifactName) return [...builderArgs];
+
+  const artifactName = profileQualifiedArtifactName(
+    targetPlatform,
+    profile,
+    "${version}",
+    "${ext}",
+  );
+  const configPath = targetPlatform === "win32" ? "-c.win.artifactName" : "-c.artifactName";
+  return [...builderArgs, `${configPath}=${artifactName}`];
+}
+
+// Preserve the original exported helper name for downstream scripts while both
+// release targets transition to the profile-qualified naming contract.
+export const withLinuxProfileArtifactName = withProfileArtifactName;
+
+export function requireProfileQualifiedArtifactInventory({
+  rootDir = root,
+  targetPlatform,
+  acceleratorProfile,
+  version,
+} = {}) {
+  if (targetPlatform !== "linux" && targetPlatform !== "win32") return null;
+
+  const profile = normalizedArtifactProfile(acceleratorProfile, targetPlatform);
+  const releaseVersion = String(version ?? "").trim();
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(releaseVersion)) {
+    throw new Error("The desktop package version must be filename-safe before release evidence is written.");
   }
 
-  return [
-    ...builderArgs,
-    `-c.artifactName=EDMG-Studio-\${version}-linux-x64-${profile}.\${ext}`,
-  ];
+  const extension = targetPlatform === "linux" ? "AppImage" : "exe";
+  const expectedArtifactName = profileQualifiedArtifactName(
+    targetPlatform,
+    profile,
+    releaseVersion,
+    extension,
+  );
+  const distDir = path.join(rootDir, "dist");
+  if (!fs.existsSync(distDir) || !fs.statSync(distDir).isDirectory()) {
+    throw new Error(`Release artifact directory is missing: ${distDir}`);
+  }
+
+  const entries = fs.readdirSync(distDir, { withFileTypes: true }).filter((entry) => entry.isFile());
+  const primaryArtifactPattern =
+    targetPlatform === "linux" ? /\.AppImage$/i : /\.(?:exe|msi)$/i;
+  const primaryArtifactNames = entries
+    .map((entry) => entry.name)
+    .filter((name) => primaryArtifactPattern.test(name))
+    .sort((left, right) => left.localeCompare(right));
+  if (primaryArtifactNames.length !== 1 || primaryArtifactNames[0] !== expectedArtifactName) {
+    throw new Error(
+      `Profile-qualified ${targetPlatform} release inventory mismatch. Expected exactly ${expectedArtifactName}; ` +
+        `found ${primaryArtifactNames.length ? primaryArtifactNames.join(", ") : "none"}. ` +
+        "Archive or remove stale top-level installer outputs and rebuild before signing or release evidence.",
+    );
+  }
+
+  let blockmapPath = null;
+  if (targetPlatform === "win32") {
+    const expectedBlockmapName = `${expectedArtifactName}.blockmap`;
+    const blockmapNames = entries
+      .map((entry) => entry.name)
+      .filter((name) => /\.blockmap$/i.test(name))
+      .sort((left, right) => left.localeCompare(right));
+    const unexpectedBlockmaps = blockmapNames.filter((name) => name !== expectedBlockmapName);
+    if (unexpectedBlockmaps.length) {
+      throw new Error(
+        `Windows release inventory contains blockmaps not paired with ${expectedArtifactName}: ` +
+          unexpectedBlockmaps.join(", "),
+      );
+    }
+    if (blockmapNames.includes(expectedBlockmapName)) {
+      blockmapPath = path.join(distDir, expectedBlockmapName);
+    }
+  }
+
+  const updateMetadataNames = entries
+    .map((entry) => entry.name)
+    .filter((name) =>
+      targetPlatform === "linux" ? name === "latest-linux.yml" : /^latest.*\.yml$/i.test(name),
+    );
+  for (const metadataName of updateMetadataNames) {
+    const metadataPath = path.join(distDir, metadataName);
+    if (!fs.readFileSync(metadataPath, "utf8").includes(expectedArtifactName)) {
+      throw new Error(
+        `Release update metadata ${metadataName} is not paired with ${expectedArtifactName}.`,
+      );
+    }
+  }
+
+  // electron-builder rewrites this support file during the invocation that just
+  // completed. It is not an installer and must not affect the primary count,
+  // but a surviving profile-blind config is evidence that the wrapper override
+  // was not applied.
+  const effectiveConfigPath = path.join(distDir, "builder-effective-config.yaml");
+  if (fs.existsSync(effectiveConfigPath) && fs.statSync(effectiveConfigPath).isFile()) {
+    const profileToken =
+      targetPlatform === "linux" ? `linux-x64-${profile}` : `windows-x64-${profile}-Setup`;
+    if (!fs.readFileSync(effectiveConfigPath, "utf8").includes(profileToken)) {
+      throw new Error(
+        `Electron Builder effective config does not contain the expected profile token ${profileToken}.`,
+      );
+    }
+  }
+
+  return {
+    expectedArtifactPath: path.join(distDir, expectedArtifactName),
+    blockmapPath,
+    updateMetadataPaths: updateMetadataNames.map((name) => path.join(distDir, name)),
+  };
 }
 
 function resolveEvidenceProfile() {
@@ -188,7 +314,7 @@ async function main() {
   const requestedBuilderArgs = process.argv.slice(2);
   const releaseTarget = resolveRequestedInstallerTarget(requestedBuilderArgs, process.platform);
   const stagedBackendManifest = requireStagedBackendPlatform({ targetPlatform: releaseTarget?.platform });
-  const packagingBuilderArgs = withLinuxProfileArtifactName(requestedBuilderArgs, {
+  const packagingBuilderArgs = withProfileArtifactName(requestedBuilderArgs, {
     targetPlatform: releaseTarget?.platform,
     acceleratorProfile: stagedBackendManifest?.acceleratorProfile,
   });
@@ -242,13 +368,23 @@ async function main() {
     process.exit(result.status ?? 1);
   }
 
+  let packageJson = null;
+  if (releaseTarget) {
+    packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    requireProfileQualifiedArtifactInventory({
+      rootDir: root,
+      targetPlatform: releaseTarget.platform,
+      acceleratorProfile: stagedBackendManifest?.acceleratorProfile,
+      version: packageJson.version,
+    });
+  }
+
   invokeWindowsSigning(packagedOwnedExecutables(), signingPlan, childEnv, "post-pack", { verifyOnly: true });
 
   if (!releaseTarget) {
     return;
   }
 
-  const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const evidence = await writeReleaseEvidence({
     root,
     phase: "dist",

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   buildHermeticPackagedProofEnv,
+  resolvePackagedProofAcceleratorProfile,
   resolveHermeticProofProfile,
 } from "./packaged-proof-environment.mjs";
 
@@ -190,8 +191,9 @@ async function main() {
   try {
     const health = await waitForHealth(baseUrl);
     const initialStatus = await requestJson(`${baseUrl}/v1/setup/status`);
+    const acceleratorProfile = resolvePackagedProofAcceleratorProfile(initialStatus);
     const fullSetup = await postJson(`${baseUrl}/v1/setup/full/install`, {
-      flavor: "cpu",
+      accelerator_profile: acceleratorProfile,
       model: requestedModel,
     });
     const taskId = fullSetup?.task?.id;
@@ -205,6 +207,7 @@ async function main() {
       baseUrl,
       health,
       task,
+      acceleratorProfile,
       requestedModel,
       ollamaUrl,
       initialStatus: {

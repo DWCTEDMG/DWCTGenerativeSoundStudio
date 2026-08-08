@@ -13,6 +13,7 @@ declare global {
           platform: string;
           arch: string;
           electronVersion: string;
+          executablePath: string;
         };
         backendBundle: {
           available: boolean;

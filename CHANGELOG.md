@@ -70,6 +70,11 @@ artifact, clean-machine, previous-version upgrade, and hardware evidence gates i
 
 ### Fixed
 
+- Launched the packaged Windows backend directly from Electron instead of through PowerShell, so a user shell policy, profile, or offline OneDrive configuration cannot prevent the bundled backend and GPU runtime from starting. Unknown pre-existing listeners are isolated onto a private port rather than reused.
+- Included Faster-Whisper's required Silero VAD ONNX asset and distribution metadata in every packaged backend, and made release-manifest validation fail closed when that runtime asset is missing or empty.
+- Stopped Faster-Whisper from downloading and trying every larger fallback model after a successful empty transcription of silence or music; the same model now receives the intended no-VAD retry, while model fallback remains available for real load or inference errors.
+- Gave Windows CPU, DirectML, and CUDA installers profile-qualified names and made release evidence fail closed on mixed or stale installers, blockmaps, and updater metadata. Raw Electron Builder output now carries an explicit `unqualified` fallback name so it cannot be mistaken for a release package.
+- Displayed the exact running desktop executable location in Settings build identity so installed, loose, and source copies can be distinguished when diagnosing version or accelerator-profile mismatches.
 - Isolated the strict Electron integration probe from stale launcher backend URLs by pinning the
   spawned test shell to its ephemeral mock backend.
 - Fixed packaging import paths for `pyinstaller_support` in the PyInstaller spec and release

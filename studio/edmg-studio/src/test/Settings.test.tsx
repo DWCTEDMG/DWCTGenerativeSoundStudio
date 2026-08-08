@@ -649,6 +649,7 @@ describe("Settings page", () => {
           platform: "win32",
           arch: "x64",
           electronVersion: "39.2.7",
+          executablePath: "E:\\EDMG Studio\\EDMG Studio.exe",
         },
         backendBundle: {
           available: true,
@@ -688,6 +689,7 @@ describe("Settings page", () => {
 
     expect(await screen.findByText("Packaged desktop")).toBeTruthy();
     expect(screen.getByLabelText("Desktop build version").textContent).toContain("1.2.0");
+    expect(screen.getByLabelText("Desktop executable location").textContent).toContain("E:\\EDMG Studio\\EDMG Studio.exe");
     expect(screen.getByLabelText("Backend build version").textContent).toContain("1.2.0");
     expect(screen.getByText(/verified installed backend \+ release manifest v5/i)).toBeTruthy();
     expect(screen.getByText("Show technical fingerprints")).toBeTruthy();

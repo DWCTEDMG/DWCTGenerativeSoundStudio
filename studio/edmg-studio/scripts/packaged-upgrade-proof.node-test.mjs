@@ -21,6 +21,7 @@ import {
   TEST_BOOTSTRAP_CONFIG_PATH_ENV,
   buildHermeticPackagedProofEnv,
   buildStudioProofPaths,
+  resolvePackagedProofAcceleratorProfile,
   resolveHermeticProofProfile,
 } from "./packaged-proof-environment.mjs";
 
@@ -102,6 +103,27 @@ test("proof-specific AI settings may change without overriding hermetic storage 
   assert.equal(
     environment[TEST_BOOTSTRAP_CONFIG_PATH_ENV],
     resolveHermeticProofProfile(studioHome).bootstrapPath,
+  );
+});
+
+test("zero-state proofs use the accelerator profile embedded in the packaged backend", () => {
+  for (const profile of ["cpu", "directml", "cuda"]) {
+    assert.equal(
+      resolvePackagedProofAcceleratorProfile({ backend_bundle: { accelerator_profile: profile } }),
+      profile,
+    );
+  }
+  assert.equal(
+    resolvePackagedProofAcceleratorProfile({ toolchain: { accelerator_profile: "DIRECTML" } }),
+    "directml",
+  );
+  assert.throws(
+    () => resolvePackagedProofAcceleratorProfile({ backend_bundle: { accelerator_profile: "mps" } }),
+    /did not report a supported accelerator profile: mps/,
+  );
+  assert.throws(
+    () => resolvePackagedProofAcceleratorProfile({}),
+    /did not report a supported accelerator profile: missing/,
   );
 });
 

@@ -18,6 +18,14 @@ function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function executablePathForApp(app) {
+  try {
+    return typeof app?.getPath === "function" ? cleanText(app.getPath("exe")) : "";
+  } catch {
+    return "";
+  }
+}
+
 function cleanCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
@@ -115,6 +123,7 @@ export function buildIdentity({
       platform: cleanText(platform),
       arch: cleanText(arch),
       electronVersion: cleanText(electronVersion),
+      executablePath: executablePathForApp(app),
     },
     backendBundle: {
       available: manifestAvailable,

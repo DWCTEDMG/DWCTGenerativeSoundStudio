@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   PINNED_UV_VERSION,
   RELEASE_CAPABILITY_EXTRAS,
+  REQUIRED_FASTER_WHISPER_VAD_ASSET,
   REQUIRED_LINUX_SETUP_SCRIPTS,
   assertNoDynamicDependencyOverrides,
   assertPinnedUvVersion,
@@ -82,11 +83,18 @@ function validManifest(overrides = {}) {
       sha256: "b".repeat(64),
     }))
     : [];
+  const asrRuntimeEntries = [{
+    path: REQUIRED_FASTER_WHISPER_VAD_ASSET,
+    type: "file",
+    size: 17,
+    sha256: "c".repeat(64),
+  }];
   const bundleEntries = [
     { path: helperEntryPoint, type: "file", size: helperSize, sha256: helperSha256 },
     { path: backendEntryPoint, type: "file", size: binarySize, sha256: binarySha256 },
     { path: "launcher_env.defaults.json", type: "file", size: defaultsSize, sha256: defaultsSha256 },
     ...hfRuntimeEntries,
+    ...asrRuntimeEntries,
     ...linuxSetupEntries,
   ].sort((left, right) => left.path.localeCompare(right.path));
   return {
@@ -233,6 +241,11 @@ test("release builds isolate accelerator environments from the source runtime", 
   );
   assert.equal(sourceEnv.UV_PROJECT_ENVIRONMENT, undefined);
   assert.throws(() => releaseUvEnvironment(studioRoot, "unknown", {}), /Unsupported accelerator profile/);
+});
+test("PyInstaller release spec bundles Faster-Whisper VAD data and metadata", () => {
+  const spec = fs.readFileSync(path.join(studioRoot, "python_backend", "pyinstaller.spec"), "utf8");
+  assert.match(spec, /collect_data_files,\s*["']faster_whisper["']/);
+  assert.match(spec, /copy_metadata,\s*["']faster-whisper["']/);
 });
 
 test("media-tool assets pin immutable checksum-verified FFmpeg and FFprobe archives", () => {
@@ -434,6 +447,22 @@ test("schema-5 onedir manifest validation and reuse reject provenance drift", ()
     validateReleaseManifest({ ...manifest, hfRuntimeBundleEvidence: undefined }).join("; "),
     /hfRuntimeBundleEvidence/,
   );
+  const withoutFasterWhisperVad = {
+    ...manifest,
+    bundleEntries: manifest.bundleEntries.filter(
+      (entry) => entry.path !== REQUIRED_FASTER_WHISPER_VAD_ASSET,
+    ),
+  };
+  withoutFasterWhisperVad.bundleEntryCount = withoutFasterWhisperVad.bundleEntries.length;
+  withoutFasterWhisperVad.bundleFileCount = withoutFasterWhisperVad.bundleEntries.length;
+  withoutFasterWhisperVad.bundleSize = withoutFasterWhisperVad.bundleEntries.reduce(
+    (total, entry) => total + entry.size,
+    0,
+  );
+  assert.match(
+    validateReleaseManifest(withoutFasterWhisperVad).join("; "),
+    /silero_vad_v6\.onnx is missing or empty/,
+  );
 });
 
 test("Linux release manifests require bundled and fingerprinted sidecar setup scripts", () => {
@@ -554,12 +583,18 @@ test("onedir reuse verifies every staged backend entry", async () => {
   const helperPath = path.join(tempDir, helperEntryPoint);
   const defaultsPath = path.join(tempDir, "launcher_env.defaults.json");
   const runtimePath = path.join(tempDir, "_internal", "torch-runtime.bin");
+  const fasterWhisperVadPath = path.join(
+    tempDir,
+    ...REQUIRED_FASTER_WHISPER_VAD_ASSET.split("/"),
+  );
   try {
     await fsp.mkdir(path.dirname(runtimePath), { recursive: true });
+    await fsp.mkdir(path.dirname(fasterWhisperVadPath), { recursive: true });
     await fsp.writeFile(launcherPath, "launcher\n", "utf8");
     await fsp.writeFile(helperPath, "helper\n", "utf8");
     await fsp.writeFile(defaultsPath, "{}\n", "utf8");
     await fsp.writeFile(runtimePath, "runtime\n", "utf8");
+    await fsp.writeFile(fasterWhisperVadPath, "silero vad runtime\n", "utf8");
     for (const evidencePath of Object.values(validManifest().hfRuntimeBundleEvidence)) {
       const absoluteEvidencePath = path.join(tempDir, ...evidencePath.split("/"));
       await fsp.mkdir(path.dirname(absoluteEvidencePath), { recursive: true });

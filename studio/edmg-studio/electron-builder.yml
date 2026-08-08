@@ -29,7 +29,7 @@
     "target": [
       "nsis"
     ],
-    "artifactName": "${name} Setup ${version}.${ext}"
+    "artifactName": "EDMG-Studio-${version}-windows-x64-unqualified-Setup.${ext}"
   },
   "linux": {
     "target": [

@@ -8,14 +8,16 @@ import { fileURLToPath } from "node:url";
 
 import {
   PINNED_UV_VERSION,
+  REQUIRED_FASTER_WHISPER_VAD_ASSET,
   RELEASE_CAPABILITY_EXTRAS,
   bundleMatchesManifest,
   collectBundleEntries,
 } from "./release-python-toolchain.mjs";
 import {
+  requireProfileQualifiedArtifactInventory,
   requireStagedBackendPlatform,
   resolveRequestedInstallerTarget,
-  withLinuxProfileArtifactName,
+  withProfileArtifactName,
 } from "./run-electron-builder.mjs";
 import { finalizeWindowsPackagedBackend } from "./electron-builder-after-pack.mjs";
 import { finalizeStagedWindowsBackendManifest } from "./windows-backend-signing.mjs";
@@ -134,7 +136,7 @@ test("rejects malformed, incomplete, and cross-platform staged manifests", (t) =
 
 test("adds a literal profile-specific Linux AppImage artifact name", () => {
   assert.deepEqual(
-    withLinuxProfileArtifactName(["-l", "AppImage"], {
+    withProfileArtifactName(["-l", "AppImage"], {
       targetPlatform: "linux",
       acceleratorProfile: "CUDA",
     }),
@@ -142,16 +144,40 @@ test("adds a literal profile-specific Linux AppImage artifact name", () => {
   );
 });
 
+test("adds literal profile-specific Windows NSIS artifact names", () => {
+  for (const profile of ["cpu", "directml", "cuda"]) {
+    assert.deepEqual(
+      withProfileArtifactName(["--win", "nsis", "--x64"], {
+        targetPlatform: "win32",
+        acceleratorProfile: profile.toUpperCase(),
+      }),
+      [
+        "--win",
+        "nsis",
+        "--x64",
+        `-c.win.artifactName=EDMG-Studio-\${version}-windows-x64-${profile}-Setup.\${ext}`,
+      ],
+    );
+  }
+});
+
 test("preserves a caller-provided artifact name and ignores artifactName false positives", () => {
   assert.deepEqual(
-    withLinuxProfileArtifactName(["--linux", "-c.artifactName=custom-${version}.${ext}"], {
+    withProfileArtifactName(["--linux", "-c.artifactName=custom-${version}.${ext}"], {
       targetPlatform: "linux",
       acceleratorProfile: "cpu",
     }),
     ["--linux", "-c.artifactName=custom-${version}.${ext}"],
   );
   assert.deepEqual(
-    withLinuxProfileArtifactName(["--linux", "-c.artifactNameSuffix=debug"], {
+    withProfileArtifactName(["--win", "--config.win.artifactName=custom-${version}.${ext}"], {
+      targetPlatform: "win32",
+      acceleratorProfile: "directml",
+    }),
+    ["--win", "--config.win.artifactName=custom-${version}.${ext}"],
+  );
+  assert.deepEqual(
+    withProfileArtifactName(["--linux", "-c.artifactNameSuffix=debug"], {
       targetPlatform: "linux",
       acceleratorProfile: "cpu",
     }),
@@ -159,21 +185,128 @@ test("preserves a caller-provided artifact name and ignores artifactName false p
   );
 });
 
-test("requires a filename-safe Linux profile and leaves non-Linux arguments unchanged", () => {
-  assert.throws(
-    () =>
-      withLinuxProfileArtifactName(["--linux"], {
-        targetPlatform: "linux",
-        acceleratorProfile: "cuda/../../other",
-      }),
-    /filename-safe acceleratorProfile/,
-  );
+test("requires a supported filename-safe release profile and leaves non-release targets unchanged", () => {
+  for (const targetPlatform of ["linux", "win32"]) {
+    assert.throws(
+      () =>
+        withProfileArtifactName([targetPlatform === "linux" ? "--linux" : "--win"], {
+          targetPlatform,
+          acceleratorProfile: "cuda/../../other",
+        }),
+      /filename-safe acceleratorProfile/,
+    );
+    assert.throws(
+      () =>
+        withProfileArtifactName([targetPlatform === "linux" ? "--linux" : "--win"], {
+          targetPlatform,
+          acceleratorProfile: "mps",
+        }),
+      /must be cpu, directml, or cuda/,
+    );
+  }
   assert.deepEqual(
-    withLinuxProfileArtifactName(["--win"], {
-      targetPlatform: "win32",
+    withProfileArtifactName(["--dir"], {
+      targetPlatform: null,
       acceleratorProfile: "cuda/../../other",
     }),
-    ["--win"],
+    ["--dir"],
+  );
+});
+
+test("requires a profile-pure Windows installer inventory before signing or evidence", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "edmg-windows-artifact-inventory-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const distDir = path.join(rootDir, "dist");
+  fs.mkdirSync(distDir, { recursive: true });
+
+  const expectedName = "EDMG-Studio-1.2.0-windows-x64-directml-Setup.exe";
+  const expectedPath = path.join(distDir, expectedName);
+  const expectedBlockmap = `${expectedPath}.blockmap`;
+  fs.writeFileSync(expectedPath, "installer");
+  fs.writeFileSync(expectedBlockmap, "blockmap");
+  fs.writeFileSync(path.join(distDir, "latest.yml"), `path: ${expectedName}\n`);
+  fs.writeFileSync(
+    path.join(distDir, "builder-effective-config.yaml"),
+    "artifactName: EDMG-Studio-${version}-windows-x64-directml-Setup.${ext}\n",
+  );
+
+  assert.deepEqual(
+    requireProfileQualifiedArtifactInventory({
+      rootDir,
+      targetPlatform: "win32",
+      acceleratorProfile: "DirectML",
+      version: "1.2.0",
+    }),
+    {
+      expectedArtifactPath: expectedPath,
+      blockmapPath: expectedBlockmap,
+      updateMetadataPaths: [path.join(distDir, "latest.yml")],
+    },
+  );
+
+  const staleInstaller = path.join(distDir, "edmg-studio Setup 1.2.0.exe");
+  fs.writeFileSync(staleInstaller, "stale installer");
+  assert.throws(
+    () =>
+      requireProfileQualifiedArtifactInventory({
+        rootDir,
+        targetPlatform: "win32",
+        acceleratorProfile: "directml",
+        version: "1.2.0",
+      }),
+    /Expected exactly EDMG-Studio-1\.2\.0-windows-x64-directml-Setup\.exe/,
+  );
+  fs.rmSync(staleInstaller);
+
+  const staleBlockmap = path.join(distDir, "edmg-studio Setup 1.2.0.exe.blockmap");
+  fs.writeFileSync(staleBlockmap, "stale blockmap");
+  assert.throws(
+    () =>
+      requireProfileQualifiedArtifactInventory({
+        rootDir,
+        targetPlatform: "win32",
+        acceleratorProfile: "directml",
+        version: "1.2.0",
+      }),
+    /blockmaps not paired/,
+  );
+});
+
+test("rejects stale update metadata while ignoring non-installer support files", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "edmg-linux-artifact-inventory-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const distDir = path.join(rootDir, "dist");
+  fs.mkdirSync(distDir, { recursive: true });
+
+  const expectedName = "EDMG-Studio-1.2.0-linux-x64-cuda.AppImage";
+  fs.writeFileSync(path.join(distDir, expectedName), "appimage");
+  fs.writeFileSync(path.join(distDir, "latest-linux.yml"), `path: ${expectedName}\n`);
+  fs.writeFileSync(
+    path.join(distDir, "builder-effective-config.yaml"),
+    "artifactName: EDMG-Studio-${version}-linux-x64-cuda.${ext}\n",
+  );
+  fs.writeFileSync(path.join(distDir, "unrelated-support.txt"), "support");
+
+  assert.equal(
+    requireProfileQualifiedArtifactInventory({
+      rootDir,
+      targetPlatform: "linux",
+      acceleratorProfile: "cuda",
+      version: "1.2.0",
+    })?.expectedArtifactPath,
+    path.join(distDir, expectedName),
+  );
+
+  fs.writeFileSync(path.join(distDir, "latest-linux.yml"), "path: old-cpu.AppImage\n");
+  assert.throws(
+    () =>
+      requireProfileQualifiedArtifactInventory({
+        rootDir,
+        targetPlatform: "linux",
+        acceleratorProfile: "cuda",
+        version: "1.2.0",
+      }),
+    /update metadata latest-linux\.yml is not paired/,
   );
 });
 
@@ -194,6 +327,7 @@ async function createBackendSigningFixture(t, { extraFiles = [] } = {}) {
     [backendEntryPoint, "unsigned backend bytes"],
     [helperEntryPoint, "unsigned helper bytes"],
     ["launcher_env.defaults.json", "{}\n"],
+    [REQUIRED_FASTER_WHISPER_VAD_ASSET, "silero vad runtime\n"],
     ...Object.values(hfRuntimeBundleEvidence).map((entryPath) => [entryPath, `fixture:${entryPath}`]),
     ...extraFiles,
   ]);
@@ -435,6 +569,11 @@ test("Inno packaging signs setup and uninstaller and always regenerates a bound 
   assert.match(source, /-ArtifactPaths \$f -RequireSigning/);
   assert.match(source, /payload-integrity\.json/);
   assert.match(source, /backendManifestSha256/);
+  assert.match(source, /\$AcceleratorProfile -notin @\("cpu", "directml", "cuda"\)/);
+  assert.match(
+    source,
+    /\$OutputBaseFilename = "EDMG-Studio-" \+ \$Version \+ "-windows-x64-" \+ \$AcceleratorProfile \+ "-Setup"/,
+  );
   assert.match(source, /pre-archive payload"[\s\S]{0,120}-VerifyOnly/);
   assert.match(source, /Get-ChildItem -LiteralPath \$WinUnpackedDir -Force/);
   assert.match(source, /Where-Object \{ \$_.Name -notlike "unins\*" \}/);

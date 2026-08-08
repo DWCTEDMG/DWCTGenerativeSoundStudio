@@ -355,21 +355,13 @@ export function createBackendRuntime({
     }
 
     if (isWindows) {
-      const result = spawnSync(
-        "powershell",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          `(Get-CimInstance Win32_Process -Filter \"ProcessId=${target}\" -ErrorAction SilentlyContinue).ExecutablePath`,
-        ],
-        {
-          windowsHide: true,
-          encoding: "utf8",
-          shell: false,
-        },
-      );
-      return result.status === 0 ? String(result.stdout || "").trim() : "";
+      // Node has no trustworthy built-in API for resolving another Windows
+      // process to its full executable path. Treat an unknown pre-existing
+      // listener as foreign and allocate this packaged app a private port.
+      // The child launched by this runtime is recognized by its exact PID in
+      // inspectPackagedBackendPortOwner, so no PowerShell/WMIC dependency is
+      // needed for the managed path.
+      return "";
     }
 
     if (process.platform === "linux") {
@@ -437,6 +429,16 @@ export function createBackendRuntime({
     const listenerPid = findListeningPid(activeBackendPort);
     if (!listenerPid) return { state: "vacant" };
     const expectedExecutable = getBackendLaunchSpec().command;
+    const managedPid = Number(backendProc?.pid);
+    if (Number.isSafeInteger(managedPid) && managedPid > 0 && listenerPid === managedPid) {
+      return {
+        state: "packaged",
+        listenerPid,
+        listenerExecutable: expectedExecutable,
+        expectedExecutable,
+        ownedByCurrentProcess: true,
+      };
+    }
     const listenerExecutable = resolveProcessExecutablePath(listenerPid);
     return {
       state: executablePathsEqual(listenerExecutable, expectedExecutable, { isWindows })
@@ -469,64 +471,77 @@ export function createBackendRuntime({
     return !(await probeBackend());
   }
 
-  function quotePowerShell(value) {
-    return `'${String(value ?? "").replace(/'/g, "''")}'`;
+  function openBackendLogFile(filePath) {
+    if (typeof runtimeOps.openBackendLogFile === "function") {
+      return runtimeOps.openBackendLogFile(filePath);
+    }
+    // Preserve the former Start-Process redirection behavior: each managed
+    // launch gets a clean current-run log instead of unbounded appended output.
+    return fs.openSync(filePath, "w");
   }
 
-  function launchPackagedBackendWindows(spec, env, logPaths) {
+  function closeBackendLogFile(fileDescriptor) {
+    if (typeof runtimeOps.closeBackendLogFile === "function") {
+      runtimeOps.closeBackendLogFile(fileDescriptor);
+      return;
+    }
+    fs.closeSync(fileDescriptor);
+  }
+
+  async function launchPackagedBackendWindows(spec, env, logPaths) {
     if (typeof runtimeOps.launchPackagedBackendWindows === "function") {
       return Promise.resolve(runtimeOps.launchPackagedBackendWindows(spec, env, logPaths));
     }
-    const argList = (spec.args || []).map((arg) => quotePowerShell(String(arg))).join(", ");
     const stdoutPath = logPaths?.stdoutPath || "";
     const stderrPath = logPaths?.stderrPath || "";
     if (stdoutPath) ensureDirSync(path.dirname(stdoutPath));
     if (stderrPath) ensureDirSync(path.dirname(stderrPath));
-    const script = [
-      `$proc = Start-Process -FilePath ${quotePowerShell(spec.command)} -ArgumentList @(${argList}) -WorkingDirectory ${quotePowerShell(spec.cwd || path.dirname(spec.command))} -WindowStyle Hidden -RedirectStandardOutput ${quotePowerShell(stdoutPath)} -RedirectStandardError ${quotePowerShell(stderrPath)} -PassThru`,
-      "[Console]::Out.Write($proc.Id)",
-    ].filter(Boolean).join("; ");
 
-    return new Promise((resolve, reject) => {
-      const launcher = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    const descriptors = [];
+    let child;
+    try {
+      const stdoutFd = openBackendLogFile(stdoutPath);
+      descriptors.push(stdoutFd);
+      const stderrFd = openBackendLogFile(stderrPath);
+      descriptors.push(stderrFd);
+      const spawnProcess = typeof runtimeOps.spawnProcess === "function" ? runtimeOps.spawnProcess : spawn;
+      child = spawnProcess(spec.command, spec.args || [], {
+        cwd: spec.cwd || path.dirname(spec.command),
         windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", stdoutFd, stderrFd],
         shell: false,
         env,
       });
-      let stdout = "";
-      let stderr = "";
+    } finally {
+      for (const descriptor of descriptors) {
+        try {
+          closeBackendLogFile(descriptor);
+        } catch (error) {
+          console.warn("[backend] failed to close parent log descriptor:", error);
+        }
+      }
+    }
 
-      launcher.stdout?.on("data", (chunk) => {
-        stdout += String(chunk || "");
-      });
-      launcher.stderr?.on("data", (chunk) => {
-        stderr += String(chunk || "");
-      });
-      launcher.on("error", (error) => {
+    child.kind = "windows_direct_spawn";
+    child.expectedExecutable = spec.command;
+    await new Promise((resolve, reject) => {
+      const onError = (error) => {
+        child.off("spawn", onSpawn);
         reject(error);
-      });
-      launcher.on("exit", (code) => {
-        if (code !== 0) {
-          reject(new Error(String(stderr || stdout || `PowerShell Start-Process failed with code ${code ?? "unknown"}`).trim()));
-          return;
-        }
-        const pid = Number(String(stdout || "").trim());
+      };
+      const onSpawn = () => {
+        child.off("error", onError);
+        const pid = Number(child.pid);
         if (!Number.isFinite(pid) || pid <= 0) {
-          reject(new Error(`Could not resolve packaged backend pid from Start-Process output: ${String(stdout || "").trim()}`));
+          reject(new Error("Could not resolve the directly spawned packaged backend pid."));
           return;
         }
-        resolve({
-          pid,
-          kind: "windows_start_process",
-          expectedExecutable: spec.command,
-          logPaths,
-          kill() {
-            terminateProcessTree(pid);
-          },
-        });
-      });
+        resolve();
+      };
+      child.once("error", onError);
+      child.once("spawn", onSpawn);
     });
+    return child;
   }
 
   function delay(ms) {
@@ -724,7 +739,7 @@ export function createBackendRuntime({
     try {
       if (app.isPackaged && isWindows) {
         backendProc = await launchPackagedBackendWindows(spec, childEnv, logPaths);
-        console.log("[backend] launched via Start-Process", { pid: backendProc.pid });
+        console.log("[backend] launched bundled executable directly", { pid: backendProc.pid });
       } else {
         backendProc = spawn(spec.command, spec.args, {
           cwd: spec.cwd,
@@ -746,20 +761,21 @@ export function createBackendRuntime({
       return false;
     }
 
-    if (typeof backendProc?.stdout?.on === "function") {
-      backendProc.stdout.on("data", (chunk) => {
+    const launchedBackendProc = backendProc;
+    if (typeof launchedBackendProc?.stdout?.on === "function") {
+      launchedBackendProc.stdout.on("data", (chunk) => {
         safeStreamWrite(process.stdout, `[backend] ${chunk}`);
       });
     }
 
-    if (typeof backendProc?.stderr?.on === "function") {
-      backendProc.stderr.on("data", (chunk) => {
+    if (typeof launchedBackendProc?.stderr?.on === "function") {
+      launchedBackendProc.stderr.on("data", (chunk) => {
         safeStreamWrite(process.stderr, `[backend] ${chunk}`);
       });
     }
 
-    if (typeof backendProc?.on === "function") {
-      backendProc.on("error", (error) => {
+    if (typeof launchedBackendProc?.on === "function") {
+      launchedBackendProc.on("error", (error) => {
         console.error("[backend] child process error:", error);
 
         if (!testMode) {
@@ -770,9 +786,11 @@ export function createBackendRuntime({
         }
       });
 
-      backendProc.on("exit", (code, signal) => {
+      launchedBackendProc.on("exit", (code, signal) => {
         console.log("[backend] exited", { code, signal });
-        backendProc = null;
+        if (backendProc === launchedBackendProc) {
+          backendProc = null;
+        }
       });
     }
 

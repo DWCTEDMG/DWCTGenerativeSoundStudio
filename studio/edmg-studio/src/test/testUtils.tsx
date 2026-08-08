@@ -51,6 +51,7 @@ export function installEdmgBridge(
         platform: "win32",
         arch: "x64",
         electronVersion: "39.2.7",
+        executablePath: "E:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio\\node_modules\\electron\\dist\\electron.exe",
       },
       backendBundle: {
         available: false,

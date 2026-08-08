@@ -4,6 +4,21 @@ import { buildCacheEnvPaths } from "../main-process/storage-env.mjs";
 
 export const INSTALLED_APP_DIR_ENV = "EDMG_STUDIO_INSTALLED_APP_DIR";
 export const TEST_BOOTSTRAP_CONFIG_PATH_ENV = "EDMG_STUDIO_TEST_BOOTSTRAP_CONFIG_PATH";
+const PACKAGED_ACCELERATOR_PROFILES = new Set(["cpu", "directml", "cuda"]);
+
+export function resolvePackagedProofAcceleratorProfile(setupStatus) {
+  const profile = String(
+    setupStatus?.backend_bundle?.accelerator_profile
+      ?? setupStatus?.toolchain?.accelerator_profile
+      ?? "",
+  ).trim().toLowerCase();
+  if (!PACKAGED_ACCELERATOR_PROFILES.has(profile)) {
+    throw new Error(
+      `Packaged setup status did not report a supported accelerator profile: ${profile || "missing"}`,
+    );
+  }
+  return profile;
+}
 
 export function buildStudioProofPaths(studioHome) {
   const resolvedHome = path.resolve(studioHome);

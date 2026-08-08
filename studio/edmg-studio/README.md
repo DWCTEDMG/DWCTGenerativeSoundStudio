@@ -130,8 +130,12 @@ token.
 
 - Canonical shipped desktop version: `studio/edmg-studio/package.json#version`
 - Release staging copies that version into `studio/edmg-studio/release/staged-app/package.json`
-- Windows installer names include `${version}` via `package.json#build.win.artifactName`
-- Linux desktop artifacts are built as `AppImage` via `pnpm run dist:linux`
+- Canonical Windows release installers identify the version, `windows-x64` target, and immutable
+  `cpu`, `directml`, or `cuda` backend profile; build them only through the repository `dist:win:*`
+  scripts. A raw Electron Builder invocation deliberately emits an `unqualified` filename and is
+  not a release package.
+- Linux desktop artifacts identify the version, `linux-x64` target, and immutable profile and are
+  built as `AppImage` packages through `pnpm run dist:linux` or `pnpm run dist:linux:cuda`.
 - Use `pnpm run check:release-metadata` after staging if you want a direct version-propagation check
 
 ## Setup Wizard (no command line)
