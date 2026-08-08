@@ -40,7 +40,7 @@
     "validate:packaged-customer-flow": "node scripts/packaged-customer-flow.mjs",
     "validate:packaged-upgrade-proof": "node scripts/packaged-upgrade-proof.mjs",
     "validate:packaged-zero-state-setup": "node scripts/packaged-zero-state-setup-proof.mjs",
-    "validate:desktop": "pnpm run check:tooling && pnpm run typecheck && pnpm run lint && pnpm run test:ui && pnpm run test:release-toolchain && pnpm run test:uv-runtime && pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && pnpm run validate:electron-bridge && pnpm run validate:desktop-integration && pnpm run validate:packaged-desktop-smoke",
+    "validate:desktop": "pnpm run check:tooling && pnpm run typecheck && pnpm run lint && pnpm run test:ui -- --maxWorkers=1 && pnpm run test:release-toolchain && pnpm run test:uv-runtime && pnpm run build && pnpm run prepare:release-bundle && pnpm run release:stage-desktop && pnpm run check:release-metadata && pnpm run validate:electron-bridge && pnpm run validate:desktop-integration && pnpm run validate:packaged-desktop-smoke",
     "validate:release": "pnpm run validate:desktop && pnpm run dist:win && pnpm run validate:packaged-customer-flow && pnpm run validate:packaged-upgrade-proof && pnpm run validate:packaged-zero-state-setup",
     "validate:release:production": "node scripts/validate-production-release.mjs",
     "validate:release:linux": "node scripts/validate-linux-release.mjs --profile cpu",
