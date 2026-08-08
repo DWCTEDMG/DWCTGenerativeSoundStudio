@@ -9,6 +9,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import {
+  buildHermeticPackagedProofEnv,
+  resolveHermeticProofProfile,
+} from "./packaged-proof-environment.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const DEFAULT_REQUEST_TIMEOUT_MS = Number(process.env.EDMG_STUDIO_PROOF_REQUEST_TIMEOUT_MS || (10 * 60 * 1000));
@@ -91,37 +96,6 @@ function chooseHomeRoot() {
   const preferred = process.env.EDMG_STUDIO_PROOF_ROOT;
   if (preferred) return preferred;
   return os.tmpdir();
-}
-
-function resolveBootstrapPaths() {
-  const appDataDir = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-  const localAppDataDir = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-  const bootstrapDir = path.join(appDataDir, "EDMG Studio");
-  return {
-    appDataDir,
-    localAppDataDir,
-    bootstrapDir,
-    bootstrapPath: path.join(bootstrapDir, "bootstrap.json"),
-  };
-}
-
-async function backupBootstrap(bootstrapPath, stamp) {
-  if (!fs.existsSync(bootstrapPath)) {
-    return { existed: false, backupPath: "" };
-  }
-  const backupPath = `${bootstrapPath}.codex-backup-${stamp}`;
-  await fsp.copyFile(bootstrapPath, backupPath);
-  return { existed: true, backupPath };
-}
-
-async function restoreBootstrap(bootstrapPath, backup) {
-  if (backup?.existed && backup.backupPath && fs.existsSync(backup.backupPath)) {
-    await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
-    await fsp.copyFile(backup.backupPath, bootstrapPath);
-    await fsp.rm(backup.backupPath, { force: true });
-    return;
-  }
-  await fsp.rm(bootstrapPath, { force: true });
 }
 
 async function allocatePort() {
@@ -295,8 +269,7 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
   const homeRoot = chooseHomeRoot();
   const studioHome = path.join(homeRoot, `EDMG-Packaged-Proof-${stamp}`);
-  const { appDataDir, localAppDataDir, bootstrapPath } = resolveBootstrapPaths();
-  const bootstrapBackup = await backupBootstrap(bootstrapPath, stamp);
+  const { appDataDir, localAppDataDir, bootstrapPath } = resolveHermeticProofProfile(studioHome);
   await fsp.mkdir(studioHome, { recursive: true });
   await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
   await fsp.rm(bootstrapPath, { force: true });
@@ -312,16 +285,7 @@ async function main() {
   log(`using heavy request timeout ${heavyRequestTimeoutMs}ms for ${path.basename(audioFixture)} (${audioBytes} bytes)`);
   const child = spawn(appExe, [], {
     cwd: path.dirname(appExe),
-    env: {
-      ...process.env,
-      EDMG_STUDIO_HOME: studioHome,
-      EDMG_STUDIO_BACKEND_HOST: "127.0.0.1",
-      EDMG_STUDIO_BACKEND_PORT: String(port),
-      EDMG_STUDIO_TEST_MODE: "1",
-      EDMG_STUDIO_TEST_PAGE: testPage,
-      EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
-      ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
-    },
+    env: buildHermeticPackagedProofEnv({ studioHome, port, testPage }),
     stdio: "ignore",
   });
 
@@ -370,6 +334,7 @@ async function main() {
     }
     assert.ok(job, `Did not observe the packaged target job ${targetJobId} in tick responses or job list`);
     const outputs = await requestJson(`${baseUrl}/v1/projects/${projectId}/outputs`);
+    const transcript = analyze?.analysis?.transcript;
     const comfyOk = Boolean(status?.comfyui?.ok);
     const usesInternalPipeline = Boolean(run?.job?.id);
     const expectedDataDir = path.join(studioHome, "data");
@@ -421,6 +386,12 @@ async function main() {
       projectId,
       uploadOk: Boolean(upload?.ok),
       analyzeKeys: Object.keys((analyze && typeof analyze === "object" ? analyze.analysis : {}) || {}),
+      transcript: {
+        available: Boolean(transcript && typeof transcript === "object"),
+        error: transcript?.error ?? null,
+        note: transcript?.note ?? null,
+        textAvailable: typeof transcript?.text === "string",
+      },
       variantCount: Array.isArray(plan?.variants) ? plan.variants.length : 0,
       trackCount: Array.isArray(apply?.timeline?.tracks) ? apply.timeline.tracks.length : 0,
       validate: {
@@ -477,6 +448,9 @@ async function main() {
     assert.equal(summary.paths.ollamaModelsDirExists, true, "Packaged run should create the Studio Ollama models root");
     assert.equal(summary.paths.logsDirExists, true, "Packaged run should create the Studio logs root");
     assert.equal(summary.paths.externalDirExists, true, "Packaged run should create the Studio external root");
+    assert.equal(summary.transcript.available, true, "Packaged analysis should return a transcription result");
+    assert.equal(summary.transcript.error, null, `Packaged transcription should not fail: ${summary.transcript.error}`);
+    assert.equal(summary.transcript.textAvailable, true, "Packaged transcription should return text, even when no speech is detected");
     assert.equal(summary.variantCount > 0, true, "Expected at least one planned variant");
     assert.equal(summary.trackCount > 0, true, "Expected timeline tracks after apply");
     assert.equal(summary.job.status, "succeeded", "Packaged render job should succeed");
@@ -496,7 +470,6 @@ async function main() {
   } finally {
     await killProcessTree(child);
     await stopExistingPackagedProcesses();
-    await restoreBootstrap(bootstrapPath, bootstrapBackup);
   }
 }
 

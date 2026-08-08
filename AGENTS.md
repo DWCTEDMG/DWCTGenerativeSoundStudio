@@ -42,20 +42,19 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
   cloud VM. To exercise the UI in a browser, run Vite alone:
   `pnpm exec vite --host 127.0.0.1 --port 5173 --strictPort`.
 - Backend CORS is open, so a browser can call the backend cross-origin without extra config.
-- **Browser-only gotcha:** when running Vite in a plain browser (no Electron), open the UI with the
- backend URL as a query param:
- `http://127.0.0.1:5173/?backendUrl=http://127.0.0.1:7863`. Without it the app fails to load
- because the browser fallback in `src/components/api.ts` recurses infinitely (`getBackendUrl()`
- calls `window.edmg.backendUrl()` which `ensureBrowserBridge()` wires back to `getBackendUrl()`).
- This path never triggers under Electron (preload supplies `window.edmg`), so it is a
- browser-dev-only quirk, not a setup problem.
+- **Browser-only backend selection:** plain-browser Vite sessions default safely to
+  `http://127.0.0.1:7863`. Use
+  `http://127.0.0.1:5173/?backendUrl=https://...` to override that default for a remote backend.
+  `src/components/api.ts` keeps the browser fallback independent from the Electron bridge so URL
+  resolution cannot recurse; `src/test/api.test.ts` carries the regression coverage.
 
-### Tests (known results on Linux)
-- Backend: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python -m pytest` → 123 pass
- (count drifts as tests are added).
-- Frontend: `pnpm run test:ui` → ~49 pass (23 files). The Windows-only
- `src/test/directorRuntime.test.ts` logs a hardcoded `C:\...` ENOENT error to stderr but still
- passes; the runner exits 0. This stderr noise is a pre-existing platform quirk, not a failure.
+### Tests
+- Backend: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python -m pytest` must exit 0. Test counts intentionally are not pinned here because they drift as coverage is added.
+- Frontend: `pnpm run test:ui` must exit 0. The Windows-only
+  `src/test/directorRuntime.test.ts` may log a hardcoded `C:\...` ENOENT message to stderr on Linux
+  while the test and runner still pass; treat the exit code and assertions as authoritative.
+- For a focused single-worker Vitest run, use `pnpm exec vitest run <test-file> --maxWorkers=1`.
+  Vitest 4.1 does not accept the older `--minWorkers` option.
 - `pnpm run lint` and `pnpm run typecheck` both pass clean on this branch (exit 0).
 - Repo-level: the frozen uv project environment is the reliable green signal.
   Some repo-root orchestration tests may still fail on branches with in-flight render-tier work.

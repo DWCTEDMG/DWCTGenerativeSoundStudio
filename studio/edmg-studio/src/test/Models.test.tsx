@@ -1,5 +1,5 @@
 import React from "react";
-import { act, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Models from "../pages/Models";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
@@ -18,6 +18,48 @@ const catalog = {
   installed: {},
   cloud: {},
   storage_mode: "local_cache",
+};
+
+const readyLegacyTensorRt = {
+  legacy: {
+    detected: true,
+    status: "ready_to_import",
+    expected_file_count: 4,
+    usable_file_count: 4,
+    total_bytes: 4_636_659_776,
+    files: [
+      { role: "text_encoder", name: "text_encoder.engine", present: true, non_empty: true, safe_regular_file: true, size_bytes: 492_983_636, hash_state: "pending_import_verification" },
+      { role: "unet", name: "unet_b1_workspace4096.engine", present: true, non_empty: true, safe_regular_file: true, size_bytes: 3_561_191_108, hash_state: "pending_import_verification" },
+      { role: "vae_decoder", name: "vae_decoder.engine", present: true, non_empty: true, safe_regular_file: true, size_bytes: 350_683_876, hash_state: "pending_import_verification" },
+      { role: "vae_encoder", name: "vae_encoder.engine", present: true, non_empty: true, safe_regular_file: true, size_bytes: 231_801_156, hash_state: "pending_import_verification" },
+    ],
+    missing_roles: [],
+    unusable_roles: [],
+    source_preserved: true,
+  },
+  canonical: {
+    exists: false,
+    status: "absent",
+    manifest: { valid: false, schema_version: null },
+    engine_files_verified: false,
+    unet_engine_ready: false,
+    onnx_ready: false,
+    profile_metadata_ready: false,
+    base_model_metadata_ready: false,
+    renderer_ready: false,
+    gaps: [],
+  },
+  migration: {
+    available: true,
+    blocked_reason: null,
+    copy_only: true,
+    source_will_be_preserved: true,
+    disk: {
+      required_free_bytes: 4_868_492_765,
+      available_free_bytes: 20_000_000_000,
+      enough_space: true,
+    },
+  },
 };
 
 describe("Models page polling", () => {
@@ -86,5 +128,89 @@ describe("Models page polling", () => {
     expect(screen.getByText(/Downloaded/).textContent).toContain("4.00 GB");
     expect(screen.getByText(/Downloaded/).textContent).toContain("Files 3 of 8");
     expect(screen.getByRole("progressbar", { name: "Install SDXL progress" })).toBeTruthy();
+  });
+
+  it("starts the explicit source-preserving TensorRT verify-and-copy task", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let importStarted = false;
+    const runningTask = {
+      id: "trt-copy-1",
+      name: "Verify and copy legacy TensorRT engines",
+      status: "running",
+      model_id: "local_sd15_tensorrt_bundle",
+      stage: "Copying unet_b1_workspace4096.engine",
+      progress: 0.25,
+    };
+    const fetchMock = installFetchMock({
+      "/v1/models/catalog": { ...catalog, tensorrt_migration: readyLegacyTensorRt },
+      "/v1/models/tasks": () => ({ tasks: importStarted ? [runningTask] : [] }),
+      "/v1/settings/render_providers": {},
+      "POST /v1/models/tensorrt/import-legacy": () => {
+        importStarted = true;
+        return { task: runningTask };
+      },
+    });
+
+    renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText("Legacy TensorRT engine migration")).toBeTruthy();
+    expect(screen.getByText(/Found 4 safe, non-empty engine candidates/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Verify and copy engines" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Verification and safe copy started/)).toBeTruthy();
+    const post = fetchMock.mock.calls.find(([url, init]) => (
+      new URL(String(url)).pathname === "/v1/models/tensorrt/import-legacy"
+      && String(init?.method).toUpperCase() === "POST"
+    ));
+    expect(post).toBeTruthy();
+  });
+
+  it("does not describe an engine-only canonical copy as renderer-ready", async () => {
+    installFetchMock({
+      "/v1/models/catalog": {
+        ...catalog,
+        tensorrt_migration: {
+          ...readyLegacyTensorRt,
+          canonical: {
+            ...readyLegacyTensorRt.canonical,
+            exists: true,
+            status: "engine_copy_incomplete_setup",
+            manifest: { valid: true, schema_version: 1 },
+            engine_files_verified: true,
+            unet_engine_ready: true,
+            renderer_ready: false,
+            gaps: [
+              "The canonical bundle still needs non-empty ONNX assets and the UNet config.",
+              "The compiled width, height, and batch profile has not been verified.",
+              "The matching SD 1.5 base-model metadata has not been verified.",
+            ],
+          },
+          migration: {
+            ...readyLegacyTensorRt.migration,
+            available: false,
+            blocked_reason: "canonical_exists",
+          },
+        },
+      },
+      "/v1/models/tasks": { tasks: [] },
+      "/v1/settings/render_providers": {},
+    });
+
+    renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText("Engine copy present — setup incomplete")).toBeTruthy();
+    expect(screen.getByText("Canonical bundle is intentionally not marked ready")).toBeTruthy();
+    expect(screen.getByText(/still needs non-empty ONNX assets/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Verify and copy engines" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

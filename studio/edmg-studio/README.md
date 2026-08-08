@@ -1,4 +1,4 @@
-# EDMG Studio (v1.1.0)
+# EDMG Studio (v1.2.0)
 
 A desktop-style "studio" application:
 
@@ -8,7 +8,8 @@ A desktop-style "studio" application:
 - Integrates with:
   - **Studio internal renderer** as the default built-in render path
   - **ComfyUI** as an optional still/motion render sidecar (local or remote)
-  - In-process **AI providers** for planning/transcription/features (Ollama by default)
+  - In-process **AI providers** for planning/transcription/features (`nemotron_cloud` by default,
+    with optional local Ollama fallback using `qwen3:8b`)
   - Optional external **AI service** over HTTP when you want to separate that workload
   - **OpenClaw** only as an optional operator/automation shell around Studio, not as a required runtime dependency
   - **EDMG Core** (enhanced-deforum-music-generator) for Deforum template/export (optional but recommended)
@@ -75,6 +76,13 @@ bash scripts/start_lightning_backend_nohup.sh
 Linux/Lightning Ollama sidecar helper:
 
 ```bash
+EDMG_AI_OLLAMA_MODEL=qwen3:8b bash scripts/setup_linux_ollama.sh
+```
+
+That is the local Ollama fallback. To opt into the separate Ollama Cloud model
+instead, authenticate and select it explicitly:
+
+```bash
 OLLAMA_SIGNIN=1 bash scripts/setup_linux_ollama.sh
 EDMG_AI_OLLAMA_MODEL=nemotron-3-ultra:cloud bash scripts/setup_linux_ollama.sh
 ```
@@ -122,8 +130,12 @@ token.
 
 - Canonical shipped desktop version: `studio/edmg-studio/package.json#version`
 - Release staging copies that version into `studio/edmg-studio/release/staged-app/package.json`
-- Windows installer names include `${version}` via `package.json#build.win.artifactName`
-- Linux desktop artifacts are built as `AppImage` via `pnpm run dist:linux`
+- Canonical Windows release installers identify the version, `windows-x64` target, and immutable
+  `cpu`, `directml`, or `cuda` backend profile; build them only through the repository `dist:win:*`
+  scripts. A raw Electron Builder invocation deliberately emits an `unqualified` filename and is
+  not a release package.
+- Linux desktop artifacts identify the version, `linux-x64` target, and immutable profile and are
+  built as `AppImage` packages through `pnpm run dist:linux` or `pnpm run dist:linux:cuda`.
 - Use `pnpm run check:release-metadata` after staging if you want a direct version-propagation check
 
 ## Setup Wizard (no command line)
@@ -131,10 +143,10 @@ token.
 When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard** (Sidebar → **Setup**) that:
 
 - Uses an assisted Windows installer, so you can choose the **app install directory** instead of being forced into the default `C:\` path
-- Lets you choose a **Studio Home** folder before large downloads, so project data, Electron data, ComfyUI Portable, and caches can live on `D:\...`
-- Checks **Ollama** availability (local AI)
+- Lets you choose a **Studio Home** folder before large downloads, so project data, Electron data, ComfyUI Portable, and caches can live on a writable volume with verified free space
+- Can check **Ollama** availability when the optional local AI fallback is selected
 - Supports local **OpenAI-compatible** servers such as LM Studio or `llama.cpp` server through Studio Settings
-- Lets you **pull the default model** (`qwen3:8b`) via a button
+- Lets you pull the default **local Ollama fallback model** (`qwen3:8b`) via a button when Ollama is the selected provider
 - Installs the **backend runtime bundle** that powers the internal renderer
 - Checks **ComfyUI** availability and can **download + extract ComfyUI Portable** on Windows when you want the optional ComfyUI path
 - Verifies **FFmpeg** for MP4 assembly, preferring the Studio-bundled binary when present
@@ -149,8 +161,10 @@ motion sidecar setup, live in [packaging/linux/README.md](./packaging/linux/READ
 OpenClaw is not part of the required Studio install path. If you use it, treat it as an optional operator shell layered around Studio for automation or monitoring rather than as a dependency of the app itself.
 
 Release/operator runbook:
+
 - [Studio release runbook](../../docs/STUDIO_RELEASE_RUNBOOK.md)
 - [Release checklist](../../RELEASE.md)
+- [1.2.0 candidate known issues](../../docs/KNOWN_ISSUES.md)
 - [Python toolchain and lock policy](../../docs/PYTHON_TOOLCHAIN.md)
 - [Linux packaging notes](./packaging/linux/README.md)
 - [GCP GPU VM deploy](../../docs/GCP_GPU_VM_DEPLOY.md)
@@ -190,13 +204,14 @@ For local Studio use, the native Director page does not require ChatGPT. If you 
 - `EDMG_AI_MODE` (default: `local`)
 - `EDMG_AI_PROVIDER` (default: `nemotron_cloud`; alternatives: `openai_compat`, `ollama`, `rule_based`)
 - `EDMG_AI_OLLAMA_URL` (default: `http://127.0.0.1:11434`)
-- `EDMG_AI_OLLAMA_MODEL` (default for Ollama path: `nemotron-3-ultra:cloud`; low-resource: `qwen3:4b`)
+- `EDMG_AI_OLLAMA_MODEL` (default local Ollama fallback: `qwen3:8b`; low-resource: `qwen3:4b`)
 - `EDMG_AI_OPENAI_COMPAT_BASE_URL` (default: `https://integrate.api.nvidia.com/v1`)
 - `EDMG_AI_OPENAI_COMPAT_MODEL` (default: `nvidia/llama-3.1-nemotron-ultra-253b-v1`)
 - `EDMG_AI_OPENAI_COMPAT_API_KEY` (optional)
 - `EDMG_COMFYUI_URL` (default: `http://127.0.0.1:8188`)
 - `EDMG_COMFYUI_CHECKPOINT` (default: `sd_xl_base_1.0.safetensors`)
-- `EDMG_FFMPEG_PATH` (optional override; packaged Studio prefers its bundled FFmpeg, dev falls back to `ffmpeg` on PATH)
+- `EDMG_FFMPEG_PATH` (optional override; packaged Studio prefers its bundled FFmpeg/FFprobe pair, while development falls back to PATH)
+- `EDMG_FFPROBE_PATH` (optional advanced override; otherwise Studio resolves FFprobe beside the selected FFmpeg)
 - `EDMG_AWS_MODEL_CACHE` (`1` enables S3-backed model cache/hosting)
 - `EDMG_AWS_MODEL_CACHE_BUCKET` and `EDMG_AWS_MODEL_CACHE_PREFIX` (S3 bucket/prefix for model objects)
 - `EDMG_MODEL_STORAGE_MODE` (`local_cache` keeps local files and mirrors them to S3; `cloud_only` stores supported models in S3 and restores them on demand)
@@ -214,12 +229,18 @@ S3-hosted model entries can use `source: "s3"` with either `s3_uri: "s3://bucket
 ## Recommended local model stack
 
 - Planner default: NVIDIA Nemotron Ultra via `nemotron_cloud` (NIM)
-- Local Ollama planner: `nemotron-3-ultra:cloud` or low-resource `qwen3:4b`
+- Local Ollama fallback planner: `qwen3:8b`, or `qwen3:4b` for lower-resource systems
 - Broad still-image default: SDXL Base 1.0
 - Fast still-image option: SD3.5 Large Turbo
 - Reference still guidance: SD3.5 ControlNet Blur, Canny, and Depth
 - Primary HF video backend: Wan2.2 TI2V 5B
 - Short image-to-video fallback: SVD XT Img2Vid
+
+Models → Imports also exposes a source-preserving migration for the recognized root-level legacy
+TensorRT engines under the active Studio Home. Studio verifies and copies those files into the
+canonical model-id bundle without deleting the originals. The engine copy remains visibly
+incomplete—not installed or renderer-ready—until its ONNX assets, compiled profile, and matching
+base-model metadata are verified.
 
 ## Hardware tiers
 
@@ -252,7 +273,8 @@ EDMG Core integration:
 
 ## Creator workflow features (2026 beta)
 
-These surfaces ship on the `codex/uv-integration` branch and are documented here until the full documentation relaunch (P5-06) lands in `docs/`.
+These source-candidate surfaces are documented here while the dedicated documentation relaunch
+(P5-06) remains incomplete. Their presence in source is not packaged-release evidence.
 
 ### Understand — Music Graph v1
 
@@ -291,13 +313,17 @@ From **Workspace** handoff and **Review → Labs**, preview cue protocols compil
 
 ### Release evidence
 
-Release builds emit CycloneDX SBOM and SHA-256 checksum manifests under `studio/edmg-studio/release/evidence/`. Generate manually:
+The release-evidence procedures write CycloneDX SBOM and SHA-256 checksum manifests under
+`studio/edmg-studio/release/evidence/`. Generate them for the exact candidate being evaluated:
 
 ```powershell
 cd studio/edmg-studio
 pnpm run generate:release-evidence
 pnpm run generate:release-evidence:dist
 ```
+
+Those commands describe how to create evidence; documentation or stale files in that directory do
+not establish that a current installer was built, signed, or qualified.
 
 See [RELEASE.md](../../RELEASE.md) for signing (credential-gated), clean-machine smoke, and acceptance gates.
 

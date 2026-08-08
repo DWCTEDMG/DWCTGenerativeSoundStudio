@@ -10,17 +10,226 @@ import { resolveWindowsSigningPlan } from "./windows-signing-lib.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const require = createRequire(import.meta.url);
-const cacheRoot = process.env.EDMG_STUDIO_BUILD_CACHE_ROOT || path.join(root, ".cache");
-const electronCache = path.join(cacheRoot, "electron");
-const electronBuilderCache = path.join(cacheRoot, "electron-builder");
+const stagedBackendManifestRelativePath = path.join(
+  "release",
+  "staged-app",
+  "electron-resources",
+  "backend",
+  "backend-bundle-manifest.json",
+);
 
-fs.mkdirSync(electronCache, { recursive: true });
-fs.mkdirSync(electronBuilderCache, { recursive: true });
+const WINDOWS_TARGET_FLAGS = new Set(["-w", "--win", "--windows"]);
+const LINUX_TARGET_FLAGS = new Set(["-l", "--linux"]);
+const RELEASE_ACCELERATOR_PROFILES = new Set(["cpu", "directml", "cuda"]);
 
-const builderEntry = require.resolve("electron-builder/cli.js");
+function normalizedFlagName(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  const assignmentIndex = normalized.indexOf("=");
+  return assignmentIndex === -1 ? normalized : normalized.slice(0, assignmentIndex);
+}
 
-if (!fs.existsSync(builderEntry)) {
-  throw new Error(`electron-builder entry point not found: ${builderEntry}`);
+export function resolveRequestedInstallerTarget(builderArgs, platform = process.platform) {
+  const flags = builderArgs.map(normalizedFlagName);
+  const wantsWindows = flags.some((flag) => WINDOWS_TARGET_FLAGS.has(flag));
+  const wantsLinux = flags.some((flag) => LINUX_TARGET_FLAGS.has(flag));
+
+  if (wantsWindows && wantsLinux) {
+    throw new Error("Electron Builder must target Windows or Linux, not both in one invocation.");
+  }
+  if (wantsWindows) {
+    if (platform !== "win32") {
+      throw new Error(
+        `Windows Electron installers must be built on Windows (current host platform: ${platform}).`,
+      );
+    }
+    return { platform: "win32", artifactSet: "win-nsis", signingArgs: ["--win"] };
+  }
+  if (wantsLinux) {
+    if (platform !== "linux") {
+      throw new Error(
+        `Linux Electron installers must be built on Linux (current host platform: ${platform}).`,
+      );
+    }
+    return { platform: "linux", artifactSet: "linux-appimage", signingArgs: ["--linux"] };
+  }
+  return null;
+}
+
+export function requireStagedBackendPlatform({
+  targetPlatform,
+  rootDir = root,
+  manifestPath = path.join(rootDir, stagedBackendManifestRelativePath),
+} = {}) {
+  if (!targetPlatform) return null;
+
+  if (!fs.existsSync(manifestPath) || !fs.statSync(manifestPath).isFile()) {
+    throw new Error(
+      `The staged backend manifest is required before ${targetPlatform} packaging: ${manifestPath}`,
+    );
+  }
+
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch (error) {
+    throw new Error(`The staged backend manifest is not valid JSON: ${manifestPath}`, { cause: error });
+  }
+
+  const manifestPlatform = String(manifest?.platform ?? "").trim();
+  if (!manifestPlatform) {
+    throw new Error(`The staged backend manifest does not declare a platform: ${manifestPath}`);
+  }
+  if (manifestPlatform !== targetPlatform) {
+    throw new Error(
+      `Staged backend platform mismatch: Electron target ${targetPlatform} cannot package backend ${manifestPlatform}. ` +
+        "Rebuild and stage the backend bundle on the target host.",
+    );
+  }
+  return manifest;
+}
+
+function normalizedArtifactProfile(acceleratorProfile, targetPlatform) {
+  const platformName = targetPlatform === "win32" ? "Windows" : "Linux";
+  const profile = String(acceleratorProfile ?? "").trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(profile)) {
+    throw new Error(
+      `The staged ${platformName} backend manifest must declare a filename-safe acceleratorProfile.`,
+    );
+  }
+  if (!RELEASE_ACCELERATOR_PROFILES.has(profile)) {
+    throw new Error(
+      `The staged ${platformName} backend manifest acceleratorProfile must be cpu, directml, or cuda.`,
+    );
+  }
+  return profile;
+}
+
+function profileQualifiedArtifactName(targetPlatform, profile, version, extension) {
+  return targetPlatform === "linux"
+    ? `EDMG-Studio-${version}-linux-x64-${profile}.${extension}`
+    : `EDMG-Studio-${version}-windows-x64-${profile}-Setup.${extension}`;
+}
+
+export function withProfileArtifactName(builderArgs, { targetPlatform, acceleratorProfile } = {}) {
+  if (targetPlatform !== "linux" && targetPlatform !== "win32") return [...builderArgs];
+
+  const profile = normalizedArtifactProfile(acceleratorProfile, targetPlatform);
+  const hasArtifactName = builderArgs.some((arg) => {
+    const value = String(arg ?? "").trim();
+    return targetPlatform === "win32"
+      ? /^(?:-c|--config)\.(?:win\.)?artifactname(?:=|$)/i.test(value)
+      : /^(?:-c|--config)\.(?:linux\.)?artifactname(?:=|$)/i.test(value);
+  });
+  if (hasArtifactName) return [...builderArgs];
+
+  const artifactName = profileQualifiedArtifactName(
+    targetPlatform,
+    profile,
+    "${version}",
+    "${ext}",
+  );
+  const configPath = targetPlatform === "win32" ? "-c.win.artifactName" : "-c.artifactName";
+  return [...builderArgs, `${configPath}=${artifactName}`];
+}
+
+// Preserve the original exported helper name for downstream scripts while both
+// release targets transition to the profile-qualified naming contract.
+export const withLinuxProfileArtifactName = withProfileArtifactName;
+
+export function requireProfileQualifiedArtifactInventory({
+  rootDir = root,
+  targetPlatform,
+  acceleratorProfile,
+  version,
+} = {}) {
+  if (targetPlatform !== "linux" && targetPlatform !== "win32") return null;
+
+  const profile = normalizedArtifactProfile(acceleratorProfile, targetPlatform);
+  const releaseVersion = String(version ?? "").trim();
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(releaseVersion)) {
+    throw new Error("The desktop package version must be filename-safe before release evidence is written.");
+  }
+
+  const extension = targetPlatform === "linux" ? "AppImage" : "exe";
+  const expectedArtifactName = profileQualifiedArtifactName(
+    targetPlatform,
+    profile,
+    releaseVersion,
+    extension,
+  );
+  const distDir = path.join(rootDir, "dist");
+  if (!fs.existsSync(distDir) || !fs.statSync(distDir).isDirectory()) {
+    throw new Error(`Release artifact directory is missing: ${distDir}`);
+  }
+
+  const entries = fs.readdirSync(distDir, { withFileTypes: true }).filter((entry) => entry.isFile());
+  const primaryArtifactPattern =
+    targetPlatform === "linux" ? /\.AppImage$/i : /\.(?:exe|msi)$/i;
+  const primaryArtifactNames = entries
+    .map((entry) => entry.name)
+    .filter((name) => primaryArtifactPattern.test(name))
+    .sort((left, right) => left.localeCompare(right));
+  if (primaryArtifactNames.length !== 1 || primaryArtifactNames[0] !== expectedArtifactName) {
+    throw new Error(
+      `Profile-qualified ${targetPlatform} release inventory mismatch. Expected exactly ${expectedArtifactName}; ` +
+        `found ${primaryArtifactNames.length ? primaryArtifactNames.join(", ") : "none"}. ` +
+        "Archive or remove stale top-level installer outputs and rebuild before signing or release evidence.",
+    );
+  }
+
+  let blockmapPath = null;
+  if (targetPlatform === "win32") {
+    const expectedBlockmapName = `${expectedArtifactName}.blockmap`;
+    const blockmapNames = entries
+      .map((entry) => entry.name)
+      .filter((name) => /\.blockmap$/i.test(name))
+      .sort((left, right) => left.localeCompare(right));
+    const unexpectedBlockmaps = blockmapNames.filter((name) => name !== expectedBlockmapName);
+    if (unexpectedBlockmaps.length) {
+      throw new Error(
+        `Windows release inventory contains blockmaps not paired with ${expectedArtifactName}: ` +
+          unexpectedBlockmaps.join(", "),
+      );
+    }
+    if (blockmapNames.includes(expectedBlockmapName)) {
+      blockmapPath = path.join(distDir, expectedBlockmapName);
+    }
+  }
+
+  const updateMetadataNames = entries
+    .map((entry) => entry.name)
+    .filter((name) =>
+      targetPlatform === "linux" ? name === "latest-linux.yml" : /^latest.*\.yml$/i.test(name),
+    );
+  for (const metadataName of updateMetadataNames) {
+    const metadataPath = path.join(distDir, metadataName);
+    if (!fs.readFileSync(metadataPath, "utf8").includes(expectedArtifactName)) {
+      throw new Error(
+        `Release update metadata ${metadataName} is not paired with ${expectedArtifactName}.`,
+      );
+    }
+  }
+
+  // electron-builder rewrites this support file during the invocation that just
+  // completed. It is not an installer and must not affect the primary count,
+  // but a surviving profile-blind config is evidence that the wrapper override
+  // was not applied.
+  const effectiveConfigPath = path.join(distDir, "builder-effective-config.yaml");
+  if (fs.existsSync(effectiveConfigPath) && fs.statSync(effectiveConfigPath).isFile()) {
+    const profileToken =
+      targetPlatform === "linux" ? `linux-x64-${profile}` : `windows-x64-${profile}-Setup`;
+    if (!fs.readFileSync(effectiveConfigPath, "utf8").includes(profileToken)) {
+      throw new Error(
+        `Electron Builder effective config does not contain the expected profile token ${profileToken}.`,
+      );
+    }
+  }
+
+  return {
+    expectedArtifactPath: path.join(distDir, expectedArtifactName),
+    blockmapPath,
+    updateMetadataPaths: updateMetadataNames.map((name) => path.join(distDir, name)),
+  };
 }
 
 function resolveEvidenceProfile() {
@@ -41,14 +250,6 @@ function resolveEvidenceProfile() {
 
 function existingFiles(paths) {
   return paths.filter((filePath) => fs.existsSync(filePath) && fs.statSync(filePath).isFile());
-}
-
-function stagedOwnedExecutables() {
-  const backendRoot = path.join(root, "release", "staged-app", "electron-resources", "backend");
-  return existingFiles([
-    path.join(backendRoot, "edmg-studio-backend.exe"),
-    path.join(backendRoot, "edmg-hf-bucket-helper.exe"),
-  ]);
 }
 
 function packagedOwnedExecutables() {
@@ -111,20 +312,47 @@ function invokeWindowsSigning(artifactPaths, signingPlan, childEnv, phase, { ver
 
 async function main() {
   const requestedBuilderArgs = process.argv.slice(2);
-  const signingPlan = resolveWindowsSigningPlan({
+  const releaseTarget = resolveRequestedInstallerTarget(requestedBuilderArgs, process.platform);
+  const stagedBackendManifest = requireStagedBackendPlatform({ targetPlatform: releaseTarget?.platform });
+  const packagingBuilderArgs = withProfileArtifactName(requestedBuilderArgs, {
+    targetPlatform: releaseTarget?.platform,
+    acceleratorProfile: stagedBackendManifest?.acceleratorProfile,
+  });
+
+  const cacheRoot = process.env.EDMG_STUDIO_BUILD_CACHE_ROOT || path.join(root, ".cache");
+  const electronCache = path.join(cacheRoot, "electron");
+  const electronBuilderCache = path.join(cacheRoot, "electron-builder");
+  fs.mkdirSync(electronCache, { recursive: true });
+  fs.mkdirSync(electronBuilderCache, { recursive: true });
+
+  const builderEntry = require.resolve("electron-builder/cli.js");
+  if (!fs.existsSync(builderEntry)) {
+    throw new Error(`electron-builder entry point not found: ${builderEntry}`);
+  }
+
+  // Classify signing from the exact target decision above. This prevents unrelated
+  // options beginning with "--win" or "--linux" from being treated as platform flags.
+  const signingClassificationArgs = releaseTarget?.signingArgs ?? [];
+  const resolvedSigningPlan = resolveWindowsSigningPlan({
     root,
-    builderArgs: requestedBuilderArgs,
+    builderArgs: signingClassificationArgs,
     env: process.env,
     platform: process.platform,
   });
+  const signingArgs = resolvedSigningPlan.builderArgs.slice(signingClassificationArgs.length);
+  const signingPlan = {
+    ...resolvedSigningPlan,
+    builderArgs: [...packagingBuilderArgs, ...signingArgs],
+  };
   const builderArgs = signingPlan.builderArgs;
   const childEnv = {
     ...signingPlan.childEnv,
     ELECTRON_CACHE: electronCache,
     ELECTRON_BUILDER_CACHE: electronBuilderCache,
+    EDMG_WINDOWS_SIGNING_REQUIRED: signingPlan.required ? "1" : "0",
+    EDMG_WINDOWS_SIGNING_CONFIGURED: signingPlan.configured ? "1" : "0",
   };
 
-  invokeWindowsSigning(stagedOwnedExecutables(), signingPlan, childEnv, "pre-pack");
   const result = spawnSync(process.execPath, [builderEntry, ...builderArgs], {
     cwd: root,
     stdio: "inherit",
@@ -140,25 +368,28 @@ async function main() {
     process.exit(result.status ?? 1);
   }
 
+  let packageJson = null;
+  if (releaseTarget) {
+    packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    requireProfileQualifiedArtifactInventory({
+      rootDir: root,
+      targetPlatform: releaseTarget.platform,
+      acceleratorProfile: stagedBackendManifest?.acceleratorProfile,
+      version: packageJson.version,
+    });
+  }
+
   invokeWindowsSigning(packagedOwnedExecutables(), signingPlan, childEnv, "post-pack", { verifyOnly: true });
 
-  const wantsWindows = requestedBuilderArgs.some((arg) => /^-w(?:$|in)|^--win/i.test(arg));
-  const wantsLinux = requestedBuilderArgs.some((arg) => /^-l(?:$|inux)|^--linux/i.test(arg));
-  const wantsInstallerArtifacts = wantsWindows || wantsLinux;
-  if (!wantsInstallerArtifacts) {
+  if (!releaseTarget) {
     return;
   }
-  if (wantsWindows && wantsLinux) {
-    throw new Error("Release evidence requires one Electron Builder target at a time (Windows or Linux).");
-  }
-  const artifactSet = wantsWindows ? "win-nsis" : "linux-appimage";
 
-  const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const evidence = await writeReleaseEvidence({
     root,
     phase: "dist",
     profile: resolveEvidenceProfile(),
-    artifactSet,
+    artifactSet: releaseTarget.artifactSet,
     version: String(packageJson.version || ""),
     env: process.env,
   });
@@ -167,7 +398,10 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error("[run-electron-builder] release evidence generation failed", error);
-  process.exit(1);
-});
+const invokedAsScript = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedAsScript) {
+  main().catch((error) => {
+    console.error("[run-electron-builder] release packaging failed", error);
+    process.exit(1);
+  });
+}

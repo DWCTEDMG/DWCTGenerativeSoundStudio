@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import path from "node:path";
 import test from "node:test";
 
@@ -9,6 +10,7 @@ import {
   executablePathsEqual,
   managedBackendUrl,
   normalizeAcceleratorProfile,
+  parseLinuxSsListeningPid,
   parseWindowsNetstatListeningPid,
   resolveStudioUiOrigin,
 } from "./backend-runtime.mjs";
@@ -109,6 +111,95 @@ test("packaged backend ignores source Python and uv configuration", () => {
   assert.equal(spec.args.includes("python"), false);
 });
 
+test("Windows packaged backend launches directly without PowerShell", async () => {
+  const previousSpawnSetting = process.env.EDMG_STUDIO_SPAWN_BACKEND;
+  const previousFfmpegPath = process.env.EDMG_FFMPEG_PATH;
+  process.env.EDMG_STUDIO_SPAWN_BACKEND = "1";
+  process.env.EDMG_FFMPEG_PATH = "ffmpeg";
+
+  const resourcesPath = "G:\\Apps\\EDMG Studio\\resources";
+  const expectedExecutable = `${resourcesPath}\\backend\\edmg-studio-backend.exe`;
+  const openedPaths = [];
+  const closedDescriptors = [];
+  const terminated = [];
+  let spawned = null;
+  let launched = false;
+
+  try {
+    const runtime = createBackendRuntime({
+      app: {
+        isPackaged: true,
+        getPath: () => "G:\\EDMG-Test-Home\\logs",
+      },
+      dialog: { showErrorBox: () => assert.fail("unexpected error dialog") },
+      rootDir: "E:\\src\\studio\\edmg-studio",
+      resourcesPath,
+      isWindows: true,
+      backendHost: "127.0.0.1",
+      backendPort: 7863,
+      backendUrl: "http://127.0.0.1:7863",
+      backendReadyTimeoutMs: 50,
+      testMode: true,
+      pathExistsSync: () => true,
+      ensureDirSync: () => {},
+      safeStreamWrite: () => {},
+      getStudioPaths: () => ({ logsDir: "G:\\EDMG-Test-Home\\logs" }),
+      buildManagedStudioEnv: () => ({
+        EDMG_STUDIO_DATA_DIR: "G:\\EDMG-Test-Home\\data",
+        EDMG_STUDIO_MODELS_DIR: "G:\\EDMG-Test-Home\\models",
+        EDMG_STUDIO_EXTERNAL_DIR: "G:\\EDMG-Test-Home\\external",
+        EDMG_STUDIO_LOGS_DIR: "G:\\EDMG-Test-Home\\logs",
+        OLLAMA_MODELS: "G:\\EDMG-Test-Home\\models\\ollama",
+      }),
+      buildManagedAiEnv: () => ({}),
+      isDev: false,
+      runtimeOps: {
+        findListeningPid: () => (launched ? 9150 : null),
+        probeBackend: () => launched,
+        probeBackendAllowsStudioOrigin: () => true,
+        openBackendLogFile: (filePath) => {
+          openedPaths.push(filePath);
+          return 41 + openedPaths.length - 1;
+        },
+        closeBackendLogFile: (descriptor) => closedDescriptors.push(descriptor),
+        spawnProcess: (command, args, options) => {
+          launched = true;
+          spawned = { command, args, options };
+          const child = new EventEmitter();
+          child.pid = 9150;
+          child.stdout = null;
+          child.stderr = null;
+          child.kill = () => {};
+          process.nextTick(() => child.emit("spawn"));
+          return child;
+        },
+        terminateProcessTree: (pid) => terminated.push(pid),
+      },
+    });
+
+    assert.equal(await runtime.startBackendIfNeeded(), true);
+    assert.equal(spawned.command, expectedExecutable);
+    assert.deepEqual(spawned.args, ["serve", "--host", "127.0.0.1", "--port", "7863"]);
+    assert.equal(spawned.options.cwd, `${resourcesPath}\\backend`);
+    assert.equal(spawned.options.windowsHide, true);
+    assert.equal(spawned.options.shell, false);
+    assert.deepEqual(spawned.options.stdio, ["ignore", 41, 42]);
+    assert.deepEqual(openedPaths, [
+      path.join("G:\\EDMG-Test-Home\\logs", "backend", "backend-stdout.log"),
+      path.join("G:\\EDMG-Test-Home\\logs", "backend", "backend-stderr.log"),
+    ]);
+    assert.deepEqual(closedDescriptors, [41, 42]);
+
+    runtime.stopBackend();
+    assert.deepEqual(terminated, [9150]);
+  } finally {
+    if (previousSpawnSetting === undefined) delete process.env.EDMG_STUDIO_SPAWN_BACKEND;
+    else process.env.EDMG_STUDIO_SPAWN_BACKEND = previousSpawnSetting;
+    if (previousFfmpegPath === undefined) delete process.env.EDMG_FFMPEG_PATH;
+    else process.env.EDMG_FFMPEG_PATH = previousFfmpegPath;
+  }
+});
+
 test("packaged backend ownership compares resolved executable paths", () => {
   const installed = "G:\\Users\\lanak\\AppData\\Local\\Programs\\EDMG Studio\\resources\\backend\\edmg-studio-backend.exe";
   assert.equal(executablePathsEqual(installed.toUpperCase(), installed, { isWindows: true }), true);
@@ -142,6 +233,47 @@ test("Windows netstat parsing finds IPv4 and IPv6 listeners with foreign-address
   assert.equal(parseWindowsNetstatListeningPid(output, 17863), 9568);
   assert.equal(parseWindowsNetstatListeningPid(output, 7864), null);
   assert.equal(parseWindowsNetstatListeningPid(output, "invalid"), null);
+});
+
+test("Linux ss parsing finds an IPv4 listener and ignores other ports", () => {
+  const output = [
+    'LISTEN 0 4096 127.0.0.1:7864 0.0.0.0:* users:(("other",pid=42,fd=3))',
+    'LISTEN 0 4096 127.0.0.1:7863 0.0.0.0:* users:(("edmg-studio-backend",pid=18556,fd=7))',
+  ].join("\n");
+
+  assert.equal(parseLinuxSsListeningPid(output, 7863), 18556);
+});
+
+test("Linux ss parsing finds bracketed and unbracketed IPv6 listeners", () => {
+  const output = [
+    'LISTEN 0 4096 [::1]:17863 [::]:* users:(("python",pid=9568,fd=6))',
+    'LISTEN 0 4096 :::27863 :::* users:(("python",pid=9569,fd=7))',
+  ].join("\n");
+
+  assert.equal(parseLinuxSsListeningPid(output, 17863), 9568);
+  assert.equal(parseLinuxSsListeningPid(output, 27863), 9569);
+});
+
+test("Linux ss parsing returns the first valid PID for multiple process owners", () => {
+  const output = [
+    'LISTEN 0 4096 127.0.0.1:7863 0.0.0.0:* users:(("pid=9999",pid=0,fd=3),("backend",pid=2401,fd=4),("backend",pid=2402,fd=5))',
+  ].join("\n");
+
+  assert.equal(parseLinuxSsListeningPid(output, 7863), 2401);
+});
+
+test("Linux ss parsing rejects missing process metadata and invalid ports", () => {
+  const output = [
+    "LISTEN 0 4096 127.0.0.1:7863 0.0.0.0:*",
+    'LISTEN 0 4096 127.0.0.1:7864 0.0.0.0:* users:(("backend",fd=4))',
+  ].join("\n");
+
+  assert.equal(parseLinuxSsListeningPid(output, 7863), null);
+  assert.equal(parseLinuxSsListeningPid(output, 7864), null);
+  assert.equal(parseLinuxSsListeningPid(output, "invalid"), null);
+  assert.equal(parseLinuxSsListeningPid(output, 0), null);
+  assert.equal(parseLinuxSsListeningPid(output, 65536), null);
+  assert.equal(parseLinuxSsListeningPid(output, 7863.5), null);
 });
 
 test("packaged runtime preserves a foreign listener and launches on a private dynamic port", async () => {
@@ -239,6 +371,7 @@ test("packaged runtime retries when a foreign process takes the selected port du
   const availablePorts = [17863, 17864];
   let launchCount = 0;
   const terminated = [];
+  const launchedChildren = [];
 
   try {
     const runtime = createBackendRuntime({
@@ -288,11 +421,12 @@ test("packaged runtime retries when a foreign process takes the selected port du
         probeBackendAllowsStudioOrigin: () => true,
         launchPackagedBackendWindows: (spec) => {
           launchCount += 1;
-          return {
-            pid: 9000 + launchCount,
-            kind: "windows_start_process",
-            expectedExecutable: spec.command,
-          };
+          const child = new EventEmitter();
+          child.pid = 9000 + launchCount;
+          child.kind = "windows_start_process";
+          child.expectedExecutable = spec.command;
+          launchedChildren.push(child);
+          return child;
         },
         terminateProcessTree: (pid) => terminated.push(pid),
       },
@@ -303,6 +437,7 @@ test("packaged runtime retries when a foreign process takes the selected port du
     assert.equal(runtime.getCurrentBackendUrl(), "http://127.0.0.1:17864");
     assert.deepEqual(terminated, [9001]);
 
+    launchedChildren[0].emit("exit", 1, null);
     runtime.stopBackend();
     assert.deepEqual(terminated, [9001, 9002]);
   } finally {

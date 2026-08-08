@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { reactCompilerBabel } from "./reactCompilerOptions";
+import { reactCompilerBabel } from "./reactCompilerOptions.ts";
 
 export default defineConfig({
   base: "./",

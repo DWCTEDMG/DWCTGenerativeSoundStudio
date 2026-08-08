@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   PINNED_UV_VERSION,
   RELEASE_CAPABILITY_EXTRAS,
+  REQUIRED_LINUX_SETUP_SCRIPTS,
   RELEASE_MANIFEST_SCHEMA_VERSION,
   assertNoDynamicDependencyOverrides,
   assertPinnedUvVersion,
@@ -58,6 +59,7 @@ const builtHfBucketHelperPath = path.join(hfBucketHelperDir, "dist", hfBucketHel
 const bundledBackendPath = path.join(electronBackendDir, backendBinaryName);
 const bundleManifestPath = path.join(electronBackendDir, "backend-bundle-manifest.json");
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const linuxSetupScriptPaths = REQUIRED_LINUX_SETUP_SCRIPTS.map((relativePath) => path.join(root, relativePath));
 
 const dependencyInputPaths = [
   pythonVersionPath,
@@ -66,6 +68,7 @@ const dependencyInputPaths = [
   hfBucketHelperPyprojectPath,
   hfBucketHelperLockPath,
   launcherDefaultsPath,
+  ...(releasePlatform === "linux" ? linuxSetupScriptPaths : []),
 ];
 const requiredBackendSourceFiles = [
   "edmg_studio_backend/__init__.py",
@@ -357,6 +360,15 @@ function buildBackendBundle(uvCommand, profile, env) {
   }
   fs.copyFileSync(helper, path.join(built, hfBucketHelperBinaryName));
   fs.copyFileSync(launcherDefaultsPath, path.join(built, "launcher_env.defaults.json"));
+  if (releasePlatform === "linux") {
+    for (const [index, sourcePath] of linuxSetupScriptPaths.entries()) {
+      const bundleRelativePath = REQUIRED_LINUX_SETUP_SCRIPTS[index];
+      const destinationPath = path.join(built, ...bundleRelativePath.split("/"));
+      fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+      fs.copyFileSync(sourcePath, destinationPath);
+      fs.chmodSync(destinationPath, 0o755);
+    }
+  }
   return built;
 }
 

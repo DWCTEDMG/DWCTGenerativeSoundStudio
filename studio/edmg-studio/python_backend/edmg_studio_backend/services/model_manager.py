@@ -9,7 +9,7 @@ import shutil
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -33,6 +33,14 @@ from .setup_wizard import (
     _ollama_base,  # reuse
     comfy_portable_installed,
     comfy_portable_root,
+)
+from .tensorrt_bundle_migration import (
+    MODEL_ID as LOCAL_SD15_TENSORRT_MODEL_ID,
+)
+from .tensorrt_bundle_migration import (
+    TensorRTBundleContract,
+    TensorRTBundleMigration,
+    TensorRTMigrationCancelled,
 )
 
 try:
@@ -521,11 +529,15 @@ def _hf_profile_matches_path(path: str, profile: HFSnapshotDownloadProfile) -> b
 
 # ------------------------------ tasks ------------------------------
 
+
+class ModelTaskCancelled(Exception):
+    """Cooperative cancellation signal for a managed model task."""
+
 @dataclass
 class ModelTask:
     id: str
     name: str
-    status: str = "queued"  # queued|running|done|failed|interrupted
+    status: str = "queued"  # queued|running|done|failed|interrupted|cancelled
     progress: float | None = None
     last_log: str = ""
     error: str | None = None
@@ -537,6 +549,7 @@ class ModelTask:
     bytes_total: int | None = None
     files_completed: int = 0
     files_total: int | None = None
+    cancel_requested: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -554,6 +567,7 @@ class ModelTask:
             "bytes_total": self.bytes_total,
             "files_completed": self.files_completed,
             "files_total": self.files_total,
+            "cancel_requested": self.cancel_requested,
         }
 
 
@@ -656,11 +670,20 @@ class ModelTaskManager:
                 task.started_at = time.time()
                 self._persist_locked()
             try:
+                if task.cancel_requested:
+                    raise ModelTaskCancelled("Cancelled before the model operation started")
                 fn(task, *args, **kwargs)
                 with self._lock:
                     task.status = "done"
                     task.stage = "complete"
                     task.progress = 1.0
+            except ModelTaskCancelled:
+                with self._lock:
+                    task.status = "cancelled"
+                    task.stage = "cancelled"
+                    task.error = None
+                    suffix = "Cancelled safely. No incomplete model bundle was published."
+                    task.last_log = f"{task.last_log.rstrip()}\n{suffix}".strip()
             except Exception as e:
                 with self._lock:
                     task.status = "failed"
@@ -674,6 +697,22 @@ class ModelTaskManager:
 
         threading.Thread(target=runner, daemon=True).start()
         return task
+
+    def request_cancel(self, task_id: str) -> ModelTask | None:
+        with self._lock:
+            task = self._tasks.get(str(task_id or "").strip())
+            if task is None:
+                return None
+            if task.status in self._ACTIVE_STATUSES:
+                task.cancel_requested = True
+                task.stage = "cancelling"
+                task.last_log = "Cancellation requested; Studio is stopping at the next safe copy boundary."
+                self._persist_locked()
+            return task
+
+    def is_cancel_requested(self, task: ModelTask) -> bool:
+        with self._lock:
+            return bool(task.cancel_requested)
 
     @staticmethod
     def log(task: ModelTask, msg: str) -> None:
@@ -865,6 +904,7 @@ class ModelManager:
         self._cloud_models_path = cfg / "models_cloud.json"
         self._lane_overrides_path = cfg / "model_lane_overrides.json"
         self._benchmarks_path = cfg / "model_benchmarks.json"
+        self._tensorrt_bundle_migration = TensorRTBundleMigration(self.models_dir)
 
         self._lock = threading.Lock()
         self._ollama_probe_lock = threading.Lock()
@@ -1080,6 +1120,7 @@ class ModelManager:
             },
             "storage_mode": self._model_storage_mode(),
             "model_cache": self._model_cache_label() if self.model_cache is not None else None,
+            "tensorrt_migration": self.legacy_tensorrt_status(),
         }
 
     def promote_model_lane(self, model_id: str, target_lane: str, *, reason: str | None = None, force: bool = False) -> dict[str, Any]:
@@ -1239,6 +1280,102 @@ class ModelManager:
             raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
         name = f"Restore local: {entry.get('name')}"
         return self.tasks.start(name, self._restore_cloud_model, entry)
+
+    # ---- legacy TensorRT bundle migration ----
+    def legacy_tensorrt_status(self, *, include_hashes: bool = False) -> dict[str, Any]:
+        """Describe the legacy and canonical SD 1.5 TensorRT layouts.
+
+        Catalog calls intentionally use the fast metadata-only form.  The
+        explicit import task streams and verifies SHA-256 for every engine and
+        records those hashes in the canonical manifest.
+        """
+
+        return self._tensorrt_bundle_migration.inspect(include_hashes=include_hashes)
+
+    def resolve_tensorrt_bundle(
+        self,
+        *,
+        additional_paths: Iterable[Path | str] = (),
+        verify_engine_hashes: bool = True,
+    ) -> TensorRTBundleContract | None:
+        """Resolve canonical first, then only fully verified explicit overrides."""
+
+        return self._tensorrt_bundle_migration.resolve_preferred_bundle(
+            external_paths=additional_paths,
+            verify_engine_hashes=verify_engine_hashes,
+        )
+
+    def import_legacy_tensorrt(self) -> ModelTask:
+        self._tensorrt_bundle_migration.ensure_migration_available()
+        return self.tasks.start(
+            "Verify and copy legacy TensorRT engines",
+            self._import_legacy_tensorrt_task,
+            model_id=LOCAL_SD15_TENSORRT_MODEL_ID,
+        )
+
+    def _import_legacy_tensorrt_task(self, task: ModelTask) -> None:
+        self.tasks.set_stage(task, "Checking legacy TensorRT engines", progress=0.01)
+
+        def cancelled() -> bool:
+            return self.tasks.is_cancel_requested(task)
+
+        def progress(
+            bytes_completed: int,
+            bytes_total: int,
+            files_completed: int,
+            files_total: int,
+            stage: str,
+        ) -> None:
+            self.tasks.set_stage(task, stage)
+            self.tasks.set_transfer(
+                task,
+                bytes_completed=bytes_completed,
+                bytes_total=bytes_total,
+                files_completed=files_completed,
+                files_total=files_total,
+                progress_floor=0.02,
+                progress_ceiling=0.95,
+            )
+            ModelTaskManager.log(task, stage)
+
+        try:
+            result = self._tensorrt_bundle_migration.migrate(
+                cancel_check=cancelled,
+                progress=progress,
+            )
+        except TensorRTMigrationCancelled as exc:
+            raise ModelTaskCancelled(str(exc)) from exc
+
+        task.bytes_completed = int(result.get("copied_bytes") or task.bytes_completed)
+        task.bytes_total = task.bytes_completed
+        task.files_completed = int(result.get("copied_file_count") or task.files_completed)
+        task.files_total = task.files_completed
+        ModelTaskManager.log(
+            task,
+            (
+                "Copied and SHA-256 verified the legacy engines. The source files remain in place. "
+                "The canonical bundle is not renderer-ready until its ONNX assets, base-model metadata, "
+                "and compiled profile metadata are verified."
+            ),
+        )
+
+    def cancel_legacy_tensorrt_import(self, task_id: str) -> ModelTask:
+        task = next((item for item in self.tasks.list() if item.id == str(task_id or "").strip()), None)
+        if task is None:
+            raise UserFacingError(
+                "The TensorRT import task was not found",
+                hint="Refresh Models and retry with the active TensorRT import task.",
+                code="MODEL_TASK_NOT_FOUND",
+                status_code=404,
+            )
+        if task.model_id != LOCAL_SD15_TENSORRT_MODEL_ID:
+            raise UserFacingError(
+                "That task is not a legacy TensorRT import",
+                hint="Only the source-preserving TensorRT copy task can be cancelled from this action.",
+                code="MODEL_TASK_TYPE_MISMATCH",
+                status_code=409,
+            )
+        return self.tasks.request_cancel(task.id) or task
 
 
     # ---- resolution ----
@@ -1642,6 +1779,12 @@ class ModelManager:
             return path if self._internal_asset_installed(entry, path) else None
         if engine == "runtime_bundle":
             source_path = str(entry.get("source_path") or "").strip()
+            if model_id == LOCAL_SD15_TENSORRT_MODEL_ID:
+                contract = self.resolve_tensorrt_bundle(
+                    additional_paths=(source_path,) if source_path else (),
+                    verify_engine_hashes=True,
+                )
+                return contract.root if contract is not None else None
             if source_path:
                 try:
                     path = Path(source_path).expanduser()

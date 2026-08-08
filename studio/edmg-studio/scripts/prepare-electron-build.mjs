@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+import { stagePinnedMediaTools } from "./stage-media-tools.mjs";
 
 const root = process.cwd();
 const rootMain = path.join(root, "main.mjs");
@@ -9,44 +10,11 @@ const rootPreload = path.join(root, "preload.cjs");
 const rootMainProcessDir = path.join(root, "main-process");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const studioRoot = path.resolve(__dirname, "..");
-const ffmpegBinDir = path.join(root, "electron-resources", "bin");
-const ffmpegExe = path.join(ffmpegBinDir, process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
+const mediaBinDir = path.join(root, "electron-resources", "bin");
 
 if (!fs.existsSync(rootMain)) throw new Error(`Missing: ${rootMain}`);
 if (!fs.existsSync(rootPreload)) throw new Error(`Missing: ${rootPreload}`);
 if (!fs.existsSync(rootMainProcessDir)) throw new Error(`Missing: ${rootMainProcessDir}`);
 
-function ensureBundledFfmpeg() {
-  if (fs.existsSync(ffmpegExe)) return;
-  if (process.platform !== "win32") return;
-
-  const script = path.join(studioRoot, "packaging", "windows", "get_ffmpeg.ps1");
-  if (!fs.existsSync(script)) {
-    throw new Error(`Missing FFmpeg staging script: ${script}`);
-  }
-
-  fs.mkdirSync(ffmpegBinDir, { recursive: true });
-  const result = spawnSync(
-    "powershell",
-    [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      script,
-      "-OutDir",
-      "./electron-resources/bin",
-    ],
-    {
-      cwd: studioRoot,
-      stdio: "inherit",
-    }
-  );
-
-  if (result.status !== 0 || !fs.existsSync(ffmpegExe)) {
-    throw new Error(`Failed to stage bundled FFmpeg via ${script}`);
-  }
-}
-
-ensureBundledFfmpeg();
-console.log("Validated canonical Electron entry files and ensured bundled FFmpeg.");
+await stagePinnedMediaTools({ root: studioRoot, outDir: mediaBinDir });
+console.log("Validated canonical Electron entry files and staged pinned FFmpeg plus FFprobe.");

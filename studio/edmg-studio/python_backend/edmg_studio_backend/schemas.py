@@ -1,6 +1,10 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field
+
 from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+from .version import STUDIO_VERSION
 
 ConditioningMode = Literal["raw", "blur", "edge", "external"]
 DiffusionWorkflowFamily = Literal["auto", "txt2img", "img2img", "inpaint", "outpaint", "controlnet"]
@@ -43,7 +47,7 @@ class OutpaintSettings(BaseModel):
 
 class HealthResponse(BaseModel):
     ok: bool = True
-    version: str = "1.1.0"
+    version: str = STUDIO_VERSION
 
 class ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -148,17 +152,20 @@ class AssembleVideoRequest(BaseModel):
     fps: int = 30
 
 class TensorRTStandaloneRenderRequest(BaseModel):
-    variant_index: int = 0
-    model_id: str | None = None
-    prompt: str | None = None
-    seed: int | None = None
-    width: int = 1024
-    height: int = 1024
-    steps: int = 28
-    cfg: float = 7.0
-    sampler: str = "pndm"
-    negative_prompt: str = "blurry, low quality, watermark, text, logo"
-    batch_size: int = 1
+    variant_index: int = Field(default=0, ge=0, le=9999)
+    model_id: str | None = Field(default=None, max_length=260)
+    prompt: str | None = Field(default=None, max_length=10_000)
+    seed: int | None = Field(default=None, ge=0, le=4_294_967_295)
+    width: int = Field(default=1024, ge=256, le=1920)
+    height: int = Field(default=1024, ge=256, le=1080)
+    steps: int = Field(default=28, ge=1, le=80)
+    cfg: float = Field(default=7.0, ge=1.0, le=20.0)
+    sampler: str = Field(default="pndm", min_length=1, max_length=64)
+    negative_prompt: str = Field(
+        default="blurry, low quality, watermark, text, logo",
+        max_length=10_000,
+    )
+    batch_size: int = Field(default=1, ge=1, le=8)
 
 class InternalVideoRenderRequest(BaseModel):
     """Render a full video using the internal renderer.

@@ -4,6 +4,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBackendRuntime } from "./main-process/backend-runtime.mjs";
+import { buildIdentity } from "./main-process/build-identity.mjs";
 import { createDirectorRuntime } from "./main-process/director-runtime.mjs";
 import { assertTrustedRendererIpc, normalizeExternalUrl } from "./main-process/security.mjs";
 import { buildCacheEnvPaths } from "./main-process/storage-env.mjs";
@@ -451,6 +452,13 @@ function resolveConfiguredPath(rawValue) {
 }
 
 function getBootstrapConfigPath() {
+  const testOverride = String(process.env.EDMG_STUDIO_TEST_BOOTSTRAP_CONFIG_PATH ?? "").trim();
+  if (testOverride && (process.env.EDMG_STUDIO_TEST_MODE ?? "0") === "1") {
+    if (!path.isAbsolute(testOverride)) {
+      throw new Error("EDMG_STUDIO_TEST_BOOTSTRAP_CONFIG_PATH must be an absolute path");
+    }
+    return path.normalize(testOverride);
+  }
   return path.join(app.getPath("appData"), APP_NAME, BOOTSTRAP_CONFIG_BASENAME);
 }
 
@@ -1421,6 +1429,11 @@ function registerIpcHandlers() {
   };
 
   trustedHandle("edmg:getBackendUrl", async () => backendRuntime.getCurrentBackendUrl());
+  trustedHandle("edmg:getBuildIdentity", async () => buildIdentity({
+    app,
+    resourcesPath: process.resourcesPath,
+    rootDir: __dirname,
+  }));
   trustedHandle("edmg:getBackendAuthToken", async () => {
     const result = readBackendAuthToken();
     return { ok: true, configured: !!result.token, ...result };

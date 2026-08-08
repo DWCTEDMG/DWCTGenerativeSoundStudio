@@ -355,6 +355,8 @@ export default function Settings(props: PageProps) {
   const [secrets, setSecrets] = useState<any>(null);
   const [hardware, setHardware] = useState<any>(null);
   const [systemReadiness, setSystemReadiness] = useState<any>(null);
+  const [buildIdentity, setBuildIdentity] = useState<any>(null);
+  const [backendHealth, setBackendHealth] = useState<any>(null);
   const [baselineMetrics, setBaselineMetrics] = useState<any>(null);
   const [renderProfiles, setRenderProfiles] = useState<any>(null);
   const [renderProviders, setRenderProviders] = useState<any>(null);
@@ -437,6 +439,8 @@ export default function Settings(props: PageProps) {
     apiGet("/v1/settings/secrets/status").then(setSecrets).catch(() => {});
     apiGet("/v1/hardware").then(setHardware).catch(() => {});
     apiGet("/v1/system/readiness").then(setSystemReadiness).catch(() => {});
+    apiGet("/health").then(setBackendHealth).catch(() => {});
+    window.edmg?.getBuildIdentity?.().then(setBuildIdentity).catch(() => {});
     apiGet("/v1/metrics/baseline").then(setBaselineMetrics).catch(() => {});
     apiGet("/v1/settings/render_profiles").then(setRenderProfiles).catch(() => {});
     apiGet("/v1/settings/render_providers").then((d) => {
@@ -971,6 +975,8 @@ export default function Settings(props: PageProps) {
             onClick={() => {
               apiGet("/v1/system/readiness").then(setSystemReadiness).catch(() => {});
               apiGet("/v1/metrics/baseline").then(setBaselineMetrics).catch(() => {});
+              apiGet("/health").then(setBackendHealth).catch(() => {});
+              window.edmg?.getBuildIdentity?.().then(setBuildIdentity).catch(() => {});
             }}
           >
             Refresh
@@ -978,6 +984,69 @@ export default function Settings(props: PageProps) {
         </div>
         <div className="small" style={{ marginBottom: 12, opacity: 0.9 }}>
           Shared health check for FFmpeg, the locked Python runtime, GPU acceleration, disk space, writable Studio paths, and the models directory.
+        </div>
+        <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 800 }}>Build identity</div>
+            <div className="small" style={{ opacity: 0.82 }}>
+              {buildIdentity?.desktop?.packaged ? "Packaged desktop" : "Source / browser session"}
+            </div>
+          </div>
+          <div className="small" style={{ display: "grid", gap: 5, marginTop: 8, opacity: 0.9 }}>
+            <div aria-label="Desktop build version">
+              Desktop <b>{buildIdentity?.desktop?.version || "unavailable"}</b>
+              {buildIdentity?.desktop?.platform ? (
+                <> • {buildIdentity.desktop.platform}/{buildIdentity.desktop.arch || "unknown"}</>
+              ) : null}
+              {buildIdentity?.desktop?.electronVersion ? (
+                <> • Electron {buildIdentity.desktop.electronVersion}</>
+              ) : null}
+            </div>
+            <div aria-label="Desktop executable location" style={{ wordBreak: "break-all" }}>
+              Running from <code>{buildIdentity?.desktop?.executablePath || "unavailable"}</code>
+            </div>
+            <div aria-label="Backend build version">
+              Backend <b>{backendHealth?.version || "unavailable"}</b>
+              {(buildIdentity?.backendBundle?.acceleratorProfile || systemReadiness?.checks?.runtime?.accelerator_profile) ? (
+                <> • profile <b>{buildIdentity?.backendBundle?.acceleratorProfile || systemReadiness?.checks?.runtime?.accelerator_profile}</b></>
+              ) : null}
+              {buildIdentity?.backendBundle?.pythonVersion ? (
+                <> • Python {buildIdentity.backendBundle.pythonVersion}</>
+              ) : null}
+            </div>
+            {buildIdentity?.backendBundle?.available ? (
+              <>
+                <div>
+                  Provenance <b>verified installed backend + release manifest v{buildIdentity.backendBundle.schemaVersion || "unknown"}</b>
+                  {typeof buildIdentity.backendBundle.sourceFileCount === "number" ? (
+                    <> • {buildIdentity.backendBundle.sourceFileCount} source files</>
+                  ) : null}
+                </div>
+                <details>
+                  <summary style={{ cursor: "pointer", fontWeight: 700 }}>Show technical fingerprints</summary>
+                  <div style={{ display: "grid", gap: 5, marginTop: 7 }}>
+                    <div style={{ wordBreak: "break-all" }}>
+                      Source fingerprint <code>{buildIdentity.backendBundle.sourceHash}</code>
+                    </div>
+                    {buildIdentity.backendBundle.binarySha256 ? (
+                      <div style={{ wordBreak: "break-all" }}>
+                        Backend binary <code>{buildIdentity.backendBundle.binarySha256}</code>
+                      </div>
+                    ) : null}
+                    {buildIdentity.backendBundle.lockSha256 ? (
+                      <div style={{ wordBreak: "break-all" }}>
+                        Dependency lock <code>{buildIdentity.backendBundle.lockSha256}</code>
+                      </div>
+                    ) : null}
+                  </div>
+                </details>
+              </>
+            ) : (
+              <div style={{ opacity: 0.78 }}>
+                Immutable backend bundle provenance is available in packaged releases; this session is using source or browser runtime metadata.
+              </div>
+            )}
+          </div>
         </div>
         {systemReadiness ? (
           <div style={{ display: "grid", gap: 10 }}>

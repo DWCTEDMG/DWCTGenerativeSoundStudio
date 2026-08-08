@@ -26,9 +26,23 @@ pnpm run validate:release:linux
 That flow:
 
 - runs the frontend typecheck and UI tests
+- stages pinned, SHA-256-verified `ffmpeg` and `ffprobe` executables
 - stages the desktop app bundle
 - validates the Electron bridge and packaged smoke path
 - builds the Linux `AppImage`
+
+The media archive is reused from `.cache/media-tools/` after its size and
+SHA-256 are verified. Set `EDMG_STUDIO_BUILD_CACHE_ROOT` to place all Electron
+and media build caches on a larger build volume. The asset URL, size, and digest
+are release inputs in `packaging/media-tools-assets.json`; Linux packaging does
+not trust host PATH binaries.
+
+The archive's GPLv3 `LICENSE.txt` is copied byte-for-byte into the AppImage
+resources as `FFmpeg-LICENSE.txt`. A deterministic `FFmpeg-SOURCE.txt` records
+the exact FFmpeg source commit, BtbN build source commit, release tag, archive
+name, size, and SHA-256. The build fails closed when the archive license is
+missing, ambiguous, or not the expected GPLv3 text, and packaged smoke requires
+both evidence files in its resource inventory.
 
 If you only need the artifact build:
 
@@ -50,14 +64,186 @@ The fixed PyTorch CUDA index, TensorRT packages, and capability extras come from
 `pyproject.toml` and `uv.lock`. The target machine still needs a matching NVIDIA
 driver and locally installed model weights.
 
+## WSL2 / WSLg packaged GUI release
+
+This is the packaged Linux desktop route for a Windows machine using WSL2. It
+builds and launches the Linux AppImage inside the WSL distribution while WSLg
+places the full Electron Studio window on the Windows desktop. These
+instructions describe the required release procedure; they are not evidence
+that the current AppImage has already been built. Treat a profile as verified
+only after its release command exits successfully and the current evidence
+files listed below have been inspected.
+
+### Build from the WSL Linux filesystem
+
+Use a clone under the distribution's native Linux filesystem, such as
+`$HOME/src`. Do not build from `/mnt/c`, `/mnt/d`, `/mnt/e`, or another Windows
+drive mounted below `/mnt`: Windows-mount permission, executable-bit, symlink,
+filesystem-watcher, and I/O behavior can invalidate Electron, AppImage, pnpm,
+or frozen Python bundle results.
+
+Enter the WSL distribution first, then clone and install from its Bash shell:
+
+```bash
+mkdir -p "$HOME/src"
+cd "$HOME/src"
+git clone https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio.git
+cd DWCTGenerativeSoundStudio/studio/edmg-studio
+corepack enable
+pnpm install --frozen-lockfile
+```
+
+The checkout should resolve to a Linux path such as
+`/home/<user>/src/DWCTGenerativeSoundStudio`, not an `/mnt/...` path. Windows
+Explorer can still retrieve completed artifacts through
+`\\wsl$\<distribution>\home\<user>\src\DWCTGenerativeSoundStudio` after the
+Linux build has finished.
+
+### Exact CPU and CUDA release gates
+
+Run one profile at a time from `studio/edmg-studio`:
+
+```bash
+# CPU AppImage: desktop validation, CPU bundle, AppImage, and final GUI smoke
+pnpm run validate:release:linux
+```
+
+```bash
+# CUDA AppImage: desktop validation, CUDA/TensorRT bundle, AppImage, and final GUI smoke
+pnpm run validate:release:linux:cuda
+```
+
+The canonical output names are:
+
+- `dist/EDMG-Studio-${version}-linux-x64-cpu.AppImage`
+- `dist/EDMG-Studio-${version}-linux-x64-cuda.AppImage`
+
+`${version}` is the exact `version` in `package.json`. The final smoke check
+requires exactly one AppImage containing that version in `dist/`; it fails
+closed if CPU and CUDA candidates collide. Archive each successful profile's
+AppImage and its `release/evidence/` directory before building the other
+profile, or use separate clean native-Linux clones/worktrees.
+
+Both release gates reject a non-Linux Node host before starting the build. Run
+them in WSL Bash, where `node -p "process.platform"` must print `linux`, not in
+Windows PowerShell against the same files. The Electron Builder wrapper also
+requires this staged manifest to exist and be valid JSON:
+
+```text
+release/staged-app/electron-resources/backend/backend-bundle-manifest.json
+```
+
+That manifest must declare `platform: "linux"`. Its `acceleratorProfile` drives
+the profile suffix in the AppImage name, and the final smoke check requires it
+to equal the requested `cpu` or `cuda` profile. A missing, malformed, or Windows
+staged backend stops packaging; a profile mismatch fails the final smoke gate,
+so a cross-platform or mislabeled AppImage cannot pass the release command.
+
+### WSLg full desktop UI and root launch behavior
+
+A WSLg session should expose `WAYLAND_DISPLAY` or `DISPLAY`. Launching the
+AppImage should open the production Electron desktop UI—not merely the Vite
+browser page—with the **Workspace**, **Render**, **Models**, **Settings**, and
+**Setup** areas and the packaged backend bridge available.
+
+```bash
+printf 'WAYLAND_DISPLAY=%s\nDISPLAY=%s\n' "$WAYLAND_DISPLAY" "$DISPLAY"
+studio_version="$(node -p "require('./package.json').version")"
+appimage="./dist/EDMG-Studio-${studio_version}-linux-x64-cpu.AppImage"
+chmod +x "$appimage"
+"$appimage"
+```
+
+Replace `cpu` with `cuda` when assigning `appimage` for the CUDA artifact. If
+WSL does not provide FUSE support, the same GUI can be launched without
+mounting the AppImage:
+
+```bash
+studio_version="$(node -p "require('./package.json').version")"
+APPIMAGE_EXTRACT_AND_RUN=1 "./dist/EDMG-Studio-${studio_version}-linux-x64-cpu.AppImage"
+```
+
+Run the desktop as the normal WSL user whenever possible. Chromium refuses its
+normal sandbox when Electron is launched as Linux root, so a root-only session
+must pass `--no-sandbox` explicitly:
+
+```bash
+studio_version="$(node -p "require('./package.json').version")"
+APPIMAGE_EXTRACT_AND_RUN=1 "./dist/EDMG-Studio-${studio_version}-linux-x64-cpu.AppImage" --no-sandbox
+```
+
+The automated final AppImage smoke applies `--no-sandbox` only when its
+effective UID is `0` and records that decision as `rootNoSandboxApplied` in the
+smoke summary. Disabling the Chromium sandbox reduces isolation; it is a root
+compatibility behavior, not the preferred normal-user launch mode.
+
+### Final AppImage evidence
+
+The full release command writes or validates these paths relative to
+`studio/edmg-studio`:
+
+| Path | Required evidence |
+| --- | --- |
+| `dist/EDMG-Studio-${version}-linux-x64-<profile>.AppImage` | Final x86-64 Linux AppImage for `cpu` or `cuda` |
+| `release/staged-app/.edmg-stage/manifest.json` | Deterministic staged desktop inventory |
+| `release/staged-app/electron-resources/backend/backend-bundle-manifest.json` | Linux backend platform, accelerator profile, lock, and bundle provenance |
+| `release/evidence/release-evidence.json` | Release evidence index for the `linux-appimage` artifact set |
+| `release/evidence/release-artifacts.sha256.json` | Artifact inventory and SHA-256 manifest |
+| `release/evidence/python-backend-<profile>.cyclonedx.json` | Frozen Python backend SBOM for the selected profile |
+| `release/evidence/linux-appimage-renderer-probe.json` | Production `file:` renderer and Studio UI landmark probe |
+| `release/evidence/linux-appimage-smoke.json` | Final AppImage, packaged-backend, endpoint, shutdown, profile, and SHA-256 summary |
+| `release/evidence/linux-appimage-smoke.log` | Captured Electron and packaged-backend smoke log |
+
+The final smoke launches the actual AppImage with an isolated temporary Studio
+Home, starts its packaged backend, verifies the production React UI landmarks
+and Electron bridge, checks backend health/config/setup endpoints, and confirms
+the backend stops with the desktop. Stale files left by a failed or interrupted
+run are not release proof; require the current command's zero exit status and
+matching profile/hash evidence.
+
+### Verify CUDA compute separately from WSLg graphics
+
+WSLg display acceleration and backend CUDA compute are separate paths. First
+verify Windows-to-WSL NVIDIA passthrough, then exercise PyTorch in the exact
+frozen CUDA release environment created by the CUDA build:
+
+```bash
+nvidia-smi
+
+release/uv-environments/cuda/bin/python - <<'PY'
+import torch
+
+assert torch.cuda.is_available(), "PyTorch cannot access CUDA in this WSL distribution"
+device = torch.cuda.get_device_name(0)
+value = (torch.ones((256, 256), device="cuda") @ torch.ones((256, 256), device="cuda")).sum()
+print("torch_cuda", torch.version.cuda)
+print("device", device)
+print("compute_sum", value.item())
+PY
+```
+
+`nvidia-smi` proves the WSL GPU bridge is visible; the tensor operation proves
+the selected release environment can execute CUDA work. Neither result proves
+that Electron's WSLg window is hardware-rendered. If `glxinfo` is installed,
+`glxinfo -B` can report the UI renderer, which may show D3D12/Mesa acceleration
+or a software renderer such as llvmpipe. A software-rendered WSLg UI does not
+invalidate successful PyTorch CUDA compute, and a hardware-rendered WSLg UI
+does not by itself prove that the packaged backend can use CUDA.
+
 ## Runtime expectations
 
-- FFmpeg can come from the packaged bundle or `EDMG_FFMPEG_PATH`
+- The AppImage includes both FFmpeg and FFprobe; `EDMG_FFMPEG_PATH` remains an explicit operator override
 - Ollama is expected to be installed system-wide or provided via `EDMG_OLLAMA_PATH`
 - ComfyUI is optional and should run as a separate Linux service when used
 - the Windows-only managed 7-Zip and ComfyUI Portable installers do not apply on Linux
 - managed cloud notebooks such as Lightning may already provide a writable
   Python/conda environment and may not allow project-local virtualenv creation
+
+The Linux backend bundle also includes `backend/scripts/setup_linux_ollama.sh`
+and `backend/scripts/setup_linux_comfyui.sh`. Their source hashes participate in
+the bundle reuse fingerprint, and packaged smoke/manifest validation rejects a
+Linux backend that omits either helper. This keeps the GUI Setup actions usable
+from the frozen backend rather than only from a source checkout.
 
 ## Core audio and visual direction
 

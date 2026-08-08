@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import {
   PINNED_UV_VERSION,
   RELEASE_CAPABILITY_EXTRAS,
+  REQUIRED_FASTER_WHISPER_VAD_ASSET,
+  REQUIRED_LINUX_SETUP_SCRIPTS,
   assertNoDynamicDependencyOverrides,
   assertPinnedUvVersion,
   assertPython312,
@@ -31,6 +33,16 @@ import {
   uvExportCycloneDxArgs,
   validateReleaseManifest,
 } from "./release-python-toolchain.mjs";
+import {
+  assertExpectedGplv3LicenseText,
+  ensureCachedArchive,
+  findUniqueArchiveFile,
+  loadPinnedMediaManifest,
+  renderMediaSourceNotice,
+  resolveMediaBuildCacheRoot,
+  resolvePinnedMediaAsset,
+  verifyPinnedArchive,
+} from "./stage-media-tools.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const studioRoot = path.resolve(__dirname, "..");
@@ -63,11 +75,27 @@ function validManifest(overrides = {}) {
     size: 11,
     sha256: "a".repeat(64),
   }));
+  const linuxSetupEntries = platform === "linux"
+    ? REQUIRED_LINUX_SETUP_SCRIPTS.map((entryPath) => ({
+      path: entryPath,
+      type: "file",
+      size: 17,
+      sha256: "b".repeat(64),
+    }))
+    : [];
+  const asrRuntimeEntries = [{
+    path: REQUIRED_FASTER_WHISPER_VAD_ASSET,
+    type: "file",
+    size: 17,
+    sha256: "c".repeat(64),
+  }];
   const bundleEntries = [
     { path: helperEntryPoint, type: "file", size: helperSize, sha256: helperSha256 },
     { path: backendEntryPoint, type: "file", size: binarySize, sha256: binarySha256 },
     { path: "launcher_env.defaults.json", type: "file", size: defaultsSize, sha256: defaultsSha256 },
     ...hfRuntimeEntries,
+    ...asrRuntimeEntries,
+    ...linuxSetupEntries,
   ].sort((left, right) => left.path.localeCompare(right.path));
   return {
     schemaVersion: 5,
@@ -83,7 +111,7 @@ function validManifest(overrides = {}) {
     bundleEntries,
     bundleEntryCount: bundleEntries.length,
     bundleFileCount: bundleEntries.length,
-    bundleSize: binarySize + helperSize + defaultsSize + hfRuntimeEntries.length * 11,
+    bundleSize: bundleEntries.reduce((total, entry) => total + entry.size, 0),
     hfBucketHelper: {
       entryPoint: helperEntryPoint,
       helperVersion: "1.0.0",
@@ -123,6 +151,12 @@ function validManifest(overrides = {}) {
       { path: "studio/edmg-studio/python_backend/hf_bucket_helper/pyproject.toml", sha256: "7".repeat(64) },
       { path: "studio/edmg-studio/python_backend/hf_bucket_helper/uv.lock", sha256: "8".repeat(64) },
       { path: "studio/edmg-studio/launcher_env.defaults.json", sha256: "8".repeat(64) },
+      ...(platform === "linux"
+        ? REQUIRED_LINUX_SETUP_SCRIPTS.map((entryPath) => ({
+          path: `studio/edmg-studio/${entryPath}`,
+          sha256: "b".repeat(64),
+        }))
+        : []),
     ],
     nltkResources: [
       {
@@ -208,6 +242,164 @@ test("release builds isolate accelerator environments from the source runtime", 
   assert.equal(sourceEnv.UV_PROJECT_ENVIRONMENT, undefined);
   assert.throws(() => releaseUvEnvironment(studioRoot, "unknown", {}), /Unsupported accelerator profile/);
 });
+test("PyInstaller release spec bundles Faster-Whisper VAD data and metadata", () => {
+  const spec = fs.readFileSync(path.join(studioRoot, "python_backend", "pyinstaller.spec"), "utf8");
+  assert.match(spec, /collect_data_files,\s*["']faster_whisper["']/);
+  assert.match(spec, /copy_metadata,\s*["']faster-whisper["']/);
+});
+
+test("media-tool assets pin immutable checksum-verified FFmpeg and FFprobe archives", () => {
+  const manifest = loadPinnedMediaManifest();
+  assert.equal(manifest.releaseTag, "autobuild-2026-07-31-14-10");
+
+  for (const [platform, archiveFormat] of [["win32", "zip"], ["linux", "tar.xz"]]) {
+    const asset = resolvePinnedMediaAsset({ platform, arch: "x64", manifest });
+    assert.equal(asset.archiveFormat, archiveFormat);
+    assert.match(asset.url, new RegExp(`/releases/download/${manifest.releaseTag}/`));
+    assert.match(asset.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(asset.size > 100_000_000);
+    assert.equal(asset.binaryNames.ffmpeg, platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
+    assert.equal(asset.binaryNames.ffprobe, platform === "win32" ? "ffprobe.exe" : "ffprobe");
+    assert.equal(asset.distributionNotice.licenseArchiveName, "LICENSE.txt");
+    assert.equal(asset.distributionNotice.licenseOutputName, "FFmpeg-LICENSE.txt");
+    assert.equal(asset.distributionNotice.sourceNoticeOutputName, "FFmpeg-SOURCE.txt");
+    assert.match(asset.distributionNotice.licenseName, /GNU General Public License version 3/i);
+    assert.match(asset.distributionNotice.ffmpegSource.commit, /^[a-f0-9]{40}$/);
+    assert.match(asset.distributionNotice.buildSource.commit, /^[a-f0-9]{40}$/);
+
+    const sourceNotice = renderMediaSourceNotice(asset);
+    for (const expectedValue of [
+      asset.releaseTag,
+      asset.archiveName,
+      String(asset.size),
+      asset.sha256,
+      asset.distributionNotice.licenseOutputName,
+      asset.distributionNotice.ffmpegSource.commit,
+      asset.distributionNotice.buildSource.commit,
+    ]) {
+      assert.match(sourceNotice, new RegExp(expectedValue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+  }
+  assert.throws(
+    () => resolvePinnedMediaAsset({ platform: "linux", arch: "arm64", manifest }),
+    /No pinned FFmpeg\/FFprobe asset/,
+  );
+
+  const abbreviatedCommitManifest = structuredClone(manifest);
+  abbreviatedCommitManifest.distributionNotice.ffmpegSourceCommit = "9b6c8969e0";
+  assert.throws(
+    () => resolvePinnedMediaAsset({ platform: "win32", arch: "x64", manifest: abbreviatedCommitManifest }),
+    /full Git commit digest/,
+  );
+
+  const nonGplManifest = structuredClone(manifest);
+  nonGplManifest.assets["win32-x64"].archiveName = nonGplManifest.assets["win32-x64"].archiveName.replace(
+    "-gpl-",
+    "-lgpl-",
+  );
+  nonGplManifest.assets["win32-x64"].url = nonGplManifest.assets["win32-x64"].url.replace(
+    "-gpl-",
+    "-lgpl-",
+  );
+  assert.throws(
+    () => resolvePinnedMediaAsset({ platform: "win32", arch: "x64", manifest: nonGplManifest }),
+    /must identify the pinned .* GPL build/,
+  );
+});
+
+test("media-tool redistribution evidence accepts GPLv3 and rejects unexpected license text", () => {
+  const gplv3 = "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n";
+  assert.equal(assertExpectedGplv3LicenseText(gplv3), gplv3);
+  assert.throws(
+    () => assertExpectedGplv3LicenseText("GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n"),
+    /expected the GPLv3 license text/,
+  );
+  assert.throws(
+    () => assertExpectedGplv3LicenseText("GNU LESSER GENERAL PUBLIC LICENSE\nVersion 3\n"),
+    /expected the GPLv3 license text/,
+  );
+});
+
+test("media-tool archive license discovery fails closed when evidence is missing or ambiguous", async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-media-license-"));
+  const firstDir = path.join(tempDir, "first");
+  const secondDir = path.join(tempDir, "second");
+  await fsp.mkdir(firstDir, { recursive: true });
+  try {
+    await assert.rejects(
+      findUniqueArchiveFile(tempDir, "LICENSE.txt", { caseInsensitive: true }),
+      /Expected exactly one LICENSE\.txt.*found 0/,
+    );
+
+    const licensePath = path.join(firstDir, "license.TXT");
+    await fsp.writeFile(licensePath, "GNU GENERAL PUBLIC LICENSE\nVersion 3\n", "utf8");
+    assert.equal(
+      await findUniqueArchiveFile(tempDir, "LICENSE.txt", { caseInsensitive: true }),
+      licensePath,
+    );
+
+    await fsp.mkdir(secondDir, { recursive: true });
+    await fsp.writeFile(path.join(secondDir, "LICENSE.txt"), "duplicate\n", "utf8");
+    await assert.rejects(
+      findUniqueArchiveFile(tempDir, "LICENSE.txt", { caseInsensitive: true }),
+      /Expected exactly one LICENSE\.txt.*found 2/,
+    );
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("media-tool archive cache rejects drift and reuses only verified content", async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-media-cache-"));
+  const fixturePath = path.join(tempDir, "fixture.bin");
+  const payload = Buffer.from("pinned media archive\n", "utf8");
+  await fsp.writeFile(fixturePath, payload);
+  const asset = {
+    archiveName: "fixture.zip",
+    releaseTag: "autobuild-2026-07-31-14-10",
+    size: payload.length,
+    sha256: await sha256File(fixturePath),
+    url: "https://example.invalid/fixture.zip",
+  };
+  const cacheRoot = path.join(tempDir, "cache-root");
+  let fetchCount = 0;
+  const fetchImpl = async () => {
+    fetchCount += 1;
+    return new Response(payload, { status: 200 });
+  };
+  try {
+    const archivePath = await ensureCachedArchive(asset, { cacheRoot, fetchImpl, retries: 1, log() {} });
+    assert.equal(fetchCount, 1);
+    assert.equal(await verifyPinnedArchive(archivePath, asset), true);
+
+    await ensureCachedArchive(asset, {
+      cacheRoot,
+      fetchImpl: async () => { throw new Error("verified cache should not download"); },
+      retries: 1,
+      log() {},
+    });
+    assert.equal(fetchCount, 1);
+
+    await fsp.writeFile(archivePath, "tampered\n", "utf8");
+    await ensureCachedArchive(asset, { cacheRoot, fetchImpl, retries: 1, log() {} });
+    assert.equal(fetchCount, 2);
+    assert.equal(await verifyPinnedArchive(archivePath, asset), true);
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("media-tool build cache honors EDMG_STUDIO_BUILD_CACHE_ROOT", () => {
+  const configured = resolveMediaBuildCacheRoot({
+    root: studioRoot,
+    env: { EDMG_STUDIO_BUILD_CACHE_ROOT: "release-cache" },
+  });
+  assert.equal(configured, path.join(studioRoot, "release-cache"));
+  assert.equal(
+    resolveMediaBuildCacheRoot({ root: studioRoot, env: {} }),
+    path.join(studioRoot, ".cache"),
+  );
+});
 
 test("uv, Python, and Torch provenance checks enforce the release pins", () => {
   assert.equal(assertPinnedUvVersion("uv 0.11.28 (build metadata)"), "0.11.28");
@@ -255,6 +447,45 @@ test("schema-5 onedir manifest validation and reuse reject provenance drift", ()
     validateReleaseManifest({ ...manifest, hfRuntimeBundleEvidence: undefined }).join("; "),
     /hfRuntimeBundleEvidence/,
   );
+  const withoutFasterWhisperVad = {
+    ...manifest,
+    bundleEntries: manifest.bundleEntries.filter(
+      (entry) => entry.path !== REQUIRED_FASTER_WHISPER_VAD_ASSET,
+    ),
+  };
+  withoutFasterWhisperVad.bundleEntryCount = withoutFasterWhisperVad.bundleEntries.length;
+  withoutFasterWhisperVad.bundleFileCount = withoutFasterWhisperVad.bundleEntries.length;
+  withoutFasterWhisperVad.bundleSize = withoutFasterWhisperVad.bundleEntries.reduce(
+    (total, entry) => total + entry.size,
+    0,
+  );
+  assert.match(
+    validateReleaseManifest(withoutFasterWhisperVad).join("; "),
+    /silero_vad_v6\.onnx is missing or empty/,
+  );
+});
+
+test("Linux release manifests require bundled and fingerprinted sidecar setup scripts", () => {
+  const manifest = validManifest({ platform: "linux" });
+  assert.deepEqual(validateReleaseManifest(manifest), []);
+
+  for (const entryPoint of REQUIRED_LINUX_SETUP_SCRIPTS) {
+    const withoutBundleEntry = {
+      ...manifest,
+      bundleEntries: manifest.bundleEntries.filter((entry) => entry.path !== entryPoint),
+    };
+    withoutBundleEntry.bundleEntryCount = withoutBundleEntry.bundleEntries.length;
+    withoutBundleEntry.bundleFileCount = withoutBundleEntry.bundleEntries.length;
+    withoutBundleEntry.bundleSize = withoutBundleEntry.bundleEntries.reduce((total, entry) => total + entry.size, 0);
+    assert.match(validateReleaseManifest(withoutBundleEntry).join("; "), new RegExp(`${entryPoint} is missing`));
+
+    const withoutFingerprint = {
+      ...manifest,
+      fingerprintInputs: manifest.fingerprintInputs.filter((entry) => !entry.path.endsWith(entryPoint)),
+    };
+    assert.match(validateReleaseManifest(withoutFingerprint).join("; "), new RegExp(`fingerprintInputs is missing ${entryPoint}`));
+    assert.equal(releaseProvenanceMatches(manifest, withoutFingerprint), false);
+  }
 });
 
 test("release bundle reuse is scoped to the current platform and backend entry point", () => {
@@ -352,16 +583,29 @@ test("onedir reuse verifies every staged backend entry", async () => {
   const helperPath = path.join(tempDir, helperEntryPoint);
   const defaultsPath = path.join(tempDir, "launcher_env.defaults.json");
   const runtimePath = path.join(tempDir, "_internal", "torch-runtime.bin");
+  const fasterWhisperVadPath = path.join(
+    tempDir,
+    ...REQUIRED_FASTER_WHISPER_VAD_ASSET.split("/"),
+  );
   try {
     await fsp.mkdir(path.dirname(runtimePath), { recursive: true });
+    await fsp.mkdir(path.dirname(fasterWhisperVadPath), { recursive: true });
     await fsp.writeFile(launcherPath, "launcher\n", "utf8");
     await fsp.writeFile(helperPath, "helper\n", "utf8");
     await fsp.writeFile(defaultsPath, "{}\n", "utf8");
     await fsp.writeFile(runtimePath, "runtime\n", "utf8");
+    await fsp.writeFile(fasterWhisperVadPath, "silero vad runtime\n", "utf8");
     for (const evidencePath of Object.values(validManifest().hfRuntimeBundleEvidence)) {
       const absoluteEvidencePath = path.join(tempDir, ...evidencePath.split("/"));
       await fsp.mkdir(path.dirname(absoluteEvidencePath), { recursive: true });
       await fsp.writeFile(absoluteEvidencePath, "runtime hf\n", "utf8");
+    }
+    if (process.platform === "linux") {
+      for (const entryPoint of REQUIRED_LINUX_SETUP_SCRIPTS) {
+        const absoluteScriptPath = path.join(tempDir, ...entryPoint.split("/"));
+        await fsp.mkdir(path.dirname(absoluteScriptPath), { recursive: true });
+        await fsp.writeFile(absoluteScriptPath, "#!/usr/bin/env bash\n", "utf8");
+      }
     }
     const bundleEntries = await collectBundleEntries(tempDir);
     const launcher = bundleEntries.find((entry) => entry.path === backendEntryPoint);
@@ -484,6 +728,9 @@ test("release bundle builds and requires the isolated HF Bucket helper and launc
 
 test("Director release stages a self-contained production hoisted install", () => {
   const prepare = fs.readFileSync(path.join(__dirname, "prepare-release-bundle.mjs"), "utf8");
+  const directorRoot = path.resolve(studioRoot, "..", "..", "chatgpt-apps", "edmg-director");
+  const directorPackage = JSON.parse(fs.readFileSync(path.join(directorRoot, "package.json"), "utf8"));
+  const directorLock = fs.readFileSync(path.join(directorRoot, "pnpm-lock.yaml"), "utf8");
   assert.match(prepare, /"--prod"/);
   assert.match(prepare, /"--frozen-lockfile"/);
   assert.match(prepare, /"--config\.node-linker=hoisted"/);
@@ -492,6 +739,12 @@ test("Director release stages a self-contained production hoisted install", () =
   assert.match(prepare, /load staged director entrypoint/);
   assert.match(prepare, /await import/);
   assert.doesNotMatch(prepare, /const copyEntries = \[[^\]]*"node_modules"/s);
+  assert.equal(directorPackage.pnpm?.overrides?.["fast-uri"], "3.1.5");
+  assert.equal(directorPackage.pnpm?.overrides?.["ip-address"], "10.3.1");
+  assert.equal(directorPackage.pnpm?.overrides?.hono, "4.12.34");
+  for (const resolution of ["fast-uri@3.1.5:", "ip-address@10.3.1:", "hono@4.12.34:"]) {
+    assert.match(directorLock, new RegExp(`^  ${resolution.replaceAll(".", "\\.")}`, "m"));
+  }
 });
 
 test("package release commands select explicit profiles without changing pnpm", () => {
@@ -513,9 +766,103 @@ test("package release commands select explicit profiles without changing pnpm", 
   assert.match(packageJson.scripts["dist:win:cuda:nsis"], /prepare:release-bundle:cuda/);
   assert.match(packageJson.scripts["dist:linux"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:linux:cuda"], /prepare:release-bundle:cuda/);
+  assert.match(packageJson.scripts["validate:desktop"], /pnpm run typecheck && pnpm run lint && pnpm run test:ui/);
 });
 
-test("Inno external installer tracks extracted payload files for safe uninstall", () => {
+test("build-tool transitive security overrides stay on audited patched releases", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(studioRoot, "package.json"), "utf8"));
+  const lockfile = fs.readFileSync(path.join(studioRoot, "pnpm-lock.yaml"), "utf8");
+  assert.deepEqual(
+    {
+      brace1: packageJson.pnpm?.overrides?.["brace-expansion@1"],
+      brace2: packageJson.pnpm?.overrides?.["brace-expansion@2"],
+      brace5: packageJson.pnpm?.overrides?.["brace-expansion@5"],
+      fastUri3: packageJson.pnpm?.overrides?.["fast-uri@3"],
+      jsYaml4: packageJson.pnpm?.overrides?.["js-yaml@4"],
+    },
+    {
+      brace1: "1.1.18",
+      brace2: "2.1.4",
+      brace5: "5.0.9",
+      fastUri3: "3.1.5",
+      jsYaml4: "4.3.1",
+    },
+  );
+  for (const resolution of [
+    "brace-expansion@1.1.18:",
+    "brace-expansion@2.1.4:",
+    "brace-expansion@5.0.9:",
+    "fast-uri@3.1.5:",
+    "js-yaml@4.3.1:",
+  ]) {
+    assert.match(lockfile, new RegExp(`^  ${resolution.replaceAll(".", "\\.")}`, "m"));
+  }
+});
+
+test("Studio CI uses Vitest 4 compatible worker arguments", () => {
+  const workflow = fs.readFileSync(
+    path.resolve(studioRoot, "..", "..", ".github", "workflows", "studio.yml"),
+    "utf8",
+  );
+  const packageJson = JSON.parse(fs.readFileSync(path.join(studioRoot, "package.json"), "utf8"));
+
+  assert.equal(packageJson.scripts["test:ui:release"], "vitest run --maxWorkers=1");
+  assert.match(packageJson.scripts["validate:desktop"], /pnpm run test:ui:release/);
+  assert.match(workflow, /pnpm run test:ui:release/);
+  assert.doesNotMatch(workflow, /--minWorkers/);
+});
+
+test("desktop packaging stages and requires pinned FFmpeg plus FFprobe on Windows and Linux", () => {
+  const prepareElectron = fs.readFileSync(path.join(studioRoot, "scripts", "prepare-electron-build.mjs"), "utf8");
+  const mediaStager = fs.readFileSync(path.join(studioRoot, "scripts", "stage-media-tools.mjs"), "utf8");
+  const packagedSmoke = fs.readFileSync(path.join(studioRoot, "scripts", "packaged-desktop-smoke.mjs"), "utf8");
+  const windowsHelper = fs.readFileSync(path.join(studioRoot, "packaging", "windows", "get_ffmpeg.ps1"), "utf8");
+  const windowsBuild = fs.readFileSync(path.join(studioRoot, "packaging", "windows", "build_all.ps1"), "utf8");
+  const linuxHelper = fs.readFileSync(path.join(studioRoot, "packaging", "linux", "get_ffmpeg.sh"), "utf8");
+
+  assert.match(prepareElectron, /stagePinnedMediaTools/);
+  assert.match(mediaStager, /EDMG_STUDIO_BUILD_CACHE_ROOT/);
+  assert.match(mediaStager, /verifyPinnedArchive/);
+  assert.match(mediaStager, /ffprobe/);
+  assert.doesNotMatch(windowsHelper, /Get-Command\s+["']ffmpeg\.exe/);
+  assert.match(windowsHelper, /stage-media-tools\.mjs/);
+  assert.match(windowsBuild, /ffprobe\.exe/);
+  assert.match(linuxHelper, /stage-media-tools\.mjs/);
+  assert.match(packagedSmoke, /ffprobeExe/);
+  assert.match(packagedSmoke, /ffmpegLicense/);
+  assert.match(packagedSmoke, /ffmpegSourceNotice/);
+  assert.match(packagedSmoke, /mediaDistributionEvidence/);
+  assert.match(mediaStager, /distributionNotice\.licenseOutputName/);
+  assert.match(mediaStager, /distributionNotice\.sourceNoticeOutputName/);
+  assert.match(mediaStager, /copyFile\(licenseSourcePath, licensePendingPath\)/);
+  assert.match(packagedSmoke, /process\.platform === "win32" \|\| process\.platform === "linux"/);
+});
+
+test("Linux backend bundle build copies the frozen setup sidecars", () => {
+  const prepareBundle = fs.readFileSync(path.join(studioRoot, "scripts", "prepare-release-bundle.mjs"), "utf8");
+  assert.match(prepareBundle, /REQUIRED_LINUX_SETUP_SCRIPTS/);
+  for (const entryPoint of REQUIRED_LINUX_SETUP_SCRIPTS) {
+    assert.equal(fs.existsSync(path.join(studioRoot, ...entryPoint.split("/"))), true, entryPoint);
+  }
+  assert.match(prepareBundle, /fs\.chmodSync\(destinationPath, 0o755\)/);
+});
+
+test("legacy TensorRT Deforum simulation is not reachable from the Studio UI", () => {
+  const renderPage = fs.readFileSync(path.join(studioRoot, "src", "pages", "Render.tsx"), "utf8");
+  const removedService = path.join(
+    studioRoot,
+    "python_backend",
+    "edmg_studio_backend",
+    "services",
+    "tensorrt_deforum.py",
+  );
+  assert.doesNotMatch(renderPage, /tensorrt-deforum/);
+  assert.match(renderPage, /\/render\/internal\/video/);
+  assert.match(renderPage, /render_mode: internalRenderMode/);
+  assert.equal(fs.existsSync(removedService), false);
+});
+
+test("Inno external installer replaces exact app-owned payload entries on upgrade", () => {
   const innoBuild = fs.readFileSync(
     path.join(studioRoot, "packaging", "windows", "build_inno_external.ps1"),
     "utf8",
@@ -526,8 +873,13 @@ test("Inno external installer tracks extracted payload files for safe uninstall"
   assert.match(innoBuild, /Security\.Cryptography\.SHA256\]::Create/);
   assert.doesNotMatch(innoBuild, /Get-FileHash/);
   assert.match(innoBuild, /ExternalSize: \{0\}; Hash: "\{1\}"/);
+  assert.match(innoBuild, /AppPublisherURL=https:\/\/github\.com\/DWCTEDMG\/DWCTGenerativeSoundStudio/);
+  assert.match(innoBuild, /AppSupportURL=https:\/\/github\.com\/DWCTEDMG\/DWCTGenerativeSoundStudio\/issues/);
+  assert.doesNotMatch(innoBuild, /github\.com\/HIMOI890\/DWCTGenerativeSoundStudio/);
   assert.match(innoBuild, /\[InstallDelete\]/);
-  assert.match(innoBuild, /Type: filesandordirs; Name: "\{app\}\\resources\\backend"/);
+  assert.match(innoBuild, /Get-ChildItem -LiteralPath \$WinUnpackedDir -Force/);
+  assert.match(innoBuild, /Where-Object \{ \$_.Name -notlike "unins\*" \}/);
+  assert.match(innoBuild, /Escape-InnoValue \$ownedEntry\.Name/);
   assert.doesNotMatch(innoBuild, /Type: filesandordirs; Name: "\{app\}"/);
   assert.match(innoBuild, /external extractarchive recursesubdirs createallsubdirs ignoreversion/);
   assert.doesNotMatch(innoBuild, /\[UninstallDelete\]/);
@@ -537,10 +889,29 @@ test("Inno external installer tracks extracted payload files for safe uninstall"
   assert.match(innoBuild, /Invoke-WindowsSigning \$StudioDir @\(\$SetupPath\) "post-compile setup"/);
   assert.ok(
     innoBuild.indexOf("pre-archive payload") < innoBuild.indexOf("7-Zip payload archive"),
-    "payload executables must be signed before their archive hash is computed",
+    "payload executable signatures must be verified before their archive hash is computed",
   );
   assert.ok(
     innoBuild.indexOf("Inno Setup compile") < innoBuild.indexOf("post-compile setup"),
     "the compiled setup must be signed after ISCC finishes",
   );
+});
+
+test("release and deployment entry points use the canonical repository identity", () => {
+  const canonicalRepository = "github.com/DWCTEDMG/DWCTGenerativeSoundStudio";
+  const legacyRepository = /github\.com\/HIMOI890\/DWCTGenerativeSoundStudio/;
+  const entryPoints = [
+    "edmg_gcp_gpu_bootstrap.sh",
+    "edmg_remote_reinstall_ports.sh",
+    "run_gcp_edmg_bootstrap.ps1",
+    "run_vast_edmg_direct_36066304.ps1",
+    "packaging/windows/build_inno_external.ps1",
+    "tools/edmgctl/go.mod",
+    "tools/edmgctl/cmd/edmgctl/main.go",
+  ];
+  for (const relativePath of entryPoints) {
+    const source = fs.readFileSync(path.join(studioRoot, ...relativePath.split("/")), "utf8");
+    assert.match(source, new RegExp(canonicalRepository.replaceAll(".", "\\.")), relativePath);
+    assert.doesNotMatch(source, legacyRepository, relativePath);
+  }
 });

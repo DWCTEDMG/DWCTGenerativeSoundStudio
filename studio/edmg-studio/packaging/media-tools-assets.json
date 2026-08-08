@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "https://github.com/BtbN/FFmpeg-Builds",
+  "releaseTag": "autobuild-2026-07-31-14-10",
+  "ffmpegVersion": "n8.1.2-34-g9b6c8969e0",
+  "distributionNotice": {
+    "licenseArchiveName": "LICENSE.txt",
+    "licenseOutputName": "FFmpeg-LICENSE.txt",
+    "sourceNoticeOutputName": "FFmpeg-SOURCE.txt",
+    "licenseName": "GNU General Public License version 3 or later",
+    "ffmpegSourceCommit": "9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b",
+    "ffmpegSourceUrl": "https://github.com/FFmpeg/FFmpeg/tree/9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b",
+    "buildSourceCommit": "a99e8230eae00d1cee38f23076a7a1f55cd984e2",
+    "buildSourceUrl": "https://github.com/BtbN/FFmpeg-Builds/tree/a99e8230eae00d1cee38f23076a7a1f55cd984e2"
+  },
+  "assets": {
+    "win32-x64": {
+      "archiveName": "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-gpl-8.1.zip",
+      "archiveFormat": "zip",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n8.1.2-34-g9b6c8969e0-win64-gpl-8.1.zip",
+      "size": 167405723,
+      "sha256": "cc4156d51387566ea8ba653fc3a04897bdf812fddf652428d9030bbf7ae24835",
+      "binaryNames": {
+        "ffmpeg": "ffmpeg.exe",
+        "ffprobe": "ffprobe.exe"
+      }
+    },
+    "linux-x64": {
+      "archiveName": "ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-gpl-8.1.tar.xz",
+      "archiveFormat": "tar.xz",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-gpl-8.1.tar.xz",
+      "size": 124917816,
+      "sha256": "09fc77be269c7053e438b7e96548e4af97604faf96a42c4a3c56a1ad74c22c0a",
+      "binaryNames": {
+        "ffmpeg": "ffmpeg",
+        "ffprobe": "ffprobe"
+      }
+    }
+  }
+}

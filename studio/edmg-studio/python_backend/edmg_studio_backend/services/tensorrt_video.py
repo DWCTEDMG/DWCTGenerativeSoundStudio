@@ -3,13 +3,14 @@ from __future__ import annotations
 import math
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+from ..errors import UserFacingError
+from . import tensorrt_standalone
 from .ffmpeg import assemble_image_sequence, interpolate_video_fps, mux_audio
 from .internal_video import InternalVideoSettings
-from . import tensorrt_standalone
-
 
 ProgressFn = Callable[[str, int, int, str | None], None]
 LogFn = Callable[[str], None]
@@ -121,6 +122,7 @@ def render_tensorrt_video_variant(
     scenes: list[dict[str, Any]],
     audio_path: Path | None,
     settings: InternalVideoSettings,
+    bundle_path: Path,
     model_id: str = "local_sd15_tensorrt_bundle",
     log_fn: LogFn | None = None,
     progress_fn: ProgressFn | None = None,
@@ -131,6 +133,15 @@ def render_tensorrt_video_variant(
     log = log_fn or _noop_log
     progress = progress_fn or _noop_progress
     check_cancel = cancel_check_fn or _noop_cancel
+
+    resolved_bundle_path = Path(bundle_path).expanduser().resolve()
+    if not resolved_bundle_path.is_dir():
+        raise UserFacingError(
+            "The resolved TensorRT bundle folder is unavailable",
+            hint="Open Models and verify the canonical TensorRT bundle before rendering.",
+            code="TRT_MODEL_NOT_FOUND",
+            status_code=400,
+        )
 
     width = 512
     height = 512
@@ -168,6 +179,7 @@ def render_tensorrt_video_variant(
             None,  # keep per-frame progress under this video job's control
             {
                 "model_id": model_id,
+                "model_path": str(resolved_bundle_path),
                 "workflow_family": "sd15",
                 "prompt": _prompt_for_scene(scene),
                 "negative_prompt": _negative_for_scene(scene, settings.negative_prompt),

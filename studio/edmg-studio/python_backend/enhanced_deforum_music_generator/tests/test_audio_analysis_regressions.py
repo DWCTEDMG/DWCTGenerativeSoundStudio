@@ -71,7 +71,7 @@ def test_transcribe_returns_empty_string_when_vad_finds_no_speech(monkeypatch):
     assert asr_module.transcribe("instrumental.wav", model_size="small") == ""
 
 
-def test_transcribe_detailed_retries_with_larger_model_then_without_vad(monkeypatch):
+def test_transcribe_detailed_retries_same_model_without_vad(monkeypatch):
     calls = []
 
     class EmptyInfo:
@@ -97,8 +97,6 @@ def test_transcribe_detailed_retries_with_larger_model_then_without_vad(monkeypa
 
         def transcribe(self, *args, **kwargs):
             calls.append((self.model_size, bool(kwargs.get("vad_filter"))))
-            if self.model_size in {"turbo", "large-v3", "medium"}:
-                return iter(()), EmptyInfo()
             if kwargs.get("vad_filter"):
                 return iter(()), EmptyInfo()
             return iter((FakeSegment(),)), FinalInfo()
@@ -107,8 +105,8 @@ def test_transcribe_detailed_retries_with_larger_model_then_without_vad(monkeypa
 
     result = asr_module.transcribe_detailed("spoken-word.wav", model_size="turbo")
 
-    assert calls == [("turbo", True), ("large-v3", True), ("medium", True), ("small", True), ("small", False)]
-    assert result["model_size"] == "small"
+    assert calls == [("turbo", True), ("turbo", False)]
+    assert result["model_size"] == "turbo"
     assert result["text"] == "Recovered lyric line."
     assert result["segment_count"] == 1
 
@@ -133,7 +131,7 @@ def test_transcribe_detailed_returns_precise_note_when_vad_and_retry_find_no_spe
 
     result = asr_module.transcribe_detailed("instrumental.wav", model_size="turbo")
 
-    assert calls == [("turbo", True), ("large-v3", True), ("medium", True), ("small", True), ("small", False)]
+    assert calls == [("turbo", True), ("turbo", False)]
     assert result["text"] == ""
     assert result["segment_count"] == 0
     assert result["note"] == "No speech detected after VAD."

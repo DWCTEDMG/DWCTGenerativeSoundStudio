@@ -413,6 +413,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   );
   const tensorRtInternalVisible = !!tensorRtInternalModel;
   const tensorRtInternalInstalled = !!tensorRtInternalModel && installedModels[tensorRtInternalModel.id] !== false;
+  const internalTensorRtRequired = internalRenderMode === "tensorrt" || (
+    effectiveInternalTemporalMode === "video_model" && internalVideoKeyframeRenderer === "tensorrt_sd15"
+  );
+  const internalTensorRtBlocked = internalTensorRtRequired && !tensorRtInternalInstalled;
   const loraModels = useMemo(
     () => modelCatalog.filter((m) => m.kind === "lora" && installedModels[m.id] !== false),
     [modelCatalog, installedModels]
@@ -432,6 +436,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const selectedStillEngine = String(selectedStillModel?.engine || selectedStillModel?.render?.engine || (selectedStillModel?.kind === "diffusers" ? "internal" : "comfyui"));
   const selectedStillFamily = String(selectedStillModel?.family || selectedStillModel?.render?.family || "").toLowerCase();
   const selectedStillIsTensorRT = selectedStillEngine === "tensorrt_standalone";
+  const selectedStillInstalled = !!selectedStillModel && installedModels[selectedStillModel.id] !== false;
+  const selectedStillTensorRtReady = selectedStillIsTensorRT && selectedStillInstalled;
   const selectedTrtProfileWidth = Number(selectedStillModel?.render?.profile_width || 0);
   const selectedTrtProfileHeight = Number(selectedStillModel?.render?.profile_height || 0);
   const selectedTrtMaxBatch = Number(selectedStillModel?.render?.max_batch || 1);
@@ -999,6 +1005,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (
       !trtLivePreview ||
       !selectedTrtSupportsLivePreview ||
+      !selectedStillInstalled ||
       !projectId ||
       !selectedStillModelId ||
       !stillModels.some((m) => m.id === selectedStillModelId && m.render?.engine === "tensorrt_standalone")
@@ -1032,7 +1039,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     return () => clearTimeout(debounceTimer);
   }, [
     trtLivePreview, projectId, selectedVariant, selectedStillModelId,
-    renderWidth, renderHeight, renderCfg, renderSeed, stillModels, selectedTrtSupportsLivePreview
+    renderWidth, renderHeight, renderCfg, renderSeed, stillModels, selectedStillInstalled, selectedTrtSupportsLivePreview
   ]);
   useEffect(() => {
     if (!refiner.enabled || !refiner.model) return;
@@ -1100,6 +1107,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const runInternalVideo = async () => {
     setErr(null);
     setInfo(null);
+    if (internalTensorRtBlocked) {
+      setErr("Install and verify the Local SD1.5 TensorRT Bundle in Models before starting this render.");
+      return;
+    }
     try {
       const d = await apiPost(`/v1/projects/${projectId}/render/internal/video`, buildInternalPayload());
       setInfo(d);
@@ -1597,7 +1608,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   };
 
   const runTensorrtStandalone = async () => {
-    if (!projectId || !selectedStillModelId) return;
+    if (!projectId || !selectedStillModelId || !selectedStillTensorRtReady) return;
     setErr(null);
     setInfo(null);
     try {
@@ -1615,25 +1626,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       });
       setInfo(d);
       await refreshProjectJobs(); // Poll for TRT job in the generic internal status widget for now
-    } catch (e: any) {
-      setErr(String(e));
-    }
-  };
-
-  const runTensorrtDeforum = async () => {
-    if (!projectId || !selectedStillModelId) return;
-    setErr(null);
-    setInfo(null);
-    try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/tensorrt-deforum`, {
-        variant_index: selectedVariant,
-        model_id: selectedStillModelId,
-        width: Number(renderWidth) || 1024,
-        height: Number(renderHeight) || 1024,
-        batch_size: trtBatchSize,
-      });
-      setInfo(d);
-      await refreshProjectJobs();
     } catch (e: any) {
       setErr(String(e));
     }
@@ -1915,7 +1907,14 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
 
           <div className="row" style={{ marginTop: 10, gap: 10, flexWrap: "wrap" }}>
             <button onClick={runPipeline} disabled={!variantCount}>Preset + Render (one click)</button>
-            <button className="secondary" onClick={runInternalVideo} disabled={!variantCount}>Internal / Hosted</button>
+            <button
+              className="secondary"
+              onClick={runInternalVideo}
+              disabled={!variantCount || internalTensorRtBlocked}
+              title={internalTensorRtBlocked ? "Install the required TensorRT bundle in Models first" : undefined}
+            >
+              Internal / Hosted
+            </button>
             <button className="secondary" onClick={assemble} disabled={!variantCount}>Assemble only</button>
           </div>
           {!variantCount ? (
@@ -2167,10 +2166,22 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                     Proxy draft renders are disabled. Auto mode will require local internal models or a configured hosted fallback.
                   </div>
                 ) : null}
-                {internalRenderMode === "tensorrt" ? (
-                  <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                {internalTensorRtRequired ? (
+                  <div
+                    className="small"
+                    role="status"
+                    aria-label="TensorRT bundle status"
+                    style={{ marginTop: 6, opacity: 0.82 }}
+                  >
                     TensorRT keyframe assembly forces CUDA, keyframe temporal mode, the local SD1.5 TensorRT bundle, and the compiled 512x512 batch-1 profile. It is still-frame assembly with interpolation, not SVD or AnimateDiff subject motion. For moving subjects, use Internal video model with TensorRT SD1.5 storyboard anchors.
                     {" "}Bundle status: <b>{tensorRtInternalInstalled ? "installed" : "missing"}</b>.
+                    {!tensorRtInternalInstalled ? (
+                      <span>
+                        {" "}<button className="secondary" type="button" onClick={() => onNavigate?.("models")}>
+                          Open Models to install TensorRT bundle
+                        </button>
+                      </span>
+                    ) : null}
                   </div>
                 ) : null}
                 {internalHostedVisible ? (
@@ -3646,11 +3657,11 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                     ) : null}
                   </>
                 ) : null}
-                {stillModels.some((m) => m.render?.engine === "tensorrt_standalone") ? (
+                {selectedStillIsTensorRT ? (
                   <>
                     <div className="row" style={{ alignItems: "center", gap: 8, background: "var(--bg-card)", padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border-color)" }}>
                       <label style={{ fontSize: "0.8em", fontWeight: 700 }}>TRT Batch Size:</label>
-                      <select value={trtBatchSize} onChange={(e) => setTrtBatchSize(Number(e.target.value))} style={{ padding: "2px 4px", fontSize: "0.8em" }}>
+                      <select disabled={!selectedStillTensorRtReady} value={trtBatchSize} onChange={(e) => setTrtBatchSize(Number(e.target.value))} style={{ padding: "2px 4px", fontSize: "0.8em" }}>
                         {[1, 2, 4, 8].map((size) => (
                           <option key={size} value={size} disabled={selectedStillIsTensorRT && size > selectedTrtMaxBatch}>
                             {size}{selectedStillIsTensorRT && size > selectedTrtMaxBatch ? " (rebuild required)" : ""}
@@ -3661,38 +3672,26 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                       <input
                         type="checkbox"
                         checked={trtLivePreview}
-                        disabled={selectedStillIsTensorRT && !selectedTrtSupportsLivePreview}
-                        title={selectedStillIsTensorRT && !selectedTrtSupportsLivePreview ? "Standalone TensorRT preview is disabled because this engine takes too long to deserialize synchronously." : undefined}
+                        disabled={!selectedStillTensorRtReady || !selectedTrtSupportsLivePreview}
+                        title={!selectedStillInstalled ? "Install and verify this TensorRT bundle in Models first." : !selectedTrtSupportsLivePreview ? "Standalone TensorRT preview is disabled because this engine takes too long to deserialize synchronously." : undefined}
                         onChange={(e) => setTrtLivePreview(e.target.checked)}
                       />
                       {trtPreviewLoading && <span style={{ fontSize: "0.8em", opacity: 0.5 }}>...</span>}
                     </div>
-                    {selectedStillIsTensorRT ? (
-                      <div className="small" style={{ width: "100%", marginTop: -4, opacity: 0.78 }}>
-                        TensorRT still profile: <b>{selectedTrtProfileWidth || renderWidth}x{selectedTrtProfileHeight || renderHeight}</b>
-                        {" "}• max batch <b>{selectedTrtMaxBatch || 1}</b>
-                        {" "}• engine <b>{modelFamilyLabel(selectedStillFamily)}</b>
-                      </div>
-                    ) : null}
+                    <div className="small" style={{ width: "100%", marginTop: -4, opacity: 0.78 }}>
+                      TensorRT still profile: <b>{selectedTrtProfileWidth || renderWidth}x{selectedTrtProfileHeight || renderHeight}</b>
+                      {" "}• max batch <b>{selectedTrtMaxBatch || 1}</b>
+                      {" "}• engine <b>{modelFamilyLabel(selectedStillFamily)}</b>
+                      {" "}• bundle <b>{selectedStillInstalled ? "verified" : "not installed"}</b>
+                    </div>
                     <button
                       className="secondary"
                       onClick={runTensorrtStandalone}
-                      disabled={!variantCount}
-                      title="Render one still image with the compiled SD1.5 TensorRT standalone engine"
+                      disabled={!variantCount || !selectedStillTensorRtReady}
+                      title={selectedStillInstalled ? "Render one still image with the compiled SD1.5 TensorRT standalone engine" : "Install and verify this TensorRT bundle in Models first."}
                     >
                       Render TensorRT still
                     </button>
-                    {project?.meta?.creative_payload?.deforum_preview && (
-                      <button
-                        className="secondary"
-                        onClick={runTensorrtDeforum}
-                        disabled={!variantCount}
-                        title="Render an audio-reactive keyframe-assembly video with the compiled SD1.5 TensorRT still engine; this is not full internal motion"
-                        style={{ marginLeft: 8 }}
-                      >
-                        Render TRT keyframe assembly
-                      </button>
-                    )}
                     {trtLivePreview && trtPreviewImage && (
                       <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 9999, border: "2px solid #00f", borderRadius: 8, padding: 4, background: "#000" }}>
                         <img src={trtPreviewImage} alt="Live Preview" style={{ maxWidth: 256, maxHeight: 256, display: "block" }} />

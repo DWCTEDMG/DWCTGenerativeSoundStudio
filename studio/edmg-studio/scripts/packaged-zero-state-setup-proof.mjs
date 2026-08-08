@@ -7,6 +7,12 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import {
+  buildHermeticPackagedProofEnv,
+  resolvePackagedProofAcceleratorProfile,
+  resolveHermeticProofProfile,
+} from "./packaged-proof-environment.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const KEEP_PROOF_HOME = (process.env.EDMG_STUDIO_KEEP_PROOF_HOME ?? "0") === "1";
@@ -26,34 +32,6 @@ function chooseHomeRoot() {
   const preferred = process.env.EDMG_STUDIO_PROOF_ROOT;
   if (preferred) return preferred;
   return os.tmpdir();
-}
-
-function resolveBootstrapPaths() {
-  const appDataDir = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-  const bootstrapDir = path.join(appDataDir, "EDMG Studio");
-  return {
-    bootstrapDir,
-    bootstrapPath: path.join(bootstrapDir, "bootstrap.json"),
-  };
-}
-
-async function backupBootstrap(bootstrapPath, stamp) {
-  if (!fs.existsSync(bootstrapPath)) {
-    return { existed: false, backupPath: "" };
-  }
-  const backupPath = `${bootstrapPath}.codex-backup-${stamp}`;
-  await fsp.copyFile(bootstrapPath, backupPath);
-  return { existed: true, backupPath };
-}
-
-async function restoreBootstrap(bootstrapPath, backup) {
-  if (backup?.existed && backup.backupPath && fs.existsSync(backup.backupPath)) {
-    await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
-    await fsp.copyFile(backup.backupPath, bootstrapPath);
-    await fsp.rm(backup.backupPath, { force: true });
-    return;
-  }
-  await fsp.rm(bootstrapPath, { force: true });
 }
 
 async function allocatePort() {
@@ -176,8 +154,7 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
   const homeRoot = chooseHomeRoot();
   const studioHome = path.join(homeRoot, `EDMG-ZeroState-Proof-${stamp}`);
-  const { bootstrapPath } = resolveBootstrapPaths();
-  const bootstrapBackup = await backupBootstrap(bootstrapPath, stamp);
+  const { bootstrapPath } = resolveHermeticProofProfile(studioHome);
   const port = Number(process.env.EDMG_STUDIO_PROOF_PORT || (await allocatePort()));
   const ollamaUrl = process.env.EDMG_STUDIO_ZERO_STATE_OLLAMA_URL || `http://127.0.0.1:${await allocatePort()}`;
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -195,30 +172,28 @@ async function main() {
   log(`launching ${appExe}`);
   const child = spawn(appExe, [], {
     cwd: path.dirname(appExe),
-    env: {
-      ...process.env,
-      EDMG_STUDIO_HOME: studioHome,
-      EDMG_STUDIO_BACKEND_HOST: "127.0.0.1",
-      EDMG_STUDIO_BACKEND_PORT: String(port),
-      EDMG_STUDIO_TEST_MODE: "1",
-      EDMG_STUDIO_TEST_PAGE: testPage,
-      EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
+    env: buildHermeticPackagedProofEnv({
+      studioHome,
+      port,
+      testPage,
+      extraEnv: {
       EDMG_SETUP_IGNORE_SYSTEM_7Z: "1",
       EDMG_SETUP_IGNORE_SYSTEM_OLLAMA: "1",
       EDMG_AI_MODE: "local",
       EDMG_AI_PROVIDER: "ollama",
       EDMG_AI_OLLAMA_URL: ollamaUrl,
       EDMG_AI_OLLAMA_MODEL: requestedModel,
-      ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
-    },
+      },
+    }),
     stdio: "ignore",
   });
 
   try {
     const health = await waitForHealth(baseUrl);
     const initialStatus = await requestJson(`${baseUrl}/v1/setup/status`);
+    const acceleratorProfile = resolvePackagedProofAcceleratorProfile(initialStatus);
     const fullSetup = await postJson(`${baseUrl}/v1/setup/full/install`, {
-      flavor: "cpu",
+      accelerator_profile: acceleratorProfile,
       model: requestedModel,
     });
     const taskId = fullSetup?.task?.id;
@@ -232,6 +207,7 @@ async function main() {
       baseUrl,
       health,
       task,
+      acceleratorProfile,
       requestedModel,
       ollamaUrl,
       initialStatus: {
@@ -289,7 +265,6 @@ async function main() {
     await stopProcessesByPathPrefix(path.join(studioHome, "external", "ollama"));
     await stopProcessesByPathPrefix(path.join(studioHome, "external", "ComfyUI_windows_portable"));
     await stopExistingPackagedProcesses();
-    await restoreBootstrap(bootstrapPath, bootstrapBackup);
     if (!KEEP_PROOF_HOME) {
       try {
         await fsp.rm(studioHome, { recursive: true, force: true });
