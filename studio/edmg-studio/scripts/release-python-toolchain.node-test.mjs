@@ -804,7 +804,11 @@ test("Studio CI uses Vitest 4 compatible worker arguments", () => {
     path.resolve(studioRoot, "..", "..", ".github", "workflows", "studio.yml"),
     "utf8",
   );
-  assert.match(workflow, /pnpm run test:ui -- --maxWorkers=1/);
+  const packageJson = JSON.parse(fs.readFileSync(path.join(studioRoot, "package.json"), "utf8"));
+
+  assert.equal(packageJson.scripts["test:ui:release"], "vitest run --maxWorkers=1");
+  assert.match(packageJson.scripts["validate:desktop"], /pnpm run test:ui:release/);
+  assert.match(workflow, /pnpm run test:ui:release/);
   assert.doesNotMatch(workflow, /--minWorkers/);
 });
 
