@@ -833,6 +833,15 @@ test("packaged customer proof compares canonical filesystem identities", () => {
   assert.match(customerFlow, /await assertSameExistingPath\(summary\.paths\.studioHome/);
 });
 
+test("zero-state setup proof compares canonical filesystem identities", () => {
+  const zeroStateProof = fs.readFileSync(path.join(studioRoot, "scripts", "packaged-zero-state-setup-proof.mjs"), "utf8");
+
+  assert.match(zeroStateProof, /async function assertSameExistingPath/);
+  assert.match(zeroStateProof, /fsp\.realpath\(actual\)/);
+  assert.match(zeroStateProof, /await assertSameExistingPath\(summary\.config\.studioHome/);
+  assert.match(zeroStateProof, /await assertSameExistingPath\(summary\.finalStatus\.ollamaExe/);
+});
+
 test("desktop packaging stages and requires pinned FFmpeg plus FFprobe on Windows and Linux", () => {
   const prepareElectron = fs.readFileSync(path.join(studioRoot, "scripts", "prepare-electron-build.mjs"), "utf8");
   const mediaStager = fs.readFileSync(path.join(studioRoot, "scripts", "stage-media-tools.mjs"), "utf8");
