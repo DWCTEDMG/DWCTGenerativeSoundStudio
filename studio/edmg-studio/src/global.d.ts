@@ -5,6 +5,31 @@ declare global {
     edmg?: {
       backendUrl: () => string;
       getBackendUrl?: () => Promise<string>;
+      getBuildIdentity?: () => Promise<{
+        ok: boolean;
+        desktop: {
+          version: string;
+          packaged: boolean;
+          platform: string;
+          arch: string;
+          electronVersion: string;
+          executablePath: string;
+        };
+        backendBundle: {
+          available: boolean;
+          binaryVerified: boolean;
+          schemaVersion: number | null;
+          builder: string;
+          platform: string;
+          backendEntryPoint: string;
+          acceleratorProfile: string;
+          pythonVersion: string;
+          sourceHash: string;
+          sourceFileCount: number | null;
+          lockSha256: string;
+          binarySha256: string;
+        };
+      }>;
       getBackendAuthToken?: () => Promise<{
         ok: boolean;
         token?: string;
@@ -60,7 +85,7 @@ declare global {
         startedAt: string | null;
         packaged: boolean;
       }>;
-      openExternal?: (url: string) => Promise<void>;
+      openExternal?: (url: string) => Promise<string>;
       openPath?: (path: string) => Promise<{ ok: boolean; action?: string; path?: string; error?: string }>;
       showItemInFolder?: (path: string) => Promise<{ ok: boolean; action?: string; path?: string; error?: string }>;
       revealPath?: (path: string) => Promise<{ ok: boolean; action?: string; path?: string; error?: string }>;

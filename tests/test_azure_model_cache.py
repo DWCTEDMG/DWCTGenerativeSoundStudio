@@ -50,6 +50,7 @@ def test_file_model_install_restores_from_azure_cache_before_source_download(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv("EDMG_MODEL_STORAGE_MODE", "local")
     manager = _manager(tmp_path)
     cache = FakeModelCache(hit=True)
     manager.model_cache = cache
@@ -74,6 +75,7 @@ def test_file_model_install_uploads_source_download_to_azure_cache(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv("EDMG_MODEL_STORAGE_MODE", "local")
     manager = _manager(tmp_path)
     cache = FakeModelCache(hit=False)
     manager.model_cache = cache

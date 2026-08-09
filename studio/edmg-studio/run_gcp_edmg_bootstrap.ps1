@@ -3,7 +3,7 @@ param(
   [string]$Zone = "us-central1-a",
   [string]$InstanceName = "edmg-gpu-studio",
   [string]$RepoBranch = "codex/Unified",
-  [string]$RepoUrl = "https://github.com/HIMOI890/DWCTGenerativeSoundStudio.git",
+  [string]$RepoUrl = "https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio.git",
   [string]$RemoteScriptLocalPath = "",
   [string]$BackendPort = "7863",
   [string]$UiPort = "5173",

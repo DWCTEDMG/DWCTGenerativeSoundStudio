@@ -143,7 +143,37 @@ function Resolve-CertificateConfiguration([string]$Reference, [string]$Root) {
     if ([IO.Path]::GetExtension($resolvedPath).ToLowerInvariant() -notin @(".pfx", ".p12")) {
       throw "EDMG_CODE_SIGN_CERT file references must use the .pfx or .p12 extension."
     }
-    return [pscustomobject]@{ Mode = "pfx"; Path = $resolvedPath; Thumbprint = ""; MachineStore = $false }
+    try {
+      $pfx = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+        $resolvedPath,
+        [string]$env:EDMG_CODE_SIGN_PASSWORD,
+        [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet
+      )
+    } catch {
+      throw "The configured PFX/P12 certificate could not be opened with EDMG_CODE_SIGN_PASSWORD."
+    }
+    try {
+      $now = Get-Date
+      $ekuOids = @($pfx.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId.Value })
+      if (-not $pfx.HasPrivateKey) {
+        throw "The configured PFX/P12 certificate does not contain a private key."
+      }
+      if ($pfx.NotBefore -gt $now -or $pfx.NotAfter -le $now) {
+        throw "The configured PFX/P12 certificate is not currently valid."
+      }
+      if ($ekuOids -notcontains "1.3.6.1.5.5.7.3.3") {
+        throw "The configured PFX/P12 certificate does not include the Code Signing enhanced key usage."
+      }
+      $pfxThumbprint = ([string]$pfx.Thumbprint).Replace(" ", "").ToUpperInvariant()
+    } finally {
+      $pfx.Dispose()
+    }
+    return [pscustomobject]@{
+      Mode = "pfx"
+      Path = $resolvedPath
+      Thumbprint = $pfxThumbprint
+      MachineStore = $false
+    }
   }
 
   $thumbprint = ($trimmed -replace "\s", "").ToUpperInvariant()
@@ -246,6 +276,7 @@ $run = [ordered]@{
   required = $required
   verifyOnly = [bool]$VerifyOnly
   certificateMode = [string]$certificate.Mode
+  expectedSignerThumbprint = [string]$certificate.Thumbprint
   timestampUrl = $timestampUrl
   signTool = $null
   ok = $false
@@ -289,11 +320,20 @@ try {
         signToolVerified = $false
         signerSubject = ""
         signerThumbprint = ""
+        expectedSignerThumbprint = [string]$certificate.Thumbprint
         signerNotAfter = $null
       }
       $before = Get-AuthenticodeRecord $artifact
+      $beforeMatchesConfiguredSigner = $certificate.Mode -eq "none" -or (
+        -not [string]::IsNullOrWhiteSpace([string]$before.signerThumbprint) -and
+        [string]::Equals(
+          ([string]$before.signerThumbprint).Replace(" ", ""),
+          ([string]$certificate.Thumbprint).Replace(" ", ""),
+          [StringComparison]::OrdinalIgnoreCase
+        )
+      )
 
-      if ($before.status -eq "Valid") {
+      if ($before.status -eq "Valid" -and $beforeMatchesConfiguredSigner) {
         if (-not $signTool) { $signTool = Resolve-SignTool $SignToolPath }
         Invoke-SignToolChecked $signTool "Authenticode verification for $relativePath" @(
           "verify", "/pa", "/all", "/tw", "/v", $artifact
@@ -306,7 +346,12 @@ try {
         $record.authenticodeStatus = $before.status
         $run.artifacts += [pscustomobject]$record
         if ($required) {
-          throw "Required Authenticode signature is missing or invalid for $relativePath (status: $($before.status))."
+          $signerDetail = if ($before.status -eq "Valid" -and -not $beforeMatchesConfiguredSigner) {
+            "signer thumbprint $($before.signerThumbprint) does not match configured thumbprint $($certificate.Thumbprint)"
+          } else {
+            "status: $($before.status)"
+          }
+          throw "Required Authenticode signature is missing, invalid, or signed by the wrong certificate for $relativePath ($signerDetail)."
         }
         Write-Host ("[sign_release] Skipping unsigned artifact: " + $relativePath) -ForegroundColor Yellow
         continue
@@ -326,6 +371,13 @@ try {
         $after = Get-AuthenticodeRecord $artifact
         if ($after.status -ne "Valid") {
           throw "Get-AuthenticodeSignature rejected $relativePath after signing (status: $($after.status))."
+        }
+        if (-not [string]::Equals(
+          ([string]$after.signerThumbprint).Replace(" ", ""),
+          ([string]$certificate.Thumbprint).Replace(" ", ""),
+          [StringComparison]::OrdinalIgnoreCase
+        )) {
+          throw "Signed artifact $relativePath does not use the configured certificate thumbprint."
         }
         Invoke-SignToolChecked $signTool "Authenticode verification for $relativePath" @(
           "verify", "/pa", "/all", "/tw", "/v", $artifact

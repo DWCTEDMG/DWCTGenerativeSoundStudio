@@ -56,8 +56,9 @@ function Get-BundledFfmpegPath($StudioDir) {
 
 function Ensure-BundledFfmpeg($StudioDir) {
   $bundled = Get-BundledFfmpegPath $StudioDir
-  if (Test-Path $bundled) {
-    Write-Host ("[info] Bundled FFmpeg ready: " + $bundled) -ForegroundColor Cyan
+  $bundledFfprobe = Join-Path $StudioDir "electron-resources\bin\ffprobe.exe"
+  if ((Test-Path $bundled) -and (Test-Path $bundledFfprobe)) {
+    Write-Host ("[info] Bundled FFmpeg/FFprobe ready: " + $bundled) -ForegroundColor Cyan
     return $bundled
   }
 
@@ -66,16 +67,16 @@ function Ensure-BundledFfmpeg($StudioDir) {
     throw "Missing FFmpeg staging script: $script"
   }
 
-  Write-Host "[info] Bundled FFmpeg missing; downloading/staging it now..." -ForegroundColor Yellow
-  Invoke-Checked "stage bundled FFmpeg" {
+  Write-Host "[info] Pinned FFmpeg/FFprobe pair missing; staging it now..." -ForegroundColor Yellow
+  Invoke-Checked "stage bundled FFmpeg and FFprobe" {
     & powershell -NoProfile -ExecutionPolicy Bypass -File $script -OutDir "./electron-resources/bin"
   }
 
-  if (-not (Test-Path $bundled)) {
-    throw "Bundled FFmpeg staging failed: $bundled"
+  if (-not (Test-Path $bundled) -or -not (Test-Path $bundledFfprobe)) {
+    throw "Bundled FFmpeg/FFprobe staging failed: $bundled; $bundledFfprobe"
   }
 
-  Write-Host ("[info] Bundled FFmpeg staged: " + $bundled) -ForegroundColor Green
+  Write-Host ("[info] Bundled FFmpeg/FFprobe staged: " + $bundled) -ForegroundColor Green
   return $bundled
 }
 
@@ -180,57 +181,6 @@ function Doctor($RepoRoot, $StudioDir, $PyBackendDir, $BackendPkgDir, $BundledFf
   Write-Host ("Backend package: " + $BackendPkgDir) -ForegroundColor Cyan
 }
 
-function Move-ExistingFolder($SourceDir, $DestRoot, $Label) {
-  if (-not (Test-Path $SourceDir)) {
-    return
-  }
-
-  New-Item -ItemType Directory -Force -Path $DestRoot | Out-Null
-  $ts = Get-Date -Format "yyyyMMdd_HHmmss"
-  $backup = Join-Path $DestRoot ($Label + "_" + $ts)
-  Move-Item -Force $SourceDir $backup
-  Write-Host ("[info] Moved " + $SourceDir + " -> " + $backup) -ForegroundColor Yellow
-}
-
-function Test-ReparsePoint($Path) {
-  if (-not (Test-Path $Path)) {
-    return $false
-  }
-  $item = Get-Item -Force $Path
-  return (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
-}
-
-function Migrate-LegacyData($RepoRoot, $StudioDir, $PyBackendDir) {
-  $DestData = Join-Path $StudioDir "data"
-  $MigrationsDir = Join-Path $StudioDir "_legacy_migrations"
-  New-Item -ItemType Directory -Force -Path $DestData | Out-Null
-  New-Item -ItemType Directory -Force -Path $MigrationsDir | Out-Null
-
-  $LegacyBackendData = Join-Path $PyBackendDir "data"
-  if (Test-Path $LegacyBackendData) {
-    Write-Host "[info] Found legacy python_backend/data. Migrating into studio/data." -ForegroundColor Yellow
-    Copy-Item -Recurse -Force (Join-Path $LegacyBackendData "*") $DestData -ErrorAction SilentlyContinue
-    Move-ExistingFolder $LegacyBackendData $MigrationsDir "python_backend_data"
-  }
-
-  $LegacyRootData = Join-Path $RepoRoot "data"
-  if (Test-Path $LegacyRootData) {
-    if (Test-ReparsePoint $LegacyRootData) {
-      Write-Host "[info] Repo-root data/ is already a link; leaving it in place." -ForegroundColor Cyan
-      return
-    }
-    Write-Host "[info] Found legacy repo-root data/. Migrating into studio/data." -ForegroundColor Yellow
-    Copy-Item -Recurse -Force (Join-Path $LegacyRootData "*") $DestData -ErrorAction SilentlyContinue
-    Move-ExistingFolder $LegacyRootData $MigrationsDir "repo_root_data"
-    try {
-      cmd /c "mklink /J `"$LegacyRootData`" `"$DestData`"" | Out-Null
-      Write-Host "[info] Recreated repo-root data/ as a junction to studio/data." -ForegroundColor Yellow
-    } catch {
-      Write-Host ("[warn] Could not recreate repo-root data junction: " + $_.Exception.Message) -ForegroundColor Yellow
-    }
-  }
-}
-
 Assert-Command $PnpmExe
 Assert-Command $UvExe
 Assert-PinnedUv $UvExe
@@ -250,7 +200,7 @@ if (-not (Test-Path $PyBackendDir)) {
 $BackendPkgDir = Resolve-BackendPackageDir $PyBackendDir
 $BundledFfmpegPath = Get-BundledFfmpegPath $StudioDir
 Doctor $RepoRoot $StudioDir $PyBackendDir $BackendPkgDir $BundledFfmpegPath
-Migrate-LegacyData $RepoRoot $StudioDir $PyBackendDir
+Write-Host "[info] Release packaging is read-only with respect to project and legacy data. Run migrations explicitly from Studio." -ForegroundColor Cyan
 $BundledFfmpegPath = Ensure-BundledFfmpeg $StudioDir
 
 Write-Host "[1/2] Installing UI dependencies from the frozen pnpm lock..."

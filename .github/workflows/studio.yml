@@ -188,7 +188,7 @@ jobs:
 
       - name: Frontend tests
         working-directory: studio/edmg-studio
-        run: pnpm run test:ui -- --maxWorkers=1 --minWorkers=1
+        run: pnpm run test:ui:release
 
       - name: Frontend production build
         working-directory: studio/edmg-studio

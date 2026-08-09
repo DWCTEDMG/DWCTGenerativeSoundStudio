@@ -4,7 +4,7 @@ set -euo pipefail
 # Bootstrap EDMG Studio on an Ubuntu GPU VM after the instance, firewall, and
 # NVIDIA driver are already in place.
 
-REPO_URL="${REPO_URL:-https://github.com/HIMOI890/DWCTGenerativeSoundStudio.git}"
+REPO_URL="${REPO_URL:-https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio.git}"
 REPO_BRANCH="${REPO_BRANCH:-codex/Unified}"
 REPO_PARENT="${REPO_PARENT:-/opt/edmg}"
 REPO_DIR="${REPO_DIR:-${REPO_PARENT}/DWCTGenerativeSoundStudio}"

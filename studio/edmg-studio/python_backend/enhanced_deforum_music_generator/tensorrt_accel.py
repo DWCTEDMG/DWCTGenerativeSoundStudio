@@ -17,13 +17,13 @@ to these pipelines today.
 
 CUDA version note
 -----------------
-Torch-TensorRT must match the CUDA build of the installed ``torch``. This
-project ships ``torch ...+cu124`` (CUDA 12.4), so install the matching
-Torch-TensorRT (which bundles its own TensorRT 10.x for CUDA 12). A standalone
-TensorRT built for a different CUDA toolkit (e.g. CUDA 13.x) is NOT used by this
-path and should not be on ``PATH`` at the same time to avoid DLL conflicts.
+Torch-TensorRT must match the CUDA build of the installed ``torch``. The
+canonical CUDA profile locks ``torch 2.11.0+cu130``, ``torch-tensorrt
+2.11.0+cu130``, and TensorRT ``10.15.1.29``. A standalone TensorRT built for a
+different CUDA toolkit is NOT used by this path and should not be on ``PATH``
+at the same time to avoid DLL conflicts.
 
-    # Into the backend venv (matches torch 2.6 + cu124):
+    # Into the backend venv (matches torch 2.11.0 + cu130):
     uv sync --frozen --extra cuda --extra internal-video
 
 Enable via the CLI flag ``--accel tensorrt`` or the environment variable

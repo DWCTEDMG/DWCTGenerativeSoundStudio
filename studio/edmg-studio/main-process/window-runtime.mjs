@@ -3,6 +3,18 @@ import { promises as fsp } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { canNavigateWithinApp, normalizeExternalUrl } from "./security.mjs";
 
+export const PRODUCTION_UI_LANDMARKS = Object.freeze([
+  "Workspace",
+  "Render",
+  "Models",
+  "Settings",
+  "Setup",
+]);
+
+const PRODUCTION_UI_PROBE_TIMEOUT_MS = 10_000;
+const PRODUCTION_UI_PROBE_INTERVAL_MS = 100;
+const TEST_REPORT_BODY_TEXT_LIMIT = 8_000;
+
 export function resolveWindowBackendUrl(backendUrl, getBackendUrl) {
   if (typeof getBackendUrl === "function") {
     const current = String(getBackendUrl() || "").trim();
@@ -76,7 +88,7 @@ export function createWindowRuntime({
     }
 
     if (testMode && testReportPath) {
-      await win.loadURL("data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Cbody%3Eedmg%20test%20mode%3C%2Fbody%3E%3C%2Fhtml%3E");
+      await win.loadFile(getProdIndexPath());
       return;
     }
 
@@ -110,6 +122,11 @@ export function createWindowRuntime({
       revealPath: testProbeRevealPath || "",
       openPath: testProbeOpenPath || "",
       expectedBackendUrl: testExpectBackendUrl || "",
+      expectProductionUi: !testPage,
+      uiLandmarks: PRODUCTION_UI_LANDMARKS,
+      productionUiTimeoutMs: PRODUCTION_UI_PROBE_TIMEOUT_MS,
+      productionUiPollIntervalMs: PRODUCTION_UI_PROBE_INTERVAL_MS,
+      bodyTextLimit: TEST_REPORT_BODY_TEXT_LIMIT,
     });
 
     try {
@@ -125,8 +142,56 @@ export function createWindowRuntime({
             backendUrlAsync: null,
             reveal: null,
             open: null,
+            expectProductionUi: !!probe.expectProductionUi,
+            rendererUrl: "",
+            rendererProtocol: "",
+            documentTitle: "",
+            bodyText: "",
+            uiLandmarks: {
+              expected: [...probe.uiLandmarks],
+              found: [],
+              missing: [...probe.uiLandmarks],
+            },
             errors: [],
           };
+
+          const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+          const delay = (durationMs) => new Promise((resolve) => window.setTimeout(resolve, durationMs));
+
+          const captureRenderer = () => {
+            if (probe.expectProductionUi) {
+              for (const group of document.querySelectorAll("details.sidebar-group")) {
+                group.open = true;
+              }
+            }
+
+            const bodyText = normalizeText(document.body?.innerText || document.body?.textContent || "");
+            const navLabels = Array.from(document.querySelectorAll(".sidebar-navText"))
+              .map((element) => normalizeText(element.textContent));
+            const found = probe.uiLandmarks.filter((landmark) => navLabels.includes(landmark));
+            let protocol = "";
+            try {
+              protocol = new URL(window.location.href).protocol;
+            } catch {
+              protocol = "";
+            }
+
+            out.rendererUrl = String(window.location.href || "");
+            out.rendererProtocol = protocol;
+            out.documentTitle = normalizeText(document.title);
+            out.bodyText = bodyText.slice(0, probe.bodyTextLimit);
+            out.uiLandmarks = {
+              expected: [...probe.uiLandmarks],
+              found,
+              missing: probe.uiLandmarks.filter((landmark) => !found.includes(landmark)),
+            };
+          };
+
+          const productionUiIsReady = () => Boolean(
+            out.rendererProtocol === "file:" &&
+            out.bodyText.length > 0 &&
+            out.uiLandmarks.missing.length === 0
+          );
 
           try {
             out.backendUrlSync = typeof window.edmg?.backendUrl === "function" ? window.edmg.backendUrl() : null;
@@ -137,6 +202,15 @@ export function createWindowRuntime({
             if (probe.openPath && typeof window.edmg?.openPath === "function") {
               out.open = await window.edmg.openPath(probe.openPath);
             }
+
+            const deadline = Date.now() + probe.productionUiTimeoutMs;
+            do {
+              captureRenderer();
+              if (!probe.expectProductionUi || productionUiIsReady() || Date.now() >= deadline) {
+                break;
+              }
+              await delay(probe.productionUiPollIntervalMs);
+            } while (true);
           } catch (error) {
             out.errors.push(String(error && error.message ? error.message : error));
           }
@@ -145,12 +219,14 @@ export function createWindowRuntime({
             (out.backendUrlSync === probe.expectedBackendUrl && out.backendUrlAsync === probe.expectedBackendUrl);
           const revealMatches = !probe.revealPath || !!out.reveal?.ok;
           const openMatches = !probe.openPath || !!out.open?.ok;
+          const productionUiMatches = !probe.expectProductionUi || productionUiIsReady();
           out.ok = Boolean(
             out.bridgeAvailable &&
             out.testBridgeAvailable &&
             backendMatches &&
             revealMatches &&
             openMatches &&
+            productionUiMatches &&
             out.errors.length === 0
           );
           return out;
@@ -169,6 +245,16 @@ export function createWindowRuntime({
         backendUrlAsync: null,
         reveal: null,
         open: null,
+        expectProductionUi: !testPage,
+        rendererUrl: "",
+        rendererProtocol: "",
+        documentTitle: "",
+        bodyText: "",
+        uiLandmarks: {
+          expected: [...PRODUCTION_UI_LANDMARKS],
+          found: [],
+          missing: [...PRODUCTION_UI_LANDMARKS],
+        },
         errors: [String(error?.message ?? error)],
       });
     }

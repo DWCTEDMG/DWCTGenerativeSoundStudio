@@ -638,4 +638,63 @@ describe("Settings page", () => {
     expect(screen.getAllByText("System readiness").length).toBeGreaterThan(0);
     expect(screen.getByText(/Models directory is empty/i)).toBeTruthy();
   });
+
+  it("shows packaged desktop and backend build identity for support", async () => {
+    installEdmgBridge({
+      getBuildIdentity: async () => ({
+        ok: true,
+        desktop: {
+          version: "1.2.0",
+          packaged: true,
+          platform: "win32",
+          arch: "x64",
+          electronVersion: "39.2.7",
+          executablePath: "E:\\EDMG Studio\\EDMG Studio.exe",
+        },
+        backendBundle: {
+          available: true,
+          binaryVerified: true,
+          schemaVersion: 5,
+          builder: "scripts/prepare-release-bundle.mjs",
+          platform: "win32",
+          backendEntryPoint: "edmg-studio-backend.exe",
+          acceleratorProfile: "cuda",
+          pythonVersion: "3.12.10",
+          sourceHash: "a".repeat(64),
+          sourceFileCount: 267,
+          lockSha256: "b".repeat(64),
+          binarySha256: "c".repeat(64),
+        },
+      }),
+    });
+    installFetchMock({
+      "/v1/config": {},
+      "/health": { ok: true, version: "1.2.0" },
+      "/v1/ai/status": { ok: true },
+      "/v1/edmg/deforum_template": { ok: true },
+      "/v1/settings/secrets/status": { store: "test" },
+      "/v1/hardware": { hardware: { device_name: "NVIDIA RTX 5080" } },
+      "/v1/system/readiness": {
+        ok: true,
+        status: "ok",
+        summary: "Ready",
+        checks: { runtime: { status: "ok", accelerator_profile: "cuda" } },
+      },
+      "/v1/settings/render_profiles": { recommended_profile: "high_quality", profiles: {} },
+      "/v1/settings/render_providers": { settings: {} },
+      "/v1/settings/transcription": { settings: {} },
+    });
+
+    renderWithStudio(<Settings backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByText("Packaged desktop")).toBeTruthy();
+    expect(screen.getByLabelText("Desktop build version").textContent).toContain("1.2.0");
+    expect(screen.getByLabelText("Desktop executable location").textContent).toContain("E:\\EDMG Studio\\EDMG Studio.exe");
+    expect(screen.getByLabelText("Backend build version").textContent).toContain("1.2.0");
+    expect(screen.getByText(/verified installed backend \+ release manifest v5/i)).toBeTruthy();
+    expect(screen.getByText("Show technical fingerprints")).toBeTruthy();
+    expect(screen.getByText("a".repeat(64))).toBeTruthy();
+    expect(screen.getByText("b".repeat(64))).toBeTruthy();
+    expect(screen.getByText("c".repeat(64))).toBeTruthy();
+  });
 });

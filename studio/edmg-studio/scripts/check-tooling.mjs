@@ -9,8 +9,23 @@ const repoRoot = path.resolve(root, "..", "..");
 const packageJsonPath = path.join(root, "package.json");
 const lockfilePath = path.join(root, "pnpm-lock.yaml");
 const electronBuilderPath = path.join(root, "electron-builder.yml");
+const backendPyprojectPath = path.join(root, "python_backend", "pyproject.toml");
+const backendVersionPath = path.join(root, "python_backend", "edmg_studio_backend", "version.py");
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 const errors = [];
+
+function extractVersion(filePath, pattern, label) {
+  if (!fs.existsSync(filePath)) {
+    errors.push(`${label} is missing: ${path.relative(repoRoot, filePath)}`);
+    return "";
+  }
+  const match = fs.readFileSync(filePath, "utf8").match(pattern);
+  if (!match?.[1]) {
+    errors.push(`${label} does not declare a parseable version: ${path.relative(repoRoot, filePath)}`);
+    return "";
+  }
+  return match[1];
+}
 
 function nodeVersionSupported(version) {
   const [major = 0, minor = 0] = String(version || "")
@@ -31,6 +46,29 @@ if (!String(packageJson.packageManager || "").startsWith("pnpm@")) {
 
 if (!packageJson.version || typeof packageJson.version !== "string") {
   errors.push("package.json must declare the shipped desktop version.");
+}
+
+const backendProjectVersion = extractVersion(
+  backendPyprojectPath,
+  /^version\s*=\s*["']([^"']+)["']/m,
+  "Backend pyproject",
+);
+const backendRuntimeVersion = extractVersion(
+  backendVersionPath,
+  /^STUDIO_VERSION\s*=\s*["']([^"']+)["']/m,
+  "Backend runtime version",
+);
+
+if (backendProjectVersion && backendProjectVersion !== packageJson.version) {
+  errors.push(
+    `Backend package version ${backendProjectVersion} does not match desktop version ${packageJson.version}.`,
+  );
+}
+
+if (backendRuntimeVersion && backendRuntimeVersion !== packageJson.version) {
+  errors.push(
+    `Backend runtime version ${backendRuntimeVersion} does not match desktop version ${packageJson.version}.`,
+  );
 }
 
 if (!fs.existsSync(lockfilePath)) {
@@ -81,4 +119,5 @@ if (errors.length) {
 console.log(`[tooling-check] pnpm canonical: ${packageJson.packageManager}`);
 console.log(`[tooling-check] node runtime: ${process.versions.node} (${packageJson.engines?.node})`);
 console.log(`[tooling-check] shipped desktop version source: ${path.relative(repoRoot, packageJsonPath)}#version (${packageJson.version})`);
+console.log(`[tooling-check] backend package/runtime version: ${backendProjectVersion}`);
 console.log(`[tooling-check] lockfile: ${path.relative(repoRoot, lockfilePath)}`);

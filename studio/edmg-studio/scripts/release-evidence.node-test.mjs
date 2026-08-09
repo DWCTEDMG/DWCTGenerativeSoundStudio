@@ -40,11 +40,14 @@ test("release artifact inventory keeps installer targets isolated", () => {
   fs.mkdirSync(distDir, { recursive: true });
   fs.mkdirSync(genericPayloadDir, { recursive: true });
   fs.mkdirSync(payloadDir, { recursive: true });
-  const installer = path.join(distDir, "edmg-studio Setup 1.0.0.exe");
-  const appImage = path.join(distDir, "edmg-studio-1.0.0.AppImage");
-  const genericInnoInstaller = path.join(genericInnoDir, "EDMG-Studio-Setup-1.0.0.exe");
+  const installer = path.join(distDir, "EDMG-Studio-1.0.0-windows-x64-directml-Setup.exe");
+  const appImage = path.join(distDir, "EDMG-Studio-1.0.0-linux-x64-cuda.AppImage");
+  const genericInnoInstaller = path.join(
+    genericInnoDir,
+    "EDMG-Studio-1.0.0-windows-x64-directml-Setup.exe",
+  );
   const genericPayload = path.join(genericPayloadDir, "win-unpacked.7z");
-  const innoInstaller = path.join(innoDir, "EDMG-Studio-Setup-1.0.0.exe");
+  const innoInstaller = path.join(innoDir, "EDMG-Studio-1.0.0-windows-x64-cuda-Setup.exe");
   const payload = path.join(payloadDir, "win-unpacked.7z");
   fs.writeFileSync(installer, "installer");
   fs.writeFileSync(appImage, "appimage");
@@ -90,7 +93,11 @@ test("checksum manifest records SHA-256 entries with self hash", async () => {
 test("code signing hook stays disabled without credentials", () => {
   const config = resolveCodeSigningConfig({});
   assert.equal(config.enabled, false);
-  const plan = planCodeSigning(config, [path.join(studioRoot, "dist", "EDMG Studio Setup 1.1.0.exe")], studioRoot);
+  const plan = planCodeSigning(
+    config,
+    [path.join(studioRoot, "dist", "EDMG-Studio-1.1.0-windows-x64-directml-Setup.exe")],
+    studioRoot,
+  );
   assert.equal(plan.attempted, false);
   assert.match(plan.reason, /EDMG_CODE_SIGN_CERT/);
 });

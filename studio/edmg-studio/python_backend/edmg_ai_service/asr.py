@@ -306,8 +306,13 @@ def _transcribe_faster_whisper(
             continue
         last_result = attempt
         last_successful_model = candidate
+        # An empty transcript is a valid inference result for silence/music.
+        # Model fallback is for load/inference failures, not for manufacturing
+        # speech by downloading progressively larger models after a successful
+        # no-speech result.
         if attempt.get("text") or attempt.get("segments"):
             return attempt
+        break
 
     if last_successful_model is None:
         if last_error is not None:

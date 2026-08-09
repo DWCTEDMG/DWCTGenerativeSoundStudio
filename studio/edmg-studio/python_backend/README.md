@@ -1,4 +1,4 @@
-# EDMG Studio Backend (v1.1.0)
+# EDMG Studio Backend (v1.2.0)
 
 ## Run
 ```bash

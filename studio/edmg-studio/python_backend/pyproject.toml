@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edmg-studio-backend"
-version = "1.1.0"
+version = "1.2.0"
 description = "Backend API for EDMG Studio"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -185,7 +185,13 @@ select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501", "B008", "UP007"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["enhanced_deforum_music_generator"]
+known-first-party = [
+  "deforum_music",
+  "edmg",
+  "edmg_ai_service",
+  "edmg_studio_backend",
+  "enhanced_deforum_music_generator",
+]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -200,3 +206,7 @@ testpaths = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+# CUDA DLL search paths must be prepared before imports that can load native
+# Torch/TensorRT modules. Keep this bootstrap ordering explicit and narrow.
+"edmg_studio_backend/app.py" = ["E402"]
+"edmg_studio_backend/cli.py" = ["E402"]

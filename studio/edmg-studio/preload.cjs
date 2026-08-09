@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld("edmg", {
     return DEFAULT_BACKEND_URL;
   },
   getBackendSettings: () => ipcRenderer.invoke("edmg:getBackendSettings"),
+  getBuildIdentity: () => ipcRenderer.invoke("edmg:getBuildIdentity"),
   getBackendAuthToken: () => ipcRenderer.invoke("edmg:getBackendAuthToken"),
   setBackendAuthToken: (token) => ipcRenderer.invoke("edmg:setBackendAuthToken", String(token || "")),
   getDirectorStatus: () => ipcRenderer.invoke("edmg:getDirectorStatus"),

@@ -7,6 +7,20 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import {
+  INSTALLED_APP_DIR_ENV,
+  assertCandidateVersionIsNewer,
+  assertInstalledAppBaselineUnchanged,
+  assertPathOutsideInstalledAppBaseline,
+  inspectInstalledAppBaseline,
+  inspectPackagedAppCandidate,
+  resolveInstalledAppDir,
+} from "./packaged-upgrade-proof-lib.mjs";
+import {
+  buildHermeticPackagedProofEnv,
+  resolveHermeticProofProfile,
+} from "./packaged-proof-environment.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 
@@ -28,9 +42,6 @@ function chooseHomeRoot() {
 }
 
 function chooseLegacyRoot(stamp) {
-  if (process.platform === "win32" && process.env.LOCALAPPDATA) {
-    return path.join(process.env.LOCALAPPDATA, `EDMG-Legacy-Proof-${stamp}`);
-  }
   return path.join(chooseHomeRoot(), `EDMG-Legacy-Proof-${stamp}`);
 }
 
@@ -46,37 +57,6 @@ function buildPathSet(studioHome) {
     electronUserData: electronDir,
     sessionData: path.join(electronDir, "session"),
   };
-}
-
-function resolveBootstrapPaths() {
-  const appDataDir = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-  const localAppDataDir = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-  const bootstrapDir = path.join(appDataDir, "EDMG Studio");
-  return {
-    appDataDir,
-    localAppDataDir,
-    bootstrapDir,
-    bootstrapPath: path.join(bootstrapDir, "bootstrap.json"),
-  };
-}
-
-async function backupBootstrap(bootstrapPath, stamp) {
-  if (!fs.existsSync(bootstrapPath)) {
-    return { existed: false, backupPath: "" };
-  }
-  const backupPath = `${bootstrapPath}.codex-backup-${stamp}`;
-  await fsp.copyFile(bootstrapPath, backupPath);
-  return { existed: true, backupPath };
-}
-
-async function restoreBootstrap(bootstrapPath, backup) {
-  if (backup?.existed && backup.backupPath && fs.existsSync(backup.backupPath)) {
-    await fsp.mkdir(path.dirname(bootstrapPath), { recursive: true });
-    await fsp.copyFile(backup.backupPath, bootstrapPath);
-    await fsp.rm(backup.backupPath, { force: true });
-    return;
-  }
-  await fsp.rm(bootstrapPath, { force: true });
 }
 
 async function allocatePort() {
@@ -182,57 +162,93 @@ async function seedLegacyArtifacts(paths) {
 }
 
 async function main() {
+  const installedAppDir = resolveInstalledAppDir({ argv: process.argv.slice(2) });
+  const installedBaselineBefore = installedAppDir
+    ? await inspectInstalledAppBaseline(installedAppDir)
+    : null;
+  if (installedBaselineBefore) {
+    log(`validated read-only installed baseline ${installedBaselineBefore.appDir}`);
+  }
+
   const appExe = resolvePackagedApp();
   assert.ok(appExe, "Packaged app not found. Run pnpm run dist:win first or set EDMG_STUDIO_PACKAGED_APP.");
 
-  await stopExistingPackagedProcesses();
+  let candidateEvidence = null;
+  let versionComparison = null;
+  if (installedBaselineBefore) {
+    await assertPathOutsideInstalledAppBaseline(
+      installedBaselineBefore.appDir,
+      appExe,
+      "Packaged candidate executable",
+    );
+    candidateEvidence = await inspectPackagedAppCandidate(appExe);
+    versionComparison = assertCandidateVersionIsNewer(installedBaselineBefore, candidateEvidence);
+    log(
+      `candidate ${versionComparison.candidateVersion} is newer than installed baseline `
+      + versionComparison.installedBaselineVersion,
+    );
+  }
 
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
   const homeRoot = chooseHomeRoot();
   const targetHome = path.join(homeRoot, `EDMG-Upgraded-Proof-${stamp}`);
   const legacyHome = chooseLegacyRoot(stamp);
-  const { appDataDir, localAppDataDir, bootstrapDir, bootstrapPath } = resolveBootstrapPaths();
-  const bootstrapBackup = await backupBootstrap(bootstrapPath, stamp);
+  const { appDataDir, localAppDataDir, bootstrapDir, bootstrapPath } = resolveHermeticProofProfile(targetHome);
   const testPage = path.join(targetHome, "blank.html");
   const port = Number(process.env.EDMG_STUDIO_PROOF_PORT || (await allocatePort()));
   const baseUrl = `http://127.0.0.1:${port}`;
-
-  await fsp.mkdir(targetHome, { recursive: true });
-  await fsp.mkdir(bootstrapDir, { recursive: true });
-  await fsp.mkdir(localAppDataDir, { recursive: true });
-  await fsp.writeFile(testPage, "<!doctype html><html><body>packaged upgrade proof</body></html>\n");
-
   const source = buildPathSet(legacyHome);
   const target = buildPathSet(targetHome);
-  const seeded = await seedLegacyArtifacts(source);
 
-  const bootstrap = {
-    studioHome: targetHome,
-    pendingMigration: {
-      requestedAt: new Date().toISOString(),
-      source,
-      target,
-    },
-    updatedAt: new Date().toISOString(),
-  };
-  await fsp.writeFile(bootstrapPath, JSON.stringify(bootstrap, null, 2) + "\n", "utf8");
+  if (installedBaselineBefore) {
+    for (const [label, mutablePath] of [
+      ["Upgrade-proof target Studio home", targetHome],
+      ["Upgrade-proof legacy Studio home", legacyHome],
+      ["Upgrade-proof bootstrap directory", bootstrapDir],
+      ["Upgrade-proof bootstrap file", bootstrapPath],
+      ["Upgrade-proof test page", testPage],
+    ]) {
+      await assertPathOutsideInstalledAppBaseline(installedBaselineBefore.appDir, mutablePath, label);
+    }
+  }
 
-  log(`launching ${appExe}`);
-  const child = spawn(appExe, [], {
-    cwd: path.dirname(appExe),
-    env: {
-      ...process.env,
-      EDMG_STUDIO_BACKEND_HOST: "127.0.0.1",
-      EDMG_STUDIO_BACKEND_PORT: String(port),
-      EDMG_STUDIO_TEST_MODE: "1",
-      EDMG_STUDIO_TEST_PAGE: testPage,
-      EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
-      ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
-    },
-    stdio: "ignore",
-  });
-
+  let child = null;
+  let summary = null;
+  let primaryError = null;
   try {
+    await stopExistingPackagedProcesses();
+
+    await fsp.mkdir(targetHome, { recursive: true });
+    await fsp.mkdir(bootstrapDir, { recursive: true });
+    await fsp.mkdir(localAppDataDir, { recursive: true });
+    await fsp.writeFile(testPage, "<!doctype html><html><body>packaged upgrade proof</body></html>\n");
+
+    const seeded = await seedLegacyArtifacts(source);
+    const bootstrap = {
+      studioHome: targetHome,
+      pendingMigration: {
+        requestedAt: new Date().toISOString(),
+        source,
+        target,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+    await fsp.writeFile(bootstrapPath, JSON.stringify(bootstrap, null, 2) + "\n", "utf8");
+
+    const launchEnv = buildHermeticPackagedProofEnv({
+      studioHome: targetHome,
+      port,
+      testPage,
+    });
+    delete launchEnv[INSTALLED_APP_DIR_ENV];
+
+    log(`launching candidate ${appExe}`);
+    child = spawn(appExe, [], {
+      cwd: path.dirname(appExe),
+      env: launchEnv,
+      stdio: "ignore",
+    });
+
     const health = await waitForHealth(baseUrl);
     const config = await requestJson(`${baseUrl}/v1/config`);
     const bootstrapAfter = JSON.parse(await fsp.readFile(bootstrapPath, "utf8"));
@@ -254,7 +270,7 @@ async function main() {
     const failedResults = Array.isArray(migration?.results) ? migration.results.filter((entry) => entry?.status === "failed") : [];
     assert.equal(failedResults.length, 0, `Upgrade migration reported failures: ${JSON.stringify(failedResults)}`);
 
-    const summary = {
+    summary = {
       ok: true,
       baseUrl,
       health,
@@ -281,13 +297,47 @@ async function main() {
         migratedTo: path.join(target[fixture.rootKey], fixture.relative),
       })),
     };
-
-    console.log(JSON.stringify(summary, null, 2));
-  } finally {
-    await killProcessTree(child);
-    await stopExistingPackagedProcesses();
-    await restoreBootstrap(bootstrapPath, bootstrapBackup);
+    if (installedBaselineBefore) {
+      summary.upgradeEvidence = {
+        schemaVersion: 1,
+        installedBaseline: installedBaselineBefore,
+        candidate: candidateEvidence,
+        versionComparison,
+        installedBaselineUnchangedAfterProof: false,
+      };
+    }
+  } catch (error) {
+    primaryError = error;
   }
+
+  const cleanupErrors = [];
+  const attemptCleanup = async (label, action) => {
+    try {
+      await action();
+    } catch (error) {
+      cleanupErrors.push(new Error(`${label}: ${error.message}`, { cause: error }));
+    }
+  };
+  await attemptCleanup("stop launched candidate process tree", () => killProcessTree(child));
+  await attemptCleanup("stop residual packaged candidate processes", () => stopExistingPackagedProcesses());
+  if (installedBaselineBefore) {
+    await attemptCleanup("verify read-only installed baseline integrity", async () => {
+      const installedBaselineAfter = await inspectInstalledAppBaseline(installedBaselineBefore.appDir);
+      assertInstalledAppBaselineUnchanged(installedBaselineBefore, installedBaselineAfter);
+      if (summary?.upgradeEvidence) {
+        summary.upgradeEvidence.installedBaselineUnchangedAfterProof = true;
+        summary.upgradeEvidence.verifiedAfter = installedBaselineAfter.capturedAt;
+      }
+    });
+  }
+
+  const errors = primaryError ? [primaryError, ...cleanupErrors] : cleanupErrors;
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Packaged upgrade proof failed and one or more cleanup/integrity checks also failed");
+  }
+
+  console.log(JSON.stringify(summary, null, 2));
 }
 
 main().catch((error) => {

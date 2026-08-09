@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HIMOI890/DWCTGenerativeSoundStudio/studio/edmg-studio/tools/edmgctl/internal/support"
+	"github.com/DWCTEDMG/DWCTGenerativeSoundStudio/studio/edmg-studio/tools/edmgctl/internal/support"
 )
 
 func main() {
