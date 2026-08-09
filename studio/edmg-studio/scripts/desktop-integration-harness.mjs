@@ -238,6 +238,9 @@ async function runElectronProbe() {
 
   const electronBinary = resolveElectronBinary();
   const args = ["."];
+  if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) {
+    args.push("--no-sandbox");
+  }
   let cmd = electronBinary;
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY && fs.existsSync("/usr/bin/xvfb-run")) {
     cmd = "/usr/bin/xvfb-run";

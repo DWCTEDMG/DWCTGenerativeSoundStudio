@@ -812,6 +812,14 @@ test("Studio CI uses Vitest 4 compatible worker arguments", () => {
   assert.doesNotMatch(workflow, /--minWorkers/);
 });
 
+test("desktop integration supports the canonical root WSL Electron workflow", () => {
+  const harness = fs.readFileSync(path.join(studioRoot, "scripts", "desktop-integration-harness.mjs"), "utf8");
+
+  assert.match(harness, /process\.platform === "linux"/);
+  assert.match(harness, /process\.getuid\(\) === 0/);
+  assert.match(harness, /args\.push\("--no-sandbox"\)/);
+});
+
 test("desktop packaging stages and requires pinned FFmpeg plus FFprobe on Windows and Linux", () => {
   const prepareElectron = fs.readFileSync(path.join(studioRoot, "scripts", "prepare-electron-build.mjs"), "utf8");
   const mediaStager = fs.readFileSync(path.join(studioRoot, "scripts", "stage-media-tools.mjs"), "utf8");
