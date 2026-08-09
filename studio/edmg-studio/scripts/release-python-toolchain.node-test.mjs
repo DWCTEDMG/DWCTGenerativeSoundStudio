@@ -824,6 +824,15 @@ test("desktop integration supports the canonical root WSL Electron workflow", ()
   assert.match(packagedSmoke, /args\.push\("--no-sandbox"\)/);
 });
 
+test("packaged customer proof compares canonical filesystem identities", () => {
+  const customerFlow = fs.readFileSync(path.join(studioRoot, "scripts", "packaged-customer-flow.mjs"), "utf8");
+
+  assert.match(customerFlow, /async function assertSameExistingPath/);
+  assert.match(customerFlow, /fsp\.realpath\(actual\)/);
+  assert.match(customerFlow, /fsp\.realpath\(expected\)/);
+  assert.match(customerFlow, /await assertSameExistingPath\(summary\.paths\.studioHome/);
+});
+
 test("desktop packaging stages and requires pinned FFmpeg plus FFprobe on Windows and Linux", () => {
   const prepareElectron = fs.readFileSync(path.join(studioRoot, "scripts", "prepare-electron-build.mjs"), "utf8");
   const mediaStager = fs.readFileSync(path.join(studioRoot, "scripts", "stage-media-tools.mjs"), "utf8");

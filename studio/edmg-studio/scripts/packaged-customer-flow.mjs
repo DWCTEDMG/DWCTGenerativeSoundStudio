@@ -139,6 +139,17 @@ function resolveTimeoutMs(value, fallback = DEFAULT_REQUEST_TIMEOUT_MS) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+async function assertSameExistingPath(actual, expected, message) {
+  const [actualRealPath, expectedRealPath] = await Promise.all([
+    fsp.realpath(actual),
+    fsp.realpath(expected),
+  ]);
+  const normalize = process.platform === "win32"
+    ? (value) => value.toLowerCase()
+    : (value) => value;
+  assert.equal(normalize(actualRealPath), normalize(expectedRealPath), message);
+}
+
 async function requestJsonViaNode(url, init, timeoutMs) {
   const target = new URL(url);
   const transport = target.protocol === "https:" ? https : http;
@@ -436,13 +447,13 @@ async function main() {
     assert.equal(summary.setupStatus.backendBundleOk, true, "Packaged backend bundle should be available");
     assert.equal(summary.setupStatus.ffmpegOk, true, "Bundled FFmpeg should be available");
     assert.equal(summary.setupStatus.edmgAvailable, true, "Bundled EDMG Core should be available");
-    assert.equal(summary.paths.studioHome, studioHome, "Packaged config should report the requested Studio home");
-    assert.equal(summary.paths.dataDir, expectedDataDir, "Packaged config data_dir should live under Studio home");
-    assert.equal(summary.paths.modelsDir, expectedModelsDir, "Packaged config models_dir should live under Studio home");
-    assert.equal(summary.paths.ollamaModelsDir, expectedOllamaModelsDir, "Packaged config ollama_models_dir should live under Studio models");
-    assert.equal(summary.paths.logsDir, expectedLogsDir, "Packaged config logs_dir should live under Studio home");
-    assert.equal(summary.paths.externalDir, expectedExternalDir, "Packaged config external_dir should live under Studio home");
-    assert.equal(summary.setupStatus.ollamaManagedModelsDir, expectedOllamaModelsDir, "Setup status should expose the managed Ollama models root");
+    await assertSameExistingPath(summary.paths.studioHome, studioHome, "Packaged config should report the requested Studio home");
+    await assertSameExistingPath(summary.paths.dataDir, expectedDataDir, "Packaged config data_dir should live under Studio home");
+    await assertSameExistingPath(summary.paths.modelsDir, expectedModelsDir, "Packaged config models_dir should live under Studio home");
+    await assertSameExistingPath(summary.paths.ollamaModelsDir, expectedOllamaModelsDir, "Packaged config ollama_models_dir should live under Studio models");
+    await assertSameExistingPath(summary.paths.logsDir, expectedLogsDir, "Packaged config logs_dir should live under Studio home");
+    await assertSameExistingPath(summary.paths.externalDir, expectedExternalDir, "Packaged config external_dir should live under Studio home");
+    await assertSameExistingPath(summary.setupStatus.ollamaManagedModelsDir, expectedOllamaModelsDir, "Setup status should expose the managed Ollama models root");
     assert.equal(summary.paths.dataDirExists, true, "Packaged run should create the Studio data root");
     assert.equal(summary.paths.modelsDirExists, true, "Packaged run should create the Studio models root");
     assert.equal(summary.paths.ollamaModelsDirExists, true, "Packaged run should create the Studio Ollama models root");
