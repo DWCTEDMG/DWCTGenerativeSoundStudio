@@ -10,8 +10,11 @@ import {
   buildChecksumManifest,
   collectReleaseArtifactPaths,
   planCodeSigning,
+  readPythonSbom,
   readWindowsSignatureEvidence,
   resolveCodeSigningConfig,
+  validateBundleEvidenceForSbomReuse,
+  writeReleaseEvidence,
 } from "./release-evidence-lib.mjs";
 import { uvExportCycloneDxArgs } from "./release-python-toolchain.mjs";
 
@@ -47,26 +50,31 @@ test("release artifact inventory keeps installer targets isolated", () => {
     "EDMG-Studio-1.0.0-windows-x64-directml-Setup.exe",
   );
   const genericPayload = path.join(genericPayloadDir, "win-unpacked.7z");
+  const genericSidecar = path.join(genericPayloadDir, "payload-integrity.json");
   const innoInstaller = path.join(innoDir, "EDMG-Studio-1.0.0-windows-x64-cuda-Setup.exe");
   const payload = path.join(payloadDir, "win-unpacked.7z");
+  const sidecar = path.join(payloadDir, "payload-integrity.json");
   fs.writeFileSync(installer, "installer");
   fs.writeFileSync(appImage, "appimage");
   fs.writeFileSync(genericInnoInstaller, "inno installer");
   fs.writeFileSync(genericPayload, "external payload");
+  fs.writeFileSync(genericSidecar, "integrity sidecar");
   fs.writeFileSync(innoInstaller, "inno installer");
   fs.writeFileSync(payload, "external payload");
+  fs.writeFileSync(sidecar, "integrity sidecar");
   try {
     assert.deepEqual(new Set(collectReleaseArtifactPaths(tempRoot, "dist", "win-nsis")), new Set([installer]));
     assert.deepEqual(new Set(collectReleaseArtifactPaths(tempRoot, "dist", "linux-appimage")), new Set([appImage]));
     assert.deepEqual(
       new Set(collectReleaseArtifactPaths(tempRoot, "dist", "win-inno")),
-      new Set([genericInnoInstaller, genericPayload]),
+      new Set([genericInnoInstaller, genericPayload, genericSidecar]),
     );
     assert.deepEqual(
       new Set(collectReleaseArtifactPaths(tempRoot, "dist", "win-inno-cuda")),
-      new Set([innoInstaller, payload]),
+      new Set([innoInstaller, payload, sidecar]),
     );
     assert.throws(() => collectReleaseArtifactPaths(tempRoot, "dist"), /artifact set is required/);
+    assert.throws(() => collectReleaseArtifactPaths(tempRoot, "all", "win-nsis"), /Unsupported/);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -87,6 +95,189 @@ test("checksum manifest records SHA-256 entries with self hash", async () => {
     assert.match(manifest.manifestSha256, /^[a-f0-9]{64}$/);
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("existing CycloneDX SBOM can be reused without rewriting it", async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-sbom-"));
+  const sbomPath = path.join(tempDir, "python-backend-cuda.cyclonedx.json");
+  const contents = JSON.stringify({
+    bomFormat: "CycloneDX",
+    specVersion: "1.5",
+    metadata: {
+      tools: { name: "uv", version: "0.11.28" },
+      component: { name: "edmg-studio-backend", version: "1.2.0" },
+    },
+    components: [{ name: "torch" }, { name: "faster-whisper" }],
+    dependencies: [],
+  });
+  await fsp.writeFile(sbomPath, contents, "utf8");
+  try {
+    const before = await fsp.readFile(sbomPath, "utf8");
+    const summary = readPythonSbom({ profile: "cuda", outputPath: sbomPath, version: "1.2.0" });
+    const after = await fsp.readFile(sbomPath, "utf8");
+
+    assert.equal(summary.format, "CycloneDX");
+    assert.equal(summary.version, "1.5");
+    assert.equal(summary.componentCount, 2);
+    assert.equal(summary.reusedExisting, true);
+    assert.equal(after, before);
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("existing SBOM reuse rejects missing and malformed evidence", async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-sbom-invalid-"));
+  const missingPath = path.join(tempDir, "missing.cyclonedx.json");
+  const invalidPath = path.join(tempDir, "invalid.cyclonedx.json");
+  await fsp.writeFile(invalidPath, JSON.stringify({ bomFormat: "not-cyclonedx" }), "utf8");
+  try {
+    assert.throws(
+      () => readPythonSbom({ profile: "cuda", outputPath: missingPath }),
+      /required but missing/,
+    );
+    assert.throws(
+      () => readPythonSbom({ profile: "cuda", outputPath: invalidPath }),
+      /not a valid CycloneDX/,
+    );
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dist evidence reuses the bundle SBOM by default", async () => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-dist-sbom-"));
+  const evidenceDir = path.join(tempRoot, "release", "evidence");
+  const distDir = path.join(tempRoot, "dist");
+  const pythonBackendDir = path.join(tempRoot, "python_backend");
+  const sbomPath = path.join(evidenceDir, "python-backend-cuda.cyclonedx.json");
+  await fsp.mkdir(evidenceDir, { recursive: true });
+  await fsp.mkdir(distDir, { recursive: true });
+  await fsp.mkdir(pythonBackendDir, { recursive: true });
+  await fsp.writeFile(
+    sbomPath,
+    JSON.stringify({
+      bomFormat: "CycloneDX",
+      specVersion: "1.5",
+      metadata: {
+        tools: { name: "uv", version: "0.11.28" },
+        component: { name: "edmg-studio-backend", version: "1.2.0" },
+      },
+      components: [{ name: "torch" }],
+      dependencies: [],
+    }),
+    "utf8",
+  );
+  const uvLockPath = path.join(pythonBackendDir, "uv.lock");
+  await fsp.writeFile(uvLockPath, "locked dependencies", "utf8");
+  const bundleManifest = await buildChecksumManifest({
+    root: tempRoot,
+    artifactPaths: [uvLockPath, sbomPath],
+    metadata: {
+      phase: "bundle",
+      studioVersion: "1.2.0",
+      acceleratorProfile: "cuda",
+    },
+  });
+  await fsp.writeFile(
+    path.join(evidenceDir, "bundle-artifacts.sha256.json"),
+    `${JSON.stringify(bundleManifest, null, 2)}\n`,
+    "utf8",
+  );
+  await fsp.writeFile(
+    path.join(distDir, "EDMG-Studio-1.2.0-windows-x64-cuda-Setup.exe"),
+    "installer",
+    "utf8",
+  );
+  try {
+    const before = await fsp.readFile(sbomPath, "utf8");
+    const evidence = await writeReleaseEvidence({
+      root: tempRoot,
+      phase: "dist",
+      profile: "cuda",
+      artifactSet: "win-nsis",
+      uvCommand: "must-not-run-for-dist-sbom-reuse",
+      version: "1.2.0",
+      env: {},
+    });
+    const after = await fsp.readFile(sbomPath, "utf8");
+
+    assert.equal(after, before);
+    assert.equal(evidence.sbom.reusedExisting, true);
+    assert.ok(
+      evidence.checksumManifest.artifacts.some((artifact) => artifact.path.endsWith("python-backend-cuda.cyclonedx.json")),
+    );
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("dist SBOM reuse rejects stale bundle checksum evidence", async () => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-stale-sbom-"));
+  const evidenceDir = path.join(tempRoot, "release", "evidence");
+  const pythonBackendDir = path.join(tempRoot, "python_backend");
+  const sbomPath = path.join(evidenceDir, "python-backend-cuda.cyclonedx.json");
+  const sbomContents = JSON.stringify({
+    bomFormat: "CycloneDX",
+    specVersion: "1.5",
+    metadata: {
+      tools: { name: "uv", version: "0.11.28" },
+      component: { name: "edmg-studio-backend", version: "1.2.0" },
+    },
+    components: [],
+    dependencies: [],
+  });
+  await fsp.mkdir(evidenceDir, { recursive: true });
+  await fsp.mkdir(pythonBackendDir, { recursive: true });
+  await fsp.writeFile(sbomPath, sbomContents, "utf8");
+  const uvLockPath = path.join(pythonBackendDir, "uv.lock");
+  await fsp.writeFile(uvLockPath, "locked dependencies", "utf8");
+  const bundleManifest = await buildChecksumManifest({
+    root: tempRoot,
+    artifactPaths: [uvLockPath, sbomPath],
+    metadata: { phase: "bundle", studioVersion: "1.2.0", acceleratorProfile: "cuda" },
+  });
+  await fsp.writeFile(
+    path.join(evidenceDir, "bundle-artifacts.sha256.json"),
+    `${JSON.stringify(bundleManifest, null, 2)}\n`,
+    "utf8",
+  );
+  try {
+    await assert.rejects(
+      () => validateBundleEvidenceForSbomReuse({
+        root: tempRoot,
+        profile: "cuda",
+        version: "9.9.9",
+        sbomPath,
+      }),
+      /does not match the requested dist profile and version/,
+    );
+
+    await fsp.appendFile(sbomPath, "\n", "utf8");
+    await assert.rejects(
+      () => validateBundleEvidenceForSbomReuse({
+        root: tempRoot,
+        profile: "cuda",
+        version: "1.2.0",
+        sbomPath,
+      }),
+      /does not match current bytes/,
+    );
+
+    await fsp.writeFile(sbomPath, sbomContents, "utf8");
+    await fsp.appendFile(uvLockPath, " drift", "utf8");
+    await assert.rejects(
+      () => validateBundleEvidenceForSbomReuse({
+        root: tempRoot,
+        profile: "cuda",
+        version: "1.2.0",
+        sbomPath,
+      }),
+      /python_backend\/uv\.lock/,
+    );
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true });
   }
 });
 

@@ -13,6 +13,7 @@ function parseArgs(argv) {
   let phase = "bundle";
   let profile = "";
   let artifactSet = "";
+  let reuseExistingSbom;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = String(argv[index] ?? "");
     if (arg === "--phase") {
@@ -42,20 +43,27 @@ function parseArgs(argv) {
       artifactSet = arg.slice("--artifact-set=".length).trim();
       continue;
     }
+    if (arg === "--reuse-existing-sbom") {
+      reuseExistingSbom = true;
+      continue;
+    }
     throw new Error(`Unknown generate-release-evidence argument: ${arg}`);
   }
-  if (!["bundle", "dist", "all"].includes(phase)) {
-    throw new Error(`Invalid --phase ${JSON.stringify(phase)}. Expected bundle, dist, or all.`);
+  if (!["bundle", "dist"].includes(phase)) {
+    throw new Error(`Invalid --phase ${JSON.stringify(phase)}. Expected bundle or dist.`);
   }
-  if ((phase === "dist" || phase === "all") && !RELEASE_ARTIFACT_SETS.includes(artifactSet)) {
+  if (phase === "dist" && !RELEASE_ARTIFACT_SETS.includes(artifactSet)) {
     throw new Error(
       `--artifact-set is required for ${phase} evidence (${RELEASE_ARTIFACT_SETS.join(", ")})`,
     );
   }
   if (phase === "bundle" && artifactSet) {
-    throw new Error("--artifact-set is only valid for dist or all evidence");
+    throw new Error("--artifact-set is only valid for dist evidence");
   }
-  return { phase, profile, artifactSet };
+  if (reuseExistingSbom === true && phase !== "bundle") {
+    throw new Error("--reuse-existing-sbom is only valid for bundle evidence repair");
+  }
+  return { phase, profile, artifactSet, reuseExistingSbom };
 }
 
 function resolveUv() {
@@ -74,7 +82,7 @@ function resolveUv() {
 }
 
 async function main() {
-  const { phase, profile, artifactSet } = parseArgs(process.argv.slice(2));
+  const { phase, profile, artifactSet, reuseExistingSbom } = parseArgs(process.argv.slice(2));
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const uvCommand = resolveUv();
   const evidence = await writeReleaseEvidence({
@@ -85,6 +93,7 @@ async function main() {
     uvCommand,
     version: String(packageJson.version || ""),
     env: process.env,
+    reuseExistingSbom,
   });
   console.log(
     JSON.stringify(
