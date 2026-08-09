@@ -45,6 +45,24 @@ type CatalogEntry = {
   };
 };
 
+type InternalVideoModelEngine = "auto" | "svd" | "animatediff";
+type ExplicitInternalVideoModelEngine = Exclude<InternalVideoModelEngine, "auto">;
+
+const CANONICAL_INTERNAL_VIDEO_MODEL_IDS: Record<ExplicitInternalVideoModelEngine, string> = {
+  svd: "hf_svd_xt_1_1_internal",
+  animatediff: "hf_animatediff_motion_adapter_v15_2_internal",
+};
+
+function normalizeInternalVideoModelEngine(value: unknown): InternalVideoModelEngine {
+  const engine = String(value || "auto").trim().toLowerCase();
+  return engine === "svd" || engine === "animatediff" ? engine : "auto";
+}
+
+function declaredInternalVideoModelEngine(model: CatalogEntry | null | undefined): ExplicitInternalVideoModelEngine | null {
+  const engine = String(model?.render?.video_model_engine || "").trim().toLowerCase();
+  return engine === "svd" || engine === "animatediff" ? engine : null;
+}
+
 type SelectedLora = {
   name: string;
   label: string;
@@ -204,7 +222,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalResumeExisting, setInternalResumeExisting] = useState<boolean>(savedRenderDefaults.internalResumeExisting ?? true);
   const [internalMotionStrategy, setInternalMotionStrategy] = useState<"manual"|"storyboard_full_motion">((savedRenderDefaults.internalMotionStrategy as any) || "manual");
   const [internalStoryboardShotMax, setInternalStoryboardShotMax] = useState<number>(Number(savedRenderDefaults.internalStoryboardShotMaxS ?? 4));
-  const [internalVideoModelEngine, setInternalVideoModelEngine] = useState<"auto"|"svd"|"animatediff">("auto");
+  const [internalVideoModelEngine, setInternalVideoModelEngine] = useState<InternalVideoModelEngine>("auto");
   const [internalVideoModelId, setInternalVideoModelId] = useState<string>("");
   const [internalVideoMaxFrames, setInternalVideoMaxFrames] = useState<number>(25);
   const [internalVideoMotionBucket, setInternalVideoMotionBucket] = useState<number>(127);
@@ -396,6 +414,38 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     ),
     [modelCatalog]
   );
+  const canonicalInternalVideoModelIds = useMemo(() => {
+    const resolveCanonical = (engine: ExplicitInternalVideoModelEngine) => {
+      const compatible = internalVideoModelOptions.filter((model) => declaredInternalVideoModelEngine(model) === engine);
+      return compatible.find((model) => model.id === CANONICAL_INTERNAL_VIDEO_MODEL_IDS[engine])?.id
+        || compatible[0]?.id
+        || "";
+    };
+    return {
+      svd: resolveCanonical("svd"),
+      animatediff: resolveCanonical("animatediff"),
+    };
+  }, [internalVideoModelOptions]);
+  const filteredInternalVideoModelOptions = useMemo(
+    () => internalVideoModelEngine === "auto"
+      ? internalVideoModelOptions
+      : internalVideoModelOptions.filter(
+        (model) => declaredInternalVideoModelEngine(model) === internalVideoModelEngine,
+      ),
+    [internalVideoModelEngine, internalVideoModelOptions],
+  );
+  const selectInternalVideoModelEngine = (value: unknown) => {
+    const engine = normalizeInternalVideoModelEngine(value);
+    setInternalVideoModelEngine(engine);
+    setInternalVideoModelId(engine === "auto" ? "" : canonicalInternalVideoModelIds[engine]);
+  };
+  const selectInternalVideoModel = (modelId: string) => {
+    setInternalVideoModelId(modelId);
+    if (!modelId) return;
+    const model = internalVideoModelOptions.find((candidate) => candidate.id === modelId);
+    const declaredEngine = declaredInternalVideoModelEngine(model);
+    if (declaredEngine) setInternalVideoModelEngine(declaredEngine);
+  };
   const supportedTensorRtInternalModels = useMemo(
     () => modelCatalog.filter((m) => m.id === "local_sd15_tensorrt_bundle" && m.render?.engine === "tensorrt_standalone"),
     [modelCatalog]
@@ -533,10 +583,25 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   useEffect(() => {
     if (!internalVideoModelId) return;
-    if (!internalVideoModelOptions.some((m) => m.id === internalVideoModelId)) {
+    const selectedModel = internalVideoModelOptions.find((model) => model.id === internalVideoModelId);
+    if (!selectedModel) {
+      if (!modelCatalog.length) return;
       setInternalVideoModelId("");
+      return;
     }
-  }, [internalVideoModelId, internalVideoModelOptions]);
+    if (
+      internalVideoModelEngine !== "auto"
+      && declaredInternalVideoModelEngine(selectedModel) !== internalVideoModelEngine
+    ) {
+      setInternalVideoModelId(canonicalInternalVideoModelIds[internalVideoModelEngine]);
+    }
+  }, [
+    canonicalInternalVideoModelIds,
+    internalVideoModelEngine,
+    internalVideoModelId,
+    internalVideoModelOptions,
+    modelCatalog.length,
+  ]);
 
   const internalHostedVisible = !!renderProviders?.stability?.visible;
   const fireflyVisible = !!renderProviders?.firefly?.visible;
@@ -551,6 +616,12 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const buildInternalPayload = () => {
     const useTensorRt = internalRenderMode === "tensorrt";
     const tensorRtModelId = tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle";
+    const selectedVideoModel = internalVideoModelOptions.find((model) => model.id === internalVideoModelId);
+    const payloadVideoModelId = internalVideoModelEngine === "auto"
+      ? (selectedVideoModel?.id || "")
+      : declaredInternalVideoModelEngine(selectedVideoModel) === internalVideoModelEngine
+        ? (selectedVideoModel?.id || "")
+        : canonicalInternalVideoModelIds[internalVideoModelEngine];
     return {
       variant_index: selectedVariant,
       fps_output: internalFpsOut,
@@ -566,7 +637,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       motion_strategy: useTensorRt ? "manual" : internalMotionStrategy,
       storyboard_shot_max_s: internalStoryboardShotMax,
       video_model_engine: internalVideoModelEngine,
-      video_model_id: internalVideoModelId || undefined,
+      video_model_id: payloadVideoModelId || undefined,
       video_model_max_frames_per_scene: internalVideoMaxFrames,
       video_model_motion_bucket_id: internalVideoMotionBucket,
       video_model_noise_aug_strength: internalVideoNoiseAug,
@@ -1342,8 +1413,27 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (p.resume_existing_frames != null) setInternalResumeExisting(Boolean(p.resume_existing_frames));
     if (p.motion_strategy) setInternalMotionStrategy(String(p.motion_strategy) as any);
     if (p.storyboard_shot_max_s != null) setInternalStoryboardShotMax(Number(p.storyboard_shot_max_s));
-    if (p.video_model_engine) setInternalVideoModelEngine(String(p.video_model_engine) as any);
-    if (p.video_model_id != null) setInternalVideoModelId(String(p.video_model_id || ""));
+    const hasRestoredVideoEngine = p.video_model_engine != null;
+    const hasRestoredVideoModel = p.video_model_id != null;
+    const restoredVideoEngine = normalizeInternalVideoModelEngine(p.video_model_engine);
+    const restoredVideoModelId = hasRestoredVideoModel ? String(p.video_model_id || "") : "";
+    const restoredVideoModel = internalVideoModelOptions.find((model) => model.id === restoredVideoModelId);
+    const restoredModelEngine = declaredInternalVideoModelEngine(restoredVideoModel);
+    if (hasRestoredVideoEngine) {
+      setInternalVideoModelEngine(restoredVideoEngine);
+      if (restoredVideoEngine === "auto") {
+        setInternalVideoModelId(restoredVideoModel?.id || "");
+      } else {
+        setInternalVideoModelId(
+          restoredModelEngine === restoredVideoEngine
+            ? (restoredVideoModel?.id || "")
+            : canonicalInternalVideoModelIds[restoredVideoEngine],
+        );
+      }
+    } else if (hasRestoredVideoModel) {
+      setInternalVideoModelId(restoredVideoModel?.id || "");
+      if (restoredModelEngine) setInternalVideoModelEngine(restoredModelEngine);
+    }
     if (p.video_model_max_frames_per_scene != null) setInternalVideoMaxFrames(Number(p.video_model_max_frames_per_scene));
     if (p.video_model_motion_bucket_id != null) setInternalVideoMotionBucket(Number(p.video_model_motion_bucket_id));
     if (p.video_model_noise_aug_strength != null) setInternalVideoNoiseAug(Number(p.video_model_noise_aug_strength));
@@ -2548,7 +2638,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                          <div style={{ minWidth: 160 }}>
                            <div className="small">Adapter engine</div>
-                           <select value={internalVideoModelEngine} onChange={(e) => setInternalVideoModelEngine(e.target.value as any)}>
+                            <select value={internalVideoModelEngine} onChange={(e) => selectInternalVideoModelEngine(e.target.value)}>
                              <option value="auto">Auto installed</option>
                              <option value="svd">SVD image-to-video</option>
                              <option value="animatediff">AnimateDiff SD1.5</option>
@@ -2556,9 +2646,9 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                          </div>
                         <div style={{ minWidth: 280 }}>
                           <div className="small">Video model</div>
-                          <select value={internalVideoModelId} onChange={(e) => setInternalVideoModelId(e.target.value)}>
-                             <option value="">Auto select installed adapter</option>
-                             {internalVideoModelOptions.map((m) => (
+                           <select value={internalVideoModelId} onChange={(e) => selectInternalVideoModel(e.target.value)}>
+                              <option value="">Auto select installed adapter</option>
+                              {filteredInternalVideoModelOptions.map((m) => (
                                <option key={m.id} value={m.id}>
                                  {m.name} {installedModels[m.id] === false ? "(not installed)" : ""}
                                </option>

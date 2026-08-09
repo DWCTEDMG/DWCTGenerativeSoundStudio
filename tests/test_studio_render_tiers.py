@@ -39,6 +39,23 @@ def _fake_internal_model(tmp_path: Path, model_id: str, class_name: str | None =
     return path
 
 
+def _fake_internal_video_model(tmp_path: Path, model_id: str, engine: str) -> Path:
+    path = tmp_path / "models" / "internal" / "video" / model_id
+    path.mkdir(parents=True, exist_ok=True)
+    if engine == "svd":
+        (path / "model_index.json").write_text(
+            '{"_class_name":"StableVideoDiffusionPipeline"}',
+            encoding="utf-8",
+        )
+    else:
+        (path / "config.json").write_text(
+            '{"_class_name":"MotionAdapter"}',
+            encoding="utf-8",
+        )
+        (path / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+    return path
+
+
 def test_internal_preflight_uses_creative_direction_fallback_when_plan_is_missing(tmp_path, monkeypatch):
     store = ProjectStore(tmp_path / "data")
     jobs = JobStore(store.projects_dir)
@@ -212,9 +229,12 @@ def test_internal_preflight_resolves_video_model_settings_without_mutating_froze
     })
     installed = {
         "hf_sd15_internal": _fake_internal_model(tmp_path, "hf_sd15_internal"),
-        "hf_animatediff_motion_adapter_v15_2_internal": tmp_path / "models" / "internal" / "video" / "hf_animatediff_motion_adapter_v15_2_internal",
+        "hf_animatediff_motion_adapter_v15_2_internal": _fake_internal_video_model(
+            tmp_path,
+            "hf_animatediff_motion_adapter_v15_2_internal",
+            "animatediff",
+        ),
     }
-    installed["hf_animatediff_motion_adapter_v15_2_internal"].mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
 
     preflight = studio_app._internal_render_preflight_data(
@@ -277,9 +297,12 @@ def test_internal_preflight_reports_motion_score_anchor_and_validation(tmp_path,
     })
     installed = {
         "hf_sdxl_internal": _fake_internal_model(tmp_path, "hf_sdxl_internal", "StableDiffusionXLPipeline"),
-        "hf_svd_xt_1_1_internal": tmp_path / "models" / "internal" / "video" / "hf_svd_xt_1_1_internal",
+        "hf_svd_xt_1_1_internal": _fake_internal_video_model(
+            tmp_path,
+            "hf_svd_xt_1_1_internal",
+            "svd",
+        ),
     }
-    installed["hf_svd_xt_1_1_internal"].mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
 
     preflight = studio_app._internal_render_preflight_data(
@@ -331,9 +354,12 @@ def test_storyboard_full_motion_preflight_generates_anchor_shot_plan(tmp_path, m
     })
     installed = {
         "hf_sdxl_internal": _fake_internal_model(tmp_path, "hf_sdxl_internal", "StableDiffusionXLPipeline"),
-        "hf_svd_xt_1_1_internal": tmp_path / "models" / "internal" / "video" / "hf_svd_xt_1_1_internal",
+        "hf_svd_xt_1_1_internal": _fake_internal_video_model(
+            tmp_path,
+            "hf_svd_xt_1_1_internal",
+            "svd",
+        ),
     }
-    installed["hf_svd_xt_1_1_internal"].mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
 
     preflight = studio_app._internal_render_preflight_data(

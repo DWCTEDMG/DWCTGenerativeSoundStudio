@@ -1822,6 +1822,60 @@ def _apply_runtime_checkpoint_state(project_id: str, job: Any, runtime_checkpoin
     return jobs.get(project_id, job.id) or job
 
 
+def _terminalize_failed_runtime_checkpoint(project_id: str, job: Any, *, message: str) -> None:
+    """Make a persisted render checkpoint agree with a terminally failed job."""
+
+    progress = dict(job.progress) if isinstance(getattr(job, "progress", None), dict) else {}
+    progress["stage"] = "failed"
+    progress["message"] = str(message or "Render failed")
+    job.progress = progress
+
+    runtime_checkpoint = _runtime_checkpoint_from_job(project_id, job)
+    if not runtime_checkpoint:
+        jobs.save(job)
+        return
+    completed_frames = max(0, int(runtime_checkpoint.get("completed_frames") or 0))
+    total_frames = max(0, int(runtime_checkpoint.get("total_frames") or 0))
+    outputs = dict(runtime_checkpoint.get("outputs") or {})
+    can_resume = bool(
+        completed_frames > 0
+        and (total_frames <= 0 or completed_frames < total_frames)
+        and not bool(outputs.get("final_exists"))
+    )
+    runtime_checkpoint.update(
+        {
+            "status": "failed",
+            "stage": "failed",
+            "message": str(message or "Render failed"),
+            "can_resume": can_resume,
+            "resume_recommended": can_resume,
+            "updated_at": time.time(),
+        }
+    )
+    checkpoint_value = outputs.get("checkpoint_json")
+    checkpoint_path = _safe_project_path(
+        store.project_dir(project_id),
+        str(checkpoint_value) if checkpoint_value else None,
+    )
+    if checkpoint_path is not None:
+        try:
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_path.write_text(
+                json.dumps(runtime_checkpoint, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            logger.warning(
+                "Unable to terminalize failed render checkpoint: project=%s job=%s",
+                project_id,
+                getattr(job, "id", "unknown"),
+                exc_info=True,
+            )
+    progress["runtime_checkpoint"] = dict(runtime_checkpoint)
+    job.progress = progress
+    _apply_runtime_checkpoint_state(project_id, job, runtime_checkpoint)
+
+
 def _remove_path(path: Path | None) -> bool:
     if path is None or not path.exists():
         return False
@@ -1895,6 +1949,73 @@ def _mutate_internal_job_artifacts(project_id: str, job: Any, *, clear_cached_fr
     }
 
 
+_RESOLVED_INTERNAL_VIDEO_PAYLOAD_KEYS = (
+    "temporal_mode",
+    "temporal_steps",
+    "video_model_engine",
+    "video_model_id",
+    "video_model_max_frames_per_scene",
+    "video_model_decode_chunk_size",
+    "video_model_dtype",
+    "video_model_cpu_offload",
+    "video_model_motion_score_mode",
+    "video_model_manual_motion_score",
+    "video_model_anchor_mode",
+    "video_model_prompt_refine",
+    "video_model_scene_motion",
+    "video_model_apply_timeline_camera",
+    "video_model_keyframe_renderer",
+    "video_model_keyframe_model_id",
+)
+
+
+def _persist_resolved_internal_video_payload(
+    payload: dict[str, Any],
+    preflight: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the executable model pair and memory policy returned by preflight."""
+
+    resolved = dict(payload)
+    mode = str(preflight.get("mode") or resolved.get("render_mode") or "auto").strip().lower()
+    resolved["render_mode"] = mode
+    if mode != "diffusion":
+        return resolved
+
+    settings_data = preflight.get("settings")
+    if not isinstance(settings_data, dict):
+        return resolved
+    if preflight.get("model_id"):
+        resolved["model_id"] = str(preflight["model_id"])
+    for key in _RESOLVED_INTERNAL_VIDEO_PAYLOAD_KEYS:
+        if key in settings_data and settings_data[key] is not None:
+            resolved[key] = settings_data[key]
+    resolved.pop("video_model_path", None)
+    resolved["_render_recipe_graph"] = parseq_adapter.build_render_recipe_graph(
+        manifest=resolved.get("parseq_manifest") if isinstance(resolved.get("parseq_manifest"), dict) else None,
+        internal_request=resolved,
+    )
+    return resolved
+
+
+def _repair_legacy_internal_video_selection(payload: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Repair only the two known mismatched pairs written by older Studio builds."""
+
+    repaired = dict(payload)
+    engine = str(repaired.get("video_model_engine") or "auto").strip().lower()
+    model_id = str(repaired.get("video_model_id") or "").strip()
+    declared_engine = INTERNAL_VIDEO_MODEL_ENGINES.get(model_id)
+    if engine not in {"svd", "animatediff"} or not declared_engine or engine == declared_engine:
+        return repaired, None
+    canonical_model_id = (
+        INTERNAL_SVD_VIDEO_MODEL_ID if engine == "svd" else INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID
+    )
+    repaired["video_model_id"] = canonical_model_id
+    return (
+        repaired,
+        f"Normalized legacy {engine}/{model_id} selection to {engine}/{canonical_model_id} before retry.",
+    )
+
+
 def _enqueue_internal_job_from_source(project_id: str, source_job: Any, *, resume_existing_frames: bool, queue_action: str) -> dict[str, Any]:
     payload = deepcopy(getattr(source_job, "payload", None) or {})
     payload["resume_existing_frames"] = bool(resume_existing_frames)
@@ -1903,7 +2024,9 @@ def _enqueue_internal_job_from_source(project_id: str, source_job: Any, *, resum
     if not resume_existing_frames:
         payload["queue_clean_restart"] = True
 
+    payload, legacy_selection_note = _repair_legacy_internal_video_selection(payload)
     preflight = _internal_render_preflight_data(project_id, payload)
+    payload = _persist_resolved_internal_video_payload(payload, preflight)
     mode = str(preflight.get("mode") or payload.get("render_mode") or "auto")
     model_id = str(preflight.get("model_id") or payload.get("model_id") or ("proxy_draft" if mode == "proxy" else "auto"))
     checkpoint = _runtime_checkpoint_from_job(project_id, source_job)
@@ -1931,6 +2054,8 @@ def _enqueue_internal_job_from_source(project_id: str, source_job: Any, *, resum
     }
     jobs.save(job)
     jobs.append_log(project_id, job.id, f"Queued {queue_action} from job {source_job.id}")
+    if legacy_selection_note:
+        jobs.append_log(project_id, job.id, legacy_selection_note)
     if checkpoint:
         jobs.append_log(
             project_id,
@@ -6684,9 +6809,24 @@ def retry_job(project_id: str, job_id: str):
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
+    source_job = jobs.get(project_id, job_id)
+    if not source_job:
+        raise HTTPException(404, "Job not found")
+    if source_job.status not in ("succeeded", "failed", "canceled"):
+        raise HTTPException(409, "Only completed, failed, or canceled jobs can be retried")
+    legacy_selection_note: str | None = None
+    if source_job.type == "internal_video":
+        retry_payload, legacy_selection_note = _repair_legacy_internal_video_selection(
+            deepcopy(source_job.payload or {})
+        )
+        preflight = _internal_render_preflight_data(project_id, retry_payload)
+        source_job.payload = _persist_resolved_internal_video_payload(retry_payload, preflight)
+        jobs.save(source_job)
     job = jobs.retry(project_id, job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    if legacy_selection_note:
+        jobs.append_log(project_id, job.id, legacy_selection_note)
     return {"ok": True, "job": job.__dict__}
 
 
@@ -6793,6 +6933,20 @@ def _tensorrt_deforum_compatibility_result(result: dict[str, Any] | None) -> dic
     return compatible
 
 
+def _public_render_job_error(exc: Exception) -> str:
+    """Return only curated failure details suitable for the Studio job UI."""
+
+    if isinstance(exc, UserFacingError):
+        parts = [str(exc.message or "Render job failed.").strip()]
+        if exc.hint:
+            parts.append(f"Fix: {str(exc.hint).strip()}")
+        if exc.code:
+            parts.append(f"Code: {str(exc.code).strip()}")
+        return "\n".join(part for part in parts if part)
+    hint = hint_from_exception(exc)
+    return "Render job failed." + (f"\nFix: {hint}" if hint else "")
+
+
 def _execute_job(job):
     jobs.append_log(job.project_id, job.id, f"Started job type={job.type}")
 
@@ -6880,8 +7034,13 @@ def _execute_job(job):
             job.error = None
         else:
             job.status = "failed"
-            hint = hint_from_exception(exc)
-            job.error = "Render job failed." + (f"\nFix: {hint}" if hint else "")
+            job.error = _public_render_job_error(exc)
+            checkpoint_job = latest or job
+            _terminalize_failed_runtime_checkpoint(
+                job.project_id,
+                checkpoint_job,
+                message=job.error.splitlines()[0],
+            )
 
     jobs.append_log(job.project_id, job.id, f"Finished status={job.status}")
     if job.error:
@@ -6967,6 +7126,14 @@ def _run_job_in_subprocess(job) -> None:
     if latest.status in ("succeeded", "failed", "canceled"):
         return
     # Child exited without finalizing the job (crash / OOM / killed).
+    latest.status = "failed"
+    latest.error = f"Render worker process exited unexpectedly (exit code {rc})."
+    _terminalize_failed_runtime_checkpoint(
+        job.project_id,
+        latest,
+        message=latest.error,
+    )
+    latest = jobs.get(job.project_id, job.id) or latest
     latest.status = "failed"
     latest.error = f"Render worker process exited unexpectedly (exit code {rc})."
     jobs.save(latest)
@@ -9252,9 +9419,7 @@ def _enqueue_internal_video_job(
 
     resolved_payload, _parseq = _apply_active_parseq_motion(proj, payload)
     preflight = _internal_render_preflight_data(project_id, resolved_payload)
-    resolved_payload["render_mode"] = str(
-        preflight.get("mode") or resolved_payload.get("render_mode") or "auto"
-    )
+    resolved_payload = _persist_resolved_internal_video_payload(resolved_payload, preflight)
     estimated_total = max(1, int(preflight.get("estimated_frames", 1)) + 3)
     if str(preflight.get("mode") or "").strip().lower() == "tensorrt":
         estimated_total += max(0, int(preflight.get("estimated_keyframes", 0)))
@@ -10080,6 +10245,10 @@ TENSORRT_VIDEO_MODEL_ID = "local_sd15_tensorrt_bundle"
 INTERNAL_SVD_VIDEO_MODEL_ID = "hf_svd_xt_1_1_internal"
 INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID = "hf_animatediff_motion_adapter_v15_2_internal"
 INTERNAL_VIDEO_MODEL_IDS = (INTERNAL_SVD_VIDEO_MODEL_ID, INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
+INTERNAL_VIDEO_MODEL_ENGINES = {
+    INTERNAL_SVD_VIDEO_MODEL_ID: "svd",
+    INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID: "animatediff",
+}
 
 
 def _tensorrt_sd15_bundle_available() -> bool:
@@ -10091,12 +10260,7 @@ def _installed_internal_video_models_status() -> dict[str, bool]:
 
 
 def _video_model_engine_from_id(model_id: str | None) -> str:
-    raw = str(model_id or "").lower()
-    if "animatediff" in raw:
-        return "animatediff"
-    if "svd" in raw or "stable-video" in raw:
-        return "svd"
-    return "svd"
+    return INTERNAL_VIDEO_MODEL_ENGINES.get(str(model_id or "").strip(), "svd")
 
 
 def _resolve_internal_video_model_selection(
@@ -10109,7 +10273,38 @@ def _resolve_internal_video_model_selection(
     installed_svd = models.installed_path(INTERNAL_SVD_VIDEO_MODEL_ID)
     installed_ad = models.installed_path(INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
 
+    if requested_engine not in {"auto", "svd", "animatediff"}:
+        raise UserFacingError(
+            "Selected internal video adapter engine is not supported",
+            hint="Choose Auto installed, SVD image-to-video, or AnimateDiff SD1.5.",
+            code="INTERNAL_VIDEO_MODEL_ENGINE_UNKNOWN",
+            status_code=400,
+        )
+
     if requested_model_id:
+        expected_engine = INTERNAL_VIDEO_MODEL_ENGINES.get(requested_model_id)
+        if not expected_engine:
+            raise UserFacingError(
+                "Selected model is not a supported internal video model",
+                hint="Open Models and select Stable Video Diffusion XT 1.1 or AnimateDiff Motion Adapter.",
+                code="INTERNAL_VIDEO_MODEL_UNSUPPORTED",
+                status_code=400,
+            )
+        if requested_engine != "auto" and requested_engine != expected_engine:
+            expected_label = (
+                "Stable Video Diffusion XT 1.1"
+                if requested_engine == "svd"
+                else "AnimateDiff Motion Adapter"
+            )
+            raise UserFacingError(
+                "Selected internal video model does not match the adapter engine",
+                hint=(
+                    f"{requested_engine.upper()} requires {expected_label}. Choose the matching model, "
+                    "or switch the adapter engine to match the selected model."
+                ),
+                code="INTERNAL_VIDEO_MODEL_ENGINE_MODEL_MISMATCH",
+                status_code=400,
+            )
         path = models.installed_path(requested_model_id)
         if not path:
             raise UserFacingError(
@@ -10118,7 +10313,7 @@ def _resolve_internal_video_model_selection(
                 code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
                 status_code=400,
             )
-        engine = requested_engine if requested_engine in {"svd", "animatediff"} else _video_model_engine_from_id(requested_model_id)
+        engine = expected_engine
     elif requested_engine == "animatediff":
         path = installed_ad
         engine = "animatediff"
@@ -10148,6 +10343,9 @@ def _resolve_internal_video_model_selection(
             status_code=400,
         )
 
+    resolved_path = Path(path)
+    internal_video_models.validate_video_model_layout(engine, resolved_path)
+
     if engine == "animatediff" and str(base_model_family or "").lower() != "sd15":
         raise UserFacingError(
             "AnimateDiff internal motion needs an SD 1.5 internal base model",
@@ -10156,7 +10354,7 @@ def _resolve_internal_video_model_selection(
             status_code=400,
         )
 
-    return engine, requested_model_id, Path(path)
+    return engine, requested_model_id, resolved_path
 
 
 def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSettings, hw: dict[str, Any]) -> InternalVideoSettings:

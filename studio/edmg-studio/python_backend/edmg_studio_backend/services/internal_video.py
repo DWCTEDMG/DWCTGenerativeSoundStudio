@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover
 
 from .compositor import apply_timeline_layers
 from .ffmpeg import assemble_image_sequence, has_video_stream, interpolate_video_fps, mux_audio
-from .internal_video_models import generate_video_model_frames
+from .internal_video_models import generate_video_model_frames, validate_video_model_layout
 
 
 @dataclass(frozen=True)
@@ -262,6 +262,27 @@ def _video_model_adapter_canvas(
             label = "SVD" if engine_l == "svd" else "AnimateDiff"
             return adapter_w, adapter_h, f"8 GB CUDA {label} canvas capped to {adapter_w}x{adapter_h}"
     return int(width), int(height), None
+
+
+def _video_model_temporal_step_cap(*, engine: str, device: str) -> int | None:
+    """Return the mandatory inference-step ceiling for low-VRAM CUDA video models."""
+
+    engine_l = str(engine or "").strip().lower()
+    if engine_l not in {"svd", "animatediff"} or str(device or "").strip().lower() != "cuda":
+        return None
+    vram_gb = _cuda_total_vram_gb(device)
+    if vram_gb <= 0.0:
+        return None
+    if vram_gb <= 6.5:
+        return 6 if engine_l == "svd" else 8
+    if vram_gb <= 8.5:
+        return 8 if engine_l == "svd" else 10
+    return None
+
+
+def _apply_video_model_temporal_step_cap(scheduled_steps: int, step_cap: int | None) -> int:
+    steps = max(1, int(scheduled_steps))
+    return min(steps, max(1, int(step_cap))) if step_cap is not None else steps
 
 
 def _stable_seed_int(*parts: Any, fallback: int = 0) -> int:
@@ -2335,6 +2356,42 @@ def render_internal_video_variant(
     _require_pillow()
 
     device = _device_auto(settings.device_preference)
+    video_model_path: Path | None = None
+    video_model_engine: str | None = None
+    video_model_temporal_step_cap: int | None = None
+    if settings.temporal_mode == "video_model":
+        raw_video_model_path = str(settings.video_model_path or "").strip()
+        if not settings.video_model_id or not raw_video_model_path:
+            raise UserFacingError(
+                "Internal video motion model is not installed",
+                hint=(
+                    "Open Models and install Internal SVD or Internal AnimateDiff, then retry "
+                    "with Temporal mode set to Internal video model."
+                ),
+                code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
+                status_code=400,
+            )
+        video_model_path = Path(raw_video_model_path)
+        video_model_engine = str(settings.video_model_engine or "svd").strip().lower()
+        if video_model_engine == "auto":
+            video_model_engine = (
+                "animatediff" if "animatediff" in str(settings.video_model_id or "").lower() else "svd"
+            )
+        validate_video_model_layout(video_model_engine, video_model_path)
+        if video_model_engine == "animatediff" and _model_family_from_dir(model_dir) != "sd15":
+            raise UserFacingError(
+                "AnimateDiff internal motion needs an SD 1.5 internal base model",
+                hint=(
+                    "Switch Internal model to Stable Diffusion v1.5, or use the SVD internal "
+                    "video model with SDXL/SD3 keyframes."
+                ),
+                code="INTERNAL_VIDEO_MODEL_BASE_UNSUPPORTED",
+                status_code=400,
+            )
+        video_model_temporal_step_cap = _video_model_temporal_step_cap(
+            engine=video_model_engine,
+            device=device,
+        )
     keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
     use_tensorrt_keyframes = settings.temporal_mode == "video_model" and keyframe_renderer == "tensorrt_sd15"
     resolved_tensorrt_bundle_path: Path | None = None
@@ -2560,25 +2617,9 @@ def render_internal_video_variant(
         _release_still_pipeline_memory(pipes, device, log_fn=log_fn)
         pipes = None  # type: ignore[assignment]
 
-        video_model_path = Path(str(settings.video_model_path or ""))
-        if not settings.video_model_id or not video_model_path.exists():
-            raise UserFacingError(
-                "Internal video motion model is not installed",
-                hint="Open Models and install Internal SVD or Internal AnimateDiff, then retry with Temporal mode set to Internal video model.",
-                code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
-                status_code=400,
-            )
-
-        engine = str(settings.video_model_engine or "svd").strip().lower()
-        if engine == "auto":
-            engine = "animatediff" if "animatediff" in str(settings.video_model_id or "").lower() else "svd"
-        if engine == "animatediff" and _model_family_from_dir(model_dir) != "sd15":
-            raise UserFacingError(
-                "AnimateDiff internal motion needs an SD 1.5 internal base model",
-                hint="Switch Internal model to Stable Diffusion v1.5, or use the SVD internal video model with SDXL/SD3 keyframes.",
-                code="INTERNAL_VIDEO_MODEL_BASE_UNSUPPORTED",
-                status_code=400,
-            )
+        if video_model_path is None or video_model_engine is None:
+            raise RuntimeError("Internal video model preflight state was not initialized.")
+        engine = video_model_engine
 
         if log_fn:
             log_fn(
@@ -2718,7 +2759,19 @@ def render_internal_video_variant(
                 defaults={"cfg": settings.cfg, "steps": float(settings.temporal_steps or settings.steps)},
             )
             cfg_for_scene = float(mp_scene.cfg if mp_scene.cfg is not None else settings.cfg)
-            steps_for_scene = int(float(mp_scene.steps if mp_scene.steps is not None else (settings.temporal_steps or settings.steps)))
+            scheduled_steps = max(
+                1,
+                int(float(mp_scene.steps if mp_scene.steps is not None else (settings.temporal_steps or settings.steps))),
+            )
+            steps_for_scene = _apply_video_model_temporal_step_cap(
+                scheduled_steps,
+                video_model_temporal_step_cap,
+            )
+            if video_model_temporal_step_cap is not None and scheduled_steps > steps_for_scene and log_fn:
+                log_fn(
+                    f"Low-VRAM CUDA safety capped scheduled {engine} temporal steps "
+                    f"from {scheduled_steps} to {steps_for_scene}."
+                )
             noise_aug_strength = _scheduled_numeric(
                 settings.video_model_noise_aug_schedule,
                 schedule_frame,

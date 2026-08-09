@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import random
 from pathlib import Path
 from typing import Any
@@ -8,8 +9,83 @@ from typing import Any
 from ..errors import UserFacingError
 from .model_weights import diffusers_weight_load_kwargs
 
-
 _VIDEO_PIPELINE_CACHE: dict[tuple[str, str, str, str], Any] = {}
+
+
+def validate_video_model_layout(engine: str, model_dir: Path) -> None:
+    """Reject mismatched or incomplete internal video assets before loading Diffusers."""
+
+    engine_l = str(engine or "").strip().lower()
+    model_dir = Path(model_dir)
+    if engine_l not in {"svd", "animatediff"}:
+        raise UserFacingError(
+            f"Unknown internal video model engine: {engine}",
+            hint="Choose auto, SVD image-to-video, or AnimateDiff SD1.5.",
+            code="INTERNAL_VIDEO_MODEL_ENGINE_UNKNOWN",
+            status_code=400,
+        )
+
+    if not model_dir.is_dir():
+        raise UserFacingError(
+            "Internal video model is not installed",
+            hint="Open Models and install the selected internal video model, then retry.",
+            code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
+            status_code=400,
+        )
+
+    config_name = "model_index.json" if engine_l == "svd" else "config.json"
+    config_path = model_dir / config_name
+    if not config_path.is_file():
+        model_label = "SVD pipeline" if engine_l == "svd" else "AnimateDiff motion adapter"
+        raise UserFacingError(
+            f"Selected internal video model is not a complete {model_label}",
+            hint=(
+                f"Open Models and reinstall the {model_label}. The selected folder is missing "
+                f"{config_name}, so Studio will not start the render."
+            ),
+            code="INTERNAL_VIDEO_MODEL_LAYOUT_INVALID",
+            status_code=400,
+        )
+
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise UserFacingError(
+            "Selected internal video model has an unreadable configuration",
+            hint=f"Open Models and reinstall the selected video model; {config_name} is invalid.",
+            code="INTERNAL_VIDEO_MODEL_LAYOUT_INVALID",
+            status_code=400,
+        ) from exc
+
+    class_name = str(config.get("_class_name") or "") if isinstance(config, dict) else ""
+    expected_class = "StableVideoDiffusionPipeline" if engine_l == "svd" else "MotionAdapter"
+    if expected_class.lower() not in class_name.lower():
+        raise UserFacingError(
+            "Selected internal video model does not match the adapter engine",
+            hint=(
+                f"The {engine_l} engine expected {expected_class}, but the selected model declares "
+                f"{class_name}. Choose the matching video model and retry."
+            ),
+            code="INTERNAL_VIDEO_MODEL_ENGINE_MODEL_MISMATCH",
+            status_code=400,
+        )
+
+    if engine_l == "animatediff":
+        weight_files = [
+            path
+            for path in model_dir.glob("diffusion_pytorch_model*")
+            if path.is_file() and path.name != config_name
+        ]
+        if not weight_files:
+            raise UserFacingError(
+                "Selected AnimateDiff motion adapter is incomplete",
+                hint=(
+                    "Open Models and reinstall AnimateDiff Motion Adapter. The selected folder "
+                    "does not contain its diffusion_pytorch_model weights."
+                ),
+                code="INTERNAL_VIDEO_MODEL_LAYOUT_INVALID",
+                status_code=400,
+            )
 
 
 def dependency_status() -> dict[str, Any]:
@@ -272,6 +348,7 @@ def generate_video_model_frames(
         )
 
     engine_l = str(engine or "svd").strip().lower()
+    validate_video_model_layout(engine_l, video_model_dir)
     dtype_l = "float16" if str(dtype or "auto").strip().lower() == "auto" and device == "cuda" else str(dtype or "float32")
     generator, used_seed = _seeded_generator(seed, device)
 

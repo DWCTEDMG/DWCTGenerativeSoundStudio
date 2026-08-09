@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import Render from "../pages/Render";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
-const installRenderMocks = (options: { tensorRtInstalled?: boolean } = {}) => {
+const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array<Record<string, unknown>> } = {}) => {
   installEdmgBridge();
   return installFetchMock({
     "/v1/projects": { projects: [{ id: "p1", name: "Demo Project" }] },
@@ -102,6 +102,31 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean } = {}) => {
             family: "svd",
           },
         },
+        {
+          id: "hf_svd_xt_1_1_internal",
+          name: "Stable Video Diffusion XT 1.1 (Internal / Diffusers)",
+          kind: "video_diffusers",
+          engine: "internal",
+          family: "svd",
+          render: {
+            engine: "internal_video_model",
+            render_modes: ["internal_video_model"],
+            video_model_engine: "svd",
+          },
+        },
+        {
+          id: "hf_animatediff_motion_adapter_v15_2_internal",
+          name: "AnimateDiff Motion Adapter v1.5 v2 (Internal / Diffusers)",
+          kind: "motion_adapter",
+          engine: "internal",
+          family: "animatediff",
+          render: {
+            engine: "internal_video_model",
+            render_modes: ["internal_video_model"],
+            video_model_engine: "animatediff",
+            base_family: "sd15",
+          },
+        },
       ],
       user: [
         {
@@ -120,6 +145,8 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean } = {}) => {
         hf_sd35_medium_internal: true,
         local_sd15_tensorrt_bundle: options.tensorRtInstalled ?? true,
         hf_svd_xt_1_1_tensorrt_bundle: true,
+        hf_svd_xt_1_1_internal: true,
+        hf_animatediff_motion_adapter_v15_2_internal: true,
       },
     },
     "/v1/projects/p1": {
@@ -277,7 +304,7 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean } = {}) => {
         ],
       },
     },
-    "/v1/projects/p1/jobs": { jobs: [] },
+    "/v1/projects/p1/jobs": { jobs: options.jobs ?? [] },
   });
 };
 
@@ -344,6 +371,105 @@ describe("Render page", () => {
     renderWithStudio(<Render />);
 
     expect(await screen.findByDisplayValue("Internal motion (frame img2img)")).toBeTruthy();
+  }, 10000);
+
+  it("keeps explicit internal video engines coupled to compatible models", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    const temporalOption = await screen.findByRole("option", { name: "Internal video model (SVD / AnimateDiff)" });
+    const temporalSelect = temporalOption.closest("select") as HTMLSelectElement;
+    fireEvent.change(temporalSelect, { target: { value: "video_model" } });
+
+    const engineOption = await screen.findByRole("option", { name: "Auto installed" });
+    const engineSelect = engineOption.closest("select") as HTMLSelectElement;
+    const autoModelOption = await screen.findByRole("option", { name: "Auto select installed adapter" });
+    const modelSelect = autoModelOption.closest("select") as HTMLSelectElement;
+
+    fireEvent.change(engineSelect, { target: { value: "svd" } });
+
+    await waitFor(() => {
+      expect(engineSelect.value).toBe("svd");
+      expect(modelSelect.value).toBe("hf_svd_xt_1_1_internal");
+    });
+    expect(Array.from(modelSelect.options, (option) => option.value)).toContain("hf_svd_xt_1_1_internal");
+    expect(Array.from(modelSelect.options, (option) => option.value)).not.toContain("hf_animatediff_motion_adapter_v15_2_internal");
+
+    fireEvent.change(engineSelect, { target: { value: "auto" } });
+
+    await waitFor(() => expect(modelSelect.value).toBe(""));
+    expect(Array.from(modelSelect.options, (option) => option.value)).toEqual(expect.arrayContaining([
+      "hf_svd_xt_1_1_internal",
+      "hf_animatediff_motion_adapter_v15_2_internal",
+    ]));
+
+    fireEvent.change(modelSelect, { target: { value: "hf_animatediff_motion_adapter_v15_2_internal" } });
+
+    await waitFor(() => {
+      expect(engineSelect.value).toBe("animatediff");
+      expect(modelSelect.value).toBe("hf_animatediff_motion_adapter_v15_2_internal");
+    });
+    await waitFor(() => {
+      const preflightBodies = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/v1/projects/p1/render/internal/preflight"))
+        .map(([, init]) => String(init?.body || ""));
+      expect(preflightBodies.some((body) => (
+        body.includes('"video_model_engine":"animatediff"')
+        && body.includes('"video_model_id":"hf_animatediff_motion_adapter_v15_2_internal"')
+      ))).toBe(true);
+      expect(preflightBodies.some((body) => (
+        body.includes('"video_model_engine":"svd"')
+        && body.includes('"video_model_id":"hf_animatediff_motion_adapter_v15_2_internal"')
+      ))).toBe(false);
+    });
+  }, 10000);
+
+  it("normalizes stale restored video settings with the explicit engine winning", async () => {
+    const fetchMock = installRenderMocks({
+      jobs: [{
+        id: "stale-video-selection",
+        project_id: "p1",
+        type: "internal_video",
+        status: "failed",
+        created_at: "2026-08-09T13:56:56Z",
+        payload: {
+          variant_index: 0,
+          temporal_mode: "video_model",
+          video_model_engine: "svd",
+          video_model_id: "hf_animatediff_motion_adapter_v15_2_internal",
+        },
+      }],
+    });
+
+    renderWithStudio(<Render />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Use latest job settings" }));
+
+    const engineOption = await screen.findByRole("option", { name: "SVD image-to-video" });
+    const engineSelect = engineOption.closest("select") as HTMLSelectElement;
+    const modelOption = await screen.findByRole("option", { name: "Stable Video Diffusion XT 1.1 (Internal / Diffusers)" });
+    const modelSelect = modelOption.closest("select") as HTMLSelectElement;
+
+    await waitFor(() => {
+      expect(engineSelect.value).toBe("svd");
+      expect(modelSelect.value).toBe("hf_svd_xt_1_1_internal");
+    });
+    expect(Array.from(modelSelect.options, (option) => option.value)).not.toContain("hf_animatediff_motion_adapter_v15_2_internal");
+
+    await waitFor(() => {
+      const preflightBodies = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/v1/projects/p1/render/internal/preflight"))
+        .map(([, init]) => String(init?.body || ""));
+      expect(preflightBodies.some((body) => (
+        body.includes('"video_model_engine":"svd"')
+        && body.includes('"video_model_id":"hf_svd_xt_1_1_internal"')
+      ))).toBe(true);
+      expect(preflightBodies.some((body) => (
+        body.includes('"video_model_engine":"svd"')
+        && body.includes('"video_model_id":"hf_animatediff_motion_adapter_v15_2_internal"')
+      ))).toBe(false);
+    });
   }, 10000);
 
   it("sends video-model motion score and anchor controls in the internal renderer payload", async () => {

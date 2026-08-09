@@ -56,6 +56,56 @@ def test_video_model_load_error_wraps_git_lfs_message(tmp_path: Path) -> None:
     assert exc.value.code == "INTERNAL_VIDEO_MODEL_LFS_POINTER"
 
 
+def test_motion_adapter_layout_is_rejected_for_svd(tmp_path: Path) -> None:
+    (tmp_path / "config.json").write_text(
+        '{"_class_name": "MotionAdapter"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+
+    with pytest.raises(UserFacingError) as exc:
+        ivm.validate_video_model_layout("svd", tmp_path)
+
+    assert exc.value.code == "INTERNAL_VIDEO_MODEL_LAYOUT_INVALID"
+    assert "model_index.json" in (exc.value.hint or "")
+    assert str(tmp_path) not in exc.value.message
+    assert str(tmp_path) not in (exc.value.hint or "")
+
+
+def test_svd_layout_is_rejected_for_animatediff(tmp_path: Path) -> None:
+    (tmp_path / "model_index.json").write_text(
+        '{"_class_name": "StableVideoDiffusionPipeline"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UserFacingError) as exc:
+        ivm.validate_video_model_layout("animatediff", tmp_path)
+
+    assert exc.value.code == "INTERNAL_VIDEO_MODEL_LAYOUT_INVALID"
+    assert "config.json" in (exc.value.hint or "")
+    assert str(tmp_path) not in exc.value.message
+    assert str(tmp_path) not in (exc.value.hint or "")
+
+
+def test_video_model_layout_accepts_canonical_assets(tmp_path: Path) -> None:
+    svd_dir = tmp_path / "svd"
+    svd_dir.mkdir()
+    (svd_dir / "model_index.json").write_text(
+        '{"_class_name": "StableVideoDiffusionPipeline"}',
+        encoding="utf-8",
+    )
+    animatediff_dir = tmp_path / "animatediff"
+    animatediff_dir.mkdir()
+    (animatediff_dir / "config.json").write_text(
+        '{"_class_name": "MotionAdapter"}',
+        encoding="utf-8",
+    )
+    (animatediff_dir / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+
+    ivm.validate_video_model_layout("svd", svd_dir)
+    ivm.validate_video_model_layout("animatediff", animatediff_dir)
+
+
 def test_video_model_cache_key_separates_cpu_offload(tmp_path: Path, monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
