@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import gc
 import logging
 from functools import lru_cache
 from typing import Any
 
-
 logger = logging.getLogger(__name__)
 
 NO_SPEECH_AFTER_VAD_NOTE = "No speech detected after VAD."
+CUDA_ASR_CPU_FALLBACK_NOTE = "CUDA transcription was unavailable; used the CPU int8 fallback."
 DEFAULT_MODEL_SIZE = "turbo"
 DEFAULT_MODEL_FALLBACK_CHAIN = ("turbo", "large-v3", "medium", "small")
 DEFAULT_ASR_PROVIDER = "faster_whisper"
@@ -26,6 +27,20 @@ def _load_faster_whisper_model(model_size: str, device: str, compute_type: str):
     except Exception as e:
         raise RuntimeError("ASR requires the locked `asr` capability in the active uv profile.") from e
     return WhisperModel(model_size, device=device, compute_type=compute_type)
+
+
+def _release_failed_cuda_whisper_models() -> None:
+    """Release cached CTranslate2 CUDA models before retrying on the CPU."""
+    _load_faster_whisper_model.cache_clear()
+    gc.collect()
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        # Cache release is best-effort and must never hide the original ASR failure.
+        pass
 
 
 @lru_cache(maxsize=4)
@@ -289,23 +304,56 @@ def _transcribe_faster_whisper(
     last_error: Exception | None = None
     last_result: dict[str, Any] | None = None
     last_successful_model: str | None = None
+    last_successful_device: str | None = None
+    last_successful_compute_type: str | None = None
+    used_cuda_cpu_fallback = False
     resolved_device = _normalize_whisper_device(device)
     resolved_compute_type = _normalize_compute_type(compute_type, resolved_device)
+    attempt_profiles = [(resolved_device, resolved_compute_type)]
+    if resolved_device == "cuda":
+        attempt_profiles.append(("cpu", "int8"))
 
     for candidate in candidates:
-        try:
-            attempt = _transcribe_once(
-                path,
-                candidate,
-                vad_filter=True,
-                device=resolved_device,
-                compute_type=resolved_compute_type,
-            )
-        except Exception as exc:
-            last_error = exc
+        for attempt_device, attempt_compute_type in attempt_profiles:
+            try:
+                attempt = _transcribe_once(
+                    path,
+                    candidate,
+                    vad_filter=True,
+                    device=attempt_device,
+                    compute_type=attempt_compute_type,
+                )
+            except Exception as exc:
+                if attempt_device != "cuda":
+                    exc.__traceback__ = None
+                    exc.__context__ = None
+                    exc.__cause__ = None
+                    last_error = exc
+                    continue
+                logger.warning(
+                    "CUDA faster-whisper inference failed; retrying the same model on CPU int8 "
+                    "(error_type=%s)",
+                    type(exc).__name__,
+                )
+            else:
+                last_result = attempt
+                last_successful_model = candidate
+                last_successful_device = attempt_device
+                last_successful_compute_type = attempt_compute_type
+                used_cuda_cpu_fallback = resolved_device == "cuda" and attempt_device == "cpu"
+                break
+
+            # Leave the exception handler before clearing the model cache so
+            # the failed inference traceback cannot retain the CUDA model.
+            _release_failed_cuda_whisper_models()
+
+        if last_successful_model != candidate:
             continue
-        last_result = attempt
-        last_successful_model = candidate
+
+        if used_cuda_cpu_fallback:
+            attempt["requested_device"] = resolved_device
+            attempt["device_fallback_used"] = True
+            attempt["device_fallback_note"] = CUDA_ASR_CPU_FALLBACK_NOTE
         # An empty transcript is a valid inference result for silence/music.
         # Model fallback is for load/inference failures, not for manufacturing
         # speech by downloading progressively larger models after a successful
@@ -319,14 +367,47 @@ def _transcribe_faster_whisper(
             raise last_error
         raise RuntimeError("No Whisper models could be loaded for transcription.")
 
+    successful_device = last_successful_device or resolved_device
+    successful_compute_type = last_successful_compute_type or resolved_compute_type
     if _coerce_float((last_result or {}).get("duration_after_vad_s"), 0.0) <= 0.0:
-        without_vad = _transcribe_once(
-            path,
-            last_successful_model,
-            vad_filter=False,
-            device=resolved_device,
-            compute_type=resolved_compute_type,
-        )
+        try:
+            without_vad = _transcribe_once(
+                path,
+                last_successful_model,
+                vad_filter=False,
+                device=successful_device,
+                compute_type=successful_compute_type,
+            )
+        except Exception as exc:
+            if successful_device != "cuda":
+                raise
+            logger.warning(
+                "CUDA faster-whisper no-VAD inference failed; retrying the same model on CPU int8 "
+                "(error_type=%s)",
+                type(exc).__name__,
+            )
+            retry_without_vad_on_cpu = True
+        else:
+            retry_without_vad_on_cpu = False
+
+        if retry_without_vad_on_cpu:
+            # Run cleanup after leaving the exception handler so CTranslate2's
+            # failed CUDA frame is no longer strongly referenced.
+            _release_failed_cuda_whisper_models()
+            successful_device = "cpu"
+            successful_compute_type = "int8"
+            used_cuda_cpu_fallback = True
+            without_vad = _transcribe_once(
+                path,
+                last_successful_model,
+                vad_filter=False,
+                device=successful_device,
+                compute_type=successful_compute_type,
+            )
+        if used_cuda_cpu_fallback:
+            without_vad["requested_device"] = resolved_device
+            without_vad["device_fallback_used"] = True
+            without_vad["device_fallback_note"] = CUDA_ASR_CPU_FALLBACK_NOTE
         if without_vad.get("text") or without_vad.get("segments"):
             return without_vad
         without_vad["note"] = NO_SPEECH_AFTER_VAD_NOTE
@@ -343,8 +424,8 @@ def _transcribe_faster_whisper(
         "model_size": last_successful_model,
         "source": "faster_whisper",
         "provider": "faster_whisper",
-        "device": resolved_device,
-        "compute_type": resolved_compute_type,
+        "device": successful_device,
+        "compute_type": successful_compute_type,
     }
 
 
