@@ -302,6 +302,9 @@ async function runStagedAppProbe() {
     cmd = "/usr/bin/xvfb-run";
     args.push("-a", unpackedApp);
   }
+  if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) {
+    args.push("--no-sandbox");
+  }
 
   log(`launching staged app probe using ${cmd}`);
   const child = spawn(cmd, args, {
