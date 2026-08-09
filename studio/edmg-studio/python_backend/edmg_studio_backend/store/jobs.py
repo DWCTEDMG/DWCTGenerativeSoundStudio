@@ -443,26 +443,54 @@ class JobStore:
             event_type="resumed",
         )
 
-    def retry(self, project_id: str, job_id: str) -> Job | None:
-        job = self.get(project_id, job_id)
-        if not job:
-            return None
-        job.status = "queued"
-        job.error = None
-        job.result = None
-        job.progress = None
-        job.attempt = int(job.attempt or 0) + 1
+    def retry(
+        self,
+        project_id: str,
+        job_id: str,
+        *,
+        payload: dict[str, Any] | None = None,
+    ) -> Job | None:
+        """Atomically requeue a terminal job, optionally replacing its payload."""
+
+        payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
         with self._lock:
-            self._conn.execute(
+            cursor = self._conn.execute(
                 """
                 UPDATE jobs
-                SET lease_owner = NULL, lease_expires_at = NULL
-                WHERE project_id = ? AND id = ?
+                SET status = 'queued',
+                    updated_at = ?,
+                    payload_json = COALESCE(?, payload_json),
+                    result_json = NULL,
+                    error = NULL,
+                    progress_json = NULL,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    attempt = attempt + 1
+                WHERE project_id = ?
+                  AND id = ?
+                  AND status IN ('succeeded', 'failed', 'canceled')
                 """,
+                (self._now(), payload_json, project_id, job_id),
+            )
+            if cursor.rowcount != 1:
+                self._conn.commit()
+                return None
+            row = self._conn.execute(
+                "SELECT * FROM jobs WHERE project_id = ? AND id = ?",
                 (project_id, job_id),
+            ).fetchone()
+            if row is None:  # pragma: no cover - guarded by the successful update
+                self._conn.rollback()
+                return None
+            self._record_event(
+                project_id,
+                job_id,
+                "retried",
+                {"to_status": "queued"},
             )
             self._conn.commit()
-        self.save(job)
+            job = self._row_to_job(row)
+        self._mirror_json(job)
         self.append_log(project_id, job_id, "Job retried (re-queued)")
         return job
 

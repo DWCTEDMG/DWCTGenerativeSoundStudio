@@ -70,6 +70,42 @@ def test_job_store_cancel_retry_and_progress(tmp_path: Path) -> None:
     store.close()
 
 
+def test_job_store_retry_is_atomic_and_does_not_reset_active_work(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "projects", db_path=tmp_path / "jobs.sqlite")
+    job = store.create("proj-retry", "internal_video", {"selection": "legacy"})
+    job.status = "failed"
+    store.save(job)
+
+    retried = store.retry(
+        "proj-retry",
+        job.id,
+        payload={"selection": "normalized"},
+    )
+    assert retried is not None
+    assert retried.status == "queued"
+    assert retried.payload == {"selection": "normalized"}
+
+    claimed = store.claim_next_queued(owner="worker-retry")
+    assert claimed is not None
+    active_attempt = claimed.attempt
+    claimed.progress = {"stage": "frames", "current": 1, "total": 2}
+    store.save(claimed)
+
+    rejected = store.retry(
+        "proj-retry",
+        job.id,
+        payload={"selection": "stale-second-request"},
+    )
+    assert rejected is None
+    current = store.get("proj-retry", job.id)
+    assert current is not None
+    assert current.status == "running"
+    assert current.payload == {"selection": "normalized"}
+    assert current.progress == {"stage": "frames", "current": 1, "total": 2}
+    assert current.attempt == active_attempt
+    store.close()
+
+
 def test_job_store_pauses_queued_work_without_letting_a_worker_claim_it(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "projects", db_path=tmp_path / "jobs.sqlite")
     job = store.create("proj4", "internal_video", {})

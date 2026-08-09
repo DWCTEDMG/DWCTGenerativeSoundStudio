@@ -1835,11 +1835,9 @@ def _terminalize_failed_runtime_checkpoint(project_id: str, job: Any, *, message
         jobs.save(job)
         return
     completed_frames = max(0, int(runtime_checkpoint.get("completed_frames") or 0))
-    total_frames = max(0, int(runtime_checkpoint.get("total_frames") or 0))
     outputs = dict(runtime_checkpoint.get("outputs") or {})
     can_resume = bool(
         completed_frames > 0
-        and (total_frames <= 0 or completed_frames < total_frames)
         and not bool(outputs.get("final_exists"))
     )
     runtime_checkpoint.update(
@@ -6815,16 +6813,16 @@ def retry_job(project_id: str, job_id: str):
     if source_job.status not in ("succeeded", "failed", "canceled"):
         raise HTTPException(409, "Only completed, failed, or canceled jobs can be retried")
     legacy_selection_note: str | None = None
+    retry_payload: dict[str, Any] | None = None
     if source_job.type == "internal_video":
         retry_payload, legacy_selection_note = _repair_legacy_internal_video_selection(
             deepcopy(source_job.payload or {})
         )
         preflight = _internal_render_preflight_data(project_id, retry_payload)
-        source_job.payload = _persist_resolved_internal_video_payload(retry_payload, preflight)
-        jobs.save(source_job)
-    job = jobs.retry(project_id, job_id)
+        retry_payload = _persist_resolved_internal_video_payload(retry_payload, preflight)
+    job = jobs.retry(project_id, job_id, payload=retry_payload)
     if not job:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(409, "Job could not be retried because its state changed")
     if legacy_selection_note:
         jobs.append_log(project_id, job.id, legacy_selection_note)
     return {"ok": True, "job": job.__dict__}

@@ -299,6 +299,46 @@ def test_unexpected_render_worker_exit_terminalizes_resumable_checkpoint(
     assert saved_checkpoint["resume_recommended"] is True
 
 
+def test_failed_final_assembly_keeps_complete_frames_resumable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = ProjectStore(tmp_path / "data")
+    jobs = JobStore(store.projects_dir)
+    project = store.create("Assembly failure")
+    checkpoint_rel = "outputs/videos/assembly.checkpoint.json"
+    checkpoint_path = store.project_dir(project.id) / checkpoint_rel
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint = {
+        "status": "running",
+        "stage": "muxing",
+        "total_frames": 24,
+        "completed_frames": 24,
+        "can_resume": True,
+        "resume_recommended": True,
+        "outputs": {"checkpoint_json": checkpoint_rel, "final_exists": False},
+    }
+    checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+    job = jobs.create(project.id, "internal_video", {})
+    job.progress = {"stage": "muxing", "runtime_checkpoint": checkpoint}
+    jobs.save(job)
+
+    monkeypatch.setattr(backend_app, "store", store)
+    monkeypatch.setattr(backend_app, "jobs", jobs)
+
+    backend_app._terminalize_failed_runtime_checkpoint(
+        project.id,
+        job,
+        message="Final assembly failed",
+    )
+
+    saved_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert saved_checkpoint["status"] == "failed"
+    assert saved_checkpoint["completed_frames"] == 24
+    assert saved_checkpoint["can_resume"] is True
+    assert saved_checkpoint["resume_recommended"] is True
+
+
 def test_pause_and_resume_job_routes_require_the_expected_state(tmp_path: Path, monkeypatch) -> None:
     store = ProjectStore(tmp_path / "data")
     jobs = JobStore(store.projects_dir)
