@@ -16,6 +16,15 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const expectedLandmarks = Object.freeze(["Workspace", "Render", "Models", "Settings", "Setup"]);
+export const APPIMAGE_RENDERER_TIMEOUT_ENV = "EDMG_APPIMAGE_SMOKE_RENDERER_TIMEOUT_MS";
+export const APPIMAGE_RENDERER_TIMEOUT_LIMITS = Object.freeze({
+  min: 30_000,
+  max: 1_800_000,
+  defaults: Object.freeze({
+    cpu: 210_000,
+    cuda: 900_000,
+  }),
+});
 
 function log(message) {
   console.log(`[packaged-appimage-smoke] ${message}`);
@@ -37,6 +46,33 @@ export function resolveCurrentAppImage(distDir, version, entries = null) {
     );
   }
   return candidates[0];
+}
+
+export function resolveRendererReportTimeoutMs({ profile, env = process.env }) {
+  if (!Object.hasOwn(APPIMAGE_RENDERER_TIMEOUT_LIMITS.defaults, profile)) {
+    throw new Error(`AppImage renderer timeout requires a cpu or cuda profile; received ${profile}.`);
+  }
+
+  if (!Object.hasOwn(env, APPIMAGE_RENDERER_TIMEOUT_ENV)) {
+    return APPIMAGE_RENDERER_TIMEOUT_LIMITS.defaults[profile];
+  }
+
+  const normalized = String(env[APPIMAGE_RENDERER_TIMEOUT_ENV]);
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    throw new Error(`${APPIMAGE_RENDERER_TIMEOUT_ENV} must be a positive integer number of milliseconds.`);
+  }
+
+  const timeoutMs = Number(normalized);
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < APPIMAGE_RENDERER_TIMEOUT_LIMITS.min ||
+    timeoutMs > APPIMAGE_RENDERER_TIMEOUT_LIMITS.max
+  ) {
+    throw new Error(
+      `${APPIMAGE_RENDERER_TIMEOUT_ENV} must be between ${APPIMAGE_RENDERER_TIMEOUT_LIMITS.min} and ${APPIMAGE_RENDERER_TIMEOUT_LIMITS.max} milliseconds.`,
+    );
+  }
+  return timeoutMs;
 }
 
 async function reserveBackendPort() {
@@ -66,7 +102,9 @@ async function waitForJsonFile(filePath, timeoutMs) {
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`Timed out waiting for valid JSON at ${filePath}${lastError ? `: ${lastError.message}` : ""}`);
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for valid JSON at ${filePath}${lastError ? `: ${lastError.message}` : ""}`,
+  );
 }
 
 async function fetchJsonWithRetry(url, timeoutMs = 30000) {
@@ -142,6 +180,7 @@ async function main() {
   assert.ok(version, "package.json version is required");
   const profile = resolveAcceleratorProfile({ argv: [], env: process.env, platform: process.platform });
   assert.ok(["cpu", "cuda"].includes(profile), `Linux AppImage profile must be cpu or cuda; received ${profile}`);
+  const rendererReportTimeoutMs = resolveRendererReportTimeoutMs({ profile, env: process.env });
 
   const appImage = resolveCurrentAppImage(path.join(root, "dist"), version);
   const stat = await fsp.stat(appImage);
@@ -224,6 +263,7 @@ async function main() {
   delete childEnv.EDMG_STUDIO_TEST_PAGE;
 
   log(`launching ${path.basename(appImage)} with the packaged ${profile} backend using ${plan.graphicalMode}`);
+  log(`renderer report timeout: ${rendererReportTimeoutMs} ms`);
   const child = spawn(plan.command, plan.args, {
     cwd: path.dirname(appImage),
     detached: true,
@@ -241,7 +281,7 @@ async function main() {
   let backendStopped = false;
   try {
     rendererReport = await Promise.race([
-      waitForJsonFile(rendererReportPath, 210000),
+      waitForJsonFile(rendererReportPath, rendererReportTimeoutMs),
       exitPromise.then(({ code, signal }) => {
         throw new Error(`AppImage exited before producing its renderer report (code=${code}, signal=${signal}). See ${logPath}`);
       }),
@@ -289,6 +329,7 @@ async function main() {
     rootNoSandboxApplied: plan.args.includes("--no-sandbox"),
     backendUrl,
     backendStopped,
+    rendererReportTimeoutMs,
     endpoints,
     rendererReport,
     logPath: path.relative(root, logPath).split(path.sep).join("/"),

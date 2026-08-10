@@ -109,7 +109,6 @@ function resolveUnpackedApp(outputDir) {
 }
 
 async function buildUnpackedDesktopApp(appDir, outputDir) {
-  await fsp.rm(outputDir, { recursive: true, force: true });
   const builderScript = path.join(root, "scripts", "run-electron-builder.mjs");
   const result = spawnSync(
     process.execPath,
@@ -223,127 +222,310 @@ async function waitForFile(filePath, timeoutMs = 20000) {
   throw new Error(`Timed out waiting for ${filePath}`);
 }
 
-async function runStagedAppProbe() {
-  const support = canLaunchElectron();
-  const smokeStageDir = path.join(root, "release", "staged-app-smoke");
-  const smokeOutputDir = path.join(root, "release", "desktop-smoke-dist");
-  const stageManifest = await stageDesktopRelease({ outDir: smokeStageDir, clean: true });
-  const appDir = stageManifest.stageDir;
-  const unpackedApp = await buildUnpackedDesktopApp(appDir, smokeOutputDir);
-  const summary = {
-    ok: true,
-    skipped: !support.ok,
-    reason: support.reason,
-    appDir,
-    smokeOutputDir,
-    unpackedApp,
-    stageManifestPath: path.join(appDir, '.edmg-stage', 'manifest.json'),
-  };
-  const resources = bundledResourcePaths(appDir);
-
-  const distIndex = path.join(appDir, "dist-web", "index.html");
-  assert.ok(fs.existsSync(distIndex), "staged app dist-web/index.html missing");
-  assert.ok(fs.existsSync(path.join(appDir, 'electron-builder.yml')), 'staged app electron-builder.yml missing');
-  assert.ok(fs.existsSync(resources.backendExe), `staged app missing bundled backend: ${resources.backendExe}`);
-  assert.ok(fs.existsSync(resources.backendManifest), `staged app missing backend bundle manifest: ${resources.backendManifest}`);
-  const bundledFfmpeg = fs.existsSync(resources.ffmpegExe) && fs.statSync(resources.ffmpegExe).isFile();
-  const bundledFfprobe = fs.existsSync(resources.ffprobeExe) && fs.statSync(resources.ffprobeExe).isFile();
-  if (process.platform === "win32" || process.platform === "linux") {
-    assertRunnableBundledMediaTool(resources.ffmpegExe, "ffmpeg");
-    assertRunnableBundledMediaTool(resources.ffprobeExe, "ffprobe");
-    summary.mediaDistributionEvidence = assertBundledMediaDistributionEvidence(resources);
-  }
-  const backendManifest = JSON.parse(await fsp.readFile(resources.backendManifest, "utf8"));
-  assertValidReleaseManifest(backendManifest);
-  assert.equal(
-    await sha256File(resources.backendExe),
-    backendManifest.binarySha256,
-    "backend binary hash must match its release manifest",
-  );
-  assert.equal(
-    await sha256File(path.join(root, "python_backend", "uv.lock")),
-    backendManifest.lockSha256,
-    "backend release manifest must match the committed uv.lock",
-  );
-  assert.ok(
-    Array.isArray(backendManifest.requiredBackendSources) &&
-      backendManifest.requiredBackendSources.includes("edmg_studio_backend/services/internal_video.py") &&
-      backendManifest.requiredBackendSources.includes("edmg_studio_backend/services/internal_video_models.py"),
-    "backend bundle manifest must prove internal video source modules were included",
-  );
-  assert.deepEqual(
-    backendManifest.capabilityExtras,
-    RELEASE_CAPABILITY_EXTRAS,
-    "backend release manifest must preserve the deterministic capability extras",
-  );
-  summary.resources = resources;
-  summary.ffmpegMode = bundledFfmpeg && bundledFfprobe ? "bundled-ffmpeg-and-ffprobe" : "unsupported-platform-fallback";
-  summary.backendManifest = backendManifest;
-  summary.backendRunJobCli = await probeBundledBackendRunJobCli(resources.backendExe);
-
-  if (!support.ok) {
-    return summary;
-  }
-
-  const fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-packaged-probe-"));
-  const fixtureDir = path.join(fixtureRoot, "frames");
-  await fsp.mkdir(fixtureDir, { recursive: true });
-  const fixtureFile = path.join(fixtureRoot, "demo.txt");
-  await fsp.writeFile(fixtureFile, "packaged desktop smoke probe\n");
-  const reportPath = path.join(fixtureRoot, "report.json");
-  const isolatedEnv = buildIsolatedDesktopEnv(fixtureRoot);
-
-  const { server, port } = await startMockBackend();
-  const expectedBackendUrl = `http://127.0.0.1:${port}`;
-
-  const args = [];
-  let cmd = unpackedApp;
-  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY && fs.existsSync("/usr/bin/xvfb-run")) {
-    cmd = "/usr/bin/xvfb-run";
-    args.push("-a", unpackedApp);
-  }
-  if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) {
-    args.push("--no-sandbox");
-  }
-
-  log(`launching staged app probe using ${cmd}`);
-  const child = spawn(cmd, args, {
-    cwd: path.dirname(unpackedApp),
-    env: {
-      ...process.env,
-      EDMG_STUDIO_TEST_MODE: "1",
-      EDMG_STUDIO_TEST_SKIP_MIGRATION: "1",
-      EDMG_STUDIO_TEST_REPORT_PATH: reportPath,
-      EDMG_STUDIO_TEST_PROBE_REVEAL_PATH: fixtureFile,
-      EDMG_STUDIO_TEST_PROBE_OPEN_PATH: fixtureDir,
-      EDMG_STUDIO_TEST_EXPECT_BACKEND_URL: expectedBackendUrl,
-      EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
-      EDMG_STUDIO_SPAWN_BACKEND: "0",
-      EDMG_STUDIO_BACKEND_PORT: String(port),
-      ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
-      ...isolatedEnv,
-    },
-    stdio: "inherit",
+export function resolveOwnedPackagedDesktopSmokePaths(baseRoot = root) {
+  return Object.freeze({
+    smokeStageDir: path.resolve(baseRoot, "release", "staged-app-smoke"),
+    smokeOutputDir: path.resolve(baseRoot, "release", "desktop-smoke-dist"),
   });
+}
 
-  let exitCode = null;
-  child.on("exit", (code) => {
-    exitCode = code;
+export function assertOwnedPackagedDesktopSmokePath(targetPath, baseRoot = root) {
+  const candidate = path.resolve(targetPath);
+  const allowedPaths = Object.values(resolveOwnedPackagedDesktopSmokePaths(baseRoot));
+  if (!allowedPaths.includes(candidate)) {
+    throw new Error(`Refusing to remove non-owned packaged desktop smoke path: ${candidate}`);
+  }
+  return candidate;
+}
+
+async function removeOwnedSmokePath(targetPath) {
+  let stat;
+  try {
+    stat = await fsp.lstat(targetPath);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (stat.isSymbolicLink()) {
+    await fsp.unlink(targetPath);
+    return;
+  }
+  await fsp.rm(targetPath, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 250,
   });
+}
+
+async function cleanupOwnedPackagedDesktopSmokePaths(paths, { baseRoot, removePath }) {
+  const cleanupErrors = [];
+  for (const targetPath of Object.values(paths)) {
+    const ownedPath = assertOwnedPackagedDesktopSmokePath(targetPath, baseRoot);
+    try {
+      await removePath(ownedPath);
+    } catch (error) {
+      cleanupErrors.push(new Error(`Unable to remove owned packaged desktop smoke path ${ownedPath}: ${error.message}`, { cause: error }));
+    }
+  }
+  if (cleanupErrors.length === 1) throw cleanupErrors[0];
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(cleanupErrors, "Unable to remove all owned packaged desktop smoke paths");
+  }
+}
+
+function flattenAggregateError(error) {
+  return error instanceof AggregateError ? [...error.errors] : [error];
+}
+
+export async function runWithOwnedPackagedDesktopSmokeCleanup(
+  operation,
+  { baseRoot = root, removePath = removeOwnedSmokePath } = {},
+) {
+  const paths = resolveOwnedPackagedDesktopSmokePaths(baseRoot);
+  await cleanupOwnedPackagedDesktopSmokePaths(paths, { baseRoot, removePath });
+
+  let result;
+  let primaryError = null;
+  try {
+    result = await operation(paths);
+  } catch (error) {
+    primaryError = error;
+  }
+
+  let cleanupError = null;
+  try {
+    await cleanupOwnedPackagedDesktopSmokePaths(paths, { baseRoot, removePath });
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  if (primaryError && cleanupError) {
+    throw new AggregateError(
+      [primaryError, ...flattenAggregateError(cleanupError)],
+      "Packaged desktop smoke failed and one or more owned scratch paths could not be removed",
+    );
+  }
+  if (primaryError) throw primaryError;
+  if (cleanupError) throw cleanupError;
+  return result;
+}
+
+async function waitForChildExit(exitPromise, timeoutMs) {
+  if (!exitPromise) return true;
+  return Promise.race([
+    exitPromise.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+  ]);
+}
+
+async function terminateProcessTree(child, exitPromise) {
+  if (!child || !Number.isInteger(child.pid) || child.exitCode !== null || child.signalCode !== null) return;
+
+  if (process.platform === "win32") {
+    let taskkillError = null;
+    await new Promise((resolve) => {
+      const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.once("error", (error) => {
+        taskkillError = error;
+        resolve();
+      });
+      killer.once("exit", () => resolve());
+    });
+    if (await waitForChildExit(exitPromise, 8000)) return;
+    if (taskkillError) {
+      throw new Error(`Unable to start taskkill for packaged desktop smoke process ${child.pid}: ${taskkillError.message}`, {
+        cause: taskkillError,
+      });
+    }
+    throw new Error(`Timed out terminating packaged desktop smoke process tree ${child.pid}.`);
+  }
 
   try {
-    await waitForFile(reportPath, 25000);
-    const report = JSON.parse(await fsp.readFile(reportPath, "utf8"));
-    assert.equal(report.ok, true, `Staged app probe failed: ${JSON.stringify(report)}`);
-    assert.equal(report.backendUrlSync, expectedBackendUrl);
-    assert.equal(report.backendUrlAsync, expectedBackendUrl);
-    assert.equal(report.reveal?.ok, true);
-    assert.equal(report.open?.ok, true);
-    return { ...summary, skipped: false, report };
-  } finally {
-    server.close();
-    if (exitCode === null) child.kill("SIGTERM");
+    process.kill(-child.pid, "SIGTERM");
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
   }
+  if (await waitForChildExit(exitPromise, 8000)) return;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+  if (!(await waitForChildExit(exitPromise, 3000))) {
+    throw new Error(`Timed out terminating packaged desktop smoke process group ${child.pid}.`);
+  }
+}
+
+async function closeServer(server) {
+  if (!server) return;
+  if (!server.listening) {
+    server.closeAllConnections?.();
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+    server.closeAllConnections?.();
+  });
+}
+
+async function runStagedAppProbe() {
+  return runWithOwnedPackagedDesktopSmokeCleanup(async ({ smokeStageDir, smokeOutputDir }) => {
+    const support = canLaunchElectron();
+    const stageManifest = await stageDesktopRelease({ outDir: smokeStageDir, clean: false });
+    const appDir = stageManifest.stageDir;
+    const unpackedApp = await buildUnpackedDesktopApp(appDir, smokeOutputDir);
+    const summary = {
+      ok: true,
+      skipped: !support.ok,
+      reason: support.reason,
+      appDir,
+      smokeOutputDir,
+      unpackedApp,
+      stageManifestPath: path.join(appDir, ".edmg-stage", "manifest.json"),
+    };
+    const resources = bundledResourcePaths(appDir);
+
+    const distIndex = path.join(appDir, "dist-web", "index.html");
+    assert.ok(fs.existsSync(distIndex), "staged app dist-web/index.html missing");
+    assert.ok(fs.existsSync(path.join(appDir, "electron-builder.yml")), "staged app electron-builder.yml missing");
+    assert.ok(fs.existsSync(resources.backendExe), `staged app missing bundled backend: ${resources.backendExe}`);
+    assert.ok(fs.existsSync(resources.backendManifest), `staged app missing backend bundle manifest: ${resources.backendManifest}`);
+    const bundledFfmpeg = fs.existsSync(resources.ffmpegExe) && fs.statSync(resources.ffmpegExe).isFile();
+    const bundledFfprobe = fs.existsSync(resources.ffprobeExe) && fs.statSync(resources.ffprobeExe).isFile();
+    if (process.platform === "win32" || process.platform === "linux") {
+      assertRunnableBundledMediaTool(resources.ffmpegExe, "ffmpeg");
+      assertRunnableBundledMediaTool(resources.ffprobeExe, "ffprobe");
+      summary.mediaDistributionEvidence = assertBundledMediaDistributionEvidence(resources);
+    }
+    const backendManifest = JSON.parse(await fsp.readFile(resources.backendManifest, "utf8"));
+    assertValidReleaseManifest(backendManifest);
+    assert.equal(
+      await sha256File(resources.backendExe),
+      backendManifest.binarySha256,
+      "backend binary hash must match its release manifest",
+    );
+    assert.equal(
+      await sha256File(path.join(root, "python_backend", "uv.lock")),
+      backendManifest.lockSha256,
+      "backend release manifest must match the committed uv.lock",
+    );
+    assert.ok(
+      Array.isArray(backendManifest.requiredBackendSources) &&
+        backendManifest.requiredBackendSources.includes("edmg_studio_backend/services/internal_video.py") &&
+        backendManifest.requiredBackendSources.includes("edmg_studio_backend/services/internal_video_models.py"),
+      "backend bundle manifest must prove internal video source modules were included",
+    );
+    assert.deepEqual(
+      backendManifest.capabilityExtras,
+      RELEASE_CAPABILITY_EXTRAS,
+      "backend release manifest must preserve the deterministic capability extras",
+    );
+    summary.resources = resources;
+    summary.ffmpegMode = bundledFfmpeg && bundledFfprobe ? "bundled-ffmpeg-and-ffprobe" : "unsupported-platform-fallback";
+    summary.backendManifest = backendManifest;
+    summary.backendRunJobCli = await probeBundledBackendRunJobCli(resources.backendExe);
+
+    if (!support.ok) return summary;
+
+    let fixtureRoot = null;
+    let server = null;
+    let child = null;
+    let childExitPromise = null;
+    let result = null;
+    let primaryError = null;
+    try {
+      fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-packaged-probe-"));
+      const fixtureDir = path.join(fixtureRoot, "frames");
+      await fsp.mkdir(fixtureDir, { recursive: true });
+      const fixtureFile = path.join(fixtureRoot, "demo.txt");
+      await fsp.writeFile(fixtureFile, "packaged desktop smoke probe\n");
+      const reportPath = path.join(fixtureRoot, "report.json");
+      const isolatedEnv = buildIsolatedDesktopEnv(fixtureRoot);
+
+      const mockBackend = await startMockBackend();
+      server = mockBackend.server;
+      const expectedBackendUrl = `http://127.0.0.1:${mockBackend.port}`;
+
+      const args = [];
+      let cmd = unpackedApp;
+      if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY && fs.existsSync("/usr/bin/xvfb-run")) {
+        cmd = "/usr/bin/xvfb-run";
+        args.push("-a", unpackedApp);
+      }
+      if (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0) {
+        args.push("--no-sandbox");
+      }
+
+      log(`launching staged app probe using ${cmd}`);
+      child = spawn(cmd, args, {
+        cwd: path.dirname(unpackedApp),
+        detached: process.platform !== "win32",
+        env: {
+          ...process.env,
+          EDMG_STUDIO_TEST_MODE: "1",
+          EDMG_STUDIO_TEST_SKIP_MIGRATION: "1",
+          EDMG_STUDIO_TEST_REPORT_PATH: reportPath,
+          EDMG_STUDIO_TEST_PROBE_REVEAL_PATH: fixtureFile,
+          EDMG_STUDIO_TEST_PROBE_OPEN_PATH: fixtureDir,
+          EDMG_STUDIO_TEST_EXPECT_BACKEND_URL: expectedBackendUrl,
+          EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
+          EDMG_STUDIO_SPAWN_BACKEND: "0",
+          EDMG_STUDIO_BACKEND_PORT: String(mockBackend.port),
+          ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
+          ...isolatedEnv,
+        },
+        stdio: "inherit",
+      });
+      childExitPromise = new Promise((resolve) => {
+        child.once("error", (error) => resolve({ error }));
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+
+      await Promise.race([
+        waitForFile(reportPath, 25000),
+        childExitPromise.then(({ code, signal, error }) => {
+          if (error) throw error;
+          throw new Error(`Staged app exited before producing its report (code=${code}, signal=${signal}).`);
+        }),
+      ]);
+      const report = JSON.parse(await fsp.readFile(reportPath, "utf8"));
+      assert.equal(report.ok, true, `Staged app probe failed: ${JSON.stringify(report)}`);
+      assert.equal(report.backendUrlSync, expectedBackendUrl);
+      assert.equal(report.backendUrlAsync, expectedBackendUrl);
+      assert.equal(report.reveal?.ok, true);
+      assert.equal(report.open?.ok, true);
+      result = { ...summary, skipped: false, report };
+    } catch (error) {
+      primaryError = error;
+    }
+
+    const cleanupErrors = [];
+    const attemptCleanup = async (label, action) => {
+      try {
+        await action();
+      } catch (error) {
+        cleanupErrors.push(new Error(`${label}: ${error.message}`, { cause: error }));
+      }
+    };
+    await attemptCleanup("terminate staged Electron process tree", () => terminateProcessTree(child, childExitPromise));
+    await attemptCleanup("close packaged desktop smoke mock backend", () => closeServer(server));
+    if (fixtureRoot) {
+      await attemptCleanup("remove packaged desktop smoke fixture", () =>
+        fsp.rm(fixtureRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 }),
+      );
+    }
+
+    const errors = primaryError ? [primaryError, ...cleanupErrors] : cleanupErrors;
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Packaged desktop live probe failed and one or more cleanup operations also failed");
+    }
+    return result;
+  });
 }
 
 async function main() {
@@ -369,7 +551,14 @@ async function main() {
   console.log(JSON.stringify({ ok: true, buildArtifacts: true, stagedProbe }, null, 2));
 }
 
-main().catch((error) => {
-  console.error("[packaged-desktop-smoke] FAILED", error);
-  process.exit(1);
-});
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+}
+
+if (isMainModule()) {
+  main().catch((error) => {
+    console.error("[packaged-desktop-smoke] FAILED", error);
+    process.exitCode = 1;
+  });
+}
