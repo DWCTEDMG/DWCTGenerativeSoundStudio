@@ -816,6 +816,8 @@ test("desktop integration supports the canonical root WSL Electron workflow", ()
   const harness = fs.readFileSync(path.join(studioRoot, "scripts", "desktop-integration-harness.mjs"), "utf8");
   const packagedSmoke = fs.readFileSync(path.join(studioRoot, "scripts", "packaged-desktop-smoke.mjs"), "utf8");
 
+  assert.match(harness, /EDMG_DIRECTOR_SPAWN:\s*"0"/);
+  assert.match(packagedSmoke, /EDMG_DIRECTOR_SPAWN:\s*"0"/);
   assert.match(harness, /process\.platform === "linux"/);
   assert.match(harness, /process\.getuid\(\) === 0/);
   assert.match(harness, /args\.push\("--no-sandbox"\)/);

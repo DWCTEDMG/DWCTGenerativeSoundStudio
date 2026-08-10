@@ -474,6 +474,7 @@ async function runStagedAppProbe() {
           EDMG_STUDIO_TEST_EXPECT_BACKEND_URL: expectedBackendUrl,
           EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
           EDMG_STUDIO_SPAWN_BACKEND: "0",
+          EDMG_DIRECTOR_SPAWN: "0",
           EDMG_STUDIO_BACKEND_PORT: String(mockBackend.port),
           ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
           ...isolatedEnv,
