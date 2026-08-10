@@ -37,6 +37,7 @@ function assertSourceCoverage() {
   assert.equal(mockBackendEnv.EDMG_STUDIO_BACKEND_MODE, "external");
   assert.equal(mockBackendEnv.EDMG_STUDIO_BACKEND_URL, "http://127.0.0.1:39999");
   assert.equal(mockBackendEnv.EDMG_STUDIO_SPAWN_BACKEND, "0");
+  assert.equal(mockBackendEnv.EDMG_DIRECTOR_SPAWN, "0");
 }
 
 async function assertPreloadContract() {
@@ -205,6 +206,7 @@ function buildMockBackendEnv(expectedBackendUrl, port) {
     EDMG_STUDIO_BACKEND_PORT: String(port),
     EDMG_STUDIO_BACKEND_URL: expectedBackendUrl,
     EDMG_STUDIO_SPAWN_BACKEND: "0",
+    EDMG_DIRECTOR_SPAWN: "0",
   };
 }
 
