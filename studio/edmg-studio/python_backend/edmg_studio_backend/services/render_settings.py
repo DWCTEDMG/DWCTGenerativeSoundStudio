@@ -49,7 +49,7 @@ DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
         "preference": "auto",
         "auto_prefer_gpu": True,
         "cosmos_fallback": True,
-        "allow_proxy_renders": True,
+        "allow_proxy_renders": False,
     },
     "cosmos": {
         "enabled": True,

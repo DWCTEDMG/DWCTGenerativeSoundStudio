@@ -379,6 +379,10 @@ def test_audio_upload_endpoint_persists_large_audio_payload(tmp_path, monkeypatc
     monkeypatch.setattr(studio_app, "jobs", jobs)
 
     payload = (b"riff" * 4096) + b"tail"
+    proj.meta["analysis"] = {"features": {"bpm": 110}}
+    proj.meta["last_plan"] = {"variants": [{"scenes": []}]}
+    proj.meta["timeline"] = {"layers": [{"id": "keep"}]}
+    store.save(proj)
 
     with TestClient(studio_app.app) as client:
         response = client.post(
@@ -394,3 +398,6 @@ def test_audio_upload_endpoint_persists_large_audio_payload(tmp_path, monkeypatc
     assert saved is not None
     assert saved.meta["audio"]["filename"] == "long.wav"
     assert saved.meta["audio"]["size_bytes"] == len(payload)
+    assert "analysis" not in saved.meta
+    assert "last_plan" not in saved.meta
+    assert saved.meta["timeline"] == {"layers": [{"id": "keep"}]}

@@ -18,6 +18,22 @@ export type Page =
   | "reactiveLab"
   | "studioForge";
 
+export type StudioNavigationGroupId = "flow" | "delivery" | "labs" | "system";
+
+export type StudioNavigationItem = {
+  page: Page;
+  label: string;
+  hint: string;
+  keywords: string[];
+};
+
+export type StudioNavigationGroup = {
+  id: StudioNavigationGroupId;
+  label: string;
+  hint: string;
+  items: StudioNavigationItem[];
+};
+
 const PAGE_LABELS: Record<Page, string> = {
   dashboard: "Dashboard",
   projects: "Projects",
@@ -108,6 +124,139 @@ const BASE_PAGES: Page[] = [
   "plannerLab",
   "reactiveLab",
 ];
+
+export function getStudioNavigationGroups(): StudioNavigationGroup[] {
+  const labs: StudioNavigationItem[] = [
+    {
+      page: "directorLab",
+      label: "EDMG Director",
+      hint: "Combined planning and reactive direction",
+      keywords: ["orchestrator", "director", "plan", "reactive", "creative"],
+    },
+    {
+      page: "plannerLab",
+      label: "AI Planner Lab",
+      hint: "Deep prompt and storyboard authoring",
+      keywords: ["prompt", "storyboard", "plan", "scene", "ai"],
+    },
+    {
+      page: "reactiveLab",
+      label: "Reactive Lab",
+      hint: "Audio-reactive schedules and cues",
+      keywords: ["audio", "beat", "bpm", "cue", "schedule", "motion"],
+    },
+  ];
+  if (isStudioForgeEnabled()) {
+    labs.push({
+      page: "studioForge",
+      label: "Studio Forge",
+      hint: "Guided AI builder and readiness preview",
+      keywords: ["builder", "assistant", "forge", "readiness"],
+    });
+  }
+
+  return [
+    {
+      id: "flow",
+      label: "Create",
+      hint: "Project, source, plan, and arrangement",
+      items: [
+        {
+          page: "dashboard",
+          label: "Dashboard",
+          hint: "Studio status and quick access",
+          keywords: ["home", "status", "overview"],
+        },
+        {
+          page: "projects",
+          label: "Projects",
+          hint: "Create and choose sessions",
+          keywords: ["session", "project", "new", "open"],
+        },
+        {
+          page: "workspace",
+          label: "Workspace",
+          hint: "Import, analyze, plan, and hand off",
+          keywords: ["upload", "audio", "analyze", "plan", "ingest"],
+        },
+        {
+          page: "timeline",
+          label: "Timeline",
+          hint: "DAW-style audio, video, prompts, and motion",
+          keywords: ["edit", "video", "audio", "daw", "arrange", "clips", "orchestrator"],
+        },
+      ],
+    },
+    {
+      id: "delivery",
+      label: "Make & Deliver",
+      hint: "Render, monitor, review, and export",
+      items: [
+        {
+          page: "render",
+          label: "Render",
+          hint: "Configure every renderer and launch outputs",
+          keywords: ["generate", "render", "settings", "model", "quality", "fps"],
+        },
+        {
+          page: "queue",
+          label: "Render Queue",
+          hint: "Progress, logs, pause, retry, and recovery",
+          keywords: ["jobs", "progress", "logs", "retry", "pause"],
+        },
+        {
+          page: "review",
+          label: "Review",
+          hint: "Compare, approve, and preserve continuity",
+          keywords: ["compare", "approve", "variant", "continuity"],
+        },
+        {
+          page: "outputs",
+          label: "Outputs",
+          hint: "Browse generated media and exports",
+          keywords: ["media", "video", "image", "export", "history"],
+        },
+      ],
+    },
+    {
+      id: "labs",
+      label: "Creative Labs",
+      hint: "Specialist planning and performance tools",
+      items: labs,
+    },
+    {
+      id: "system",
+      label: "Studio System",
+      hint: "Models, services, paths, and preferences",
+      items: [
+        {
+          page: "models",
+          label: "Models",
+          hint: "Install, restore, and inspect model packs",
+          keywords: ["download", "install", "weights", "hugging face", "s3", "cache"],
+        },
+        {
+          page: "settings",
+          label: "Settings",
+          hint: "Storage, runtime, providers, and interface",
+          keywords: ["preferences", "paths", "provider", "runtime", "theme"],
+        },
+        {
+          page: "setup",
+          label: "Setup",
+          hint: "Dependency and service health",
+          keywords: ["install", "dependency", "health", "ffmpeg", "ollama"],
+        },
+        {
+          page: "cloud",
+          label: "Cloud",
+          hint: "Remote engines and integrations",
+          keywords: ["remote", "cloud", "aws", "azure", "api"],
+        },
+      ],
+    },
+  ];
+}
 
 export function getAllowedPages(): Page[] {
   return isStudioForgeEnabled() ? [...BASE_PAGES, "studioForge"] : BASE_PAGES;

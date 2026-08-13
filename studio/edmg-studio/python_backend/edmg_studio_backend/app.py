@@ -4230,6 +4230,7 @@ def analyze_audio(project_id: str):
     if analysis_path:
         analysis["analysis_path"] = analysis_path
     proj.meta["analysis"] = analysis
+    proj.meta.pop("last_plan", None)
     store.save(proj)
     return {"ok": True, "analysis": analysis}
 

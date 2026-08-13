@@ -171,11 +171,11 @@ class InternalVideoRenderRequest(BaseModel):
     """Render a full video using the internal renderer.
 
     Modes:
-      - auto: prefer diffusion if an internal model is installed, otherwise fall back to proxy
+      - auto: prefer an installed internal model, then a configured hosted provider
       - diffusion: require an internal diffusion model
       - hosted: use the configured hosted still-image provider for keyframes, then assemble locally
       - tensorrt: generate SD1.5 TensorRT keyframes, then assemble locally
-      - proxy: render a local draft video using timeline compositing only
+      - proxy: legacy compatibility only; new Studio workflows do not select this route
     """
     variant_index: int = 0
 
@@ -196,7 +196,7 @@ class InternalVideoRenderRequest(BaseModel):
     render_tier: Literal["auto","draft","balanced","quality"] = "auto"
     device_preference: Literal["auto","cpu","cuda","mps","directml"] = "auto"
     allow_hosted_fallback: bool = True
-    allow_proxy_fallback: bool = True
+    allow_proxy_fallback: bool = False
     hosted_service: Literal["default","core","ultra","sd3"] = "default"
     hosted_model: str | None = None
     hosted_style_preset: str | None = None

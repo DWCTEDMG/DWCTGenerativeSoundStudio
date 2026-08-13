@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EdmgStudio.Core/EdmgStudio.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EdmgStudio.Core.Tests/EdmgStudio.Core.Tests.csproj" />
+  </Folder>
+  <Project Path="EdmgStudio.WinUI.csproj" />
+</Solution>
