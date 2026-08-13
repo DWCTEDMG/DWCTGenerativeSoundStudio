@@ -697,6 +697,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const [diffModel, setDiffModel] = useState<string>("auto");
   const [dockSection, setDockSection] = useState<DockSection>("orchestrator");
   const [timelineDensity, setTimelineDensity] = useState<TimelineDensity>("compact");
+  const [showReferenceLanes, setShowReferenceLanes] = useState(true);
+  const [showAutomationLanes, setShowAutomationLanes] = useState(true);
 
   const [err, setErr] = useState<string | null>(null);
   const { progress, runOperation } = useOperationProgress();
@@ -918,7 +920,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     }
     ctx.fillStyle = "rgba(177, 229, 255, 0.34)";
     ctx.fillRect(0, Math.floor(h / 2), w, 1);
-  }, [peaks, durationS, pxPerSecond]);
+  }, [peaks, durationS, pxPerSecond, showReferenceLanes]);
 
   // scrub preview frame
   useEffect(() => {
@@ -2654,10 +2656,34 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             Drag clips to arrange, pull their edges to trim, and click empty lane space to park the playhead.
           </div>
         </div>
-        <div className="timeline-panelMeta">
-          <span className="badge">{tracks.length} tracks</span>
-          <span className="badge">{layers.length} overlays</span>
-          <span className="badge">{camKeyframes.length} camera keyframes</span>
+        <div className="timeline-panelTools">
+          <div className="timeline-viewControls" role="group" aria-label="Arrangement lane visibility">
+            <button
+              className={`secondary timeline-viewToggle${showReferenceLanes ? " is-active" : ""}`}
+              type="button"
+              aria-label={`${showReferenceLanes ? "Hide" : "Show"} reference lanes`}
+              aria-pressed={showReferenceLanes}
+              onClick={() => setShowReferenceLanes((visible) => !visible)}
+            >
+              <AudioLines size={14} aria-hidden="true" />
+              Reference
+            </button>
+            <button
+              className={`secondary timeline-viewToggle${showAutomationLanes ? " is-active" : ""}`}
+              type="button"
+              aria-label={`${showAutomationLanes ? "Hide" : "Show"} automation lanes`}
+              aria-pressed={showAutomationLanes}
+              onClick={() => setShowAutomationLanes((visible) => !visible)}
+            >
+              <Sparkles size={14} aria-hidden="true" />
+              Automation
+            </button>
+          </div>
+          <div className="timeline-panelMeta">
+            <span className="badge">{tracks.length} tracks</span>
+            <span className="badge">{layers.length} overlays</span>
+            <span className="badge">{camKeyframes.length} camera keyframes</span>
+          </div>
         </div>
       </div>
 
@@ -2673,27 +2699,31 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             </div>
           </div>
 
-          <div className="timeline-railCell timeline-railCell--wave">
-            <div className="timeline-trackIdentity">
-              <span className="timeline-trackNumber timeline-trackNumber--audio"><AudioLines size={14} aria-hidden="true" /></span>
-              <div>
-                <div className="timeline-railTitle">Audio master</div>
-                <div className="timeline-railMeta">Reference waveform</div>
+          {showReferenceLanes ? (
+            <>
+              <div className="timeline-railCell timeline-railCell--wave" aria-label="Audio master reference lane header">
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber timeline-trackNumber--audio"><AudioLines size={14} aria-hidden="true" /></span>
+                  <div>
+                    <div className="timeline-railTitle">Audio master</div>
+                    <div className="timeline-railMeta">Reference waveform</div>
+                  </div>
+                </div>
+                <span className="timeline-railState">REF</span>
               </div>
-            </div>
-            <span className="timeline-railState">REF</span>
-          </div>
 
-          <div className="timeline-railCell timeline-railCell--musicMap">
-            <div className="timeline-trackIdentity">
-              <span className="timeline-trackNumber">M</span>
-              <div className="timeline-trackCopy">
-                <div className="timeline-railTitle">Music map</div>
-                <div className="timeline-railMeta">{musicSections.length} sections · {musicCues.length} cues</div>
+              <div className="timeline-railCell timeline-railCell--musicMap" aria-label="Music map reference lane header">
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber">M</span>
+                  <div className="timeline-trackCopy">
+                    <div className="timeline-railTitle">Music map</div>
+                    <div className="timeline-railMeta">{musicSections.length} sections · {musicCues.length} cues</div>
+                  </div>
+                </div>
+                <span className="timeline-railState">MAP</span>
               </div>
-            </div>
-            <span className="timeline-railState">MAP</span>
-          </div>
+            </>
+          ) : null}
 
           {tracks.map((tr, trackIdx) => {
             const laneId = laneIdForTrack(tr, trackIdx);
@@ -2749,57 +2779,61 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             );
           })}
 
-          <div className={`timeline-railCell timeline-railCell--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`}>
-            <div className="timeline-trackIdentity">
-              <span className="timeline-trackNumber">{String(tracks.length + 1).padStart(2, "0")}</span>
-              <div className="timeline-trackCopy">
-                <div className="timeline-railTitle">Overlays</div>
-                <div className="timeline-railMeta">VISUAL · {layers.length} clips</div>
+          {showAutomationLanes ? (
+            <>
+              <div className={`timeline-railCell timeline-railCell--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`} aria-label="Overlays automation lane header">
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber">{String(tracks.length + 1).padStart(2, "0")}</span>
+                  <div className="timeline-trackCopy">
+                    <div className="timeline-railTitle">Overlays</div>
+                    <div className="timeline-railMeta">VISUAL · {layers.length} clips</div>
+                  </div>
+                </div>
+                <div className="timeline-railActions">
+                  <button
+                    className={`secondary timeline-trackButton${isLaneLocked("overlays") ? " is-active" : ""}`}
+                    type="button"
+                    aria-label={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays track`}
+                    title={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays editing`}
+                    onClick={() => toggleLaneLock("overlays")}
+                  >
+                    {isLaneLocked("overlays") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="timeline-railActions">
-              <button
-                className={`secondary timeline-trackButton${isLaneLocked("overlays") ? " is-active" : ""}`}
-                type="button"
-                aria-label={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays track`}
-                title={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays editing`}
-                onClick={() => toggleLaneLock("overlays")}
-              >
-                {isLaneLocked("overlays") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
-              </button>
-            </div>
-          </div>
 
-          <div className={`timeline-railCell timeline-railCell--camera${isLaneLocked("camera") ? " is-locked" : ""}`}>
-            <div className="timeline-trackIdentity">
-              <span className="timeline-trackNumber">{String(tracks.length + 2).padStart(2, "0")}</span>
-              <div className="timeline-trackCopy">
-                <div className="timeline-railTitle">Camera</div>
-                <div className="timeline-railMeta">AUTOMATION · {camKeyframes.length} points</div>
+              <div className={`timeline-railCell timeline-railCell--camera${isLaneLocked("camera") ? " is-locked" : ""}`} aria-label="Camera automation lane header">
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber">{String(tracks.length + 2).padStart(2, "0")}</span>
+                  <div className="timeline-trackCopy">
+                    <div className="timeline-railTitle">Camera</div>
+                    <div className="timeline-railMeta">AUTOMATION · {camKeyframes.length} points</div>
+                  </div>
+                </div>
+                <div className="timeline-railActions">
+                  <button
+                    className="secondary timeline-trackButton"
+                    type="button"
+                    aria-label="Add camera keyframe"
+                    title="Add camera keyframe at playhead"
+                    disabled={isLaneLocked("camera")}
+                    onClick={addCameraKeyframe}
+                  >
+                    <Plus size={14} aria-hidden="true" />
+                  </button>
+                  <button
+                    className={`secondary timeline-trackButton${isLaneLocked("camera") ? " is-active" : ""}`}
+                    type="button"
+                    aria-label={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera track`}
+                    title={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera editing`}
+                    onClick={() => toggleLaneLock("camera")}
+                  >
+                    {isLaneLocked("camera") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="timeline-railActions">
-              <button
-                className="secondary timeline-trackButton"
-                type="button"
-                aria-label="Add camera keyframe"
-                title="Add camera keyframe at playhead"
-                disabled={isLaneLocked("camera")}
-                onClick={addCameraKeyframe}
-              >
-                <Plus size={14} aria-hidden="true" />
-              </button>
-              <button
-                className={`secondary timeline-trackButton${isLaneLocked("camera") ? " is-active" : ""}`}
-                type="button"
-                aria-label={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera track`}
-                title={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera editing`}
-                onClick={() => toggleLaneLock("camera")}
-              >
-                {isLaneLocked("camera") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
-              </button>
-            </div>
-          </div>
+            </>
+          ) : null}
         </div>
 
         <div
@@ -2844,41 +2878,45 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               )}
             </div>
 
-            <div className="timeline-waveformRow" onClick={onWaveformClick}>
-              <canvas
-                ref={canvasRef}
-                width={timelineCanvasWidth}
-                height={92}
-                className="timeline-waveformCanvas"
-              />
-            </div>
+            {showReferenceLanes ? (
+              <>
+                <div className="timeline-waveformRow" onClick={onWaveformClick} aria-label="Audio master reference lane">
+                  <canvas
+                    ref={canvasRef}
+                    width={timelineCanvasWidth}
+                    height={92}
+                    className="timeline-waveformCanvas"
+                  />
+                </div>
 
-            <div className="timeline-laneRow timeline-laneRow--musicMap" onPointerDown={onLanePointerDown}>
-              {musicSections.map((section: AnyDict) => (
-                <div
-                  key={section.id}
-                  className="timeline-musicSection"
-                  style={{
-                    left: clipPx(clamp(section.start, 0, durationS)),
-                    width: Math.max(18, clipPx(clamp(section.end, section.start, durationS)) - clipPx(section.start)),
-                  }}
-                  title={`${section.label}: ${fmtTime(section.start)}–${fmtTime(section.end)}`}
-                >
-                  {section.label}
+                <div className="timeline-laneRow timeline-laneRow--musicMap" onPointerDown={onLanePointerDown} aria-label="Music map reference lane">
+                  {musicSections.map((section: AnyDict) => (
+                    <div
+                      key={section.id}
+                      className="timeline-musicSection"
+                      style={{
+                        left: clipPx(clamp(section.start, 0, durationS)),
+                        width: Math.max(18, clipPx(clamp(section.end, section.start, durationS)) - clipPx(section.start)),
+                      }}
+                      title={`${section.label}: ${fmtTime(section.start)}–${fmtTime(section.end)}`}
+                    >
+                      {section.label}
+                    </div>
+                  ))}
+                  {musicCues.map((cue: AnyDict) => (
+                    <div
+                      key={cue.id}
+                      className="timeline-musicCue"
+                      style={{ left: clipPx(cue.time) }}
+                      title={`${cue.label}: ${fmtTime(cue.time)}`}
+                      aria-label={`${cue.label} at ${fmtTime(cue.time)}`}
+                    >
+                      <span>{cue.label}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              {musicCues.map((cue: AnyDict) => (
-                <div
-                  key={cue.id}
-                  className="timeline-musicCue"
-                  style={{ left: clipPx(cue.time) }}
-                  title={`${cue.label}: ${fmtTime(cue.time)}`}
-                  aria-label={`${cue.label} at ${fmtTime(cue.time)}`}
-                >
-                  <span>{cue.label}</span>
-                </div>
-              ))}
-            </div>
+              </>
+            ) : null}
 
             {tracks.map((tr, trackIdx) => (
               <div
@@ -2932,7 +2970,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               </div>
             ))}
 
-            <div className={`timeline-laneRow timeline-laneRow--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown}>
+            {showAutomationLanes ? (
+              <>
+                <div className={`timeline-laneRow timeline-laneRow--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown} aria-label="Overlays automation lane">
               {layers.map((l, i) => {
                 const s = Number(l.start_s ?? 0);
                 const e = Number(l.end_s ?? durationS);
@@ -2969,9 +3009,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   </div>
                 );
               })}
-            </div>
+                </div>
 
-            <div className={`timeline-laneRow timeline-laneRow--camera${isLaneLocked("camera") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown}>
+                <div className={`timeline-laneRow timeline-laneRow--camera${isLaneLocked("camera") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown} aria-label="Camera automation lane">
               {camKeyframes.map((k, i) => {
                 const x = clipPx(Number(k.t || 0));
                 const isSel = selected?.kind === "camera" && selected.kfIdx === i;
@@ -2986,7 +3026,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   />
                 );
               })}
-            </div>
+                </div>
+              </>
+            ) : null}
             <div className="timeline-globalPlayhead" style={{ left: clipPx(playheadS) }} aria-hidden="true">
               <span />
             </div>

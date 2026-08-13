@@ -188,8 +188,8 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
       ok: true,
       plan: {
         plan_id: "plan-test",
-        summary: "Recommended engine mix: proxy x1.",
-        sections: [{ scene_id: "scene-1", engine: "proxy" }],
+        summary: "Recommended engine mix: internal x1.",
+        sections: [{ scene_id: "scene-1", engine: "internal" }],
       },
       environment: {
         diagnostics: ["test-environment"],
@@ -199,15 +199,6 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
         motifs: ["neon skyline", "lead silhouette"],
         confidence: 0.72,
       },
-    },
-    "POST /v1/projects/p1/render/conductor/promote": {
-      ok: true,
-      plan: {
-        plan_id: "plan-test",
-        summary: "Promoted 1 scene(s) to internal/quality.",
-        sections: [{ scene_id: "scene-1", engine: "internal" }],
-      },
-      promoted_scene_ids: ["scene-1"],
     },
     "/v1/projects/p1/visual_dna": {
       ok: true,
@@ -248,7 +239,7 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
         ],
       },
     },
-    "POST /v1/projects/p1/render/internal/preflight": { ok: true, mode: "proxy" },
+    "POST /v1/projects/p1/render/internal/preflight": { ok: true, mode: "internal" },
     "POST /v1/projects/p1/render/internal/video": {
       ok: true,
       job: { id: "internal-trt-1", type: "internal_video", status: "queued" },
@@ -265,7 +256,7 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
     },
     "POST /v1/projects/p1/render/performer/run": {
       ok: true,
-      message: "Queued explicit mock/proxy performer fallback; this is not Wan S2V output.",
+      message: "Queued performer render using an available genuine provider.",
       job: { id: "performer-job-1", type: "performer_video", status: "queued" },
     },
     "/v1/projects/p1/render/motion_sequencer*": {
@@ -309,7 +300,7 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
 };
 
 describe("Render page", () => {
-  it("plans and queues the W6-05 performer workflow with explicit fallback", async () => {
+  it("plans and queues the performer workflow with an automatic genuine provider", async () => {
     const fetchMock = installRenderMocks();
     renderWithStudio(<Render />);
 
@@ -321,10 +312,23 @@ describe("Render page", () => {
     fireEvent.click(queueButton);
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url, init]) =>
-        String(url).includes("/render/performer/run") && String(init?.body || "").includes('"provider":"auto"'),
-      )).toBe(true);
+      const runCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/render/performer/run"));
+      expect(runCall).toBeTruthy();
+      expect(JSON.parse(String(runCall?.[1]?.body || "{}"))).toMatchObject({
+        provider: "auto",
+      });
+      expect(JSON.parse(String(runCall?.[1]?.body || "{}"))).not.toHaveProperty("allow_mock_fallback");
     });
+    const conductorCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/render/conductor/plan"));
+    expect(conductorCall).toBeTruthy();
+    expect(JSON.parse(String(conductorCall?.[1]?.body || "{}")).allowed_engines).toEqual([
+      "internal",
+      "comfyui_still",
+      "comfyui_motion",
+      "hosted_video",
+      "deforum_export",
+      "tensorrt_standalone",
+    ]);
   }, 10000);
 
   it("renders and navigates to Outputs from the top action bar", async () => {
@@ -676,7 +680,7 @@ describe("Render page", () => {
     renderWithStudio(<Render />);
 
     expect(await screen.findByRole("option", { name: "TensorRT SD1.5 keyframe assembly" })).toBeTruthy();
-    expect(screen.getByRole("option", { name: "Local SD1.5 TensorRT Bundle" })).toBeTruthy();
+    expect(screen.getAllByRole("option", { name: "Local SD1.5 TensorRT Bundle" }).length).toBeGreaterThan(0);
     expect(screen.queryByRole("option", { name: "SVD XT 1.1 TensorRT Bundle" })).toBeNull();
   }, 10000);
 

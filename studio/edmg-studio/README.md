@@ -292,10 +292,10 @@ After **Analyze**, open **Workspace → Audio** to inspect Music Graph v1: tempo
 
 ### Render Plan v1
 
-**Render** includes a **Render Plan** panel for the stored Conductor plan: task DAG, cache keys, estimates, warnings, and proxy→hero promote actions.
+**Render** includes a **Render Plan** panel for the stored Conductor plan: task DAG, cache keys, estimates, warnings, and genuine local or hosted engine routes. Legacy plans that reference the retired proxy route remain readable and guide users to configure a real renderer before refreshing.
 
 - API: `GET /v1/projects/{id}/render/conductor/plan`
-- Promote: Conductor promote endpoint on Render Lab (see Render page)
+- Planning: new Studio requests explicitly allow only real Conductor engines
 
 ### Live cues and live assets
 

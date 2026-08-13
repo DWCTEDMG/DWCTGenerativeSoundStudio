@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from edmg_studio_backend.render_conductor.planner import promote_proxy_sections
-from edmg_studio_backend.schemas import AssemblyPlan, RenderPlan, RenderSectionPlan
+from edmg_studio_backend.schemas import (
+    AssemblyPlan,
+    ProjectVisualDNA,
+    RenderPlan,
+    RenderSectionPlan,
+    TraitObservation,
+)
 from edmg_studio_backend.services.visual_dna import trait_id, update_visual_dna
-from edmg_studio_backend.schemas import ProjectVisualDNA, TraitObservation
 
 
 def test_promote_proxy_sections_upgrades_proxy_lanes() -> None:

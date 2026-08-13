@@ -98,13 +98,11 @@ from .services.internal_video import (
     _scene_keyframe_times,
     describe_internal_render_cache,
     describe_internal_video_model_preflight,
-    describe_proxy_render_cache,
     normalize_internal_motion_strategy,
     normalize_video_model_keyframe_renderer,
     normalize_video_model_scene_motion,
     render_internal_still_image,
     render_internal_video_variant,
-    render_internal_proxy_video_variant,
     render_stability_hosted_video_variant,
     render_internal_diffusion_preview_segment,
 )
@@ -183,7 +181,11 @@ from .services.visual_dna import (
     trait_id as visual_dna_trait_id,
     update_visual_dna,
 )
-from .render_conductor.planner import build_advisory_render_plan, promote_proxy_sections
+from .render_conductor.planner import (
+    NoRealRenderRouteError,
+    build_advisory_render_plan,
+    promote_proxy_sections,
+)
 from .domain.music_graph import music_graph_from_analysis
 from .domain.performer_workflow import build_performer_workflow_plan
 from .services.setup_wizard import (
@@ -2026,7 +2028,7 @@ def _enqueue_internal_job_from_source(project_id: str, source_job: Any, *, resum
     preflight = _internal_render_preflight_data(project_id, payload)
     payload = _persist_resolved_internal_video_payload(payload, preflight)
     mode = str(preflight.get("mode") or payload.get("render_mode") or "auto")
-    model_id = str(preflight.get("model_id") or payload.get("model_id") or ("proxy_draft" if mode == "proxy" else "auto"))
+    model_id = str(preflight.get("model_id") or payload.get("model_id") or "auto")
     checkpoint = _runtime_checkpoint_from_job(project_id, source_job)
     total = max(1, int(preflight.get("estimated_frames", 1)) + 3)
     job = jobs.create(project_id, "internal_video", payload)
@@ -2042,7 +2044,7 @@ def _enqueue_internal_job_from_source(project_id: str, source_job: Any, *, resum
         "percent": 0.0,
         "message": message,
         **_job_checkpoint_extra(
-            "proxy" if mode == "proxy" else "internal",
+            "internal",
             model_id,
             checkpoint,
             queue_action=queue_action,
@@ -2395,7 +2397,7 @@ def _build_internal_render_plan(hw: dict[str, Any] | None = None, *, requested_t
         "chunk_plan": chunk_plan,
         "notes": notes + list(chunk_plan.get("notes") or []),
         "hardware_backend": backend,
-        "supports_proxy_render": True,
+        "supports_proxy_render": False,
     }
 
 
@@ -2537,7 +2539,7 @@ def _compute_hardware_profile() -> dict[str, Any]:
             out["preferred_internal_model"] = preferred_cuda_model
     out["device_preference"] = plan["device_preference"]
     out["supports_internal_diffusion"] = True
-    out["supports_proxy_render"] = True
+    out["supports_proxy_render"] = False
     return out
 
 
@@ -2607,32 +2609,6 @@ def _baseline_metrics_report() -> dict[str, Any]:
     return collect_baseline_metrics(hardware_probe=_hardware_profile)
 
 
-def _proxy_renders_enabled(payload: dict[str, Any] | None = None) -> bool:
-    video_cfg = dict((render_settings.get().get("video") or {}))
-    if bool(video_cfg.get("allow_proxy_renders", True)):
-        return True
-    if not payload:
-        return False
-    mode = str(payload.get("render_mode") or "").strip().lower()
-    action = str(payload.get("queue_action") or "").strip().lower()
-    if mode == "proxy" and payload.get("source_job_id") and action in {"resume_from_checkpoint", "restart_clean"}:
-        return True
-    return False
-
-
-def _proxy_render_disabled_error(reason: str | None = None) -> UserFacingError:
-    detail = f" {reason}" if reason else ""
-    return UserFacingError(
-        f"Proxy draft renders are disabled.{detail}",
-        hint=(
-            "Install or select a local internal model, enable a hosted fallback, or turn proxy draft "
-            "renders back on in Settings -> GPU / Render Runtime."
-        ),
-        code="PROXY_RENDER_DISABLED",
-        status_code=400,
-    )
-
-
 def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     hw = dict(hw or _hardware_profile())
     cfg = render_settings.get()
@@ -2665,17 +2641,6 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "ok": True,
         "settings": cfg,
-        "proxy": {
-            "provider": "local-proxy-draft",
-            "enabled": bool(video_cfg.get("allow_proxy_renders", True)),
-            "available": True,
-            "active": bool(video_cfg.get("allow_proxy_renders", True)),
-            "note": (
-                "Local draft proxy renders are available for pacing previews and missing-model fallback."
-                if bool(video_cfg.get("allow_proxy_renders", True))
-                else "Local draft proxy renders are disabled; renders must use internal models or a hosted fallback."
-            ),
-        },
         "firefly": {
             "provider": "adobe-firefly",
             "configured": firefly_credentials_ok,
@@ -6257,7 +6222,6 @@ def _build_render_conductor_environment() -> dict[str, Any]:
     hw = _hardware_profile()
     provider_status = _render_provider_status(hw)
     runtime = _internal_diffusion_runtime_status()
-    proxy_enabled = _proxy_renders_enabled()
     installed_internal = any(
         _internal_model_is_available(model_id)
         for model_id in ("hf_sd15_internal", "hf_sdxl_internal", "hf_sd35_medium_internal")
@@ -6310,6 +6274,7 @@ def _build_render_conductor_environment() -> dict[str, Any]:
         deforum_ok = bool(core_status().get("ok"))
     except Exception:
         deforum_ok = False
+    tensorrt_ok = _tensorrt_sd15_bundle_available()
 
     diagnostics = [
         f"internal_runtime={'ready' if runtime.get('ok') else 'missing'}",
@@ -6318,6 +6283,7 @@ def _build_render_conductor_environment() -> dict[str, Any]:
         f"comfyui_motion={'ready' if (ad_ok or svd_ok) else 'unavailable'}",
         f"hosted_stability={'ready' if _hosted_stability_ready({'allow_hosted_fallback': True}) else 'unavailable'}",
         f"deforum_export={'ready' if deforum_ok else 'unavailable'}",
+        f"tensorrt_standalone={'ready' if tensorrt_ok else 'unavailable'}",
     ]
     return {
         "hardware": hw,
@@ -6344,15 +6310,15 @@ def _build_render_conductor_environment() -> dict[str, Any]:
                 "quality_score": 0.78,
                 "speed_score": 0.82,
             },
-            "proxy": {
-                "available": proxy_enabled,
-                "quality_score": 0.38,
-                "speed_score": 0.95,
-            },
             "deforum_export": {
                 "available": deforum_ok,
                 "quality_score": 0.7,
                 "speed_score": 0.45,
+            },
+            "tensorrt_standalone": {
+                "available": tensorrt_ok,
+                "quality_score": 0.82,
+                "speed_score": 0.88,
             },
         },
     }
@@ -7962,141 +7928,6 @@ def _run_tensorrt_standalone(project_id: str, job_id: str, payload: dict[str, An
 
 def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     preflight = _internal_render_preflight_data(project_id, payload)
-    if preflight.get("mode") == "proxy":
-        proj = store.get(project_id)
-        if not proj:
-            raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
-        variant_index = int(payload.get("variant_index", 0))
-        variant, _used_fallback = _internal_render_variant_or_fallback(proj, variant_index)
-        scenes = variant.get("scenes") or []
-        pdir = store.project_dir(project_id)
-        audio_meta = proj.meta.get("audio")
-        audio_path: Path | None = None
-        if audio_meta and audio_meta.get("filename"):
-            audio_path = pdir / "assets" / "audio" / str(audio_meta["filename"])
-            if not audio_path.exists():
-                audio_path = None
-
-        settings_obj = _internal_settings_from_payload(
-            payload,
-            model_id="proxy_draft",
-            render_tier=str(payload.get("render_tier") or "auto"),
-            device_preference="cpu",
-            temporal_mode="off",
-        )
-
-        runtime_checkpoint: dict[str, Any] | None = None
-        chunk_plan = dict(((preflight.get("tier_plan") or {}).get("chunk_plan") or {}))
-        estimated_total = max(1, int(preflight.get("estimated_frames", 1)) + 3)
-
-        def _checkpoint(state: dict[str, Any]) -> None:
-            nonlocal runtime_checkpoint
-            runtime_checkpoint = dict(state or {})
-            latest = jobs.get(project_id, job_id)
-            latest_progress = latest.progress if latest and isinstance(latest.progress, dict) else {}
-            jobs.update_progress(
-                project_id,
-                job_id,
-                stage=str(latest_progress.get("stage") or runtime_checkpoint.get("stage") or "running"),
-                current=int(latest_progress.get("current", 0) or 0),
-                total=max(1, int(latest_progress.get("total", estimated_total) or estimated_total)),
-                message=str(latest_progress.get("message") or runtime_checkpoint.get("message") or ""),
-                extra=_job_checkpoint_extra("proxy", "proxy_draft", runtime_checkpoint),
-            )
-
-        def _check_canceled() -> None:
-            latest = jobs.get(project_id, job_id)
-            if latest and latest.status == "canceled":
-                jobs.update_progress(
-                    project_id,
-                    job_id,
-                    stage="canceled",
-                    current=int((latest.progress or {}).get("current", 0)),
-                    total=max(1, int((latest.progress or {}).get("total", estimated_total) or estimated_total)),
-                    message="Cancel requested — stopping after current step",
-                    extra=_job_checkpoint_extra("proxy", "proxy_draft", runtime_checkpoint),
-                )
-                raise JobCanceled("Proxy render canceled")
-
-        def _log(line: str) -> None:
-            _check_canceled()
-            jobs.append_log(project_id, job_id, line)
-
-        def _progress(stage: str, current: int, total: int, message: str | None = None) -> None:
-            _check_canceled()
-            jobs.update_progress(
-                project_id,
-                job_id,
-                stage=stage,
-                current=current,
-                total=total,
-                message=message,
-                extra=_job_checkpoint_extra("proxy", "proxy_draft", runtime_checkpoint),
-            )
-
-        _progress("starting", 0, estimated_total, "Starting proxy draft render")
-        variant2 = dict(variant)
-        variant2["index"] = variant_index
-        variant2["duration_s"] = _resolved_project_duration_s(proj, variant, scenes)
-
-        out = render_internal_proxy_video_variant(
-            ffmpeg_path=settings.ffmpeg_path,
-            project_dir=pdir,
-            variant=variant2,
-            scenes=scenes,
-            audio_path=audio_path,
-            settings=settings_obj,
-            timeline=(proj.meta.get("timeline") or None),
-            log_fn=_log,
-            progress_fn=_progress,
-            cancel_check_fn=_check_canceled,
-            chunk_plan=chunk_plan,
-            checkpoint_fn=_checkpoint,
-        )
-        checkpoint_summary = runtime_checkpoint or _load_render_checkpoint(out)
-
-        jobs.update_progress(
-            project_id,
-            job_id,
-            stage="complete",
-            current=estimated_total,
-            total=estimated_total,
-            message=f"Saved {out.name}",
-            extra=_job_checkpoint_extra("proxy", "proxy_draft", checkpoint_summary, video=str(out)),
-        )
-
-        rel_video = str(out.relative_to(pdir))
-        videos = proj.meta.setdefault("outputs", {}).setdefault("videos", [])
-        if rel_video not in videos:
-            videos.append(rel_video)
-        render_entry = {
-            "video": rel_video,
-            "model_id": "proxy_draft",
-            "mode": "proxy",
-            "fps_render": settings_obj.fps_render,
-            "fps_output": settings_obj.fps_output,
-            "temporal_mode": "off",
-            "resume_existing_frames": settings_obj.resume_existing_frames,
-            "variant_index": variant_index,
-            "completed_at": time.time(),
-            "preflight": _public_render_preflight(preflight),
-            "runtime_checkpoint": checkpoint_summary,
-        }
-        proj.meta["last_internal_render"] = render_entry
-        hist = proj.meta.setdefault("internal_render_history", [])
-        hist.append(render_entry)
-        if isinstance(hist, list) and len(hist) > 20:
-            proj.meta["internal_render_history"] = hist[-20:]
-        store.save(proj)
-        return {
-            "ok": True,
-            "video": rel_video,
-            "video_abs": str(out),
-            "mode": "proxy",
-            "preflight": _public_render_preflight(preflight),
-            "runtime_checkpoint": checkpoint_summary,
-        }
-
     if preflight.get("mode") == "hosted":
         provider_cfg = dict((render_settings.get().get("stability") or {}))
         proj = store.get(project_id)
@@ -10028,98 +9859,6 @@ def _resolve_internal_render_request(
     )
 
 
-def _proxy_render_preflight_data(
-    project_id: str,
-    payload: dict[str, Any],
-    *,
-    reason: str | None = None,
-    requested_model_id: str | None = None,
-) -> dict[str, Any]:
-    if not _proxy_renders_enabled(payload):
-        raise _proxy_render_disabled_error(reason)
-
-    proj = store.get(project_id)
-    if not proj:
-        raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
-
-    variant_index = int(payload.get("variant_index", 0))
-    variant, used_fallback = _internal_render_variant_or_fallback(proj, variant_index)
-    scenes = variant.get("scenes") or []
-    if not scenes:
-        raise UserFacingError("Selected variant has no scenes", hint="Re-run Plan with at least 1 scene.")
-
-    settings_obj = _internal_settings_from_payload(
-        payload,
-        model_id="proxy_draft",
-        render_tier=str(payload.get("render_tier") or "auto"),
-        device_preference="cpu",
-        temporal_mode="off",
-    )
-
-    duration_sources = _project_duration_sources(proj, variant, scenes)
-    duration_s = _resolved_project_duration_s(proj, variant, scenes)
-    total_frames = int(math.ceil(duration_s * max(1, int(settings_obj.fps_render))))
-    hw = _hardware_profile()
-    tier_plan = _build_internal_render_plan(hw, requested_tier=str(payload.get("render_tier") or "auto"), duration_s=duration_s)
-    tier_plan["chunk_plan"] = _build_render_chunk_plan(hw, applied_tier=str(tier_plan.get("applied_tier") or "draft"), duration_s=duration_s, total_frames=total_frames, fps_render=int(settings_obj.fps_render), render_mode="proxy")
-    cache = describe_proxy_render_cache(
-        project_dir=store.project_dir(project_id),
-        variant_index=variant_index,
-        scenes=scenes,
-        timeline=(proj.meta.get("timeline") or None),
-        settings=settings_obj,
-        total_frames=total_frames,
-    )
-    fallback_reason = (
-        "the requested internal diffusion model is unavailable for this render."
-        if reason
-        else "no internal diffusion model is installed."
-    )
-    warnings = [
-        f"Using proxy draft render because {fallback_reason}",
-        "Proxy mode renders pacing, prompts, and timeline overlays locally without ComfyUI or Diffusers.",
-    ]
-    if used_fallback:
-        warnings.append(
-            "No saved plan found; using the generated creative-direction fallback scene pack. "
-            "Run Analyze + Plan for transcript/audio-accurate scenes."
-        )
-    if reason:
-        warnings.insert(0, reason)
-    duration_warning = _duration_mismatch_warning(duration_sources)
-    if duration_warning:
-        warnings.append(duration_warning)
-    return {
-        "ok": True,
-        "mode": "proxy",
-        "plan_source": "creative_direction_fallback" if used_fallback else "last_plan",
-        "variant_index": variant_index,
-        "model_id": "proxy_draft",
-        "requested_model_id": str(requested_model_id or payload.get("model_id") or "auto"),
-        "model_path": None,
-        "duration_s": duration_s,
-        "duration_sources": duration_sources,
-        "estimated_frames": total_frames,
-        "estimated_keyframes": max(1, len(_scene_keyframe_times(scenes, settings_obj.keyframe_interval_s))),
-        "device": str(tier_plan.get("device_preference") or "cpu"),
-        "hardware": hw,
-        "tier_plan": tier_plan,
-        "resume_existing_frames": bool(settings_obj.resume_existing_frames),
-        "warnings": warnings,
-        "cache": cache,
-        "installed_internal_models": _installed_internal_models_status(),
-        "settings": {
-            "fps_render": settings_obj.fps_render,
-            "fps_output": settings_obj.fps_output,
-            "width": settings_obj.width,
-            "height": settings_obj.height,
-            "interpolation_engine": settings_obj.interpolation_engine,
-            "resume_existing_frames": settings_obj.resume_existing_frames,
-            "render_mode": "proxy",
-        },
-    }
-
-
 def _hosted_render_preflight_data(
     project_id: str,
     payload: dict[str, Any],
@@ -10465,7 +10204,7 @@ def _studio_native_resource_policy(
         dtype = "float32" if backend == "cpu" else "auto"
         offload = "cpu_or_unified_memory"
         attention = "low_parallelism"
-        notes.append("Non-CUDA policy: use lower FPS render, smaller frames, and proxy/keyframe paths for long clips.")
+        notes.append("Non-CUDA policy: use lower FPS render, smaller frames, and real keyframe paths for long clips.")
 
     lora_count = len(tuple(settings_obj.loras or ()))
     if lora_count > 2 and vram_gb and vram_gb <= 8.5:
@@ -10594,7 +10333,7 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     if str(hw.get("backend") or "").lower() != "cuda":
         raise UserFacingError(
             "TensorRT video rendering requires CUDA.",
-            hint="Use an NVIDIA CUDA backend, or switch Internal renderer mode to Local diffusion or Proxy.",
+            hint="Use an NVIDIA CUDA backend, or switch Internal renderer mode to an installed local diffusion model.",
             code="TRT_CUDA_UNAVAILABLE",
             status_code=400,
         )
@@ -10693,7 +10432,12 @@ def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
 def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     requested_mode = str(payload.get("render_mode") or "auto").strip().lower()
     if requested_mode == "proxy":
-        return _proxy_render_preflight_data(project_id, payload, reason="Proxy mode requested explicitly.")
+        raise UserFacingError(
+            "Proxy rendering is no longer available for new renders.",
+            hint="Install a supported local model or configure a hosted provider, then retry.",
+            code="PROXY_RENDER_DISABLED",
+            status_code=400,
+        )
     if requested_mode == "hosted":
         return _hosted_render_preflight_data(project_id, payload)
     if requested_mode == "tensorrt" or (requested_mode in {"auto", "diffusion"} and _payload_requests_tensorrt_video(payload)):
@@ -10711,11 +10455,6 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     except UserFacingError as e:
         if e.code in {"MODEL_NOT_INSTALLED", "DIRECTML_MODEL_UNSUPPORTED", "MODEL_UNSUPPORTED_FOR_HARDWARE"} and _hosted_stability_ready(payload):
             return _hosted_render_preflight_data(project_id, payload, reason=e.message)
-        allow_proxy = bool(payload.get("allow_proxy_fallback", True))
-        if allow_proxy and e.code in {"MODEL_NOT_INSTALLED", "MODEL_UNSUPPORTED_FOR_HARDWARE"}:
-            if not _proxy_renders_enabled(payload):
-                raise _proxy_render_disabled_error(e.message)
-            return _proxy_render_preflight_data(project_id, payload, reason=e.message, requested_model_id=str(payload.get("model_id") or "auto"))
         raise
     model_family = _internal_model_family_for_request(model_id, model_path)
 
@@ -11087,23 +10826,11 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
         diagnostics.append("internal_models=unsupported" if hardware_issues else "internal_models=missing")
         diagnostics.extend(str(issue["message"]) for issue in hardware_issues)
     diagnostics.extend(list(runtime.get("diagnostics") or []))
-    if not _proxy_renders_enabled():
-        return {
-            "mode": "none",
-            "engine": None,
-            "model_id": None,
-            "reason": f"{reason} No local internal render route is available, and proxy draft renders are disabled.",
-            "diagnostics": diagnostics + ["proxy_renders=disabled", f"project={project_id}"],
-            "tier_plan": tier_plan,
-        }
-    proxy_reason = reason
-    if picked and not runtime.get("ok"):
-        proxy_reason = f"{reason} Internal diffusion runtime is not installed."
     return {
-        "mode": "proxy",
-        "engine": "proxy",
-        "model_id": "proxy_draft",
-        "reason": f"{proxy_reason} Falling back to proxy draft render.",
+        "mode": "none",
+        "engine": None,
+        "model_id": None,
+        "reason": f"{reason} No installed local model or configured hosted provider is available.",
         "diagnostics": diagnostics + [f"project={project_id}"],
         "tier_plan": tier_plan,
     }
@@ -11391,7 +11118,16 @@ def render_conductor_plan(project_id: str, req: RenderConductorPlanRequest):
         audio_filename=str(audio_meta.get("filename") or "") or None,
         duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
     )
-    advisory_plan = build_advisory_render_plan(intent, snapshot, environment=environment)
+    try:
+        advisory_plan = build_advisory_render_plan(intent, snapshot, environment=environment)
+    except NoRealRenderRouteError as exc:
+        diagnostics = "; ".join(exc.diagnostics)
+        raise UserFacingError(
+            "No requested real render route is currently available.",
+            hint=diagnostics or "Install a supported local model or configure a hosted provider, then retry.",
+            code="NO_RENDER_ROUTE",
+            status_code=409,
+        ) from exc
     plan_payload = advisory_plan.model_dump(mode="json")
     proj.meta["last_conductor_plan"] = plan_payload
     proj.meta["last_conductor_intent"] = intent.model_dump(mode="json")
@@ -11517,35 +11253,12 @@ def _performer_high_end_available() -> bool:
 
 
 def _run_performer_video(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    provider = str(payload.get("selected_provider") or "mock")
-    if provider != "mock":
-        raise UserFacingError(
-            "The configured high-end performer adapter is not available in this build",
-            hint="Enable mock fallback or configure a supported Wan S2V provider adapter.",
-        )
-
-    jobs.append_log(project_id, job_id, "Performer provider=mock; rendering an explicit local proxy fallback")
-    render_payload = dict(payload.get("render_settings") or {})
-    render_payload.update(
-        {
-            "variant_index": int(payload.get("variant_index") or 0),
-            "render_mode": "proxy",
-            "allow_proxy_fallback": True,
-        }
+    raise UserFacingError(
+        "No real Wan S2V performer adapter is available in this build.",
+        hint="Install and configure a supported Wan S2V adapter before starting a performer render.",
+        code="PERFORMER_ADAPTER_UNAVAILABLE",
+        status_code=409,
     )
-    result = _run_internal_video(project_id, job_id, render_payload)
-    return {
-        **result,
-        "performer": {
-            "plan_id": payload.get("plan_id"),
-            "requested_provider": payload.get("requested_provider"),
-            "selected_provider": provider,
-            "fallback_used": bool(payload.get("fallback_used")),
-            "model": payload.get("model"),
-            "task_count": len(payload.get("tasks") or []),
-            "provenance": payload.get("provenance"),
-        },
-    }
 
 
 @app.post("/v1/projects/{project_id}/render/performer/run")
@@ -11563,58 +11276,12 @@ def render_performer_run(project_id: str, req: PerformerWorkflowRunRequest) -> d
     if not list(stored.get("tasks") or []):
         raise HTTPException(400, "Performer plan has no render tasks")
 
-    requested = str(req.provider or "auto")
-    high_end_available = _performer_high_end_available()
-    selected = "high_end" if requested in {"auto", "high_end"} and high_end_available else "mock"
-    fallback_used = selected == "mock" and requested != "mock"
-    if requested == "high_end" and not high_end_available and not req.allow_mock_fallback:
-        raise HTTPException(409, "High-end Wan S2V provider is unavailable and mock fallback is disabled")
-
-    payload = {
-        "variant_index": int(req.variant_index),
-        "plan_id": stored.get("plan_id"),
-        "requested_provider": requested,
-        "selected_provider": selected,
-        "fallback_used": fallback_used,
-        "model": stored.get("model"),
-        "tasks": list(stored.get("tasks") or []),
-        "render_settings": dict(req.render_settings or {}),
-        "provenance": {
-            "workflow": "W6-05",
-            "source_plan_id": stored.get("plan_id"),
-            "audio_driven": True,
-            "honest_fallback": True,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        },
-    }
-    job = jobs.create(project_id, "performer_video", payload)
-    job.progress = {
-        "stage": "queued",
-        "current": 0,
-        "total": max(1, len(payload["tasks"])),
-        "percent": 0.0,
-        "message": f"Queued performer workflow via {selected}",
-    }
-    jobs.save(job)
-    proj.meta.setdefault("jobs", []).append(job.__dict__)
-    proj.meta["last_performer_run"] = {
-        "job_id": job.id,
-        "plan_id": stored.get("plan_id"),
-        "requested_provider": requested,
-        "selected_provider": selected,
-        "fallback_used": fallback_used,
-    }
-    store.save(proj)
-    return {
-        "ok": True,
-        "job": job.__dict__,
-        "selection": proj.meta["last_performer_run"],
-        "message": (
-            "Queued explicit mock/proxy performer fallback; this is not Wan S2V output."
-            if selected == "mock"
-            else "Queued high-end performer render."
-        ),
-    }
+    raise UserFacingError(
+        "No real Wan S2V performer adapter is available in this build.",
+        hint="Install and configure a supported Wan S2V adapter before starting a performer render.",
+        code="PERFORMER_ADAPTER_UNAVAILABLE",
+        status_code=409,
+    )
 
 
 @app.get("/v1/projects/{project_id}/unreal/preview")
@@ -11686,7 +11353,6 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             refine_every_n_frames=int(tier_defaults.get("refine_every_n_frames", 1)),
             anchor_strength=float(tier_defaults.get("anchor_strength", 0.20)),
             prompt_blend=bool(tier_defaults.get("prompt_blend", True)),
-            allow_proxy_fallback=_proxy_renders_enabled(),
         )
         res = render_internal_video(project_id, internal_req)
         return {"ok": True, "mode": str(res.get("preflight", {}).get("mode") or "internal"), "job": res.get("job"), "preflight": res.get("preflight")}
@@ -11696,12 +11362,12 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
     if rec.get("mode") == "none":
         raise UserFacingError(
             "No render route is available.",
-            hint=str(rec.get("reason") or "Enable local internal models, a hosted fallback, or proxy draft renders."),
+            hint=str(rec.get("reason") or "Install a supported local model or configure a hosted provider."),
             code="NO_RENDER_ROUTE",
             status_code=400,
         )
 
-    if rec["mode"] in ("internal", "proxy", "hosted"):
+    if rec["mode"] in ("internal", "hosted"):
         hw = _hardware_profile()
         provider_status = _render_provider_status(hw)
         tier_plan = dict(rec.get("tier_plan") or _build_internal_render_plan(hw, requested_tier=("draft" if preset == "fast" else ("quality" if preset in ("quality", "ultra") else "auto"))))
@@ -11720,7 +11386,7 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             keyframe_interval_s=float(tier_defaults.get("keyframe_interval_s", os.getenv("EDMG_INTERNAL_KEYFRAME_INTERVAL_S", "5.0"))),
             interpolation_engine=str(tier_defaults.get("interpolation_engine", os.getenv("EDMG_INTERPOLATION_ENGINE", "auto"))),
             model_id=str(rec.get("model_id") or os.getenv("EDMG_INTERNAL_MODEL_ID", "auto")),
-            render_mode=("proxy" if rec["mode"] == "proxy" else ("hosted" if rec["mode"] == "hosted" else "auto")),
+            render_mode=("hosted" if rec["mode"] == "hosted" else "auto"),
             render_tier=str(tier_plan.get("applied_tier") or "auto"),
             device_preference=device_preference,
             temporal_mode=str(tier_defaults.get("temporal_mode", "frame_img2img")),
@@ -11729,7 +11395,6 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             anchor_strength=float(tier_defaults.get("anchor_strength", 0.20)),
             prompt_blend=bool(tier_defaults.get("prompt_blend", True)),
             allow_hosted_fallback=True,
-            allow_proxy_fallback=_proxy_renders_enabled(),
         )
         res = render_internal_video(project_id, internal_req)
         effective_mode = str(res.get("preflight", {}).get("mode") or rec["mode"])
@@ -11738,7 +11403,7 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             selected["mode"] = "internal"
             selected["engine"] = "diffusion"
             selected["model_id"] = str(res.get("preflight", {}).get("model_id") or selected.get("model_id") or "auto")
-        elif effective_mode in {"proxy", "hosted"}:
+        elif effective_mode == "hosted":
             selected["mode"] = effective_mode
         return {
             "ok": True,

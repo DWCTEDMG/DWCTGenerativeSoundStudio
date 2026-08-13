@@ -1,11 +1,56 @@
 import React, { useEffect, useMemo, useState } from "react";
+import {
+  Bot,
+  Box,
+  Boxes,
+  CloudCog,
+  CloudUpload,
+  Database,
+  ExternalLink,
+  RefreshCw,
+  Server,
+  Sparkles,
+} from "lucide-react";
 import { apiGet, apiPost, getBackendUrl, normalizeBackendUrl, setBrowserBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { useStudioPageLayout } from "../components/studioLayout";
 import type { PageProps } from "../types/pageProps";
 
-type CloudPanelId = "aws" | "azure" | "hf" | "lightning" | "result";
+type CloudPanelId = "foundry" | "aws" | "azure" | "hf" | "lightning" | "result";
+
+const FOUNDRY_PROJECT = {
+  name: "jonlong-1185",
+  subscription: "Azuredwct",
+  endpoint: "https://jonlong-1185-resource.services.ai.azure.com/api/projects/jonlong-1185",
+};
+
+function CloudPanelHeader({
+  icon,
+  eyebrow,
+  title,
+  status,
+  statusTone = "neutral",
+}: {
+  icon: React.ReactNode;
+  eyebrow: string;
+  title: string;
+  status: string;
+  statusTone?: "neutral" | "ready" | "attention";
+}) {
+  return (
+    <div className="cloud-panelHeader">
+      <div className="cloud-panelIdentity">
+        <span className="cloud-panelIcon" aria-hidden="true">{icon}</span>
+        <div>
+          <div className="cloud-panelEyebrow">{eyebrow}</div>
+          <h2>{title}</h2>
+        </div>
+      </div>
+      <span className={`cloud-statusBadge is-${statusTone}`}>{status}</span>
+    </div>
+  );
+}
 
 export default function Cloud(props: PageProps) {
   const [bucket, setBucket] = useState("");
@@ -148,6 +193,11 @@ export default function Cloud(props: PageProps) {
   const panelDefinitions = useMemo(
     () => [
       {
+        id: "foundry" as const,
+        label: "Microsoft Foundry project",
+        description: "Selected Foundry project context and inference configuration boundary.",
+      },
+      {
         id: "aws" as const,
         label: "AWS bundle tools",
         description: "S3 credential test and optional project bundle upload flow.",
@@ -205,54 +255,113 @@ export default function Cloud(props: PageProps) {
   }));
 
   const panelContent: Record<CloudPanelId, React.ReactNode> = {
+    foundry: (
+      <section className="cloud-panel cloud-panel--featured">
+        <CloudPanelHeader
+          icon={<Bot size={20} />}
+          eyebrow="AI orchestration"
+          title="Microsoft Foundry"
+          status="Project selected"
+          statusTone="ready"
+        />
+        <p className="cloud-panelCopy">
+          Studio is scoped to the selected Foundry project. Model inference remains separate until a deployment
+          and authentication method are configured in AI Provider settings.
+        </p>
+        <div className="cloud-projectGrid">
+          <div className="cloud-projectFact">
+            <span>Project</span>
+            <strong>{FOUNDRY_PROJECT.name}</strong>
+          </div>
+          <div className="cloud-projectFact">
+            <span>Subscription</span>
+            <strong>{FOUNDRY_PROJECT.subscription}</strong>
+          </div>
+          <div className="cloud-projectFact cloud-projectFact--wide">
+            <span>Project endpoint</span>
+            <code>{FOUNDRY_PROJECT.endpoint}</code>
+          </div>
+        </div>
+        <div className="cloud-callout">
+          <Sparkles size={16} aria-hidden="true" />
+          <span>This project endpoint identifies the workspace; it is not treated as an OpenAI inference endpoint.</span>
+        </div>
+        <a
+          className="cloud-linkButton"
+          href={FOUNDRY_PROJECT.endpoint}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open Foundry project <ExternalLink size={15} aria-hidden="true" />
+        </a>
+      </section>
+    ),
     aws: (
-      <div className="card">
-        <div style={{ fontWeight: 800, marginBottom: 10 }}>AWS</div>
-        <div className="small">Optional capability: <code>uv sync --frozen --extra PROFILE --extra aws</code>.</div>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">S3 bucket</div>
-          <input value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="my-bucket" />
+      <section className="cloud-panel">
+        <CloudPanelHeader
+          icon={<CloudUpload size={20} />}
+          eyebrow="Bundle delivery"
+          title="AWS S3"
+          status="Optional"
+        />
+        <p className="cloud-panelCopy">Test S3 credentials and optionally upload a portable Studio project bundle.</p>
+        <div className="cloud-capability">Requires <code>uv sync --frozen --extra PROFILE --extra aws</code></div>
+        <div className="cloud-field">
+          <label htmlFor="cloud-aws-bucket">S3 bucket</label>
+          <input id="cloud-aws-bucket" value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="my-bucket" />
         </div>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">Bundle key</div>
-          <input value={bundleKey} onChange={(e) => setBundleKey(e.target.value)} />
+        <div className="cloud-field">
+          <label htmlFor="cloud-aws-key">Bundle key</label>
+          <input id="cloud-aws-key" value={bundleKey} onChange={(e) => setBundleKey(e.target.value)} />
         </div>
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="cloud-actions">
           <button onClick={awsTest}>Test credentials</button>
           <button className="secondary" onClick={awsBundle}>Bundle + (optional) upload</button>
         </div>
-      </div>
+      </section>
     ),
     azure: (
-      <div className="card">
-        <div style={{ fontWeight: 800, marginBottom: 10 }}>Azure</div>
-        <div className="small">Optional capability: <code>uv sync --frozen --extra PROFILE --extra azure</code>.</div>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">Blob container</div>
-          <input value={azureContainer} onChange={(e) => setAzureContainer(e.target.value)} placeholder="edmg-model-cache" />
+      <section className="cloud-panel">
+        <CloudPanelHeader
+          icon={<Database size={20} />}
+          eyebrow="Model storage"
+          title="Azure Blob cache"
+          status="Optional"
+        />
+        <p className="cloud-panelCopy">Validate Blob Storage access for on-demand model weight caching.</p>
+        <div className="cloud-capability">Requires <code>uv sync --frozen --extra PROFILE --extra azure</code></div>
+        <div className="cloud-field">
+          <label htmlFor="cloud-azure-container">Blob container</label>
+          <input id="cloud-azure-container" value={azureContainer} onChange={(e) => setAzureContainer(e.target.value)} placeholder="edmg-model-cache" />
         </div>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">Model prefix</div>
-          <input value={azurePrefix} onChange={(e) => setAzurePrefix(e.target.value)} placeholder="models" />
+        <div className="cloud-field">
+          <label htmlFor="cloud-azure-prefix">Model prefix</label>
+          <input id="cloud-azure-prefix" value={azurePrefix} onChange={(e) => setAzurePrefix(e.target.value)} placeholder="models" />
         </div>
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="cloud-actions">
           <button onClick={azureTest}>Test Azure</button>
         </div>
-      </div>
+      </section>
     ),
     hf: (
-      <div className="card">
-        <div style={{ fontWeight: 800, marginBottom: 10 }}>Hugging Face bucket</div>
-        <div className="small">
+      <section className="cloud-panel cloud-panel--wide">
+        <CloudPanelHeader
+          icon={<Boxes size={20} />}
+          eyebrow="Primary model cache"
+          title="Hugging Face bucket"
+          status={hfStatusLoading ? "Checking" : hfStatus?.active ? "Active" : hfEnabled ? "Configured" : "Disabled"}
+          statusTone={hfStatus?.active ? "ready" : hfEnabled ? "attention" : "neutral"}
+        />
+        <p className="cloud-panelCopy">
           Model cache backed by a Hugging Face bucket. When enabled it is used <b>before AWS S3 / Azure</b>
           {" "}for finding, downloading, and storing model weights. Settings are saved by Studio — no env vars required.
-        </div>
+        </p>
         {hfStatusLoading ? (
-          <div className="small" style={{ marginTop: 10 }}>Loading backend status…</div>
+          <div className="cloud-inlineStatus"><RefreshCw className="cloud-spin" size={14} /> Loading backend status…</div>
         ) : hfStatus ? (
-          <div className="small" style={{ marginTop: 10 }}>
+          <div className="cloud-inlineStatus">
             {hfStatus.error ? (
-              <span style={{ color: "var(--danger)" }}>{hfStatus.error}</span>
+              <span className="cloud-errorText">{hfStatus.error}</span>
             ) : (
               <>
                 Cache enabled: {hfStatus.enabled ? "yes" : "no"} · Active: {hfStatus.active ? "yes" : "no"}
@@ -262,45 +371,48 @@ export default function Cloud(props: PageProps) {
             )}
           </div>
         ) : null}
-        <div className="small" style={{ marginTop: 6 }}>
+        <div className="cloud-activeProvider">
+          <Box size={15} aria-hidden="true" />
           Active model cache: <b>{hfActiveProvider || "none (local + S3/Azure fallback)"}</b>
         </div>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">Model storage mode</div>
-          <select value={hfStorageMode} onChange={(e) => setHfStorageMode(e.target.value as "local_cache" | "cloud_only")}>
+        <div className="cloud-field">
+          <label htmlFor="cloud-hf-storage">Model storage mode</label>
+          <select id="cloud-hf-storage" value={hfStorageMode} onChange={(e) => setHfStorageMode(e.target.value as "local_cache" | "cloud_only")}>
             <option value="local_cache">Local models + HF/S3 secondary mirrors</option>
             <option value="cloud_only">Cloud only (no local model copy)</option>
           </select>
         </div>
-        <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+        <div className="cloud-fieldHint">
           Local-first keeps installed models on this machine. When HF bucket or S3 is enabled, Studio also mirrors supported models there and restores from those caches if the local file is missing.
         </div>
-        <label className="row" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
+        <label className="cloud-toggle">
           <input
             type="checkbox"
             checked={hfEnabled}
             onChange={(e) => setHfEnabled(e.target.checked)}
-            style={{ width: "auto" }}
           />
           <span>Use Hugging Face bucket as the model cache (priority over S3)</span>
         </label>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">Bucket id (namespace/name)</div>
+        <div className="cloud-fieldGrid">
+          <div className="cloud-field">
+            <label htmlFor="cloud-hf-bucket">Bucket id (namespace/name)</label>
           <input
+            id="cloud-hf-bucket"
             value={hfBucket}
             onChange={(e) => setHfBucket(e.target.value)}
             placeholder="namespace/bucket-name"
           />
+          </div>
+          <div className="cloud-field">
+            <label htmlFor="cloud-hf-prefix">Optional prefix</label>
+            <input id="cloud-hf-prefix" value={hfPrefix} onChange={(e) => setHfPrefix(e.target.value)} placeholder="models" />
+          </div>
         </div>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">Optional prefix</div>
-          <input value={hfPrefix} onChange={(e) => setHfPrefix(e.target.value)} placeholder="models" />
-        </div>
-        <div className="small" style={{ marginTop: 10 }}>
+        <div className="cloud-fieldHint">
           Uploads need a token with write access. Studio checks env tokens (<code>HF_TOKEN</code> / <code>EDMG_HF_TOKEN</code>),
           then the modern <code>hf auth login</code> session, then Settings → Tokens. Public buckets can be read without a token.
         </div>
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="cloud-actions">
           <button onClick={saveHf} disabled={hfSaving}>
             {hfSaving ? "Saving…" : "Save & apply"}
           </button>
@@ -309,47 +421,81 @@ export default function Cloud(props: PageProps) {
             Refresh status
           </button>
         </div>
-      </div>
+      </section>
     ),
     lightning: (
-      <div className="card">
-        <div style={{ fontWeight: 800, marginBottom: 10 }}>Lightning.ai</div>
-        <div className="small">Generates a runnable bundle folder (backend + startup script).</div>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">Output dir under Studio data/cloud</div>
-          <input value={lightningOut} onChange={(e) => setLightningOut(e.target.value)} />
+      <section className="cloud-panel">
+        <CloudPanelHeader
+          icon={<Server size={20} />}
+          eyebrow="Remote runtime"
+          title="Lightning.ai"
+          status="Bundle tools"
+        />
+        <p className="cloud-panelCopy">Generate a runnable backend bundle and target a hosted Studio runtime.</p>
+        <div className="cloud-field">
+          <label htmlFor="cloud-lightning-output">Output dir under Studio data/cloud</label>
+          <input id="cloud-lightning-output" value={lightningOut} onChange={(e) => setLightningOut(e.target.value)} />
         </div>
-        <div style={{ marginTop: 10 }}>
-          <div className="small">Lightning backend URL</div>
+        <div className="cloud-field">
+          <label htmlFor="cloud-lightning-url">Lightning backend URL</label>
           <input
+            id="cloud-lightning-url"
             aria-label="Lightning backend URL"
             value={lightningBackendUrl}
             onChange={(e) => setLightningBackendUrl(e.target.value)}
             placeholder="https://your-lightning-backend.example.com"
           />
         </div>
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="cloud-actions">
           <button onClick={lightningBundle}>Generate bundle</button>
           <button className="secondary" disabled={connectingLightning} onClick={connectLightningBackend}>
             {connectingLightning ? "Connecting…" : window.edmg?.setBackendSettings ? "Save backend target" : "Use backend now"}
           </button>
         </div>
-      </div>
+      </section>
     ),
     result: result ? (
-      <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 800, marginBottom: 10 }}>Result</div>
+      <section className="cloud-result">
+        <CloudPanelHeader
+          icon={<CloudCog size={20} />}
+          eyebrow="Latest operation"
+          title="Result"
+          status={result?.ok === false ? "Action failed" : "Complete"}
+          statusTone={result?.ok === false ? "attention" : "ready"}
+        />
         <StructuredSummary value={result} showJson />
-      </div>
+      </section>
     ) : null,
   };
 
   return (
-    <div>
-      <h1>Cloud</h1>
-      <div className="small" style={{ marginTop: 6 }}>
-        Reorder or hide cloud helper sections for your own workflow. This only changes the local page layout and does not alter any bundle, upload, or backend behavior.
-      </div>
+    <div className="cloud-page">
+      <header className="cloud-pageHeader">
+        <div>
+          <div className="cloud-kicker">Infrastructure workspace</div>
+          <div className="cloud-titleRow">
+            <CloudCog size={28} aria-hidden="true" />
+            <h1>Cloud</h1>
+          </div>
+          <p className="cloud-headerCopy">
+            Coordinate AI projects, model caches, bundle delivery, and remote Studio runtimes from one workspace.
+          </p>
+        </div>
+        <div className="cloud-statusStrip" aria-label="Cloud workspace status">
+          <div className="cloud-stat">
+            <span>Foundry</span>
+            <strong>{FOUNDRY_PROJECT.name}</strong>
+          </div>
+          <div className="cloud-stat">
+            <span>Model cache</span>
+            <strong>{hfStatus?.active ? "HF active" : "Local fallback"}</strong>
+          </div>
+          <div className="cloud-stat">
+            <span>Backend</span>
+            <strong>{normalizeBackendUrl(props.backendUrl || getBackendUrl()) ? "Target set" : "Local"}</strong>
+          </div>
+        </div>
+      </header>
       <StudioLayoutCustomizer
         title="Cloud layout"
         description="Reorder or hide cloud helper panels without changing AWS tests, bundle generation, or upload payloads."
@@ -361,8 +507,8 @@ export default function Cloud(props: PageProps) {
         onToggleHidden={updateHidden}
         onReset={resetLayout}
       />
-      {err && <div style={{ marginTop: 14, color: "var(--danger)" }}>{err}</div>}
-      <div className="grid2" style={{ marginTop: 14 }}>
+      {err && <div className="cloud-error" role="alert">{err}</div>}
+      <div className="cloud-panelGrid">
         {visibleOrder
           .filter((panelId) => panelId !== "result")
           .map((panelId) => (

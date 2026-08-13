@@ -436,7 +436,6 @@ def build_autoconfig(
         "anchor_strength": float(td.get("anchor_strength", 0.20)),
         "prompt_blend": bool(td.get("prompt_blend", True)),
         "allow_hosted_fallback": True,
-        "allow_proxy_fallback": True,
     }
     if preset.motion_strategy == "storyboard_full_motion":
         storyboard_request = {

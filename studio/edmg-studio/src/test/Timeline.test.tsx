@@ -150,6 +150,73 @@ describe("Timeline page", () => {
     expect(loopOut.value).toBe("8");
   });
 
+  it("collapses reference and automation lane groups without hiding edit tracks", async () => {
+    installEdmgBridge();
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Lane Visibility Test" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Lane Visibility Test",
+          meta: {
+            audio: { filename: "track.wav", duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120 } },
+            last_plan: {
+              variants: [
+                {
+                  name: "Variant 1",
+                  scenes: [{ id: "scene_0", start_s: 0, end_s: 8, prompt: "Always visible edit clip." }],
+                },
+              ],
+            },
+            timeline: {
+              duration_s: 8,
+              tracks: [
+                {
+                  id: "track_prompt",
+                  name: "Prompts",
+                  type: "prompt",
+                  clips: [{ id: "prompt_0", start_s: 0, end_s: 8, data: { prompt: "Always visible edit clip." } }],
+                },
+              ],
+              layers: [{ type: "text", text: "Overlay", start_s: 0, end_s: 4 }],
+              camera: { keyframes: [{ t: 2, zoom: 1 }] },
+            },
+          },
+        },
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    expect(await screen.findByLabelText("Audio master reference lane header")).toBeTruthy();
+    expect(screen.getByLabelText("Audio master reference lane")).toBeTruthy();
+    expect(screen.getByLabelText("Overlays automation lane header")).toBeTruthy();
+    expect(screen.getByLabelText("Overlays automation lane")).toBeTruthy();
+    expect(screen.getByTitle("Always visible edit clip.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide reference lanes" }));
+    expect(screen.queryByLabelText("Audio master reference lane header")).toBeNull();
+    expect(screen.queryByLabelText("Audio master reference lane")).toBeNull();
+    expect(screen.queryByLabelText("Music map reference lane header")).toBeNull();
+    expect(screen.queryByLabelText("Music map reference lane")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show reference lanes" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByTitle("Always visible edit clip.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide automation lanes" }));
+    expect(screen.queryByLabelText("Overlays automation lane header")).toBeNull();
+    expect(screen.queryByLabelText("Overlays automation lane")).toBeNull();
+    expect(screen.queryByLabelText("Camera automation lane header")).toBeNull();
+    expect(screen.queryByLabelText("Camera automation lane")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show automation lanes" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByTitle("Always visible edit clip.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show reference lanes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show automation lanes" }));
+    expect(screen.getByLabelText("Audio master reference lane")).toBeTruthy();
+    expect(screen.getByLabelText("Camera automation lane")).toBeTruthy();
+  });
+
   it("snaps clip moves, exposes timing fields, and honors track edit locks", async () => {
     installEdmgBridge();
     installFetchMock({

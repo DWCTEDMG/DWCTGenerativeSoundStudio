@@ -74,7 +74,7 @@ describe("Studio Forge runtime status", () => {
     expect(runtime.cards.find((card) => card.id === "models")?.status).toBe("ready");
   });
 
-  it("keeps cloud-only models and proxy fallback visibly degraded", () => {
+  it("keeps cloud-only models and proxy-only rendering visibly degraded", () => {
     const runtime = deriveStudioForgeRuntime({
       health: { ok: true },
       systemReadiness: healthyReadiness("warn"),
@@ -104,8 +104,9 @@ describe("Studio Forge runtime status", () => {
     expect(runtime.capabilities).not.toContain("cuda");
     expect(runtime.cards.find((card) => card.id === "models")).toMatchObject({ status: "degraded" });
     expect(runtime.cards.find((card) => card.id === "models")?.impact).toContain("restored locally");
-    expect(runtime.cards.find((card) => card.id === "render-providers")?.impact).toContain(
-      "not proof that CUDA model inference works",
+    expect(runtime.cards.find((card) => card.id === "render-providers")?.detail).toContain("0 hosted configured");
+    expect(runtime.cards.find((card) => card.id === "render-providers")?.impact).toMatch(
+      /genuine local model or authenticated hosted provider/i,
     );
   });
 

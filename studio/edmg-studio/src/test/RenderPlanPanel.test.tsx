@@ -1,6 +1,6 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { RenderPlanPanel } from "../components/RenderPlanPanel";
 
 describe("RenderPlanPanel", () => {
@@ -26,8 +26,6 @@ describe("RenderPlanPanel", () => {
           sections: [{ scene_id: "scene-1", engine: "internal", estimated_seconds: 12 }],
           diagnostics: ["advisory_only=true"],
         }}
-        onPromoteAll={vi.fn()}
-        onPromoteScene={vi.fn()}
       />,
     );
 
@@ -37,5 +35,18 @@ describe("RenderPlanPanel", () => {
     expect(screen.getByText("scene-1-motion")).toBeTruthy();
     expect(screen.getByText(/rp1:demo:v0:scene-1:render_motion:abc123/)).toBeTruthy();
     expect(screen.getByText(/Plan is advisory/)).toBeTruthy();
+  });
+
+  it("guides stored proxy plans back to a genuine render route", () => {
+    render(
+      <RenderPlanPanel
+        plan={{ sections: [{ scene_id: "scene-1", engine: "proxy" }] }}
+        onOpenModels={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("Legacy proxy route unavailable")).toBeTruthy();
+    expect(screen.getByText(/installing a compatible local model/i)).toBeTruthy();
+    expect(screen.queryByText(/Promote proxy/i)).toBeNull();
   });
 });

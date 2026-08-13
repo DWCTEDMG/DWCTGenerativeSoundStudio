@@ -6,7 +6,6 @@ from typing import Any
 
 from .music_graph import section_energy_at_time
 
-
 WAN_S2V_MODEL = {
     "id": "wan_s2v_14b",
     "repo_id": "Wan-AI/Wan2.2-S2V-14B",
@@ -114,7 +113,7 @@ def build_performer_workflow_plan(
             {
                 "code": "hosted_lane_unavailable",
                 "severity": "warning",
-                "message": "High-end performer execution is unavailable; Run will use a clearly labeled local mock/proxy fallback unless fallback is disabled.",
+                "message": "High-end performer execution is unavailable. Install the supported local adapter or configure a compatible hosted provider before running this lane.",
             }
         )
     warnings.append(

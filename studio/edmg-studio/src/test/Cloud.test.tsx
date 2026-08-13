@@ -5,6 +5,23 @@ import Cloud from "../pages/Cloud";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
 describe("Cloud page", () => {
+  it("shows the selected Foundry project without claiming inference connectivity", async () => {
+    installEdmgBridge();
+    installFetchMock({
+      "GET /v1/cloud/hf/settings": { ok: true, settings: { enabled: false, bucket: "", prefix: "", storage_mode: "local_cache" }, status: { ok: true, provider: "huggingface_bucket", enabled: false }, active_provider: null },
+    });
+
+    renderWithStudio(<Cloud backendUrl="http://127.0.0.1:7863" config={null} />);
+
+    expect(await screen.findAllByText("jonlong-1185")).toHaveLength(2);
+    expect(screen.getByText("Azuredwct")).toBeTruthy();
+    expect(screen.getByText("Project selected")).toBeTruthy();
+    expect(screen.getByText(/not treated as an OpenAI inference endpoint/i)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Open Foundry project/i }).getAttribute("href")).toBe(
+      "https://jonlong-1185-resource.services.ai.azure.com/api/projects/jonlong-1185",
+    );
+  });
+
   it("keeps AWS test actions working while exposing layout profiles", async () => {
     installEdmgBridge();
     const fetchMock = installFetchMock({

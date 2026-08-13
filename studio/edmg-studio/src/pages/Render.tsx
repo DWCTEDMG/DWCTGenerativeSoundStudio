@@ -126,6 +126,15 @@ const UPSCALER_OPTIONS = [
   { value: "pixel_bicubic", label: "Pixel bicubic" },
 ];
 
+const REAL_CONDUCTOR_ENGINES = [
+  "internal",
+  "comfyui_still",
+  "comfyui_motion",
+  "hosted_video",
+  "deforum_export",
+  "tensorrt_standalone",
+];
+
 function formatDurationSources(preflight: any): string {
   const sources = Array.isArray(preflight?.duration_sources) ? preflight.duration_sources : [];
   return sources
@@ -151,14 +160,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [conductorPlan, setConductorPlan] = useState<any>(null);
   const [conductorEnvironment, setConductorEnvironment] = useState<any>(null);
   const [continuityReport, setContinuityReport] = useState<any>(null);
-  const [conductorPromoteStatus, setConductorPromoteStatus] = useState<string>("");
-  const [promotingScenes, setPromotingScenes] = useState(false);
   const [performerPlan, setPerformerPlan] = useState<any>(null);
   const [performerStatus, setPerformerStatus] = useState<string>("");
   const [planningPerformer, setPlanningPerformer] = useState(false);
   const [runningPerformer, setRunningPerformer] = useState(false);
-  const [performerProvider, setPerformerProvider] = useState<"auto" | "high_end" | "mock">("auto");
-  const [performerFallback, setPerformerFallback] = useState(true);
 
   const [renderPreset, setRenderPreset] = useState<"fast" | "balanced" | "quality" | "ultra">((savedRenderDefaults.renderPreset as any) || "balanced");
   const [quickRenderGoal, setQuickRenderGoal] = useState<RenderQuickGoal>("auto");
@@ -671,7 +676,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       render_tier: internalRenderTier,
       device_preference: useTensorRt ? "cuda" : internalDevicePreference,
       allow_hosted_fallback: true,
-      allow_proxy_fallback: false,
       resume_existing_frames: useTensorRt ? false : internalResumeExisting,
     };
   };
@@ -851,17 +855,16 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       setConductorPlan(null);
       setConductorEnvironment(null);
       setContinuityReport(null);
-      setConductorPromoteStatus("");
       return;
     }
     try {
       const d = await apiPost(`/v1/projects/${projectId}/render/conductor/plan`, {
         variant_index: selectedVariant,
         preset: renderPreset,
+        allowed_engines: REAL_CONDUCTOR_ENGINES,
       });
       setConductorPlan(d?.plan || null);
       setConductorEnvironment(d?.environment || null);
-      setConductorPromoteStatus("");
       if (d?.visual_dna_hints) setVisualDnaHints(d.visual_dna_hints);
       try {
         const continuity = await apiGet(`/v1/projects/${projectId}/render/conductor/continuity?variant_index=${selectedVariant}`);
@@ -876,32 +879,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         setConductorEnvironment(null);
         setContinuityReport(null);
       }
-    }
-  };
-
-  const promoteConductorScenes = async (sceneIds: string[] = []) => {
-    if (!projectId || !conductorPlan) return;
-    setPromotingScenes(true);
-    setConductorPromoteStatus("");
-    try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/conductor/promote`, {
-        plan_id: conductorPlan.plan_id || null,
-        scene_ids: sceneIds,
-        target_engine: "internal",
-        quality_tier: renderPreset === "fast" ? "draft" : renderPreset,
-        reason: sceneIds.length ? `Promote ${sceneIds.join(", ")} to hero lane` : "Promote proxy scenes to hero lane",
-      });
-      setConductorPlan(d?.plan || conductorPlan);
-      const promoted = Array.isArray(d?.promoted_scene_ids) ? d.promoted_scene_ids : [];
-      setConductorPromoteStatus(
-        promoted.length
-          ? `Promoted ${promoted.length} scene(s) to internal/${renderPreset === "fast" ? "draft" : renderPreset}.`
-          : "No proxy scenes left to promote.",
-      );
-    } catch (e: any) {
-      setConductorPromoteStatus(String(e));
-    } finally {
-      setPromotingScenes(false);
     }
   };
 
@@ -953,8 +930,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       const d = await apiPost(`/v1/projects/${projectId}/render/performer/run`, {
         variant_index: selectedVariant,
         plan_id: performerPlan.plan_id,
-        provider: performerProvider,
-        allow_mock_fallback: performerFallback,
+        provider: "auto",
         render_settings: buildInternalPayload(),
       });
       setPerformerStatus(d?.message || `Performer job ${d?.job?.id || ""} queued.`);
@@ -2017,10 +1993,8 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
               plan={conductorPlan}
               continuityReport={continuityReport}
               visualDnaHints={visualDnaHints}
-              conductorPromoteStatus={conductorPromoteStatus}
-              promotingScenes={promotingScenes}
-              onPromoteAll={() => promoteConductorScenes()}
-              onPromoteScene={(sceneId) => promoteConductorScenes([sceneId])}
+              onOpenModels={onNavigate ? () => onNavigate("models") : undefined}
+              onOpenSettings={onNavigate ? () => onNavigate("settings") : undefined}
               onNavigateReview={onNavigate ? () => onNavigate("review") : undefined}
               onRefresh={() => refreshConductorPlan().catch(() => {})}
             />
@@ -2034,21 +2008,12 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
               </button>
             </div>
             <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-              Queue audio-driven performance scenes through the high-end lane, with explicit local mock fallback and full provenance. Mock output is never labeled as Wan S2V.
+              Queue audio-driven performance scenes only when a genuine high-end performer adapter is installed and ready. Synthetic proxy output is never substituted.
             </div>
-            <div className="row" style={{ marginTop: 10, gap: 10, alignItems: "end", flexWrap: "wrap" }}>
-              <label style={{ minWidth: 190 }}>
-                <span className="small">Execution provider</span>
-                <select value={performerProvider} onChange={(e) => setPerformerProvider(e.target.value as any)}>
-                  <option value="auto">Auto (high-end, then mock)</option>
-                  <option value="high_end">High-end Wan S2V</option>
-                  <option value="mock">Local mock/proxy proof</option>
-                </select>
-              </label>
-              <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", paddingBottom: 8 }}>
-                <input type="checkbox" checked={performerFallback} onChange={(e) => setPerformerFallback(e.target.checked)} />
-                Allow labeled mock fallback
-              </label>
+            <div className="row" style={{ marginTop: 10, gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div className="small" style={{ opacity: 0.82 }}>
+                Provider: <b>automatic real route</b>
+              </div>
               <button type="button" disabled={!performerPlan?.tasks?.length || runningPerformer} onClick={() => runPerformerWorkflow().catch(() => {})}>
                 {runningPerformer ? "Queueing…" : "Queue performer render"}
               </button>

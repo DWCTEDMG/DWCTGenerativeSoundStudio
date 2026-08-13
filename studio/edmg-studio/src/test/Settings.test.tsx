@@ -166,6 +166,75 @@ describe("Settings page", () => {
         }),
       );
     });
+
+  });
+
+  it("forces proxy rendering off while preserving sibling provider settings", async () => {
+    let savedSettings: any = null;
+    const providers = {
+      video: {
+        provider: "imagineart",
+        mode: "image_to_video",
+        model: "kling-2.0-master",
+        allow_proxy_renders: true,
+      },
+      imagineart: {
+        endpoint: "https://api.imagine.art",
+        image_style: "imagine-turbo",
+        video_style: "kling-2.0-master",
+      },
+      stability: {
+        endpoint: "https://api.stability.ai",
+        model: "stable-diffusion-xl-1024-v1-0",
+      },
+      internal: {
+        enabled: true,
+        preferred_family: "sdxl",
+      },
+    };
+
+    installFetchMock({
+      "/v1/config": {},
+      "/health": { ok: true },
+      "/v1/ai/status": { ok: true },
+      "/v1/edmg/deforum_template": { ok: true },
+      "/v1/settings/secrets/status": { store: "test" },
+      "/v1/hardware": { hardware: { device_name: "NVIDIA RTX 5080" } },
+      "/v1/system/readiness": {
+        ok: true,
+        status: "ok",
+        summary: "Ready",
+        checks: { runtime: { status: "ok", accelerator_profile: "cuda" } },
+      },
+      "/v1/settings/render_profiles": { recommended_profile: "high_quality", profiles: {} },
+      "/v1/settings/render_providers": (_path, init) => {
+        if (String(init?.method || "GET").toUpperCase() === "POST") {
+          savedSettings = JSON.parse(String(init?.body || "{}"));
+          return { ok: true, settings: savedSettings };
+        }
+        return {
+          settings: providers,
+          imagineart_image_styles: ["imagine-turbo"],
+          imagineart_video_styles: ["kling-2.0-master"],
+        };
+      },
+      "/v1/settings/transcription": { settings: {} },
+    });
+
+    renderWithStudio(<Settings backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    const saveButton = await screen.findByRole("button", { name: "Save render provider settings" });
+    await waitFor(() => expect((saveButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(saveButton);
+
+    await waitFor(() => expect(savedSettings).toBeTruthy());
+    expect(savedSettings.video).toEqual({
+      ...providers.video,
+      allow_proxy_renders: false,
+    });
+    expect(savedSettings.imagineart).toEqual(providers.imagineart);
+    expect(savedSettings.stability).toEqual(providers.stability);
+    expect(savedSettings.internal).toEqual(providers.internal);
   });
 
   it("persists desktop backend mode and target settings", async () => {

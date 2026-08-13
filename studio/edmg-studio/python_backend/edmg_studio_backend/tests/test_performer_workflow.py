@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from edmg_studio_backend import app as backend_app
@@ -56,7 +57,6 @@ def test_advisory_plan_records_music_graph_diagnostics() -> None:
         "engines": {
             "internal": {"available": True},
             "hosted_video": {"available": True, "quality_score": 0.8, "speed_score": 0.82},
-            "proxy": {"available": True},
         },
     }
     plan = build_advisory_render_plan(intent, snapshot, environment=environment)
@@ -66,7 +66,7 @@ def test_advisory_plan_records_music_graph_diagnostics() -> None:
     assert plan.sections[0].engine == "hosted_video"
 
 
-def test_performer_run_queues_honest_mock_fallback(tmp_path: Path, monkeypatch) -> None:
+def test_performer_run_rejects_without_real_adapter(tmp_path: Path, monkeypatch) -> None:
     store = ProjectStore(tmp_path / "data")
     jobs = JobStore(store.projects_dir)
     project = store.create("Performer queue")
@@ -88,17 +88,20 @@ def test_performer_run_queues_honest_mock_fallback(tmp_path: Path, monkeypatch) 
             json={"variant_index": 0, "plan_id": "performer-test", "provider": "auto"},
         )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["job"]["type"] == "performer_video"
-    assert body["selection"]["selected_provider"] == "mock"
-    assert body["selection"]["fallback_used"] is True
-    queued = jobs.get(project.id, body["job"]["id"])
-    assert queued is not None
-    assert queued.payload["provenance"]["honest_fallback"] is True
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "PERFORMER_ADAPTER_UNAVAILABLE"
+    assert jobs.list_for_project(project.id) == []
+    saved = store.get(project.id)
+    assert saved is not None
+    assert "last_performer_run" not in saved.meta
 
 
-def test_performer_run_can_refuse_mock_fallback(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("provider", ["high_end", "mock"])
+def test_performer_run_rejects_explicit_non_real_provider(
+    tmp_path: Path,
+    monkeypatch,
+    provider: str,
+) -> None:
     store = ProjectStore(tmp_path / "data")
     jobs = JobStore(store.projects_dir)
     project = store.create("Performer strict")
@@ -116,8 +119,12 @@ def test_performer_run_can_refuse_mock_fallback(tmp_path: Path, monkeypatch) -> 
     with TestClient(backend_app.app) as client:
         response = client.post(
             f"/v1/projects/{project.id}/render/performer/run",
-            json={"provider": "high_end", "allow_mock_fallback": False},
+            json={"provider": provider},
         )
 
     assert response.status_code == 409
+    assert response.json()["error"]["code"] == "PERFORMER_ADAPTER_UNAVAILABLE"
     assert jobs.list_for_project(project.id) == []
+    saved = store.get(project.id)
+    assert saved is not None
+    assert "last_performer_run" not in saved.meta
