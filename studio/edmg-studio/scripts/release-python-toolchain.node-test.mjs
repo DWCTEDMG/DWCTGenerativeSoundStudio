@@ -812,6 +812,38 @@ test("Studio CI uses Vitest 4 compatible worker arguments", () => {
   assert.doesNotMatch(workflow, /--minWorkers/);
 });
 
+test("desktop integration supports the canonical root WSL Electron workflow", () => {
+  const harness = fs.readFileSync(path.join(studioRoot, "scripts", "desktop-integration-harness.mjs"), "utf8");
+  const packagedSmoke = fs.readFileSync(path.join(studioRoot, "scripts", "packaged-desktop-smoke.mjs"), "utf8");
+
+  assert.match(harness, /EDMG_DIRECTOR_SPAWN:\s*"0"/);
+  assert.match(packagedSmoke, /EDMG_DIRECTOR_SPAWN:\s*"0"/);
+  assert.match(harness, /process\.platform === "linux"/);
+  assert.match(harness, /process\.getuid\(\) === 0/);
+  assert.match(harness, /args\.push\("--no-sandbox"\)/);
+  assert.match(packagedSmoke, /process\.platform === "linux"/);
+  assert.match(packagedSmoke, /process\.getuid\(\) === 0/);
+  assert.match(packagedSmoke, /args\.push\("--no-sandbox"\)/);
+});
+
+test("packaged customer proof compares canonical filesystem identities", () => {
+  const customerFlow = fs.readFileSync(path.join(studioRoot, "scripts", "packaged-customer-flow.mjs"), "utf8");
+
+  assert.match(customerFlow, /async function assertSameExistingPath/);
+  assert.match(customerFlow, /fsp\.realpath\(actual\)/);
+  assert.match(customerFlow, /fsp\.realpath\(expected\)/);
+  assert.match(customerFlow, /await assertSameExistingPath\(summary\.paths\.studioHome/);
+});
+
+test("zero-state setup proof compares canonical filesystem identities", () => {
+  const zeroStateProof = fs.readFileSync(path.join(studioRoot, "scripts", "packaged-zero-state-setup-proof.mjs"), "utf8");
+
+  assert.match(zeroStateProof, /async function assertSameExistingPath/);
+  assert.match(zeroStateProof, /fsp\.realpath\(actual\)/);
+  assert.match(zeroStateProof, /await assertSameExistingPath\(summary\.config\.studioHome/);
+  assert.match(zeroStateProof, /await assertSameExistingPath\(summary\.finalStatus\.ollamaExe/);
+});
+
 test("desktop packaging stages and requires pinned FFmpeg plus FFprobe on Windows and Linux", () => {
   const prepareElectron = fs.readFileSync(path.join(studioRoot, "scripts", "prepare-electron-build.mjs"), "utf8");
   const mediaStager = fs.readFileSync(path.join(studioRoot, "scripts", "stage-media-tools.mjs"), "utf8");

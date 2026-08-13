@@ -19,7 +19,7 @@
     "test:ui": "vitest run",
     "test:ui:release": "vitest run --maxWorkers=1",
     "test:ui:watch": "vitest",
-    "test:release-toolchain": "node --test scripts/release-python-toolchain.node-test.mjs scripts/release-evidence.node-test.mjs scripts/windows-signing.node-test.mjs scripts/packaged-upgrade-proof.node-test.mjs scripts/validate-production-release.node-test.mjs scripts/validate-linux-release.node-test.mjs scripts/run-electron-builder.node-test.mjs scripts/packaged-appimage-smoke.node-test.mjs",
+    "test:release-toolchain": "node --test scripts/release-python-toolchain.node-test.mjs scripts/release-evidence.node-test.mjs scripts/windows-signing.node-test.mjs scripts/packaged-upgrade-proof.node-test.mjs scripts/validate-production-release.node-test.mjs scripts/validate-linux-release.node-test.mjs scripts/run-electron-builder.node-test.mjs scripts/packaged-desktop-smoke.node-test.mjs scripts/packaged-appimage-smoke.node-test.mjs",
     "test:uv-runtime": "node --test main-process/backend-runtime.node-test.mjs main-process/build-identity.node-test.mjs main-process/window-runtime.node-test.mjs",
     "lint": "eslint src main.mjs preload.cjs main-process scripts --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",

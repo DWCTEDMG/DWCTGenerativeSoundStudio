@@ -21,6 +21,17 @@ function log(message) {
   console.log(`[packaged-zero-state-setup] ${message}`);
 }
 
+async function assertSameExistingPath(actual, expected, message) {
+  const [actualRealPath, expectedRealPath] = await Promise.all([
+    fsp.realpath(actual),
+    fsp.realpath(expected),
+  ]);
+  const normalize = process.platform === "win32"
+    ? (value) => value.toLowerCase()
+    : (value) => value;
+  assert.equal(normalize(actualRealPath), normalize(expectedRealPath), message);
+}
+
 function resolvePackagedApp() {
   const envPath = process.env.EDMG_STUDIO_PACKAGED_APP;
   if (envPath && fs.existsSync(envPath)) return envPath;
@@ -254,10 +265,10 @@ async function main() {
     assert.equal(summary.finalStatus.ollamaUrl, ollamaUrl, "Ollama should be running on the Studio-managed proof port");
     assert.equal(summary.finalStatus.modelPresent, true, "Full setup should pull the requested Ollama model");
     assert.equal(summary.finalStatus.comfyPortableInstalled, true, "Full setup should install ComfyUI Portable");
-    assert.equal(summary.config.studioHome, studioHome, "Packaged config should reflect the requested Studio home");
-    assert.equal(summary.config.externalDir, externalDir, "External tools should stay under the chosen Studio home");
-    assert.equal(summary.finalStatus.sevenZipPath, expectedSevenZip, "7-Zip should resolve to the Studio-managed portable copy");
-    assert.equal(summary.finalStatus.ollamaExe, expectedOllamaExe, "Ollama should resolve to the Studio-managed install");
+    await assertSameExistingPath(summary.config.studioHome, studioHome, "Packaged config should reflect the requested Studio home");
+    await assertSameExistingPath(summary.config.externalDir, externalDir, "External tools should stay under the chosen Studio home");
+    await assertSameExistingPath(summary.finalStatus.sevenZipPath, expectedSevenZip, "7-Zip should resolve to the Studio-managed portable copy");
+    await assertSameExistingPath(summary.finalStatus.ollamaExe, expectedOllamaExe, "Ollama should resolve to the Studio-managed install");
     assert.equal(summary.exists.ollamaExe, true, "Studio-managed Ollama executable should exist");
     assert.equal(summary.exists.sevenZipExe, true, "Studio-managed 7-Zip executable should exist");
   } finally {

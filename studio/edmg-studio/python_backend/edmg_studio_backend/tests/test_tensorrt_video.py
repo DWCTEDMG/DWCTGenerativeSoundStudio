@@ -326,6 +326,10 @@ def test_internal_request_resolves_distinct_server_side_tensorrt_anchor_path(tmp
     bundle_path = tmp_path / "Canonical TensorRT"
     for path in (base_path, svd_path, bundle_path):
         path.mkdir()
+    (svd_path / "model_index.json").write_text(
+        '{"_class_name": "StableVideoDiffusionPipeline"}',
+        encoding="utf-8",
+    )
 
     class FakeModels:
         paths = {
@@ -382,6 +386,10 @@ def test_internal_request_fails_preflight_when_tensorrt_anchor_bundle_is_missing
     svd_path = tmp_path / "Internal SVD"
     base_path.mkdir()
     svd_path.mkdir()
+    (svd_path / "model_index.json").write_text(
+        '{"_class_name": "StableVideoDiffusionPipeline"}',
+        encoding="utf-8",
+    )
 
     class FakeModels:
         paths = {
@@ -849,3 +857,35 @@ def test_svd_low_vram_canvas_is_capped(monkeypatch) -> None:
 
     assert (width, height) == (568, 320)
     assert note == "6 GB CUDA SVD canvas capped to 568x320"
+
+
+@pytest.mark.parametrize(
+    ("engine", "device", "vram_gb", "expected_steps"),
+    [
+        ("svd", "cuda", 6.0, 6),
+        ("animatediff", "cuda", 6.0, 8),
+        ("svd", "cuda", 8.0, 8),
+        ("animatediff", "cuda", 8.0, 10),
+        ("svd", "cuda", 12.0, 15),
+        ("svd", "cpu", 0.0, 15),
+    ],
+)
+def test_parseq_steps_cannot_exceed_low_vram_video_model_ceiling(
+    monkeypatch,
+    engine: str,
+    device: str,
+    vram_gb: float,
+    expected_steps: int,
+) -> None:
+    monkeypatch.setattr(internal_video, "_cuda_total_vram_gb", lambda _device: vram_gb)
+
+    cap = internal_video._video_model_temporal_step_cap(  # noqa: SLF001 - pure policy helper
+        engine=engine,
+        device=device,
+    )
+    effective = internal_video._apply_video_model_temporal_step_cap(  # noqa: SLF001
+        15,
+        cap,
+    )
+
+    assert effective == expected_steps

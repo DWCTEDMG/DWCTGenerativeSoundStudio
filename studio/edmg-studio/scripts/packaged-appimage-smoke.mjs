@@ -16,6 +16,15 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const expectedLandmarks = Object.freeze(["Workspace", "Render", "Models", "Settings", "Setup"]);
+export const APPIMAGE_RENDERER_TIMEOUT_ENV = "EDMG_APPIMAGE_SMOKE_RENDERER_TIMEOUT_MS";
+export const APPIMAGE_RENDERER_TIMEOUT_LIMITS = Object.freeze({
+  min: 30_000,
+  max: 1_800_000,
+  defaults: Object.freeze({
+    cpu: 210_000,
+    cuda: 900_000,
+  }),
+});
 
 function log(message) {
   console.log(`[packaged-appimage-smoke] ${message}`);
@@ -37,6 +46,33 @@ export function resolveCurrentAppImage(distDir, version, entries = null) {
     );
   }
   return candidates[0];
+}
+
+export function resolveRendererReportTimeoutMs({ profile, env = process.env }) {
+  if (!Object.hasOwn(APPIMAGE_RENDERER_TIMEOUT_LIMITS.defaults, profile)) {
+    throw new Error(`AppImage renderer timeout requires a cpu or cuda profile; received ${profile}.`);
+  }
+
+  if (!Object.hasOwn(env, APPIMAGE_RENDERER_TIMEOUT_ENV)) {
+    return APPIMAGE_RENDERER_TIMEOUT_LIMITS.defaults[profile];
+  }
+
+  const normalized = String(env[APPIMAGE_RENDERER_TIMEOUT_ENV]);
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    throw new Error(`${APPIMAGE_RENDERER_TIMEOUT_ENV} must be a positive integer number of milliseconds.`);
+  }
+
+  const timeoutMs = Number(normalized);
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < APPIMAGE_RENDERER_TIMEOUT_LIMITS.min ||
+    timeoutMs > APPIMAGE_RENDERER_TIMEOUT_LIMITS.max
+  ) {
+    throw new Error(
+      `${APPIMAGE_RENDERER_TIMEOUT_ENV} must be between ${APPIMAGE_RENDERER_TIMEOUT_LIMITS.min} and ${APPIMAGE_RENDERER_TIMEOUT_LIMITS.max} milliseconds.`,
+    );
+  }
+  return timeoutMs;
 }
 
 async function reserveBackendPort() {
@@ -66,7 +102,9 @@ async function waitForJsonFile(filePath, timeoutMs) {
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`Timed out waiting for valid JSON at ${filePath}${lastError ? `: ${lastError.message}` : ""}`);
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for valid JSON at ${filePath}${lastError ? `: ${lastError.message}` : ""}`,
+  );
 }
 
 async function fetchJsonWithRetry(url, timeoutMs = 30000) {
@@ -113,7 +151,7 @@ function launchPlan(appImage) {
 }
 
 async function terminateProcessGroup(child, exitPromise) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!child || !Number.isInteger(child.pid) || child.exitCode !== null || child.signalCode !== null) return;
   try {
     process.kill(-child.pid, "SIGTERM");
   } catch (error) {
@@ -129,7 +167,11 @@ async function terminateProcessGroup(child, exitPromise) {
   } catch (error) {
     if (error.code !== "ESRCH") throw error;
   }
-  await Promise.race([exitPromise, new Promise((resolve) => setTimeout(resolve, 3000))]);
+  const killed = await Promise.race([
+    exitPromise.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 3000)),
+  ]);
+  if (!killed) throw new Error(`Timed out terminating AppImage process group ${child.pid}.`);
 }
 
 async function main() {
@@ -142,6 +184,7 @@ async function main() {
   assert.ok(version, "package.json version is required");
   const profile = resolveAcceleratorProfile({ argv: [], env: process.env, platform: process.platform });
   assert.ok(["cpu", "cuda"].includes(profile), `Linux AppImage profile must be cpu or cuda; received ${profile}`);
+  const rendererReportTimeoutMs = resolveRendererReportTimeoutMs({ profile, env: process.env });
 
   const appImage = resolveCurrentAppImage(path.join(root, "dist"), version);
   const stat = await fsp.stat(appImage);
@@ -176,72 +219,80 @@ async function main() {
     fsp.rm(logPath, { force: true }),
   ]);
 
-  const fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-appimage-smoke-"));
-  const fixtureDir = path.join(fixtureRoot, "frames");
-  const fixtureFile = path.join(fixtureRoot, "demo.txt");
-  const tempDir = path.join(fixtureRoot, "tmp");
-  await Promise.all([
-    fsp.mkdir(fixtureDir, { recursive: true }),
-    fsp.mkdir(tempDir, { recursive: true }),
-    fsp.mkdir(path.join(fixtureRoot, "xdg-config"), { recursive: true }),
-    fsp.mkdir(path.join(fixtureRoot, "xdg-cache"), { recursive: true }),
-    fsp.mkdir(path.join(fixtureRoot, "xdg-data"), { recursive: true }),
-    fsp.mkdir(path.join(fixtureRoot, "xdg-state"), { recursive: true }),
-    fsp.writeFile(fixtureFile, "final AppImage Studio UI probe\n", "utf8"),
-  ]);
-
-  const backendPort = await reserveBackendPort();
-  const backendUrl = `http://127.0.0.1:${backendPort}`;
-  const plan = launchPlan(appImage);
-  const logHandle = await fsp.open(logPath, "w");
-  const childEnv = {
-    ...process.env,
-    APPIMAGE_EXTRACT_AND_RUN: "1",
-    EDMG_AI_PROVIDER: "rule_based",
-    EDMG_BACKEND_ACCELERATOR_PROFILE: profile,
-    EDMG_DIRECTOR_SPAWN: "0",
-    EDMG_STUDIO_BACKEND_HOST: "127.0.0.1",
-    EDMG_STUDIO_BACKEND_MODE: "managed",
-    EDMG_STUDIO_BACKEND_PORT: String(backendPort),
-    EDMG_STUDIO_BACKEND_READY_TIMEOUT_MS: "180000",
-    EDMG_STUDIO_BACKEND_URL: "",
-    EDMG_STUDIO_SPAWN_BACKEND: "1",
-    EDMG_STUDIO_HOME: path.join(fixtureRoot, "studio-home"),
-    EDMG_STUDIO_TEST_EXPECT_BACKEND_URL: backendUrl,
-    EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
-    EDMG_STUDIO_TEST_MODE: "1",
-    EDMG_STUDIO_TEST_PROBE_OPEN_PATH: fixtureDir,
-    EDMG_STUDIO_TEST_PROBE_REVEAL_PATH: fixtureFile,
-    EDMG_STUDIO_TEST_REPORT_PATH: rendererReportPath,
-    EDMG_STUDIO_TEST_SKIP_MIGRATION: "1",
-    ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
-    TMPDIR: tempDir,
-    XDG_CACHE_HOME: path.join(fixtureRoot, "xdg-cache"),
-    XDG_CONFIG_HOME: path.join(fixtureRoot, "xdg-config"),
-    XDG_DATA_HOME: path.join(fixtureRoot, "xdg-data"),
-    XDG_STATE_HOME: path.join(fixtureRoot, "xdg-state"),
-  };
-  delete childEnv.EDMG_STUDIO_TEST_PAGE;
-
-  log(`launching ${path.basename(appImage)} with the packaged ${profile} backend using ${plan.graphicalMode}`);
-  const child = spawn(plan.command, plan.args, {
-    cwd: path.dirname(appImage),
-    detached: true,
-    env: childEnv,
-    shell: false,
-    stdio: ["ignore", logHandle.fd, logHandle.fd],
-  });
-  const exitPromise = new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-
-  let rendererReport;
-  let endpoints;
+  let fixtureRoot = null;
+  let logHandle = null;
+  let child = null;
+  let exitPromise = null;
+  let backendUrl = null;
+  let plan = null;
+  let rendererReport = null;
+  let endpoints = null;
   let backendStopped = false;
+  let primaryError = null;
   try {
+    fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-appimage-smoke-"));
+    const fixtureDir = path.join(fixtureRoot, "frames");
+    const fixtureFile = path.join(fixtureRoot, "demo.txt");
+    const tempDir = path.join(fixtureRoot, "tmp");
+    await Promise.all([
+      fsp.mkdir(fixtureDir, { recursive: true }),
+      fsp.mkdir(tempDir, { recursive: true }),
+      fsp.mkdir(path.join(fixtureRoot, "xdg-config"), { recursive: true }),
+      fsp.mkdir(path.join(fixtureRoot, "xdg-cache"), { recursive: true }),
+      fsp.mkdir(path.join(fixtureRoot, "xdg-data"), { recursive: true }),
+      fsp.mkdir(path.join(fixtureRoot, "xdg-state"), { recursive: true }),
+      fsp.writeFile(fixtureFile, "final AppImage Studio UI probe\n", "utf8"),
+    ]);
+
+    const backendPort = await reserveBackendPort();
+    backendUrl = `http://127.0.0.1:${backendPort}`;
+    plan = launchPlan(appImage);
+    logHandle = await fsp.open(logPath, "w");
+    const childEnv = {
+      ...process.env,
+      APPIMAGE_EXTRACT_AND_RUN: "1",
+      EDMG_AI_PROVIDER: "rule_based",
+      EDMG_BACKEND_ACCELERATOR_PROFILE: profile,
+      EDMG_DIRECTOR_SPAWN: "0",
+      EDMG_STUDIO_BACKEND_HOST: "127.0.0.1",
+      EDMG_STUDIO_BACKEND_MODE: "managed",
+      EDMG_STUDIO_BACKEND_PORT: String(backendPort),
+      EDMG_STUDIO_BACKEND_READY_TIMEOUT_MS: "180000",
+      EDMG_STUDIO_BACKEND_URL: "",
+      EDMG_STUDIO_SPAWN_BACKEND: "1",
+      EDMG_STUDIO_HOME: path.join(fixtureRoot, "studio-home"),
+      EDMG_STUDIO_TEST_EXPECT_BACKEND_URL: backendUrl,
+      EDMG_STUDIO_TEST_FAKE_PATH_ACTIONS: "1",
+      EDMG_STUDIO_TEST_MODE: "1",
+      EDMG_STUDIO_TEST_PROBE_OPEN_PATH: fixtureDir,
+      EDMG_STUDIO_TEST_PROBE_REVEAL_PATH: fixtureFile,
+      EDMG_STUDIO_TEST_REPORT_PATH: rendererReportPath,
+      EDMG_STUDIO_TEST_SKIP_MIGRATION: "1",
+      ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
+      TMPDIR: tempDir,
+      XDG_CACHE_HOME: path.join(fixtureRoot, "xdg-cache"),
+      XDG_CONFIG_HOME: path.join(fixtureRoot, "xdg-config"),
+      XDG_DATA_HOME: path.join(fixtureRoot, "xdg-data"),
+      XDG_STATE_HOME: path.join(fixtureRoot, "xdg-state"),
+    };
+    delete childEnv.EDMG_STUDIO_TEST_PAGE;
+
+    log(`launching ${path.basename(appImage)} with the packaged ${profile} backend using ${plan.graphicalMode}`);
+    log(`renderer report timeout: ${rendererReportTimeoutMs} ms`);
+    child = spawn(plan.command, plan.args, {
+      cwd: path.dirname(appImage),
+      detached: true,
+      env: childEnv,
+      shell: false,
+      stdio: ["ignore", logHandle.fd, logHandle.fd],
+    });
+    exitPromise = new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+
     rendererReport = await Promise.race([
-      waitForJsonFile(rendererReportPath, 210000),
+      waitForJsonFile(rendererReportPath, rendererReportTimeoutMs),
       exitPromise.then(({ code, signal }) => {
         throw new Error(`AppImage exited before producing its renderer report (code=${code}, signal=${signal}). See ${logPath}`);
       }),
@@ -263,13 +314,41 @@ async function main() {
       setup: await fetchJsonWithRetry(`${backendUrl}/v1/setup/status`),
     };
     assert.equal(endpoints.health?.ok, true, "Packaged backend health response must be ok.");
-  } finally {
-    await terminateProcessGroup(child, exitPromise);
-    await logHandle.close();
-    backendStopped = await waitForBackendShutdown(backendUrl);
-    await fsp.rm(fixtureRoot, { recursive: true, force: true });
+  } catch (error) {
+    primaryError = error;
   }
-  assert.equal(backendStopped, true, `Packaged backend still answered after AppImage shutdown: ${backendUrl}`);
+
+  const cleanupErrors = [];
+  const attemptCleanup = async (label, action) => {
+    try {
+      await action();
+    } catch (error) {
+      cleanupErrors.push(new Error(`${label}: ${error.message}`, { cause: error }));
+    }
+  };
+  if (child) {
+    await attemptCleanup("terminate AppImage process group", () => terminateProcessGroup(child, exitPromise));
+  }
+  if (logHandle) {
+    await attemptCleanup("close AppImage smoke log", () => logHandle.close());
+  }
+  if (backendUrl && child) {
+    await attemptCleanup("verify packaged backend shutdown", async () => {
+      backendStopped = await waitForBackendShutdown(backendUrl);
+      assert.equal(backendStopped, true, `Packaged backend still answered after AppImage shutdown: ${backendUrl}`);
+    });
+  }
+  if (fixtureRoot) {
+    await attemptCleanup("remove AppImage smoke fixture", () =>
+      fsp.rm(fixtureRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 }),
+    );
+  }
+
+  const errors = primaryError ? [primaryError, ...cleanupErrors] : cleanupErrors;
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Final AppImage smoke failed and one or more cleanup operations also failed");
+  }
 
   const finalStat = await fsp.stat(appImage);
   const summary = {
@@ -289,6 +368,7 @@ async function main() {
     rootNoSandboxApplied: plan.args.includes("--no-sandbox"),
     backendUrl,
     backendStopped,
+    rendererReportTimeoutMs,
     endpoints,
     rendererReport,
     logPath: path.relative(root, logPath).split(path.sep).join("/"),

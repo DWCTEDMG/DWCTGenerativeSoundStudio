@@ -47,11 +47,13 @@ const DIST_ARTIFACT_GLOBS = Object.freeze({
   "win-inno": [
     "dist-inno/*.exe",
     "dist-inno/payload/*.7z",
+    "dist-inno/payload/payload-integrity.json",
     "dist/builder-effective-config.yaml",
   ],
   "win-inno-cuda": [
     "dist-inno-cuda/*.exe",
     "dist-inno-cuda/payload/*.7z",
+    "dist-inno-cuda/payload/payload-integrity.json",
     "dist/builder-effective-config.yaml",
   ],
 });
@@ -81,15 +83,18 @@ function expandGlob(root, pattern) {
 }
 
 export function collectReleaseArtifactPaths(root, phase = "bundle", artifactSet = "") {
+  if (!["bundle", "dist"].includes(phase)) {
+    throw new Error(`Unsupported release evidence phase: ${JSON.stringify(phase)}`);
+  }
   const normalizedArtifactSet = String(artifactSet || "").trim();
-  const wantsDist = phase === "dist" || phase === "all";
+  const wantsDist = phase === "dist";
   if (wantsDist && !RELEASE_ARTIFACT_SETS.includes(normalizedArtifactSet)) {
     throw new Error(
       `A dist artifact set is required (${RELEASE_ARTIFACT_SETS.join(", ")}); received ${JSON.stringify(normalizedArtifactSet)}`,
     );
   }
   const patterns = [
-    ...(phase === "bundle" || phase === "all" ? RELEASE_ARTIFACT_GLOBS.bundle : []),
+    ...(phase === "bundle" ? RELEASE_ARTIFACT_GLOBS.bundle : []),
     ...(wantsDist ? DIST_ARTIFACT_GLOBS[normalizedArtifactSet] : []),
   ];
   const seen = new Set();
@@ -254,7 +259,114 @@ export function generatePythonSbom({
     outputPath,
     componentCount: Array.isArray(document?.components) ? document.components.length : 0,
     uvVersion: PINNED_UV_VERSION,
+    reusedExisting: false,
   };
+}
+
+export function readPythonSbom({ profile, outputPath, version = "", env = process.env }) {
+  const resolvedProfile = resolveAcceleratorProfile({
+    argv: [`--profile=${profile}`],
+    env,
+    platform: process.platform,
+  });
+  if (!fs.existsSync(outputPath)) {
+    throw new Error(`Existing SBOM is required but missing: ${outputPath}`);
+  }
+
+  let document = null;
+  try {
+    document = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+  } catch {
+    throw new Error(`Existing SBOM is invalid JSON: ${outputPath}`);
+  }
+  const tool = Array.isArray(document?.metadata?.tools)
+    ? document.metadata.tools.find((candidate) => candidate?.name === "uv")
+    : document?.metadata?.tools;
+  if (
+    document?.bomFormat !== "CycloneDX"
+    || document?.specVersion !== "1.5"
+    || tool?.name !== "uv"
+    || tool?.version !== PINNED_UV_VERSION
+    || document?.metadata?.component?.name !== "edmg-studio-backend"
+    || (version && document?.metadata?.component?.version !== version)
+    || !Array.isArray(document?.components)
+    || !Array.isArray(document?.dependencies)
+  ) {
+    throw new Error(`Existing SBOM is not a valid CycloneDX document: ${outputPath}`);
+  }
+
+  return {
+    format: "CycloneDX",
+    version: String(document.specVersion),
+    profile: resolvedProfile,
+    extras: selectedExtras(resolvedProfile),
+    outputPath,
+    componentCount: Array.isArray(document.components) ? document.components.length : 0,
+    uvVersion: PINNED_UV_VERSION,
+    reusedExisting: true,
+  };
+}
+
+export async function validateBundleEvidenceForSbomReuse({ root, profile, version = "", sbomPath }) {
+  const bundleEvidencePath = path.join(root, RELEASE_EVIDENCE_DIR, "bundle-artifacts.sha256.json");
+  if (!fs.existsSync(bundleEvidencePath)) {
+    throw new Error(`Bundle checksum evidence is required before dist evidence: ${bundleEvidencePath}`);
+  }
+
+  let document = null;
+  try {
+    document = JSON.parse(fs.readFileSync(bundleEvidencePath, "utf8"));
+  } catch {
+    throw new Error(`Bundle checksum evidence is invalid JSON: ${bundleEvidencePath}`);
+  }
+  const resolvedProfile = resolveAcceleratorProfile({
+    argv: [`--profile=${profile}`],
+    env: process.env,
+    platform: process.platform,
+  });
+  if (
+    document?.schemaVersion !== RELEASE_EVIDENCE_SCHEMA_VERSION
+    || document?.phase !== "bundle"
+    || document?.acceleratorProfile !== resolvedProfile
+    || (version && document?.studioVersion !== version)
+    || !Array.isArray(document?.artifacts)
+  ) {
+    throw new Error("Bundle checksum evidence does not match the requested dist profile and version.");
+  }
+
+  const expectedManifestHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ ...document, manifestSha256: undefined }))
+    .digest("hex");
+  if (document.manifestSha256 !== expectedManifestHash) {
+    throw new Error("Bundle checksum evidence self-hash is invalid.");
+  }
+
+  const rootPrefix = `${path.resolve(root)}${path.sep}`.toLowerCase();
+  for (const artifact of document.artifacts) {
+    const artifactPath = path.resolve(root, String(artifact?.path || "").split("/").join(path.sep));
+    if (!artifactPath.toLowerCase().startsWith(rootPrefix)) {
+      throw new Error(`Bundle checksum evidence contains an unsafe artifact path: ${artifact?.path}`);
+    }
+    let stat = null;
+    try {
+      stat = await fsp.stat(artifactPath);
+    } catch {
+      throw new Error(`Bundle checksum artifact is missing: ${artifact?.path}`);
+    }
+    if (!stat.isFile() || stat.size !== artifact?.bytes || (await sha256File(artifactPath)) !== artifact?.sha256) {
+      throw new Error(`Bundle checksum artifact does not match current bytes: ${artifact?.path}`);
+    }
+  }
+
+  const expectedSbomPath = repoRelative(root, sbomPath);
+  if (!document.artifacts.some((artifact) => artifact.path === expectedSbomPath)) {
+    throw new Error(`Bundle checksum evidence does not bind the expected SBOM: ${expectedSbomPath}`);
+  }
+  if (!document.artifacts.some((artifact) => artifact.path === "python_backend/uv.lock")) {
+    throw new Error("Bundle checksum evidence does not bind python_backend/uv.lock.");
+  }
+  return document;
 }
 
 export async function buildChecksumManifest({
@@ -293,13 +405,31 @@ export async function writeReleaseEvidence({
   uvCommand = "uv",
   version = "",
   env = process.env,
+  reuseExistingSbom,
 }) {
+  if (!["bundle", "dist"].includes(phase)) {
+    throw new Error(`Unsupported release evidence phase: ${JSON.stringify(phase)}`);
+  }
   const evidenceDir = path.join(root, RELEASE_EVIDENCE_DIR);
   await fsp.mkdir(evidenceDir, { recursive: true });
 
   const resolvedProfile = resolveAcceleratorProfile({ argv: [`--profile=${profile}`], env, platform: process.platform });
   const sbomPath = path.join(evidenceDir, `python-backend-${resolvedProfile}.cyclonedx.json`);
-  const sbom = generatePythonSbom({ root, uvCommand, profile: resolvedProfile, outputPath: sbomPath, env });
+  if (reuseExistingSbom === true && phase !== "bundle") {
+    throw new Error("Explicit existing-SBOM reuse is only supported for bundle evidence repair.");
+  }
+  const shouldReuseSbom = phase === "dist" || reuseExistingSbom === true;
+  if (shouldReuseSbom && phase === "dist") {
+    await validateBundleEvidenceForSbomReuse({
+      root,
+      profile: resolvedProfile,
+      version,
+      sbomPath,
+    });
+  }
+  const sbom = shouldReuseSbom
+    ? readPythonSbom({ profile: resolvedProfile, outputPath: sbomPath, version, env })
+    : generatePythonSbom({ root, uvCommand, profile: resolvedProfile, outputPath: sbomPath, env });
 
   const artifactPaths = collectReleaseArtifactPaths(root, phase, artifactSet);
   if (fs.existsSync(sbomPath) && !artifactPaths.includes(sbomPath)) {
