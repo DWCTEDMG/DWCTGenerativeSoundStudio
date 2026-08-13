@@ -149,7 +149,6 @@ export function deriveStudioForgeRuntime(snapshot: StudioForgeRuntimeSnapshot) {
   const providers = asRecord(snapshot.renderProviders);
   const cuda = asRecord(providers.cuda);
   const directml = asRecord(providers.directml);
-  const proxy = asRecord(providers.proxy);
   const catalog = asRecord(snapshot.modelCatalog);
   const catalogRows = asArray(catalog.catalog) as InternalModelCatalogEntry[];
   const installed = asRecord(catalog.installed) as Record<string, boolean>;
@@ -310,9 +309,9 @@ export function deriveStudioForgeRuntime(snapshot: StudioForgeRuntimeSnapshot) {
       id: "render-providers",
       label: "Render routes",
       role: "Capability broker",
-      status: internalModels.hasLocalStillModel || hostedReady || proxy.active === true ? "ready" : "blocked",
-      detail: `${internalModels.hasLocalStillModel ? "local model" : "no local model"} • ${hostedProviders.length} hosted configured • proxy ${proxy.active === true ? "enabled" : "disabled"}`,
-      impact: "Proxy is a draft fallback, not proof that CUDA model inference works.",
+      status: internalModels.hasLocalStillModel || hostedReady ? "ready" : "blocked",
+      detail: `${internalModels.hasLocalStillModel ? "local model" : "no local model"} • ${hostedProviders.length} hosted configured`,
+      impact: "A genuine local model or authenticated hosted provider is required for rendering.",
     },
     {
       id: "tasks",

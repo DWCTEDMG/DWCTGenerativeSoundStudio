@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import Outputs from "../pages/Outputs";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
@@ -195,4 +195,44 @@ describe("Outputs page", () => {
     expect((await screen.findAllByText(/A luminous skyline with added edge detail/)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Outpaint margins/i)).toBeTruthy();
   }, 15000);
+
+  it("retries historical proxy renders through automatic genuine routing", async () => {
+    let retryRequest: any = null;
+
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Test project" }] },
+      "/v1/projects/p1/outputs": {
+        videos: [],
+        images: [],
+        active_internal_jobs: [],
+        internal_render_history: [{
+          mode: "proxy",
+          model_id: "proxy",
+          variant_index: 2,
+          fps_render: 4,
+          fps_output: 30,
+          temporal_mode: "optical_flow",
+          video: "outputs/videos/legacy-proxy.mp4",
+        }],
+      },
+      "POST /v1/projects/p1/render/internal/video": (_path, init) => {
+        retryRequest = JSON.parse(String(init?.body || "{}"));
+        return { ok: true, job: { id: "retry-1", status: "queued" } };
+      },
+    });
+
+    renderWithStudio(<Outputs backendUrl="http://127.0.0.1:7863" config={null} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retryRequest).toBeTruthy());
+    expect(retryRequest).toEqual({
+      variant_index: 2,
+      model_id: "auto",
+      fps_render: 4,
+      fps_output: 30,
+      temporal_mode: "optical_flow",
+      render_mode: "auto",
+      resume_existing_frames: true,
+    });
+  });
 });

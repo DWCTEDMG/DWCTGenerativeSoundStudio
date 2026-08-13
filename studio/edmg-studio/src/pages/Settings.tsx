@@ -743,7 +743,14 @@ export default function Settings(props: PageProps) {
     setSavingProviders(true);
     setErr(null);
     try {
-      const next = await apiPost("/v1/settings/render_providers", renderProviderDraft || {});
+      const draft = renderProviderDraft || {};
+      const next = await apiPost("/v1/settings/render_providers", {
+        ...draft,
+        video: {
+          ...(draft.video || {}),
+          allow_proxy_renders: false,
+        },
+      });
       setRenderProviders(next?.status ?? next);
       setRenderProviderDraft(next?.settings ?? renderProviderDraft);
       apiGet("/v1/render/route").then(setVideoRoute).catch(() => {});
@@ -1798,21 +1805,14 @@ export default function Settings(props: PageProps) {
                     />
                     Fall back to Cosmos if GPU render fails
                   </label>
-                  <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <input type="checkbox"
-                      checked={renderProviderDraft?.video?.allow_proxy_renders !== false}
-                      onChange={(e) => setRenderProviderDraft((c: any) => ({
-                        ...(c || {}), video: { ...(c?.video || {}), allow_proxy_renders: e.target.checked },
-                      }))}
-                    />
-                    Allow local proxy draft renders and missing-model fallback
-                  </label>
+                  <div className="small">
+                    Synthetic proxy rendering is disabled. Studio blocks the render when no genuine local model or authenticated hosted provider can serve it.
+                  </div>
                 </div>
               </div>
               <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
                 Local GPU: {videoRoute?.local_ready ? <b style={{color:"green"}}>ready — {videoRoute?.local_detail?.device} ({videoRoute?.local_detail?.vram_gb} GB)</b> : <b style={{color:"#888"}}>not available</b>}
                 {" "}• Cosmos Cloud: {videoRoute?.cosmos_ready ? <b style={{color:"green"}}>configured</b> : <b style={{color:"#888"}}>not configured (add NVIDIA API key)</b>}
-                {" "}• Proxy drafts: {renderProviderDraft?.video?.allow_proxy_renders !== false ? <b style={{color:"green"}}>allowed</b> : <b style={{color:"#888"}}>disabled</b>}
               </div>
             </div>
 

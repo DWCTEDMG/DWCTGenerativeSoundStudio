@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from edmg_studio_backend import app as studio_app
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
@@ -23,6 +25,11 @@ def test_analyze_audio_builds_rich_longform_payload(tmp_path, monkeypatch):
     audio_path = store.project_dir(proj.id) / "assets" / "audio" / "track.wav"
     audio_path.write_bytes(b"fake-wav")
     store.set_audio(proj.id, "track.wav", audio_path.stat().st_size)
+    proj = store.get(proj.id)
+    assert proj is not None
+    proj.meta["last_plan"] = {"variants": [{"scenes": []}]}
+    proj.meta["timeline"] = {"layers": [{"id": "authored"}]}
+    store.save(proj)
 
     monkeypatch.setattr(
         studio_app,
@@ -79,6 +86,8 @@ def test_analyze_audio_builds_rich_longform_payload(tmp_path, monkeypatch):
 
     saved_proj = store.get(proj.id)
     assert saved_proj is not None
+    assert "last_plan" not in saved_proj.meta
+    assert saved_proj.meta["timeline"] == {"layers": [{"id": "authored"}]}
     payload = studio_app._build_creative_direction_payload(saved_proj, 0, "cinematic", 1.0)
     assert payload["sections"]
     assert payload["transcript_summary"] == analysis["summary"]
@@ -134,3 +143,31 @@ def test_analyze_audio_surfaces_no_speech_after_vad_status(tmp_path, monkeypatch
     assert saved_proj is not None
     payload = studio_app._build_creative_direction_payload(saved_proj, 0, "cinematic", 1.0)
     assert payload["transcript_summary"].startswith("No speech detected after VAD.")
+
+
+def test_analyze_audio_failure_preserves_previous_analysis_and_plan(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+
+    audio_path = store.project_dir(proj.id) / "assets" / "audio" / "track.wav"
+    audio_path.write_bytes(b"fake-wav")
+    store.set_audio(proj.id, "track.wav", audio_path.stat().st_size)
+    proj = store.get(proj.id)
+    assert proj is not None
+    proj.meta["analysis"] = {"features": {"bpm": 100}}
+    proj.meta["last_plan"] = {"variants": [{"name": "Previous"}]}
+    store.save(proj)
+
+    def fail_feature_collection(_path):
+        raise RuntimeError("feature extraction failed")
+
+    monkeypatch.setattr(studio_app, "_collect_audio_analysis_features", fail_feature_collection)
+
+    with pytest.raises(RuntimeError, match="feature extraction failed"):
+        studio_app.analyze_audio(proj.id)
+
+    saved = store.get(proj.id)
+    assert saved is not None
+    assert saved.meta["analysis"] == {"features": {"bpm": 100}}
+    assert saved.meta["last_plan"] == {"variants": [{"name": "Previous"}]}

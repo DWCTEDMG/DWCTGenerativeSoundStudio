@@ -11,6 +11,7 @@ from edmg_studio_backend import app as backend_app
 from edmg_studio_backend.services.render_settings import RenderSettingsStore
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
+from edmg_studio_backend.tests.safetensors_test_utils import write_minimal_safetensors
 
 
 def _make_project(tmp_path: Path):
@@ -45,6 +46,26 @@ def _patch(monkeypatch, store, jobs, *, comfy_available=False, tensorrt_availabl
     monkeypatch.setattr(backend_app.worker, "start", lambda *a, **k: None)
     monkeypatch.setattr(backend_app, "_comfyui_available_quick", lambda: comfy_available)
     monkeypatch.setattr(backend_app, "_tensorrt_sd15_bundle_available", lambda: tensorrt_available)
+
+
+def _install_minimal_internal_model(monkeypatch, tmp_path: Path) -> Path:
+    models_dir = tmp_path / "models"
+    monkeypatch.setattr(backend_app.models, "models_dir", models_dir)
+    model_dir = models_dir / "internal" / "diffusers" / "hf_sd15_internal"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model_index.json").write_text(
+        json.dumps(
+            {
+                "_class_name": "StableDiffusionPipeline",
+                "unet": ["diffusers", "UNet2DConditionModel"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_minimal_safetensors(
+        model_dir / "unet" / "diffusion_pytorch_model.safetensors"
+    )
+    return model_dir
 
 
 def test_list_animation_presets():
@@ -220,6 +241,12 @@ def test_auto_dry_run_comfyui_preset_probes_availability(tmp_path, monkeypatch):
 def test_auto_run_internal_launches_job(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     _patch(monkeypatch, store, jobs)
+    _install_minimal_internal_model(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        backend_app,
+        "_internal_diffusion_runtime_status",
+        lambda: {"ok": True, "message": "ok"},
+    )
     with TestClient(backend_app.app) as client:
         resp = client.post(
             f"/v1/projects/{proj.id}/render/auto",

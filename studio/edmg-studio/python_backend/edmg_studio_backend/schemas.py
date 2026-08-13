@@ -171,11 +171,10 @@ class InternalVideoRenderRequest(BaseModel):
     """Render a full video using the internal renderer.
 
     Modes:
-      - auto: prefer diffusion if an internal model is installed, otherwise fall back to proxy
+      - auto: prefer an installed internal model, then a configured hosted provider
       - diffusion: require an internal diffusion model
       - hosted: use the configured hosted still-image provider for keyframes, then assemble locally
       - tensorrt: generate SD1.5 TensorRT keyframes, then assemble locally
-      - proxy: render a local draft video using timeline compositing only
     """
     variant_index: int = 0
 
@@ -192,11 +191,10 @@ class InternalVideoRenderRequest(BaseModel):
 
     interpolation_engine: Literal["auto","minterpolate","fps","rife"] = "auto"
     model_id: str = "auto"
-    render_mode: Literal["auto","diffusion","hosted","tensorrt","proxy"] = "auto"
+    render_mode: Literal["auto","diffusion","hosted","tensorrt"] = "auto"
     render_tier: Literal["auto","draft","balanced","quality"] = "auto"
     device_preference: Literal["auto","cpu","cuda","mps","directml"] = "auto"
     allow_hosted_fallback: bool = True
-    allow_proxy_fallback: bool = True
     hosted_service: Literal["default","core","ultra","sd3"] = "default"
     hosted_model: str | None = None
     hosted_style_preset: str | None = None
@@ -630,7 +628,6 @@ class RenderIntent(BaseModel):
             "comfyui_still",
             "comfyui_motion",
             "hosted_video",
-            "proxy",
             "deforum_export",
             "tensorrt_standalone",
         ]
@@ -742,8 +739,8 @@ class RenderConductorPlanRequest(BaseModel):
             "comfyui_still",
             "comfyui_motion",
             "hosted_video",
-            "proxy",
             "deforum_export",
+            "tensorrt_standalone",
         ]
     )
     fallback_policy: RenderFallbackPolicy = "auto"
@@ -768,7 +765,7 @@ class PerformerWorkflowRunRequest(BaseModel):
     variant_index: int = Field(default=0, ge=0)
     plan_id: str | None = Field(default=None, max_length=160)
     provider: Literal["auto", "high_end", "mock"] = "auto"
-    allow_mock_fallback: bool = True
+    allow_mock_fallback: bool = False
     render_settings: dict[str, Any] = Field(default_factory=dict)
 
 

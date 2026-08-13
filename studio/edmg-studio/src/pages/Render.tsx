@@ -6,6 +6,11 @@ import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
+import {
+  RenderControlCenter,
+  type RenderQuickGoal,
+  type RenderQuickQuality,
+} from "../components/RenderControlCenter";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
@@ -121,6 +126,15 @@ const UPSCALER_OPTIONS = [
   { value: "pixel_bicubic", label: "Pixel bicubic" },
 ];
 
+const REAL_CONDUCTOR_ENGINES = [
+  "internal",
+  "comfyui_still",
+  "comfyui_motion",
+  "hosted_video",
+  "deforum_export",
+  "tensorrt_standalone",
+];
+
 function formatDurationSources(preflight: any): string {
   const sources = Array.isArray(preflight?.duration_sources) ? preflight.duration_sources : [];
   return sources
@@ -146,16 +160,14 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [conductorPlan, setConductorPlan] = useState<any>(null);
   const [conductorEnvironment, setConductorEnvironment] = useState<any>(null);
   const [continuityReport, setContinuityReport] = useState<any>(null);
-  const [conductorPromoteStatus, setConductorPromoteStatus] = useState<string>("");
-  const [promotingScenes, setPromotingScenes] = useState(false);
   const [performerPlan, setPerformerPlan] = useState<any>(null);
   const [performerStatus, setPerformerStatus] = useState<string>("");
   const [planningPerformer, setPlanningPerformer] = useState(false);
   const [runningPerformer, setRunningPerformer] = useState(false);
-  const [performerProvider, setPerformerProvider] = useState<"auto" | "high_end" | "mock">("auto");
-  const [performerFallback, setPerformerFallback] = useState(true);
 
   const [renderPreset, setRenderPreset] = useState<"fast" | "balanced" | "quality" | "ultra">((savedRenderDefaults.renderPreset as any) || "balanced");
+  const [quickRenderGoal, setQuickRenderGoal] = useState<RenderQuickGoal>("auto");
+  const [advancedControlsOpen, setAdvancedControlsOpen] = useState(uiMode === "advanced");
   const [checkpointName, setCheckpointName] = useState<string>("");
   const [renderMode, setRenderMode] = useState<"stills" | "motion_ad" | "motion_svd">("stills");
   const [motionFps, setMotionFps] = useState<number>(12);
@@ -209,7 +221,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalKeyInterval, setInternalKeyInterval] = useState<number>(5);
   const [internalInterp, setInternalInterp] = useState<"auto"|"minterpolate"|"fps"|"rife">("auto");
   const [internalModelId, setInternalModelId] = useState<string>("auto");
-  const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"tensorrt"|"proxy">("auto");
+  const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"tensorrt">("auto");
   const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
 
@@ -607,9 +619,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const fireflyVisible = !!renderProviders?.firefly?.visible;
   const imagineartVisible = !!renderProviders?.imagineart?.visible;
   const cosmosReady = !!renderProviders?.cosmos?.active;
-  const proxyRendersEnabled = renderProviders
-    ? renderProviders?.proxy?.enabled !== false && renderProviders?.settings?.video?.allow_proxy_renders !== false
-    : true;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
 
@@ -626,6 +635,13 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       variant_index: selectedVariant,
       fps_output: internalFpsOut,
       fps_render: internalFpsRender,
+      width: renderWidth,
+      height: renderHeight,
+      steps: renderSteps,
+      cfg: renderCfg,
+      sampler: renderSampler,
+      seed: renderSeed.trim() && Number.isFinite(Number(renderSeed)) ? Math.trunc(Number(renderSeed)) : undefined,
+      negative_prompt: renderNegativePrompt,
       keyframe_interval_s: internalKeyInterval,
       interpolation_engine: internalInterp,
       temporal_mode: useTensorRt ? "keyframes" : effectiveInternalTemporalMode,
@@ -660,7 +676,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       render_tier: internalRenderTier,
       device_preference: useTensorRt ? "cuda" : internalDevicePreference,
       allow_hosted_fallback: true,
-      allow_proxy_fallback: proxyRendersEnabled,
       resume_existing_frames: useTensorRt ? false : internalResumeExisting,
     };
   };
@@ -754,12 +769,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   }, [internalHostedVisible, internalRenderMode]);
 
   useEffect(() => {
-    if (!proxyRendersEnabled && internalRenderMode === "proxy") {
-      setInternalRenderMode("auto");
-    }
-  }, [proxyRendersEnabled, internalRenderMode]);
-
-  useEffect(() => {
     if (!internalDirectmlAvailable && internalDevicePreference === "directml") {
       setInternalDevicePreference("auto");
     }
@@ -846,17 +855,16 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       setConductorPlan(null);
       setConductorEnvironment(null);
       setContinuityReport(null);
-      setConductorPromoteStatus("");
       return;
     }
     try {
       const d = await apiPost(`/v1/projects/${projectId}/render/conductor/plan`, {
         variant_index: selectedVariant,
         preset: renderPreset,
+        allowed_engines: REAL_CONDUCTOR_ENGINES,
       });
       setConductorPlan(d?.plan || null);
       setConductorEnvironment(d?.environment || null);
-      setConductorPromoteStatus("");
       if (d?.visual_dna_hints) setVisualDnaHints(d.visual_dna_hints);
       try {
         const continuity = await apiGet(`/v1/projects/${projectId}/render/conductor/continuity?variant_index=${selectedVariant}`);
@@ -871,32 +879,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         setConductorEnvironment(null);
         setContinuityReport(null);
       }
-    }
-  };
-
-  const promoteConductorScenes = async (sceneIds: string[] = []) => {
-    if (!projectId || !conductorPlan) return;
-    setPromotingScenes(true);
-    setConductorPromoteStatus("");
-    try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/conductor/promote`, {
-        plan_id: conductorPlan.plan_id || null,
-        scene_ids: sceneIds,
-        target_engine: "internal",
-        quality_tier: renderPreset === "fast" ? "draft" : renderPreset,
-        reason: sceneIds.length ? `Promote ${sceneIds.join(", ")} to hero lane` : "Promote proxy scenes to hero lane",
-      });
-      setConductorPlan(d?.plan || conductorPlan);
-      const promoted = Array.isArray(d?.promoted_scene_ids) ? d.promoted_scene_ids : [];
-      setConductorPromoteStatus(
-        promoted.length
-          ? `Promoted ${promoted.length} scene(s) to internal/${renderPreset === "fast" ? "draft" : renderPreset}.`
-          : "No proxy scenes left to promote.",
-      );
-    } catch (e: any) {
-      setConductorPromoteStatus(String(e));
-    } finally {
-      setPromotingScenes(false);
     }
   };
 
@@ -948,8 +930,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       const d = await apiPost(`/v1/projects/${projectId}/render/performer/run`, {
         variant_index: selectedVariant,
         plan_id: performerPlan.plan_id,
-        provider: performerProvider,
-        allow_mock_fallback: performerFallback,
+        provider: "auto",
         render_settings: buildInternalPayload(),
       });
       setPerformerStatus(d?.message || `Performer job ${d?.job?.id || ""} queued.`);
@@ -1159,7 +1140,6 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalVideoKeyframeRenderer,
     motionSequencerEnabled,
     tensorRtInternalModel,
-    proxyRendersEnabled,
   ]);
 
 
@@ -1871,6 +1851,80 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
 
   const variantCount = plan?.variants?.length || 0;
   const sceneCount = plan?.variants?.[selectedVariant]?.scenes?.length || 0;
+  const renderRouteOptions = [
+    { value: "auto", label: "Auto · best installed route" },
+    { value: "diffusion", label: "Local diffusion" },
+    ...(internalHostedVisible ? [{ value: "hosted", label: "Hosted Stability" }] : []),
+    ...(tensorRtInternalVisible ? [{ value: "tensorrt", label: "TensorRT SD 1.5 keyframes" }] : []),
+  ];
+  const quickRenderModels = internalModelOptions.map((model) => ({
+    id: model.id,
+    name: model.name,
+    installed: installedModels[model.id] !== false,
+  }));
+
+  const applyQuickRenderGoal = (goal: RenderQuickGoal) => {
+    setQuickRenderGoal(goal);
+    if (goal === "edit") {
+      onNavigate?.("timeline");
+      return;
+    }
+    if (goal === "stills") {
+      setRenderMode("stills");
+      setInternalMotionStrategy("manual");
+      return;
+    }
+    if (goal === "motion_ad") {
+      setRenderMode("motion_ad");
+      setInternalMotionStrategy("storyboard_full_motion");
+      selectInternalVideoModelEngine("animatediff");
+      return;
+    }
+    if (goal === "motion_svd") {
+      setRenderMode("motion_svd");
+      setInternalMotionStrategy("storyboard_full_motion");
+      selectInternalVideoModelEngine("svd");
+      return;
+    }
+    if (goal === "full_video") {
+      setInternalMotionStrategy("storyboard_full_motion");
+      setInternalTemporalMode("video_model");
+      setRenderMode("motion_svd");
+      return;
+    }
+    setInternalRenderMode("auto");
+  };
+
+  const applyQuickQuality = (quality: RenderQuickQuality) => {
+    setRenderPreset(quality);
+    setInternalRenderTier(quality === "ultra" ? "quality" : quality === "fast" ? "draft" : quality);
+    const stillSettings = quality === "fast"
+      ? { steps: 12, cfg: 5.5, renderFps: 2 }
+      : quality === "balanced"
+        ? { steps: 24, cfg: 7, renderFps: 3 }
+        : quality === "quality"
+          ? { steps: 36, cfg: 7.5, renderFps: 4 }
+          : { steps: 50, cfg: 8, renderFps: 6 };
+    setRenderSteps(stillSettings.steps);
+    setRenderCfg(stillSettings.cfg);
+    setInternalFpsRender(stillSettings.renderFps);
+  };
+
+  const runQuickRender = () => {
+    if (quickRenderGoal === "stills") {
+      void renderScenes();
+      return;
+    }
+    if (quickRenderGoal === "motion_ad" || quickRenderGoal === "motion_svd") {
+      void renderMotion();
+      return;
+    }
+    if (quickRenderGoal === "edit") {
+      onNavigate?.("timeline");
+      return;
+    }
+    void runInternalVideo();
+  };
 
   return (
     <div>
@@ -1939,10 +1993,8 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
               plan={conductorPlan}
               continuityReport={continuityReport}
               visualDnaHints={visualDnaHints}
-              conductorPromoteStatus={conductorPromoteStatus}
-              promotingScenes={promotingScenes}
-              onPromoteAll={() => promoteConductorScenes()}
-              onPromoteScene={(sceneId) => promoteConductorScenes([sceneId])}
+              onOpenModels={onNavigate ? () => onNavigate("models") : undefined}
+              onOpenSettings={onNavigate ? () => onNavigate("settings") : undefined}
               onNavigateReview={onNavigate ? () => onNavigate("review") : undefined}
               onRefresh={() => refreshConductorPlan().catch(() => {})}
             />
@@ -1956,21 +2008,12 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
               </button>
             </div>
             <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-              Queue audio-driven performance scenes through the high-end lane, with explicit local mock fallback and full provenance. Mock output is never labeled as Wan S2V.
+              Queue audio-driven performance scenes only when a genuine high-end performer adapter is installed and ready. Synthetic proxy output is never substituted.
             </div>
-            <div className="row" style={{ marginTop: 10, gap: 10, alignItems: "end", flexWrap: "wrap" }}>
-              <label style={{ minWidth: 190 }}>
-                <span className="small">Execution provider</span>
-                <select value={performerProvider} onChange={(e) => setPerformerProvider(e.target.value as any)}>
-                  <option value="auto">Auto (high-end, then mock)</option>
-                  <option value="high_end">High-end Wan S2V</option>
-                  <option value="mock">Local mock/proxy proof</option>
-                </select>
-              </label>
-              <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", paddingBottom: 8 }}>
-                <input type="checkbox" checked={performerFallback} onChange={(e) => setPerformerFallback(e.target.checked)} />
-                Allow labeled mock fallback
-              </label>
+            <div className="row" style={{ marginTop: 10, gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div className="small" style={{ opacity: 0.82 }}>
+                Provider: <b>automatic real route</b>
+              </div>
               <button type="button" disabled={!performerPlan?.tasks?.length || runningPerformer} onClick={() => runPerformerWorkflow().catch(() => {})}>
                 {runningPerformer ? "Queueing…" : "Queue performer render"}
               </button>
@@ -2178,7 +2221,12 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
             ) : null}
           </div>
 
-          <details style={{ marginTop: 12 }} open={uiMode === "advanced"}>
+          <details
+            id="render-all-settings"
+            style={{ marginTop: 12 }}
+            open={advancedControlsOpen}
+            onToggle={(event) => setAdvancedControlsOpen(event.currentTarget.open)}
+          >
             <summary style={{ cursor: "pointer", fontWeight: 800 }}>Advanced routing & controls</summary>
             <div style={{ marginTop: 10 }}>
               <div className="small" style={{ marginBottom: 10 }}>
@@ -2194,8 +2242,6 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                       <option value="diffusion">Local diffusion</option>
                       {internalHostedVisible ? <option value="hosted">Hosted Stability</option> : null}
                       {tensorRtInternalVisible ? <option value="tensorrt">TensorRT SD1.5 keyframe assembly</option> : null}
-                      {fireflyVisible ? <option value="firefly">Adobe Firefly</option> : null}
-                      {proxyRendersEnabled ? <option value="proxy">Proxy only</option> : null}
                     </select>
                   </div>
                   <div style={{ minWidth: 140 }}>
@@ -2251,11 +2297,9 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                 <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
                   Tip: install internal models in Models first. Auto tiering adapts the internal renderer for laptops, Apple Silicon, CPU-only systems, higher-end GPUs, and the TensorRT CUDA keyframe path.
                 </div>
-                {!proxyRendersEnabled ? (
-                  <div className="small" style={{ marginTop: 6, color: "var(--warning,#d97706)" }}>
-                    Proxy draft renders are disabled. Auto mode will require local internal models or a configured hosted fallback.
-                  </div>
-                ) : null}
+                <div className="small" style={{ marginTop: 6, color: "var(--accent-soft)" }}>
+                  Auto mode uses installed internal models or a configured hosted renderer. Studio will not substitute a synthetic proxy render.
+                </div>
                 {internalTensorRtRequired ? (
                   <div
                     className="small"
@@ -3899,6 +3943,37 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
           {info && <StructuredSummary value={info} showJson />}
         </div>
       </div>
+
+      <RenderControlCenter
+        goal={quickRenderGoal}
+        onGoalChange={applyQuickRenderGoal}
+        quality={renderPreset}
+        onQualityChange={applyQuickQuality}
+        route={internalRenderMode}
+        onRouteChange={(route) => setInternalRenderMode(route as "auto" | "diffusion" | "hosted" | "tensorrt")}
+        routeOptions={renderRouteOptions}
+        modelId={internalModelId}
+        onModelChange={setInternalModelId}
+        models={quickRenderModels}
+        outputFps={internalFpsOut}
+        onOutputFpsChange={setInternalFpsOut}
+        width={renderWidth}
+        height={renderHeight}
+        onResolutionChange={(width, height) => {
+          setRenderWidth(width);
+          setRenderHeight(height);
+        }}
+        timelineCamera={internalVideoApplyTimelineCamera}
+        onTimelineCameraChange={setInternalVideoApplyTimelineCamera}
+        onRun={runQuickRender}
+        runDisabled={!variantCount || internalTensorRtBlocked}
+        runLabel={quickRenderGoal === "stills" ? "Render still scenes" : "Queue this render"}
+        onOpenAllSettings={() => {
+          setAdvancedControlsOpen(true);
+          window.setTimeout(() => document.getElementById("render-all-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+        }}
+        onOpenModels={() => onNavigate?.("models")}
+      />
     </div>
   );
 }

@@ -9,26 +9,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from edmg_studio_backend import app as studio_app
-from edmg_studio_backend.services import internal_video as internal_video_service
-from edmg_studio_backend.services.render_settings import DEFAULT_RENDER_PROVIDER_SETTINGS
 from edmg_studio_backend.store.projects import ProjectStore
 from edmg_studio_backend.store.jobs import JobStore
-
-
-def _enable_proxy_renders(monkeypatch):
-    monkeypatch.setattr(studio_app.render_settings, "get", lambda: DEFAULT_RENDER_PROVIDER_SETTINGS)
-
-
-def _disable_proxy_renders(monkeypatch):
-    settings = DEFAULT_RENDER_PROVIDER_SETTINGS.copy()
-    settings["video"] = {**settings["video"], "allow_proxy_renders": False}
-    monkeypatch.setattr(studio_app.render_settings, "get", lambda: settings)
 
 
 def _make_project(tmp_path: Path):
     store = ProjectStore(tmp_path / "data")
     jobs = JobStore(store.projects_dir)
-    proj = store.create("Proxy Fallback Test")
+    proj = store.create("Genuine Render Route Test")
     proj.meta = {
         "analysis": {"duration_s": 6.0},
         "last_plan": {
@@ -49,186 +37,68 @@ def _make_project(tmp_path: Path):
     return store, jobs, proj
 
 
-def test_internal_preflight_falls_back_to_proxy(tmp_path, monkeypatch):
+def test_internal_preflight_reports_missing_model_without_genuine_fallback(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
-    _enable_proxy_renders(monkeypatch)
+    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
 
-    preflight = studio_app._internal_render_preflight_data(
-        proj.id,
-        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": True},
-    )
+    with pytest.raises(studio_app.UserFacingError) as exc:
+        studio_app._internal_render_preflight_data(
+            proj.id,
+            {
+                "variant_index": 0,
+                "fps_render": 2,
+                "fps_output": 24,
+                "model_id": "auto",
+                "allow_hosted_fallback": False,
+            },
+        )
 
-    assert preflight["ok"] is True
-    assert preflight["mode"] == "proxy"
-    assert preflight["model_id"] == "proxy_draft"
-    assert preflight["estimated_frames"] == 12
-    assert preflight["cache"]["frames_expected"] == 12
-    assert any("proxy" in w.lower() for w in preflight["warnings"])
+    assert exc.value.code == "MODEL_NOT_INSTALLED"
 
 
 def test_internal_preflight_blocks_explicit_proxy_when_disabled(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
-    _disable_proxy_renders(monkeypatch)
-
     with pytest.raises(studio_app.UserFacingError) as exc:
         studio_app._internal_render_preflight_data(
             proj.id,
-            {"variant_index": 0, "render_mode": "proxy", "allow_proxy_fallback": True},
+            {"variant_index": 0, "render_mode": "proxy"},
         )
 
     assert exc.value.code == "PROXY_RENDER_DISABLED"
 
 
-def test_internal_preflight_blocks_proxy_fallback_when_disabled(tmp_path, monkeypatch):
-    store, jobs, proj = _make_project(tmp_path)
-    monkeypatch.setattr(studio_app, "store", store)
-    monkeypatch.setattr(studio_app, "jobs", jobs)
-    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
-    monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
-    _disable_proxy_renders(monkeypatch)
-
-    with pytest.raises(studio_app.UserFacingError) as exc:
-        studio_app._internal_render_preflight_data(
-            proj.id,
-            {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": True},
-        )
-
-    assert exc.value.code == "PROXY_RENDER_DISABLED"
-
-
-def test_internal_preflight_falls_back_to_proxy_for_incomplete_internal_model(tmp_path, monkeypatch):
-    store, jobs, proj = _make_project(tmp_path)
-    monkeypatch.setattr(studio_app, "store", store)
-    monkeypatch.setattr(studio_app, "jobs", jobs)
-    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
-    _enable_proxy_renders(monkeypatch)
-    monkeypatch.setattr(
-        studio_app.models,
-        "internal_asset_issue",
-        lambda model_id: "incomplete" if model_id == "hf_sd35_medium_internal" else None,
-    )
-
-    preflight = studio_app._internal_render_preflight_data(
-        proj.id,
-        {
-            "variant_index": 0,
-            "fps_render": 2,
-            "fps_output": 24,
-            "model_id": "hf_sd35_medium_internal",
-            "allow_proxy_fallback": True,
-        },
-    )
-
-    assert preflight["ok"] is True
-    assert preflight["mode"] == "proxy"
-    assert any("incomplete" in w.lower() for w in preflight["warnings"])
-
-
-def test_run_pipeline_auto_uses_proxy_when_comfy_and_models_missing(tmp_path, monkeypatch):
-    store, jobs, proj = _make_project(tmp_path)
-    monkeypatch.setattr(studio_app, "store", store)
-    monkeypatch.setattr(studio_app, "jobs", jobs)
-    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
-    monkeypatch.setattr(studio_app.comfy_pool, "diagnose", lambda _req: {"compatible": [], "busy_compatible": []})
-    _enable_proxy_renders(monkeypatch)
-
-    captured = {}
-
-    def fake_render_internal_video(project_id, req):
-        captured["project_id"] = project_id
-        captured["req"] = req
-        return {"ok": True, "job": {"id": "job-proxy"}, "preflight": {"mode": "proxy"}}
-
-    monkeypatch.setattr(studio_app, "render_internal_video", fake_render_internal_video)
-
-    result = studio_app.run_pipeline(proj.id, variant_index=0, preset="balanced", mode="auto", engine="auto")
-
-    assert result["ok"] is True
-    assert result["render_mode"] == "proxy"
-    assert result["selected"]["mode"] == "proxy"
-    assert captured["project_id"] == proj.id
-    assert captured["req"].render_mode == "proxy"
-    assert captured["req"].allow_proxy_fallback is True
-
-
-def test_run_pipeline_auto_reports_no_route_when_proxy_disabled(tmp_path, monkeypatch):
+def test_run_pipeline_auto_reports_no_route_without_genuine_renderer(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
     monkeypatch.setattr(studio_app.comfy_pool, "diagnose", lambda _req: {"compatible": [], "busy_compatible": []})
     monkeypatch.setattr(studio_app, "_hosted_stability_ready", lambda _payload: False)
-    _disable_proxy_renders(monkeypatch)
-
     with pytest.raises(studio_app.UserFacingError) as exc:
         studio_app.run_pipeline(proj.id, variant_index=0, preset="balanced", mode="auto", engine="auto")
 
     assert exc.value.code == "NO_RENDER_ROUTE"
 
 
-def test_proxy_renderer_creates_video_and_metadata_without_ffmpeg(tmp_path, monkeypatch):
-    project_dir = tmp_path / "project"
-    (project_dir / "outputs" / "videos").mkdir(parents=True, exist_ok=True)
-
-    def fake_assemble_image_sequence(*, frames_dir, out_mp4, fps, glob_pattern, audio_path=None, ffmpeg_path=None):
-        frames = sorted(frames_dir.glob(glob_pattern))
-        assert frames, "expected rendered frames"
-        out_mp4.write_bytes(b"raw-mp4")
-
-    def fake_interpolate_video_fps(*, in_mp4, out_mp4, fps_out, engine, ffmpeg_path=None):
-        out_mp4.write_bytes(in_mp4.read_bytes() + f"-fps{fps_out}".encode("utf-8"))
-
-    monkeypatch.setattr(internal_video_service, "assemble_image_sequence", fake_assemble_image_sequence)
-    monkeypatch.setattr(internal_video_service, "interpolate_video_fps", fake_interpolate_video_fps)
-
-    settings = internal_video_service.InternalVideoSettings(
-        fps_render=2,
-        fps_output=4,
-        width=320,
-        height=180,
-        interpolation_engine="fps",
-        model_id="proxy_draft",
-        resume_existing_frames=False,
-    )
-    variant = {"index": 0, "duration_s": 2.0}
-    scenes = [{"start_s": 0.0, "end_s": 2.0, "prompt": "glowing tunnel"}]
-
-    out = internal_video_service.render_internal_proxy_video_variant(
-        ffmpeg_path="ffmpeg",
-        project_dir=project_dir,
-        variant=variant,
-        scenes=scenes,
-        audio_path=None,
-        settings=settings,
-        timeline={"layers": []},
-    )
-
-    assert out.exists()
-    assert out.read_bytes().startswith(b"raw-mp4")
-    meta_path = out.with_suffix(".render.json")
-    assert meta_path.exists()
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta["render_mode"] == "proxy"
-    assert meta["frames"]["expected"] == 4
-    checkpoint_path = out.with_suffix(".checkpoint.json")
-    assert checkpoint_path.exists()
-    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["status"] == "complete"
-    assert checkpoint["completed_frames"] == 4
-    assert checkpoint["outputs"]["final_exists"] is True
-
-
 def test_resume_and_restart_routes_clone_internal_job_with_checkpoint(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
-    monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
-    _disable_proxy_renders(monkeypatch)
+    monkeypatch.setattr(
+        studio_app,
+        "_internal_render_preflight_data",
+        lambda _project_id, _payload: {
+            "ok": True,
+            "mode": "diffusion",
+            "model_id": "runwayml/stable-diffusion-v1-5",
+            "settings": {"temporal_mode": "frame_img2img"},
+        },
+    )
 
     source = jobs.create(
         proj.id,
@@ -237,9 +107,9 @@ def test_resume_and_restart_routes_clone_internal_job_with_checkpoint(tmp_path, 
             "variant_index": 0,
             "fps_render": 2,
             "fps_output": 24,
-            "render_mode": "proxy",
-            "model_id": "auto",
-            "allow_proxy_fallback": True,
+            "render_mode": "diffusion",
+            "model_id": "runwayml/stable-diffusion-v1-5",
+            "allow_hosted_fallback": False,
             "resume_existing_frames": True,
         },
     )
@@ -293,8 +163,9 @@ def test_resume_route_rejects_running_internal_job(tmp_path, monkeypatch):
             "variant_index": 0,
             "fps_render": 2,
             "fps_output": 24,
-            "render_mode": "proxy",
-            "allow_proxy_fallback": True,
+            "render_mode": "diffusion",
+            "model_id": "runwayml/stable-diffusion-v1-5",
+            "allow_hosted_fallback": False,
         },
     )
     source.status = "running"
@@ -342,7 +213,7 @@ def test_job_detail_endpoint_returns_checkpoint_and_log_metadata(tmp_path, monke
         "frames": {"dir": "frames_dir"},
     }), encoding="utf-8")
 
-    job = jobs.create(proj.id, "internal_video", {"variant_index": 0, "render_mode": "proxy"})
+    job = jobs.create(proj.id, "internal_video", {"variant_index": 0, "render_mode": "diffusion"})
     job.status = "failed"
     job.result = {"video": video_rel}
     job.progress = {
@@ -379,6 +250,10 @@ def test_audio_upload_endpoint_persists_large_audio_payload(tmp_path, monkeypatc
     monkeypatch.setattr(studio_app, "jobs", jobs)
 
     payload = (b"riff" * 4096) + b"tail"
+    proj.meta["analysis"] = {"features": {"bpm": 110}}
+    proj.meta["last_plan"] = {"variants": [{"scenes": []}]}
+    proj.meta["timeline"] = {"layers": [{"id": "keep"}]}
+    store.save(proj)
 
     with TestClient(studio_app.app) as client:
         response = client.post(
@@ -394,3 +269,6 @@ def test_audio_upload_endpoint_persists_large_audio_payload(tmp_path, monkeypatc
     assert saved is not None
     assert saved.meta["audio"]["filename"] == "long.wav"
     assert saved.meta["audio"]["size_bytes"] == len(payload)
+    assert "analysis" not in saved.meta
+    assert "last_plan" not in saved.meta
+    assert saved.meta["timeline"] == {"layers": [{"id": "keep"}]}

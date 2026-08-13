@@ -19,6 +19,23 @@ from ..schemas import (
     RenderStep,
 )
 
+REAL_ENGINE_KINDS: tuple[EngineKind, ...] = (
+    "internal",
+    "comfyui_still",
+    "comfyui_motion",
+    "hosted_video",
+    "deforum_export",
+    "tensorrt_standalone",
+)
+
+
+class NoRealRenderRouteError(ValueError):
+    """Raised when a new conductor plan has no executable real render engine."""
+
+    def __init__(self, message: str, diagnostics: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostics = list(diagnostics or [])
+
 
 @dataclass
 class CapabilityReport:
@@ -81,11 +98,11 @@ def _environment_engines(environment: dict[str, Any] | None, intent: RenderInten
     for engine in intent.allowed_engines:
         details = raw_engines.get(engine)
         if isinstance(details, dict):
-            out[engine] = {"available": bool(details.get("available", True)), **details}
+            out[engine] = {**details, "available": bool(details.get("available", False))}
         elif isinstance(details, bool):
             out[engine] = {"available": bool(details)}
         else:
-            out[engine] = {"available": engine == "proxy" or engine == "internal"}
+            out[engine] = {"available": False}
     return out
 
 
@@ -305,20 +322,20 @@ def _fallback_engine(
     primary: EngineKind,
     engines: dict[str, dict[str, Any]],
     intent: RenderIntent,
-) -> EngineKind:
+) -> EngineKind | None:
     preferred_orders: dict[EngineKind, list[EngineKind]] = {
-        "internal": ["proxy"],
-        "comfyui_motion": ["internal", "proxy"],
-        "comfyui_still": ["internal", "proxy"],
-        "hosted_video": ["internal", "proxy"],
-        "deforum_export": ["internal", "proxy"],
-        "tensorrt_standalone": ["internal", "proxy"],
-        "proxy": ["proxy"],
+        "internal": ["comfyui_motion", "comfyui_still", "tensorrt_standalone", "hosted_video", "deforum_export"],
+        "comfyui_motion": ["internal", "hosted_video", "comfyui_still", "tensorrt_standalone", "deforum_export"],
+        "comfyui_still": ["internal", "tensorrt_standalone", "comfyui_motion", "hosted_video", "deforum_export"],
+        "hosted_video": ["internal", "comfyui_motion", "comfyui_still", "tensorrt_standalone", "deforum_export"],
+        "deforum_export": ["internal", "comfyui_motion", "comfyui_still", "tensorrt_standalone", "hosted_video"],
+        "tensorrt_standalone": ["internal", "comfyui_still", "comfyui_motion", "hosted_video", "deforum_export"],
+        "proxy": list(REAL_ENGINE_KINDS),
     }
-    for candidate in preferred_orders.get(primary, ["proxy"]):
+    for candidate in preferred_orders.get(primary, list(REAL_ENGINE_KINDS)):
         if candidate in intent.allowed_engines and bool(engines.get(candidate, {}).get("available", False)):
             return candidate
-    return "proxy"
+    return None
 
 
 def _section_steps(
@@ -434,6 +451,23 @@ def build_advisory_render_plan(
     variant = _resolve_variant(snapshot_obj, intent_obj.variant_index)
     scenes = [scene for scene in list(variant.get("scenes") or []) if isinstance(scene, dict)]
     engines = _environment_engines(environment, intent_obj)
+    available_real_engines = [
+        engine
+        for engine in intent_obj.allowed_engines
+        if engine in REAL_ENGINE_KINDS and bool(engines.get(engine, {}).get("available", False))
+    ]
+    if not available_real_engines:
+        requested = ", ".join(intent_obj.allowed_engines) or "none"
+        diagnostics = [
+            f"{engine}=unavailable"
+            for engine in intent_obj.allowed_engines
+            if engine in REAL_ENGINE_KINDS
+        ]
+        raise NoRealRenderRouteError(
+            "No real render route is available for this plan. "
+            f"Requested engines: {requested}. Install a supported local model or configure a hosted provider.",
+            [f"requested_engines={requested}", *diagnostics, "available_genuine_engines=none"],
+        )
 
     section_lookup = {section.scene_id: section for section in intent_obj.sections}
     plans: list[RenderSectionPlan] = []
@@ -451,10 +485,12 @@ def build_advisory_render_plan(
             continuity_priority = _clamp_unit(override.continuity_priority, continuity_priority)
         hero_frame = _hero_frame(scene)
 
-        chosen_engine: EngineKind = "proxy"
+        chosen_engine: EngineKind | None = None
         chosen_score = -1.0
         rationale_parts: list[str] = []
         for engine in intent_obj.allowed_engines:
+            if engine not in REAL_ENGINE_KINDS:
+                continue
             score = _engine_score(
                 engine,
                 continuity_priority=continuity_priority,
@@ -469,8 +505,8 @@ def build_advisory_render_plan(
             if score > chosen_score:
                 chosen_engine = engine
                 chosen_score = score
-        if not bool(engines.get(chosen_engine, {}).get("available", False)):
-            chosen_engine = _fallback_engine(chosen_engine, engines, intent_obj)
+        if chosen_engine is None or not bool(engines.get(chosen_engine, {}).get("available", False)):
+            chosen_engine = available_real_engines[0]
 
         if chosen_engine == "internal":
             rationale_parts.append("continuity bias and style lock favor the internal renderer")
@@ -482,8 +518,10 @@ def build_advisory_render_plan(
             rationale_parts.append("speed and motion density justify a hosted video recommendation")
         elif chosen_engine == "deforum_export":
             rationale_parts.append("scene is a better fit for Deforum-aligned export than direct execution")
+        elif chosen_engine == "tensorrt_standalone":
+            rationale_parts.append("installed TensorRT still anchors provide the best executable local route")
         else:
-            rationale_parts.append("proxy remains the safest fallback for this scene on the current environment")
+            rationale_parts.append("the available real renderer provides the best route for this scene")
 
         if dna and dna.identity.motifs:
             rationale_parts.append(f"project DNA motifs in play: {', '.join(dna.identity.motifs[:3])}")
@@ -519,13 +557,14 @@ def build_advisory_render_plan(
             )
         )
         fallback = _fallback_engine(chosen_engine, engines, intent_obj)
-        fallbacks.append(
-            FallbackBranch(
-                trigger=f"{scene_id}:{chosen_engine}:unavailable",
-                reroute_to=fallback,
-                notes=f"Fallback to {fallback} if the recommended adapter is unavailable when the plan is executed.",
+        if fallback is not None:
+            fallbacks.append(
+                FallbackBranch(
+                    trigger=f"{scene_id}:{chosen_engine}:unavailable",
+                    reroute_to=fallback,
+                    notes=f"Fallback to {fallback} if the recommended adapter is unavailable when the plan is executed.",
+                )
             )
-        )
         engine_counts[chosen_engine] = engine_counts.get(chosen_engine, 0) + 1
 
     engine_summary = ", ".join(f"{engine} x{count}" for engine, count in sorted(engine_counts.items()))
@@ -579,7 +618,7 @@ def promote_proxy_sections(
     quality_tier: str = "quality",
     reason: str | None = None,
 ) -> tuple[RenderPlan, list[str]]:
-    """Promote proxy (or selected) sections to a hero/quality engine lane."""
+    """Promote historical proxy sections to a real render engine lane."""
     plan_obj = plan if isinstance(plan, RenderPlan) else RenderPlan.model_validate(plan)
     selected = {str(item).strip() for item in (scene_ids or []) if str(item).strip()}
     promoted: list[str] = []

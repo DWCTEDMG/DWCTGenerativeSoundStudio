@@ -18,7 +18,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { apiFetch, apiGet, apiPost, getBackendUrl } from "../components/api";
+import { apiFetch, apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../components/api";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
 import { useOperationProgress } from "../components/useOperationProgress";
@@ -51,6 +51,7 @@ type TimelineDrag =
       x0: number;
       start0: number;
       end0: number;
+      data0: AnyDict;
       historyBefore: AnyDict;
       historyLabel: string;
     }
@@ -73,7 +74,7 @@ type TimelineDrag =
       historyLabel: string;
     };
 
-type DockSection = "handoffs" | "inspector" | "proxy" | "diffusion" | "curves";
+type DockSection = "orchestrator" | "inspector" | "media" | "diffusion" | "curves";
 type TimelineDensity = "compact" | "comfortable";
 type TimelineTimebase = "bars" | "time";
 
@@ -563,6 +564,10 @@ function ensureTimelineShape(timeline: AnyDict, planVariant: AnyDict | null): An
   }));
   ensureTrack("track_motion", "Motion", "motion", motionClips);
 
+  // Canonical non-destructive edit-decision lane. Source media remains in
+  // Outputs; Timeline clips only keep source in/out and finishing decisions.
+  ensureTrack("track_video", "Video Edit", "video", []);
+
   // Overlays/layers (kept as timeline.layers to match compositor)
   tl.layers = Array.isArray(tl.layers) ? tl.layers : [];
 
@@ -598,7 +603,20 @@ function fmtLabel(trackType: string, clip: Clip): string {
   const t = String(trackType || "").toLowerCase();
   if (t === "prompt") return String(clip?.data?.prompt || "prompt").slice(0, 34);
   if (t === "motion") return fmtMotionLabel(clip?.data || {});
+  if (t === "video") {
+    const source = String(clip?.data?.source_path || clip?.data?.name || "video");
+    return source.split(/[\\/]/).pop() || "video";
+  }
   return String(clip?.id || "clip");
+}
+
+function isTimelineInteractiveTarget(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null;
+  return Boolean(
+    element?.closest(
+      "input, textarea, select, button, a, [contenteditable='true'], [role='button'], [role='dialog'], [role='menu']",
+    ),
+  );
 }
 
 export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: PageProps) {
@@ -653,11 +671,18 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const previewTimer = useRef<any>(null);
   const autoFitKeyRef = useRef<string>("");
 
-  const [proxyUrl, setProxyUrl] = useState<string>("");
-  const [proxyBusy, setProxyBusy] = useState(false);
-  const [proxyStart, setProxyStart] = useState<number>(0);
-  const [proxyEnd, setProxyEnd] = useState<number>(5);
-  const [proxyFps, setProxyFps] = useState<number>(6);
+  const [mediaLibrary, setMediaLibrary] = useState<AnyDict[]>([]);
+  const [mediaLibraryBusy, setMediaLibraryBusy] = useState(false);
+  const [selectedMediaPath, setSelectedMediaPath] = useState("");
+  const [selectedMediaDuration, setSelectedMediaDuration] = useState(5);
+  const [mediaRenderBusy, setMediaRenderBusy] = useState(false);
+  const [mediaRenderStatus, setMediaRenderStatus] = useState("");
+  const [editWidth, setEditWidth] = useState(1920);
+  const [editHeight, setEditHeight] = useState(1080);
+  const [editFps, setEditFps] = useState(24);
+  const [editVideoCodec, setEditVideoCodec] = useState("h264");
+  const [installedPreviewModels, setInstalledPreviewModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [conductorPlan, setConductorPlan] = useState<AnyDict | null>(null);
 
   const [diffUrl, setDiffUrl] = useState<string>("");
   const [diffBusy, setDiffBusy] = useState(false);
@@ -670,8 +695,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const [diffW, setDiffW] = useState<number>(512);
   const [diffH, setDiffH] = useState<number>(512);
   const [diffModel, setDiffModel] = useState<string>("auto");
-  const [dockSection, setDockSection] = useState<DockSection>("handoffs");
+  const [dockSection, setDockSection] = useState<DockSection>("orchestrator");
   const [timelineDensity, setTimelineDensity] = useState<TimelineDensity>("compact");
+  const [showReferenceLanes, setShowReferenceLanes] = useState(true);
+  const [showAutomationLanes, setShowAutomationLanes] = useState(true);
 
   const [err, setErr] = useState<string | null>(null);
   const { progress, runOperation } = useOperationProgress();
@@ -714,6 +741,38 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     }
   };
 
+  const refreshTimelineResources = async (pid: string) => {
+    setMediaLibraryBusy(true);
+    try {
+      const [outputs, modelData] = await Promise.all([
+        apiGet(`/v1/projects/${pid}/outputs`).catch(() => ({ videos: [] })),
+        apiGet("/v1/models/catalog").catch(() => ({ catalog: [], user: [], installed: {} })),
+      ]);
+      setMediaLibrary(Array.isArray(outputs?.videos) ? outputs.videos : []);
+
+      const installed =
+        modelData?.installed && typeof modelData.installed === "object" ? modelData.installed : {};
+      const supportedPreviewIds = new Set([
+        "hf_sd15_internal",
+        "hf_sdxl_internal",
+        "hf_sd35_medium_internal",
+      ]);
+      const catalog = [
+        ...(Array.isArray(modelData?.catalog) ? modelData.catalog : []),
+        ...(Array.isArray(modelData?.user) ? modelData.user : []),
+      ];
+      const downloaded = catalog
+        .filter((entry: AnyDict) => supportedPreviewIds.has(String(entry?.id || "")) && installed[entry.id] === true)
+        .map((entry: AnyDict) => ({ id: String(entry.id), name: String(entry.name || entry.id) }));
+      setInstalledPreviewModels(downloaded);
+      setDiffModel((current) =>
+        current === "auto" || downloaded.some((entry) => entry.id === current) ? current : "auto",
+      );
+    } finally {
+      setMediaLibraryBusy(false);
+    }
+  };
+
   const refreshProject = async (pid: string) => {
     const d = await apiGet(`/v1/projects/${pid}`);
     setProject(d?.project || null);
@@ -735,6 +794,11 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     else setAudioUrl("");
 
     setPlan(p?.meta?.last_plan || null);
+    setConductorPlan(
+      p?.meta?.last_conductor_plan && typeof p.meta.last_conductor_plan === "object"
+        ? p.meta.last_conductor_plan
+        : null,
+    );
     const variantCount = Array.isArray(p?.meta?.last_plan?.variants) ? p.meta.last_plan.variants.length : 0;
     if (variantCount > 0 && selectedVariant > variantCount - 1) setSelectedVariant(0);
 
@@ -749,6 +813,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     } catch {
       setRecoveryNotice(null);
     }
+    void refreshTimelineResources(pid);
   };
 
   useEffect(() => {
@@ -855,7 +920,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     }
     ctx.fillStyle = "rgba(177, 229, 255, 0.34)";
     ctx.fillRect(0, Math.floor(h / 2), w, 1);
-  }, [peaks, durationS, pxPerSecond]);
+  }, [peaks, durationS, pxPerSecond, showReferenceLanes]);
 
   // scrub preview frame
   useEffect(() => {
@@ -959,7 +1024,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   }, [projectId, selectedVariant, durationS]);
 
   useEffect(() => {
-    if (lastHandoff && lastHandoff.projectId === projectId) setDockSection("handoffs");
+    if (lastHandoff && lastHandoff.projectId === projectId) setDockSection("orchestrator");
   }, [lastHandoff, projectId]);
 
   const onTimelineWheel = (event: React.WheelEvent<HTMLDivElement>) => {
@@ -994,12 +1059,13 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         x0: e.clientX,
         start0: cl.start_s,
         end0: cl.end_s,
+        data0: { ...(cl.data || {}) },
         historyBefore: snapshotTimeline(timelineRef.current),
         historyLabel: mode === "move" ? "move_clip" : "trim_clip",
       };
       setSelected({ kind: "track", trackIdx, clipIdx });
-      setProxyStart(cl.start_s);
-      setProxyEnd(cl.end_s);
+      setDiffStart(cl.start_s);
+      setDiffEnd(cl.end_s);
     };
 
   const onOverlayPointerDown =
@@ -1023,8 +1089,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         historyLabel: mode === "move" ? "move_overlay" : "trim_overlay",
       };
       setSelected({ kind: "overlay", layerIdx });
-      setProxyStart(s0);
-      setProxyEnd(e0);
+      setDiffStart(s0);
+      setDiffEnd(e0);
     };
 
   const onCameraKfPointerDown = (kfIdx: number) => (e: React.PointerEvent) => {
@@ -1043,8 +1109,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       historyLabel: "move_camera",
     };
     setSelected({ kind: "camera", kfIdx });
-    setProxyStart(Math.max(0, Number(k.t || 0) - 1));
-    setProxyEnd(Math.min(durationS, Number(k.t || 0) + 2));
+    setDiffStart(Math.max(0, Number(k.t || 0) - 1));
+    setDiffEnd(Math.min(durationS, Number(k.t || 0) + 2));
   };
 
   const onTimelinePointerMove = (e: React.PointerEvent) => {
@@ -1088,11 +1154,31 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       }
       start = clamp(start, 0, durationS - 0.05);
       end = clamp(end, start + 0.05, durationS);
+      let nextData = cl.data || {};
+      if (String(tr.type || "").toLowerCase() === "video" && st.mode !== "move") {
+        const speed = clamp(Number(st.data0?.speed ?? 1), 0.25, 4);
+        const sourceIn0 = Math.max(0, Number(st.data0?.source_in_s ?? 0));
+        const sourceOut0 = Math.max(
+          sourceIn0 + TIMELINE_MIN_RANGE_S,
+          Number(st.data0?.source_out_s ?? sourceIn0 + (st.end0 - st.start0) * speed),
+        );
+        nextData = {
+          ...st.data0,
+          source_in_s:
+            st.mode === "left"
+              ? Math.max(0, sourceIn0 + (start - st.start0) * speed)
+              : sourceIn0,
+          source_out_s:
+            st.mode === "right"
+              ? Math.max(sourceIn0 + TIMELINE_MIN_RANGE_S, sourceOut0 + (end - st.end0) * speed)
+              : sourceOut0,
+        };
+      }
 
       const nextTracks = currentTracks.map((t, i) => {
         if (i !== st.trackIdx) return t;
         const nextClips = (t.clips || []).map((c, j) =>
-          j === st.clipIdx ? { ...c, start_s: start, end_s: end } : c,
+          j === st.clipIdx ? { ...c, start_s: start, end_s: end, data: nextData } : c,
         );
         return { ...t, clips: nextClips };
       });
@@ -1189,9 +1275,6 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         () => apiPost(`/v1/projects/${projectId}/timeline`, { timeline }),
       );
       replaceTimelineState(saved?.timeline || timelineRef.current, false);
-      // invalidate proxy preview on save
-      setProxyUrl("");
-      setProxyBusy(false);
     } catch (e: any) {
       setErr(String(e));
     }
@@ -1305,8 +1388,6 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         () => apiPost(`/v1/projects/${projectId}/timeline`, { timeline }),
       );
       replaceTimelineState(saved?.timeline || timelineRef.current, false);
-      setProxyUrl("");
-      setProxyBusy(false);
       onNavigate?.("render");
     } catch (e: any) {
       setErr(String(e));
@@ -1333,6 +1414,86 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       i === idx ? { ...t, clips: [...(t.clips || []), { id, start_s: s, end_s: e, data }] } : t,
     );
     commitTimeline({ ...timelineRef.current, tracks: nextTracks }, `add_${type}_clip`);
+  };
+
+  const addMediaClip = (entry: AnyDict) => {
+    const sourcePath = String(entry?.path || "").trim();
+    if (!sourcePath) return;
+    const trackIdx = tracks.findIndex((track) => String(track.type).toLowerCase() === "video");
+    if (trackIdx < 0) return;
+    if (isLaneLocked(laneIdForTrack(tracks[trackIdx], trackIdx))) return;
+
+    const sourceDuration = Math.max(
+      TIMELINE_MIN_RANGE_S,
+      Number(entry?.duration_s || entry?.metadata?.duration_s || selectedMediaDuration || 5),
+    );
+    const start = clamp(playheadS, 0, Math.max(0, durationS - TIMELINE_MIN_RANGE_S));
+    const end = clamp(start + sourceDuration, start + TIMELINE_MIN_RANGE_S, durationS);
+    const visibleSourceDuration = Math.max(TIMELINE_MIN_RANGE_S, end - start);
+    const clip: Clip = {
+      id: `video_${Date.now()}`,
+      start_s: start,
+      end_s: end,
+      data: {
+        source_path: sourcePath,
+        name: String(entry?.name || sourcePath.split(/[\\/]/).pop() || "Video clip"),
+        source_in_s: 0,
+        source_out_s: Math.min(sourceDuration, visibleSourceDuration),
+        source_duration_s: sourceDuration,
+        speed: 1,
+        volume: 1,
+        muted: false,
+        fade_in_s: 0,
+        fade_out_s: 0,
+      },
+    };
+    const nextTracks = tracks.map((track, index) =>
+      index === trackIdx
+        ? { ...track, clips: [...(track.clips || []), clip].sort((a, b) => a.start_s - b.start_s) }
+        : track,
+    );
+    commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "add_video_clip");
+    setSelected({ kind: "track", trackIdx, clipIdx: nextTracks[trackIdx].clips.indexOf(clip) });
+    setSelectedMediaPath(sourcePath);
+    setDockSection("inspector");
+  };
+
+  const renderEditedTimeline = async () => {
+    if (!projectId) return;
+    const videoClips = tracks
+      .filter((track) => String(track.type).toLowerCase() === "video")
+      .flatMap((track) => track.clips || []);
+    if (!videoClips.length) {
+      setErr("Add at least one output video to the Video Edit track before rendering an edited master.");
+      return;
+    }
+    setMediaRenderBusy(true);
+    setMediaRenderStatus("Saving the edit decision list…");
+    setErr(null);
+    try {
+      const saved = await apiPost(`/v1/projects/${projectId}/timeline`, { timeline: timelineRef.current });
+      replaceTimelineState(saved?.timeline || timelineRef.current, false);
+      setMediaRenderStatus("Queueing the non-destructive video edit…");
+      const response = await apiPost(`/v1/projects/${projectId}/timeline/render`, {
+        width: editWidth,
+        height: editHeight,
+        fps: editFps,
+        video_codec: editVideoCodec,
+        audio_codec: editVideoCodec === "prores" ? "pcm_s16le" : "aac",
+        quality: "high",
+        name: `${String(project?.name || "studio").replace(/[^a-z0-9_-]+/gi, "_")}_edit`,
+      });
+      setMediaRenderStatus(
+        response?.job?.id
+          ? `Edit queued as ${response.job.id}. Track progress in Render Queue.`
+          : "Edit queued. Track progress in Render Queue.",
+      );
+    } catch (error: any) {
+      setErr(String(error));
+      setMediaRenderStatus("");
+    } finally {
+      setMediaRenderBusy(false);
+    }
   };
 
   const addCameraKeyframe = () => {
@@ -1520,8 +1681,22 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       if (!tr || !cl) return;
       if (isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
       if (!(cl.start_s + _minLen < tSplit && tSplit < cl.end_s - _minLen)) return;
-      const left = { ...cl, end_s: tSplit };
-      const right = { ...cl, id: `${String(tr.type)}_${Date.now()}`, start_s: tSplit };
+      let leftData = cl.data || {};
+      let rightData = cl.data || {};
+      if (String(tr.type || "").toLowerCase() === "video") {
+        const speed = clamp(Number(cl.data?.speed ?? 1), 0.25, 4);
+        const sourceIn = Math.max(0, Number(cl.data?.source_in_s ?? 0));
+        const sourceSplit = sourceIn + (tSplit - cl.start_s) * speed;
+        leftData = { ...(cl.data || {}), source_out_s: sourceSplit };
+        rightData = { ...(cl.data || {}), source_in_s: sourceSplit };
+      }
+      const left = { ...cl, end_s: tSplit, data: leftData };
+      const right = {
+        ...cl,
+        id: `${String(tr.type)}_${Date.now()}`,
+        start_s: tSplit,
+        data: rightData,
+      };
       const nextTracks = tracks.map((t, i) => {
         if (i !== selected.trackIdx) return t;
         const nextClips = (t.clips || []).flatMap((c, j) =>
@@ -1611,9 +1786,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   // S = split, D = duplicate, Q = quantize, L = loop, arrows = grid navigation.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const el = document.activeElement as any;
-      const tag = String(el?.tagName || "").toUpperCase();
-      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      if (isTimelineInteractiveTarget(e.target) || isTimelineInteractiveTarget(document.activeElement)) {
+        return;
+      }
 
       if (e.ctrlKey || e.metaKey) {
         const key = e.key.toLowerCase();
@@ -1870,12 +2045,23 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (!tr || !cl || isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
     const start = clamp(Number(start_s) || 0, 0, Math.max(0, durationS - _minLen));
     const end = clamp(Number(end_s) || start + _minLen, start + _minLen, durationS);
+    let data = cl.data || {};
+    if (String(tr.type || "").toLowerCase() === "video") {
+      const speed = clamp(Number(data.speed ?? 1), 0.25, 4);
+      const sourceIn = Math.max(0, Number(data.source_in_s ?? 0) + (start - cl.start_s) * speed);
+      const sourceOut = Math.max(
+        sourceIn + _minLen,
+        Number(data.source_out_s ?? sourceIn + (cl.end_s - cl.start_s) * speed) +
+          (end - cl.end_s) * speed,
+      );
+      data = { ...data, source_in_s: sourceIn, source_out_s: sourceOut };
+    }
     const nextTracks = tracks.map((track, trackIdx) => {
       if (trackIdx !== selected.trackIdx) return track;
       return {
         ...track,
         clips: (track.clips || []).map((clip, clipIdx) =>
-          clipIdx === selected.clipIdx ? { ...clip, start_s: start, end_s: end } : clip,
+          clipIdx === selected.clipIdx ? { ...clip, start_s: start, end_s: end, data } : clip,
         ),
       };
     });
@@ -1945,16 +2131,6 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     seekTo(after ?? durationS);
   };
 
-  const generateProxy = () => {
-    if (!projectId) return;
-    const s = clamp(Number(proxyStart), 0, durationS);
-    const e = clamp(Number(proxyEnd), s + 0.05, durationS);
-    setProxyBusy(true);
-    setProxyUrl(
-      `${backendUrl}/v1/projects/${projectId}/preview/segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}&w=768&h=432&fps=${encodeURIComponent(String(proxyFps))}&force=1&v=${Date.now()}`,
-    );
-  };
-
   const playPause = () => {
     const a = audioRef.current;
     if (!a) return;
@@ -1970,11 +2146,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (
-      e.key === " " &&
-      (e.target as any)?.tagName !== "TEXTAREA" &&
-      (e.target as any)?.tagName !== "INPUT"
-    ) {
+    if (e.key === " " && !isTimelineInteractiveTarget(e.target)) {
       e.preventDefault();
       playPause();
     }
@@ -2056,12 +2228,52 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     : 0;
   const reactiveCueCount = Array.isArray(reactiveLabMeta?.cue_events) ? reactiveLabMeta.cue_events.length : 0;
   const reactiveSectionCount = Array.isArray(reactiveLabMeta?.sections) ? reactiveLabMeta.sections.length : 0;
+  const musicSections = (
+    Array.isArray(reactiveLabMeta?.sections)
+      ? reactiveLabMeta.sections
+      : Array.isArray(project?.meta?.analysis?.features?.sections)
+        ? project.meta.analysis.features.sections
+        : Array.isArray(plan?.variants?.[selectedVariant]?.scenes)
+          ? plan.variants[selectedVariant].scenes
+          : []
+  )
+    .map((section: AnyDict, index: number) => ({
+      id: String(section?.id || `section_${index}`),
+      start: Number(section?.start_s ?? section?.start ?? section?.time ?? 0),
+      end: Number(section?.end_s ?? section?.end ?? section?.start_s ?? section?.start ?? 0),
+      label: String(section?.label || section?.name || section?.section || `Section ${index + 1}`),
+    }))
+    .map((section: AnyDict, index: number, all: AnyDict[]) => ({
+      ...section,
+      end:
+        section.end > section.start
+          ? section.end
+          : Number(all[index + 1]?.start ?? Math.min(durationS, section.start + 4)),
+    }))
+    .filter((section: AnyDict) => Number.isFinite(section.start) && section.start < durationS);
+  const musicCues = (
+    Array.isArray(reactiveLabMeta?.cue_events)
+      ? reactiveLabMeta.cue_events
+      : Array.isArray(project?.meta?.analysis?.features?.cue_events)
+        ? project.meta.analysis.features.cue_events
+        : []
+  )
+    .map((cue: AnyDict, index: number) => ({
+      id: String(cue?.id || `cue_${index}`),
+      time: Number(cue?.time_s ?? cue?.t ?? cue?.time ?? cue?.start_s ?? 0),
+      label: String(cue?.label || cue?.name || cue?.type || `Cue ${index + 1}`),
+    }))
+    .filter((cue: AnyDict) => Number.isFinite(cue.time) && cue.time >= 0 && cue.time <= durationS);
   const densityConfig =
     timelineDensity === "compact"
       ? { rail: 196, lane: 54, wave: 92, clipTop: 9, clipHeight: 34, keyframeTop: 19 }
       : { rail: 220, lane: 64, wave: 106, clipTop: 12, clipHeight: 40, keyframeTop: 24 };
   const pickedSelection =
     selected?.kind === "track" ? selectedTrackClip(selected) : null;
+  const activeTimelineVideoPath =
+    pickedSelection && String(pickedSelection.tr.type || "").toLowerCase() === "video"
+      ? String(pickedSelection.cl.data?.source_path || "")
+      : selectedMediaPath;
   const selectionStatus =
     selected?.kind === "track" && pickedSelection
       ? `${pickedSelection.tr.name} clip`
@@ -2444,10 +2656,34 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             Drag clips to arrange, pull their edges to trim, and click empty lane space to park the playhead.
           </div>
         </div>
-        <div className="timeline-panelMeta">
-          <span className="badge">{tracks.length} tracks</span>
-          <span className="badge">{layers.length} overlays</span>
-          <span className="badge">{camKeyframes.length} camera keyframes</span>
+        <div className="timeline-panelTools">
+          <div className="timeline-viewControls" role="group" aria-label="Arrangement lane visibility">
+            <button
+              className={`secondary timeline-viewToggle${showReferenceLanes ? " is-active" : ""}`}
+              type="button"
+              aria-label={`${showReferenceLanes ? "Hide" : "Show"} reference lanes`}
+              aria-pressed={showReferenceLanes}
+              onClick={() => setShowReferenceLanes((visible) => !visible)}
+            >
+              <AudioLines size={14} aria-hidden="true" />
+              Reference
+            </button>
+            <button
+              className={`secondary timeline-viewToggle${showAutomationLanes ? " is-active" : ""}`}
+              type="button"
+              aria-label={`${showAutomationLanes ? "Hide" : "Show"} automation lanes`}
+              aria-pressed={showAutomationLanes}
+              onClick={() => setShowAutomationLanes((visible) => !visible)}
+            >
+              <Sparkles size={14} aria-hidden="true" />
+              Automation
+            </button>
+          </div>
+          <div className="timeline-panelMeta">
+            <span className="badge">{tracks.length} tracks</span>
+            <span className="badge">{layers.length} overlays</span>
+            <span className="badge">{camKeyframes.length} camera keyframes</span>
+          </div>
         </div>
       </div>
 
@@ -2463,16 +2699,31 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             </div>
           </div>
 
-          <div className="timeline-railCell timeline-railCell--wave">
-            <div className="timeline-trackIdentity">
-              <span className="timeline-trackNumber timeline-trackNumber--audio"><AudioLines size={14} aria-hidden="true" /></span>
-              <div>
-                <div className="timeline-railTitle">Audio master</div>
-                <div className="timeline-railMeta">Reference waveform</div>
+          {showReferenceLanes ? (
+            <>
+              <div className="timeline-railCell timeline-railCell--wave" aria-label="Audio master reference lane header">
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber timeline-trackNumber--audio"><AudioLines size={14} aria-hidden="true" /></span>
+                  <div>
+                    <div className="timeline-railTitle">Audio master</div>
+                    <div className="timeline-railMeta">Reference waveform</div>
+                  </div>
+                </div>
+                <span className="timeline-railState">REF</span>
               </div>
-            </div>
-            <span className="timeline-railState">REF</span>
-          </div>
+
+              <div className="timeline-railCell timeline-railCell--musicMap" aria-label="Music map reference lane header">
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber">M</span>
+                  <div className="timeline-trackCopy">
+                    <div className="timeline-railTitle">Music map</div>
+                    <div className="timeline-railMeta">{musicSections.length} sections · {musicCues.length} cues</div>
+                  </div>
+                </div>
+                <span className="timeline-railState">MAP</span>
+              </div>
+            </>
+          ) : null}
 
           {tracks.map((tr, trackIdx) => {
             const laneId = laneIdForTrack(tr, trackIdx);
@@ -2528,57 +2779,61 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             );
           })}
 
-          <div className={`timeline-railCell timeline-railCell--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`}>
-            <div className="timeline-trackIdentity">
-              <span className="timeline-trackNumber">{String(tracks.length + 1).padStart(2, "0")}</span>
-              <div className="timeline-trackCopy">
-                <div className="timeline-railTitle">Overlays</div>
-                <div className="timeline-railMeta">VISUAL · {layers.length} clips</div>
+          {showAutomationLanes ? (
+            <>
+              <div className={`timeline-railCell timeline-railCell--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`} aria-label="Overlays automation lane header">
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber">{String(tracks.length + 1).padStart(2, "0")}</span>
+                  <div className="timeline-trackCopy">
+                    <div className="timeline-railTitle">Overlays</div>
+                    <div className="timeline-railMeta">VISUAL · {layers.length} clips</div>
+                  </div>
+                </div>
+                <div className="timeline-railActions">
+                  <button
+                    className={`secondary timeline-trackButton${isLaneLocked("overlays") ? " is-active" : ""}`}
+                    type="button"
+                    aria-label={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays track`}
+                    title={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays editing`}
+                    onClick={() => toggleLaneLock("overlays")}
+                  >
+                    {isLaneLocked("overlays") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="timeline-railActions">
-              <button
-                className={`secondary timeline-trackButton${isLaneLocked("overlays") ? " is-active" : ""}`}
-                type="button"
-                aria-label={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays track`}
-                title={`${isLaneLocked("overlays") ? "Unlock" : "Lock"} Overlays editing`}
-                onClick={() => toggleLaneLock("overlays")}
-              >
-                {isLaneLocked("overlays") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
-              </button>
-            </div>
-          </div>
 
-          <div className={`timeline-railCell timeline-railCell--camera${isLaneLocked("camera") ? " is-locked" : ""}`}>
-            <div className="timeline-trackIdentity">
-              <span className="timeline-trackNumber">{String(tracks.length + 2).padStart(2, "0")}</span>
-              <div className="timeline-trackCopy">
-                <div className="timeline-railTitle">Camera</div>
-                <div className="timeline-railMeta">AUTOMATION · {camKeyframes.length} points</div>
+              <div className={`timeline-railCell timeline-railCell--camera${isLaneLocked("camera") ? " is-locked" : ""}`} aria-label="Camera automation lane header">
+                <div className="timeline-trackIdentity">
+                  <span className="timeline-trackNumber">{String(tracks.length + 2).padStart(2, "0")}</span>
+                  <div className="timeline-trackCopy">
+                    <div className="timeline-railTitle">Camera</div>
+                    <div className="timeline-railMeta">AUTOMATION · {camKeyframes.length} points</div>
+                  </div>
+                </div>
+                <div className="timeline-railActions">
+                  <button
+                    className="secondary timeline-trackButton"
+                    type="button"
+                    aria-label="Add camera keyframe"
+                    title="Add camera keyframe at playhead"
+                    disabled={isLaneLocked("camera")}
+                    onClick={addCameraKeyframe}
+                  >
+                    <Plus size={14} aria-hidden="true" />
+                  </button>
+                  <button
+                    className={`secondary timeline-trackButton${isLaneLocked("camera") ? " is-active" : ""}`}
+                    type="button"
+                    aria-label={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera track`}
+                    title={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera editing`}
+                    onClick={() => toggleLaneLock("camera")}
+                  >
+                    {isLaneLocked("camera") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="timeline-railActions">
-              <button
-                className="secondary timeline-trackButton"
-                type="button"
-                aria-label="Add camera keyframe"
-                title="Add camera keyframe at playhead"
-                disabled={isLaneLocked("camera")}
-                onClick={addCameraKeyframe}
-              >
-                <Plus size={14} aria-hidden="true" />
-              </button>
-              <button
-                className={`secondary timeline-trackButton${isLaneLocked("camera") ? " is-active" : ""}`}
-                type="button"
-                aria-label={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera track`}
-                title={`${isLaneLocked("camera") ? "Unlock" : "Lock"} Camera editing`}
-                onClick={() => toggleLaneLock("camera")}
-              >
-                {isLaneLocked("camera") ? <Lock size={14} aria-hidden="true" /> : <Unlock size={14} aria-hidden="true" />}
-              </button>
-            </div>
-          </div>
+            </>
+          ) : null}
         </div>
 
         <div
@@ -2623,14 +2878,45 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               )}
             </div>
 
-            <div className="timeline-waveformRow" onClick={onWaveformClick}>
-              <canvas
-                ref={canvasRef}
-                width={timelineCanvasWidth}
-                height={92}
-                className="timeline-waveformCanvas"
-              />
-            </div>
+            {showReferenceLanes ? (
+              <>
+                <div className="timeline-waveformRow" onClick={onWaveformClick} aria-label="Audio master reference lane">
+                  <canvas
+                    ref={canvasRef}
+                    width={timelineCanvasWidth}
+                    height={92}
+                    className="timeline-waveformCanvas"
+                  />
+                </div>
+
+                <div className="timeline-laneRow timeline-laneRow--musicMap" onPointerDown={onLanePointerDown} aria-label="Music map reference lane">
+                  {musicSections.map((section: AnyDict) => (
+                    <div
+                      key={section.id}
+                      className="timeline-musicSection"
+                      style={{
+                        left: clipPx(clamp(section.start, 0, durationS)),
+                        width: Math.max(18, clipPx(clamp(section.end, section.start, durationS)) - clipPx(section.start)),
+                      }}
+                      title={`${section.label}: ${fmtTime(section.start)}–${fmtTime(section.end)}`}
+                    >
+                      {section.label}
+                    </div>
+                  ))}
+                  {musicCues.map((cue: AnyDict) => (
+                    <div
+                      key={cue.id}
+                      className="timeline-musicCue"
+                      style={{ left: clipPx(cue.time) }}
+                      title={`${cue.label}: ${fmtTime(cue.time)}`}
+                      aria-label={`${cue.label} at ${fmtTime(cue.time)}`}
+                    >
+                      <span>{cue.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
 
             {tracks.map((tr, trackIdx) => (
               <div
@@ -2650,6 +2936,19 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                       key={cl.id || i}
                       className={`timeline-laneClip timeline-laneClip--${String(tr.type).toLowerCase()}${isSel ? " is-selected" : ""}${isLaneLocked(laneIdForTrack(tr, trackIdx)) ? " is-locked" : ""}`}
                       onPointerDown={onTrackClipPointerDown(trackIdx, i, "move")}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isSel}
+                      aria-label={`${tr.name} clip, ${fmtLabel(tr.type, cl)}, ${fmtTime(cl.start_s)} to ${fmtTime(cl.end_s)}`}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setSelected({ kind: "track", trackIdx, clipIdx: i });
+                          setDiffStart(cl.start_s);
+                          setDiffEnd(cl.end_s);
+                        }
+                      }}
                       style={{ left, width }}
                       title={fmtLabel(tr.type, cl)}
                     >
@@ -2671,7 +2970,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               </div>
             ))}
 
-            <div className={`timeline-laneRow timeline-laneRow--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown}>
+            {showAutomationLanes ? (
+              <>
+                <div className={`timeline-laneRow timeline-laneRow--overlay${isLaneLocked("overlays") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown} aria-label="Overlays automation lane">
               {layers.map((l, i) => {
                 const s = Number(l.start_s ?? 0);
                 const e = Number(l.end_s ?? durationS);
@@ -2708,9 +3009,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   </div>
                 );
               })}
-            </div>
+                </div>
 
-            <div className={`timeline-laneRow timeline-laneRow--camera${isLaneLocked("camera") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown}>
+                <div className={`timeline-laneRow timeline-laneRow--camera${isLaneLocked("camera") ? " is-locked" : ""}`} onPointerDown={onLanePointerDown} aria-label="Camera automation lane">
               {camKeyframes.map((k, i) => {
                 const x = clipPx(Number(k.t || 0));
                 const isSel = selected?.kind === "camera" && selected.kfIdx === i;
@@ -2725,7 +3026,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                   />
                 );
               })}
-            </div>
+                </div>
+              </>
+            ) : null}
             <div className="timeline-globalPlayhead" style={{ left: clipPx(playheadS) }} aria-hidden="true">
               <span />
             </div>
@@ -2952,6 +3255,88 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                     </>
                   );
                 })()
+              ) : tt === "video" ? (
+                <>
+                  <div className="small timeline-inspectorHint">
+                    The original output is never changed. These source, speed, audio, and fade values are stored as edit decisions.
+                  </div>
+                  <div className="timeline-fieldGrid timeline-fieldGrid--compact">
+                    <label className="small">Source in</label>
+                    <input
+                      aria-label="Video source in"
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      disabled={selectedLaneLocked}
+                      value={Number(cl.data?.source_in_s ?? 0)}
+                      onChange={(e) => updateSelectedClipData({ source_in_s: Math.max(0, Number(e.target.value)) }, "trim_video_source")}
+                    />
+                    <label className="small">Source out</label>
+                    <input
+                      aria-label="Video source out"
+                      type="number"
+                      min={0.1}
+                      step={0.01}
+                      disabled={selectedLaneLocked}
+                      value={Number(cl.data?.source_out_s ?? cl.end_s - cl.start_s)}
+                      onChange={(e) => updateSelectedClipData({ source_out_s: Math.max(0.1, Number(e.target.value)) }, "trim_video_source")}
+                    />
+                    <label className="small">Speed</label>
+                    <input
+                      aria-label="Video speed"
+                      type="number"
+                      min={0.25}
+                      max={4}
+                      step={0.05}
+                      disabled={selectedLaneLocked}
+                      value={Number(cl.data?.speed ?? 1)}
+                      onChange={(e) => updateSelectedClipData({ speed: clamp(Number(e.target.value), 0.25, 4) }, "change_video_speed")}
+                    />
+                    <label className="small">Volume</label>
+                    <input
+                      aria-label="Video volume"
+                      type="number"
+                      min={0}
+                      max={2}
+                      step={0.05}
+                      disabled={selectedLaneLocked || Boolean(cl.data?.muted)}
+                      value={Number(cl.data?.volume ?? 1)}
+                      onChange={(e) => updateSelectedClipData({ volume: clamp(Number(e.target.value), 0, 2) }, "change_video_volume")}
+                    />
+                    <label className="small">Fade in</label>
+                    <input
+                      aria-label="Video fade in"
+                      type="number"
+                      min={0}
+                      step={0.05}
+                      disabled={selectedLaneLocked}
+                      value={Number(cl.data?.fade_in_s ?? 0)}
+                      onChange={(e) => updateSelectedClipData({ fade_in_s: Math.max(0, Number(e.target.value)) }, "change_video_fade")}
+                    />
+                    <label className="small">Fade out</label>
+                    <input
+                      aria-label="Video fade out"
+                      type="number"
+                      min={0}
+                      step={0.05}
+                      disabled={selectedLaneLocked}
+                      value={Number(cl.data?.fade_out_s ?? 0)}
+                      onChange={(e) => updateSelectedClipData({ fade_out_s: Math.max(0, Number(e.target.value)) }, "change_video_fade")}
+                    />
+                  </div>
+                  <label className="timeline-checkRow">
+                    <input
+                      type="checkbox"
+                      disabled={selectedLaneLocked}
+                      checked={Boolean(cl.data?.muted)}
+                      onChange={(e) => updateSelectedClipData({ muted: e.target.checked }, "mute_video_clip")}
+                    />
+                    Mute source audio
+                  </label>
+                  <div className="small timeline-inspectorMeta">
+                    Source: {String(cl.data?.source_path || "Missing source")}
+                  </div>
+                </>
               ) : (
                 <div className="small timeline-emptyState">Unsupported track type.</div>
               )}
@@ -3069,12 +3454,27 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       <div className="timeline-panelHeader">
         <div>
           <div className="timeline-panelTitle">Program Monitor</div>
-          <div className="small">Cached frame preview for scrubbing and timing checks.</div>
+          <div className="small">
+            {activeTimelineVideoPath
+              ? "Source monitor for the selected non-destructive video edit."
+              : "Model/timeline frame preview for scrubbing and timing checks."}
+          </div>
         </div>
         <span className="badge">Frame</span>
       </div>
       <div className="timeline-monitor">
-        {previewUrl ? (
+        {activeTimelineVideoPath && projectId ? (
+          <video
+            key={activeTimelineVideoPath}
+            src={buildProjectFileUrl(backendUrl, projectId, activeTimelineVideoPath)}
+            controls
+            className="timeline-monitorVideo"
+            onLoadedMetadata={(event) => {
+              const value = Number(event.currentTarget.duration || 0);
+              if (Number.isFinite(value) && value > 0) setSelectedMediaDuration(value);
+            }}
+          />
+        ) : previewUrl ? (
           <img src={previewUrl} className="timeline-monitorImage" />
         ) : (
           <div className="small">No preview.</div>
@@ -3083,16 +3483,31 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     </div>
   );
 
-  const handoffsPanel = (
+  const orchestratorPanel = (
     <div className="timeline-dockPanel">
       <div className="timeline-panelHeader">
         <div>
-          <div className="timeline-panelTitle">Session Handoffs</div>
+          <div className="timeline-panelTitle">Render Orchestrator</div>
           <div className="small">
-            Planner and Reactive Lab sync status stays visible here while you arrange the track.
+            The current plan, downloaded preview models, and session handoffs stay visible while you edit.
           </div>
         </div>
-        <span className="badge">{handoffReadyCount}/2 ready</span>
+        <span className="badge">
+          {Array.isArray(conductorPlan?.sections) ? `${conductorPlan.sections.length} routed scenes` : "Plan not routed"}
+        </span>
+      </div>
+      <div className="timeline-handoffCard">
+        <div className="timeline-handoffLabel">Downloaded model preview</div>
+        <strong>
+          {installedPreviewModels.length
+            ? `${installedPreviewModels.length} compatible model${installedPreviewModels.length === 1 ? "" : "s"} ready`
+            : "No compatible internal still model installed"}
+        </strong>
+        <div className="small">
+          {installedPreviewModels.length
+            ? installedPreviewModels.map((model) => model.name).join(" • ")
+            : "Look Dev will stop with a clear model-readiness error; it never substitutes a synthetic proxy."}
+        </div>
       </div>
       <div className="timeline-handoffGrid">
         <div className="timeline-handoffCard">
@@ -3123,6 +3538,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         <button className="secondary" onClick={() => setDockSection("inspector")}>
           Open inspector
         </button>
+        <button className="secondary" onClick={() => onNavigate?.("models")}>
+          Manage models
+        </button>
         <button className="secondary" onClick={() => clearHandoff()} disabled={!lastHandoff}>
           Clear notice
         </button>
@@ -3130,66 +3548,94 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     </div>
   );
 
-  const proxyPanel = (
+  const mediaPanel = (
     <div className="timeline-dockPanel">
       <div className="timeline-panelHeader">
         <div>
-          <div className="timeline-panelTitle">Proxy Preview</div>
-          <div className="small">Low-resolution timing clip for the selected range.</div>
+          <div className="timeline-panelTitle">Media &amp; Edit Master</div>
+          <div className="small">
+            Add completed renders to the Video Edit lane, trim them non-destructively, then render a new master.
+          </div>
         </div>
-        <span className="badge">Cached MP4</span>
+        <span className="badge">{mediaLibrary.length} videos</span>
+      </div>
+
+      {mediaLibraryBusy ? (
+        <ProgressBar value={54} label="Refreshing output media" compact />
+      ) : mediaLibrary.length ? (
+        <div className="timeline-mediaLibrary" aria-label="Project output videos">
+          {mediaLibrary.slice(0, 12).map((entry) => {
+            const path = String(entry?.path || "");
+            const selectedSource = selectedMediaPath === path;
+            return (
+              <div key={path} className={`timeline-mediaItem${selectedSource ? " is-selected" : ""}`}>
+                <button
+                  type="button"
+                  className="timeline-mediaSelect"
+                  aria-pressed={selectedSource}
+                  onClick={() => {
+                    setSelectedMediaPath(path);
+                    setSelectedMediaDuration(Number(entry?.duration_s || entry?.metadata?.duration_s || 5));
+                  }}
+                >
+                  <span>{String(entry?.name || path)}</span>
+                  <span className="small">{String(entry?.kind || "video")}</span>
+                </button>
+                <button type="button" className="secondary" onClick={() => addMediaClip(entry)}>
+                  Add at playhead
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="small timeline-emptyState">
+          No completed output video is available yet. Render with a downloaded model, then refresh this library.
+        </div>
+      )}
+
+      <div className="timeline-inlineActions">
+        <button className="secondary" type="button" onClick={() => void refreshTimelineResources(projectId)} disabled={!projectId || mediaLibraryBusy}>
+          Refresh media
+        </button>
+        <button className="secondary" type="button" onClick={() => onNavigate?.("outputs")}>
+          Open Outputs
+        </button>
+      </div>
+
+      <div className="timeline-panelHeader timeline-editMasterHeader">
+        <div>
+          <div className="timeline-panelTitle">Edited master</div>
+          <div className="small">Real FFmpeg export from the saved Video Edit decisions. Source files stay untouched.</div>
+        </div>
       </div>
       <div className="timeline-fieldGrid timeline-fieldGrid--compact">
-        <label className="small">start</label>
-        <input
-          type="number"
-          step={0.1}
-          value={proxyStart}
-          onChange={(e) => setProxyStart(Number(e.target.value))}
-        />
-        <label className="small">end</label>
-        <input
-          type="number"
-          step={0.1}
-          value={proxyEnd}
-          onChange={(e) => setProxyEnd(Number(e.target.value))}
-        />
-        <label className="small">fps</label>
-        <input
-          type="number"
-          step={1}
-          value={proxyFps}
-          onChange={(e) => setProxyFps(Number(e.target.value))}
-        />
+        <label className="small">Width</label>
+        <input type="number" min={256} max={7680} step={2} value={editWidth} onChange={(e) => setEditWidth(Number(e.target.value))} />
+        <label className="small">Height</label>
+        <input type="number" min={256} max={4320} step={2} value={editHeight} onChange={(e) => setEditHeight(Number(e.target.value))} />
+        <label className="small">FPS</label>
+        <select value={editFps} onChange={(e) => setEditFps(Number(e.target.value))}>
+          {[23.976, 24, 25, 29.97, 30, 50, 60].map((value) => <option key={value} value={value}>{value}</option>)}
+        </select>
+        <label className="small">Codec</label>
+        <select value={editVideoCodec} onChange={(e) => setEditVideoCodec(e.target.value)}>
+          <option value="h264">H.264 delivery</option>
+          <option value="hevc">H.265 / HEVC</option>
+          <option value="prores">ProRes editing master</option>
+        </select>
       </div>
       <div className="timeline-inlineActions">
-        <button className="primary" onClick={generateProxy}>
-          Generate
+        <button className="primary" type="button" disabled={!projectId || mediaRenderBusy} onClick={() => void renderEditedTimeline()}>
+          {mediaRenderBusy ? "Queueing edit…" : "Render edited master"}
         </button>
-        <button className="secondary" onClick={() => { setProxyUrl(""); setProxyBusy(false); }}>
-          Clear
+        <button className="secondary" type="button" onClick={() => onNavigate?.("renderQueue")}>
+          Render Queue
         </button>
       </div>
-      {proxyBusy ? (
-        <ProgressBar
-          value={68}
-          label="Generating proxy"
-          detail="Waiting for the preview clip to finish writing."
-          compact
-        />
-      ) : null}
-      <div className="timeline-monitor timeline-monitor--video">
-        {proxyUrl ? (
-          <video
-            src={proxyUrl}
-            controls
-            className="timeline-monitorVideo"
-            onLoadedData={() => setProxyBusy(false)}
-            onError={() => setProxyBusy(false)}
-          />
-        ) : (
-          <div className="small">No proxy clip generated.</div>
-        )}
+      {mediaRenderStatus ? <div className="small timeline-inspectorHint">{mediaRenderStatus}</div> : null}
+      <div className="small timeline-inspectorHint">
+        Synthetic proxy generation has been removed. Look Dev uses downloaded models; video editing uses the original rendered outputs.
       </div>
     </div>
   );
@@ -3198,12 +3644,12 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     <div className="timeline-dockPanel">
       <div className="timeline-panelHeader">
         <div>
-          <div className="timeline-panelTitle">Diffusion Preview</div>
+          <div className="timeline-panelTitle">Downloaded Model Look Dev</div>
           <div className="small">
-            Look-dev segment using the internal SD path without leaving the timeline.
+            Render a short example through an installed internal model without leaving the timeline.
           </div>
         </div>
-        <span className="badge">Look Dev</span>
+        <span className="badge">{installedPreviewModels.length} ready</span>
       </div>
       <div className="timeline-inlineActions">
         <button className="secondary" disabled={!selected} onClick={setDiffRangeFromSelection}>
@@ -3269,17 +3715,21 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         />
         <label className="small">model</label>
         <select value={diffModel} onChange={(e) => setDiffModel(e.target.value)}>
-          <option value="auto">auto</option>
-          <option value="hf_sd15_internal">sd15</option>
-          <option value="hf_sdxl_internal">sdxl</option>
+          <option value="auto">Auto-select downloaded model</option>
+          {installedPreviewModels.map((model) => (
+            <option key={model.id} value={model.id}>{model.name}</option>
+          ))}
         </select>
       </div>
       <div className="timeline-inlineActions">
-        <button className="primary" onClick={generateDiffusionPreview}>
+        <button className="primary" disabled={!installedPreviewModels.length} onClick={generateDiffusionPreview}>
           Generate
         </button>
         <button className="secondary" onClick={() => { setDiffUrl(""); setDiffBusy(false); }}>
           Clear
+        </button>
+        <button className="secondary" onClick={() => onNavigate?.("models")}>
+          Manage models
         </button>
       </div>
       {diffBusy ? (
@@ -3300,7 +3750,11 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
             onError={() => setDiffBusy(false)}
           />
         ) : (
-          <div className="small">No diffusion preview generated.</div>
+          <div className="small">
+            {installedPreviewModels.length
+              ? "No model preview generated."
+              : "Install an internal SD model in Models to enable Look Dev."}
+          </div>
         )}
       </div>
     </div>
@@ -3488,9 +3942,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const dockTabs: Array<{ id: DockSection; label: string; meta: string }> = [
     {
-      id: "handoffs",
-      label: "Handoffs",
-      meta: `${handoffReadyCount}/2`,
+      id: "orchestrator",
+      label: "Orchestrator",
+      meta: conductorPlan ? "planned" : `${handoffReadyCount}/2`,
     },
     {
       id: "inspector",
@@ -3498,9 +3952,9 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       meta: selected ? selectionStatus : "idle",
     },
     {
-      id: "proxy",
-      label: "Proxy",
-      meta: proxyUrl ? "ready" : "draft",
+      id: "media",
+      label: "Media",
+      meta: `${mediaLibrary.length}`,
     },
     {
       id: "diffusion",
@@ -3519,10 +3973,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   ];
 
   const activeDockPanel =
-    dockSection === "handoffs"
-      ? handoffsPanel
-      : dockSection === "proxy"
-      ? proxyPanel
+    dockSection === "orchestrator"
+      ? orchestratorPanel
+      : dockSection === "media"
+      ? mediaPanel
       : dockSection === "diffusion"
         ? diffusionPanel
         : dockSection === "curves" && motionCurvesPanel
@@ -3530,7 +3984,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           : inspectorPanel;
 
   return (
-    <div className="timeline-page" onKeyDown={onKeyDown} tabIndex={0} style={{ outline: "none" }}>
+    <div className="timeline-page" onKeyDown={onKeyDown} tabIndex={0}>
       {pageHeader}
       {recoveryNotice ? (
         <div className="card timeline-sessionCard timeline-sessionCard--accent" style={{ marginBottom: 12 }}>
@@ -3583,7 +4037,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           <div className="guide-grid">
             <section className="guide-block">
               <div className="guide-kicker">What this view does</div>
-              <p>Timeline is the full arrangement editor for the saved Studio plan. It combines prompt clips, motion clips, overlays, camera moves, and look-development tools in one horizontal workspace.</p>
+              <p>Timeline is the full arrangement and non-destructive video editor for the saved Studio plan. It combines output media, prompt clips, motion clips, overlays, camera moves, and model look-development in one horizontal workspace.</p>
             </section>
             <section className="guide-block">
               <div className="guide-kicker">Capabilities</div>
@@ -3591,15 +4045,16 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 <li>Play audio, move the playhead, switch variants, and review timing against the active soundtrack.</li>
                 <li>Zoom with buttons, slider, numeric entry, Fit all, or Ctrl/Cmd plus mouse wheel.</li>
                 <li>Switch density between compact and comfortable depending on how many tracks or keyframes you need to see.</li>
-                <li>Use the dock for handoffs, inspector, proxy renders, look-dev, and motion-curve editing without removing advanced controls.</li>
+                <li>Use the dock for orchestration, clip inspection, output media, downloaded-model look-dev, and motion-curve editing without removing advanced controls.</li>
+                <li>Add completed renders to the Video Edit lane, split and trim them, change speed/audio/fades, then render a new master while preserving the original files.</li>
               </ul>
             </section>
             <section className="guide-block">
               <div className="guide-kicker">Recommended flow</div>
               <ul className="guide-list">
                 <li>Start in Fit all mode to see the whole arrangement, then zoom into dense sections for clip or keyframe edits.</li>
-                <li>Check the Handoffs tab before editing so planner and reactive sync state is visible without leaving Timeline.</li>
-                <li>Keep the inspector open for clip-level adjustments, and switch to proxy or look-dev when you need validation renders.</li>
+                <li>Check the Orchestrator tab before editing so planner, reactive, model, and route state is visible without leaving Timeline.</li>
+                <li>Keep the inspector open for clip-level adjustments; use Look Dev for a real model example and Media for pre/post-render video finishing.</li>
                 <li>Use Timeline after Workspace or Storyboard when the plan is ready for precise arrangement and finishing decisions.</li>
               </ul>
             </section>

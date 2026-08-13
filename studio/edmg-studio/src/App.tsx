@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import Sidebar from "./components/Sidebar";
+import { StudioCommandPalette } from "./components/StudioCommandPalette";
 import {
   BACKEND_URL_CHANGED_EVENT,
   apiGet,
@@ -67,6 +68,19 @@ export default function App() {
   const [config, setConfig] = useState<any>(null);
   const [backendConfigError, setBackendConfigError] = useState<string>("");
   const [setupChecked, setSetupChecked] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleCommandShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        setCommandPaletteOpen((current) => !current);
+      }
+    };
+    window.addEventListener("keydown", handleCommandShortcut);
+    return () => window.removeEventListener("keydown", handleCommandShortcut);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -163,7 +177,7 @@ export default function App() {
   if (!backendUrl) {
     return (
       <div className="app-shell">
-        <Sidebar page={page} onNavigate={setPage} />
+        <Sidebar page={page} onNavigate={setPage} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
         <div className="main">
           <div className="card">
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Connecting to Studio backend</div>
@@ -202,7 +216,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar page={page} onNavigate={setPage} />
+      <Sidebar page={page} onNavigate={setPage} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
       <div className={mainClassName}>
         {backendConfigError ? (
           <div className="card" style={{ marginBottom: 14, borderColor: "var(--warning, #b58900)" }}>
@@ -219,6 +233,12 @@ export default function App() {
           {content}
         </Suspense>
       </div>
+      <StudioCommandPalette
+        open={commandPaletteOpen}
+        activePage={page}
+        onClose={() => setCommandPaletteOpen(false)}
+        onNavigate={setPage}
+      />
     </div>
   );
 }

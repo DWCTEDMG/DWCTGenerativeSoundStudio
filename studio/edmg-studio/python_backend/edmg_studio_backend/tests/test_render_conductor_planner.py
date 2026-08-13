@@ -1,12 +1,32 @@
 from __future__ import annotations
 
-from edmg_studio_backend.render_conductor.planner import build_advisory_render_plan
+import pytest
+
+from edmg_studio_backend.render_conductor.planner import (
+    NoRealRenderRouteError,
+    build_advisory_render_plan,
+)
 from edmg_studio_backend.schemas import (
     EngineOutcomeMemory,
+    PerformerWorkflowRunRequest,
     ProjectSnapshot,
     ProjectVisualDNA,
+    RenderConductorPlanRequest,
     RenderIntent,
 )
+
+
+def test_new_workflow_defaults_only_allow_real_render_routes():
+    intent = RenderIntent(project_id="proj-defaults")
+    request = RenderConductorPlanRequest()
+    performer = PerformerWorkflowRunRequest()
+
+    assert "proxy" not in intent.allowed_engines
+    assert "proxy" not in request.allowed_engines
+    assert "tensorrt_standalone" in intent.allowed_engines
+    assert "tensorrt_standalone" in request.allowed_engines
+    assert performer.provider == "auto"
+    assert performer.allow_mock_fallback is False
 
 
 def test_advisory_render_plan_routes_by_scene_profile_and_dna_bias():
@@ -77,7 +97,6 @@ def test_advisory_render_plan_routes_by_scene_profile_and_dna_bias():
             "comfyui_motion": {"available": True, "quality_score": 0.82, "speed_score": 0.62},
             "comfyui_still": {"available": True, "quality_score": 0.88, "speed_score": 0.4},
             "hosted_video": {"available": False},
-            "proxy": {"available": True},
             "deforum_export": {"available": False},
         }
     }
@@ -101,7 +120,7 @@ def test_advisory_render_plan_routes_by_scene_profile_and_dna_bias():
     assert all(task.cache_key for task in plan.tasks)
 
 
-def test_advisory_render_plan_falls_back_to_proxy_when_only_proxy_is_available():
+def test_advisory_render_plan_rejects_when_only_proxy_is_available():
     snapshot = ProjectSnapshot(
         project_id="proj-789",
         plan={
@@ -119,7 +138,47 @@ def test_advisory_render_plan_falls_back_to_proxy_when_only_proxy_is_available()
             ]
         },
     )
-    intent = RenderIntent(project_id="proj-789", variant_index=0)
+    intent = RenderIntent(project_id="proj-789", variant_index=0, allowed_engines=["proxy"])
+
+    with pytest.raises(NoRealRenderRouteError) as exc_info:
+        build_advisory_render_plan(
+            intent,
+            snapshot,
+            environment={
+                "engines": {
+                    "proxy": {"available": True},
+                }
+            },
+        )
+
+    assert "No real render route is available" in str(exc_info.value)
+    assert "requested_engines=proxy" in exc_info.value.diagnostics
+    assert "available_genuine_engines=none" in exc_info.value.diagnostics
+
+
+def test_advisory_render_plan_selects_available_tensorrt_runtime():
+    snapshot = ProjectSnapshot(
+        project_id="proj-trt",
+        plan={
+            "variants": [
+                {
+                    "scenes": [
+                        {
+                            "id": "scene-1",
+                            "start_s": 0.0,
+                            "end_s": 3.0,
+                            "prompt": "short test scene",
+                        }
+                    ]
+                }
+            ]
+        },
+    )
+    intent = RenderIntent(
+        project_id="proj-trt",
+        variant_index=0,
+        allowed_engines=["internal", "tensorrt_standalone"],
+    )
 
     plan = build_advisory_render_plan(
         intent,
@@ -127,16 +186,15 @@ def test_advisory_render_plan_falls_back_to_proxy_when_only_proxy_is_available()
         environment={
             "engines": {
                 "internal": {"available": False},
-                "comfyui_still": {"available": False},
-                "comfyui_motion": {"available": False},
-                "hosted_video": {"available": False},
+                "tensorrt_standalone": {
+                    "available": True,
+                    "quality_score": 0.95,
+                    "speed_score": 0.95,
+                },
                 "proxy": {"available": True},
-                "deforum_export": {"available": False},
             }
         },
     )
 
-    assert len(plan.sections) == 1
-    assert plan.sections[0].engine == "proxy"
-    assert plan.fallback_branches[0].reroute_to == "proxy"
-    assert plan.assembly.expected_output_path.endswith(".mp4")
+    assert plan.sections[0].engine == "tensorrt_standalone"
+    assert all(branch.reroute_to != "proxy" for branch in plan.fallback_branches)

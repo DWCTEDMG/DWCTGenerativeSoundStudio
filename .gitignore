@@ -91,6 +91,7 @@ studio/edmg-studio/models/
 studio/edmg-studio/python_backend/models/
 studio/edmg-studio/python_backend/temp_pytest/
 studio/edmg-studio/python_backend/.pytest-tmp/
+winui-pytest-temp-*/
 studio/edmg-studio/cache/
 studio/edmg-studio/logs/
 studio/edmg-studio/output/

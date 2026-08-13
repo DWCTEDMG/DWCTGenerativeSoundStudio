@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.MigrationPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid MaxWidth="920" Padding="24">
+        <StackPanel VerticalAlignment="Center" Spacing="14">
+            <SymbolIcon Symbol="Repair" />
+            <TextBlock x:Name="PageTitle" HorizontalAlignment="Center" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource PageTitleStyle}" Text="Native surface in progress" />
+            <TextBlock
+                x:Name="PageDescription"
+                HorizontalAlignment="Center"
+                MaxWidth="680"
+                Foreground="{ThemeResource StudioMutedTextBrush}"
+                Text="This destination is represented in the native shell and will be migrated after the complete create, audio, analysis, and planning workflow."
+                TextAlignment="Center"
+                TextWrapping="Wrap" />
+            <InfoBar
+                IsIconVisible="True"
+                IsOpen="True"
+                IsClosable="False"
+                Message="The existing Electron client remains untouched, so no production workflow is removed while this XAML surface is built."
+                Severity="Informational"
+                Title="Parallel migration" />
+            <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                <Button Click="OpenWorkspace_Click" Content="Open Workspace" Style="{StaticResource AccentButtonStyle}" />
+                <Button Click="OpenDashboard_Click" Content="Back to Dashboard" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</Page>

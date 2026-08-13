@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.DashboardPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    NavigationCacheMode="Required"
+    mc:Ignorable="d">
+
+    <ScrollViewer>
+        <Grid MaxWidth="{StaticResource StudioPageMaxWidth}" Padding="24" RowSpacing="18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="5">
+                    <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource PageTitleStyle}" Text="Dashboard" />
+                    <TextBlock
+                        Style="{StaticResource PageSubtitleStyle}"
+                        Text="Native Studio status, session continuity, and the fastest path into production." />
+                </StackPanel>
+                <CommandBar Grid.Column="1" Background="Transparent" DefaultLabelPosition="Right">
+                    <AppBarButton
+                        AutomationProperties.Name="Refresh dashboard"
+                        Click="Refresh_Click"
+                        Icon="Refresh"
+                        Label="Refresh" />
+                </CommandBar>
+            </Grid>
+
+            <InfoBar
+                x:Name="DashboardInfoBar"
+                Grid.Row="1"
+                IsOpen="False"
+                IsClosable="True" />
+
+            <Grid x:Name="SummaryGrid" Grid.Row="2" ColumnSpacing="14" RowSpacing="14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border
+                    x:Name="BackendCard"
+                    Padding="20"
+                    Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Backend" />
+                        <TextBlock x:Name="BackendStateValue" FontWeight="SemiBold" Text="Checking…" />
+                        <TextBlock
+                            x:Name="BackendAddressValue"
+                            Foreground="{ThemeResource StudioMutedTextBrush}"
+                            TextWrapping="Wrap" />
+                        <TextBlock x:Name="BackendVersionValue" Text="Version: loading" />
+                        <ProgressRing
+                            x:Name="DashboardProgress"
+                            Width="24"
+                            Height="24"
+                            HorizontalAlignment="Left"
+                            AutomationProperties.Name="Loading dashboard status"
+                            IsActive="False" />
+                    </StackPanel>
+                </Border>
+
+                <Border
+                    x:Name="ProjectsCard"
+                    Grid.Column="1"
+                    Padding="20"
+                    Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Projects" />
+                        <TextBlock x:Name="ProjectCountValue" FontSize="26" FontWeight="SemiBold" Text="—" />
+                        <TextBlock x:Name="ActiveProjectValue" Text="Active project: none" TextWrapping="Wrap" />
+                        <Button
+                            HorizontalAlignment="Left"
+                            AutomationProperties.Name="Open project library"
+                            Click="OpenProjects_Click"
+                            Content="Open project library" />
+                    </StackPanel>
+                </Border>
+
+                <Border
+                    x:Name="RuntimeCard"
+                    Grid.Row="1"
+                    Padding="20"
+                    Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Runtime configuration" />
+                        <TextBlock x:Name="BackendModeValue" Text="Mode: loading" />
+                        <TextBlock x:Name="StorageHomeValue" Text="Storage: loading" TextWrapping="Wrap" />
+                        <TextBlock x:Name="ConfigValue" Foreground="{ThemeResource StudioMutedTextBrush}" Text="Configuration: loading" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border
+                    x:Name="WorkflowCard"
+                    Grid.Row="1"
+                    Grid.Column="1"
+                    Padding="20"
+                    Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Core workflow" />
+                        <TextBlock Text="1. Create or select a project" />
+                        <TextBlock Text="2. Choose and upload audio" />
+                        <TextBlock Text="3. Analyze rhythm and transcription" />
+                        <TextBlock Text="4. Generate plan variants" />
+                        <TextBlock Text="5. Continue to Timeline and Render" />
+                        <Button
+                            HorizontalAlignment="Left"
+                            AutomationProperties.Name="Continue to Workspace"
+                            Click="OpenWorkspace_Click"
+                            Content="Continue to Workspace"
+                            Style="{StaticResource AccentButtonStyle}" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <TextBlock
+                Grid.Row="3"
+                Foreground="{ThemeResource StudioMutedTextBrush}"
+                Text="The Python AI, audio, and render pipeline remains unchanged behind this native Windows interface."
+                TextWrapping="Wrap" />
+
+            <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup>
+                    <VisualState x:Name="Narrow">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="0" />
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="ProjectsCard.(Grid.Column)" Value="0" />
+                            <Setter Target="ProjectsCard.(Grid.Row)" Value="1" />
+                            <Setter Target="RuntimeCard.(Grid.Row)" Value="2" />
+                            <Setter Target="WorkflowCard.(Grid.Column)" Value="0" />
+                            <Setter Target="WorkflowCard.(Grid.Row)" Value="3" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Wide">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="900" />
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="ProjectsCard.(Grid.Column)" Value="1" />
+                            <Setter Target="ProjectsCard.(Grid.Row)" Value="0" />
+                            <Setter Target="RuntimeCard.(Grid.Row)" Value="1" />
+                            <Setter Target="WorkflowCard.(Grid.Column)" Value="1" />
+                            <Setter Target="WorkflowCard.(Grid.Row)" Value="1" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+        </Grid>
+    </ScrollViewer>
+</Page>

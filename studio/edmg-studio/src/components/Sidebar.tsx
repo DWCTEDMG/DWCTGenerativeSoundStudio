@@ -1,76 +1,13 @@
 import React, { useState } from "react";
-import { isStudioForgeEnabled } from "../features";
-import { preloadNavigationIntent, type Page } from "../pageRouting";
+import { Search } from "lucide-react";
+import {
+  getStudioNavigationGroups,
+  preloadNavigationIntent,
+  type Page,
+  type StudioNavigationGroupId,
+} from "../pageRouting";
 
-type NavGroupId = "flow" | "delivery" | "labs" | "system";
-
-type NavItem = {
-  page: Page;
-  label: string;
-  hint: string;
-};
-
-type NavGroup = {
-  id: NavGroupId;
-  label: string;
-  hint: string;
-  items: NavItem[];
-};
-
-function getNavGroups(): NavGroup[] {
-  const labs: NavItem[] = [
-    { page: "directorLab", label: "EDMG Director", hint: "combined planning + reactive" },
-    { page: "plannerLab", label: "AI Planner Lab", hint: "deep prompt authoring" },
-    { page: "reactiveLab", label: "Reactive Lab", hint: "audio-reactive scheduling" },
-  ];
-  if (isStudioForgeEnabled()) {
-    labs.push({ page: "studioForge", label: "Studio Forge", hint: "AI builder preview" });
-  }
-
-  return [
-    {
-      id: "flow",
-      label: "Core Flow",
-      hint: "Canonical studio path",
-      items: [
-        { page: "dashboard", label: "Dashboard", hint: "status + quick access" },
-        { page: "projects", label: "Projects", hint: "create and pick sessions" },
-        { page: "workspace", label: "Workspace", hint: "ingest, plan, reactive handoff" },
-        { page: "timeline", label: "Timeline", hint: "arrange full track and cues" },
-      ],
-    },
-    {
-      id: "delivery",
-      label: "Delivery",
-      hint: "Render and review",
-      items: [
-        { page: "render", label: "Render", hint: "launch outputs" },
-        { page: "queue", label: "Render Queue", hint: "logs, retries, progress" },
-        { page: "review", label: "Review", hint: "compare variants, approve results" },
-        { page: "outputs", label: "Outputs", hint: "browse generated media" },
-      ],
-    },
-    {
-      id: "labs",
-      label: "Labs",
-      hint: "Standalone specialist tools",
-      items: labs,
-    },
-    {
-      id: "system",
-      label: "System",
-      hint: "Models, setup, services",
-      items: [
-        { page: "cloud", label: "Cloud", hint: "remote integrations" },
-        { page: "models", label: "Models", hint: "packs and availability" },
-        { page: "settings", label: "Settings", hint: "paths and preferences" },
-        { page: "setup", label: "Setup", hint: "dependency health" },
-      ],
-    },
-  ];
-}
-
-const DEFAULT_GROUP_STATE: Record<NavGroupId, boolean> = {
+const DEFAULT_GROUP_STATE: Record<StudioNavigationGroupId, boolean> = {
   flow: true,
   delivery: true,
   labs: false,
@@ -79,14 +16,16 @@ const DEFAULT_GROUP_STATE: Record<NavGroupId, boolean> = {
 
 export default function Sidebar({
   page,
-  onNavigate
+  onNavigate,
+  onOpenCommandPalette,
 }: {
   page: Page;
   onNavigate: (p: Page) => void;
+  onOpenCommandPalette?: () => void;
 }) {
   const [openGroups, setOpenGroups] =
-    useState<Record<NavGroupId, boolean>>(DEFAULT_GROUP_STATE);
-  const navGroups = getNavGroups();
+    useState<Record<StudioNavigationGroupId, boolean>>(DEFAULT_GROUP_STATE);
+  const navGroups = getStudioNavigationGroups();
 
   const activeItem =
     navGroups.flatMap((group) => group.items).find((item) => item.page === page) || null;
@@ -109,6 +48,17 @@ export default function Sidebar({
       <div className="small sidebar-tagline">
         Desktop UI + managed or external backend + internal renderer + optional ComfyUI + AI + EDMG Core
       </div>
+
+      <button
+        type="button"
+        className="secondary sidebar-commandButton"
+        onClick={onOpenCommandPalette}
+        aria-label="Search Studio screens and actions"
+      >
+        <Search size={15} aria-hidden="true" />
+        <span>Search Studio</span>
+        <kbd>Ctrl K</kbd>
+      </button>
 
       <div className="sidebar-focusCard">
         <div className="sidebar-focusLabel">Current focus</div>

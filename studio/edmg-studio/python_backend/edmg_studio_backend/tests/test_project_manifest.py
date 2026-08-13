@@ -80,6 +80,33 @@ def test_project_store_save_is_atomic_and_versioned(tmp_path: Path) -> None:
     )
 
 
+def test_set_audio_invalidates_analysis_and_plan_but_preserves_authored_state(tmp_path: Path) -> None:
+    store = ProjectStore(tmp_path / "data")
+    project = store.create("Replacement Audio")
+    project.meta.update(
+        {
+            "audio": {"filename": "old.wav", "size_bytes": 10},
+            "analysis": {"features": {"bpm": 120}},
+            "last_plan": {"variants": [{"scenes": []}]},
+            "timeline": {"layers": [{"id": "authored"}]},
+            "visual_dna": {"palette": ["teal"]},
+            "internal_render_history": [{"id": "render-1"}],
+        }
+    )
+    store.save(project)
+
+    store.set_audio(project.id, "replacement.wav", 2048)
+
+    saved = store.get(project.id)
+    assert saved is not None
+    assert saved.meta["audio"] == {"filename": "replacement.wav", "size_bytes": 2048}
+    assert "analysis" not in saved.meta
+    assert "last_plan" not in saved.meta
+    assert saved.meta["timeline"] == {"layers": [{"id": "authored"}]}
+    assert saved.meta["visual_dna"] == {"palette": ["teal"]}
+    assert saved.meta["internal_render_history"] == [{"id": "render-1"}]
+
+
 def test_concurrent_project_writes_use_unique_same_directory_temp_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -285,4 +285,6 @@ class ProjectStore:
         if not proj:
             raise KeyError("Project not found")
         proj.meta["audio"] = {"filename": filename, "size_bytes": bytes_len}
+        proj.meta.pop("analysis", None)
+        proj.meta.pop("last_plan", None)
         self.save(proj)

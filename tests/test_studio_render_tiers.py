@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from edmg_studio_backend import app as studio_app
+from edmg_studio_backend.errors import UserFacingError
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
 
@@ -84,7 +87,7 @@ def test_internal_preflight_uses_creative_direction_fallback_when_plan_is_missin
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
-        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": False},
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_hosted_fallback": False},
     )
 
     assert preflight["ok"] is True
@@ -131,7 +134,7 @@ def test_auto_model_skips_sd35_on_midrange_cuda(tmp_path, monkeypatch):
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
-        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": False},
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_hosted_fallback": False},
     )
 
     assert preflight["mode"] == "diffusion"
@@ -163,7 +166,7 @@ def test_internal_preflight_defaults_to_frame_img2img_on_midrange_cuda(tmp_path,
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
-        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": False},
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_hosted_fallback": False},
     )
 
     assert preflight["mode"] == "diffusion"
@@ -204,7 +207,7 @@ def test_internal_preflight_previews_resolved_planner_text_prompt(tmp_path, monk
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
-        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "hf_sd15_internal", "allow_proxy_fallback": False},
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "hf_sd15_internal", "allow_hosted_fallback": False},
     )
 
     assert preflight["prompt_preview"][0]["prompt"].startswith("A red-cloaked dancer")
@@ -246,7 +249,7 @@ def test_internal_preflight_resolves_video_model_settings_without_mutating_froze
             "model_id": "hf_sd15_internal",
             "temporal_mode": "video_model",
             "video_model_engine": "animatediff",
-            "allow_proxy_fallback": False,
+            "allow_hosted_fallback": False,
         },
     )
 
@@ -320,7 +323,7 @@ def test_internal_preflight_reports_motion_score_anchor_and_validation(tmp_path,
             "video_model_motion_score_mode": "auto",
             "video_model_anchor_mode": "loop",
             "video_model_prompt_refine": True,
-            "allow_proxy_fallback": False,
+            "allow_hosted_fallback": False,
         },
     )
 
@@ -372,7 +375,7 @@ def test_storyboard_full_motion_preflight_generates_anchor_shot_plan(tmp_path, m
             "temporal_mode": "keyframes",
             "motion_strategy": "storyboard_full_motion",
             "storyboard_shot_max_s": 3.0,
-            "allow_proxy_fallback": False,
+            "allow_hosted_fallback": False,
         },
     )
 
@@ -390,7 +393,7 @@ def test_storyboard_full_motion_preflight_generates_anchor_shot_plan(tmp_path, m
     assert any("Storyboard full motion is active" in warning for warning in preflight["warnings"])
 
 
-def test_auto_model_reports_sd35_vram_guard_when_no_lighter_model_installed(tmp_path, monkeypatch):
+def test_auto_model_rejects_sd35_when_no_lighter_model_is_supported(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
@@ -413,17 +416,18 @@ def test_auto_model_reports_sd35_vram_guard_when_no_lighter_model_installed(tmp_
     }
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
 
-    preflight = studio_app._internal_render_preflight_data(
-        proj.id,
-        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": True},
-    )
+    with pytest.raises(UserFacingError) as exc:
+        studio_app._internal_render_preflight_data(
+            proj.id,
+            {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_hosted_fallback": False},
+        )
 
-    assert preflight["mode"] == "proxy"
-    assert preflight["requested_model_id"] == "auto"
-    assert any("14 GB" in warning for warning in preflight["warnings"])
+    assert exc.value.code == "MODEL_UNSUPPORTED_FOR_HARDWARE"
+    assert "14 GB" in exc.value.message
+    assert "6.0 GB" in exc.value.message
 
 
-def test_explicit_sd35_on_midrange_cuda_uses_proxy_fallback(tmp_path, monkeypatch):
+def test_explicit_sd35_on_midrange_cuda_is_rejected(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
@@ -446,23 +450,24 @@ def test_explicit_sd35_on_midrange_cuda_uses_proxy_fallback(tmp_path, monkeypatc
     }
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
 
-    preflight = studio_app._internal_render_preflight_data(
-        proj.id,
-        {
-            "variant_index": 0,
-            "fps_render": 2,
-            "fps_output": 24,
-            "model_id": "hf_sd35_medium_internal",
-            "allow_proxy_fallback": True,
-        },
-    )
+    with pytest.raises(UserFacingError) as exc:
+        studio_app._internal_render_preflight_data(
+            proj.id,
+            {
+                "variant_index": 0,
+                "fps_render": 2,
+                "fps_output": 24,
+                "model_id": "hf_sd35_medium_internal",
+                "allow_hosted_fallback": False,
+            },
+        )
 
-    assert preflight["mode"] == "proxy"
-    assert preflight["requested_model_id"] == "hf_sd35_medium_internal"
-    assert any("14 GB" in warning for warning in preflight["warnings"])
+    assert exc.value.code == "MODEL_UNSUPPORTED_FOR_HARDWARE"
+    assert "14 GB" in exc.value.message
+    assert "6.0 GB" in exc.value.message
 
 
-def test_internal_preflight_includes_tier_plan_for_cpu_proxy(tmp_path, monkeypatch):
+def test_internal_preflight_reports_missing_model_for_cpu(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
     monkeypatch.setattr(studio_app, "jobs", jobs)
@@ -481,15 +486,13 @@ def test_internal_preflight_includes_tier_plan_for_cpu_proxy(tmp_path, monkeypat
     })
     monkeypatch.setattr(studio_app.models, "installed_path", lambda _mid: None)
 
-    preflight = studio_app._internal_render_preflight_data(
-        proj.id,
-        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": True, "render_tier": "quality"},
-    )
+    with pytest.raises(UserFacingError) as exc:
+        studio_app._internal_render_preflight_data(
+            proj.id,
+            {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_hosted_fallback": False, "render_tier": "quality"},
+        )
 
-    assert preflight["mode"] == "proxy"
-    assert preflight["tier_plan"]["applied_tier"] == "draft"
-    assert preflight["tier_plan"]["defaults"]["width"] == 640
-    assert any("draft" in w.lower() or "cpu" in w.lower() for w in preflight["warnings"])
+    assert exc.value.code == "MODEL_NOT_INSTALLED"
 
 
 def test_run_pipeline_local_fallback_uses_tier_defaults_on_cpu(tmp_path, monkeypatch):
@@ -511,6 +514,11 @@ def test_run_pipeline_local_fallback_uses_tier_defaults_on_cpu(tmp_path, monkeyp
     })
     monkeypatch.setattr(studio_app.comfy_pool, "diagnose", lambda _req: {"compatible": [], "busy_compatible": []})
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: Path("/tmp/fake-model") if mid == "hf_sd15_internal" else None)
+    monkeypatch.setattr(
+        studio_app,
+        "_internal_diffusion_runtime_status",
+        lambda: {"ok": True, "diagnostics": ["internal_runtime=ready"]},
+    )
 
     captured = {}
 
@@ -556,7 +564,7 @@ def test_pipeline_local_fallback_considers_sd35_on_cpu_when_it_is_only_installed
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
-        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_proxy_fallback": False},
+        {"variant_index": 0, "fps_render": 2, "fps_output": 24, "model_id": "auto", "allow_hosted_fallback": False},
     )
     fallback = studio_app._recommend_local_fallback(proj.id, "balanced", reason="ComfyUI is not reachable.")
 

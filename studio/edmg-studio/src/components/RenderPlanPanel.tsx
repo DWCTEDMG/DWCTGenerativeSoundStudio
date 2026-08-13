@@ -4,10 +4,8 @@ type RenderPlanPanelProps = {
   plan: any;
   continuityReport?: any;
   visualDnaHints?: any;
-  conductorPromoteStatus?: string;
-  promotingScenes?: boolean;
-  onPromoteAll?: () => void;
-  onPromoteScene?: (sceneId: string) => void;
+  onOpenModels?: () => void;
+  onOpenSettings?: () => void;
   onNavigateReview?: () => void;
   onRefresh?: () => void;
 };
@@ -22,10 +20,8 @@ export function RenderPlanPanel({
   plan,
   continuityReport,
   visualDnaHints,
-  conductorPromoteStatus,
-  promotingScenes = false,
-  onPromoteAll,
-  onPromoteScene,
+  onOpenModels,
+  onOpenSettings,
   onNavigateReview,
   onRefresh,
 }: RenderPlanPanelProps) {
@@ -135,30 +131,19 @@ export function RenderPlanPanel({
         </div>
       ) : null}
 
-      <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-        {onPromoteAll ? (
-          <button
-            className="secondary"
-            disabled={promotingScenes || !proxySections.length}
-            onClick={onPromoteAll}
-          >
-            Promote proxy → hero
-          </button>
-        ) : null}
-        {proxySections.slice(0, 4).map((section: any) => (
-          onPromoteScene ? (
-            <button
-              key={section.scene_id}
-              className="secondary"
-              disabled={promotingScenes}
-              onClick={() => onPromoteScene(String(section.scene_id))}
-            >
-              Promote {section.scene_id}
-            </button>
-          ) : null
-        ))}
-      </div>
-      {conductorPromoteStatus ? <div className="small" style={{ marginTop: 8 }}>{conductorPromoteStatus}</div> : null}
+      {proxySections.length ? (
+        <div style={{ marginTop: 10, padding: 10, borderRadius: 10, border: "1px solid var(--warning, #b58900)" }}>
+          <div className="small" style={{ fontWeight: 700 }}>Legacy proxy route unavailable</div>
+          <div className="small" style={{ marginTop: 4 }}>
+            This stored plan references {proxySections.length} retired proxy scene route{proxySections.length === 1 ? "" : "s"}.
+            Refresh the plan after installing a compatible local model or configuring an authenticated hosted provider.
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+            {onOpenModels ? <button className="secondary" onClick={onOpenModels}>Open Models</button> : null}
+            {onOpenSettings ? <button className="secondary" onClick={onOpenSettings}>Open provider settings</button> : null}
+          </div>
+        </div>
+      ) : null}
       {continuityReport ? (
         <div className="small" style={{ marginTop: 8, padding: 8, borderRadius: 10, border: "1px solid var(--border)" }}>
           Continuity: {continuityReport.warning_count} warning(s)

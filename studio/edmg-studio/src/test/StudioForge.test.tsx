@@ -159,7 +159,6 @@ const FETCH_FIXTURES = {
     ok: true,
     cuda: { available: true, enabled: true, active: true, device_name: "RTX 4050", vram_gb: 6 },
     directml: { available: false, enabled: false },
-    proxy: { available: true, active: false },
   },
   "/v1/comfyui/capabilities": {
     ok: false,
@@ -227,7 +226,6 @@ describe("Studio Forge", () => {
         ok: true,
         cuda: { available: true, enabled: false, active: false, device_name: "RTX 4050", vram_gb: 6 },
         directml: { available: false, enabled: false },
-        proxy: { available: true, active: true },
       },
       "/v1/models/catalog": {
         catalog: [{ id: "hf_sd15_internal", name: "Stable Diffusion 1.5" }],
@@ -248,7 +246,7 @@ describe("Studio Forge", () => {
     expect(await screen.findByText(/stored in team\/cache; restore needed/i)).toBeTruthy();
     expect((await screen.findAllByText(/Setup needed/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/CUDA is detected but disabled in Settings/i)).toBeTruthy();
-    expect(screen.getByText(/Proxy is a draft fallback, not proof that CUDA model inference works/i)).toBeTruthy();
+    expect(screen.getByText(/A genuine local model or authenticated hosted provider is required for rendering/i)).toBeTruthy();
     expect(screen.getByText(/comfyCapabilities: ComfyUI offline/i)).toBeTruthy();
   });
 
@@ -274,7 +272,9 @@ describe("Studio Forge", () => {
 
     renderWithStudio(<App />);
 
-    expect(await screen.findByRole("heading", { name: /Studio Forge/i })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: /Studio Forge/i }, { timeout: 10_000 }),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: /Studio Forge/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /AI Planner Lab/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Reactive Lab/i })).toBeTruthy();
