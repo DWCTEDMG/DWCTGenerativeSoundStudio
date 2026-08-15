@@ -29,7 +29,11 @@
                     Text="Create a production session, inspect its readiness, and open it in the native Workspace." />
             </StackPanel>
             <CommandBar Grid.Column="1" Background="Transparent" DefaultLabelPosition="Right">
-                <AppBarButton Click="Refresh_Click" Icon="Refresh" Label="Refresh" />
+                <AppBarButton
+                    AutomationProperties.AutomationId="RefreshProjectsButton"
+                    Click="Refresh_Click"
+                    Icon="Refresh"
+                    Label="Refresh" />
             </CommandBar>
         </Grid>
 
@@ -47,6 +51,7 @@
                 </Grid.ColumnDefinitions>
                 <TextBox
                     x:Name="ProjectNameBox"
+                    AutomationProperties.AutomationId="ProjectNameTextBox"
                     AutomationProperties.Name="Project name"
                     Header="Project name"
                     MaxLength="200"
@@ -56,6 +61,7 @@
                     x:Name="CreateProjectButton"
                     Grid.Column="1"
                     Margin="0,24,0,0"
+                    AutomationProperties.AutomationId="CreateProjectButton"
                     AutomationProperties.HelpText="Creates the project and opens it in Workspace"
                     Click="CreateProject_Click"
                     Content="Create and open"
@@ -93,6 +99,7 @@
             <Grid Grid.Row="1">
                 <ListView
                     x:Name="ProjectList"
+                    AutomationProperties.AutomationId="ProjectList"
                     AutomationProperties.Name="Studio projects"
                     IsItemClickEnabled="True"
                     ItemClick="ProjectList_ItemClick"
@@ -120,6 +127,7 @@
                                 <Button
                                     Grid.Column="1"
                                     VerticalAlignment="Center"
+                                    AutomationProperties.AutomationId="{x:Bind Id}"
                                     AutomationProperties.Name="{x:Bind OpenLabel}"
                                     Click="OpenProject_Click"
                                     Content="Open"

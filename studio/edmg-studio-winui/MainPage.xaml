@@ -41,6 +41,7 @@
         <NavigationView
             x:Name="StudioNavigation"
             Grid.Row="1"
+            AutomationProperties.AutomationId="StudioNavigation"
             CompactModeThresholdWidth="720"
             ExpandedModeThresholdWidth="1120"
             IsBackButtonVisible="Collapsed"
@@ -110,58 +111,64 @@
                             Text="http://127.0.0.1:7863"
                             TextTrimming="CharacterEllipsis"
                             ToolTipService.ToolTip="Active Studio backend address" />
+                        <Button
+                            Margin="0,6,0,0"
+                            AutomationProperties.AutomationId="ReconnectBackendButton"
+                            Click="ReconnectBackend_Click"
+                            Content="Reconnect"
+                            HorizontalAlignment="Stretch" />
                     </StackPanel>
                 </Border>
             </NavigationView.PaneFooter>
 
             <NavigationView.MenuItems>
                 <NavigationViewItemHeader Content="Core Flow" />
-                <NavigationViewItem Content="Dashboard" Tag="dashboard" ToolTipService.ToolTip="Status and quick access">
+                <NavigationViewItem AutomationProperties.AutomationId="DashboardNavigationItem" Content="Dashboard" Tag="dashboard" ToolTipService.ToolTip="Status and quick access">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Home" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Projects" Tag="projects" ToolTipService.ToolTip="Create and choose Studio sessions">
+                <NavigationViewItem AutomationProperties.AutomationId="ProjectsNavigationItem" Content="Projects" Tag="projects" ToolTipService.ToolTip="Create and choose Studio sessions">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Folder" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Workspace" Tag="workspace" ToolTipService.ToolTip="Ingest, analyze, and plan">
+                <NavigationViewItem AutomationProperties.AutomationId="WorkspaceNavigationItem" Content="Workspace" Tag="workspace" ToolTipService.ToolTip="Ingest, analyze, and plan">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Edit" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Timeline" Tag="timeline" ToolTipService.ToolTip="Arrange full-track visuals and cues">
+                <NavigationViewItem AutomationProperties.AutomationId="TimelineNavigationItem" Content="Timeline" Tag="timeline" ToolTipService.ToolTip="Arrange full-track visuals and cues">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Clock" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <NavigationViewItemHeader Content="Delivery" />
-                <NavigationViewItem Content="Render" Tag="render" ToolTipService.ToolTip="Launch output generation">
+                <NavigationViewItem AutomationProperties.AutomationId="RenderNavigationItem" Content="Render" Tag="render" ToolTipService.ToolTip="Launch output generation">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Video" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Render Queue" Tag="queue" ToolTipService.ToolTip="Progress, logs, and retries">
+                <NavigationViewItem AutomationProperties.AutomationId="QueueNavigationItem" Content="Render Queue" Tag="queue" ToolTipService.ToolTip="Progress, logs, and retries">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Bullets" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Review" Tag="review" ToolTipService.ToolTip="Compare and approve variants">
+                <NavigationViewItem AutomationProperties.AutomationId="ReviewNavigationItem" Content="Review" Tag="review" ToolTipService.ToolTip="Compare and approve variants">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Preview" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Outputs" Tag="outputs" ToolTipService.ToolTip="Browse generated media">
+                <NavigationViewItem AutomationProperties.AutomationId="OutputsNavigationItem" Content="Outputs" Tag="outputs" ToolTipService.ToolTip="Browse generated media">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Pictures" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <NavigationViewItemHeader Content="Labs" />
-                <NavigationViewItem Content="EDMG Director" Tag="directorLab" ToolTipService.ToolTip="Combined planning and reactive direction">
+                <NavigationViewItem AutomationProperties.AutomationId="DirectorNavigationItem" Content="EDMG Director" Tag="directorLab" ToolTipService.ToolTip="Combined planning and reactive direction">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Target" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="AI Planner Lab" Tag="plannerLab" ToolTipService.ToolTip="Deep prompt authoring">
+                <NavigationViewItem AutomationProperties.AutomationId="PlannerNavigationItem" Content="AI Planner Lab" Tag="plannerLab" ToolTipService.ToolTip="Deep prompt authoring">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Edit" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Reactive Lab" Tag="reactiveLab" ToolTipService.ToolTip="Audio-reactive scheduling">
+                <NavigationViewItem AutomationProperties.AutomationId="ReactiveNavigationItem" Content="Reactive Lab" Tag="reactiveLab" ToolTipService.ToolTip="Audio-reactive scheduling">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Sync" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <NavigationViewItemHeader Content="System" />
-                <NavigationViewItem Content="Cloud" Tag="cloud" ToolTipService.ToolTip="Remote integrations">
+                <NavigationViewItem AutomationProperties.AutomationId="CloudNavigationItem" Content="Cloud" Tag="cloud" ToolTipService.ToolTip="Remote integrations">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="World" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Models" Tag="models" ToolTipService.ToolTip="Model packs and availability">
+                <NavigationViewItem AutomationProperties.AutomationId="ModelsNavigationItem" Content="Models" Tag="models" ToolTipService.ToolTip="Model packs and availability">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Download" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Setup" Tag="setup" ToolTipService.ToolTip="Dependency and storage readiness">
+                <NavigationViewItem AutomationProperties.AutomationId="SetupNavigationItem" Content="Setup" Tag="setup" ToolTipService.ToolTip="Dependency and storage readiness">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Repair" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

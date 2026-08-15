@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <ResourceDictionary.ThemeDictionaries>
-        <ResourceDictionary x:Key="Default">
+        <ResourceDictionary x:Key="Dark">
             <SolidColorBrush x:Key="StudioBackgroundBrush" Color="#041417" />
             <SolidColorBrush x:Key="StudioCardBrush" Color="#D1071719" />
             <SolidColorBrush x:Key="StudioBorderBrush" Color="#4746D6E0" />

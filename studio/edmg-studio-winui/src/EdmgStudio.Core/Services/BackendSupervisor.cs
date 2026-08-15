@@ -450,7 +450,10 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
-            var health = await JsonSerializer.DeserializeAsync<HealthResponse>(stream, StudioJson.Options, timeout.Token)
+            var health = await JsonSerializer.DeserializeAsync(
+                    stream,
+                    StudioJson.GetTypeInfo<HealthResponse>(),
+                    timeout.Token)
                 .ConfigureAwait(false);
             return health?.Ok == true;
         }

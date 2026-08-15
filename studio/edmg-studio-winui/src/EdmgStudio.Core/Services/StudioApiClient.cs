@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using EdmgStudio.Core.Models;
 
 namespace EdmgStudio.Core.Services;
@@ -63,7 +65,9 @@ public sealed class StudioApiClient : IDisposable
         return await SendJsonAsync<ProjectResponse>(
             HttpMethod.Post,
             "/v1/projects",
-            JsonContent.Create(new CreateProjectRequest(normalized), options: StudioJson.Options),
+            JsonContent.Create(
+                new CreateProjectRequest(normalized),
+                StudioJson.GetTypeInfo<CreateProjectRequest>()),
             true,
             cancellationToken).ConfigureAwait(false);
     }
@@ -146,7 +150,7 @@ public sealed class StudioApiClient : IDisposable
         return SendJsonAsync<PlanDto>(
             HttpMethod.Post,
             $"/v1/projects/{EscapeIdentifier(projectId)}/plan?mode={Uri.EscapeDataString(normalizedMode)}",
-            JsonContent.Create(request, options: StudioJson.Options),
+            JsonContent.Create(request, StudioJson.GetTypeInfo<PlanRequest>()),
             true,
             cancellationToken);
     }
@@ -159,6 +163,408 @@ public sealed class StudioApiClient : IDisposable
 
     public Task<JsonElement> GetEdmgStatusAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/edmg/status", null, true, cancellationToken);
+
+    public Task<JsonElement> GetTimelineAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/timeline",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> SaveTimelineAsync(
+        string projectId,
+        JsonElement timeline,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/timeline",
+            new TimelineUpdateRequest(timeline),
+            StudioJson.GetTypeInfo<TimelineUpdateRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> AutosaveTimelineAsync(
+        string projectId,
+        JsonElement timeline,
+        JsonElement? metadata = null,
+        string? reason = null,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/autosave",
+            new TimelineAutosaveRequest(timeline, metadata, reason),
+            StudioJson.GetTypeInfo<TimelineAutosaveRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> GetRecoveryAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/recovery",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> ApplyRecoveryAsync(
+        string projectId,
+        RecoveryApplyRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/recovery/apply",
+            request,
+            StudioJson.GetTypeInfo<RecoveryApplyRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> DiscardRecoveryAsync(string projectId, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/recovery/discard",
+            new JsonObject(),
+            cancellationToken);
+
+    public Task<JsonElement> PreflightInternalRenderAsync(
+        string projectId,
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/internal/preflight",
+            request,
+            cancellationToken);
+
+    public Task<JsonElement> StartInternalRenderAsync(
+        string projectId,
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/internal/video",
+            request,
+            cancellationToken);
+
+    public Task<StudioJobListResponse> GetJobsAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<StudioJobListResponse>(HttpMethod.Get, "/v1/jobs", null, true, cancellationToken);
+
+    public Task<StudioJobListResponse> GetProjectJobsAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<StudioJobListResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/jobs",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> GetProjectJobAsync(
+        string projectId,
+        string jobId,
+        int tailLines = 80,
+        CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/jobs/{EscapeIdentifier(jobId)}?tail_lines={Math.Clamp(tailLines, 0, 5000)}",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<StudioJobActionResponse> CancelJobAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        PostJobActionAsync(projectId, jobId, "cancel", cancellationToken);
+
+    public Task<StudioJobActionResponse> PauseJobAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        PostJobActionAsync(projectId, jobId, "pause", cancellationToken);
+
+    public Task<StudioJobActionResponse> ResumeJobAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        PostJobActionAsync(projectId, jobId, "resume", cancellationToken);
+
+    public Task<StudioJobActionResponse> RetryJobAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        PostJobActionAsync(projectId, jobId, "retry", cancellationToken);
+
+    public Task<JsonElement> ResumeJobFromCheckpointAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        PostProjectJobJsonAsync(projectId, jobId, "resume_from_checkpoint", cancellationToken);
+
+    public Task<JsonElement> RestartJobCleanAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        PostProjectJobJsonAsync(projectId, jobId, "restart_clean", cancellationToken);
+
+    public Task<JsonElement> ClearJobCachedFramesAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        PostProjectJobJsonAsync(projectId, jobId, "clear_cached_frames", cancellationToken);
+
+    public Task<JsonElement> DropJobCheckpointAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        PostProjectJobJsonAsync(projectId, jobId, "drop_checkpoint", cancellationToken);
+
+    public Task<JsonElement> GetJobLogAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        GetProjectJobJsonAsync(projectId, jobId, "log", cancellationToken);
+
+    public Task<JsonElement> GetJobEventsAsync(
+        string projectId,
+        string jobId,
+        CancellationToken cancellationToken = default) =>
+        GetProjectJobJsonAsync(projectId, jobId, "events", cancellationToken);
+
+    public Task<JsonElement> GetOutputsAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/outputs",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<byte[]> DownloadProjectFileAsync(
+        string projectId,
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        var path = RequireValue(relativePath, nameof(relativePath));
+        return SendBytesAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/file?path={Uri.EscapeDataString(path)}",
+            cancellationToken);
+    }
+
+    public Task<JsonElement> GetVariantReviewAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/variant_review",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> SaveVariantDecisionAsync(
+        string projectId,
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/variant_review/decision",
+            request,
+            cancellationToken);
+
+    public Task<JsonElement> SaveVariantDecisionAsync(
+        string projectId,
+        JsonObject request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/variant_review/decision",
+            request,
+            cancellationToken);
+
+    public Task<JsonElement> GetContinuityAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/conductor/continuity",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> GetModelCatalogAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/models/catalog", null, true, cancellationToken);
+
+    public Task<JsonElement> GetModelTasksAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/models/tasks", null, true, cancellationToken);
+
+    public Task<JsonElement> InstallModelAsync(string modelId, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            "/v1/models/install",
+            new JsonObject { ["model_id"] = RequireValue(modelId, nameof(modelId)) },
+            cancellationToken);
+
+    public Task<JsonElement> AcceptModelLicenseAsync(
+        string modelId,
+        string licenseId,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            "/v1/models/accept",
+            new JsonObject
+            {
+                ["model_id"] = RequireValue(modelId, nameof(modelId)),
+                ["license_id"] = RequireValue(licenseId, nameof(licenseId))
+            },
+            cancellationToken);
+
+    public Task<JsonElement> RestoreLocalModelAsync(string modelId, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            "/v1/models/restore_local",
+            new JsonObject { ["model_id"] = RequireValue(modelId, nameof(modelId)) },
+            cancellationToken);
+
+    public Task<JsonElement> InstallModelPackAsync(string packId, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            "/v1/models/install_pack",
+            new JsonObject { ["pack_id"] = RequireValue(packId, nameof(packId)) },
+            cancellationToken);
+
+    public Task<JsonElement> PromoteModelAsync(
+        string modelId,
+        string lane,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            "/v1/models/promote",
+            new JsonObject
+            {
+                ["model_id"] = RequireValue(modelId, nameof(modelId)),
+                ["lane"] = RequireValue(lane, nameof(lane))
+            },
+            cancellationToken);
+
+    public Task<JsonElement> RemoveUserModelAsync(string modelId, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            "/v1/models/remove_user",
+            new JsonObject { ["model_id"] = RequireValue(modelId, nameof(modelId)) },
+            cancellationToken);
+
+    public Task<JsonElement> GetHardwareAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/hardware", null, true, cancellationToken);
+
+    public Task<JsonElement> GetSystemReadinessAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/system/readiness", null, true, cancellationToken);
+
+    public Task<JsonElement> GetBaselineMetricsAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/metrics/baseline", null, true, cancellationToken);
+
+    public Task<JsonElement> GetRenderProfilesAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/settings/render_profiles", null, true, cancellationToken);
+
+    public Task<JsonElement> GetRenderProvidersAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/settings/render_providers", null, true, cancellationToken);
+
+    public Task<JsonElement> SaveRenderProvidersAsync(
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/settings/render_providers", request, cancellationToken);
+
+    public Task<JsonElement> SaveRenderProvidersAsync(
+        JsonObject request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/settings/render_providers", request, cancellationToken);
+
+    public Task<JsonElement> GetRenderRouteAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/render/route", null, true, cancellationToken);
+
+    public Task<JsonElement> SaveRenderRouteAsync(
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/render/route/preferences", request, cancellationToken);
+
+    public Task<JsonElement> GetTranscriptionSettingsAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/settings/transcription", null, true, cancellationToken);
+
+    public Task<JsonElement> SaveTranscriptionSettingsAsync(
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/settings/transcription", request, cancellationToken);
+
+    public Task<JsonElement> SaveTranscriptionSettingsAsync(
+        JsonObject request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/settings/transcription", request, cancellationToken);
+
+    public Task<JsonElement> GetSecretStatusAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/settings/secrets/status", null, true, cancellationToken);
+
+    public Task<JsonElement> SetSecretAsync(
+        string key,
+        string value,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            "/v1/settings/secrets/set",
+            new JsonObject
+            {
+                ["name"] = RequireValue(key, nameof(key)),
+                ["value"] = RequireValue(value, nameof(value))
+            },
+            cancellationToken);
+
+    public Task<JsonElement> ClearSecretAsync(string key, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            "/v1/settings/secrets/clear",
+            new JsonObject { ["name"] = RequireValue(key, nameof(key)) },
+            cancellationToken);
+
+    private Task<JsonElement> PostJsonElementAsync(
+        string relativePath,
+        JsonElement request,
+        CancellationToken cancellationToken) =>
+        SendJsonElementAsync(
+            HttpMethod.Post,
+            relativePath,
+            new StringContent(request.GetRawText(), Encoding.UTF8, "application/json"),
+            true,
+            cancellationToken);
+
+    private Task<JsonElement> PostJsonElementAsync(
+        string relativePath,
+        JsonObject request,
+        CancellationToken cancellationToken) =>
+        SendJsonElementAsync(
+            HttpMethod.Post,
+            relativePath,
+            new StringContent(request.ToJsonString(StudioJson.Options), Encoding.UTF8, "application/json"),
+            true,
+            cancellationToken);
+
+    private Task<JsonElement> PostJsonElementAsync<T>(
+        string relativePath,
+        T request,
+        JsonTypeInfo<T> typeInfo,
+        CancellationToken cancellationToken) =>
+        SendJsonElementAsync(
+            HttpMethod.Post,
+            relativePath,
+            JsonContent.Create(request, typeInfo),
+            true,
+            cancellationToken);
+
+    private Task<StudioJobActionResponse> PostJobActionAsync(
+        string projectId,
+        string jobId,
+        string action,
+        CancellationToken cancellationToken) =>
+        SendJsonAsync<StudioJobActionResponse>(
+            HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/jobs/{EscapeIdentifier(jobId)}/{action}",
+            new StringContent("{}", Encoding.UTF8, "application/json"),
+            true,
+            cancellationToken);
+
+    private Task<JsonElement> PostProjectJobJsonAsync(
+        string projectId,
+        string jobId,
+        string action,
+        CancellationToken cancellationToken) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/jobs/{EscapeIdentifier(jobId)}/{action}",
+            new JsonObject(),
+            cancellationToken);
+
+    private Task<JsonElement> GetProjectJobJsonAsync(
+        string projectId,
+        string jobId,
+        string suffix,
+        CancellationToken cancellationToken) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/jobs/{EscapeIdentifier(jobId)}/{suffix}",
+            null,
+            true,
+            cancellationToken);
 
     private async Task<T> SendJsonAsync<T>(
         HttpMethod method,
@@ -174,7 +580,11 @@ public sealed class StudioApiClient : IDisposable
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        var result = await JsonSerializer.DeserializeAsync<T>(stream, StudioJson.Options, cancellationToken).ConfigureAwait(false);
+        var result = await JsonSerializer.DeserializeAsync(
+                stream,
+                StudioJson.GetTypeInfo<T>(),
+                cancellationToken)
+            .ConfigureAwait(false);
         return result ?? throw new StudioApiException(
             response.StatusCode,
             "EMPTY_RESPONSE",
@@ -197,6 +607,26 @@ public sealed class StudioApiClient : IDisposable
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         return document.RootElement.Clone();
+    }
+
+    private async Task<byte[]> SendBytesAsync(string relativePath, CancellationToken cancellationToken)
+    {
+        using var request = await CreateRequestAsync(
+                HttpMethod.Get,
+                relativePath,
+                null,
+                true,
+                cancellationToken)
+            .ConfigureAwait(false);
+        request.Headers.Accept.Clear();
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("*/*"));
+        using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<HttpRequestMessage> CreateRequestAsync(
@@ -296,6 +726,16 @@ public sealed class StudioApiClient : IDisposable
         }
 
         return Uri.EscapeDataString(value.Trim());
+    }
+
+    private static string RequireValue(string value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("A value is required.", parameterName);
+        }
+
+        return value.Trim();
     }
 
     private static bool SameOrigin(Uri left, Uri right) =>

@@ -12,12 +12,16 @@ but they are not equal alternatives to the Studio product.
 
 ## Canonical product
 
-The primary desktop product lives under:
+The Studio product spans two desktop clients and one authoritative backend:
 
-- `studio/edmg-studio/`
+- `studio/edmg-studio-winui/` — primary packaged Windows frontend
+- `studio/edmg-studio/` — shared FastAPI backend plus the Electron/React client
+  retained for Linux and compatibility
 
-That tree contains the Electron shell, React/Vite frontend, FastAPI backend,
-vendored EDMG engine packages, packaging scripts, and release validation flow.
+Both clients use the same project format and authenticated localhost API. Audio
+analysis, AI/provider integration, CUDA/TensorRT inference, rendering, jobs,
+outputs, and model lifecycle stay in
+`studio/edmg-studio/python_backend/`; WinUI does not duplicate those engines.
 
 The legacy standalone web UI prototypes have been retired from the active product
 surface. Their planning and audio-reactive workflows now live inside Studio
@@ -40,16 +44,11 @@ macOS/Linux:
 ./run_me.sh
 ```
 
-Those launchers open the Studio dev launcher in
-`studio/edmg-studio/tools/launcher_gui.py`, which keeps the UI, backend, and
-Studio Home storage aligned with the same settings used by the packaged app.
-
-The launcher flow:
-- installs Studio backend/UI dev dependencies when needed
-- starts EDMG Studio
-- keeps runtime data and caches under your chosen Studio Home
-- lets Studio’s in-app Setup page handle Ollama, local OpenAI-compatible
-  providers, ComfyUI Portable, model packs, and EDMG Core repair/install
+On Windows, `RUN_ME.bat` launches the packaged WinUI profile by default.
+`RUN_ME.bat electron` (or `compat`) opens the established Electron launcher when
+that compatibility surface is required. On Linux, `run_me.sh` continues to use
+the Electron/React Studio. The clients share Studio Home, backend settings, and
+runtime data.
 
 ## Studio Setup
 
@@ -141,7 +140,8 @@ An older Electron shell still exists here:
 desktop/electron
 ```
 
-It is superseded by `studio/edmg-studio`, which is the canonical desktop product.
+It is superseded by the WinUI Windows client and the maintained
+`studio/edmg-studio` Electron compatibility client.
 
 ## A1111 / legacy integration
 
@@ -149,9 +149,10 @@ This repo still contains legacy engine and integration paths, but it does not
 ship a bundled `a1111_extension/` folder anymore.
 
 If you need Automatic1111 integration, treat it as an external or legacy
-workflow alongside the standalone EDMG engine. The authoritative desktop product
-path remains:
+workflow alongside the standalone EDMG engine. The authoritative Studio paths
+remain:
 
+- `studio/edmg-studio-winui/`
 - `studio/edmg-studio/`
 
 ## JS tooling
@@ -161,8 +162,9 @@ path remains:
   `studio/edmg-studio/.node-version`.
 - The canonical package manager is `pnpm@10.33.0`, pinned in
   `studio/edmg-studio/package.json`.
-- The shipped desktop app version also comes from
-  `studio/edmg-studio/package.json#version`.
+- The Electron compatibility package version comes from
+  `studio/edmg-studio/package.json#version`. The WinUI package carries its own
+  synchronized MSIX/.NET version metadata.
 
 ## Python tooling
 
@@ -173,7 +175,9 @@ path remains:
 - Select exactly one accelerator extra: `cpu`, `directml`, or `cuda`; compose it
   with capability extras such as `audio`, `asr`, and `internal-video`.
 - Packaged Electron applications include the PyInstaller backend and do not
-  require end users to install Python or uv.
+  require end users to install Python or uv. The WinUI production package must
+  consume that same validated backend payload; MSIX clean-machine qualification
+  remains a separate release gate.
 
 See [docs/PYTHON_TOOLCHAIN.md](./docs/PYTHON_TOOLCHAIN.md) for commands and the
 lock-update policy.

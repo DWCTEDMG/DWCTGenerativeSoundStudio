@@ -1,0 +1,105 @@
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.QueuePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="{ThemeResource AppCanvasBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Margin="32,24,32,12" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Render queue" />
+                <TextBlock Foreground="{ThemeResource SecondaryTextBrush}"
+                           Text="Monitor progress, inspect results, and control backend jobs." />
+            </StackPanel>
+            <StackPanel x:Name="QueueScopeControls" Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <ToggleSwitch x:Name="AllProjectsSwitch"
+                              AutomationProperties.AutomationId="Queue.AllProjects"
+                              Header="All projects"
+                              Toggled="AllProjectsSwitch_Toggled" />
+                <Button x:Name="RefreshButton"
+                        AutomationProperties.AutomationId="Queue.Refresh"
+                        Click="RefreshButton_Click"
+                        Content="Refresh" />
+            </StackPanel>
+        </Grid>
+
+        <InfoBar x:Name="StatusBar" Grid.Row="1" Margin="32,0,32,12"
+                 IsClosable="True" IsOpen="False" />
+
+        <Grid x:Name="QueueWorkspace" Grid.Row="2" Margin="32,0,32,24" ColumnDefinitions="3*,2*" ColumnSpacing="20">
+            <Border Background="{ThemeResource CardBackgroundBrush}"
+                    BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8"
+                    MinWidth="420">
+                <ListView x:Name="JobsList"
+                          AutomationProperties.AutomationId="Queue.Jobs"
+                          ItemsSource="{x:Bind Jobs}"
+                          SelectionChanged="JobsList_SelectionChanged">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Padding="12,10" RowSpacing="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                    <Border Grid.Column="1" Padding="8,3"
+                                            Background="{ThemeResource AccentFillColorTertiaryBrush}" CornerRadius="10">
+                                        <TextBlock Text="{Binding StatusLabel}" />
+                                    </Border>
+                                </Grid>
+                                <ProgressBar Grid.Row="1" Minimum="0" Maximum="100"
+                                             Value="{Binding Percent}" Visibility="{Binding ProgressVisibility}" />
+                                <TextBlock Grid.Row="2" Foreground="{ThemeResource SecondaryTextBrush}"
+                                           Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Border>
+
+            <ScrollViewer Grid.Column="1" MinWidth="340" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="14">
+                    <TextBlock x:Name="SelectedJobText" Style="{StaticResource SubtitleTextBlockStyle}" Text="Select a job" />
+                    <TextBlock x:Name="SelectedJobSummaryText" Foreground="{ThemeResource SecondaryTextBrush}"
+                               Text="Job actions and diagnostic details appear here." TextWrapping="Wrap" />
+                    <ProgressBar x:Name="SelectedProgressBar" Minimum="0" Maximum="100" Visibility="Collapsed" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="PauseButton" AutomationProperties.AutomationId="Queue.Pause"
+                                Click="PauseButton_Click" Content="Pause" IsEnabled="False" />
+                        <Button x:Name="ResumeButton" AutomationProperties.AutomationId="Queue.Resume"
+                                Click="ResumeButton_Click" Content="Resume" IsEnabled="False" />
+                        <Button x:Name="CancelButton" AutomationProperties.AutomationId="Queue.Cancel"
+                                Click="CancelButton_Click" Content="Cancel" IsEnabled="False" />
+                        <Button x:Name="RetryButton" AutomationProperties.AutomationId="Queue.Retry"
+                                Click="RetryButton_Click" Content="Retry" IsEnabled="False" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="LogButton" AutomationProperties.AutomationId="Queue.LoadLog"
+                                Click="LogButton_Click" Content="Load log" IsEnabled="False" />
+                        <Button x:Name="EventsButton" AutomationProperties.AutomationId="Queue.LoadEvents"
+                                Click="EventsButton_Click" Content="Load events" IsEnabled="False" />
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Result and diagnostics" />
+                    <TextBox x:Name="DetailsTextBox"
+                             AutomationProperties.AutomationId="Queue.Details"
+                             AcceptsReturn="True"
+                             FontFamily="Consolas"
+                             IsReadOnly="True"
+                             MinHeight="300"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             TextWrapping="NoWrap" />
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <ProgressRing x:Name="BusyRing" Grid.RowSpan="3"
+                      HorizontalAlignment="Center" VerticalAlignment="Center" IsActive="False" />
+    </Grid>
+</Page>

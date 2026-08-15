@@ -1,7 +1,7 @@
 # DWCT Generative Sound Studio Release-Convergence Status
 
 Current review date: 2026-08-06
-Canonical product: `studio/edmg-studio`
+Canonical product: WinUI Windows client plus the shared Studio backend in `studio/edmg-studio`
 Canonical Python lock: `studio/edmg-studio/python_backend/uv.lock`
 
 This document now separates **current verified truth** from the historical seven-day implementation
@@ -95,7 +95,8 @@ The detailed retirement policy and removal gates live in `docs/COMPATIBILITY_MAT
 
 | Path | Classification | Rule |
 |---|---|---|
-| `studio/edmg-studio` | Canonical desktop product | All normal product, UI, backend, packaging, and release work lands here |
+| `studio/edmg-studio-winui` | Primary Windows frontend | Native Studio workflows use the shared authenticated API; do not duplicate inference or rendering |
+| `studio/edmg-studio` | Canonical backend and Linux/compatibility client | Own shared backend, project contracts, Electron/React compatibility, and the currently qualified packaging lanes |
 | Repository root | Active workspace/orchestration | Keep cross-scope tests, docs, deployment, and compatibility launchers; do not create a second app |
 | `studio/edmg-studio/python_backend/edmg_studio_backend` | Canonical Studio backend | Extract by domain while preserving routes and persisted formats |
 | `studio/edmg-studio/python_backend/enhanced_deforum_music_generator` | Canonical bundled engine package | Access through stable facades and tests |
@@ -197,7 +198,7 @@ historical status label.
 | P2-03 | Not started | P1-06, P2-01, P2-02 | `src/features/**`; Render/Timeline/Settings pages | UI parity, typecheck, lint, build | Large page-local systems remain |
 | P2-04 | Partial | P1-02, P1-06 | job API/store; Render Queue UI | State-machine contracts and every UI transition | Pause and uniform blocked/recovery states are missing |
 | P2-05 | Partial | W1-01, P3-01 | analysis APIs; Understand feature | Correction persistence/invalidation; keyboard UI | Existing views are distributed and not uniformly editable |
-| P2-06 | Partial | P0-04, P0-05, P1-01, P1-02 | starter project; first-run UI/e2e | Clean-machine proxy-render e2e | No bundled guided starter proof |
+| P2-06 | Partial | P0-04, P0-05, P1-01, P1-02 | starter project; first-run UI/e2e | Clean-machine supported-render e2e | No bundled guided starter proof |
 
 ## Day 4 - Install the music-aware intelligence layer
 
@@ -216,7 +217,7 @@ historical status label.
 |---|---|---|---|---|---|
 | P4-01 | Partial | W1-01, P1-02, P1-03, P3-01, P3-03, P3-04 | Render Plan DAG/contracts/planner | DAG validation, immutability, cache keys, compatibility | Current plan is advisory rather than an immutable task DAG |
 | P4-02 | Partial | W1-01, P4-01 | capability broker and provider adapters | Shared adapter conformance suite | Existing capability protocol is not one executable multi-lane contract |
-| P4-03 | Partial | P1-03, P4-01, P4-02 | lane-promotion contract | Cross-lane timing/framing/control/lineage goldens | Explicit proxy-to-final equivalence is missing |
+| P4-03 | Partial | P1-03, P4-01, P4-02 | lane-promotion contract | Cross-lane timing/framing/control/lineage goldens | Production-lane equivalence evidence is missing |
 | P4-04 | Partial | P4-01, P4-02, P5-02 | budget controller and explanation UI | Deterministic time/memory/cost allocation fixtures | Hero heuristic exists without named-task reallocation |
 | P4-05 | Partial | P1-03, P3-04, P4-01 | Variant Review contracts/UI | Variant lifecycle and synchronized compare e2e | Approval/cherry-pick/locks/notes/review provenance incomplete |
 | P4-06 | Partial | P3-04, P4-01, P4-05 | continuity validators/UI warnings | Per-validator fixtures and false-positive review | Scalar risk exists; typed continuity conflict checks do not |

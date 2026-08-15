@@ -7,20 +7,30 @@ public sealed class BackendLaunchSpecFactory
     private static readonly string[] CapabilityExtras = ["core", "audio", "asr", "internal-video", "aws"];
 
     private readonly BackendConfiguration _configuration;
+    private readonly string? _installationLocatorPath;
 
-    public BackendLaunchSpecFactory(BackendConfiguration configuration)
+    public BackendLaunchSpecFactory(
+        BackendConfiguration configuration,
+        string? installationLocatorPath = null)
     {
         _configuration = configuration;
+        _installationLocatorPath = installationLocatorPath;
     }
 
     public string? FindPackagedBackendDirectory()
     {
-        var candidates = new[]
+        var candidates = new List<string>
         {
             Path.Combine(AppContext.BaseDirectory, "backend"),
             Path.Combine(AppContext.BaseDirectory, "resources", "backend"),
             Path.Combine(AppContext.BaseDirectory, "electron-resources", "backend")
         };
+
+        var installedBackend = BackendInstallationLocator.TryResolveBackendDirectory(_installationLocatorPath);
+        if (!string.IsNullOrWhiteSpace(installedBackend))
+        {
+            candidates.Add(installedBackend);
+        }
 
         return candidates.FirstOrDefault(IsValidPackagedBackendDirectory);
     }

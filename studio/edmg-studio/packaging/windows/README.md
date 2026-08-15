@@ -1,6 +1,8 @@
 # Windows Release Build (Installer-grade)
 
-This folder contains a **Windows-first** packaging pipeline that produces a DAW/game-like installer.
+This folder contains the **WinUI-first** Windows packaging pipeline. It produces
+a packaged x64 WinUI primary frontend over the authenticated localhost FastAPI
+backend and retains Electron as an explicit compatibility frontend.
 
 ## Prereqs
 
@@ -43,6 +45,17 @@ cd studio/edmg-studio
 pnpm run dist:win:cuda
 ```
 
+That command builds the Electron/CUDA compatibility tree, stages a
+self-contained Windows App SDK WinUI MSIX, and builds the Inno wrapper. To
+validate only the WinUI package without recompressing the large payload:
+
+```powershell
+pnpm run stage:winui:msix
+```
+
+An unsigned staged MSIX proves package structure only. It is not a releasable
+installer and the installation manager rejects it.
+
 For other oversized profiles, build the Inno Setup external-payload installer
 directly:
 
@@ -64,6 +77,8 @@ This produces:
 - `studio/edmg-studio/dist-inno/EDMG-Studio-<version>-windows-x64-<profile>-Setup.exe`
 - `studio/edmg-studio/dist-inno/payload/win-unpacked.7z`
 - `studio/edmg-studio/dist-inno/payload/payload-integrity.json`
+- `studio/edmg-studio/release/winui-msix/<identity>_<version>_x64.msix`
+- `studio/edmg-studio/release/winui-msix/winui-msix.json`
 
 The CUDA command uses the parallel `dist-inno-cuda/` directory and names its
 installer `EDMG-Studio-<version>-windows-x64-cuda-Setup.exe`. The legacy
@@ -71,8 +86,9 @@ single-file CUDA NSIS attempt remains available as `dist:win:cuda:nsis` for
 diagnostics, but the current locked CUDA payload is too large to succeed.
 
 Ship the setup EXE and `payload/` directory together. The setup EXE is small
-because Inno copies the large packaged app archive from the sibling payload
-folder at install time instead of embedding it. Inno's native archive extractor
+because it embeds only the WinUI MSIX and its registration helper; Inno copies
+the large Electron/CUDA packaged app archive from the sibling payload folder at
+install time instead of embedding it. Inno's native archive extractor
 tracks every installed payload file for a clean uninstall, so customer machines
 do not need 7-Zip. The setup EXE embeds the payload SHA-256 and rejects a missing
 or modified archive. The integrity sidecar binds that archive hash to the exact
@@ -103,7 +119,9 @@ cannot replace CUDA dependencies during a build.
 
 ## What gets bundled
 
-- Electron UI
+- self-contained Windows App SDK WinUI MSIX as the primary Windows frontend
+- WinUI package registration, dynamic AppsFolder launch, rollback, and uninstall helper
+- Electron UI as the Linux and Windows compatibility frontend
 - Python backend compiled into `edmg-studio-backend.exe` from `uv.lock`
 - Checksum-verified, pinned media tools:
   - `studio/edmg-studio/electron-resources/bin/ffmpeg.exe`
@@ -132,8 +150,10 @@ PE bytes, and fully revalidates it before NSIS or Inno can archive them. Unsigne
 builds retain an explicit `unsigned-local` manifest state and cannot be promoted
 through the fail-closed production gate. Release evidence (SBOM + checksum manifests) is written to
 `studio/edmg-studio/release/evidence/` during `prepare-release-bundle` and after
-installer builds. Installed applications run the executable directly and do not
-require Python or uv on the customer machine.
+installer builds. Installed WinUI applications launch through their registered package identity;
+the compatibility frontend and backend use their installed executables.
+Customer machines do not require Python, uv, or a separate Windows App Runtime
+framework package.
 
 ## Release evidence and smoke
 
@@ -163,7 +183,8 @@ packaging fail before unsigned EDMG-owned executables can be archived and also
 sets electron-builder `forceCodeSigning`. The custom certificate variables are
 mapped into electron-builder's native Windows signing configuration, while the
 PowerShell lane verifies the copied backend/helper, application, and installer
-with both `Get-AuthenticodeSignature` and `signtool verify`. A
+with both `Get-AuthenticodeSignature` and `signtool verify`; application MSIX
+packages are verified with the `/pa` policy. A
 valid signature from a different certificate is rejected; the signer thumbprint
 must match the configured release certificate.
 
@@ -181,6 +202,11 @@ checksum evidence is generated afterward so it describes the signed bytes.
 Without `EDMG_REQUIRE_CODE_SIGNING`, developer builds may remain unsigned, but
 the signing evidence records those artifacts as skipped. Never distribute that
 state as a production release.
+
+The remaining release gates are intentionally external: qualify the production
+publisher/signing identity, test install/upgrade/rollback/uninstall on a clean
+supported Windows machine, and run CUDA/TensorRT acceptance on physical NVIDIA
+hardware. Source-only or unsigned structural validation does not satisfy them.
 
 ## Runtime defaults
 

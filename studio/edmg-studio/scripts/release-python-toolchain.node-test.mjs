@@ -759,6 +759,7 @@ test("package release commands select explicit profiles without changing pnpm", 
   assert.match(packageJson.scripts["dist:win:cpu"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:win:directml"], /prepare:release-bundle:directml/);
   assert.match(packageJson.scripts["dist:win:cuda"], /dist:win:cuda:dir/);
+  assert.match(packageJson.scripts["dist:win:cuda"], /stage:winui:msix/);
   assert.match(packageJson.scripts["dist:win:cuda"], /build_inno_external\.ps1/);
   assert.match(packageJson.scripts["dist:win:cuda"], /--profile cuda/);
   assert.match(packageJson.scripts["dist:win:cuda"], /--artifact-set win-inno-cuda/);
@@ -767,6 +768,59 @@ test("package release commands select explicit profiles without changing pnpm", 
   assert.match(packageJson.scripts["dist:linux"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:linux:cuda"], /prepare:release-bundle:cuda/);
   assert.match(packageJson.scripts["validate:desktop"], /pnpm run typecheck && pnpm run lint && pnpm run test:ui/);
+});
+
+test("Windows packaging stages and installs a self-contained packaged WinUI primary frontend", () => {
+  const stageWinUi = fs.readFileSync(
+    path.join(studioRoot, "packaging", "windows", "stage_winui_msix.ps1"),
+    "utf8",
+  );
+  const manageWinUi = fs.readFileSync(
+    path.join(studioRoot, "packaging", "windows", "manage_winui_package.ps1"),
+    "utf8",
+  );
+  const innoBuild = fs.readFileSync(
+    path.join(studioRoot, "packaging", "windows", "build_inno_external.ps1"),
+    "utf8",
+  );
+
+  assert.match(stageWinUi, /-p:Platform=x64/);
+  assert.match(stageWinUi, /-p:RuntimeIdentifier=win-x64/);
+  assert.match(stageWinUi, /-p:WindowsAppSDKSelfContained=true/);
+  assert.match(stageWinUi, /-p:PublishTrimmed=false/);
+  assert.match(stageWinUi, /-p:AppxBundle=Never/);
+  assert.match(stageWinUi, /local-name\(\)='PackageDependency'/);
+  assert.match(stageWinUi, /Generated WinUI MSIX is not self-contained/);
+  assert.match(stageWinUi, /windowsAppSdkDeployment = "self-contained"/);
+
+  assert.match(innoBuild, /windowsAppSdkDeployment.*-cne "self-contained"/);
+  assert.match(innoBuild, /release\\winui-msix/);
+  assert.match(innoBuild, /-Action Install -InstallRoot/);
+  assert.match(innoBuild, /-Action Uninstall -InstallRoot/);
+  assert.match(innoBuild, /EDMG Studio \(Electron compatibility\)/);
+  assert.match(innoBuild, /-Action Launch/);
+  assert.match(
+    innoBuild,
+    /\[Run\][\s\S]*-Action Install -InstallRoot[\s\S]*-Action Launch"; Description: "Launch EDMG Studio"/,
+    "the package must be registered before the post-install WinUI launch",
+  );
+
+  assert.match(manageWinUi, /Get-AppxPackage -Name \$packageName/);
+  assert.match(manageWinUi, /shell:AppsFolder\\\$\(\$package\.PackageFamilyName\)!\$applicationId/);
+  assert.match(manageWinUi, /Get-AuthenticodeSignature/);
+  assert.match(manageWinUi, /Add-AppxPackage -Path \$normalizedMsixPath/);
+  assert.match(manageWinUi, /Remove-AppxPackage -Package \$package\.PackageFullName/);
+  assert.ok(
+    manageWinUi.indexOf("Write-Utf8FileAtomically $locatorPath") <
+      manageWinUi.indexOf("Add-AppxPackage -Path $normalizedMsixPath"),
+    "backend discovery must be configured before package registration",
+  );
+  assert.ok(
+    manageWinUi.indexOf("Remove-AppxPackage -Package $package.PackageFullName") <
+      manageWinUi.lastIndexOf("Remove-MatchingLocator $normalizedRoot"),
+    "uninstall must remove the package before its backend locator",
+  );
+  assert.match(manageWinUi, /Write-Utf8FileAtomically \$locatorPath \$previousLocator/);
 });
 
 test("build-tool transitive security overrides stay on audited patched releases", () => {

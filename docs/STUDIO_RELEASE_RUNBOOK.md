@@ -176,9 +176,10 @@ new Studio Home is active and its Models page has inspected the root-level engin
 
 ### ComfyUI is reachable but unusable
 
-- Studio should fall back to proxy/internal render paths when the configured
-  checkpoint/runtime is not actually usable
-- verify the render recommendation in `Render` or pipeline validation
+- Studio does not provide a proxy-render fallback. Repair the configured local
+  ComfyUI checkpoint/runtime, select the supported internal renderer when the
+  project permits it, or stop the render.
+- verify the actionable error and render recommendation in `Render` or pipeline validation
 
 ### Old data still appears split across drives
 
