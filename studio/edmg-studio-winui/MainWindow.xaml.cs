@@ -48,6 +48,10 @@ public sealed partial class MainWindow : Window
         {
             await App.Services.DisposeAsync();
         }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"Application shutdown completed with errors: {exception}");
+        }
         finally
         {
             _closeCompleted = true;

@@ -3,6 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:controls="using:EdmgStudio.WinUI.Controls"
     xmlns:local="using:EdmgStudio.WinUI.Pages"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
@@ -87,7 +88,8 @@
                     </Grid>
                     <ListView x:Name="LaneList" Grid.Row="2"
                               AutomationProperties.AutomationId="Timeline.LaneList"
-                              ItemsSource="{x:Bind Lanes, Mode=OneWay}">
+                              ItemsSource="{x:Bind Lanes, Mode=OneWay}"
+                              SelectionChanged="LaneList_SelectionChanged">
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="local:TimelineLane">
                                 <Grid Padding="0,6" ColumnSpacing="8">
@@ -118,6 +120,30 @@
             </Border>
 
             <StackPanel Grid.Column="1" Spacing="12">
+                <Border Padding="18" Background="{ThemeResource CardBackgroundBrush}"
+                        BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
+                    <StackPanel Spacing="12">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <StackPanel>
+                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="Selected lane monitor" />
+                                <TextBlock x:Name="PreviewFrameText"
+                                           Foreground="{ThemeResource SecondaryTextBrush}"
+                                           Text="Select a lane to preview its start frame."
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button x:Name="PreviewFrameButton" Grid.Column="1"
+                                    AutomationProperties.AutomationId="Timeline.PreviewFrame"
+                                    Click="PreviewFrameButton_Click"
+                                    Content="Refresh frame"
+                                    IsEnabled="False" />
+                        </Grid>
+                        <controls:Direct3DPreviewControl
+                            x:Name="TimelinePreview"
+                            Height="220"
+                            AutomationProperties.AutomationId="Timeline.FramePreview"
+                            AutomationProperties.Name="Selected timeline lane Direct3D preview" />
+                    </StackPanel>
+                </Border>
                 <Border Padding="18" Background="{ThemeResource CardBackgroundBrush}"
                         BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
                     <StackPanel Spacing="12">

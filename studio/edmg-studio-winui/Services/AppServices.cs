@@ -1,9 +1,14 @@
 using EdmgStudio.Core.Services;
+using EdmgStudio.WinUI.Graphics;
 
 namespace EdmgStudio.WinUI.Services;
 
 public sealed class AppServices : IAsyncDisposable
 {
+    private readonly object _previewSessionsSync = new();
+    private readonly HashSet<PreviewRendererSession> _previewSessions = [];
+    private bool _isDisposing;
+
     private AppServices(
         BackendConfiguration configuration,
         BackendSupervisor backendSupervisor,
@@ -20,6 +25,28 @@ public sealed class AppServices : IAsyncDisposable
     public BackendSupervisor BackendSupervisor { get; }
     public StudioApiClient ApiClient { get; }
     public StudioSessionService Session { get; }
+
+    internal bool TryTrackPreviewSession(PreviewRendererSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        lock (_previewSessionsSync)
+        {
+            if (_isDisposing)
+            {
+                return false;
+            }
+
+            return _previewSessions.Add(session);
+        }
+    }
+
+    internal void UntrackPreviewSession(PreviewRendererSession session)
+    {
+        lock (_previewSessionsSync)
+        {
+            _previewSessions.Remove(session);
+        }
+    }
 
     public static AppServices Create()
     {
@@ -42,7 +69,53 @@ public sealed class AppServices : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        ApiClient.Dispose();
-        await BackendSupervisor.DisposeAsync();
+        List<Exception>? failures = null;
+        PreviewRendererSession[] previewSessions;
+        lock (_previewSessionsSync)
+        {
+            if (_isDisposing)
+            {
+                return;
+            }
+
+            _isDisposing = true;
+            previewSessions = [.. _previewSessions];
+            _previewSessions.Clear();
+        }
+
+        foreach (PreviewRendererSession session in previewSessions)
+        {
+            try
+            {
+                await session.DisposeAsync();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+
+        try
+        {
+            await BackendSupervisor.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
+        try
+        {
+            ApiClient.Dispose();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
+        if (failures is not null)
+        {
+            throw new AggregateException("One or more application services failed to shut down cleanly.", failures);
+        }
     }
 }

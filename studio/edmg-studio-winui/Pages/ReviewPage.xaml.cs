@@ -9,6 +9,8 @@ public sealed partial class ReviewPage : Page
 {
     private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
     private string? _projectId;
+    private CancellationTokenSource? _previewCancellation;
+    private int _previewGeneration;
 
     public ObservableCollection<ReviewArtifact> Artifacts { get; } = [];
 
@@ -81,8 +83,11 @@ public sealed partial class ReviewPage : Page
         }
     }
 
-    private void ArtifactsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void ArtifactsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        CancelPreview();
+        int generation = Interlocked.Increment(ref _previewGeneration);
+
         if (ArtifactsList.SelectedItem is not ReviewArtifact artifact)
         {
             ClearArtifactDetails();
@@ -95,6 +100,48 @@ public sealed partial class ReviewPage : Page
         TraitsTextBox.Text = JoinValues(artifact.Data["cherry_pick_traits"]);
         LockFieldsTextBox.Text = JoinValues(artifact.Data["locks"]);
         MetadataTextBox.Text = StudioPageHelpers.FormatJson(artifact.Data);
+
+        if (!artifact.IsImage || string.IsNullOrWhiteSpace(_projectId))
+        {
+            ArtifactPreview.ShowUnsupported(artifact.IsVideo
+                ? "Video preview is not available in this build."
+                : "This artifact does not have an inline image preview.");
+            return;
+        }
+
+        _previewCancellation = new CancellationTokenSource();
+        CancellationToken cancellationToken = _previewCancellation.Token;
+        try
+        {
+            await _apiClient.StreamProjectFileAsync(
+                _projectId,
+                artifact.Path,
+                async (file, callbackToken) =>
+                {
+                    if (generation != Volatile.Read(ref _previewGeneration))
+                    {
+                        return false;
+                    }
+
+                    await ArtifactPreview.LoadStreamAsync(
+                        file.Stream,
+                        file.ContentHeaders.ContentType?.MediaType,
+                        callbackToken);
+                    return true;
+                },
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            if (generation == Volatile.Read(ref _previewGeneration))
+            {
+                ArtifactPreview.ShowError("Preview failed to load.");
+                ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
+            }
+        }
     }
 
     private void ClearArtifactDetails()
@@ -105,6 +152,17 @@ public sealed partial class ReviewPage : Page
         TraitsTextBox.Text = string.Empty;
         LockFieldsTextBox.Text = string.Empty;
         MetadataTextBox.Text = string.Empty;
+        ArtifactPreview.ShowEmpty("Select an artifact to preview it here.");
+    }
+
+    private void ReviewPage_Unloaded(object sender, RoutedEventArgs e) => CancelPreview();
+
+    private void CancelPreview()
+    {
+        Interlocked.Increment(ref _previewGeneration);
+        CancellationTokenSource? cancellation = Interlocked.Exchange(ref _previewCancellation, null);
+        cancellation?.Cancel();
+        cancellation?.Dispose();
     }
 
     private async void ApproveButton_Click(object sender, RoutedEventArgs e) => await SaveDecisionAsync("approved");
@@ -181,6 +239,10 @@ public sealed class ReviewArtifact
     public string Name { get; set; }
     public string Path { get; set; }
     public JsonObject Data { get; set; }
+    public bool IsImage => new[] { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico" }
+        .Contains(System.IO.Path.GetExtension(Name), StringComparer.OrdinalIgnoreCase);
+    public bool IsVideo => new[] { ".mp4", ".mov", ".webm", ".mkv", ".avi" }
+        .Contains(System.IO.Path.GetExtension(Name), StringComparer.OrdinalIgnoreCase);
 
     public string Summary
     {

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -27,6 +28,34 @@ public sealed class EnvironmentBackendTokenProvider : IBackendTokenProvider
 
         return ValueTask.FromResult<string?>(string.IsNullOrWhiteSpace(token) ? null : token.Trim());
     }
+}
+
+/// <summary>
+/// Provides callback-scoped access to a streamed project file. The stream and
+/// headers are valid only until the callback supplied to
+/// <see cref="StudioApiClient.StreamProjectFileAsync{TResult}"/> completes.
+/// </summary>
+public sealed class StudioFileStream
+{
+    internal StudioFileStream(
+        Stream stream,
+        HttpContentHeaders contentHeaders,
+        HttpResponseHeaders responseHeaders,
+        HttpStatusCode statusCode)
+    {
+        Stream = stream;
+        ContentHeaders = contentHeaders;
+        ResponseHeaders = responseHeaders;
+        StatusCode = statusCode;
+    }
+
+    public Stream Stream { get; }
+
+    public HttpContentHeaders ContentHeaders { get; }
+
+    public HttpResponseHeaders ResponseHeaders { get; }
+
+    public HttpStatusCode StatusCode { get; }
 }
 
 public sealed class StudioApiClient : IDisposable
@@ -171,6 +200,41 @@ public sealed class StudioApiClient : IDisposable
             null,
             true,
             cancellationToken);
+
+    public Task<TResult> StreamTimelineFrameAsync<TResult>(
+        string projectId,
+        double timeSeconds,
+        int width,
+        int height,
+        bool force,
+        Func<StudioFileStream, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken = default)
+    {
+        if (!double.IsFinite(timeSeconds) || timeSeconds < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeSeconds),
+                "Timeline preview time must be finite and non-negative.");
+        }
+
+        if (width is < 1 or > 16_384)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width));
+        }
+
+        if (height is < 1 or > 16_384)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height));
+        }
+
+        string requestPath =
+            $"/v1/projects/{EscapeIdentifier(projectId)}/preview/frame" +
+            $"?t={timeSeconds.ToString("R", CultureInfo.InvariantCulture)}" +
+            $"&w={width.ToString(CultureInfo.InvariantCulture)}" +
+            $"&h={height.ToString(CultureInfo.InvariantCulture)}" +
+            $"&force={(force ? "1" : "0")}";
+        return StreamResponseAsync(requestPath, callback, cancellationToken);
+    }
 
     public Task<JsonElement> SaveTimelineAsync(
         string projectId,
@@ -329,15 +393,66 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
 
-    public Task<byte[]> DownloadProjectFileAsync(
+    public async Task<byte[]> DownloadProjectFileAsync(
         string projectId,
         string relativePath,
         CancellationToken cancellationToken = default)
     {
+        return await StreamProjectFileAsync(
+                projectId,
+                relativePath,
+                async (file, callbackCancellationToken) =>
+                {
+                    using var destination = new MemoryStream();
+                    await file.Stream.CopyToAsync(destination, callbackCancellationToken).ConfigureAwait(false);
+                    return destination.ToArray();
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<TResult> StreamProjectFileAsync<TResult>(
+        string projectId,
+        string relativePath,
+        Func<StudioFileStream, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken = default)
+    {
         var path = RequireValue(relativePath, nameof(relativePath));
-        return SendBytesAsync(
-            $"/v1/projects/{EscapeIdentifier(projectId)}/file?path={Uri.EscapeDataString(path)}",
-            cancellationToken);
+        var requestPath =
+            $"/v1/projects/{EscapeIdentifier(projectId)}/file?path={Uri.EscapeDataString(path)}";
+        return await StreamResponseAsync(requestPath, callback, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<TResult> StreamResponseAsync<TResult>(
+        string requestPath,
+        Func<StudioFileStream, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        using var request = await CreateRequestAsync(
+                HttpMethod.Get,
+                requestPath,
+                null,
+                true,
+                cancellationToken)
+            .ConfigureAwait(false);
+        request.Headers.Accept.Clear();
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("*/*"));
+
+        using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var scopedFile = new StudioFileStream(
+            stream,
+            response.Content.Headers,
+            response.Headers,
+            response.StatusCode);
+        return await callback(scopedFile, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<JsonElement> GetVariantReviewAsync(string projectId, CancellationToken cancellationToken = default) =>
@@ -607,26 +722,6 @@ public sealed class StudioApiClient : IDisposable
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         return document.RootElement.Clone();
-    }
-
-    private async Task<byte[]> SendBytesAsync(string relativePath, CancellationToken cancellationToken)
-    {
-        using var request = await CreateRequestAsync(
-                HttpMethod.Get,
-                relativePath,
-                null,
-                true,
-                cancellationToken)
-            .ConfigureAwait(false);
-        request.Headers.Accept.Clear();
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("*/*"));
-        using var response = await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken)
-            .ConfigureAwait(false);
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<HttpRequestMessage> CreateRequestAsync(

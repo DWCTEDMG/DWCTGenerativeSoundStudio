@@ -187,7 +187,46 @@ new Studio Home is active and its Models page has inspected the root-level engin
 - restart Studio so the pending migration can run
 - confirm migration status in `Setup`
 
-### Packaged release proof
+### Native WinUI x64 preview proof
+
+The WinUI 3 client is packaged and x64-only. Do not add an unpackaged
+`WindowsPackageType=None` path, remove `Package.appxmanifest`, build AnyCPU, or
+start the packaged executable directly.
+
+Run from `studio/edmg-studio-winui`:
+
+```powershell
+dotnet restore .\EdmgStudio.WinUI.csproj -r win-x64
+dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj `
+  -p:Platform=x64 -p:Configuration=Release
+dotnet build .\EdmgStudio.WinUI.csproj `
+  -p:Platform=x64 -p:Configuration=Release
+```
+
+Launch the package through its package profile or `winapp run`, never by invoking
+the generated `.exe`. On every physical release candidate, manually verify:
+
+1. Outputs and Review display generated images without a temporary preview file;
+   Save Copy and Reveal continue to work.
+2. Selecting a Timeline lane loads its valid start-frame artifact without blocking
+   selection, and unsupported video shows an accessible unsupported state.
+3. Preview diagnostics name the expected hardware adapter and report its exact
+   64-bit DXGI LUID. Test WARP separately as a degraded fallback where practical.
+4. Colors, EXIF orientation, padded-row images, aspect-fit letterboxing, and empty,
+   loading, error, and recovery states are correct.
+5. Resize, minimize/restore, DPI changes, and moving between monitors never resize
+   the swap chain to zero or stretch the source.
+6. Device removal/reset recovery is bounded and redraws the latest valid frame.
+7. Closing while preview acquisition or rendering is active does not hang and
+   releases the renderer before the backend supervisor and API client.
+
+The current path decodes images to bounded CPU BGRA memory before uploading to
+reusable D3D11 textures. It does not move Python/CUDA inference to DirectX.
+`IFrameUploader` is reserved for future CUDA-D3D11 shared-texture interop using the
+recorded adapter LUID. Video is explicitly unsupported until a pinned, packaged,
+and qualified decoder exists.
+
+### Electron packaged release proof
 
 Operators should run:
 

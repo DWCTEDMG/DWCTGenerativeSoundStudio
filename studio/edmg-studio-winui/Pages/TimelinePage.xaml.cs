@@ -30,6 +30,8 @@ public sealed partial class TimelinePage : Page
     private string? _projectId;
     private bool _isBusy;
     private bool _isRecoveryAvailable;
+    private CancellationTokenSource? _previewCancellation;
+    private int _previewGeneration;
 
     public ObservableCollection<TimelineLane> Lanes { get; } = [];
 
@@ -43,6 +45,12 @@ public sealed partial class TimelinePage : Page
         base.OnNavigatedTo(e);
         _projectId = App.Services.Session.ActiveProjectId;
         await LoadTimelineAsync();
+    }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        CancelPreview();
+        base.OnNavigatedFrom(e);
     }
 
     private async Task LoadTimelineAsync()
@@ -129,6 +137,74 @@ public sealed partial class TimelinePage : Page
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await LoadTimelineAsync();
+
+    private async void LaneList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        await LoadSelectedFrameAsync(force: false);
+        SetEnabledState(!_isBusy && !string.IsNullOrWhiteSpace(_projectId));
+    }
+
+    private async void PreviewFrameButton_Click(object sender, RoutedEventArgs e)
+        => await LoadSelectedFrameAsync(force: true);
+
+    private async Task LoadSelectedFrameAsync(bool force)
+    {
+        CancelPreview();
+        int generation = Interlocked.Increment(ref _previewGeneration);
+        if (LaneList.SelectedItem is not TimelineLane lane || string.IsNullOrWhiteSpace(_projectId))
+        {
+            PreviewFrameText.Text = "Select a lane to preview its start frame.";
+            TimelinePreview.ShowEmpty("Select a lane to preview its start frame.");
+            return;
+        }
+
+        double timeSeconds = Math.Max(0, lane.StartSeconds);
+        PreviewFrameText.Text = $"{lane.Name} at {timeSeconds:N2} seconds";
+        _previewCancellation = new CancellationTokenSource();
+        CancellationToken cancellationToken = _previewCancellation.Token;
+        try
+        {
+            await App.Services.ApiClient.StreamTimelineFrameAsync(
+                _projectId,
+                timeSeconds,
+                640,
+                360,
+                force,
+                async (file, callbackToken) =>
+                {
+                    if (generation != Volatile.Read(ref _previewGeneration))
+                    {
+                        return false;
+                    }
+
+                    await TimelinePreview.LoadStreamAsync(
+                        file.Stream,
+                        file.ContentHeaders.ContentType?.MediaType,
+                        callbackToken);
+                    return true;
+                },
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            if (generation == Volatile.Read(ref _previewGeneration))
+            {
+                TimelinePreview.ShowError("Timeline frame could not be loaded.");
+                ShowStatus(StudioPageHelpers.UserMessage(exception), InfoBarSeverity.Error);
+            }
+        }
+    }
+
+    private void CancelPreview()
+    {
+        Interlocked.Increment(ref _previewGeneration);
+        CancellationTokenSource? cancellation = Interlocked.Exchange(ref _previewCancellation, null);
+        cancellation?.Cancel();
+        cancellation?.Dispose();
+    }
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
@@ -321,6 +397,8 @@ public sealed partial class TimelinePage : Page
         ApplyJsonButton.IsEnabled = enabled && !_isBusy;
         CheckRecoveryButton.IsEnabled = enabled && !_isBusy;
         RestoreRecoveryButton.IsEnabled = enabled && !_isBusy && _isRecoveryAvailable;
+        PreviewFrameButton.IsEnabled =
+            enabled && !_isBusy && LaneList.SelectedItem is TimelineLane;
     }
 
     private void ShowStatus(string message, InfoBarSeverity severity)

@@ -275,6 +275,183 @@ public sealed class StudioApiClientTests
     }
 
     [TestMethod]
+    public async Task StreamProjectFileAsync_KeepsResponseAliveForAuthenticatedCallbackThenDisposesIt()
+    {
+        byte[] expected = [0x01, 0x02, 0xFE, 0xFF];
+        var content = new TrackingContent(expected);
+        string? authorization = null;
+        using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
+        {
+            authorization = request.Headers.Authorization?.ToString();
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+            response.Headers.TryAddWithoutValidation("X-Preview-Source", "stream");
+            return Task.FromResult(response);
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("stream-token"),
+            httpClient);
+
+        var actual = await client.StreamProjectFileAsync(
+            "p1",
+            "renders/preview.png",
+            async (file, cancellationToken) =>
+            {
+                Assert.IsFalse(content.IsDisposed);
+                Assert.AreEqual(HttpStatusCode.OK, file.StatusCode);
+                Assert.AreEqual(expected.Length, file.ContentHeaders.ContentLength);
+                Assert.AreEqual("stream", file.ResponseHeaders.GetValues("X-Preview-Source").Single());
+
+                using var copy = new MemoryStream();
+                await file.Stream.CopyToAsync(copy, cancellationToken);
+                Assert.IsFalse(content.IsDisposed);
+                return copy.ToArray();
+            });
+
+        CollectionAssert.AreEqual(expected, actual);
+        Assert.AreEqual("Bearer stream-token", authorization);
+        Assert.IsTrue(content.IsDisposed);
+        Assert.IsTrue(content.Stream.IsDisposed);
+    }
+
+    [TestMethod]
+    public async Task StreamProjectFileAsync_CancellationDisposesTheResponseLifetime()
+    {
+        var content = new TrackingContent([0x01]);
+        using var httpClient = new HttpClient(new RecordingHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content })));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("stream-token"),
+            httpClient);
+        using var cancellation = new CancellationTokenSource();
+
+        var streaming = client.StreamProjectFileAsync(
+            "p1",
+            "renders/preview.png",
+            async (_, cancellationToken) =>
+            {
+                cancellation.Cancel();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return false;
+            },
+            cancellation.Token);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await streaming);
+        Assert.IsTrue(content.IsDisposed);
+        Assert.IsTrue(content.Stream.IsDisposed);
+    }
+
+    [TestMethod]
+    public async Task StreamTimelineFrameAsync_UsesAuthenticatedExactQueryAndCallbackLifetime()
+    {
+        byte[] expected = [0x89, 0x50, 0x4E, 0x47];
+        var content = new TrackingContent(expected);
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                string.Empty);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("stream-token"),
+            httpClient);
+
+        var actual = await client.StreamTimelineFrameAsync(
+            "project /#1",
+            1.25,
+            768,
+            432,
+            force: false,
+            async (file, cancellationToken) =>
+            {
+                Assert.IsFalse(content.IsDisposed);
+                using var copy = new MemoryStream();
+                await file.Stream.CopyToAsync(copy, cancellationToken);
+                return copy.ToArray();
+            });
+
+        CollectionAssert.AreEqual(expected, actual);
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Get, captured.Method);
+        Assert.AreEqual("/v1/projects/project%20%2F%231/preview/frame", captured.Uri.AbsolutePath);
+        Assert.AreEqual("?t=1.25&w=768&h=432&force=0", captured.Uri.Query);
+        Assert.AreEqual("Bearer " + "stream" + "-token", captured.Authorization);
+        Assert.IsTrue(content.IsDisposed);
+        Assert.IsTrue(content.Stream.IsDisposed);
+    }
+
+    [TestMethod]
+    public async Task StreamTimelineFrameAsync_CancellationDisposesTheResponseLifetime()
+    {
+        var content = new TrackingContent([0x01]);
+        using var httpClient = new HttpClient(new RecordingHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content })));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("stream-token"),
+            httpClient);
+        using var cancellation = new CancellationTokenSource();
+
+        var streaming = client.StreamTimelineFrameAsync(
+            "p1",
+            0,
+            768,
+            432,
+            force: false,
+            async (_, cancellationToken) =>
+            {
+                cancellation.Cancel();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return false;
+            },
+            cancellation.Token);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await streaming);
+        Assert.IsTrue(content.IsDisposed);
+        Assert.IsTrue(content.Stream.IsDisposed);
+    }
+
+    [TestMethod]
+    public void StreamTimelineFrameAsync_RejectsInvalidGeometryBeforeNetworkUse()
+    {
+        var callCount = 0;
+        using var httpClient = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            callCount++;
+            return Task.FromResult(JsonResponse("{}"));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            client.StreamTimelineFrameAsync(
+                "p1",
+                double.NaN,
+                768,
+                432,
+                false,
+                (_, _) => Task.FromResult(true)));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            client.StreamTimelineFrameAsync(
+                "p1",
+                0,
+                0,
+                432,
+                false,
+                (_, _) => Task.FromResult(true)));
+        Assert.AreEqual(0, callCount);
+    }
+
+    [TestMethod]
     public async Task ModelActions_UseExactPathsAndBodies()
     {
         var captured = new List<CapturedRequest>();
@@ -337,5 +514,50 @@ public sealed class StudioApiClientTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             callback(request, cancellationToken);
+    }
+
+    private sealed class TrackingContent : HttpContent
+    {
+        private readonly byte[] _bytes;
+
+        public TrackingContent(byte[] bytes)
+        {
+            _bytes = bytes;
+            Headers.ContentLength = bytes.Length;
+            Stream = new TrackingStream(bytes);
+        }
+
+        public bool IsDisposed { get; private set; }
+
+        public TrackingStream Stream { get; }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(_bytes).AsTask();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = _bytes.Length;
+            return true;
+        }
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(Stream);
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class TrackingStream(byte[] bytes) : MemoryStream(bytes)
+    {
+        public bool IsDisposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
+        }
     }
 }
