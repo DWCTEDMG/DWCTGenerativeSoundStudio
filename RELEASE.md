@@ -1,7 +1,8 @@
 # EDMG Studio Release Checklist
 
-This is the Windows-first release checklist for the canonical Studio product in
-`studio/edmg-studio/`.
+This is the Windows-first release checklist for the Studio product: the primary
+WinUI frontend in `studio/edmg-studio-winui/`, the shared backend in
+`studio/edmg-studio/`, and the established Electron compatibility/release lane.
 
 This checklist defines procedures and acceptance gates; it is not a claim that
 the current installers exist or have passed them. Release evidence is valid only
@@ -18,8 +19,40 @@ Stable and preview promotion follows [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.
 - `pnpm@10.33.0` via `studio/edmg-studio/package.json#packageManager`
 - Windows build host for `dist:win`
 
-Packaged Studio ships its own Electron runtime and PyInstaller backend. Python
-and uv are build-time requirements only; customers do not install either one.
+Packaged Studio ships a self-contained Windows App SDK WinUI package, the
+Electron compatibility runtime, and the PyInstaller backend. Python and uv are
+build-time requirements only; customers do not install either one.
+
+### Frontend and packaging boundary
+
+WinUI is the primary Windows product frontend and uses the same validated
+PyInstaller backend payload over authenticated localhost HTTP. The existing
+Electron frontend remains available for Linux and Windows compatibility. The
+canonical Windows CUDA command stages a self-contained x64 WinUI MSIX and embeds
+it in the external-payload Inno installer; the approximately 6.8 GB Electron and
+CUDA/TensorRT backend tree remains the sibling payload archive. A public package
+still requires production signing and publisher identity, clean-machine install,
+upgrade, rollback, accessibility, customer-flow, and physical NVIDIA evidence.
+
+Source gates for the native client, run from `studio/edmg-studio-winui/`:
+
+```powershell
+dotnet build .\EdmgStudio.WinUI.csproj -p:Platform=x64 -p:Configuration=Release
+dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj -p:Platform=x64
+```
+
+Launch development builds through the packaged profile or `winapp`; never run
+the generated executable directly.
+
+Create a structurally validated local WinUI package from `studio/edmg-studio/`:
+
+```powershell
+pnpm run stage:winui:msix
+```
+
+This staging path enforces Release/x64, no MSIX bundle, no trimming, and a
+self-contained Windows App SDK. Without configured signing credentials the
+result is structural build evidence only and must not be distributed.
 
 ## Canonical repo hygiene
 
@@ -70,6 +103,10 @@ pnpm run dist:win:cpu
 pnpm run dist:win:directml
 pnpm run dist:win:cuda
 ```
+
+`dist:win:cuda` is the canonical WinUI-first CUDA distribution path. It retains
+the Electron application as a clearly named compatibility shortcut while
+registering WinUI as the primary Start menu and post-install application.
 
 Every release profile is resolved exclusively from `pyproject.toml` and the
 committed `uv.lock`. Environment variables that inject a package source,
@@ -208,7 +245,9 @@ Minimum manual acceptance pass after automation:
 5. Upload audio.
 6. Analyze — confirm **Workspace → Understand / Music Graph v1** shows sections, tags, and optional ASR lines.
 7. Plan — generate variants and apply one to the timeline.
-8. Render — inspect **Render Plan** panel and enqueue a proxy render.
+8. Render — select a supported diffusion, hosted, or TensorRT path, pass
+   preflight, enqueue a production render, and verify progress/cancel/recovery in
+   the queue. Do not use the retired proxy-render workflow.
 9. **Review** — compare artifacts and record an approval decision.
 10. **Workspace → Handoff** — export a template package (optional import smoke).
 11. Export and verify output files.

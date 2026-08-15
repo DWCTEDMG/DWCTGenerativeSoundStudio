@@ -79,6 +79,113 @@ public sealed class BackendConfigurationTests
         }
     }
 
+    [TestMethod]
+    public void InstallationLocator_ResolvesAValidExternalBackend()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var installRoot = Path.Combine(root, "install");
+            var backendDirectory = CreatePackagedBackend(installRoot, validManifest: true);
+            var locatorPath = Path.Combine(root, "installation.json");
+            File.WriteAllText(
+                locatorPath,
+                $$"""{"schemaVersion":1,"installRoot":{{System.Text.Json.JsonSerializer.Serialize(installRoot)}}}""");
+
+            var configuration = CreateConfiguration(root);
+            var factory = new BackendLaunchSpecFactory(configuration, locatorPath);
+
+            Assert.AreEqual(backendDirectory, BackendInstallationLocator.TryResolveBackendDirectory(locatorPath));
+            Assert.AreEqual(backendDirectory, factory.FindPackagedBackendDirectory());
+        }
+        finally
+        {
+            DeleteTemporaryRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public void InstallationLocator_IgnoresMissingMalformedRelativeAndStaleValues()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var locatorPath = Path.Combine(root, "installation.json");
+            Assert.IsNull(BackendInstallationLocator.TryResolveBackendDirectory(locatorPath));
+
+            File.WriteAllText(locatorPath, "{not-json");
+            Assert.IsNull(BackendInstallationLocator.TryResolveBackendDirectory(locatorPath));
+
+            File.WriteAllText(locatorPath, """{"schemaVersion":1,"installRoot":"relative"}""");
+            Assert.IsNull(BackendInstallationLocator.TryResolveBackendDirectory(locatorPath));
+
+            var missingRoot = Path.Combine(root, "missing");
+            File.WriteAllText(
+                locatorPath,
+                $$"""{"schemaVersion":1,"installRoot":{{System.Text.Json.JsonSerializer.Serialize(missingRoot)}}}""");
+            Assert.IsNull(BackendInstallationLocator.TryResolveBackendDirectory(locatorPath));
+        }
+        finally
+        {
+            DeleteTemporaryRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public void FindPackagedBackendDirectory_RejectsInvalidLocatedBundle()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var installRoot = Path.Combine(root, "install");
+            CreatePackagedBackend(installRoot, validManifest: false);
+            var locatorPath = Path.Combine(root, "installation.json");
+            File.WriteAllText(
+                locatorPath,
+                $$"""{"schemaVersion":1,"installRoot":{{System.Text.Json.JsonSerializer.Serialize(installRoot)}}}""");
+
+            var factory = new BackendLaunchSpecFactory(CreateConfiguration(root), locatorPath);
+
+            Assert.IsNull(factory.FindPackagedBackendDirectory());
+        }
+        finally
+        {
+            DeleteTemporaryRoot(root);
+        }
+    }
+
+    private static BackendConfiguration CreateConfiguration(string root) => new(
+        RequestedBackendMode.Managed,
+        "127.0.0.1",
+        7863,
+        new Uri("http://127.0.0.1:7863/"),
+        "cuda",
+        root,
+        CreatePaths(root),
+        "test");
+
+    private static string CreatePackagedBackend(string installRoot, bool validManifest)
+    {
+        var backendDirectory = Path.Combine(installRoot, "resources", "backend");
+        Directory.CreateDirectory(Path.Combine(backendDirectory, "_internal"));
+        File.WriteAllText(Path.Combine(backendDirectory, "edmg-studio-backend.exe"), string.Empty);
+        File.WriteAllText(
+            Path.Combine(backendDirectory, "backend-bundle-manifest.json"),
+            validManifest
+                ? """
+                  {
+                    "ok": true,
+                    "platform": "win32",
+                    "bundleLayout": "onedir",
+                    "backendEntryPoint": "edmg-studio-backend.exe",
+                    "acceleratorProfile": "cuda",
+                    "bundleEntries": ["edmg-studio-backend.exe"]
+                  }
+                  """
+                : """{"ok":false}""");
+        return backendDirectory;
+    }
+
     internal static StudioPaths CreatePaths(string root) => new(
         root,
         Path.Combine(root, "data"),

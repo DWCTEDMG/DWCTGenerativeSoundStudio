@@ -1,11 +1,13 @@
 # EDMG Studio
 
-This repo includes the **primary desktop product** under:
+This repo includes the Studio desktop product under:
 
-- `studio/edmg-studio/`
+- `studio/edmg-studio-winui/` — primary packaged Windows frontend
+- `studio/edmg-studio/` — Electron/React frontend for Linux and compatibility
 
-It is an Electron + React UI with a local FastAPI backend, intended to be the
-"DAW-like" Studio experience (projects → audio ingest → AI plan → render queue → outputs).
+Both frontends use the same local FastAPI backend and project format for the "DAW-like" Studio
+experience (projects → audio ingest → AI plan → timeline → render queue → review → outputs).
+CUDA, TensorRT, analysis, rendering, and model lifecycle remain authoritative in Python.
 
 The original DWCTEDMG codebase remains the engine + integrations, but Studio is the
 canonical product surface and can install the EDMG Core engine into the same workflow.
@@ -19,8 +21,8 @@ From the repo root:
 - `RUN_ME.bat`
 - `./run_me.sh`
 
-Compatibility aliases may still exist, but the repo should be treated as if the
-Studio path above is the single desktop entrypoint.
+Compatibility aliases may still exist. On Windows, launch the packaged WinUI app; on Linux use the
+Electron/React Studio launcher.
 
 That launcher keeps the Studio product aligned with the same `Studio Home`, backend port,
 and runtime data that the in-app Setup page uses.
@@ -35,6 +37,17 @@ The packaged Windows installer is now configured as an assisted installer so the
 - run `edmg-studio-backend serve --host 127.0.0.1 --port 7863`
 
 2. Start Studio UI
+
+Windows packaged app (from `studio/edmg-studio-winui`):
+
+- use the WinUI `BuildAndRun.ps1` workflow with `EdmgStudio.WinUI.csproj`; it builds x64,
+  registers the package, and launches it through `winapp run --debug-output`
+- never run the generated packaged executable directly
+- if Developer Mode, .NET, or `winapp` is missing, install the prerequisite through
+  the supported WinUI setup workflow before retrying; do not switch to an unpackaged build
+
+Linux/compatibility client:
+
 - `cd studio/edmg-studio`
 - `npm install`
 - `npm run dev`

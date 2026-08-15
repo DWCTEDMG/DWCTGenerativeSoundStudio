@@ -2,6 +2,7 @@ using EdmgStudio.Core.Models;
 using EdmgStudio.WinUI.Pages;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 
@@ -14,6 +15,11 @@ public sealed partial class MainPage : Page
     public MainPage()
     {
         InitializeComponent();
+        if (StudioNavigation.SettingsItem is NavigationViewItem settingsItem)
+        {
+            AutomationProperties.SetAutomationId(settingsItem, "SettingsNavigationItem");
+        }
+
         App.Shell = this;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
@@ -106,6 +112,43 @@ public sealed partial class MainPage : Page
         BackendInfoBar.IsOpen = status.State != BackendLifecycleState.Ready;
     }
 
+    private async void ReconnectBackend_Click(object sender, RoutedEventArgs e)
+    {
+        BackendInfoBar.IsOpen = true;
+        BackendInfoBar.Severity = InfoBarSeverity.Informational;
+        BackendInfoBar.Title = "Connecting to the Studio backend";
+        BackendInfoBar.Message = "Checking health and safely starting the managed backend when required.";
+        try
+        {
+            var status = await App.Services.BackendSupervisor.RefreshHealthAsync();
+            if (!status.IsReady)
+            {
+                status = await App.Services.BackendSupervisor.StartAsync();
+            }
+
+            status = await App.Services.BackendSupervisor.RefreshHealthAsync();
+            if (!status.IsReady)
+            {
+                throw new InvalidOperationException(
+                    status.Detail ?? status.Message ?? "The backend did not become ready.");
+            }
+
+            BackendInfoBar.Severity = InfoBarSeverity.Success;
+            BackendInfoBar.Title = "Studio backend connected";
+            BackendInfoBar.Message = status.Detail ?? status.Message;
+            if (ContentFrame.Content is IStudioRefreshable refreshable)
+            {
+                await refreshable.RefreshAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            BackendInfoBar.Severity = InfoBarSeverity.Error;
+            BackendInfoBar.Title = "Backend connection failed";
+            BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
+        }
+    }
+
     private void Navigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (args.IsSettingsSelected)
@@ -148,6 +191,17 @@ public sealed partial class MainPage : Page
         "dashboard" => typeof(DashboardPage),
         "projects" => typeof(ProjectsPage),
         "workspace" => typeof(WorkspacePage),
+        "timeline" => typeof(TimelinePage),
+        "render" => typeof(RenderPage),
+        "queue" => typeof(QueuePage),
+        "review" => typeof(ReviewPage),
+        "outputs" => typeof(OutputsPage),
+        "models" => typeof(ModelsPage),
+        "cloud" => typeof(SettingsPage),
+        "directorLab" => typeof(TimelinePage),
+        "plannerLab" => typeof(RenderPage),
+        "reactiveLab" => typeof(TimelinePage),
+        "settings" => typeof(SettingsPage),
         "setup" => typeof(SetupPage),
         _ => typeof(MigrationPage)
     };

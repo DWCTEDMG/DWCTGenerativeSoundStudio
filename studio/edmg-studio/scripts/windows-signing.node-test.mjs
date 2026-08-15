@@ -107,6 +107,8 @@ test("PowerShell signing lane performs real signing, dual verification, and evid
   assert.match(signScript, /Join-Path \$PSHOME "Modules\\Microsoft\.PowerShell\.Security/);
   assert.match(signScript, /Import-Module -Name \$securityModule -Force/);
   assert.match(signScript, /Get-AuthenticodeSignature/);
+  assert.match(signScript, /Where-Object \{ \$_.Extension\.ToLowerInvariant\(\) -in @\("\.exe", "\.msi", "\.msix"\) \}/);
+  assert.match(signScript, /\$extension -notin @\("\.exe", "\.msi", "\.msix"\)/);
   assert.match(signScript, /"sign", "\/fd", "SHA256"/);
   assert.match(signScript, /"verify", "\/pa", "\/all", "\/tw", "\/v"/);
   assert.match(signScript, /windows-signatures\.json/);

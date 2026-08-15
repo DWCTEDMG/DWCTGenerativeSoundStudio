@@ -1,15 +1,23 @@
 # EDMG Studio — native Windows client
 
-This directory contains the packaged WinUI 3 migration of EDMG Studio. It is a parallel client over the existing FastAPI backend; the established Electron/React client remains available while native screens are migrated and verified one workflow at a time.
+This directory contains the packaged WinUI 3 primary Windows frontend for EDMG Studio.
+The established Electron/React client remains available for Linux and compatibility. Both clients
+use the existing CUDA-capable FastAPI backend; WinUI does not duplicate inference or render logic.
 
-## Current milestone
+## Native workflow coverage
 
-The first usable native workflow is implemented:
+The primary native workflow is implemented:
 
 - Windows 11-style `NavigationView`, Mica title bar, light/dark theme integration, keyboard navigation, and accessible headings.
 - Dashboard with live backend, project, runtime, storage, and AI-provider status.
 - Projects library with empty, loading, error, refresh, create, and open states.
 - Workspace with a native Windows audio picker and the authoritative create → upload → analyze/transcribe → plan-variants flow.
+- Field-preserving lane/clip Timeline editing with JSON access, undo/redo, save, autosave, and recovery.
+- Advanced Render settings for diffusion, hosted, CUDA, and TensorRT modes with backend preflight.
+- Render Queue progress, pause/resume/cancel/retry actions, logs, and event diagnostics.
+- Authenticated Outputs browsing/downloads and Review notes, traits, locks, and decisions.
+- Model catalogue, license acceptance, install/restore/remove, promotion lanes, and packs.
+- Settings for render routing, transcription, secret status, Foundry context, hardware, readiness, and metrics.
 - Setup Wizard with runtime readiness, storage locations, safe cache fallback reporting, backend connection details, and Credential Locker token storage.
 - Source, packaged, external, and healthy-source-attachment backend modes.
 - Managed-process containment with a Windows Job Object, owned-process-tree shutdown, strict `2xx + {"ok":true}` health checks, listener ownership checks, retry isolation, cancelable startup, and crash status propagation.
@@ -27,7 +35,8 @@ The WinUI client treats the Electron product artwork as the canonical source. Re
 The generator validates every output path before writing, copies the canonical logo/backgrounds into `Assets\Brand`, creates the scale-qualified MSIX graphics, and installs the existing multi-resolution EDMG Windows icon. The XAML theme provides distinct dark, light, and high-contrast resources; decorative artwork is disabled automatically in high-contrast mode.
 - Canonical cache/storage environment mapping and persisted AI-provider environment mapping.
 
-Timeline, Render, Render Queue, Review, Outputs, EDMG Director, AI Planner Lab, Reactive Lab, Cloud, Models, and Settings are present in the native navigation but intentionally open clear migration-status pages. They are not represented as complete native functionality yet.
+The obsolete proxy-render workflow is intentionally not exposed. Production renders use the
+backend's supported render routes.
 
 ## Architecture
 
@@ -43,7 +52,9 @@ EdmgStudio.WinUI (WinUI 3 / MSIX)
 Existing edmg_studio_backend (FastAPI / Python 3.12)
 ```
 
-The native client does not duplicate the AI, audio-analysis, render, model, or project-storage engines. Both desktop clients use the same backend and project format.
+The native client does not duplicate the AI, audio-analysis, render, model, or project-storage
+engines. It communicates with the backend over bearer-authenticated localhost HTTP and uses the
+same project format as the compatibility client.
 
 ## Prerequisites
 
@@ -125,7 +136,7 @@ new analysis → invalidate active plan
 new plan → becomes the active variant source
 ```
 
-Authored Timeline data, Visual DNA, imported lab state, outputs, jobs, and render history are preserved. Before native Render becomes functional, the remaining downstream conductor/performer caches need explicit revision provenance rather than broad deletion.
+Authored Timeline data, Visual DNA, imported lab state, outputs, jobs, and render history are preserved. Downstream conductor/performer caches still need explicit revision provenance rather than broad deletion.
 
 ## Packaging and release boundary
 
@@ -136,4 +147,5 @@ This is a packaged MSIX project, but it is not a Store-submission artifact yet.
 - Do not commit or copy the current multi-gigabyte generated backend bundle into this source directory.
 - Store signing, final product icons, installer upgrade tests, clean-machine proof, and customer-flow release validation remain separate release gates.
 
-The Electron client should not be removed until every native destination has feature parity and the packaged customer workflow has passed those release gates.
+The Electron client remains the Linux and compatibility surface while packaged WinUI customer-flow
+release validation proceeds.

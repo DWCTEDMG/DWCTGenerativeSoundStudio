@@ -30,6 +30,7 @@
                 </StackPanel>
                 <CommandBar Grid.Column="1" Background="Transparent" DefaultLabelPosition="Right">
                     <AppBarButton
+                        AutomationProperties.AutomationId="RefreshDashboardButton"
                         AutomationProperties.Name="Refresh dashboard"
                         Click="Refresh_Click"
                         Icon="Refresh"
@@ -88,6 +89,7 @@
                         <TextBlock x:Name="ActiveProjectValue" Text="Active project: none" TextWrapping="Wrap" />
                         <Button
                             HorizontalAlignment="Left"
+                            AutomationProperties.AutomationId="OpenProjectsButton"
                             AutomationProperties.Name="Open project library"
                             Click="OpenProjects_Click"
                             Content="Open project library" />
@@ -122,6 +124,7 @@
                         <TextBlock Text="5. Continue to Timeline and Render" />
                         <Button
                             HorizontalAlignment="Left"
+                            AutomationProperties.AutomationId="OpenWorkspaceButton"
                             AutomationProperties.Name="Continue to Workspace"
                             Click="OpenWorkspace_Click"
                             Content="Continue to Workspace"

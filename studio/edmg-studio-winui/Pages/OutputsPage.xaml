@@ -1,0 +1,108 @@
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.OutputsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <StackPanel>
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Outputs" />
+                <TextBlock Opacity="0.72" Text="Browse authenticated images, videos, exports, and render history." />
+            </StackPanel>
+            <Button
+                x:Name="RefreshButton"
+                Grid.Column="1"
+                AutomationProperties.AutomationId="OutputsRefreshButton"
+                Click="RefreshButton_Click"
+                Content="Refresh" />
+        </Grid>
+
+        <InfoBar
+            x:Name="StatusInfoBar"
+            Grid.Row="1"
+            IsClosable="True"
+            IsOpen="False" />
+
+        <Grid Grid.Row="2" ColumnDefinitions="360,*" ColumnSpacing="20">
+            <ListView
+                x:Name="OutputsList"
+                AutomationProperties.AutomationId="OutputsList"
+                ItemsSource="{x:Bind Items}"
+                SelectionChanged="OutputsList_SelectionChanged"
+                SelectionMode="Single">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Padding="8" RowSpacing="3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Row="1" Opacity="0.68" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+
+            <Grid Grid.Column="1" RowSpacing="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <StackPanel>
+                    <TextBlock x:Name="SelectedNameText" Style="{StaticResource SubtitleTextBlockStyle}" Text="Select an output" />
+                    <TextBlock x:Name="SelectedPathText" Opacity="0.68" TextWrapping="Wrap" />
+                </StackPanel>
+                <Border
+                    Grid.Row="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid>
+                        <Image x:Name="ImagePreview" MaxHeight="520" Stretch="Uniform" Visibility="Collapsed" />
+                        <TextBlock
+                            x:Name="PreviewPlaceholder"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Opacity="0.64"
+                            Text="Preview appears here"
+                            TextAlignment="Center"
+                            TextWrapping="Wrap" />
+                    </Grid>
+                </Border>
+                <TextBlock x:Name="MetadataText" Grid.Row="2" FontFamily="Consolas" TextWrapping="Wrap" />
+                <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
+                    <Button
+                        x:Name="SaveButton"
+                        AutomationProperties.AutomationId="OutputsSaveButton"
+                        Click="SaveButton_Click"
+                        Content="Save a copy"
+                        IsEnabled="False" />
+                    <Button
+                        x:Name="RevealButton"
+                        AutomationProperties.AutomationId="OutputsRevealButton"
+                        Click="RevealButton_Click"
+                        Content="Reveal preview"
+                        IsEnabled="False" />
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <ProgressRing
+            x:Name="BusyRing"
+            Grid.RowSpan="3"
+            Width="40"
+            Height="40"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            IsActive="False" />
+    </Grid>
+</Page>

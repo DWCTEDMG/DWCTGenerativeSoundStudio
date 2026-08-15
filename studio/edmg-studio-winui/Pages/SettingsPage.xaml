@@ -1,0 +1,118 @@
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Grid ColumnDefinitions="*,Auto">
+            <StackPanel>
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Settings and cloud" />
+                <TextBlock Opacity="0.72" Text="Provider routing, transcription, secrets, readiness, and the selected Foundry project." />
+            </StackPanel>
+            <Button x:Name="RefreshButton" Grid.Column="1" AutomationProperties.AutomationId="SettingsRefreshButton" Click="RefreshButton_Click" Content="Refresh" />
+        </Grid>
+        <InfoBar x:Name="StatusInfoBar" Grid.Row="1" IsClosable="True" IsOpen="False" />
+        <ScrollViewer x:Name="SettingsScroller" Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="16">
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Video generation route" />
+                        <ComboBox
+                            x:Name="VideoRouteComboBox"
+                            AutomationProperties.AutomationId="SettingsVideoRouteComboBox"
+                            Header="Preferred route"
+                            SelectedIndex="0">
+                            <x:String>auto</x:String>
+                            <x:String>local_gpu</x:String>
+                            <x:String>cosmos_cloud</x:String>
+                            <x:String>comfyui</x:String>
+                            <x:String>firefly_cloud</x:String>
+                            <x:String>imagineart_cloud</x:String>
+                        </ComboBox>
+                        <CheckBox x:Name="PreferGpuCheckBox" AutomationProperties.AutomationId="SettingsPreferGpuCheckBox" Content="Prefer local GPU in auto mode" IsChecked="True" />
+                        <CheckBox x:Name="CloudFallbackCheckBox" AutomationProperties.AutomationId="SettingsCloudFallbackCheckBox" Content="Allow Cosmos fallback" IsChecked="True" />
+                        <TextBlock Opacity="0.68" Text="Proxy rendering is permanently disabled. Rendering uses the local CUDA backend or a configured provider." TextWrapping="Wrap" />
+                        <Button AutomationProperties.AutomationId="SettingsSaveRouteButton" Click="SaveRouteButton_Click" Content="Save video route" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Transcription" />
+                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="12">
+                            <ComboBox x:Name="TranscriptionProviderComboBox" AutomationProperties.AutomationId="SettingsTranscriptionProviderComboBox" Header="Provider" SelectedIndex="0">
+                                <x:String>faster_whisper</x:String>
+                                <x:String>parakeet</x:String>
+                                <x:String>parakeet_nim</x:String>
+                            </ComboBox>
+                            <ComboBox x:Name="TranscriptionDeviceComboBox" Grid.Column="1" AutomationProperties.AutomationId="SettingsTranscriptionDeviceComboBox" Header="Device" SelectedIndex="0">
+                                <x:String>auto</x:String>
+                                <x:String>cuda</x:String>
+                                <x:String>cpu</x:String>
+                            </ComboBox>
+                            <ComboBox x:Name="ComputeTypeComboBox" Grid.Column="2" AutomationProperties.AutomationId="SettingsComputeTypeComboBox" Header="Compute type" SelectedIndex="0">
+                                <x:String>auto</x:String>
+                                <x:String>float16</x:String>
+                                <x:String>int8</x:String>
+                                <x:String>int8_float16</x:String>
+                            </ComboBox>
+                        </Grid>
+                        <TextBox x:Name="TranscriptionModelTextBox" AutomationProperties.AutomationId="SettingsTranscriptionModelTextBox" Header="Model" PlaceholderText="turbo" />
+                        <Button AutomationProperties.AutomationId="SettingsSaveTranscriptionButton" Click="SaveTranscriptionButton_Click" Content="Save transcription settings" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Secure provider secret" />
+                        <Grid ColumnDefinitions="220,*,Auto,Auto" ColumnSpacing="8">
+                            <ComboBox x:Name="SecretNameComboBox" AutomationProperties.AutomationId="SettingsSecretNameComboBox" SelectedIndex="0">
+                                <x:String>NVIDIA_API_KEY</x:String>
+                                <x:String>OPENAI_API_KEY</x:String>
+                                <x:String>AZURE_OPENAI_API_KEY</x:String>
+                                <x:String>ADOBE_CLIENT_ID</x:String>
+                                <x:String>ADOBE_CLIENT_SECRET</x:String>
+                                <x:String>IMAGINEART_API_KEY</x:String>
+                            </ComboBox>
+                            <PasswordBox x:Name="SecretValueBox" Grid.Column="1" AutomationProperties.AutomationId="SettingsSecretValueBox" PlaceholderText="New value (never displayed after saving)" />
+                            <Button Grid.Column="2" AutomationProperties.AutomationId="SettingsSaveSecretButton" Click="SaveSecretButton_Click" Content="Save" />
+                            <Button Grid.Column="3" AutomationProperties.AutomationId="SettingsClearSecretButton" Click="ClearSecretButton_Click" Content="Clear" />
+                        </Grid>
+                        <TextBlock x:Name="SecretStatusText" Opacity="0.68" Text="Secret status is loaded from the backend; values are never returned." TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Microsoft Foundry project" />
+                        <TextBlock Text="Project: jonlong-1185" />
+                        <TextBlock Text="Subscription: Azuredwct" />
+                        <TextBlock Text="Endpoint: https://jonlong-1185-resource.services.ai.azure.com/api/projects/jonlong-1185" TextWrapping="Wrap" />
+                        <TextBlock Opacity="0.68" Text="Authentication remains backend-managed; no credentials are stored in the WinUI source tree." TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Backend readiness and hardware" />
+                        <TextBox
+                            x:Name="DiagnosticsTextBox"
+                            AutomationProperties.AutomationId="SettingsDiagnosticsTextBox"
+                            AcceptsReturn="True"
+                            FontFamily="Consolas"
+                            IsReadOnly="True"
+                            MinHeight="280"
+                            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                            TextWrapping="NoWrap" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+        <ProgressRing x:Name="BusyRing" Grid.RowSpan="3" HorizontalAlignment="Center" VerticalAlignment="Center" IsActive="False" />
+    </Grid>
+</Page>

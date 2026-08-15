@@ -1,28 +1,33 @@
 # EDMG Studio Repo Map
 
-This repo contains one primary product and several compatibility surfaces.
+This repo contains one primary Studio product, two desktop clients, and several
+compatibility surfaces.
 
 ## Canonical product
 
-The authoritative desktop product is:
+The authoritative Studio runtime architecture is:
 
-- `studio/edmg-studio/`
-
-Its canonical runtime architecture is:
-
-1. Electron shell and preload in `studio/edmg-studio/`
-2. React/Vite frontend in `studio/edmg-studio/src/`
-3. FastAPI backend in `studio/edmg-studio/python_backend/`
-4. Shared launcher/runtime glue in `studio/edmg-studio/tools/launcher_gui.py`
-5. Packaging and release validation under `studio/edmg-studio/scripts/`,
+1. Primary Windows frontend in `studio/edmg-studio-winui/` (WinUI 3/MSIX)
+2. Linux and compatibility frontend in `studio/edmg-studio/` (Electron/React)
+3. Shared FastAPI backend in `studio/edmg-studio/python_backend/`
+4. Shared project/storage contracts and bearer-authenticated localhost API
+5. Electron launcher/runtime glue in `studio/edmg-studio/tools/launcher_gui.py`
+6. Established packaging and release validation under `studio/edmg-studio/scripts/`,
    `studio/edmg-studio/packaging/windows/`,
    `studio/edmg-studio/packaging/linux/`, and
    `docs/STUDIO_RELEASE_RUNBOOK.md`
+
+Python remains authoritative for analysis, AI/provider access, CUDA/TensorRT
+inference, rendering, jobs, outputs, and model lifecycle. The native client is
+not a second rendering engine.
 
 Canonical launch path from the repo root:
 
 - `RUN_ME.bat`
 - `./run_me.sh`
+
+`RUN_ME.bat` defaults to packaged WinUI. Pass `electron` or `compat` for the
+Electron client. Linux continues to use the Electron launcher.
 
 ## Internal support surfaces
 
@@ -71,12 +76,17 @@ Use these for the Studio product:
 
 - [README.md](../README.md)
 - [README_STUDIO.md](../README_STUDIO.md)
+- [studio/edmg-studio-winui/README.md](../studio/edmg-studio-winui/README.md)
 - [studio/edmg-studio/README.md](../studio/edmg-studio/README.md)
 - [RELEASE.md](../RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](./STUDIO_RELEASE_RUNBOOK.md)
 
 Key validation commands:
 
+- `studio/edmg-studio-winui/`:
+  `dotnet build .\EdmgStudio.WinUI.csproj -p:Platform=x64 -p:Configuration=Debug`
+- `studio/edmg-studio-winui/`:
+  `dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj -p:Platform=x64`
 - Repo root:
   `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`
 - `studio/edmg-studio/`:
@@ -94,6 +104,11 @@ Key validation commands:
 - `studio/edmg-studio/`:
   `pnpm run validate:release:linux`
 
-Canonical packaged desktop version source:
+Current Electron release-lane version source:
 
 - `studio/edmg-studio/package.json#version`
+
+The Electron installer lane remains the currently qualified release path. WinUI
+is the primary Windows product client, but Store identity/signing, backend-bundle
+integration, clean-machine MSIX, upgrade, and customer-flow evidence must be
+completed before claiming a production WinUI package.

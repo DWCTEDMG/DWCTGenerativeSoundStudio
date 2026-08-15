@@ -128,6 +128,181 @@ public sealed class StudioApiClientTests
         Assert.AreEqual(0, callCount);
     }
 
+    [TestMethod]
+    public async Task TimelineRecoveryAndSecrets_UseExactBackendRequestBodies()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            var body = request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                body));
+            return JsonResponse("""{"ok":true}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+        using var timeline = JsonDocument.Parse("""{"layers":[{"id":"layer-1"}]}""");
+        using var metadata = JsonDocument.Parse("""{"playhead":12.5}""");
+
+        await client.AutosaveTimelineAsync(
+            "project one",
+            timeline.RootElement.Clone(),
+            metadata.RootElement.Clone(),
+            "interval");
+        await client.ApplyRecoveryAsync(
+            "project one",
+            new RecoveryApplyRequest("snapshot", "snapshot-2026-08-12"));
+        await client.SetSecretAsync("foundry_api_key", "secret-value");
+        await client.ClearSecretAsync("foundry_api_key");
+
+        var autosave = captured.Single(item => item.Uri.AbsolutePath.EndsWith("/autosave", StringComparison.Ordinal));
+        Assert.AreEqual("/v1/projects/project%20one/autosave", autosave.Uri.AbsolutePath);
+        Assert.IsNotNull(autosave.Authorization);
+        using (var payload = JsonDocument.Parse(autosave.Body))
+        {
+            Assert.IsTrue(payload.RootElement.TryGetProperty("meta", out var serializedMetadata));
+            Assert.AreEqual(12.5, serializedMetadata.GetProperty("playhead").GetDouble());
+            Assert.IsFalse(payload.RootElement.TryGetProperty("metadata", out _));
+            Assert.AreEqual(
+                "layer-1",
+                payload.RootElement.GetProperty("timeline").GetProperty("layers")[0].GetProperty("id").GetString());
+        }
+
+        var recovery = captured.Single(item => item.Uri.AbsolutePath.EndsWith("/recovery/apply", StringComparison.Ordinal));
+        using (var payload = JsonDocument.Parse(recovery.Body))
+        {
+            Assert.AreEqual("snapshot", payload.RootElement.GetProperty("source").GetString());
+            Assert.AreEqual("snapshot-2026-08-12", payload.RootElement.GetProperty("snapshot_name").GetString());
+            Assert.IsFalse(payload.RootElement.TryGetProperty("prefer_journal", out _));
+        }
+
+        var setSecret = captured.Single(item => item.Uri.AbsolutePath.EndsWith("/secrets/set", StringComparison.Ordinal));
+        using (var payload = JsonDocument.Parse(setSecret.Body))
+        {
+            Assert.AreEqual("foundry_api_key", payload.RootElement.GetProperty("name").GetString());
+            Assert.AreEqual("secret-value", payload.RootElement.GetProperty("value").GetString());
+            Assert.IsFalse(payload.RootElement.TryGetProperty("key", out _));
+        }
+
+        var clearSecret = captured.Single(item => item.Uri.AbsolutePath.EndsWith("/secrets/clear", StringComparison.Ordinal));
+        using (var payload = JsonDocument.Parse(clearSecret.Body))
+        {
+            Assert.AreEqual("foundry_api_key", payload.RootElement.GetProperty("name").GetString());
+            Assert.IsFalse(payload.RootElement.TryGetProperty("key", out _));
+        }
+    }
+
+    [TestMethod]
+    public async Task GetJobsAsync_PreservesProgressAndExposesValidActions()
+    {
+        using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
+        {
+            Assert.AreEqual("/v1/jobs", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(JsonResponse(
+                """
+                {
+                  "jobs": [{
+                    "id": "job-42",
+                    "project_id": "project-alpha",
+                    "type": "internal_video",
+                    "status": "running",
+                    "created_at": "2026-08-12T08:00:00Z",
+                    "progress": {
+                      "percent": 37.5,
+                      "stage": "render",
+                      "message": "Rendering frames",
+                      "current": 45,
+                      "total": 120
+                    }
+                  }]
+                }
+                """));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        var result = await client.GetJobsAsync();
+
+        var job = result.Jobs.Single();
+        Assert.AreEqual("job-42", job.Id);
+        Assert.IsTrue(job.IsActive);
+        Assert.IsTrue(job.CanCancel);
+        Assert.IsFalse(job.CanRetry);
+        Assert.AreEqual(37.5, job.Progress?.Percent);
+    }
+
+    [TestMethod]
+    public async Task DownloadProjectFileAsync_UsesAuthenticationEscapingAndPreservesBytes()
+    {
+        byte[] expected = [0x00, 0x7F, 0x80, 0xFF];
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, _) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(expected)
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        var actual = await client.DownloadProjectFileAsync("project /#1", "renders/final take #1.mp4");
+
+        CollectionAssert.AreEqual(expected, actual);
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Get, captured.Method);
+        Assert.AreEqual("/v1/projects/project%20%2F%231/file", captured.Uri.AbsolutePath);
+        Assert.AreEqual("?path=renders%2Ffinal%20take%20%231.mp4", captured.Uri.Query);
+        Assert.IsNotNull(captured.Authorization);
+    }
+
+    [TestMethod]
+    public async Task ModelActions_UseExactPathsAndBodies()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, _) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync()));
+            return JsonResponse("""{"ok":true}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        await client.AcceptModelLicenseAsync("model /#1", "license /#1");
+        await client.RestoreLocalModelAsync("local /#2");
+
+        Assert.HasCount(2, captured);
+        Assert.AreEqual("/v1/models/accept", captured[0].Uri.AbsolutePath);
+        Assert.AreEqual("""{"model_id":"model /#1","license_id":"license /#1"}""", captured[0].Body);
+        Assert.AreEqual("/v1/models/restore_local", captured[1].Uri.AbsolutePath);
+        Assert.AreEqual("""{"model_id":"local /#2"}""", captured[1].Body);
+    }
+
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) => new(statusCode)
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json")

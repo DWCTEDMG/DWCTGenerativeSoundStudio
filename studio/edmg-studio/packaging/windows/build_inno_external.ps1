@@ -213,12 +213,44 @@ $PayloadArchive = Join-Path $PayloadRoot "win-unpacked.7z"
 $PayloadIntegrity = Join-Path $PayloadRoot "payload-integrity.json"
 $GeneratedIss = Join-Path $OutDirAbs "edmg-studio-external.iss"
 $IconPath = Join-Path $StudioDir "electron-resources\app-icon.ico"
+$WinUiStageDirectory = Join-Path $StudioDir "release\winui-msix"
+$WinUiMetadataPath = Join-Path $WinUiStageDirectory "winui-msix.json"
+$WinUiManagerPath = Join-Path $PSScriptRoot "manage_winui_package.ps1"
 $SigningRequired = ConvertTo-BooleanSetting $env:EDMG_REQUIRE_CODE_SIGNING "EDMG_REQUIRE_CODE_SIGNING"
 $SigningConfigured = -not [string]::IsNullOrWhiteSpace([string]$env:EDMG_CODE_SIGN_CERT)
 if ($SigningRequired -and -not $SigningConfigured) {
   throw "EDMG_REQUIRE_CODE_SIGNING is enabled, but EDMG_CODE_SIGN_CERT is not configured."
 }
 $SigningEnabled = $SigningRequired -or $SigningConfigured
+
+if (-not (Test-Path -LiteralPath $WinUiMetadataPath -PathType Leaf)) {
+  throw "Staged WinUI metadata not found: $WinUiMetadataPath. Run pnpm run stage:winui:msix first."
+}
+if (-not (Test-Path -LiteralPath $WinUiManagerPath -PathType Leaf)) {
+  throw "WinUI package manager not found: $WinUiManagerPath"
+}
+$WinUiCandidates = @(Get-ChildItem -LiteralPath $WinUiStageDirectory -Filter "*.msix" -File)
+if ($WinUiCandidates.Count -ne 1) {
+  throw "Expected exactly one staged WinUI MSIX under $WinUiStageDirectory, found $($WinUiCandidates.Count)."
+}
+$WinUiMsixPath = $WinUiCandidates[0].FullName
+$WinUiMetadata = Get-Content -Raw -LiteralPath $WinUiMetadataPath | ConvertFrom-Json
+if ([int]$WinUiMetadata.schemaVersion -ne 1 -or
+    [string]$WinUiMetadata.package.fileName -cne [IO.Path]::GetFileName($WinUiMsixPath) -or
+    [string]$WinUiMetadata.package.name -cne "ED2F9BCD-A580-4603-8A17-A7AD5FF6D451" -or
+    [string]$WinUiMetadata.package.architecture -cne "x64" -or
+    [string]$WinUiMetadata.package.applicationId -cne "App" -or
+    [string]$WinUiMetadata.package.windowsAppSdkDeployment -cne "self-contained" -or
+    (ConvertTo-NumericVersionKey ([string]$WinUiMetadata.package.version) "WinUI MSIX version") -ne
+      (ConvertTo-NumericVersionKey $Version "package.json version")) {
+  throw "Staged WinUI metadata does not match the expected EDMG Studio x64 package."
+}
+$WinUiMsixSha256 = Get-Sha256Hex $WinUiMsixPath
+if ($WinUiMsixSha256 -cne ([string]$WinUiMetadata.package.sha256).ToLowerInvariant()) {
+  throw "Staged WinUI MSIX bytes do not match winui-msix.json."
+}
+Invoke-WindowsSigning $StudioDir @($WinUiMsixPath) "staged WinUI MSIX" `
+  -VerifyOnly -RequireSigning:$SigningEnabled
 
 if (-not $SkipElectronDirBuild) {
   Push-Location $StudioDir
@@ -409,6 +441,8 @@ $issLines = @(
   "ArchiveExtraction=enhanced/nopassword",
   "WizardStyle=modern",
   "PrivilegesRequired=lowest",
+  "ArchitecturesAllowed=x64compatible",
+  "ArchitecturesInstallIn64BitMode=x64compatible",
   "DisableProgramGroupPage=yes",
   "CloseApplications=yes",
   ("AppMutex={0}" -f (Escape-InnoValue $AppId))
@@ -449,16 +483,24 @@ $issLines += @(
   "",
   "[Files]",
   ('Source: "{{src}}\payload\win-unpacked.7z"; DestDir: "{{app}}"; ExternalSize: {0}; Hash: "{1}"; Flags: external extractarchive recursesubdirs createallsubdirs ignoreversion' -f $PayloadExpandedSize, $PayloadSha256),
+  ('Source: "{0}"; DestDir: "{{app}}\resources\winui"; DestName: "{1}"; Hash: "{2}"; Flags: ignoreversion' -f (Escape-InnoValue $WinUiMsixPath), (Escape-InnoValue ([IO.Path]::GetFileName($WinUiMsixPath))), $WinUiMsixSha256),
+  ('Source: "{0}"; DestDir: "{{app}}\resources\winui"; DestName: "winui-msix.json"; Flags: ignoreversion' -f (Escape-InnoValue $WinUiMetadataPath)),
+  ('Source: "{0}"; DestDir: "{{app}}\resources\winui"; DestName: "manage_winui_package.ps1"; Flags: ignoreversion' -f (Escape-InnoValue $WinUiManagerPath)),
   "",
   "[Icons]",
-  'Name: "{group}\EDMG Studio"; Filename: "{app}\EDMG Studio.exe"; WorkingDir: "{app}"',
-  'Name: "{userdesktop}\EDMG Studio"; Filename: "{app}\EDMG Studio.exe"; WorkingDir: "{app}"; Tasks: desktopicon',
+  'Name: "{group}\EDMG Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\resources\winui\manage_winui_package.ps1"" -Action Launch"; WorkingDir: "{app}"',
+  'Name: "{group}\EDMG Studio (Electron compatibility)"; Filename: "{app}\EDMG Studio.exe"; WorkingDir: "{app}"',
+  'Name: "{userdesktop}\EDMG Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\resources\winui\manage_winui_package.ps1"" -Action Launch"; WorkingDir: "{app}"; Tasks: desktopicon',
   "",
   "[Tasks]",
   'Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked',
   "",
   "[Run]",
-  'Filename: "{app}\EDMG Studio.exe"; Description: "Launch EDMG Studio"; Flags: nowait postinstall skipifsilent'
+  ('Filename: "{{sys}}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{{app}}\resources\winui\manage_winui_package.ps1"" -Action Install -InstallRoot ""{{app}}"" -MsixPath ""{{app}}\resources\winui\{0}"""; StatusMsg: "Registering EDMG Studio WinUI..."; Flags: runhidden waituntilterminated' -f (Escape-InnoValue ([IO.Path]::GetFileName($WinUiMsixPath)))),
+  'Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\resources\winui\manage_winui_package.ps1"" -Action Launch"; Description: "Launch EDMG Studio"; Flags: nowait postinstall skipifsilent',
+  "",
+  "[UninstallRun]",
+  'Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\resources\winui\manage_winui_package.ps1"" -Action Uninstall -InstallRoot ""{app}"""; RunOnceId: "RemoveEdmgStudioWinUi"; Flags: runhidden waituntilterminated'
 )
 
 Set-Content -Path $GeneratedIss -Value $issLines -Encoding UTF8

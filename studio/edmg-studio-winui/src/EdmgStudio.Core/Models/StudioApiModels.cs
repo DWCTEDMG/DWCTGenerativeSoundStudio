@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace EdmgStudio.Core.Models;
 
@@ -132,7 +133,9 @@ public sealed class ProjectDto
                 return [];
             }
 
-            return JsonSerializer.Deserialize<List<PlanVariantDto>>(variants.GetRawText(), StudioJson.Options) ?? [];
+            return JsonSerializer.Deserialize(
+                variants.GetRawText(),
+                StudioJson.GetTypeInfo<List<PlanVariantDto>>()) ?? [];
         }
     }
 
@@ -200,7 +203,7 @@ public sealed class PlanDto
     public List<PlanVariantDto> Variants { get; init; } = [];
 
     [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; init; }
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class PlanVariantDto
@@ -221,7 +224,7 @@ public sealed class PlanVariantDto
     public List<PlanSceneDto> Scenes { get; init; } = [];
 
     [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; init; }
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 
     [JsonIgnore]
     public string DisplayName => !string.IsNullOrWhiteSpace(Name) ? Name! : $"Variant {(Index ?? 0) + 1}";
@@ -245,8 +248,60 @@ public sealed class PlanSceneDto
     public string? NegativePrompt { get; init; }
 
     [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; init; }
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
+
+public sealed record StudioJobListResponse(
+    [property: JsonPropertyName("jobs")] IReadOnlyList<StudioJob> Jobs);
+
+public sealed record StudioJobActionResponse(
+    [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("job")] StudioJob Job);
+
+public sealed record StudioJob(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("project_id")] string ProjectId,
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("created_at")] string? CreatedAt,
+    [property: JsonPropertyName("updated_at")] string? UpdatedAt,
+    [property: JsonPropertyName("started_at")] string? StartedAt,
+    [property: JsonPropertyName("finished_at")] string? FinishedAt,
+    [property: JsonPropertyName("error")] string? Error,
+    [property: JsonPropertyName("progress")] StudioJobProgress? Progress,
+    [property: JsonPropertyName("result")] JsonElement? Result,
+    [property: JsonPropertyName("payload")] JsonElement? Payload,
+    [property: JsonPropertyName("attempt")] int Attempt = 0)
+{
+    public bool IsActive => Status is "queued" or "paused" or "running";
+
+    public bool CanPause => Status == "queued";
+
+    public bool CanResume => Status == "paused";
+
+    public bool CanCancel => IsActive;
+
+    public bool CanRetry => Status is "succeeded" or "failed" or "canceled";
+}
+
+public sealed record StudioJobProgress(
+    [property: JsonPropertyName("percent")] double? Percent,
+    [property: JsonPropertyName("stage")] string? Stage,
+    [property: JsonPropertyName("message")] string? Message,
+    [property: JsonPropertyName("current")] double? Current,
+    [property: JsonPropertyName("total")] double? Total);
+
+public sealed record TimelineUpdateRequest(
+    [property: JsonPropertyName("timeline")] JsonElement Timeline);
+
+public sealed record TimelineAutosaveRequest(
+    [property: JsonPropertyName("timeline")] JsonElement Timeline,
+    [property: JsonPropertyName("meta")] JsonElement? Metadata = null,
+    [property: JsonPropertyName("reason")] string? Reason = null);
+
+public sealed record RecoveryApplyRequest(
+    [property: JsonPropertyName("source")] string Source = "journal",
+    [property: JsonPropertyName("snapshot_name")] string? SnapshotName = null);
 
 public static class StudioJson
 {
@@ -255,4 +310,28 @@ public static class StudioJson
         PropertyNameCaseInsensitive = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
+
+    public static readonly StudioJsonContext Context = new(Options);
+
+    public static JsonTypeInfo<T> GetTypeInfo<T>()
+        => Context.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>
+           ?? throw new InvalidOperationException(
+               $"JSON metadata is not registered for {typeof(T).FullName}.");
 }
+
+[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]
+[JsonSerializable(typeof(HealthResponse))]
+[JsonSerializable(typeof(ProjectListResponse))]
+[JsonSerializable(typeof(ProjectResponse))]
+[JsonSerializable(typeof(CreateProjectRequest))]
+[JsonSerializable(typeof(AnalysisResponse))]
+[JsonSerializable(typeof(PlanRequest))]
+[JsonSerializable(typeof(PlanDto))]
+[JsonSerializable(typeof(List<PlanVariantDto>))]
+[JsonSerializable(typeof(StudioJobListResponse))]
+[JsonSerializable(typeof(StudioJobActionResponse))]
+[JsonSerializable(typeof(StudioJob))]
+[JsonSerializable(typeof(TimelineUpdateRequest))]
+[JsonSerializable(typeof(TimelineAutosaveRequest))]
+[JsonSerializable(typeof(RecoveryApplyRequest))]
+public sealed partial class StudioJsonContext : JsonSerializerContext;

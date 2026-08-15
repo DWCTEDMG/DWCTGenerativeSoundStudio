@@ -97,6 +97,7 @@ def _artifact_entry(
         "review_state": str(review.get("state") or "unreviewed"),
         "review_notes": str(review.get("notes") or ""),
         "cherry_pick_traits": list(review.get("cherry_pick_traits") or []) if isinstance(review.get("cherry_pick_traits"), list) else [],
+        "locks": list(review.get("locks") or []) if isinstance(review.get("locks"), list) else [],
         "engine": str((manifest or {}).get("engine") or (metadata or {}).get("engine") or ""),
         "model_id": str(model.get("id") or (metadata or {}).get("model_id") or "") if manifest or metadata else "",
         "seed": manifest.get("seed") if isinstance(manifest, dict) else metadata.get("seed") if isinstance(metadata, dict) else None,
@@ -224,9 +225,9 @@ def apply_variant_review_decision(
     review["state"] = state
     review["notes"] = str(notes or "").strip()
     review["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    if cherry_pick_traits:
+    if cherry_pick_traits is not None:
         review["cherry_pick_traits"] = [str(item).strip() for item in cherry_pick_traits if str(item).strip()]
-    if lock_fields:
+    if lock_fields is not None:
         review["locks"] = [str(item).strip() for item in lock_fields if str(item).strip()]
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")

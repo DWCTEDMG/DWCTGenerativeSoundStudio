@@ -29,7 +29,11 @@
                         Text="Verify the native client, backend runtime, storage, AI path, and FFmpeg readiness." />
                 </StackPanel>
                 <CommandBar Grid.Column="1" Background="Transparent" DefaultLabelPosition="Right">
-                    <AppBarButton Click="Refresh_Click" Icon="Refresh" Label="Refresh setup" />
+                    <AppBarButton
+                        AutomationProperties.AutomationId="RefreshSetupButton"
+                        Click="Refresh_Click"
+                        Icon="Refresh"
+                        Label="Refresh setup" />
                 </CommandBar>
             </Grid>
 
@@ -75,7 +79,10 @@
                         <TextBlock x:Name="CachePathText" TextWrapping="Wrap" />
                         <TextBlock x:Name="LogsPathText" TextWrapping="Wrap" />
                         <TextBlock x:Name="StorageStatusText" Foreground="{ThemeResource StudioMutedTextBrush}" TextWrapping="Wrap" />
-                        <Button HorizontalAlignment="Left" Click="OpenStudioHome_Click" Content="Open Studio Home" />
+                        <Button HorizontalAlignment="Left"
+                                AutomationProperties.AutomationId="OpenStudioHomeButton"
+                                Click="OpenStudioHome_Click"
+                                Content="Open Studio Home" />
                     </StackPanel>
                 </Border>
 
@@ -91,12 +98,17 @@
                         <TextBlock x:Name="BackendSourceText" Foreground="{ThemeResource StudioMutedTextBrush}" TextWrapping="Wrap" />
                         <PasswordBox
                             x:Name="BackendTokenBox"
+                            AutomationProperties.AutomationId="BackendTokenPasswordBox"
                             AutomationProperties.HelpText="Stored using Windows Credential Locker and never written to logs"
                             Header="Backend access token"
                             PlaceholderText="Enter only when the backend requires authentication" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Click="SaveToken_Click" Content="Save securely" />
-                            <Button Click="ClearToken_Click" Content="Clear saved token" />
+                            <Button AutomationProperties.AutomationId="SaveBackendTokenButton"
+                                    Click="SaveToken_Click"
+                                    Content="Save securely" />
+                            <Button AutomationProperties.AutomationId="ClearBackendTokenButton"
+                                    Click="ClearToken_Click"
+                                    Content="Clear saved token" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -108,11 +120,11 @@
                     Padding="20"
                     Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="8">
-                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Native migration status" />
+                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Native workflow status" />
                         <TextBlock Text="Available now" FontWeight="SemiBold" />
-                        <TextBlock Text="Native shell, backend lifecycle, Dashboard, Projects, Workspace audio analysis, and plan variants." TextWrapping="Wrap" />
-                        <TextBlock Text="Next native surfaces" FontWeight="SemiBold" />
-                        <TextBlock Text="Timeline, Render, queue, review, outputs, model management, and specialist labs remain represented in navigation while their XAML surfaces are migrated." TextWrapping="Wrap" />
+                        <TextBlock Text="Backend lifecycle, projects, workspace, timeline, render, queue, review, outputs, models, and settings." TextWrapping="Wrap" />
+                        <TextBlock Text="Compatibility boundary" FontWeight="SemiBold" />
+                        <TextBlock Text="Electron remains available on Linux and for specialist interactions that are not exposed by the shared backend API." TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
 
@@ -145,6 +157,7 @@
             <Button
                 Grid.Row="3"
                 HorizontalAlignment="Left"
+                AutomationProperties.AutomationId="OpenWorkspaceButton"
                 Click="OpenWorkspace_Click"
                 Content="Go to Workspace"
                 Style="{StaticResource AccentButtonStyle}" />

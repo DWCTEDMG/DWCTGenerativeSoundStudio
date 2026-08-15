@@ -65,6 +65,23 @@ def test_apply_variant_review_decision_updates_manifest(tmp_path: Path) -> None:
     assert result["review"]["state"] == "approved"
     assert manifest["review"]["state"] == "approved"
     assert manifest["review"]["notes"] == "Hero framing locked"
+    assert manifest["review"]["cherry_pick_traits"] == ["palette:magenta"]
+    assert manifest["review"]["locks"] == ["camera"]
+
+    refreshed = collect_variant_review(project_dir, {})
+    artifact = refreshed["groups"][0]["artifacts"][0]
+    assert artifact["cherry_pick_traits"] == ["palette:magenta"]
+    assert artifact["locks"] == ["camera"]
+
+    cleared = apply_variant_review_decision(
+        project_dir,
+        artifact_path="outputs/videos/internal_v00_demo.mp4",
+        decision="approved",
+        cherry_pick_traits=[],
+        lock_fields=[],
+    )
+    assert cleared["review"]["cherry_pick_traits"] == []
+    assert cleared["review"]["locks"] == []
 
 
 def test_apply_variant_review_decision_rejects_path_traversal(tmp_path: Path) -> None:

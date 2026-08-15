@@ -23,12 +23,17 @@
                 IsIconVisible="True"
                 IsOpen="True"
                 IsClosable="False"
-                Message="The existing Electron client remains untouched, so no production workflow is removed while this XAML surface is built."
+                Message="Core Studio workflows are native on Windows. Specialist interactions that are not represented by the shared backend API remain available through the Electron compatibility frontend."
                 Severity="Informational"
-                Title="Parallel migration" />
+                Title="Compatibility boundary" />
             <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
-                <Button Click="OpenWorkspace_Click" Content="Open Workspace" Style="{StaticResource AccentButtonStyle}" />
-                <Button Click="OpenDashboard_Click" Content="Back to Dashboard" />
+                <Button AutomationProperties.AutomationId="OpenNativeWorkspaceButton"
+                        Click="OpenWorkspace_Click"
+                        Content="Open Workspace"
+                        Style="{StaticResource AccentButtonStyle}" />
+                <Button AutomationProperties.AutomationId="BackToDashboardButton"
+                        Click="OpenDashboard_Click"
+                        Content="Back to Dashboard" />
             </StackPanel>
         </StackPanel>
     </Grid>

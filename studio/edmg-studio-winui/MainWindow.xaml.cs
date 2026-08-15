@@ -1,11 +1,16 @@
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI;
+using System.Runtime.InteropServices;
 using Windows.Graphics;
 
 namespace EdmgStudio.WinUI;
 
 public sealed partial class MainWindow : Window
 {
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hWnd);
+
     private bool _closing;
     private bool _closeCompleted;
 
@@ -16,7 +21,9 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         AppWindow.SetIcon("Assets/AppIcon.ico");
         AppWindow.Title = "EDMG Studio";
-        AppWindow.Resize(new SizeInt32(1440, 900));
+        var hwnd = Win32Interop.GetWindowFromWindowId(AppWindow.Id);
+        var scale = GetDpiForWindow(hwnd) / 96.0;
+        AppWindow.Resize(new SizeInt32((int)(1440 * scale), (int)(900 * scale)));
         RootFrame.Navigate(typeof(MainPage));
         AppWindow.Closing += OnClosing;
     }

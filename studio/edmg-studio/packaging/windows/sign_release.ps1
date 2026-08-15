@@ -50,7 +50,7 @@ function Resolve-SignableArtifacts($Root, $ExplicitPaths) {
       if (Test-Path -LiteralPath $directory -PathType Container) {
         $candidates += @(
           Get-ChildItem -LiteralPath $directory -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Extension.ToLowerInvariant() -in @(".exe", ".msi") } |
+            Where-Object { $_.Extension.ToLowerInvariant() -in @(".exe", ".msi", ".msix") } |
             ForEach-Object { $_.FullName }
         )
       }
@@ -79,7 +79,7 @@ function Resolve-SignableArtifacts($Root, $ExplicitPaths) {
     }
     $fullPath = (Resolve-Path -LiteralPath $candidate).Path
     $extension = [IO.Path]::GetExtension($fullPath).ToLowerInvariant()
-    if ($extension -notin @(".exe", ".msi")) {
+    if ($extension -notin @(".exe", ".msi", ".msix")) {
       throw "Unsupported Windows signing artifact: $fullPath"
     }
     $key = $fullPath.ToLowerInvariant()
