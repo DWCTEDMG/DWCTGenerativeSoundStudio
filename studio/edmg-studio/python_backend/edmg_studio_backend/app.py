@@ -66,6 +66,7 @@ from .schemas import (
     ParseqMotionApplyRequest,
     LayeredAnimateRequest,
     TensorRTStandaloneRenderRequest,
+    TimelineRenderRequest,
 )
 from .services import animation_autoconfig as autoconfig
 from .services import layer_animation as layeranim
@@ -73,6 +74,7 @@ from .services import parseq_adapter
 from .store.projects import ProjectStore
 from .version import STUDIO_VERSION
 from .store.jobs import JobStore
+from .store.artifacts import write_artifact_manifest
 from .api import create_models_router, create_project_router, create_system_router
 from .domain.director_modes import (
     director_mode_profile,
@@ -92,7 +94,18 @@ from .integrations import comfyui as comfy
 from .integrations.comfyui_pool import ComfyUINodePool
 from .services.worker_manager import WorkerManager
 from .services.hf_auth import describe_hf_auth
-from .services.ffmpeg import assemble_slideshow, assemble_image_sequence, concat_videos, interpolate_video_fps, mux_audio, _probe_duration_seconds
+from .services.ffmpeg import (
+    TimelineRenderCanceled,
+    _probe_duration_seconds,
+    assemble_image_sequence,
+    assemble_slideshow,
+    build_timeline_render_command,
+    concat_videos,
+    interpolate_video_fps,
+    mux_audio,
+    prepare_timeline_render_plan,
+    render_timeline_edited_master,
+)
 from .services.internal_video import (
     InternalVideoSettings,
     _scene_keyframe_times,
@@ -6163,6 +6176,48 @@ def _project_response_payload(proj: Any) -> dict[str, Any]:
     }
 
 
+def _enqueue_timeline_render(project_id: str, req: TimelineRenderRequest) -> dict[str, Any]:
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    timeline = proj.meta.get("timeline")
+    if not isinstance(timeline, dict):
+        raise HTTPException(400, "Project timeline is missing or invalid")
+    try:
+        render_plan = prepare_timeline_render_plan(
+            ffmpeg_path=settings.ffmpeg_path,
+            project_dir=store.project_dir(project_id),
+            timeline=timeline,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    settings_payload = req.model_dump(mode="json")
+    job = jobs.create(
+        project_id,
+        "timeline_render",
+        {
+            "settings": settings_payload,
+            "timeline": render_plan,
+        },
+    )
+    jobs.update_progress(
+        project_id,
+        job.id,
+        stage="queued",
+        current=0,
+        total=1000,
+        message="Timeline render queued",
+    )
+    proj.meta["last_timeline_render_request"] = {
+        "job_id": job.id,
+        "status": "queued",
+        **settings_payload,
+    }
+    store.save(proj)
+    persisted = jobs.get(project_id, job.id) or job
+    return {"ok": True, "job": persisted.__dict__}
+
+
 app.include_router(create_system_router(
     readiness_report=_system_readiness_report,
     baseline_metrics=_baseline_metrics_report,
@@ -6172,6 +6227,7 @@ app.include_router(
         get_store=lambda: store,
         project_response=_project_response_payload,
         assess_health=assess_project_health,
+        enqueue_timeline_render=_enqueue_timeline_render,
     )
 )
 app.include_router(create_models_router(get_models=lambda: models))
@@ -6941,6 +6997,10 @@ def _execute_job(job):
             else:
                 job.result = res
                 job.status = "succeeded"
+        elif job.type == "timeline_render":
+            res = _run_timeline_render(job.project_id, job.id, job.payload)
+            job.result = res
+            job.status = "succeeded"
         elif job.type == "performer_video":
             res = _run_performer_video(job.project_id, job.id, job.payload)
             latest = jobs.get(job.project_id, job.id)
@@ -11622,6 +11682,149 @@ def render_auto(project_id: str, req: AutoAnimateRequest):
         }
     )
     return result
+
+
+def _run_timeline_render(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    proj = store.get(project_id)
+    if not proj:
+        raise RuntimeError("Project not found")
+    pdir = store.project_dir(project_id)
+    request = TimelineRenderRequest.model_validate(payload.get("settings") or {})
+    timeline = payload.get("timeline")
+    if not isinstance(timeline, dict):
+        timeline = proj.meta.get("timeline")
+    if not isinstance(timeline, dict):
+        raise ValueError("Project timeline is missing or invalid")
+
+    extension = ".mov" if request.video_codec == "prores" else ".mp4"
+    safe_stem = Path(request.name).stem.strip(" .") or "edited-master"
+    output_path = pdir / "outputs" / "videos" / f"{safe_stem}_{job_id[:8]}{extension}"
+
+    def _is_canceled() -> bool:
+        latest = jobs.get(project_id, job_id)
+        return bool(latest and latest.status == "canceled")
+
+    def _set_request_status(status: str, **extra: Any) -> None:
+        current = store.get(project_id)
+        if not current:
+            return
+        current.meta["last_timeline_render_request"] = {
+            "job_id": job_id,
+            "status": status,
+            **request.model_dump(mode="json"),
+            **extra,
+        }
+        store.save(current)
+
+    jobs.update_progress(
+        project_id,
+        job_id,
+        stage="validating",
+        current=25,
+        total=1000,
+        message="Validating timeline sources",
+    )
+    try:
+        command, duration_s = build_timeline_render_command(
+            ffmpeg_path=settings.ffmpeg_path,
+            project_dir=pdir,
+            timeline=timeline,
+            output_path=output_path,
+            width=request.width,
+            height=request.height,
+            fps=request.fps,
+            video_codec=request.video_codec,
+            audio_codec=request.audio_codec,
+            quality=request.quality,
+        )
+        if _is_canceled():
+            raise TimelineRenderCanceled("Timeline render canceled")
+
+        jobs.update_progress(
+            project_id,
+            job_id,
+            stage="rendering",
+            current=100,
+            total=1000,
+            message="Rendering edited master",
+        )
+
+        def _on_progress(fraction: float) -> None:
+            jobs.update_progress(
+                project_id,
+                job_id,
+                stage="rendering",
+                current=100 + round(max(0.0, min(1.0, fraction)) * 850),
+                total=1000,
+                message="Rendering edited master",
+            )
+
+        render_timeline_edited_master(
+            command=command,
+            output_path=output_path,
+            duration_s=duration_s,
+            is_canceled=_is_canceled,
+            on_progress=_on_progress,
+        )
+    except TimelineRenderCanceled as exc:
+        _set_request_status("canceled")
+        raise JobCanceled(str(exc)) from exc
+    except Exception as exc:
+        _set_request_status("failed", error=str(exc))
+        raise
+
+    video_rel = output_path.relative_to(pdir).as_posix()
+    manifest_path = write_artifact_manifest(
+        output_path,
+        project_dir=pdir,
+        project_id=project_id,
+        kind="video",
+        engine="timeline_render",
+        params={
+            **request.model_dump(mode="json"),
+            "duration_s": duration_s,
+        },
+        extra={"job_id": job_id},
+    )
+    manifest_rel = manifest_path.relative_to(pdir).as_posix()
+
+    proj = store.get(project_id)
+    if not proj:
+        raise RuntimeError("Project not found")
+    outputs = proj.meta.setdefault("outputs", {})
+    videos = outputs.setdefault("videos", [])
+    videos.append(
+        {
+            "kind": "timeline_render",
+            "path": video_rel,
+            "video_codec": request.video_codec,
+            "audio_codec": request.audio_codec,
+        }
+    )
+    completed = {
+        "job_id": job_id,
+        "status": "succeeded",
+        "video": video_rel,
+        "artifact_manifest": manifest_rel,
+        "duration_s": duration_s,
+        **request.model_dump(mode="json"),
+    }
+    proj.meta["last_timeline_render_request"] = completed
+    proj.meta["last_timeline_render"] = completed
+    store.save(proj)
+    jobs.update_progress(
+        project_id,
+        job_id,
+        stage="complete",
+        current=1000,
+        total=1000,
+        message="Timeline render complete",
+    )
+    return {
+        "video": video_rel,
+        "artifact_manifest": manifest_rel,
+        "duration_s": duration_s,
+    }
 
 
 def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:

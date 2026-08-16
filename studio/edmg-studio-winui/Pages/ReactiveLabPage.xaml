@@ -1,0 +1,111 @@
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.ReactiveLabPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <ScrollViewer>
+            <StackPanel Padding="32,28,32,48" Spacing="16" MaxWidth="1120" HorizontalAlignment="Stretch">
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Reactive Lab" Style="{ThemeResource TitleTextBlockStyle}" />
+                    <TextBlock x:Name="ProjectSummaryText" Text="Validated reactive bundle apply for the active project."
+                               TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+
+                <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
+                         Title="Audio analysis remains a browser workbench capability"
+                         Message="WinUI can hydrate and apply real reactive bundles through FastAPI. No native or backend contract currently exposes Web Audio microphone or file analysis, so this page does not simulate it." />
+                <InfoBar x:Name="StatusInfoBar" IsOpen="False" IsClosable="True" />
+
+                <Border Style="{StaticResource StudioCardBorderStyle}">
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="Reactive mapping" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <Grid ColumnSpacing="16" RowSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Mapping preset" />
+                                <ComboBox x:Name="PresetCombo" SelectedIndex="0"
+                                          AutomationProperties.AutomationId="ReactivePresetComboBox">
+                                    <ComboBoxItem Content="cinematic" />
+                                    <ComboBoxItem Content="psychedelic" />
+                                    <ComboBoxItem Content="ambient" />
+                                    <ComboBoxItem Content="percussive" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="6">
+                                <TextBlock Text="Render mode" />
+                                <ComboBox x:Name="RenderModeCombo" SelectedIndex="0"
+                                          AutomationProperties.AutomationId="ReactiveRenderModeComboBox">
+                                    <ComboBoxItem Content="smooth" />
+                                    <ComboBoxItem Content="cut-heavy" />
+                                    <ComboBoxItem Content="performance-led" />
+                                    <ComboBoxItem Content="ambient" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="6">
+                                <TextBlock Text="Frames per second" />
+                                <NumberBox x:Name="FpsBox" Value="24" Minimum="12" Maximum="60" SpinButtonPlacementMode="Inline"
+                                           AutomationProperties.AutomationId="ReactiveFpsNumberBox" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Spacing="6">
+                                <TextBlock Text="Sensitivity" />
+                                <NumberBox x:Name="SensitivityBox" Value="1" Minimum="0.2" Maximum="2.5" SmallChange="0.1"
+                                           SpinButtonPlacementMode="Inline" AutomationProperties.AutomationId="ReactiveSensitivityNumberBox" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
+                                <TextBlock Text="Smoothing" />
+                                <NumberBox x:Name="SmoothingBox" Value="0.28" Minimum="0" Maximum="1" SmallChange="0.05"
+                                           SpinButtonPlacementMode="Inline" AutomationProperties.AutomationId="ReactiveSmoothingNumberBox" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="2" Spacing="6">
+                                <TextBlock Text="Schedule stride" />
+                                <NumberBox x:Name="ScheduleStrideBox" Value="4" Minimum="1" Maximum="120" SpinButtonPlacementMode="Inline"
+                                           AutomationProperties.AutomationId="ReactiveScheduleStrideNumberBox" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardBorderStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Reactive bundle" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Paste the browser workbench sync payload. Mapping controls above update its metadata before apply."
+                                   TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBox x:Name="PayloadJsonBox" AcceptsReturn="True" TextWrapping="NoWrap"
+                                 FontFamily="Cascadia Mono" MinHeight="320"
+                                 AutomationProperties.AutomationId="ReactivePayloadJsonTextBox" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <CheckBox x:Name="OverwriteMotionCheckBox" Content="Overwrite motion track" IsChecked="True"
+                                      AutomationProperties.AutomationId="ReactiveOverwriteMotionCheckBox" />
+                            <CheckBox x:Name="OverwriteCameraCheckBox" Content="Overwrite camera" IsChecked="True"
+                                      AutomationProperties.AutomationId="ReactiveOverwriteCameraCheckBox" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Load last reactive payload" Click="LoadLastPayload_Click"
+                                    AutomationProperties.AutomationId="ReactiveLoadLastPayloadButton" />
+                            <Button Content="Apply to project" Style="{StaticResource AccentButtonStyle}" Click="ApplyReactive_Click"
+                                    AutomationProperties.AutomationId="ReactiveApplyButton" />
+                            <Button Content="Open Workspace" Click="OpenWorkspace_Click"
+                                    AutomationProperties.AutomationId="ReactiveOpenWorkspaceButton" />
+                            <Button Content="Open Render" Click="OpenRender_Click"
+                                    AutomationProperties.AutomationId="ReactiveOpenRenderButton" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+        <ProgressBar x:Name="BusyIndicator" IsIndeterminate="True" Visibility="Collapsed"
+                     VerticalAlignment="Top" AutomationProperties.Name="Reactive operation in progress" />
+    </Grid>
+</Page>

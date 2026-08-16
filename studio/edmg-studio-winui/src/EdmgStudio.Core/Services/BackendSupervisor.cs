@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -23,11 +24,14 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly object _statusLock = new();
     private readonly object _logLock = new();
+    private readonly object _startupMonitorLock = new();
     private readonly List<Task> _logTasks = [];
 
     private Process? _ownedProcess;
     private WindowsProcessJob? _ownedJob;
     private CancellationTokenSource? _logCancellation;
+    private CancellationTokenSource? _startupMonitorCancellation;
+    private Task? _startupMonitorTask;
     private BackendStatus _status;
     private bool _stopping;
 
@@ -69,7 +73,7 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
         await _lifecycleGate.WaitAsync(startupToken).ConfigureAwait(false);
         try
         {
-            if (Status.IsReady)
+            if (Status.IsReady || IsManagedStartupActive())
             {
                 return Status;
             }
@@ -177,10 +181,21 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
 
     public async Task<BackendStatus> RefreshHealthAsync(CancellationToken cancellationToken = default)
     {
-        var healthy = await IsHealthyAsync(CurrentBackendUri, cancellationToken).ConfigureAwait(false);
+        var status = Status;
+        var ownedProcess = _ownedProcess;
+        var ownedJob = _ownedJob;
+        var healthy = status.Mode is BackendMode.ManagedSource or BackendMode.ManagedPackaged
+            ? ownedProcess is not null &&
+              await IsHealthyForOwnerAsync(
+                      CurrentBackendUri,
+                      ownedProcess,
+                      ownedJob,
+                      cancellationToken)
+                  .ConfigureAwait(false)
+            : await IsHealthyAsync(CurrentBackendUri, cancellationToken).ConfigureAwait(false);
         if (healthy)
         {
-            return Publish(Status with
+            return Publish(status with
             {
                 State = BackendLifecycleState.Ready,
                 Message = "Studio backend is ready.",
@@ -190,12 +205,18 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
             });
         }
 
-        return Publish(Status with
+        var startupActive = ownedProcess is not null && !HasExitedSafe(ownedProcess);
+        return Publish(status with
         {
-            State = _ownedProcess is null ? BackendLifecycleState.Unavailable : BackendLifecycleState.Failed,
-            Message = "Studio backend is not responding.",
-            Detail = $"No valid health response was received from {CurrentBackendUri}.",
-            FailureCode = "BACKEND_UNAVAILABLE",
+            State = startupActive ? BackendLifecycleState.WaitingForHealth : BackendLifecycleState.Unavailable,
+            Message = startupActive
+                ? "The managed Studio backend is still starting."
+                : "Studio backend is not responding.",
+            Detail = startupActive
+                ? "First startup can take several minutes while Python dependencies are installed."
+                : $"No valid health response was received from {CurrentBackendUri}.",
+            FailureCode = startupActive ? null : "BACKEND_UNAVAILABLE",
+            OwnedProcessId = startupActive ? ownedProcess!.Id : null,
             LastHealthCheck = DateTimeOffset.UtcNow
         });
     }
@@ -206,6 +227,7 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            await CancelStartupMonitorAsync().ConfigureAwait(false);
             if (_ownedProcess is null)
             {
                 Publish(Status with
@@ -409,8 +431,7 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
                 break;
             }
 
-            if (await IsHealthyAsync(endpoint, cancellationToken).ConfigureAwait(false) &&
-                (job is null || job.OwnsTcpListener(endpoint.Port)))
+            if (await IsHealthyForOwnerAsync(endpoint, process, job, cancellationToken).ConfigureAwait(false))
             {
                 return Publish(Status with
                 {
@@ -425,14 +446,157 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
             await Task.Delay(ProbeInterval, cancellationToken).ConfigureAwait(false);
         }
 
+        if (spec.Mode == BackendMode.ManagedSource &&
+            ReferenceEquals(_ownedProcess, process) &&
+            !HasExitedSafe(process))
+        {
+            var waiting = Publish(Status with
+            {
+                State = BackendLifecycleState.WaitingForHealth,
+                Message = "The managed Studio backend is still starting.",
+                Detail = "First startup can take several minutes while Python dependencies are installed.",
+                FailureCode = null,
+                OwnedProcessId = process.Id,
+                LastHealthCheck = DateTimeOffset.UtcNow
+            });
+            StartStartupMonitor(process, job, spec, endpoint);
+            return waiting;
+        }
+
         return Publish(Status with
         {
             State = BackendLifecycleState.Failed,
             Message = "The managed backend did not become ready.",
             Detail = BuildFailureDetail(spec),
-            FailureCode = process.HasExited ? "BACKEND_EXITED" : "BACKEND_HEALTH_TIMEOUT",
+            FailureCode = HasExitedSafe(process) ? "BACKEND_EXITED" : "BACKEND_HEALTH_TIMEOUT",
             LastHealthCheck = DateTimeOffset.UtcNow
         });
+    }
+
+    private bool IsManagedStartupActive()
+    {
+        var process = _ownedProcess;
+        return Status.State == BackendLifecycleState.WaitingForHealth &&
+               process is not null &&
+               !HasExitedSafe(process);
+    }
+
+    private void StartStartupMonitor(
+        Process process,
+        WindowsProcessJob? job,
+        BackendLaunchSpec spec,
+        Uri endpoint)
+    {
+        CancellationTokenSource monitorCancellation;
+        lock (_startupMonitorLock)
+        {
+            if (_startupMonitorTask is { IsCompleted: false })
+            {
+                return;
+            }
+
+            _startupMonitorCancellation?.Dispose();
+            monitorCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCancellation.Token);
+            _startupMonitorCancellation = monitorCancellation;
+            _startupMonitorTask = MonitorStartupAsync(
+                process,
+                job,
+                spec,
+                endpoint,
+                monitorCancellation);
+        }
+    }
+
+    private async Task MonitorStartupAsync(
+        Process process,
+        WindowsProcessJob? job,
+        BackendLaunchSpec spec,
+        Uri endpoint,
+        CancellationTokenSource monitorCancellation)
+    {
+        try
+        {
+            var result = await BackendStartupMonitor.WaitAsync(
+                    token => IsHealthyForOwnerAsync(endpoint, process, job, token),
+                    () => !ReferenceEquals(_ownedProcess, process) || HasExitedSafe(process),
+                    TimeSpan.FromMinutes(5),
+                    TimeSpan.FromMilliseconds(500),
+                    monitorCancellation.Token)
+                .ConfigureAwait(false);
+
+            if (result == BackendStartupMonitorResult.Ready &&
+                ReferenceEquals(_ownedProcess, process))
+            {
+                Publish(Status with
+                {
+                    State = BackendLifecycleState.Ready,
+                    Message = "Studio backend is ready.",
+                    Detail = null,
+                    FailureCode = null,
+                    OwnedProcessId = process.Id,
+                    LastHealthCheck = DateTimeOffset.UtcNow
+                });
+                return;
+            }
+
+            if (result == BackendStartupMonitorResult.TimedOut &&
+                ReferenceEquals(_ownedProcess, process))
+            {
+                var detail = BuildFailureDetail(spec);
+                await StopOwnedProcessAsync(CancellationToken.None, cancelStartupMonitor: false)
+                    .ConfigureAwait(false);
+                PublishFailure(
+                    "BACKEND_HEALTH_TIMEOUT",
+                    "The managed backend did not become ready before the extended startup timeout.",
+                    detail);
+            }
+        }
+        catch (OperationCanceledException) when (monitorCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            lock (_startupMonitorLock)
+            {
+                if (ReferenceEquals(_startupMonitorCancellation, monitorCancellation))
+                {
+                    _startupMonitorCancellation = null;
+                    _startupMonitorTask = null;
+                }
+            }
+
+            monitorCancellation.Dispose();
+        }
+    }
+
+    private async Task CancelStartupMonitorAsync()
+    {
+        CancellationTokenSource? cancellation;
+        Task? monitorTask;
+        lock (_startupMonitorLock)
+        {
+            cancellation = _startupMonitorCancellation;
+            monitorTask = _startupMonitorTask;
+            _startupMonitorCancellation = null;
+            _startupMonitorTask = null;
+        }
+
+        if (cancellation is null)
+        {
+            return;
+        }
+
+        cancellation.Cancel();
+        if (monitorTask is not null)
+        {
+            try
+            {
+                await monitorTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
     }
 
     private async Task<bool> IsHealthyAsync(Uri endpoint, CancellationToken cancellationToken)
@@ -462,6 +626,43 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
             return false;
         }
         catch
+        {
+            return false;
+        }
+    }
+
+    private async Task<bool> IsHealthyForOwnerAsync(
+        Uri endpoint,
+        Process process,
+        WindowsProcessJob? job,
+        CancellationToken cancellationToken)
+    {
+        if (!ReferenceEquals(_ownedProcess, process) || HasExitedSafe(process))
+        {
+            return false;
+        }
+
+        if (!await IsHealthyAsync(endpoint, cancellationToken).ConfigureAwait(false) ||
+            !ReferenceEquals(_ownedProcess, process) ||
+            HasExitedSafe(process))
+        {
+            return false;
+        }
+
+        if (job is null)
+        {
+            return true;
+        }
+
+        try
+        {
+            return ReferenceEquals(_ownedJob, job) && job.OwnsTcpListener(endpoint.Port);
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+        catch (Win32Exception)
         {
             return false;
         }
@@ -506,8 +707,15 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
         }
     }
 
-    private async Task StopOwnedProcessAsync(CancellationToken cancellationToken)
+    private async Task StopOwnedProcessAsync(
+        CancellationToken cancellationToken,
+        bool cancelStartupMonitor = true)
     {
+        if (cancelStartupMonitor)
+        {
+            await CancelStartupMonitorAsync().ConfigureAwait(false);
+        }
+
         var process = Interlocked.Exchange(ref _ownedProcess, null);
         var job = Interlocked.Exchange(ref _ownedJob, null);
         if (process is null)
@@ -684,6 +892,22 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
         catch
         {
             return null;
+        }
+    }
+
+    private static bool HasExitedSafe(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
         }
     }
 

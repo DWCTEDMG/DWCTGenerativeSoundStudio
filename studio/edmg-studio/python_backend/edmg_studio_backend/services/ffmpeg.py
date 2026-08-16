@@ -6,8 +6,11 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
+import time
+from collections.abc import Callable
+from pathlib import Path, PureWindowsPath
 from string import Formatter
+from typing import Any
 
 
 def ensure_ffmpeg(ffmpeg_path: str) -> str:
@@ -213,6 +216,457 @@ def has_video_stream(ffmpeg_path: str, media_path: Path) -> bool | None:
         return False
     stream_lines = [line.strip().lower() for line in (proc.stdout or "").splitlines() if line.strip()]
     return any(line == "video" for line in stream_lines)
+
+
+def has_audio_stream(ffmpeg_path: str, media_path: Path) -> bool | None:
+    """Best-effort probe for an audio stream in a media container."""
+    if not media_path.exists():
+        return False
+    try:
+        ffprobe = ensure_ffprobe(ffmpeg_path)
+    except RuntimeError:
+        return None
+    proc = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(media_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return False
+    return any(line.strip().lower() == "audio" for line in (proc.stdout or "").splitlines())
+
+
+class TimelineRenderCanceled(RuntimeError):
+    pass
+
+
+_TIMELINE_VIDEO_SUFFIXES = {
+    ".avi",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
+    ".webm",
+}
+
+
+def _timeline_clip_values(clip: dict[str, Any]) -> dict[str, Any]:
+    values = dict(clip.get("data") or {}) if isinstance(clip.get("data"), dict) else {}
+    values.update({key: value for key, value in clip.items() if key != "data"})
+    return values
+
+
+def _timeline_tracks(timeline: dict[str, Any]) -> list[dict[str, Any]]:
+    tracks = timeline.get("tracks")
+    if isinstance(tracks, list):
+        return [track for track in tracks if isinstance(track, dict)]
+    layers = timeline.get("layers")
+    if isinstance(layers, list):
+        return [
+            {
+                "id": str(layer.get("id") or f"legacy-{index}"),
+                "clips": (
+                    layer["clips"]
+                    if isinstance(layer.get("clips"), list)
+                    else [layer]
+                ),
+            }
+            for index, layer in enumerate(layers)
+            if isinstance(layer, dict)
+        ]
+    clips = timeline.get("clips")
+    if isinstance(clips, list):
+        return [{"id": "legacy-clips", "clips": clips}]
+    return []
+
+
+def _resolve_timeline_source(project_dir: Path, source_value: Any) -> tuple[str, Path]:
+    source = str(source_value or "").strip().replace("\\", "/")
+    if not source:
+        raise ValueError("Timeline clip is missing source_path")
+    relative = Path(source)
+    windows_path = PureWindowsPath(str(source_value or ""))
+    if (
+        relative.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or source.startswith(("/", "\\"))
+        or any(part == ".." for part in relative.parts)
+    ):
+        raise ValueError("Timeline source_path must be project-relative")
+    project_root = project_dir.resolve()
+    candidates = (
+        [
+            project_root / "outputs" / "videos" / relative,
+            project_root / relative,
+        ]
+        if len(relative.parts) == 1
+        else [project_root / relative]
+    )
+    resolved: Path | None = None
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        try:
+            candidate.relative_to(project_root)
+        except ValueError as exc:
+            raise ValueError("Timeline source_path escapes the project directory") from exc
+        if candidate.is_file():
+            resolved = candidate
+            break
+    if resolved is None:
+        raise ValueError(f"Timeline video source does not exist: {source}")
+    if resolved.suffix.lower() not in _TIMELINE_VIDEO_SUFFIXES:
+        raise ValueError(f"Timeline source is not a supported video file: {source}")
+    return resolved.relative_to(project_root).as_posix(), resolved
+
+
+def _atempo_filters(speed: float) -> list[str]:
+    filters: list[str] = []
+    remaining = speed
+    while remaining > 2.0:
+        filters.append("atempo=2")
+        remaining /= 2.0
+    while remaining < 0.5:
+        filters.append("atempo=0.5")
+        remaining /= 0.5
+    filters.append(f"atempo={remaining:.8g}")
+    return filters
+
+
+def prepare_timeline_render_plan(
+    *,
+    ffmpeg_path: str,
+    project_dir: Path,
+    timeline: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate a saved timeline and return the only data persisted in the render job."""
+    if not isinstance(timeline, dict):
+        raise ValueError("Project timeline must be an object")
+    prepared_tracks: list[dict[str, Any]] = []
+    try:
+        timeline_duration = float(
+            timeline.get("duration_s", timeline.get("duration", 0.0)) or 0.0
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Timeline duration must be numeric") from exc
+    if not math.isfinite(timeline_duration) or timeline_duration < 0:
+        raise ValueError("Timeline duration must be a finite non-negative number")
+    for track_index, track in enumerate(_timeline_tracks(timeline)):
+        prepared_clips: list[dict[str, Any]] = []
+        raw_clips = track.get("clips")
+        if not isinstance(raw_clips, list):
+            continue
+        for clip_index, raw_clip in enumerate(raw_clips):
+            if not isinstance(raw_clip, dict):
+                continue
+            clip = _timeline_clip_values(raw_clip)
+            source_value = clip.get("source_path")
+            if not str(source_value or "").strip():
+                continue
+            source_relative, source_path = _resolve_timeline_source(project_dir, source_value)
+            if has_video_stream(ffmpeg_path, source_path) is not True:
+                raise ValueError(f"Timeline source has no video stream: {source_relative}")
+            try:
+                start = float(clip.get("start_s", clip.get("timeline_start_s", 0.0)))
+                end = float(clip.get("end_s", clip.get("timeline_end_s", start)))
+                speed = float(clip.get("speed", 1.0))
+                source_in = float(clip.get("source_in_s", 0.0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} has invalid numeric values"
+                ) from exc
+            if not all(math.isfinite(value) for value in (start, end, speed, source_in)):
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} numeric values must be finite"
+                )
+            if start < 0 or end <= start:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} has an invalid start/end"
+                )
+            if speed <= 0 or speed > 16:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} has an invalid speed"
+                )
+            source_out_value = clip.get("source_out_s")
+            try:
+                source_out = (
+                    float(source_out_value)
+                    if source_out_value is not None
+                    else source_in + ((end - start) * speed)
+                )
+                volume = float(clip.get("volume", 1.0))
+                fade_in = float(clip.get("fade_in_s", 0.0))
+                fade_out = float(clip.get("fade_out_s", 0.0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} has invalid numeric values"
+                ) from exc
+            if not all(math.isfinite(value) for value in (source_out, volume, fade_in, fade_out)):
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} numeric values must be finite"
+                )
+            if source_in < 0 or source_out <= source_in:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} has an invalid source range"
+                )
+            required_source_duration = (end - start) * speed
+            if source_out - source_in + 0.001 < required_source_duration:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} source range is too short"
+                )
+            prepared_clips.append(
+                {
+                    "id": str(clip.get("id") or f"clip-{track_index}-{clip_index}"),
+                    "source_path": source_relative,
+                    "start_s": start,
+                    "end_s": end,
+                    "source_in_s": source_in,
+                    "source_out_s": source_out,
+                    "speed": speed,
+                    "volume": max(0.0, min(16.0, volume)),
+                    "muted": bool(clip.get("muted", clip.get("mute", False))),
+                    "fade_in_s": max(0.0, fade_in),
+                    "fade_out_s": max(0.0, fade_out),
+                    "has_audio": has_audio_stream(ffmpeg_path, source_path) is not False,
+                }
+            )
+            timeline_duration = max(timeline_duration, end)
+        prepared_clips.sort(key=lambda item: (item["start_s"], item["end_s"], item["id"]))
+        for previous, current in zip(prepared_clips, prepared_clips[1:], strict=False):
+            if current["start_s"] < previous["end_s"] - 0.001:
+                track_name = str(track.get("name") or track.get("id") or track_index + 1)
+                raise ValueError(
+                    f"Overlapping clips in timeline track {track_name!r} are not supported"
+                )
+        if prepared_clips:
+            prepared_tracks.append(
+                {
+                    "id": str(track.get("id") or f"track-{track_index}"),
+                    "clips": prepared_clips,
+                }
+            )
+    if not prepared_tracks:
+        raise ValueError("Timeline contains no renderable video clips")
+    return {"duration_s": timeline_duration, "tracks": prepared_tracks}
+
+
+def build_timeline_render_command(
+    *,
+    ffmpeg_path: str,
+    project_dir: Path,
+    timeline: dict[str, Any],
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    video_codec: str,
+    audio_codec: str,
+    quality: int,
+) -> tuple[list[str], float]:
+    """Build a shell-free FFmpeg command for a flattened edited timeline."""
+    plan = prepare_timeline_render_plan(
+        ffmpeg_path=ffmpeg_path,
+        project_dir=project_dir,
+        timeline=timeline,
+    )
+    duration_s = float(plan["duration_s"])
+    clips = [
+        clip
+        for track in plan["tracks"]
+        for clip in track["clips"]
+    ]
+
+    codec_options = {
+        "h264": ("libx264", "yuv420p", ".mp4"),
+        "hevc": ("libx265", "yuv420p", ".mp4"),
+        "prores": ("prores_ks", "yuv422p10le", ".mov"),
+    }
+    if video_codec not in codec_options:
+        raise ValueError(f"Unsupported video codec: {video_codec}")
+    if (video_codec == "prores" and audio_codec != "pcm_s16le") or (
+        video_codec != "prores" and audio_codec != "aac"
+    ):
+        raise ValueError("Invalid video/audio codec combination")
+    expected_suffix = codec_options[video_codec][2]
+    if output_path.suffix.lower() != expected_suffix:
+        raise ValueError(f"{video_codec} output must use {expected_suffix}")
+
+    command = [ensure_ffmpeg(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y"]
+    for clip in clips:
+        command.extend(["-i", str(project_dir / clip["source_path"])])
+    black_input = len(clips)
+    silence_input = black_input + 1
+    command.extend(
+        [
+            "-f",
+            "lavfi",
+            "-t",
+            f"{duration_s:.6f}",
+            "-i",
+            f"color=c=black:s={width}x{height}:r={fps:.8g}",
+            "-f",
+            "lavfi",
+            "-t",
+            f"{duration_s:.6f}",
+            "-i",
+            "anullsrc=r=48000:cl=stereo",
+        ]
+    )
+
+    filters: list[str] = [
+        f"[{black_input}:v]trim=duration={duration_s:.6f},setpts=PTS-STARTPTS[vbase]"
+    ]
+    current_video = "vbase"
+    audio_labels = [f"{silence_input}:a"]
+    for input_index, clip in enumerate(clips):
+        start = float(clip["start_s"])
+        duration = float(clip["end_s"]) - start
+        source_in = float(clip["source_in_s"])
+        source_out = float(clip["source_out_s"])
+        speed = float(clip["speed"])
+        video_filters = [
+            f"trim=start={source_in:.6f}:end={source_out:.6f}",
+            f"setpts=(PTS-STARTPTS)/{speed:.8g}",
+            f"trim=duration={duration:.6f}",
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black",
+            f"fps={fps:.8g}",
+            "setsar=1",
+        ]
+        fade_in = min(float(clip["fade_in_s"]), duration)
+        fade_out = min(float(clip["fade_out_s"]), duration)
+        if fade_in > 0:
+            video_filters.append(f"fade=t=in:st=0:d={fade_in:.6f}")
+        if fade_out > 0:
+            video_filters.append(f"fade=t=out:st={duration - fade_out:.6f}:d={fade_out:.6f}")
+        video_filters.append(f"setpts=PTS+{start:.6f}/TB")
+        filters.append(f"[{input_index}:v:0]{','.join(video_filters)}[vc{input_index}]")
+        filters.append(
+            f"[{current_video}][vc{input_index}]"
+            f"overlay=eof_action=pass:shortest=0[vo{input_index}]"
+        )
+        current_video = f"vo{input_index}"
+
+        if clip["has_audio"]:
+            audio_filters = [
+                f"atrim=start={source_in:.6f}:end={source_out:.6f}",
+                "asetpts=PTS-STARTPTS",
+                *_atempo_filters(speed),
+                f"atrim=duration={duration:.6f}",
+                "aresample=48000",
+                "aformat=sample_rates=48000:channel_layouts=stereo",
+                f"volume={0.0 if clip['muted'] else clip['volume']:.8g}",
+            ]
+            if fade_in > 0:
+                audio_filters.append(f"afade=t=in:st=0:d={fade_in:.6f}")
+            if fade_out > 0:
+                audio_filters.append(f"afade=t=out:st={duration - fade_out:.6f}:d={fade_out:.6f}")
+            audio_filters.extend(
+                [
+                    f"adelay={int(round(start * 1000))}:all=1",
+                    f"apad=whole_dur={duration_s:.6f}",
+                    f"atrim=duration={duration_s:.6f}",
+                ]
+            )
+            filters.append(f"[{input_index}:a:0]{','.join(audio_filters)}[ac{input_index}]")
+            audio_labels.append(f"ac{input_index}")
+    if len(audio_labels) == 1:
+        filters.append(
+            f"[{audio_labels[0]}]atrim=duration={duration_s:.6f},"
+            "asetpts=PTS-STARTPTS[aout]"
+        )
+    else:
+        filters.append(
+            "".join(f"[{label}]" for label in audio_labels)
+            + f"amix=inputs={len(audio_labels)}:duration=longest:dropout_transition=0,"
+            + f"atrim=duration={duration_s:.6f}[aout]"
+        )
+    video_encoder, pixel_format, _ = codec_options[video_codec]
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            f"[{current_video}]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            video_encoder,
+            "-pix_fmt",
+            pixel_format,
+        ]
+    )
+    if video_codec == "prores":
+        command.extend(["-profile:v", "3"])
+    else:
+        command.extend(["-crf", str(quality)])
+    command.extend(["-c:a", audio_codec])
+    if audio_codec == "aac":
+        command.extend(["-b:a", "192k"])
+    if video_codec != "prores":
+        command.extend(["-movflags", "+faststart"])
+    command.extend(["-t", f"{duration_s:.6f}", str(output_path)])
+    return command, duration_s
+
+
+def render_timeline_edited_master(
+    *,
+    command: list[str],
+    output_path: Path,
+    duration_s: float,
+    is_canceled: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
+) -> None:
+    """Run an edited-master command while polling the persistent cancel flag."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        while proc.poll() is None:
+            if is_canceled and is_canceled():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                raise TimelineRenderCanceled("Timeline render canceled")
+            if on_progress:
+                elapsed = time.monotonic() - started
+                on_progress(min(0.95, elapsed / max(duration_s, 1.0)))
+            time.sleep(0.1)
+        _, stderr = proc.communicate()
+        if proc.returncode != 0:
+            message = (stderr or "").strip()
+            raise RuntimeError(f"FFmpeg timeline render failed ({proc.returncode}): {message[-2000:]}")
+        if not output_path.is_file() or output_path.stat().st_size <= 0:
+            raise RuntimeError("FFmpeg timeline render did not produce an output file")
+        if on_progress:
+            on_progress(1.0)
+    except BaseException:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+        output_path.unlink(missing_ok=True)
+        raise
 
 
 def _video_output_is_usable(ffmpeg_path: str, media_path: Path) -> bool:

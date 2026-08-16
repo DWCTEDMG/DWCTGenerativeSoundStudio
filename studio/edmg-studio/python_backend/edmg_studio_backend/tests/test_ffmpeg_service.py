@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import subprocess
 from pathlib import Path
 
@@ -415,3 +416,189 @@ def test_mux_audio_falls_back_to_shortest_when_video_duration_is_unknown(tmp_pat
     assert "-map" not in observed
     assert "-shortest" in observed
     assert out_mp4.read_bytes() == b"muxed"
+
+
+def test_prepare_timeline_render_plan_prefers_outputs_videos_and_rejects_unsafe_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "project"
+    videos_dir = project_dir / "outputs" / "videos"
+    videos_dir.mkdir(parents=True)
+    preferred = videos_dir / "source.mp4"
+    preferred.write_bytes(b"video")
+    (project_dir / "source.mp4").write_bytes(b"other")
+
+    monkeypatch.setattr(ffmpeg_service, "has_video_stream", lambda *_args: True)
+    monkeypatch.setattr(ffmpeg_service, "has_audio_stream", lambda *_args: True)
+    plan = ffmpeg_service.prepare_timeline_render_plan(
+        ffmpeg_path="ffmpeg",
+        project_dir=project_dir,
+        timeline={"tracks": [{"clips": [{"source_path": "source.mp4", "start_s": 1, "end_s": 3}]}]},
+    )
+    assert plan["duration_s"] == 3
+    assert plan["tracks"][0]["clips"][0]["source_path"] == "outputs/videos/source.mp4"
+
+    for unsafe in ("../outside.mp4", "C:\\outside.mp4"):
+        with pytest.raises(ValueError):
+            ffmpeg_service.prepare_timeline_render_plan(
+                ffmpeg_path="ffmpeg",
+                project_dir=project_dir,
+                timeline={"clips": [{"source_path": unsafe, "start_s": 0, "end_s": 1}]},
+            )
+
+    with pytest.raises(ValueError):
+        ffmpeg_service.prepare_timeline_render_plan(
+            ffmpeg_path="ffmpeg",
+            project_dir=project_dir,
+            timeline={"clips": [{"source_path": "missing.mp4", "start_s": 0, "end_s": 1}]},
+        )
+
+
+def test_prepare_timeline_render_plan_rejects_overlaps_and_non_finite_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "project"
+    videos_dir = project_dir / "outputs" / "videos"
+    videos_dir.mkdir(parents=True)
+    (videos_dir / "source.mp4").write_bytes(b"video")
+    monkeypatch.setattr(ffmpeg_service, "has_video_stream", lambda *_args: True)
+    monkeypatch.setattr(ffmpeg_service, "has_audio_stream", lambda *_args: True)
+
+    with pytest.raises(ValueError, match="Overlapping"):
+        ffmpeg_service.prepare_timeline_render_plan(
+            ffmpeg_path="ffmpeg",
+            project_dir=project_dir,
+            timeline={
+                "tracks": [
+                    {
+                        "clips": [
+                            {"source_path": "source.mp4", "start_s": 0, "end_s": 2},
+                            {"source_path": "source.mp4", "start_s": 1, "end_s": 3},
+                        ]
+                    }
+                ]
+            }
+        )
+
+    with pytest.raises(ValueError, match="finite"):
+        ffmpeg_service.prepare_timeline_render_plan(
+            ffmpeg_path="ffmpeg",
+            project_dir=project_dir,
+            timeline={"clips": [{"source_path": "source.mp4", "start_s": math.nan, "end_s": 1}]},
+        )
+
+
+@pytest.mark.parametrize(
+    ("video_codec", "audio_codec", "extension", "expected_args"),
+    [
+        ("h264", "aac", ".mp4", ("libx264", "yuv420p", "-crf", "18")),
+        ("hevc", "aac", ".mp4", ("libx265", "yuv420p", "-crf", "18")),
+        ("prores", "pcm_s16le", ".mov", ("prores_ks", "yuv422p10le", "-profile:v", "3")),
+    ],
+)
+def test_build_timeline_render_command_maps_codecs_and_builds_filters(
+    tmp_path: Path,
+    video_codec: str,
+    audio_codec: str,
+    extension: str,
+    expected_args: tuple[str, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_dir = tmp_path / "project"
+    videos_dir = project_dir / "outputs" / "videos"
+    videos_dir.mkdir(parents=True)
+    (videos_dir / "source.mp4").write_bytes(b"video")
+    monkeypatch.setattr(ffmpeg_service, "ensure_ffmpeg", lambda value: value)
+    monkeypatch.setattr(ffmpeg_service, "has_video_stream", lambda *_args: True)
+    monkeypatch.setattr(ffmpeg_service, "has_audio_stream", lambda *_args: True)
+    output = videos_dir / f"master{extension}"
+    timeline = {
+        "tracks": [
+            {
+                "clips": [
+                    {
+                        "source_path": "source.mp4",
+                        "start_s": 1,
+                        "end_s": 4,
+                        "source_in_s": 0.5,
+                        "source_out_s": 2,
+                        "speed": 0.5,
+                        "volume": 0.75,
+                        "fade_in_s": 0.25,
+                        "fade_out_s": 0.5,
+                    }
+                ]
+            }
+        ]
+    }
+
+    cmd, duration_s = ffmpeg_service.build_timeline_render_command(
+        ffmpeg_path="ffmpeg",
+        project_dir=project_dir,
+        timeline=timeline,
+        output_path=output,
+        width=1280,
+        height=720,
+        fps=24,
+        video_codec=video_codec,
+        audio_codec=audio_codec,
+        quality=18,
+    )
+
+    assert cmd[0] == "ffmpeg"
+    assert duration_s == 4
+    assert cmd[-1] == str(output)
+    assert all(arg in cmd for arg in expected_args)
+    assert "-filter_complex" in cmd
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "color=c=black:s=1280x720:r=24" in " ".join(cmd)
+    assert "scale=1280:720:force_original_aspect_ratio=decrease" in graph
+    assert "pad=1280:720" in graph
+    assert "fps=24" in graph
+    assert "fade=t=in" in graph and "fade=t=out" in graph
+    assert "volume=0.75" in graph
+    assert "adelay=1000:all=1" in graph
+    assert "overlay" in graph and "amix=" in graph
+    assert "-c:a" in cmd and cmd[cmd.index("-c:a") + 1] == audio_codec
+
+
+def test_render_timeline_cancellation_terminates_and_removes_partial_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "project"
+    videos_dir = project_dir / "outputs" / "videos"
+    videos_dir.mkdir(parents=True)
+    (videos_dir / "source.mp4").write_bytes(b"video")
+    output = videos_dir / "master.mp4"
+    output.write_bytes(b"partial")
+
+    class _CanceledProcess:
+        returncode = None
+
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            assert kwargs.get("shell") is not True
+            self.terminated = False
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.returncode = -15
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.terminated = True
+
+    monkeypatch.setattr(ffmpeg_service.subprocess, "Popen", _CanceledProcess)
+
+    with pytest.raises(ffmpeg_service.TimelineRenderCanceled):
+        ffmpeg_service.render_timeline_edited_master(
+            command=["ffmpeg", "-i", "source.mp4", str(output)],
+            output_path=output,
+            duration_s=1,
+            is_canceled=lambda: True,
+        )
+    assert not output.exists()

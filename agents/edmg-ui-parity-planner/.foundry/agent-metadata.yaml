@@ -1,0 +1,6 @@
+defaultEnvironment: dev
+environments:
+  dev:
+    azd:
+      environmentName: agents-edmg-ui-parity-planner-dev
+      service: edmg-ui-parity-planner

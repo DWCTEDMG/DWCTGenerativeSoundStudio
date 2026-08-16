@@ -160,6 +160,9 @@
                 <NavigationViewItem AutomationProperties.AutomationId="ReactiveNavigationItem" Content="Reactive Lab" Tag="reactiveLab" ToolTipService.ToolTip="Audio-reactive scheduling">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Sync" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem AutomationProperties.AutomationId="StudioForgeNavigationItem" Content="Studio Forge" Tag="studioForge" ToolTipService.ToolTip="Guided builder and readiness preview">
+                    <NavigationViewItem.Icon><SymbolIcon Symbol="Library" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
 
                 <NavigationViewItemHeader Content="System" />
                 <NavigationViewItem AutomationProperties.AutomationId="CloudNavigationItem" Content="Cloud" Tag="cloud" ToolTipService.ToolTip="Remote integrations">

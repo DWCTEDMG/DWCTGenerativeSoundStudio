@@ -143,6 +143,10 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         ResumeButton.IsEnabled = job.CanResume;
         CancelButton.IsEnabled = job.CanCancel;
         RetryButton.IsEnabled = job.CanRetry;
+        ResumeCheckpointButton.IsEnabled = !job.IsActive;
+        RestartCleanButton.IsEnabled = !job.IsActive;
+        ClearCachedFramesButton.IsEnabled = !job.IsActive;
+        DropCheckpointButton.IsEnabled = !job.IsActive;
         LogButton.IsEnabled = true;
         EventsButton.IsEnabled = true;
         DetailsTextBox.Text = FormatJobDetails(job);
@@ -160,9 +164,59 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
     private async void RetryButton_Click(object sender, RoutedEventArgs e) =>
         await RunJobActionAsync("retry", (projectId, jobId) => _apiClient.RetryJobAsync(projectId, jobId));
 
-    private async Task RunJobActionAsync(
+    private async void ResumeCheckpointButton_Click(object sender, RoutedEventArgs e) =>
+        await RunJobActionAsync(
+            "checkpoint continuation",
+            (projectId, jobId) => _apiClient.ResumeJobFromCheckpointAsync(projectId, jobId));
+
+    private async void RestartCleanButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await ConfirmRecoveryActionAsync(
+                "Restart job clean?",
+                "This queues a clean replacement without using the selected job's checkpoint or cached frames.",
+                "Restart clean"))
+        {
+            return;
+        }
+
+        await RunJobActionAsync(
+            "clean restart",
+            (projectId, jobId) => _apiClient.RestartJobCleanAsync(projectId, jobId));
+    }
+
+    private async void ClearCachedFramesButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await ConfirmRecoveryActionAsync(
+                "Clear cached frames?",
+                "Cached render frames for the selected job will be deleted and may need to be regenerated.",
+                "Clear frames"))
+        {
+            return;
+        }
+
+        await RunJobActionAsync(
+            "cached-frame cleanup",
+            (projectId, jobId) => _apiClient.ClearJobCachedFramesAsync(projectId, jobId));
+    }
+
+    private async void DropCheckpointButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await ConfirmRecoveryActionAsync(
+                "Drop checkpoint?",
+                "The selected job's saved recovery checkpoint will be permanently removed.",
+                "Drop checkpoint"))
+        {
+            return;
+        }
+
+        await RunJobActionAsync(
+            "checkpoint removal",
+            (projectId, jobId) => _apiClient.DropJobCheckpointAsync(projectId, jobId));
+    }
+
+    private async Task RunJobActionAsync<TResponse>(
         string action,
-        Func<string, string, Task<StudioJobActionResponse>> command)
+        Func<string, string, Task<TResponse>> command)
     {
         if (JobsList.SelectedItem is not JobListItem item)
         {
@@ -191,6 +245,29 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
             _isCommandRunning = false;
             SetBusy(false);
         }
+    }
+
+    private async Task<bool> ConfirmRecoveryActionAsync(
+        string title,
+        string content,
+        string primaryButtonText)
+    {
+        if (JobsList.SelectedItem is not JobListItem)
+        {
+            return false;
+        }
+
+        var confirmation = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            Content = content,
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        return await confirmation.ShowAsync() == ContentDialogResult.Primary;
     }
 
     private async void LogButton_Click(object sender, RoutedEventArgs e) =>
@@ -271,6 +348,10 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         ResumeButton.IsEnabled = false;
         CancelButton.IsEnabled = false;
         RetryButton.IsEnabled = false;
+        ResumeCheckpointButton.IsEnabled = false;
+        RestartCleanButton.IsEnabled = false;
+        ClearCachedFramesButton.IsEnabled = false;
+        DropCheckpointButton.IsEnabled = false;
         LogButton.IsEnabled = false;
         EventsButton.IsEnabled = false;
         DetailsTextBox.Text = string.Empty;

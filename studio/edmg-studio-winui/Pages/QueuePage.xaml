@@ -80,6 +80,32 @@
                                 Click="RetryButton_Click" Content="Retry" IsEnabled="False" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="ResumeCheckpointButton"
+                                AutomationProperties.AutomationId="Queue.ResumeCheckpoint"
+                                Click="ResumeCheckpointButton_Click"
+                                Content="Resume from checkpoint"
+                                IsEnabled="False"
+                                ToolTipService.ToolTip="Queue a continuation using the selected job's saved checkpoint." />
+                        <Button x:Name="RestartCleanButton"
+                                AutomationProperties.AutomationId="Queue.RestartClean"
+                                Click="RestartCleanButton_Click"
+                                Content="Restart clean"
+                                IsEnabled="False"
+                                ToolTipService.ToolTip="Queue a clean replacement without checkpoint recovery." />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="ClearCachedFramesButton"
+                                AutomationProperties.AutomationId="Queue.ClearCachedFrames"
+                                Click="ClearCachedFramesButton_Click"
+                                Content="Clear cached frames"
+                                IsEnabled="False" />
+                        <Button x:Name="DropCheckpointButton"
+                                AutomationProperties.AutomationId="Queue.DropCheckpoint"
+                                Click="DropCheckpointButton_Click"
+                                Content="Drop checkpoint"
+                                IsEnabled="False" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button x:Name="LogButton" AutomationProperties.AutomationId="Queue.LoadLog"
                                 Click="LogButton_Click" Content="Load log" IsEnabled="False" />
                         <Button x:Name="EventsButton" AutomationProperties.AutomationId="Queue.LoadEvents"
