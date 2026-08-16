@@ -17,21 +17,45 @@
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="CornerRadius" Value="12" />
             </Style>
+            <Style x:Key="StudioCardBorderStyle"
+                   TargetType="Border"
+                   BasedOn="{StaticResource StudioCardStyle}" />
             <Style x:Key="PageTitleStyle" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="28" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="Foreground" Value="{ThemeResource StudioTextBrush}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
             </Style>
+            <Style x:Key="StudioPageTitleTextStyle"
+                   TargetType="TextBlock"
+                   BasedOn="{StaticResource PageTitleStyle}" />
             <Style x:Key="PageSubtitleStyle" TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{ThemeResource StudioMutedTextBrush}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
             </Style>
+            <Style x:Key="StudioCaptionTextStyle"
+                   TargetType="TextBlock"
+                   BasedOn="{StaticResource PageSubtitleStyle}">
+                <Setter Property="FontSize" Value="12" />
+            </Style>
+            <Style x:Key="StudioSecondaryTextStyle"
+                   TargetType="TextBlock"
+                   BasedOn="{StaticResource PageSubtitleStyle}" />
             <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="18" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="Foreground" Value="{ThemeResource StudioAccentBrush}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+            <Style x:Key="StudioSectionTitleTextStyle"
+                   TargetType="TextBlock"
+                   BasedOn="{StaticResource SectionTitleStyle}" />
+            <Style x:Key="StudioPrimaryButtonStyle"
+                   TargetType="Button"
+                   BasedOn="{StaticResource AccentButtonStyle}" />
+            <Style x:Key="StudioDangerButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="{ThemeResource StudioDangerBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource StudioAccentForegroundBrush}" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

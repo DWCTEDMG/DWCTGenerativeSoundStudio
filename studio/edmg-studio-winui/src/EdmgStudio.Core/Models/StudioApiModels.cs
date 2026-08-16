@@ -299,6 +299,19 @@ public sealed record TimelineAutosaveRequest(
     [property: JsonPropertyName("meta")] JsonElement? Metadata = null,
     [property: JsonPropertyName("reason")] string? Reason = null);
 
+public sealed record TimelineRenderRequest(
+    [property: JsonPropertyName("width")] int Width,
+    [property: JsonPropertyName("height")] int Height,
+    [property: JsonPropertyName("fps")] double Fps,
+    [property: JsonPropertyName("video_codec")] string VideoCodec,
+    [property: JsonPropertyName("audio_codec")] string AudioCodec,
+    [property: JsonPropertyName("quality")] string Quality,
+    [property: JsonPropertyName("name")] string Name);
+
+public sealed record TimelineRenderResponse(
+    [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("job")] StudioJob Job);
+
 public sealed record RecoveryApplyRequest(
     [property: JsonPropertyName("source")] string Source = "journal",
     [property: JsonPropertyName("snapshot_name")] string? SnapshotName = null);
@@ -333,5 +346,25 @@ public static class StudioJson
 [JsonSerializable(typeof(StudioJob))]
 [JsonSerializable(typeof(TimelineUpdateRequest))]
 [JsonSerializable(typeof(TimelineAutosaveRequest))]
+[JsonSerializable(typeof(TimelineRenderRequest))]
+[JsonSerializable(typeof(TimelineRenderResponse))]
 [JsonSerializable(typeof(RecoveryApplyRequest))]
+[JsonSerializable(typeof(ModelCatalogueResponse))]
+[JsonSerializable(typeof(ModelCatalogueEntry))]
+[JsonSerializable(typeof(ModelPackEntry))]
+[JsonSerializable(typeof(ModelTask))]
+[JsonSerializable(typeof(ModelTaskListResponse))]
+[JsonSerializable(typeof(ModelTaskActionResponse))]
+[JsonSerializable(typeof(ModelBenchmarkRequest))]
+[JsonSerializable(typeof(ModelBenchmarkResponse))]
+[JsonSerializable(typeof(CivitaiImportRequest))]
+[JsonSerializable(typeof(LocalModelImportRequest))]
+[JsonSerializable(typeof(ModelImportResponse))]
+[JsonSerializable(typeof(TensorRtCancelImportRequest))]
+[JsonSerializable(typeof(TensorRtMigrationStatus))]
+[JsonSerializable(typeof(TensorRtLegacyStatus))]
+[JsonSerializable(typeof(TensorRtLegacyFile))]
+[JsonSerializable(typeof(TensorRtCanonicalStatus))]
+[JsonSerializable(typeof(TensorRtMigrationAvailability))]
+[JsonSerializable(typeof(TensorRtDiskStatus))]
 public sealed partial class StudioJsonContext : JsonSerializerContext;

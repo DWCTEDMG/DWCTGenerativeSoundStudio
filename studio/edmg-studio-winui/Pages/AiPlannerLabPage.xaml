@@ -1,0 +1,148 @@
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.AiPlannerLabPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <ScrollViewer>
+            <StackPanel Padding="32,28,32,48" Spacing="16" MaxWidth="1120" HorizontalAlignment="Stretch">
+                <StackPanel Spacing="4">
+                    <TextBlock Text="AI Planner Lab" Style="{ThemeResource TitleTextBlockStyle}" />
+                    <TextBlock x:Name="ProjectSummaryText" Text="Validated browser-plan import for the active project."
+                               TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+
+                <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
+                         Title="Native generation is not exposed by the backend"
+                         Message="This page imports the same Planner workbench analysis and plan shapes used by Electron. It does not pretend to run browser NLP generation." />
+                <InfoBar x:Name="StatusInfoBar" IsOpen="False" IsClosable="True" />
+
+                <Border Style="{StaticResource StudioCardBorderStyle}">
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="Planning settings" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <Grid ColumnSpacing="16" RowSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Analysis focus" />
+                                <ComboBox x:Name="AnalysisFocusCombo" SelectedIndex="0"
+                                          AutomationProperties.AutomationId="PlannerAnalysisFocusComboBox">
+                                    <ComboBoxItem Content="balanced" />
+                                    <ComboBoxItem Content="emotion" />
+                                    <ComboBoxItem Content="visual" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="6">
+                                <TextBlock Text="Prompt style" />
+                                <ComboBox x:Name="PromptStyleCombo" SelectedIndex="0"
+                                          AutomationProperties.AutomationId="PlannerPromptStyleComboBox">
+                                    <ComboBoxItem Content="cinematic" />
+                                    <ComboBoxItem Content="music-video" />
+                                    <ComboBoxItem Content="experimental" />
+                                    <ComboBoxItem Content="documentary" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="6">
+                                <TextBlock Text="Prompt detail" />
+                                <ComboBox x:Name="PromptDetailCombo" SelectedIndex="1"
+                                          AutomationProperties.AutomationId="PlannerPromptDetailComboBox">
+                                    <ComboBoxItem Content="tight" />
+                                    <ComboBoxItem Content="standard" />
+                                    <ComboBoxItem Content="expanded" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Spacing="6">
+                                <TextBlock Text="Aspect ratio" />
+                                <ComboBox x:Name="AspectRatioCombo" SelectedIndex="0"
+                                          AutomationProperties.AutomationId="PlannerAspectRatioComboBox">
+                                    <ComboBoxItem Content="16:9" />
+                                    <ComboBoxItem Content="9:16" />
+                                    <ComboBoxItem Content="1:1" />
+                                    <ComboBoxItem Content="21:9" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
+                                <TextBlock Text="Target" />
+                                <ComboBox x:Name="TargetCombo" SelectedIndex="0"
+                                          AutomationProperties.AutomationId="PlannerTargetComboBox">
+                                    <ComboBoxItem Content="general-video" />
+                                    <ComboBoxItem Content="runway" />
+                                    <ComboBoxItem Content="deforum" />
+                                    <ComboBoxItem Content="storyboard" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="2" Spacing="6">
+                                <TextBlock Text="Variant mode" />
+                                <ComboBox x:Name="VariantModeCombo" SelectedIndex="0"
+                                          AutomationProperties.AutomationId="PlannerVariantModeComboBox">
+                                    <ComboBoxItem Content="safe" />
+                                    <ComboBoxItem Content="bold" />
+                                    <ComboBoxItem Content="weird" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="2" Spacing="6">
+                                <TextBlock Text="Scene count" />
+                                <NumberBox x:Name="SceneCountBox" Value="8" Minimum="1" Maximum="64" SpinButtonPlacementMode="Inline"
+                                           AutomationProperties.AutomationId="PlannerSceneCountNumberBox" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="2" Grid.Column="1" Spacing="6">
+                                <TextBlock Text="Subject focus" />
+                                <TextBox x:Name="SubjectFocusBox" AutomationProperties.AutomationId="PlannerSubjectFocusTextBox" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="2" Grid.Column="2" Spacing="6">
+                                <TextBlock Text="Negative prompt seed" />
+                                <TextBox x:Name="NegativePromptBox" AutomationProperties.AutomationId="PlannerNegativePromptTextBox" />
+                            </StackPanel>
+                        </Grid>
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Creative brief" />
+                            <TextBox x:Name="CreativeBriefBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="72"
+                                     AutomationProperties.AutomationId="PlannerCreativeBriefTextBox" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardBorderStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Workbench payload" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Analysis JSON" FontWeight="SemiBold" />
+                        <TextBox x:Name="AnalysisJsonBox" AcceptsReturn="True" TextWrapping="NoWrap"
+                                 FontFamily="Cascadia Mono" MinHeight="180"
+                                 AutomationProperties.AutomationId="PlannerAnalysisJsonTextBox" />
+                        <TextBlock Text="Plan JSON" FontWeight="SemiBold" />
+                        <TextBox x:Name="PlanJsonBox" AcceptsReturn="True" TextWrapping="NoWrap"
+                                 FontFamily="Cascadia Mono" MinHeight="180"
+                                 AutomationProperties.AutomationId="PlannerPlanJsonTextBox" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <CheckBox x:Name="ApplyTimelineCheckBox" Content="Apply to timeline" IsChecked="True"
+                                      AutomationProperties.AutomationId="PlannerApplyTimelineCheckBox" />
+                            <CheckBox x:Name="OverwriteTimelineCheckBox" Content="Overwrite timeline" IsChecked="True"
+                                      AutomationProperties.AutomationId="PlannerOverwriteTimelineCheckBox" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Load last Planner payload" Click="LoadLastPayload_Click"
+                                    AutomationProperties.AutomationId="PlannerLoadLastPayloadButton" />
+                            <Button Content="Import into project" Style="{StaticResource AccentButtonStyle}" Click="ImportPlanner_Click"
+                                    AutomationProperties.AutomationId="PlannerImportButton" />
+                            <Button Content="Open Workspace" Click="OpenWorkspace_Click"
+                                    AutomationProperties.AutomationId="PlannerOpenWorkspaceButton" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+        <ProgressBar x:Name="BusyIndicator" IsIndeterminate="True" Visibility="Collapsed"
+                     VerticalAlignment="Top" AutomationProperties.Name="Planner operation in progress" />
+    </Grid>
+</Page>

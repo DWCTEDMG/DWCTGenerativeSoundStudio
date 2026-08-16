@@ -49,6 +49,11 @@ public sealed partial class MainPage : Page
             NavigateTo("dashboard");
             var status = await App.Services.BackendSupervisor.StartAsync();
             UpdateBackendStatus(status);
+            if (status.State == BackendLifecycleState.WaitingForHealth)
+            {
+                return;
+            }
+
             if (!status.IsReady)
             {
                 NavigateTo("setup");
@@ -91,7 +96,26 @@ public sealed partial class MainPage : Page
 
     private void BackendSupervisor_StatusChanged(object? sender, BackendStatus status)
     {
-        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, () => UpdateBackendStatus(status));
+        DispatcherQueue.TryEnqueue(
+            DispatcherQueuePriority.Normal,
+            async () =>
+            {
+                UpdateBackendStatus(status);
+                if (status.IsReady && ContentFrame.Content is IStudioRefreshable refreshable)
+                {
+                    try
+                    {
+                        await refreshable.RefreshAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        BackendInfoBar.Severity = InfoBarSeverity.Warning;
+                        BackendInfoBar.Title = "Backend connected; page refresh failed";
+                        BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
+                        BackendInfoBar.IsOpen = true;
+                    }
+                }
+            });
     }
 
     private void UpdateBackendStatus(BackendStatus status)
@@ -121,12 +145,29 @@ public sealed partial class MainPage : Page
         try
         {
             var status = await App.Services.BackendSupervisor.RefreshHealthAsync();
+            if (status.State == BackendLifecycleState.WaitingForHealth)
+            {
+                UpdateBackendStatus(status);
+                return;
+            }
+
             if (!status.IsReady)
             {
                 status = await App.Services.BackendSupervisor.StartAsync();
+                if (status.State == BackendLifecycleState.WaitingForHealth)
+                {
+                    UpdateBackendStatus(status);
+                    return;
+                }
             }
 
             status = await App.Services.BackendSupervisor.RefreshHealthAsync();
+            if (status.State == BackendLifecycleState.WaitingForHealth)
+            {
+                UpdateBackendStatus(status);
+                return;
+            }
+
             if (!status.IsReady)
             {
                 throw new InvalidOperationException(
@@ -197,10 +238,11 @@ public sealed partial class MainPage : Page
         "review" => typeof(ReviewPage),
         "outputs" => typeof(OutputsPage),
         "models" => typeof(ModelsPage),
-        "cloud" => typeof(SettingsPage),
-        "directorLab" => typeof(TimelinePage),
-        "plannerLab" => typeof(RenderPage),
-        "reactiveLab" => typeof(TimelinePage),
+        "cloud" => typeof(CloudPage),
+        "directorLab" => typeof(EdmgDirectorPage),
+        "plannerLab" => typeof(AiPlannerLabPage),
+        "reactiveLab" => typeof(ReactiveLabPage),
+        "studioForge" => typeof(StudioForgePage),
         "settings" => typeof(SettingsPage),
         "setup" => typeof(SetupPage),
         _ => typeof(MigrationPage)

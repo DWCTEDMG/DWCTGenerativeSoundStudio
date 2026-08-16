@@ -1,0 +1,158 @@
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.CloudPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="1120" Padding="32" Spacing="20" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="6">
+                <TextBlock Text="Cloud" Style="{StaticResource PageTitleTextBlockStyle}" />
+                <TextBlock
+                    Text="Test configured cloud providers and create portable backend bundles. Credentials remain owned by the FastAPI service."
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <InfoBar
+                IsOpen="True"
+                IsClosable="False"
+                Severity="Informational"
+                Title="Backend target switching is unavailable in the native client"
+                Message="The Electron host can persist an external backend URL. FastAPI exposes no equivalent contract, so WinUI keeps this capability disabled rather than changing targets locally." />
+
+            <InfoBar
+                x:Name="StatusInfoBar"
+                IsOpen="False"
+                IsClosable="True" />
+
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Padding="20" CornerRadius="8"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="AWS bundle tools" Style="{StaticResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Test the backend's S3 credentials and optionally build/upload a project bundle."
+                                   TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBox x:Name="AwsBucketTextBox" Header="S3 bucket (optional)"
+                                 AutomationProperties.AutomationId="CloudAwsBucketTextBox" />
+                        <TextBox x:Name="AwsBundleKeyTextBox" Header="Bundle object key"
+                                 Text="edmg_project_bundle.zip"
+                                 AutomationProperties.AutomationId="CloudAwsBundleKeyTextBox" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Test credentials" Click="AwsTest_Click"
+                                    AutomationProperties.AutomationId="CloudAwsTestButton" />
+                            <Button Content="Create bundle" Style="{StaticResource AccentButtonStyle}"
+                                    Click="AwsBundle_Click"
+                                    AutomationProperties.AutomationId="CloudAwsBundleButton" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Padding="20" CornerRadius="8"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Azure model cache" Style="{StaticResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Test the backend's Azure Blob Storage configuration for on-demand model caching."
+                                   TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBox x:Name="AzureContainerTextBox" Header="Container"
+                                 Text="edmg-model-cache"
+                                 AutomationProperties.AutomationId="CloudAzureContainerTextBox" />
+                        <TextBox x:Name="AzurePrefixTextBox" Header="Prefix"
+                                 Text="models"
+                                 AutomationProperties.AutomationId="CloudAzurePrefixTextBox" />
+                        <Button Content="Test Azure storage" HorizontalAlignment="Left"
+                                Click="AzureTest_Click"
+                                AutomationProperties.AutomationId="CloudAzureTestButton" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Padding="20" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="Hugging Face bucket" Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <TextBlock x:Name="HfProviderTextBlock" Text="Provider status has not been loaded."
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Reload status" Click="ReloadHf_Click"
+                                AutomationProperties.AutomationId="CloudHfReloadButton" />
+                    </Grid>
+                    <ToggleSwitch x:Name="HfEnabledToggle" Header="Enable bucket-backed model cache"
+                                  AutomationProperties.AutomationId="CloudHfEnabledToggle" />
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="HfBucketTextBox" Grid.Column="0" Header="Bucket"
+                                 AutomationProperties.AutomationId="CloudHfBucketTextBox" />
+                        <TextBox x:Name="HfPrefixTextBox" Grid.Column="1" Header="Prefix"
+                                 AutomationProperties.AutomationId="CloudHfPrefixTextBox" />
+                        <ComboBox x:Name="HfStorageModeComboBox" Grid.Column="2" Header="Storage mode"
+                                  SelectedIndex="0"
+                                  AutomationProperties.AutomationId="CloudHfStorageModeComboBox">
+                            <ComboBoxItem Content="Local cache" Tag="local_cache" />
+                            <ComboBoxItem Content="Cloud only" Tag="cloud_only" />
+                        </ComboBox>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Save settings" Style="{StaticResource AccentButtonStyle}"
+                                Click="SaveHf_Click"
+                                AutomationProperties.AutomationId="CloudHfSaveButton" />
+                        <Button Content="Test bucket" Click="TestHf_Click"
+                                AutomationProperties.AutomationId="CloudHfTestButton" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="20" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Lightning.ai bundle" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Generate a local deployment bundle through FastAPI. Connecting this client to a hosted Lightning backend is unavailable without a backend-settings contract."
+                               TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBox x:Name="LightningOutputTextBox" Header="Output directory"
+                             Text="lightning/lightning_bundle"
+                             AutomationProperties.AutomationId="CloudLightningOutputTextBox" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Generate bundle" Style="{StaticResource AccentButtonStyle}"
+                                Click="LightningBundle_Click"
+                                AutomationProperties.AutomationId="CloudLightningBundleButton" />
+                        <Button Content="Connect hosted backend" IsEnabled="False"
+                                ToolTipService.ToolTip="No FastAPI contract exists for changing the desktop client's backend target."
+                                AutomationProperties.AutomationId="CloudLightningConnectButton" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="20" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Latest result" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBox x:Name="ResultTextBox" IsReadOnly="True" AcceptsReturn="True"
+                             MinHeight="160" TextWrapping="NoWrap"
+                             AutomationProperties.AutomationId="CloudResultTextBox" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

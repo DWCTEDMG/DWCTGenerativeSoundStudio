@@ -33,6 +33,16 @@
     <Content Include="Assets\Brand\StudioLogo.png" />
     <Content Include="Assets\Brand\StudioBackground.jpg" />
     <Content Include="Assets\Brand\WorkspaceFlair.jpg" />
+    <Content Include="..\edmg-studio\electron-resources\bin\ffmpeg.exe"
+             Condition="Exists('..\edmg-studio\electron-resources\bin\ffmpeg.exe')"
+             Link="bin\ffmpeg.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\edmg-studio\electron-resources\bin\ffprobe.exe"
+             Condition="Exists('..\edmg-studio\electron-resources\bin\ffprobe.exe')"
+             Link="bin\ffprobe.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

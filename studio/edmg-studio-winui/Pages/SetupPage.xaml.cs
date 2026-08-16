@@ -1,7 +1,11 @@
 using System.Text.Json;
+using EdmgStudio.Core.Models;
+using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
+using Microsoft.Windows.AppLifecycle;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.ApplicationModel.Core;
 using Windows.Storage;
 using Windows.System;
 
@@ -79,9 +83,18 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         StorageStatusText.Text = paths.PreparationWarnings.Count == 0
             ? "Storage paths are available."
             : string.Join(Environment.NewLine, paths.PreparationWarnings);
-        BackendModeText.Text = $"Configured mode: {configuration.Mode} · accelerator: {configuration.AcceleratorProfile}";
-        BackendAddressText.Text = $"Address: {configuration.BackendUri.ToString().TrimEnd('/')}";
-        BackendSourceText.Text = $"Configuration source: {configuration.Source}";
+        BackendModeText.Text =
+            $"Configured mode: {configuration.Mode} · accelerator: {configuration.AcceleratorProfile}";
+        BackendAddressText.Text = configuration.Mode == RequestedBackendMode.External
+            ? $"Configured external address: {configuration.ConfiguredBackendUrl ?? "(missing)"}"
+            : $"Managed address: {configuration.BackendUri.ToString().TrimEnd('/')}";
+        BackendSourceText.Text =
+            $"Mode source: {configuration.BackendModeSource} · address source: {configuration.BackendAddressSource}";
+        BackendValidationText.Text = configuration.ValidationErrors.Count == 0
+            ? string.Empty
+            : string.Join(Environment.NewLine, configuration.ValidationErrors);
+        ResetBackendButton.IsEnabled = configuration.Mode != RequestedBackendMode.Managed ||
+                                       configuration.ValidationErrors.Count > 0;
         if (configuration.HasPendingMigration)
         {
             StorageStatusText.Text = configuration.PendingMigrationDetail ?? "A pending storage migration requires attention.";
@@ -117,6 +130,46 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+    private async void RetryBackend_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+
+    private async void ResetBackend_Click(object sender, RoutedEventArgs e)
+    {
+        var configuration = App.Services.Configuration;
+        var confirmation = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Reset to the managed Python backend?",
+            Content =
+                $"Studio will replace only the saved backend target with http://127.0.0.1:7863 and restart. " +
+                $"Storage, models, accelerator settings, Foundry configuration, and other bootstrap settings will be preserved.\n\n" +
+                $"Current target: {(configuration.ConfiguredBackendUrl ?? configuration.BackendUri.ToString())}",
+            PrimaryButtonText = "Reset and restart",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close
+        };
+        if (await confirmation.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        try
+        {
+            BackendSettingsStore.ResetToManaged();
+            var restartResult = AppInstance.Restart("--backend-reset");
+            if (restartResult != AppRestartFailureReason.RestartPending)
+            {
+                ShowStatus(
+                    "Backend target was reset, but Studio could not restart",
+                    $"Restart result: {restartResult}. Close and reopen Studio to use the managed backend.",
+                    InfoBarSeverity.Error);
+            }
+        }
+        catch (Exception exception)
+        {
+            ShowStatus("Backend target was not reset", exception.Message, InfoBarSeverity.Error);
+        }
+    }
+
     private void OpenWorkspace_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
 
     private async void OpenStudioHome_Click(object sender, RoutedEventArgs e)

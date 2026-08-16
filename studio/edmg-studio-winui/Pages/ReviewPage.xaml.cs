@@ -101,11 +101,9 @@ public sealed partial class ReviewPage : Page
         LockFieldsTextBox.Text = JoinValues(artifact.Data["locks"]);
         MetadataTextBox.Text = StudioPageHelpers.FormatJson(artifact.Data);
 
-        if (!artifact.IsImage || string.IsNullOrWhiteSpace(_projectId))
+        if ((!artifact.IsImage && !artifact.IsVideo) || string.IsNullOrWhiteSpace(_projectId))
         {
-            ArtifactPreview.ShowUnsupported(artifact.IsVideo
-                ? "Video preview is not available in this build."
-                : "This artifact does not have an inline image preview.");
+            ArtifactPreview.ShowUnsupported("This artifact does not have an inline preview.");
             return;
         }
 
@@ -123,10 +121,17 @@ public sealed partial class ReviewPage : Page
                         return false;
                     }
 
-                    await ArtifactPreview.LoadStreamAsync(
-                        file.Stream,
-                        file.ContentHeaders.ContentType?.MediaType,
-                        callbackToken);
+                    if (artifact.IsVideo)
+                    {
+                        await ArtifactPreview.LoadVideoStreamAsync(file.Stream, callbackToken);
+                    }
+                    else
+                    {
+                        await ArtifactPreview.LoadStreamAsync(
+                            file.Stream,
+                            file.ContentHeaders.ContentType?.MediaType,
+                            callbackToken);
+                    }
                     return true;
                 },
                 cancellationToken);

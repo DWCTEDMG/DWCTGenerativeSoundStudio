@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .version import STUDIO_VERSION
 
@@ -329,6 +329,53 @@ class MusicGraphCorrectionsRequest(BaseModel):
 
 class TimelineUpdateRequest(BaseModel):
     timeline: dict[str, Any] = Field(default_factory=dict)
+
+
+class TimelineRenderRequest(BaseModel):
+    width: int = Field(default=1920, ge=256, le=7680)
+    height: int = Field(default=1080, ge=256, le=7680)
+    fps: float = Field(default=30, ge=1, le=120)
+    video_codec: Literal["h264", "hevc", "prores"] = "h264"
+    audio_codec: Literal["aac", "pcm_s16le"] = "aac"
+    quality: int = Field(default=18, ge=1, le=51)
+    name: str = Field(default="edited-master", min_length=1, max_length=80)
+
+    @field_validator("width", "height")
+    @classmethod
+    def dimensions_must_be_even(cls, value: int) -> int:
+        if value % 2:
+            raise ValueError("render dimensions must be even")
+        return value
+
+    @field_validator("quality", mode="before")
+    @classmethod
+    def normalize_quality(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            named = {"high": 18, "medium": 23, "low": 28}
+            if normalized in named:
+                return named[normalized]
+            if normalized.isdigit():
+                return int(normalized)
+        return value
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def sanitize_name(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        text = "".join(char if char.isalnum() or char in {" ", "-", "_", "."} else "_" for char in text)
+        text = " ".join(text.split()).strip(" .")
+        if not text:
+            raise ValueError("name must contain a filename-safe character")
+        return text[:80].rstrip(" .")
+
+    @model_validator(mode="after")
+    def validate_codec_pair(self) -> TimelineRenderRequest:
+        if self.video_codec == "prores" and self.audio_codec != "pcm_s16le":
+            raise ValueError("ProRes renders require PCM audio")
+        if self.video_codec in {"h264", "hevc"} and self.audio_codec != "aac":
+            raise ValueError("H.264 and HEVC renders require AAC audio")
+        return self
 
 
 class AutosaveRequest(BaseModel):

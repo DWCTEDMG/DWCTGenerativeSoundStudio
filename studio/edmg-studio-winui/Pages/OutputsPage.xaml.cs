@@ -103,11 +103,9 @@ public sealed partial class OutputsPage : Page
         SaveButton.IsEnabled = true;
         RevealButton.IsEnabled = true;
 
-        if (!entry.IsImage)
+        if (!entry.IsImage && !entry.IsVideo)
         {
-            OutputPreview.ShowUnsupported(entry.IsVideo
-                ? "Video preview is not available in this build. Use Reveal preview to locate the file."
-                : "This output does not have an inline preview.");
+            OutputPreview.ShowUnsupported("This output does not have an inline preview.");
             return;
         }
 
@@ -124,10 +122,17 @@ public sealed partial class OutputsPage : Page
                         return false;
                     }
 
-                    await OutputPreview.LoadStreamAsync(
-                        file.Stream,
-                        file.ContentHeaders.ContentType?.MediaType,
-                        callbackToken);
+                    if (entry.IsVideo)
+                    {
+                        await OutputPreview.LoadVideoStreamAsync(file.Stream, callbackToken);
+                    }
+                    else
+                    {
+                        await OutputPreview.LoadStreamAsync(
+                            file.Stream,
+                            file.ContentHeaders.ContentType?.MediaType,
+                            callbackToken);
+                    }
                     return true;
                 },
                 cancellationToken);

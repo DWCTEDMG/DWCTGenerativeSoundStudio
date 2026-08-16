@@ -1,0 +1,85 @@
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.EdmgDirectorPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <ScrollViewer>
+            <StackPanel Padding="32,28,32,48" Spacing="16" MaxWidth="1120" HorizontalAlignment="Stretch">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="EDMG Director" Style="{ThemeResource TitleTextBlockStyle}" />
+                        <TextBlock Text="Coordinate the native planning, reactive, workspace, and render workflow for the active project."
+                                   TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Refresh project" Click="RefreshProject_Click"
+                            AutomationProperties.AutomationId="DirectorRefreshProjectButton" />
+                </Grid>
+
+                <InfoBar x:Name="StatusInfoBar" IsOpen="False" IsClosable="True" />
+
+                <Border Style="{StaticResource StudioCardBorderStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Active production" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <Grid ColumnSpacing="24" RowSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Project" FontWeight="SemiBold" />
+                            <TextBlock x:Name="ProjectNameText" Grid.Column="1" Text="No active project" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="1" Text="Project ID" FontWeight="SemiBold" />
+                            <TextBlock x:Name="ProjectIdText" Grid.Row="1" Grid.Column="1" Text="—" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="2" Text="Selected variant" FontWeight="SemiBold" />
+                            <TextBlock x:Name="VariantText" Grid.Row="2" Grid.Column="1" Text="Variant 1" />
+                            <TextBlock Grid.Row="3" Text="Analysis" FontWeight="SemiBold" />
+                            <TextBlock x:Name="AnalysisText" Grid.Row="3" Grid.Column="1" Text="Not loaded" />
+                            <TextBlock Grid.Row="4" Text="Plan" FontWeight="SemiBold" />
+                            <TextBlock x:Name="PlanText" Grid.Row="4" Grid.Column="1" Text="Not loaded" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardBorderStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Direct the workflow" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Each action opens a dedicated native surface. The Python backend remains authoritative for every mutation."
+                                   TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="AI Planner Lab" Click="OpenPlanner_Click"
+                                    AutomationProperties.AutomationId="DirectorOpenPlannerButton" />
+                            <Button Content="Reactive Lab" Click="OpenReactive_Click"
+                                    AutomationProperties.AutomationId="DirectorOpenReactiveButton" />
+                            <Button Content="Workspace" Click="OpenWorkspace_Click"
+                                    AutomationProperties.AutomationId="DirectorOpenWorkspaceButton" />
+                            <Button Content="Render" Click="OpenRender_Click"
+                                    AutomationProperties.AutomationId="DirectorOpenRenderButton" />
+                            <Button Content="Studio Forge" Click="OpenForge_Click"
+                                    AutomationProperties.AutomationId="DirectorOpenForgeButton" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
+                         Title="Desktop service lifecycle is managed outside this page"
+                         Message="The Electron Director can manage its own embedded service process. WinUI uses the configured backend supervisor and does not expose fake start, stop, or restart controls here." />
+            </StackPanel>
+        </ScrollViewer>
+        <ProgressBar x:Name="BusyIndicator" IsIndeterminate="True" Visibility="Collapsed"
+                     VerticalAlignment="Top" AutomationProperties.Name="Loading Director project" />
+    </Grid>
+</Page>

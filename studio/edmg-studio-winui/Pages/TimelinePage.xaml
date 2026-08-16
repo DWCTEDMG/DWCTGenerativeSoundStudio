@@ -2,175 +2,469 @@
     x:Class="EdmgStudio.WinUI.Pages.TimelinePage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:controls="using:EdmgStudio.WinUI.Controls"
-    xmlns:local="using:EdmgStudio.WinUI.Pages"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    mc:Ignorable="d">
+    NavigationCacheMode="Enabled">
 
-    <Grid Background="{ThemeResource AppCanvasBrush}">
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Grid Margin="32,24,32,12" ColumnSpacing="16">
+        <Grid Grid.Row="0" Margin="20,16,20,10" ColumnSpacing="16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Timeline" />
-                <TextBlock Foreground="{ThemeResource SecondaryTextBrush}"
-                           Text="Arrange clip lanes while preserving all backend timeline metadata." />
+            <StackPanel Spacing="3">
+                <TextBlock Text="Timeline" Style="{StaticResource StudioPageTitleTextStyle}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock x:Name="ProjectText"
+                               Text="Arrange generated clips, preview the edit, and render a master."
+                               Style="{StaticResource StudioCaptionTextStyle}" />
+                    <TextBlock x:Name="DurationSummaryText"
+                               Style="{StaticResource StudioCaptionTextStyle}" />
+                </StackPanel>
             </StackPanel>
-            <CommandBar Grid.Column="1" Background="Transparent" DefaultLabelPosition="Right">
-                <AppBarButton x:Name="RefreshButton" AutomationProperties.AutomationId="Timeline.Refresh"
-                              Click="RefreshButton_Click" Icon="Refresh" Label="Refresh" />
-                <AppBarButton x:Name="UndoButton" AutomationProperties.AutomationId="Timeline.Undo"
-                              Click="UndoButton_Click" Icon="Undo" IsEnabled="False" Label="Undo" />
-                <AppBarButton x:Name="RedoButton" AutomationProperties.AutomationId="Timeline.Redo"
-                              Click="RedoButton_Click" Icon="Redo" IsEnabled="False" Label="Redo" />
-                <AppBarButton x:Name="SaveButton" AutomationProperties.AutomationId="Timeline.Save"
-                              Click="SaveButton_Click" Icon="Save" Label="Save" />
-                <AppBarButton x:Name="AutosaveButton" AutomationProperties.AutomationId="Timeline.Autosave"
-                              Click="AutosaveButton_Click" Icon="Clock" Label="Autosave" />
-            </CommandBar>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <Button x:Name="UndoButton"
+                        AutomationProperties.AutomationId="Timeline.Undo"
+                        Content="Undo"
+                        Click="Undo_Click" />
+                <Button x:Name="RedoButton"
+                        AutomationProperties.AutomationId="Timeline.Redo"
+                        Content="Redo"
+                        Click="Redo_Click" />
+                <Button x:Name="SaveButton"
+                        AutomationProperties.AutomationId="Timeline.Save"
+                        Style="{StaticResource StudioPrimaryButtonStyle}"
+                        Content="Save timeline"
+                        Click="SaveTimeline_Click" />
+                <Button AutomationProperties.AutomationId="Timeline.Refresh"
+                        Content="Refresh"
+                        Click="Refresh_Click" />
+            </StackPanel>
         </Grid>
 
-        <InfoBar x:Name="StatusBar" Grid.Row="1" Margin="32,0,32,12"
-                 IsClosable="True" IsOpen="False" Severity="Informational" />
+        <InfoBar x:Name="PageInfoBar"
+                 Grid.Row="1"
+                 Margin="20,0,20,10"
+                 IsOpen="False"
+                 IsClosable="True" />
 
-        <Grid Grid.Row="2" Margin="32,0,32,28" ColumnSpacing="16">
+        <Border Grid.Row="2"
+                Margin="20,0,20,10"
+                Padding="10"
+                Style="{StaticResource StudioCardBorderStyle}">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button x:Name="PlayPauseButton"
+                        Grid.Column="0"
+                        AutomationProperties.AutomationId="Timeline.PlayPause"
+                        MinWidth="74"
+                        Content="Play"
+                        Click="PlayPause_Click" />
+                <Button Grid.Column="1"
+                        AutomationProperties.AutomationId="Timeline.StepBackward"
+                        Content="-1 frame"
+                        Click="StepBackward_Click" />
+                <Button Grid.Column="2"
+                        AutomationProperties.AutomationId="Timeline.StepForward"
+                        Content="+1 frame"
+                        Click="StepForward_Click" />
+                <TextBlock x:Name="TimecodeText"
+                           Grid.Column="3"
+                           MinWidth="118"
+                           VerticalAlignment="Center"
+                           Text="00:00:00.000"
+                           FontFamily="Consolas"
+                           FontSize="14" />
+                <Slider x:Name="PositionSlider"
+                        Grid.Column="4"
+                        AutomationProperties.AutomationId="Timeline.Position"
+                        Minimum="0"
+                        Maximum="1"
+                        ValueChanged="PositionSlider_ValueChanged"
+                        PointerPressed="PositionSlider_PointerPressed"
+                        PointerReleased="PositionSlider_PointerReleased" />
+                <ToggleButton x:Name="LoopToggle"
+                              Grid.Column="5"
+                              AutomationProperties.AutomationId="Timeline.Loop"
+                              Content="Loop" />
+                <NumberBox x:Name="LoopInNumberBox"
+                          Grid.Column="6"
+                          AutomationProperties.AutomationId="Timeline.LoopIn"
+                          Width="76"
+                          Minimum="0"
+                          PlaceholderText="In" />
+                <NumberBox x:Name="LoopOutNumberBox"
+                          Grid.Column="7"
+                          AutomationProperties.AutomationId="Timeline.LoopOut"
+                          Width="76"
+                          Minimum="0"
+                          PlaceholderText="Out" />
+                <ComboBox x:Name="SnapCombo"
+                          Grid.Column="8"
+                          AutomationProperties.AutomationId="Timeline.Snap"
+                          MinWidth="118"
+                          SelectedIndex="1">
+                    <ComboBoxItem Content="Snap off" Tag="off" />
+                    <ComboBoxItem Content="Snap: beat" Tag="beat" />
+                    <ComboBoxItem Content="Snap: 1/2 beat" Tag="half" />
+                    <ComboBoxItem Content="Snap: 1/4 beat" Tag="quarter" />
+                </ComboBox>
+                <Slider x:Name="ZoomSlider"
+                        Grid.Column="9"
+                        AutomationProperties.AutomationId="Timeline.Zoom"
+                        Width="108"
+                        Minimum="35"
+                        Maximum="320"
+                        Value="100"
+                        ValueChanged="ZoomSlider_ValueChanged" />
+                <Button Grid.Column="10"
+                        AutomationProperties.AutomationId="Timeline.Fit"
+                        Content="Fit"
+                        Click="FitTimeline_Click" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3" Margin="20,0,20,20" ColumnSpacing="10">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*" MinWidth="480" />
-                <ColumnDefinition Width="360" />
+                <ColumnDefinition Width="210" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="350" />
             </Grid.ColumnDefinitions>
 
-            <Border Padding="20" Background="{ThemeResource CardBackgroundBrush}"
-                    BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
+            <Border Grid.Column="0" Style="{StaticResource StudioCardBorderStyle}">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="34" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel>
-                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="Clip lanes" />
-                            <TextBlock x:Name="ProjectText" Foreground="{ThemeResource SecondaryTextBrush}"
-                                       Text="Select a project from Projects or Workspace." />
-                        </StackPanel>
-                        <Button x:Name="AddLaneButton" Grid.Column="1"
-                                AutomationProperties.AutomationId="Timeline.AddLane"
-                                Click="AddLaneButton_Click">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <SymbolIcon Symbol="Add" />
-                                <TextBlock Text="Add lane" />
-                            </StackPanel>
-                        </Button>
+                    <Grid Background="{ThemeResource StudioLayerFillColorDefaultBrush}">
+                        <TextBlock Margin="12,0"
+                                   VerticalAlignment="Center"
+                                   Text="TRACKS"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   CharacterSpacing="90"
+                                   Style="{StaticResource StudioSecondaryTextStyle}" />
                     </Grid>
-                    <Grid Grid.Row="1" Margin="0,18,0,8" ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="90" />
-                            <ColumnDefinition Width="90" />
-                            <ColumnDefinition Width="44" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock FontWeight="SemiBold" Text="Name / type" />
-                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Start" />
-                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="End" />
-                    </Grid>
-                    <ListView x:Name="LaneList" Grid.Row="2"
-                              AutomationProperties.AutomationId="Timeline.LaneList"
-                              ItemsSource="{x:Bind Lanes, Mode=OneWay}"
-                              SelectionChanged="LaneList_SelectionChanged">
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="local:TimelineLane">
-                                <Grid Padding="0,6" ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="90" />
-                                        <ColumnDefinition Width="90" />
-                                        <ColumnDefinition Width="44" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBox AutomationProperties.AutomationId="{x:Bind NameAutomationId}"
-                                             Header="{x:Bind Type}" Text="{x:Bind Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    <NumberBox Grid.Column="1" AutomationProperties.AutomationId="{x:Bind StartAutomationId}"
-                                               Minimum="0" SmallChange="0.25" SpinButtonPlacementMode="Compact"
-                                               Value="{x:Bind StartSeconds, Mode=TwoWay}" />
-                                    <NumberBox Grid.Column="2" AutomationProperties.AutomationId="{x:Bind EndAutomationId}"
-                                               Minimum="0" SmallChange="0.25" SpinButtonPlacementMode="Compact"
-                                               Value="{x:Bind EndSeconds, Mode=TwoWay}" />
-                                    <Button Grid.Column="3" Width="36" Height="36"
-                                            AutomationProperties.AutomationId="{x:Bind RemoveAutomationId}"
-                                            Click="RemoveLaneButton_Click" Tag="{x:Bind}">
-                                        <SymbolIcon Symbol="Delete" />
-                                    </Button>
-                                </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
+                    <ScrollViewer x:Name="TrackHeaderScroll"
+                                  Grid.Row="1"
+                                  VerticalScrollBarVisibility="Hidden"
+                                  HorizontalScrollMode="Disabled"
+                                  VerticalScrollMode="Enabled"
+                                  ViewChanged="TrackHeaderScroll_ViewChanged">
+                        <StackPanel x:Name="TrackHeadersPanel" />
+                    </ScrollViewer>
                 </Grid>
             </Border>
 
-            <StackPanel Grid.Column="1" Spacing="12">
-                <Border Padding="18" Background="{ThemeResource CardBackgroundBrush}"
-                        BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
-                    <StackPanel Spacing="12">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <StackPanel>
-                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="Selected lane monitor" />
-                                <TextBlock x:Name="PreviewFrameText"
-                                           Foreground="{ThemeResource SecondaryTextBrush}"
-                                           Text="Select a lane to preview its start frame."
-                                           TextWrapping="Wrap" />
+            <Border Grid.Column="1" Style="{StaticResource StudioCardBorderStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="34" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <ScrollViewer x:Name="RulerScroll"
+                                  HorizontalScrollBarVisibility="Hidden"
+                                  VerticalScrollMode="Disabled"
+                                  HorizontalScrollMode="Enabled">
+                        <Canvas x:Name="RulerCanvas"
+                                Height="34"
+                                Background="{ThemeResource StudioLayerFillColorDefaultBrush}" />
+                    </ScrollViewer>
+                    <ScrollViewer x:Name="TimelineScroll"
+                                  Grid.Row="1"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollMode="Enabled"
+                                  VerticalScrollMode="Enabled"
+                                  ViewChanged="TimelineScroll_ViewChanged">
+                        <Canvas x:Name="TimelineCanvas"
+                                AutomationProperties.AutomationId="Timeline.ClipSurface"
+                                Background="{ThemeResource StudioControlFillColorDefaultBrush}"
+                                PointerPressed="TimelineCanvas_PointerPressed" />
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2" Padding="0" Style="{StaticResource StudioCardBorderStyle}">
+                <Pivot x:Name="InspectorPivot" Margin="0">
+                    <PivotItem Header="Inspector">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Padding="14" Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock x:Name="SelectedClipTitle"
+                                               Text="No clip selected"
+                                               FontSize="18"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock x:Name="SelectedClipSubtitle"
+                                               Text="Select a clip in the timeline to edit it."
+                                               TextWrapping="Wrap"
+                                               Style="{StaticResource StudioCaptionTextStyle}" />
+                                </StackPanel>
+
+                                <Grid ColumnSpacing="8" RowSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <NumberBox x:Name="StartNumberBox"
+                                               Grid.Row="0"
+                                               Grid.Column="0"
+                                               Header="Start (s)"
+                                               Minimum="0"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="EndNumberBox"
+                                               Grid.Row="0"
+                                               Grid.Column="1"
+                                               Header="End (s)"
+                                               Minimum="0"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="SourceInNumberBox"
+                                               Grid.Row="1"
+                                               Grid.Column="0"
+                                               Header="Source in (s)"
+                                               Minimum="0"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="SourceOutNumberBox"
+                                               Grid.Row="1"
+                                               Grid.Column="1"
+                                               Header="Source out (s)"
+                                               Minimum="0"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="SpeedNumberBox"
+                                               Grid.Row="2"
+                                               Grid.Column="0"
+                                               Header="Speed"
+                                               Minimum="0.25"
+                                               Maximum="4"
+                                               SmallChange="0.05"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="TrackNumberBox"
+                                               Grid.Row="2"
+                                               Grid.Column="1"
+                                               Header="Track"
+                                               Minimum="1"
+                                               SpinButtonPlacementMode="Compact" />
+                                </Grid>
+
+                                <TextBox x:Name="SourcePathTextBox"
+                                         Header="Source path"
+                                         PlaceholderText="Backend media source" />
+
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <NumberBox x:Name="VolumeNumberBox"
+                                               Grid.Column="0"
+                                               Header="Volume"
+                                               Minimum="0"
+                                               Maximum="2"
+                                               SmallChange="0.05"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <ToggleSwitch x:Name="MutedToggle"
+                                                  Grid.Column="1"
+                                                  Header="Muted"
+                                                  VerticalAlignment="Bottom" />
+                                </Grid>
+
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <NumberBox x:Name="FadeInNumberBox"
+                                               Grid.Column="0"
+                                               Header="Fade in (s)"
+                                               Minimum="0"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="FadeOutNumberBox"
+                                               Grid.Column="1"
+                                               Header="Fade out (s)"
+                                               Minimum="0"
+                                               SpinButtonPlacementMode="Compact" />
+                                </Grid>
+
+                                <Button x:Name="ApplyInspectorButton"
+                                        AutomationProperties.AutomationId="Timeline.ApplyInspector"
+                                        Style="{StaticResource StudioPrimaryButtonStyle}"
+                                        HorizontalAlignment="Stretch"
+                                        Content="Apply clip changes"
+                                        Click="ApplyInspector_Click" />
+
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="SplitClipButton"
+                                            Grid.Column="0"
+                                            AutomationProperties.AutomationId="Timeline.Split"
+                                            HorizontalAlignment="Stretch"
+                                            Content="Split at playhead"
+                                            Click="SplitClip_Click" />
+                                    <Button x:Name="DuplicateClipButton"
+                                            Grid.Column="1"
+                                            AutomationProperties.AutomationId="Timeline.Duplicate"
+                                            HorizontalAlignment="Stretch"
+                                            Content="Duplicate here"
+                                            Click="DuplicateClip_Click" />
+                                </Grid>
+
+                                <Button x:Name="DeleteClipButton"
+                                        AutomationProperties.AutomationId="Timeline.DeleteSelected"
+                                        Style="{StaticResource StudioDangerButtonStyle}"
+                                        HorizontalAlignment="Stretch"
+                                        Content="Delete selected clip"
+                                        Click="DeleteSelectedClip_Click" />
+
+                                <controls:Direct3DPreviewControl
+                                    x:Name="PreviewSurface"
+                                    AutomationProperties.AutomationId="Timeline.PreviewSurface"
+                                    Height="190"
+                                    HorizontalAlignment="Stretch" />
+                                <TextBlock x:Name="PreviewHintText"
+                                           Text="Scrub or play to preview the current timeline frame."
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
                             </StackPanel>
-                            <Button x:Name="PreviewFrameButton" Grid.Column="1"
-                                    AutomationProperties.AutomationId="Timeline.PreviewFrame"
-                                    Click="PreviewFrameButton_Click"
-                                    Content="Refresh frame"
-                                    IsEnabled="False" />
+                        </ScrollViewer>
+                    </PivotItem>
+
+                    <PivotItem Header="Render">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Padding="14" Spacing="12">
+                                <TextBlock Text="Render edited master"
+                                           Style="{StaticResource StudioSectionTitleTextStyle}" />
+                                <TextBlock Text="Uses the saved timeline as the authoritative edit."
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
+                                <TextBox x:Name="OutputNameTextBox"
+                                         AutomationProperties.AutomationId="Timeline.OutputName"
+                                         Header="Output name"
+                                         Text="timeline_master" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ComboBox x:Name="ModeComboBox"
+                                              AutomationProperties.AutomationId="Timeline.Mode"
+                                              Header="Mode"
+                                              Width="126"
+                                              SelectedIndex="1">
+                                        <ComboBoxItem Content="Preview" Tag="preview" />
+                                        <ComboBoxItem Content="Final" Tag="final" />
+                                    </ComboBox>
+                                    <ComboBox x:Name="AspectRatioComboBox"
+                                              AutomationProperties.AutomationId="Timeline.AspectRatio"
+                                              Header="Aspect ratio"
+                                              Width="126"
+                                              SelectedIndex="0">
+                                        <ComboBoxItem Content="16:9" Tag="16:9" />
+                                        <ComboBoxItem Content="9:16" Tag="9:16" />
+                                        <ComboBoxItem Content="1:1" Tag="1:1" />
+                                        <ComboBoxItem Content="4:5" Tag="4:5" />
+                                    </ComboBox>
+                                </StackPanel>
+                                <Button x:Name="RenderMasterButton"
+                                        AutomationProperties.AutomationId="Timeline.RenderMaster"
+                                        Style="{StaticResource StudioPrimaryButtonStyle}"
+                                        HorizontalAlignment="Stretch"
+                                        Content="Render master"
+                                        Click="RenderMaster_Click" />
+                                <TextBlock x:Name="StatusText"
+                                           Text="Ready."
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </PivotItem>
+
+                    <PivotItem Header="Recovery">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Padding="14" Spacing="12">
+                                <TextBlock Text="Recovery"
+                                           Style="{StaticResource StudioSectionTitleTextStyle}" />
+                                <TextBlock Text="Local snapshots are stored before edits and can be restored after an interruption."
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
+                                <Button x:Name="RestoreBackupButton"
+                                        AutomationProperties.AutomationId="Timeline.RestoreBackup"
+                                        HorizontalAlignment="Stretch"
+                                        Content="Restore backup"
+                                        Click="RestoreBackup_Click" />
+                                <Button x:Name="ExportRecoveryButton"
+                                        AutomationProperties.AutomationId="Timeline.ExportRecovery"
+                                        HorizontalAlignment="Stretch"
+                                        Content="Export recovery copy"
+                                        Click="ExportRecovery_Click" />
+                                <Button x:Name="DeleteRecoveryButton"
+                                        AutomationProperties.AutomationId="Timeline.DeleteRecovery"
+                                        Style="{StaticResource StudioDangerButtonStyle}"
+                                        HorizontalAlignment="Stretch"
+                                        Content="Discard recovery journal"
+                                        Click="DeleteRecovery_Click" />
+                                <TextBlock x:Name="BackupSummaryText"
+                                           Text="No recovery snapshot."
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </PivotItem>
+
+                    <PivotItem Header="JSON">
+                        <Grid Padding="14">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Raw timeline document"
+                                       Style="{StaticResource StudioSectionTitleTextStyle}" />
+                            <TextBox x:Name="TimelineTextBox"
+                                     Grid.Row="1"
+                                     AutomationProperties.AutomationId="Timeline.Json"
+                                     Margin="0,10,0,10"
+                                     AcceptsReturn="True"
+                                     FontFamily="Consolas"
+                                     TextWrapping="NoWrap"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="ApplyRawButton"
+                                        AutomationProperties.AutomationId="Timeline.ApplyRaw"
+                                        Content="Apply JSON"
+                                        Click="ApplyRaw_Click" />
+                                <Button x:Name="RevertRawButton"
+                                        AutomationProperties.AutomationId="Timeline.RevertRaw"
+                                        Content="Revert"
+                                        Click="RevertRaw_Click" />
+                            </StackPanel>
                         </Grid>
-                        <controls:Direct3DPreviewControl
-                            x:Name="TimelinePreview"
-                            Height="220"
-                            AutomationProperties.AutomationId="Timeline.FramePreview"
-                            AutomationProperties.Name="Selected timeline lane Direct3D preview" />
-                    </StackPanel>
-                </Border>
-                <Border Padding="18" Background="{ThemeResource CardBackgroundBrush}"
-                        BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
-                    <StackPanel Spacing="12">
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Recovery" />
-                        <TextBlock Foreground="{ThemeResource SecondaryTextBrush}" TextWrapping="Wrap"
-                                   Text="Inspect the autosave journal and restore it only when needed." />
-                        <Button x:Name="CheckRecoveryButton" AutomationProperties.AutomationId="Timeline.CheckRecovery"
-                                Click="CheckRecoveryButton_Click" Content="Check recovery state" />
-                        <Button x:Name="RestoreRecoveryButton" AutomationProperties.AutomationId="Timeline.RestoreRecovery"
-                                Click="RestoreRecoveryButton_Click" Content="Restore journal" IsEnabled="False" />
-                        <TextBlock x:Name="RecoveryText" Foreground="{ThemeResource SecondaryTextBrush}"
-                                   Text="Recovery state not checked." TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-                <Expander Header="Advanced timeline JSON" IsExpanded="False">
-                    <StackPanel Margin="0,12,0,0" Spacing="8">
-                        <TextBlock Foreground="{ThemeResource SecondaryTextBrush}" TextWrapping="Wrap"
-                                   Text="Edit unsupported clip, keyframe, motion, and overlay fields without losing them." />
-                        <TextBox x:Name="RawTimelineBox" Height="300" AcceptsReturn="True"
-                                 AutomationProperties.AutomationId="Timeline.RawJson"
-                                 FontFamily="Consolas" ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                 TextWrapping="NoWrap" ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                        <Button x:Name="ApplyJsonButton" AutomationProperties.AutomationId="Timeline.ApplyJson"
-                                Click="ApplyJsonButton_Click" Content="Apply JSON to lanes" />
-                    </StackPanel>
-                </Expander>
-            </StackPanel>
+                    </PivotItem>
+                </Pivot>
+            </Border>
         </Grid>
     </Grid>
 </Page>

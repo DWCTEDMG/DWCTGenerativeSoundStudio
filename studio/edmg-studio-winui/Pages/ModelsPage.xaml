@@ -1,99 +1,347 @@
 <Page
     x:Class="EdmgStudio.WinUI.Pages.ModelsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    NavigationCacheMode="Enabled"
+    Loaded="OnLoaded"
+    Unloaded="OnUnloaded">
+
     <Grid Padding="24" RowSpacing="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <Grid ColumnDefinitions="*,Auto">
-            <StackPanel>
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Models and providers" />
-                <TextBlock x:Name="StorageText" Opacity="0.72" Text="Backend-managed model catalogue, licenses, installs, and runtime lanes." />
+
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="4">
+                <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="Models" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="Install, import, benchmark, promote, and migrate models used by the Python/CUDA backend."
+                    TextWrapping="Wrap" />
             </StackPanel>
-            <Button x:Name="RefreshButton" Grid.Column="1" AutomationProperties.AutomationId="ModelsRefreshButton" Click="RefreshButton_Click" Content="Refresh" />
+            <Button
+                x:Name="RefreshButton"
+                Grid.Column="1"
+                Click="Refresh_Click"
+                Style="{StaticResource AccentButtonStyle}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE72C;" />
+                    <TextBlock Text="Refresh" />
+                </StackPanel>
+            </Button>
         </Grid>
-        <InfoBar x:Name="StatusInfoBar" Grid.Row="1" IsClosable="True" IsOpen="False" />
-        <Grid x:Name="ContentGrid" Grid.Row="2" ColumnDefinitions="440,*" ColumnSpacing="20">
-            <ListView
-                x:Name="ModelsList"
-                AutomationProperties.AutomationId="ModelsList"
-                ItemsSource="{x:Bind Models}"
-                SelectionChanged="ModelsList_SelectionChanged">
-                <ListView.ItemTemplate>
-                    <DataTemplate>
-                        <Grid Padding="8" RowSpacing="3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Grid.Row="1" Opacity="0.68" Text="{Binding Summary}" />
+
+        <StackPanel Grid.Row="1" Spacing="8">
+            <InfoBar
+                x:Name="StatusBar"
+                IsClosable="True"
+                IsOpen="False"
+                Severity="Informational" />
+            <ProgressBar
+                x:Name="CommandProgress"
+                Height="3"
+                IsIndeterminate="True"
+                Visibility="Collapsed" />
+        </StackPanel>
+
+        <Grid Grid.Row="2" ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="360" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Grid RowSpacing="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBox
+                    x:Name="SearchBox"
+                    Header="Search catalogue"
+                    PlaceholderText="Name, ID, source, kind, or lane"
+                    TextChanged="SearchBox_TextChanged" />
+
+                <ListView
+                    x:Name="ModelList"
+                    Grid.Row="1"
+                    IsItemClickEnabled="True"
+                    ItemClick="ModelList_ItemClick"
+                    SelectionMode="Single">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Padding="4,8" ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock
+                                        FontWeight="SemiBold"
+                                        Text="{Binding DisplayName}"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="{Binding Subtitle}"
+                                        TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Border
+                                    Grid.Column="1"
+                                    Padding="8,3"
+                                    Background="{ThemeResource ControlAltFillColorSecondaryBrush}"
+                                    CornerRadius="10">
+                                    <TextBlock FontSize="11" Text="{Binding StateLabel}" />
+                                </Border>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <Border
+                    Grid.Row="2"
+                    Padding="12"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel Spacing="8">
+                        <Grid>
+                            <TextBlock FontWeight="SemiBold" Text="Recent tasks" />
+                            <TextBlock
+                                x:Name="TaskCountText"
+                                HorizontalAlignment="Right"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-                <StackPanel Spacing="12">
-                    <TextBlock x:Name="SelectedModelText" Style="{StaticResource SubtitleTextBlockStyle}" Text="Select a model" />
-                    <TextBlock x:Name="ModelStatusText" Opacity="0.72" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button AutomationProperties.AutomationId="ModelsAcceptLicenseButton" Click="AcceptLicenseButton_Click" Content="Accept license" />
-                        <Button AutomationProperties.AutomationId="ModelsInstallButton" Click="InstallButton_Click" Content="Install" />
-                        <Button AutomationProperties.AutomationId="ModelsRestoreButton" Click="RestoreButton_Click" Content="Restore local" />
-                        <Button AutomationProperties.AutomationId="ModelsRemoveButton" Click="RemoveButton_Click" Content="Remove user model" />
+                        <TextBlock
+                            x:Name="NoTasksText"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="No model tasks yet." />
+                        <ItemsControl x:Name="TaskItems">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,3" Spacing="3">
+                                        <Grid>
+                                            <TextBlock
+                                                MaxWidth="240"
+                                                FontSize="12"
+                                                FontWeight="SemiBold"
+                                                Text="{Binding DisplayName}"
+                                                TextTrimming="CharacterEllipsis" />
+                                            <TextBlock
+                                                HorizontalAlignment="Right"
+                                                FontSize="11"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Text="{Binding StatusLabel}" />
+                                        </Grid>
+                                        <ProgressBar
+                                            Maximum="1"
+                                            Value="{Binding Progress}"
+                                            Visibility="{Binding ProgressVisibility}" />
+                                        <TextBlock
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="{Binding Detail}"
+                                            TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </StackPanel>
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <ComboBox
-                            x:Name="LaneComboBox"
-                            AutomationProperties.AutomationId="ModelsLaneComboBox"
-                            Header="Runtime lane"
-                            HorizontalAlignment="Stretch"
-                            SelectedIndex="1">
-                            <x:String>stable</x:String>
-                            <x:String>recommended</x:String>
-                            <x:String>experimental</x:String>
-                            <x:String>research</x:String>
-                            <x:String>legacy</x:String>
-                        </ComboBox>
-                        <Button
-                            Grid.Column="1"
-                            VerticalAlignment="Bottom"
-                            AutomationProperties.AutomationId="ModelsPromoteButton"
-                            Click="PromoteButton_Click"
-                            Content="Promote" />
-                    </Grid>
-                    <TextBlock Text="Install a pack" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <ComboBox
-                            x:Name="PackComboBox"
-                            AutomationProperties.AutomationId="ModelsPackComboBox"
-                            DisplayMemberPath="Name"
-                            HorizontalAlignment="Stretch"
-                            PlaceholderText="Choose a model pack" />
-                        <Button
-                            Grid.Column="1"
-                            VerticalAlignment="Center"
-                            AutomationProperties.AutomationId="ModelsInstallPackButton"
-                            Click="InstallPackButton_Click"
-                            Content="Install pack" />
-                    </Grid>
-                    <TextBlock Text="Model metadata" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <TextBox
-                        x:Name="ModelJsonTextBox"
-                        AutomationProperties.AutomationId="ModelsMetadataTextBox"
-                        AcceptsReturn="True"
-                        FontFamily="Consolas"
-                        IsReadOnly="True"
-                        MinHeight="280"
-                        ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                        ScrollViewer.VerticalScrollBarVisibility="Auto"
-                        TextWrapping="NoWrap" />
+                </Border>
+            </Grid>
+
+            <ScrollViewer Grid.Column="1">
+                <StackPanel MaxWidth="920" Spacing="16">
+                    <Border
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="12">
+                            <TextBlock
+                                x:Name="ModelNameText"
+                                Style="{ThemeResource SubtitleTextBlockStyle}"
+                                Text="Select a model" />
+                            <TextBlock
+                                x:Name="ModelDescriptionText"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Choose a catalogue or imported model to view its controls."
+                                TextWrapping="Wrap" />
+                            <TextBlock x:Name="ModelMetadataText" TextWrapping="Wrap" />
+                            <TextBlock
+                                x:Name="LicenseText"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+
+                            <StackPanel Orientation="Horizontal">
+                                <Button
+                                    x:Name="PrimaryActionButton"
+                                    Margin="0,0,8,8"
+                                    Click="PrimaryAction_Click"
+                                    IsEnabled="False"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Content="Install" />
+                                <Button
+                                    x:Name="AcceptLicenseButton"
+                                    Margin="0,0,8,8"
+                                    Click="AcceptLicense_Click"
+                                    IsEnabled="False"
+                                    Content="Review license" />
+                                <Button
+                                    x:Name="BenchmarkButton"
+                                    Margin="0,0,8,8"
+                                    Click="Benchmark_Click"
+                                    IsEnabled="False"
+                                    Content="Record benchmark" />
+                                <Button
+                                    x:Name="RemoveButton"
+                                    Margin="0,0,8,8"
+                                    Click="Remove_Click"
+                                    IsEnabled="False"
+                                    Content="Remove" />
+                            </StackPanel>
+
+                            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                            <TextBlock FontWeight="SemiBold" Text="Promotion lane" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ComboBox x:Name="LaneCombo" Width="220" SelectedIndex="0">
+                                    <ComboBoxItem Content="Experimental" Tag="experimental" />
+                                    <ComboBoxItem Content="Preview" Tag="preview" />
+                                    <ComboBoxItem Content="Production" Tag="production" />
+                                </ComboBox>
+                                <Button
+                                    x:Name="PromoteButton"
+                                    Click="Promote_Click"
+                                    IsEnabled="False"
+                                    Content="Promote" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="12">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Model packs" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Install a curated set of compatible models with required license acceptance handled in one workflow."
+                                TextWrapping="Wrap" />
+                            <ComboBox
+                                x:Name="PackCombo"
+                                DisplayMemberPath="DisplayName"
+                                PlaceholderText="Choose a pack"
+                                SelectionChanged="PackCombo_SelectionChanged" />
+                            <TextBlock
+                                x:Name="PackDescriptionText"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button
+                                    x:Name="InstallPackButton"
+                                    Margin="0,0,8,8"
+                                    Click="InstallPack_Click"
+                                    IsEnabled="False"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Content="Install pack" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="12">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Import models" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Import a Civitai model URL or copy a local model file into the backend's managed model folders."
+                                TextWrapping="Wrap" />
+                            <TextBox
+                                x:Name="CivitaiUrlBox"
+                                Header="Civitai URL"
+                                PlaceholderText="https://civitai.com/models/..."
+                                TextChanged="CivitaiUrlBox_TextChanged" />
+                            <Button
+                                x:Name="CivitaiImportButton"
+                                HorizontalAlignment="Left"
+                                Click="CivitaiImport_Click"
+                                IsEnabled="False"
+                                Content="Import from Civitai" />
+                            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ComboBox x:Name="LocalFolderCombo" Width="220" SelectedIndex="0">
+                                    <ComboBoxItem Content="Checkpoints" Tag="checkpoints" />
+                                    <ComboBoxItem Content="LoRAs" Tag="loras" />
+                                    <ComboBoxItem Content="Embeddings" Tag="embeddings" />
+                                    <ComboBoxItem Content="VAE" Tag="vae" />
+                                    <ComboBoxItem Content="ControlNet" Tag="controlnet" />
+                                </ComboBox>
+                                <Button Click="LocalImport_Click" Content="Choose local model file" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border
+                        x:Name="TensorRtCard"
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="12">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="TensorRT bundle migration" />
+                            <TextBlock
+                                x:Name="TensorRtSummaryText"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Checking legacy TensorRT bundle status..."
+                                TextWrapping="Wrap" />
+                            <TextBlock x:Name="TensorRtDiskText" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button
+                                    x:Name="TensorRtImportButton"
+                                    Margin="0,0,8,8"
+                                    Click="TensorRtImport_Click"
+                                    IsEnabled="False"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Content="Create verified managed copy" />
+                                <Button
+                                    x:Name="TensorRtCancelButton"
+                                    Margin="0,0,8,8"
+                                    Click="TensorRtCancel_Click"
+                                    IsEnabled="False"
+                                    Content="Cancel migration" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="8">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Storage" />
+                            <TextBlock x:Name="StorageText" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
         </Grid>
-        <ProgressRing x:Name="BusyRing" Grid.RowSpan="3" HorizontalAlignment="Center" VerticalAlignment="Center" IsActive="False" />
     </Grid>
 </Page>

@@ -36,6 +36,9 @@ public sealed record BackendConfiguration(
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<string> ValidationErrors { get; init; } = [];
+    public string BackendModeSource { get; init; } = "defaults";
+    public string BackendAddressSource { get; init; } = "defaults";
+    public string? ConfiguredBackendUrl { get; init; }
     public bool HasPendingMigration { get; init; }
     public string? PendingMigrationDetail { get; init; }
     public TimeSpan SourceReadyTimeout { get; init; } = TimeSpan.FromSeconds(15);
@@ -76,6 +79,26 @@ public sealed record BackendConfiguration(
             sources.Add("command-line");
         }
 
+        return CreateConfiguration(values, sources);
+    }
+
+    public static BackendConfiguration LoadFromBootstrap(string bootstrapPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bootstrapPath);
+        var values = new MutableConfiguration();
+        var sources = new List<string>();
+        if (TryReadBootstrap(Path.GetFullPath(bootstrapPath), values))
+        {
+            sources.Add("bootstrap");
+        }
+
+        return CreateConfiguration(values, sources);
+    }
+
+    private static BackendConfiguration CreateConfiguration(
+        MutableConfiguration values,
+        IReadOnlyCollection<string> sources)
+    {
         var validationErrors = new List<string>();
         string acceleratorProfile;
         try
@@ -92,10 +115,19 @@ public sealed record BackendConfiguration(
         var host = NormalizeHost(values.Host);
         var port = NormalizePort(values.Port);
         var localUri = ManagedBackendUri(host, port);
-        var backendUri = mode == RequestedBackendMode.External
-            ? NormalizeBackendUri(values.Url) ?? localUri
-            : localUri;
+        var configuredBackendUrl = values.Url?.Trim();
+        var normalizedExternalUri = NormalizeBackendUri(configuredBackendUrl);
+        if (mode == RequestedBackendMode.External && normalizedExternalUri is null)
+        {
+            validationErrors.Add(
+                string.IsNullOrWhiteSpace(configuredBackendUrl)
+                    ? "External backend mode requires a backend URL starting with http:// or https://."
+                    : $"The configured external backend URL '{configuredBackendUrl}' is invalid. Use an absolute http:// or https:// URL.");
+        }
 
+        var backendUri = mode == RequestedBackendMode.External
+            ? normalizedExternalUri ?? localUri
+            : localUri;
         var timeoutOverride = ParseReadyTimeout(values.ReadyTimeoutMilliseconds, validationErrors);
         var paths = StudioPaths.Create(values.StudioHome, values.StorageOverrides);
         return new BackendConfiguration(
@@ -110,6 +142,9 @@ public sealed record BackendConfiguration(
         {
             ManagedEnvironment = new Dictionary<string, string>(values.ManagedEnvironment, StringComparer.OrdinalIgnoreCase),
             ValidationErrors = validationErrors,
+            BackendModeSource = values.ModeSource,
+            BackendAddressSource = values.AddressSource,
+            ConfiguredBackendUrl = mode == RequestedBackendMode.External ? configuredBackendUrl : null,
             HasPendingMigration = values.HasPendingMigration,
             PendingMigrationDetail = values.PendingMigrationDetail,
             SourceReadyTimeout = timeoutOverride ?? TimeSpan.FromSeconds(15),
@@ -265,10 +300,12 @@ public sealed record BackendConfiguration(
             values.Host = ReadString(backend, "host") ?? values.Host;
             values.Port = ReadStringOrNumber(backend, "port") ?? values.Port;
             values.Url = ReadString(backend, "url") ?? values.Url;
+            values.AddressSource = "runtime-defaults";
             if (backend.TryGetProperty("spawnBackend", out var spawn) && spawn.ValueKind is JsonValueKind.True or JsonValueKind.False)
             {
                 values.SpawnBackend = spawn.GetBoolean();
                 values.Mode = spawn.GetBoolean() ? "managed" : "external";
+                values.ModeSource = "runtime-defaults";
             }
 
             return true;
@@ -290,7 +327,7 @@ public sealed record BackendConfiguration(
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(path));
-            ApplyFlatEnvironmentObject(document.RootElement, values);
+            ApplyFlatEnvironmentObject(document.RootElement, values, "launcher_env");
             return true;
         }
         catch
@@ -312,6 +349,8 @@ public sealed record BackendConfiguration(
                 values.Host = ReadString(backend, "host") ?? values.Host;
                 values.Port = ReadStringOrNumber(backend, "port") ?? values.Port;
                 values.Url = ReadString(backend, "url") ?? values.Url;
+                values.ModeSource = "bootstrap";
+                values.AddressSource = "bootstrap";
             }
 
             values.StudioHome = ReadString(root, "studioHome") ?? values.StudioHome;
@@ -355,7 +394,7 @@ public sealed record BackendConfiguration(
         }
     }
 
-    private static void ApplyFlatEnvironmentObject(JsonElement root, MutableConfiguration values)
+    private static void ApplyFlatEnvironmentObject(JsonElement root, MutableConfiguration values, string source)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -383,7 +422,7 @@ public sealed record BackendConfiguration(
             }
 
             values.ManagedEnvironment[property.Name] = text;
-            ApplyKnownEnvironmentValue(property.Name, text, values);
+            ApplyKnownEnvironmentValue(property.Name, text, values, source);
         }
     }
 
@@ -400,7 +439,7 @@ public sealed record BackendConfiguration(
 
             changed = true;
             values.ManagedEnvironment[name] = value;
-            ApplyKnownEnvironmentValue(name, value, values);
+            ApplyKnownEnvironmentValue(name, value, values, "environment");
         }
 
         return changed;
@@ -433,11 +472,11 @@ public sealed record BackendConfiguration(
 
             switch (name)
             {
-                case "--backend-mode": values.Mode = value; changed = true; break;
-                case "--backend-host": values.Host = value; changed = true; break;
-                case "--backend-port": values.Port = value; changed = true; break;
-                case "--backend-url": values.Url = value; changed = true; break;
-                case "--spawn-backend": values.SpawnBackend = value.Trim() is not ("0" or "false" or "False"); changed = true; break;
+                case "--backend-mode": values.Mode = value; values.ModeSource = "command-line"; changed = true; break;
+                case "--backend-host": values.Host = value; values.AddressSource = "command-line"; changed = true; break;
+                case "--backend-port": values.Port = value; values.AddressSource = "command-line"; changed = true; break;
+                case "--backend-url": values.Url = value; values.AddressSource = "command-line"; changed = true; break;
+                case "--spawn-backend": values.SpawnBackend = value.Trim() is not ("0" or "false" or "False"); values.ModeSource = "command-line"; changed = true; break;
                 case "--accelerator-profile": values.AcceleratorProfile = value; changed = true; break;
                 case "--backend-source": values.SourceDirectory = value; changed = true; break;
                 case "--backend-ready-timeout-ms": values.ReadyTimeoutMilliseconds = value; changed = true; break;
@@ -447,15 +486,19 @@ public sealed record BackendConfiguration(
         return changed;
     }
 
-    private static void ApplyKnownEnvironmentValue(string name, string value, MutableConfiguration values)
+    private static void ApplyKnownEnvironmentValue(
+        string name,
+        string value,
+        MutableConfiguration values,
+        string source)
     {
         switch (name)
         {
-            case "EDMG_STUDIO_BACKEND_MODE": values.Mode = value; break;
-            case "EDMG_STUDIO_BACKEND_HOST": values.Host = value; break;
-            case "EDMG_STUDIO_BACKEND_PORT": values.Port = value; break;
-            case "EDMG_STUDIO_BACKEND_URL": values.Url = value; break;
-            case "EDMG_STUDIO_SPAWN_BACKEND": values.SpawnBackend = value.Trim() is not ("0" or "false" or "False"); break;
+            case "EDMG_STUDIO_BACKEND_MODE": values.Mode = value; values.ModeSource = source; break;
+            case "EDMG_STUDIO_BACKEND_HOST": values.Host = value; values.AddressSource = source; break;
+            case "EDMG_STUDIO_BACKEND_PORT": values.Port = value; values.AddressSource = source; break;
+            case "EDMG_STUDIO_BACKEND_URL": values.Url = value; values.AddressSource = source; break;
+            case "EDMG_STUDIO_SPAWN_BACKEND": values.SpawnBackend = value.Trim() is not ("0" or "false" or "False"); values.ModeSource = source; break;
             case "EDMG_BACKEND_ACCELERATOR_PROFILE": values.AcceleratorProfile = value; break;
             case "EDMG_STUDIO_BACKEND_SOURCE_DIR": values.SourceDirectory = value; break;
             case "EDMG_STUDIO_HOME": values.StudioHome = value; break;
@@ -531,6 +574,8 @@ public sealed record BackendConfiguration(
         public string Host { get; set; } = "127.0.0.1";
         public string Port { get; set; } = "7863";
         public string Url { get; set; } = string.Empty;
+        public string ModeSource { get; set; } = "defaults";
+        public string AddressSource { get; set; } = "defaults";
         public bool? SpawnBackend { get; set; }
         public string? AcceleratorProfile { get; set; } = "cpu";
         public string? SourceDirectory { get; set; }

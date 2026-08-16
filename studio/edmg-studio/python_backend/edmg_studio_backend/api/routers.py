@@ -1,26 +1,31 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from ..domain.continuity_validation import validate_project_continuity
 from ..domain.live_assets import compile_live_assets, sample_bounded_modulation
+from ..domain.live_cues import compile_live_cues
 from ..domain.motion_grammar import apply_motion_phrases_to_timeline
 from ..domain.music_graph import music_graph_from_analysis
-from ..domain.live_cues import compile_live_cues
 from ..domain.render_plan_v1 import enrich_render_plan
 from ..domain.stem_modulation import mute_lane, normalize_modulation_matrix, scale_lane
 from ..domain.template_packages import export_template_package, import_template_package
-from ..domain.variant_review import apply_variant_review_decision, collect_variant_review
 from ..domain.understand_corrections import apply_understand_corrections
-from ..domain.world_adapters import export_touchdesigner_adapter, export_unreal_adapter, run_adapter_simulator
+from ..domain.variant_review import apply_variant_review_decision, collect_variant_review
+from ..domain.world_adapters import (
+    export_touchdesigner_adapter,
+    export_unreal_adapter,
+    run_adapter_simulator,
+)
 from ..schemas import (
     AutosaveRequest,
-    LiveCuePublishRequest,
     LiveAssetModulationRequest,
+    LiveCuePublishRequest,
     MotionPhrasesApplyRequest,
     MusicGraphCorrectionsRequest,
     ProjectCreateRequest,
@@ -28,6 +33,7 @@ from ..schemas import (
     RenderPlan,
     StemModulationUpdateRequest,
     TemplatePackageImportRequest,
+    TimelineRenderRequest,
     TimelineUpdateRequest,
     VariantReviewDecisionRequest,
     WorldAdapterExportRequest,
@@ -62,6 +68,7 @@ def create_project_router(
     get_store: Callable[[], ProjectStore],
     project_response: Callable[[Any], dict[str, Any]],
     assess_health: Callable[..., dict[str, Any]],
+    enqueue_timeline_render: Callable[[str, TimelineRenderRequest], dict[str, Any]] | None = None,
 ) -> APIRouter:
     """Core project + durability routes extracted from the monolith for WP-09."""
 
@@ -381,6 +388,12 @@ def create_project_router(
         journal.write_snapshot(project_id=project_id, meta=proj.meta, reason="timeline_save")
         journal.mark_clean()
         return {"ok": True, "timeline": proj.meta["timeline"]}
+
+    @router.post("/v1/projects/{project_id}/timeline/render")
+    def render_timeline(project_id: str, req: TimelineRenderRequest) -> dict[str, Any]:
+        if enqueue_timeline_render is None:
+            raise HTTPException(501, "Timeline rendering is not configured")
+        return enqueue_timeline_render(project_id, req)
 
     @router.post("/v1/projects/{project_id}/motion_grammar/apply")
     def apply_motion_grammar(project_id: str, req: MotionPhrasesApplyRequest) -> dict[str, Any]:

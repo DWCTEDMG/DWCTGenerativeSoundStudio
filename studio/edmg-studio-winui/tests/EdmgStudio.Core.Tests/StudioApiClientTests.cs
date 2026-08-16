@@ -201,6 +201,87 @@ public sealed class StudioApiClientTests
     }
 
     [TestMethod]
+    public async Task QueueTimelineRenderAsync_UsesTypedAuthenticatedContract()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                await request.Content!.ReadAsStringAsync(cancellationToken));
+            return JsonResponse(
+                """
+                {
+                  "ok": true,
+                  "job": {
+                    "id": "timeline-job",
+                    "project_id": "project one",
+                    "type": "timeline_render",
+                    "status": "queued"
+                  }
+                }
+                """);
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        var response = await client.QueueTimelineRenderAsync(
+            "project one",
+            new TimelineRenderRequest(1920, 1080, 24, "H264", "AAC", "high", "edited-master"));
+
+        Assert.IsTrue(response.Ok);
+        Assert.AreEqual("timeline-job", response.Job.Id);
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Post, captured.Method);
+        Assert.AreEqual("/v1/projects/project%20one/timeline/render", captured.Uri.AbsolutePath);
+        Assert.AreEqual("Bearer session-token", captured.Authorization);
+        Assert.AreEqual("application/json", captured.ContentType);
+        using var payload = JsonDocument.Parse(captured.Body);
+        Assert.AreEqual(1920, payload.RootElement.GetProperty("width").GetInt32());
+        Assert.AreEqual(1080, payload.RootElement.GetProperty("height").GetInt32());
+        Assert.AreEqual(24, payload.RootElement.GetProperty("fps").GetDouble());
+        Assert.AreEqual("h264", payload.RootElement.GetProperty("video_codec").GetString());
+        Assert.AreEqual("aac", payload.RootElement.GetProperty("audio_codec").GetString());
+        Assert.AreEqual("high", payload.RootElement.GetProperty("quality").GetString());
+        Assert.AreEqual("edited-master", payload.RootElement.GetProperty("name").GetString());
+    }
+
+    [TestMethod]
+    public async Task InvalidTimelineRenderRequests_AreRejectedBeforeNetworkUse()
+    {
+        var callCount = 0;
+        using var httpClient = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            callCount++;
+            return Task.FromResult(JsonResponse("{}"));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+
+        await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => client.QueueTimelineRenderAsync(
+            "p1",
+            new TimelineRenderRequest(1919, 1080, 24, "h264", "aac", "high", "master")));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => client.QueueTimelineRenderAsync(
+            "p1",
+            new TimelineRenderRequest(1920, 1080, 24, "prores", "aac", "high", "master")));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => client.QueueTimelineRenderAsync(
+            "p1",
+            new TimelineRenderRequest(1920, 1080, 24, "h264", "aac", "ultra", "master")));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => client.QueueTimelineRenderAsync(
+            "p1",
+            new TimelineRenderRequest(1920, 1080, 24, "h264", "aac", "high", "../master")));
+
+        Assert.AreEqual(0, callCount);
+    }
+
+    [TestMethod]
     public async Task GetJobsAsync_PreservesProgressAndExposesValidActions()
     {
         using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
@@ -239,6 +320,46 @@ public sealed class StudioApiClientTests
         Assert.IsTrue(job.CanCancel);
         Assert.IsFalse(job.CanRetry);
         Assert.AreEqual(37.5, job.Progress?.Percent);
+    }
+
+    [TestMethod]
+    public async Task QueueRecoveryActions_UseExactProjectJobRoutes()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null
+                    ? string.Empty
+                    : await request.Content.ReadAsStringAsync(cancellationToken)));
+            return JsonResponse("""{"ok":true}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        await client.ResumeJobFromCheckpointAsync("project one", "job one");
+        await client.RestartJobCleanAsync("project one", "job one");
+        await client.ClearJobCachedFramesAsync("project one", "job one");
+        await client.DropJobCheckpointAsync("project one", "job one");
+
+        var expectedPaths = new[]
+        {
+            "/v1/projects/project%20one/jobs/job%20one/resume_from_checkpoint",
+            "/v1/projects/project%20one/jobs/job%20one/restart_clean",
+            "/v1/projects/project%20one/jobs/job%20one/clear_cached_frames",
+            "/v1/projects/project%20one/jobs/job%20one/drop_checkpoint",
+        };
+        CollectionAssert.AreEqual(expectedPaths, captured.Select(item => item.Uri.AbsolutePath).ToArray());
+        Assert.IsTrue(captured.All(item => item.Method == HttpMethod.Post));
+        Assert.IsTrue(captured.All(item => item.Authorization == "Bearer session-token"));
+        Assert.IsTrue(captured.All(item => item.ContentType == "application/json"));
+        Assert.IsTrue(captured.All(item => item.Body == "{}"));
     }
 
     [TestMethod]
@@ -480,6 +601,248 @@ public sealed class StudioApiClientTests
         Assert.AreEqual("""{"model_id":"local /#2"}""", captured[1].Body);
     }
 
+    [TestMethod]
+    public async Task ModelTasks_DeserializeProgressAndPresentationState()
+    {
+        using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
+        {
+            Assert.AreEqual(HttpMethod.Get, request.Method);
+            Assert.AreEqual("/v1/models/tasks", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(JsonResponse(
+                """
+                {"tasks":[{"id":"task-1","name":"Install model","status":"running","progress":1.4,"last_log":"Downloading","error":null,"started_at":1.0,"ended_at":null,"model_id":"sd15","stage":null,"bytes_completed":1024,"bytes_total":2048,"files_completed":1,"files_total":2,"cancel_requested":false}]}
+                """));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+
+        var response = await client.GetModelTasksAsync();
+        IReadOnlyList<ModelTask> tasks = response.Tasks!;
+        var task = tasks.Single();
+
+        Assert.IsTrue(task.IsActive);
+        Assert.AreEqual(1d, task.ClampedProgress);
+        Assert.AreEqual("Downloading", task.DisplayStage);
+        Assert.AreEqual("task-1:running", ModelTask.Fingerprint(tasks));
+    }
+
+    [TestMethod]
+    public async Task ModelManagement_UsesExactPathsBodiesAndTypedResponses()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            return request.RequestUri!.AbsolutePath switch
+            {
+                "/v1/models/benchmark" => JsonResponse("""{"ok":true,"benchmark":{"passed":true}}"""),
+                "/v1/models/import/civitai" => JsonResponse("""{"entry":{"id":"civitai-model"}}"""),
+                "/v1/models/import/local" => JsonResponse("""{"entry":{"id":"local-model"}}"""),
+                "/v1/models/tensorrt/cancel-import" => JsonResponse(ModelTaskActionJson),
+                "/v1/models/tensorrt/import-legacy" => JsonResponse(ModelTaskActionJson),
+                _ => throw new InvalidOperationException(request.RequestUri.AbsolutePath)
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        var benchmark = await client.RecordModelBenchmarkAsync("model-1");
+        var civitai = await client.ImportCivitaiModelAsync("https://civitai.com/models/1");
+        var local = await client.ImportLocalModelAsync(@"C:\models\model.safetensors", "checkpoints");
+        var migration = await client.ImportLegacyTensorRtAsync();
+        var cancellation = await client.CancelLegacyTensorRtImportAsync("task-1");
+
+        Assert.IsTrue(benchmark.Ok);
+        Assert.AreEqual("civitai-model", civitai.Entry.GetProperty("id").GetString());
+        Assert.AreEqual("local-model", local.Entry.GetProperty("id").GetString());
+        Assert.AreEqual("task-1", migration.Task.Id);
+        Assert.AreEqual("task-1", cancellation.Task.Id);
+        Assert.AreEqual(
+            """
+            {"model_id":"model-1","summary":"manual_ui_benchmark","passed":true,"metrics":{"source":"models_page"}}
+            """,
+            captured[0].Body);
+        Assert.AreEqual("""{"url":"https://civitai.com/models/1"}""", captured[1].Body);
+        Assert.AreEqual("""{"file_path":"C:\\models\\model.safetensors","folder":"checkpoints"}""", captured[2].Body);
+        Assert.AreEqual("{}", captured[3].Body);
+        Assert.AreEqual("""{"task_id":"task-1"}""", captured[4].Body);
+    }
+
+    [TestMethod]
+    public async Task PlannerAndReactiveLabs_UseAuthenticatedPreparedPayloadContracts()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                await request.Content!.ReadAsStringAsync(cancellationToken)));
+            return JsonResponse("""{"ok":true}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+        using var planner = JsonDocument.Parse(
+            """{"analysis":{"basicInfo":{"title":"Signal"}},"plan":{"scenes":[{"id":"scene-1"}]},"settings":{"sceneCount":4},"apply_timeline":true,"overwrite_timeline":false}""");
+        using var reactive = JsonDocument.Parse(
+            """{"metadata":{"preset":"cinematic"},"keyframes":[{"frame":24}],"overwrite_motion_track":true,"overwrite_camera":false}""");
+
+        await client.ImportPlannerLabAsync("project / one", planner.RootElement.Clone());
+        await client.ApplyReactiveLabAsync("project / one", reactive.RootElement.Clone());
+
+        Assert.HasCount(2, captured);
+        Assert.IsTrue(captured.All(item => item.Method == HttpMethod.Post));
+        Assert.IsTrue(captured.All(item =>
+            item.Authorization is not null
+            && item.Authorization.StartsWith("Bearer ", StringComparison.Ordinal)
+            && item.Authorization.EndsWith("-token", StringComparison.Ordinal)));
+        Assert.IsTrue(captured.All(item => item.ContentType == "application/json"));
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%20one/planner_lab/import",
+            captured[0].Uri.AbsolutePath);
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%20one/reactive_lab/apply",
+            captured[1].Uri.AbsolutePath);
+
+        using (var payload = JsonDocument.Parse(captured[0].Body))
+        {
+            Assert.AreEqual("Signal", payload.RootElement.GetProperty("analysis").GetProperty("basicInfo").GetProperty("title").GetString());
+            Assert.AreEqual("scene-1", payload.RootElement.GetProperty("plan").GetProperty("scenes")[0].GetProperty("id").GetString());
+            Assert.AreEqual(4, payload.RootElement.GetProperty("settings").GetProperty("sceneCount").GetInt32());
+            Assert.IsTrue(payload.RootElement.GetProperty("apply_timeline").GetBoolean());
+            Assert.IsFalse(payload.RootElement.GetProperty("overwrite_timeline").GetBoolean());
+        }
+
+        using (var payload = JsonDocument.Parse(captured[1].Body))
+        {
+            Assert.AreEqual("cinematic", payload.RootElement.GetProperty("metadata").GetProperty("preset").GetString());
+            Assert.AreEqual(24, payload.RootElement.GetProperty("keyframes")[0].GetProperty("frame").GetInt32());
+            Assert.IsTrue(payload.RootElement.GetProperty("overwrite_motion_track").GetBoolean());
+            Assert.IsFalse(payload.RootElement.GetProperty("overwrite_camera").GetBoolean());
+        }
+    }
+
+    [TestMethod]
+    public async Task CloudOperations_UseAuthenticatedJsonContracts()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+            return JsonResponse("""{"ok":true,"settings":{"enabled":true}}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+        using var awsTest = JsonDocument.Parse("""{"bucket":"studio-assets"}""");
+        using var awsBundle = JsonDocument.Parse("""{"bucket":"studio-assets","key":"bundles/project.zip"}""");
+        using var azureTest = JsonDocument.Parse("""{"container":"model-cache","prefix":"models"}""");
+        using var hfSettings = JsonDocument.Parse(
+            """{"enabled":true,"bucket":"hf-cache","prefix":"weights","storage_mode":"cloud_only"}""");
+        using var hfTest = JsonDocument.Parse("""{"bucket":"hf-cache","prefix":"weights"}""");
+        using var lightning = JsonDocument.Parse("""{"output_dir":"lightning/bundle"}""");
+
+        await client.TestAwsCloudAsync(awsTest.RootElement.Clone());
+        await client.BundleAwsCloudAsync(awsBundle.RootElement.Clone());
+        await client.TestAzureCloudAsync(azureTest.RootElement.Clone());
+        await client.GetHuggingFaceCloudSettingsAsync();
+        await client.SaveHuggingFaceCloudSettingsAsync(hfSettings.RootElement.Clone());
+        await client.TestHuggingFaceCloudAsync(hfTest.RootElement.Clone());
+        await client.BundleLightningCloudAsync(lightning.RootElement.Clone());
+
+        Assert.HasCount(7, captured);
+        Assert.IsTrue(captured.All(item =>
+            item.Authorization is not null
+            && item.Authorization.StartsWith("Bearer ", StringComparison.Ordinal)
+            && item.Authorization.EndsWith("-token", StringComparison.Ordinal)));
+        Assert.AreEqual(
+            "POST /v1/cloud/aws/test|POST /v1/cloud/aws/bundle|POST /v1/cloud/azure/test|GET /v1/cloud/hf/settings|POST /v1/cloud/hf/settings|POST /v1/cloud/hf/test|POST /v1/cloud/lightning/bundle",
+            string.Join("|", captured.Select(item => $"{item.Method.Method} {item.Uri.AbsolutePath}")));
+        Assert.IsTrue(captured.Where(item => item.Method == HttpMethod.Post)
+            .All(item => item.ContentType == "application/json"));
+        Assert.AreEqual(string.Empty, captured.Single(item => item.Method == HttpMethod.Get).Body);
+
+        using (var payload = JsonDocument.Parse(captured[1].Body))
+        {
+            Assert.AreEqual("studio-assets", payload.RootElement.GetProperty("bucket").GetString());
+            Assert.AreEqual("bundles/project.zip", payload.RootElement.GetProperty("key").GetString());
+        }
+
+        using (var payload = JsonDocument.Parse(captured[4].Body))
+        {
+            Assert.IsTrue(payload.RootElement.GetProperty("enabled").GetBoolean());
+            Assert.AreEqual("cloud_only", payload.RootElement.GetProperty("storage_mode").GetString());
+        }
+
+        using (var payload = JsonDocument.Parse(captured[6].Body))
+        {
+            Assert.AreEqual("lightning/bundle", payload.RootElement.GetProperty("output_dir").GetString());
+        }
+    }
+
+    [TestMethod]
+    public async Task ForgeProbes_UseAuthenticatedEscapedProjectContracts()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                string.Empty));
+            return Task.FromResult(JsonResponse("""{"ok":true}"""));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        await client.GetAiStatusAsync();
+        await client.GetComfyUiCapabilitiesAsync();
+        await client.GetUnrealPreviewAsync("project / one", -3);
+        await client.GetUnrealPreviewAsync("project / one", 2);
+        await client.GetLiveCuePublishStatusAsync("project / one");
+
+        Assert.HasCount(5, captured);
+        Assert.IsTrue(captured.All(item => item.Method == HttpMethod.Get));
+        Assert.IsTrue(captured.All(item =>
+            item.Authorization is not null
+            && item.Authorization.StartsWith("Bearer ", StringComparison.Ordinal)
+            && item.Authorization.EndsWith("-token", StringComparison.Ordinal)));
+        Assert.AreEqual("/v1/ai/status", captured[0].Uri.AbsolutePath);
+        Assert.AreEqual("/v1/comfyui/capabilities", captured[1].Uri.AbsolutePath);
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%20one/unreal/preview",
+            captured[2].Uri.AbsolutePath);
+        Assert.AreEqual("?variant_index=0", captured[2].Uri.Query);
+        Assert.AreEqual("?variant_index=2", captured[3].Uri.Query);
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%20one/live_cues/publish/status",
+            captured[4].Uri.AbsolutePath);
+    }
+
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) => new(statusCode)
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -490,6 +853,9 @@ public sealed class StudioApiClientTests
 
     private const string ProjectResponseJson =
         """{"project":{"id":"p1","name":"Native Project","created_at":"2026-08-12 08:00:00","meta":{},"schema_version":1},"visual_dna":{},"visual_dna_hints":{}}""";
+
+    private const string ModelTaskActionJson =
+        """{"task":{"id":"task-1","name":"Import TensorRT","status":"queued","progress":0.0,"last_log":null,"error":null,"started_at":null,"ended_at":null,"model_id":"local_sd15_tensorrt_bundle","stage":"queued","bytes_completed":0,"bytes_total":null,"files_completed":0,"files_total":null,"cancel_requested":false}}""";
 
     private sealed record CapturedRequest(
         HttpMethod Method,

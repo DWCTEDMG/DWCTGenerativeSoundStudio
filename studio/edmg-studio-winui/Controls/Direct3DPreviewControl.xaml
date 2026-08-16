@@ -14,12 +14,18 @@
     <Grid
         MinHeight="220"
         Background="{ThemeResource CardBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
         <SwapChainPanel
             x:Name="PreviewPanel"
+            Grid.Row="0"
             SizeChanged="PreviewPanel_SizeChanged" />
 
         <Border
             x:Name="StateOverlay"
+            Grid.Row="0"
             Background="{ThemeResource CardBackgroundBrush}"
             IsHitTestVisible="False">
             <StackPanel
@@ -43,6 +49,49 @@
                     TextAlignment="Center"
                     TextWrapping="Wrap" />
             </StackPanel>
+        </Border>
+
+        <Border
+            x:Name="VideoTransport"
+            Grid.Row="1"
+            Padding="12,8"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="0,1,0,0"
+            Visibility="Collapsed">
+            <Grid ColumnSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button
+                    x:Name="PlayPauseButton"
+                    Width="36"
+                    Height="36"
+                    AutomationProperties.Name="Play video"
+                    Click="PlayPauseButton_Click">
+                    <FontIcon
+                        x:Name="PlayPauseIcon"
+                        FontSize="16"
+                        Glyph="&#xE768;" />
+                </Button>
+                <Slider
+                    x:Name="PositionSlider"
+                    Grid.Column="1"
+                    Minimum="0"
+                    Maximum="1"
+                    StepFrequency="0.1"
+                    ValueChanged="PositionSlider_ValueChanged" />
+                <TextBlock
+                    x:Name="PositionText"
+                    Grid.Column="2"
+                    MinWidth="96"
+                    VerticalAlignment="Center"
+                    FontFamily="Consolas"
+                    Text="00:00 / 00:00"
+                    TextAlignment="Right" />
+            </Grid>
         </Border>
     </Grid>
 </UserControl>

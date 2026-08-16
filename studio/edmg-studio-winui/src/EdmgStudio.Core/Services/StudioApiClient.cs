@@ -184,6 +184,72 @@ public sealed class StudioApiClient : IDisposable
             cancellationToken);
     }
 
+    public Task<JsonElement> ImportPlannerLabAsync(
+        string projectId,
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/planner_lab/import",
+            request,
+            cancellationToken);
+
+    public Task<JsonElement> ApplyReactiveLabAsync(
+        string projectId,
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/reactive_lab/apply",
+            request,
+            cancellationToken);
+
+    public Task<JsonElement> TestAwsCloudAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/cloud/aws/test", request, cancellationToken);
+
+    public Task<JsonElement> BundleAwsCloudAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/cloud/aws/bundle", request, cancellationToken);
+
+    public Task<JsonElement> TestAzureCloudAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/cloud/azure/test", request, cancellationToken);
+
+    public Task<JsonElement> GetHuggingFaceCloudSettingsAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/cloud/hf/settings", null, true, cancellationToken);
+
+    public Task<JsonElement> SaveHuggingFaceCloudSettingsAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/cloud/hf/settings", request, cancellationToken);
+
+    public Task<JsonElement> TestHuggingFaceCloudAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/cloud/hf/test", request, cancellationToken);
+
+    public Task<JsonElement> BundleLightningCloudAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/cloud/lightning/bundle", request, cancellationToken);
+
+    public Task<JsonElement> GetAiStatusAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/ai/status", null, true, cancellationToken);
+
+    public Task<JsonElement> GetComfyUiCapabilitiesAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/comfyui/capabilities", null, true, cancellationToken);
+
+    public Task<JsonElement> GetUnrealPreviewAsync(
+        string projectId,
+        int variantIndex,
+        CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/unreal/preview?variant_index={Math.Max(0, variantIndex)}",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> GetLiveCuePublishStatusAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/live_cues/publish/status",
+            null,
+            true,
+            cancellationToken);
+
     public Task<JsonElement> GetConfigAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/config", null, true, cancellationToken);
 
@@ -257,6 +323,21 @@ public sealed class StudioApiClient : IDisposable
             new TimelineAutosaveRequest(timeline, metadata, reason),
             StudioJson.GetTypeInfo<TimelineAutosaveRequest>(),
             cancellationToken);
+
+    public Task<TimelineRenderResponse> QueueTimelineRenderAsync(
+        string projectId,
+        TimelineRenderRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var normalized = NormalizeTimelineRenderRequest(request);
+        return SendJsonAsync<TimelineRenderResponse>(
+            HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/timeline/render",
+            JsonContent.Create(normalized, StudioJson.GetTypeInfo<TimelineRenderRequest>()),
+            true,
+            cancellationToken);
+    }
 
     public Task<JsonElement> GetRecoveryAsync(string projectId, CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(
@@ -492,8 +573,80 @@ public sealed class StudioApiClient : IDisposable
     public Task<JsonElement> GetModelCatalogAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/models/catalog", null, true, cancellationToken);
 
-    public Task<JsonElement> GetModelTasksAsync(CancellationToken cancellationToken = default) =>
-        SendJsonElementAsync(HttpMethod.Get, "/v1/models/tasks", null, true, cancellationToken);
+    public Task<ModelCatalogueResponse> GetTypedModelCatalogueAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ModelCatalogueResponse>(
+            HttpMethod.Get,
+            "/v1/models/catalog",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<ModelTaskListResponse> GetModelTasksAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ModelTaskListResponse>(
+            HttpMethod.Get,
+            "/v1/models/tasks",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<ModelBenchmarkResponse> RecordModelBenchmarkAsync(
+        string modelId,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<ModelBenchmarkRequest, ModelBenchmarkResponse>(
+            "/v1/models/benchmark",
+            new ModelBenchmarkRequest(
+                RequireValue(modelId, nameof(modelId)),
+                "manual_ui_benchmark",
+                true,
+                new Dictionary<string, string> { ["source"] = "models_page" }),
+            cancellationToken);
+
+    public Task<ModelImportResponse> ImportCivitaiModelAsync(
+        string url,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<CivitaiImportRequest, ModelImportResponse>(
+            "/v1/models/import/civitai",
+            new CivitaiImportRequest(RequireValue(url, nameof(url))),
+            cancellationToken);
+
+    public Task<ModelImportResponse> ImportLocalModelAsync(
+        string filePath,
+        string folder,
+        string? name = null,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<LocalModelImportRequest, ModelImportResponse>(
+            "/v1/models/import/local",
+            new LocalModelImportRequest(
+                RequireValue(filePath, nameof(filePath)),
+                RequireValue(folder, nameof(folder)),
+                string.IsNullOrWhiteSpace(name) ? null : name.Trim()),
+            cancellationToken);
+
+    public Task<TensorRtMigrationStatus> GetTensorRtLegacyStatusAsync(
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<TensorRtMigrationStatus>(
+            HttpMethod.Get,
+            "/v1/models/tensorrt/legacy-status",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<ModelTaskActionResponse> ImportLegacyTensorRtAsync(
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ModelTaskActionResponse>(
+            HttpMethod.Post,
+            "/v1/models/tensorrt/import-legacy",
+            new StringContent("{}", Encoding.UTF8, "application/json"),
+            true,
+            cancellationToken);
+
+    public Task<ModelTaskActionResponse> CancelLegacyTensorRtImportAsync(
+        string taskId,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<TensorRtCancelImportRequest, ModelTaskActionResponse>(
+            "/v1/models/tensorrt/cancel-import",
+            new TensorRtCancelImportRequest(RequireValue(taskId, nameof(taskId))),
+            cancellationToken);
 
     public Task<JsonElement> InstallModelAsync(string modelId, CancellationToken cancellationToken = default) =>
         PostJsonElementAsync(
@@ -644,6 +797,17 @@ public sealed class StudioApiClient : IDisposable
             HttpMethod.Post,
             relativePath,
             JsonContent.Create(request, typeInfo),
+            true,
+            cancellationToken);
+
+    private Task<TResponse> PostJsonAsync<TRequest, TResponse>(
+        string relativePath,
+        TRequest request,
+        CancellationToken cancellationToken) =>
+        SendJsonAsync<TResponse>(
+            HttpMethod.Post,
+            relativePath,
+            JsonContent.Create(request, StudioJson.GetTypeInfo<TRequest>()),
             true,
             cancellationToken);
 
@@ -831,6 +995,70 @@ public sealed class StudioApiClient : IDisposable
         }
 
         return value.Trim();
+    }
+
+    private static TimelineRenderRequest NormalizeTimelineRenderRequest(TimelineRenderRequest request)
+    {
+        ValidateTimelineDimension(request.Width, nameof(request.Width));
+        ValidateTimelineDimension(request.Height, nameof(request.Height));
+        if (!double.IsFinite(request.Fps) || request.Fps is < 1 or > 120)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request.Fps), "Timeline FPS must be between 1 and 120.");
+        }
+
+        var videoCodec = RequireValue(request.VideoCodec, nameof(request.VideoCodec)).ToLowerInvariant();
+        if (videoCodec is not ("h264" or "hevc" or "prores"))
+        {
+            throw new ArgumentException("Timeline video codec must be h264, hevc, or prores.", nameof(request.VideoCodec));
+        }
+
+        var audioCodec = RequireValue(request.AudioCodec, nameof(request.AudioCodec)).ToLowerInvariant();
+        if (audioCodec is not ("aac" or "pcm_s16le"))
+        {
+            throw new ArgumentException("Timeline audio codec must be aac or pcm_s16le.", nameof(request.AudioCodec));
+        }
+
+        if ((videoCodec == "prores") != (audioCodec == "pcm_s16le"))
+        {
+            throw new ArgumentException(
+                "ProRes requires pcm_s16le audio; H.264 and HEVC require AAC audio.",
+                nameof(request.AudioCodec));
+        }
+
+        var quality = RequireValue(request.Quality, nameof(request.Quality)).ToLowerInvariant();
+        if (quality is not ("low" or "medium" or "high") &&
+            (!int.TryParse(quality, NumberStyles.None, CultureInfo.InvariantCulture, out var qualityNumber) ||
+             qualityNumber is < 1 or > 51))
+        {
+            throw new ArgumentException(
+                "Timeline quality must be low, medium, high, or a number from 1 through 51.",
+                nameof(request.Quality));
+        }
+
+        var name = RequireValue(request.Name, nameof(request.Name));
+        if (name.Length > 128 ||
+            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+            name.Contains('/') ||
+            name.Contains('\\'))
+        {
+            throw new ArgumentException("Timeline output name must be a valid file name of at most 128 characters.", nameof(request.Name));
+        }
+
+        return request with
+        {
+            VideoCodec = videoCodec,
+            AudioCodec = audioCodec,
+            Quality = quality,
+            Name = name
+        };
+    }
+
+    private static void ValidateTimelineDimension(int value, string parameterName)
+    {
+        if (value is < 256 or > 7680 || value % 2 != 0)
+        {
+            throw new ArgumentOutOfRangeException(parameterName, "Timeline dimensions must be even and between 256 and 7680.");
+        }
     }
 
     private static bool SameOrigin(Uri left, Uri right) =>

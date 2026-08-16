@@ -1,0 +1,124 @@
+<Page
+    x:Class="EdmgStudio.WinUI.Pages.StudioForgePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="1120" Padding="32" Spacing="20" HorizontalAlignment="Stretch">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Studio Forge" Style="{StaticResource PageTitleTextBlockStyle}" />
+                    <TextBlock
+                        Text="Inspect backend and project readiness, then move into the canonical workflow that owns each action."
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="Refresh readiness" Style="{StaticResource AccentButtonStyle}"
+                        Click="Refresh_Click"
+                        AutomationProperties.AutomationId="StudioForgeRefreshButton" />
+            </Grid>
+
+            <InfoBar x:Name="StatusInfoBar" IsOpen="False" IsClosable="True" />
+
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Padding="20" CornerRadius="8"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Runtime readiness" Style="{StaticResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Live probes from the authoritative FastAPI service."
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <ProgressRing x:Name="RuntimeProgressRing" IsActive="False"
+                                      HorizontalAlignment="Left" />
+                        <TextBlock x:Name="RuntimeSummaryTextBlock" Text="Not checked."
+                                   TextWrapping="Wrap" FontFamily="Consolas" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Padding="20" CornerRadius="8"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Active project readiness" Style="{StaticResource SubtitleTextBlockStyle}" />
+                        <TextBlock x:Name="ProjectIdentityTextBlock" Text="No active project selected."
+                                   FontWeight="SemiBold" />
+                        <TextBlock x:Name="ProjectSummaryTextBlock"
+                                   Text="Select or create a project in Workspace to inspect its Forge readiness."
+                                   TextWrapping="Wrap" FontFamily="Consolas" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Padding="20" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Canonical workflows" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock
+                        Text="Forge is a readiness and routing surface. It does not silently install models, render variants, publish cues, or mutate project data."
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ItemsWrapGrid x:Name="WorkflowButtonsPanel" Orientation="Horizontal"
+                                   MaximumRowsOrColumns="3" ItemWidth="245" ItemHeight="48">
+                        <Button Content="Workspace · project and media" Tag="workspace" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeWorkspaceButton" />
+                        <Button Content="AI Planner Lab · plan import" Tag="plannerLab" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgePlannerButton" />
+                        <Button Content="Reactive Lab · cue import" Tag="reactiveLab" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeReactiveButton" />
+                        <Button Content="Render · generation jobs" Tag="render" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeRenderButton" />
+                        <Button Content="Models · model readiness" Tag="models" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeModelsButton" />
+                        <Button Content="Cloud · provider tools" Tag="cloud" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeCloudButton" />
+                        <Button Content="Setup · runtime repair" Tag="setup" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeSetupButton" />
+                        <Button Content="Settings · providers" Tag="settings" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeSettingsButton" />
+                    </ItemsWrapGrid>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="20" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Bridge previews" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock
+                        Text="Unreal preview and live-cue publisher status are read-only backend probes. Their full payload summaries appear here when an active project is selected."
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBox x:Name="BridgePreviewTextBox" IsReadOnly="True" AcceptsReturn="True"
+                             MinHeight="120" TextWrapping="Wrap"
+                             AutomationProperties.AutomationId="StudioForgeBridgePreviewTextBox" />
+                </StackPanel>
+            </Border>
+
+            <Border Padding="20" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Developer validation" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock
+                        Text="Documentation only — Studio Forge never executes shell commands."
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock FontFamily="Consolas" TextWrapping="Wrap"
+                               Text="pnpm run typecheck&#x0a;pnpm run lint&#x0a;pnpm run test:ui&#x0a;pnpm run build&#x0a;pnpm run validate:desktop&#x0a;pnpm run dist:win&#x0a;pnpm run dist:linux" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

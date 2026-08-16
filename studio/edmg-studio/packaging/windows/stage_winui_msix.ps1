@@ -160,7 +160,7 @@ $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
   $stream = [IO.File]::OpenRead($stagedPath)
   try {
-    $hash = [Convert]::ToHexString($sha256.ComputeHash($stream)).ToLowerInvariant()
+    $hash = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
   } finally {
     $stream.Dispose()
   }
