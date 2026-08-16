@@ -21,6 +21,22 @@ Python remains authoritative for analysis, AI/provider access, CUDA/TensorRT
 inference, rendering, jobs, outputs, and model lifecycle. The native client is
 not a second rendering engine.
 
+The native WinUI client has a presentation-only Direct3D 11 image-preview pipeline:
+
+- `studio/edmg-studio-winui/Graphics/` owns adapter selection, streamed image
+  decoding, CPU-frame upload, the D3D11/DXGI/D2D composition renderer, recovery,
+  and adapter/LUID diagnostics.
+- `studio/edmg-studio-winui/Controls/Direct3DPreviewControl.xaml` is the reusable
+  `SwapChainPanel` surface used by Outputs, Review, and the selected Timeline
+  artifact monitor.
+- `studio/edmg-studio-winui/src/EdmgStudio.Core/Graphics/` contains the
+  platform-neutral frame, geometry, DPI, mailbox, and lifecycle contracts.
+- `IFrameUploader` preserves a future CUDA-D3D11 shared-texture extension point.
+  The current implementation uploads decoded image CPU memory and does not change
+  Python/CUDA inference.
+- Video preview is intentionally unsupported in the native package until a pinned,
+  safely packaged decoder is qualified.
+
 Canonical launch path from the repo root:
 
 - `RUN_ME.bat`
@@ -84,9 +100,9 @@ Use these for the Studio product:
 Key validation commands:
 
 - `studio/edmg-studio-winui/`:
-  `dotnet build .\EdmgStudio.WinUI.csproj -p:Platform=x64 -p:Configuration=Debug`
+  `dotnet build .\EdmgStudio.WinUI.csproj -p:Platform=x64 -p:Configuration=Release`
 - `studio/edmg-studio-winui/`:
-  `dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj -p:Platform=x64`
+  `dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj -p:Platform=x64 -p:Configuration=Release`
 - Repo root:
   `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`
 - `studio/edmg-studio/`:

@@ -6,10 +6,14 @@
     <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Dark">
             <SolidColorBrush x:Key="StudioBackgroundBrush" Color="#041417" />
+            <SolidColorBrush x:Key="AppCanvasBrush" Color="#041417" />
             <SolidColorBrush x:Key="StudioCardBrush" Color="#D1071719" />
+            <SolidColorBrush x:Key="CardBackgroundBrush" Color="#D1071719" />
             <SolidColorBrush x:Key="StudioBorderBrush" Color="#4746D6E0" />
+            <SolidColorBrush x:Key="CardStrokeBrush" Color="#4746D6E0" />
             <SolidColorBrush x:Key="StudioTextBrush" Color="#EEF5F4" />
             <SolidColorBrush x:Key="StudioMutedTextBrush" Color="#AEBAA8" />
+            <SolidColorBrush x:Key="SecondaryTextBrush" Color="#AEBAA8" />
             <SolidColorBrush x:Key="StudioAccentBrush" Color="#35D8DF" />
             <SolidColorBrush x:Key="StudioAccentForegroundBrush" Color="#041417" />
             <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="#94B7D8" />
@@ -43,10 +47,14 @@
 
         <ResourceDictionary x:Key="Light">
             <SolidColorBrush x:Key="StudioBackgroundBrush" Color="#EDF7F7" />
+            <SolidColorBrush x:Key="AppCanvasBrush" Color="#EDF7F7" />
             <SolidColorBrush x:Key="StudioCardBrush" Color="#EFFFFFFF" />
+            <SolidColorBrush x:Key="CardBackgroundBrush" Color="#EFFFFFFF" />
             <SolidColorBrush x:Key="StudioBorderBrush" Color="#5930A9B1" />
+            <SolidColorBrush x:Key="CardStrokeBrush" Color="#5930A9B1" />
             <SolidColorBrush x:Key="StudioTextBrush" Color="#102426" />
             <SolidColorBrush x:Key="StudioMutedTextBrush" Color="#536864" />
+            <SolidColorBrush x:Key="SecondaryTextBrush" Color="#536864" />
             <SolidColorBrush x:Key="StudioAccentBrush" Color="#087F88" />
             <SolidColorBrush x:Key="StudioAccentForegroundBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="#416C94" />
@@ -80,10 +88,14 @@
 
         <ResourceDictionary x:Key="HighContrast">
             <SolidColorBrush x:Key="StudioBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="AppCanvasBrush" Color="{ThemeResource SystemColorWindowColor}" />
             <SolidColorBrush x:Key="StudioCardBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="CardBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
             <SolidColorBrush x:Key="StudioBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="CardStrokeBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="StudioTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="StudioMutedTextBrush" Color="{ThemeResource SystemColorGrayTextColor}" />
+            <SolidColorBrush x:Key="SecondaryTextBrush" Color="{ThemeResource SystemColorGrayTextColor}" />
             <SolidColorBrush x:Key="StudioAccentBrush" Color="{ThemeResource SystemColorHighlightColor}" />
             <SolidColorBrush x:Key="StudioAccentForegroundBrush" Color="{ThemeResource SystemColorHighlightTextColor}" />
             <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="{ThemeResource SystemColorHighlightColor}" />

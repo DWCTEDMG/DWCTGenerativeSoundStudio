@@ -56,6 +56,57 @@ The native client does not duplicate the AI, audio-analysis, render, model, or p
 engines. It communicates with the backend over bearer-authenticated localhost HTTP and uses the
 same project format as the compatibility client.
 
+### Native Direct3D preview pipeline
+
+Outputs, Review, and the selected Timeline artifact use one reusable
+`Direct3DPreviewControl`. The control owns a real WinUI 3 `SwapChainPanel`; its renderer creates a
+DXGI composition swap chain with `CreateSwapChainForComposition` and uses:
+
+- a high-performance hardware-adapter enumeration rather than assuming adapter zero
+- software-adapter rejection and WARP only as a degraded fallback
+- two `B8G8R8A8_UNorm` flip-model buffers, VSync presentation, no depth buffer, and a maximum
+  frame latency of one where supported
+- Direct2D drawing over the swap-chain back buffer with centered aspect-fit letterboxing
+- physical pixel sizes calculated from panel DIPs and `XamlRoot.RasterizationScale`, with
+  coalesced non-zero resizes and an inverse-scale swap-chain transform
+
+The selected adapter description and exact 64-bit DXGI LUID are exposed in the preview's
+diagnostic/help text. Keep the LUID when collecting GPU reports: a future CUDA interoperability
+implementation must match the CUDA device to this exact DXGI adapter rather than relying on ordinal
+device numbers.
+
+The Python/CUDA backend remains the compute and render authority. Preview media is retrieved with
+authenticated `ResponseHeadersRead` requests, and the request, response, network stream, and headers
+are valid only during the streaming callback. The current image path decodes into one owned,
+premultiplied CPU BGRA8 frame, then uploads through reusable D3D11 textures. It does not move
+inference to DirectML or DirectX and does not retain a whole-media byte array.
+
+The frame boundary is intentionally narrow:
+
+- dimensions are positive and at most 16,384 per axis
+- decoded memory is bounded to 512 MiB and all size arithmetic is checked
+- format is explicit BGRA8 or RGBA8
+- stride is explicit and may contain padded rows
+- orientation is explicit top-down or bottom-up
+- conversion copies rows into tightly packed native BGRA order
+
+`IFrameUploader` is the replacement point for a future CUDA-D3D11 shared-texture uploader. That
+future work can avoid the CPU copy without changing the preview control, renderer session, page, or
+backend API contract. CUDA interop is not implemented in this release.
+
+Image decoding uses Windows Imaging Component, applies metadata orientation and sRGB color
+management, bounds compressed input to 256 MiB, and delete-on-close spools non-seekable streams.
+Video preview is explicitly unsupported because the WinUI package does not contain a separately
+pinned and qualified video decoder. Generated video files can still be saved or revealed through
+the established output actions.
+
+Decode continuations, row conversion, uploads, drawing, resizing, and `Present` run on a dedicated
+renderer worker. The UI dispatcher is used only for panel attachment/detachment and status updates.
+A capacity-one mailbox disposes stale frames, and only the latest valid CPU frame is retained for a
+redraw after bounded device-loss recovery. Shutdown stops submissions, cancels acquisition,
+completes the mailbox, detaches the panel on the UI dispatcher, waits for the worker, releases
+D3D11/DXGI/D2D resources, and only then disposes the backend supervisor and API client.
+
 ## Prerequisites
 
 - Windows 10 version 1809 or newer; Windows 11 is the primary experience.
@@ -72,15 +123,19 @@ Run these commands from this directory in PowerShell:
 
 ```powershell
 dotnet restore .\EdmgStudio.WinUI.csproj -r win-x64
-dotnet build .\EdmgStudio.WinUI.csproj -p:Platform=x64 -p:Configuration=Debug
-dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj
+dotnet build .\EdmgStudio.WinUI.csproj -p:Platform=x64 -p:Configuration=Release
+dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj `
+  -p:Platform=x64 -p:Configuration=Release
 ```
 
 The whole solution can also be compiled with:
 
 ```powershell
-dotnet build .\EdmgStudio.WinUI.slnx
+dotnet build .\EdmgStudio.WinUI.slnx -p:Platform=x64
 ```
+
+Only x64 is qualified for the native preview path. Do not build or publish this project as AnyCPU,
+do not remove `Package.appxmanifest`, and do not add `WindowsPackageType=None`.
 
 The focused backend data-freshness tests live in the existing Python test suite and should be run with the repository's frozen backend environment.
 
@@ -93,6 +148,9 @@ dotnet run --project .\EdmgStudio.WinUI.csproj `
   --launch-profile "EdmgStudio.WinUI (Package)" `
   -p:Platform=x64
 ```
+
+Never start the packaged executable directly. Use the package launch profile or `winapp run` so
+MSIX identity and Windows App SDK activation are present.
 
 For a deterministic source-development launch against an existing local backend on port 7863:
 

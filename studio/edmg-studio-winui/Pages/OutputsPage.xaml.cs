@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 
@@ -13,7 +12,7 @@ public sealed partial class OutputsPage : Page
 {
     private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
     private string? _projectId;
-    private string? _cachedPreviewPath;
+    private string? _revealPreviewPath;
     private CancellationTokenSource? _previewCancellation;
     private int _previewGeneration;
 
@@ -88,10 +87,7 @@ public sealed partial class OutputsPage : Page
     {
         CancelPreview();
         var generation = ++_previewGeneration;
-        _cachedPreviewPath = null;
-        ImagePreview.Source = null;
-        ImagePreview.Visibility = Visibility.Collapsed;
-        RevealButton.IsEnabled = false;
+        CleanupRevealPreview();
 
         if (OutputsList.SelectedItem is not OutputEntry entry || string.IsNullOrWhiteSpace(_projectId))
         {
@@ -104,37 +100,37 @@ public sealed partial class OutputsPage : Page
         SelectedNameText.Text = entry.Name;
         SelectedPathText.Text = entry.Path;
         MetadataText.Text = StudioPageHelpers.FormatJson(entry.Metadata);
-        PreviewPlaceholder.Visibility = Visibility.Visible;
-        PreviewPlaceholder.Text = "Loading authenticated preview…";
         SaveButton.IsEnabled = true;
+        RevealButton.IsEnabled = true;
 
         if (!entry.IsImage)
         {
-            PreviewPlaceholder.Text = entry.IsVideo
-                ? "Video preview is available after saving a local copy."
-                : "This output does not have an inline preview.";
+            OutputPreview.ShowUnsupported(entry.IsVideo
+                ? "Video preview is not available in this build. Use Reveal preview to locate the file."
+                : "This output does not have an inline preview.");
             return;
         }
 
         try
         {
-            var bytes = await _apiClient.DownloadProjectFileAsync(_projectId, entry.Path, cancellationToken);
-            var extension = Path.GetExtension(entry.Name);
-            var file = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
-                $"edmg-preview-{Guid.NewGuid():N}{extension}", CreationCollisionOption.ReplaceExisting);
-            await FileIO.WriteBytesAsync(file, bytes);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (generation != _previewGeneration || !ReferenceEquals(OutputsList.SelectedItem, entry))
-            {
-                await file.DeleteAsync(StorageDeleteOption.PermanentDelete);
-                return;
-            }
+            await _apiClient.StreamProjectFileAsync(
+                _projectId,
+                entry.Path,
+                async (file, callbackToken) =>
+                {
+                    callbackToken.ThrowIfCancellationRequested();
+                    if (generation != Volatile.Read(ref _previewGeneration))
+                    {
+                        return false;
+                    }
 
-            _cachedPreviewPath = file.Path;
-            ImagePreview.Source = new BitmapImage(new Uri(file.Path));
-            ImagePreview.Visibility = Visibility.Visible;
-            PreviewPlaceholder.Visibility = Visibility.Collapsed;
-            RevealButton.IsEnabled = true;
+                    await OutputPreview.LoadStreamAsync(
+                        file.Stream,
+                        file.ContentHeaders.ContentType?.MediaType,
+                        callbackToken);
+                    return true;
+                },
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -145,12 +141,16 @@ public sealed partial class OutputsPage : Page
             {
                 return;
             }
-            PreviewPlaceholder.Text = "Preview failed to load.";
+            OutputPreview.ShowError("Preview failed to load.");
             ShowStatus(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
         }
     }
 
-    private void OutputsPage_Unloaded(object sender, RoutedEventArgs e) => CancelPreview();
+    private void OutputsPage_Unloaded(object sender, RoutedEventArgs e)
+    {
+        CancelPreview();
+        CleanupRevealPreview();
+    }
 
     private void CancelPreview()
     {
@@ -161,14 +161,11 @@ public sealed partial class OutputsPage : Page
 
     private void ClearOutputDetails()
     {
-        _cachedPreviewPath = null;
+        CleanupRevealPreview();
         SelectedNameText.Text = "Select an output";
         SelectedPathText.Text = string.Empty;
         MetadataText.Text = string.Empty;
-        ImagePreview.Source = null;
-        ImagePreview.Visibility = Visibility.Collapsed;
-        PreviewPlaceholder.Text = "Preview appears here";
-        PreviewPlaceholder.Visibility = Visibility.Visible;
+        OutputPreview.ShowEmpty("Select an output to preview it here.");
         SaveButton.IsEnabled = false;
         RevealButton.IsEnabled = false;
     }
@@ -197,8 +194,17 @@ public sealed partial class OutputsPage : Page
 
         try
         {
-            var bytes = await _apiClient.DownloadProjectFileAsync(_projectId, entry.Path);
-            await FileIO.WriteBytesAsync(destination, bytes);
+            await using Stream destinationStream = await destination.OpenStreamForWriteAsync();
+            destinationStream.SetLength(0);
+            await _apiClient.StreamProjectFileAsync(
+                _projectId,
+                entry.Path,
+                async (file, cancellationToken) =>
+                {
+                    await file.Stream.CopyToAsync(destinationStream, cancellationToken);
+                    await destinationStream.FlushAsync(cancellationToken);
+                    return true;
+                });
             ShowStatus($"Saved {destination.Name}.", InfoBarSeverity.Success);
         }
         catch (Exception ex)
@@ -207,14 +213,75 @@ public sealed partial class OutputsPage : Page
         }
     }
 
-    private void RevealButton_Click(object sender, RoutedEventArgs e)
+    private async void RevealButton_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(_cachedPreviewPath) || !File.Exists(_cachedPreviewPath))
+        if (OutputsList.SelectedItem is not OutputEntry entry || string.IsNullOrWhiteSpace(_projectId))
         {
             return;
         }
 
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_cachedPreviewPath}\"") { UseShellExecute = true });
+        try
+        {
+            CleanupRevealPreview();
+            var extension = Path.GetExtension(entry.Name);
+            var previewFile = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
+                $"edmg-output-reveal-{Guid.NewGuid():N}{extension}",
+                CreationCollisionOption.ReplaceExisting);
+
+            try
+            {
+                await using Stream destinationStream = await previewFile.OpenStreamForWriteAsync();
+                destinationStream.SetLength(0);
+                await _apiClient.StreamProjectFileAsync(
+                    _projectId,
+                    entry.Path,
+                    async (file, cancellationToken) =>
+                    {
+                        await file.Stream.CopyToAsync(destinationStream, cancellationToken);
+                        await destinationStream.FlushAsync(cancellationToken);
+                        return true;
+                    });
+            }
+            catch
+            {
+                await previewFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                throw;
+            }
+
+            _revealPreviewPath = previewFile.Path;
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_revealPreviewPath}\"")
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            ShowStatus(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+        }
+    }
+
+    private void CleanupRevealPreview()
+    {
+        string? path = Interlocked.Exchange(ref _revealPreviewPath, null);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // Explorer or a shell extension may briefly hold the on-demand reveal copy.
+            Interlocked.CompareExchange(ref _revealPreviewPath, path, null);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Temporary storage cleanup can retry during the next app maintenance cycle.
+            Interlocked.CompareExchange(ref _revealPreviewPath, path, null);
+        }
     }
 
     private void SetBusy(bool value)
