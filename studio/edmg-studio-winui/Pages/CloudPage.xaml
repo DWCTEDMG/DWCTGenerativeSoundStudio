@@ -20,13 +20,35 @@
                 IsOpen="True"
                 IsClosable="False"
                 Severity="Informational"
-                Title="Backend target switching is unavailable in the native client"
-                Message="The Electron host can persist an external backend URL. FastAPI exposes no equivalent contract, so WinUI keeps this capability disabled rather than changing targets locally." />
+                Title="Backend endpoints are supervised by the native shell"
+                Message="Managed and external backend targets come from the native startup configuration. This page only calls provider operations exposed by FastAPI and never stores credentials." />
 
             <InfoBar
                 x:Name="StatusInfoBar"
                 IsOpen="False"
                 IsClosable="True" />
+
+            <Border Padding="20" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Microsoft Foundry project" Style="{StaticResource SubtitleTextBlockStyle}" />
+                        <TextBlock x:Name="FoundryProjectText" Text="Project: loading..." TextWrapping="Wrap" />
+                        <TextBlock x:Name="FoundrySubscriptionText" Text="Subscription: loading..." TextWrapping="Wrap" />
+                        <TextBlock x:Name="FoundryEndpointText" Text="Endpoint: loading..." TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Content="Edit metadata"
+                            Click="OpenSettings_Click"
+                            AutomationProperties.AutomationId="CloudFoundryOpenSettingsButton" />
+                </Grid>
+            </Border>
 
             <Grid ColumnSpacing="16">
                 <Grid.ColumnDefinitions>

@@ -1,4 +1,3 @@
-<?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="EdmgStudio.WinUI.Pages.WorkspacePage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -6,295 +5,691 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="using:EdmgStudio.WinUI.Pages"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    NavigationCacheMode="Required"
     mc:Ignorable="d">
 
-    <Grid Background="{ThemeResource StudioBackgroundBrush}">
-        <Image
-            AutomationProperties.AccessibilityView="Raw"
-            IsHitTestVisible="False"
-            Opacity="{ThemeResource StudioWorkspaceArtworkOpacity}"
-            Source="ms-appx:///Assets/Brand/WorkspaceFlair.jpg"
-            Stretch="UniformToFill" />
-        <Rectangle
-            IsHitTestVisible="False"
-            Fill="{ThemeResource StudioWorkspaceScrimBrush}" />
-        <ScrollViewer>
-        <Grid MaxWidth="{StaticResource StudioPageMaxWidth}" Padding="24" RowSpacing="14">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
+    <Page.Resources>
+        <Style x:Key="WorkspaceCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="20" />
+        </Style>
+        <Style x:Key="WorkspaceSectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+    </Page.Resources>
 
-            <Grid Grid.Row="0" ColumnSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Spacing="5">
-                    <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource PageTitleStyle}" Text="Workspace" />
-                    <TextBlock
-                        Style="{StaticResource PageSubtitleStyle}"
-                        Text="Ingest, analyze, shape creative direction, and hand the session off to Timeline and Render." />
-                </StackPanel>
-                <CommandBar Grid.Column="1" Background="Transparent" DefaultLabelPosition="Right">
-                    <AppBarButton
-                        AutomationProperties.AutomationId="RefreshWorkspaceButton"
-                        Click="Refresh_Click"
-                        Icon="Refresh"
-                        Label="Refresh" />
-                </CommandBar>
-            </Grid>
+    <Grid Padding="24,20,24,28">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
-            <InfoBar
-                x:Name="WorkspaceInfoBar"
-                Grid.Row="1"
-                AutomationProperties.LiveSetting="Assertive"
-                IsClosable="True"
-                IsOpen="False" />
-
-            <StackPanel Grid.Row="2" Spacing="8">
-                <ProgressBar
-                    x:Name="OperationProgress"
-                    AutomationProperties.Name="Studio operation in progress"
-                    IsIndeterminate="True"
-                    ShowError="False"
-                    ShowPaused="False"
-                    Visibility="Collapsed" />
-                <Grid ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="OperationStatusText" Text="Ready" TextWrapping="Wrap" />
-                    <Button
-                        x:Name="CancelOperationButton"
-                        Grid.Column="1"
-                        AutomationProperties.AutomationId="CancelOperationButton"
-                        Click="CancelOperation_Click"
-                        Content="Stop waiting"
-                        Visibility="Collapsed" />
-                </Grid>
+        <Grid Grid.Row="0" ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Workspace" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="Shape source media, project health, analysis, storyboards, and handoffs from one native workbench."
+                    TextWrapping="Wrap" />
             </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <ProgressRing
+                    x:Name="WorkspaceProgressRing"
+                    Width="22"
+                    Height="22"
+                    IsActive="False"
+                    Visibility="Collapsed" />
+                <Button
+                    x:Name="RefreshWorkspaceButton"
+                    AccessKey="R"
+                    AutomationProperties.AutomationId="Workspace.RefreshAll"
+                    Click="RefreshWorkspaceButton_Click"
+                    Content="Refresh workspace"
+                    ToolTipService.ToolTip="Reload project details, assets, health, and live summaries" />
+            </StackPanel>
+        </Grid>
 
-            <Grid x:Name="WorkspaceGrid" Grid.Row="3" ColumnSpacing="16" RowSpacing="16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="3*" />
-                    <ColumnDefinition Width="2*" />
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+        <InfoBar
+            x:Name="StatusInfoBar"
+            Grid.Row="1"
+            Margin="0,16,0,0"
+            IsClosable="True"
+            IsOpen="False" />
 
-                <StackPanel x:Name="WorkflowColumn" Spacing="12">
-                    <Expander Header="1. Project" IsExpanded="True">
-                        <StackPanel Padding="0,10,0,8" Spacing="8">
-                            <ComboBox
-                                x:Name="ProjectPicker"
-                                AutomationProperties.AutomationId="ProjectPickerComboBox"
-                                AutomationProperties.Name="Active Studio project"
-                                DisplayMemberPath="Name"
-                                Header="Active project"
-                                ItemsSource="{x:Bind Projects}"
-                                PlaceholderText="Choose a project"
-                                SelectionChanged="ProjectPicker_SelectionChanged" />
-                            <TextBlock
-                                x:Name="NoProjectsText"
-                                Foreground="{ThemeResource StudioMutedTextBrush}"
-                                Text="No projects yet. Create one in Projects."
-                                TextWrapping="Wrap"
-                                Visibility="Collapsed" />
-                            <Button
-                                HorizontalAlignment="Left"
-                                AutomationProperties.AutomationId="ProjectsButton"
-                                Click="OpenProjects_Click"
-                                Content="Open Projects" />
-                        </StackPanel>
-                    </Expander>
+        <SelectorBar
+            x:Name="WorkspaceModeSelector"
+            Grid.Row="2"
+            Margin="0,14,0,14"
+            AutomationProperties.AutomationId="Workspace.ModeSelector"
+            SelectionChanged="WorkspaceMode_SelectionChanged">
+            <SelectorBarItem
+                x:Name="OverviewSelectorItem"
+                AutomationProperties.AutomationId="Workspace.Mode.Overview"
+                Icon="Home"
+                Text="Overview" />
+            <SelectorBarItem
+                x:Name="StoryboardSelectorItem"
+                AutomationProperties.AutomationId="Workspace.Mode.Storyboard"
+                Icon="Video"
+                Text="Storyboard" />
+        </SelectorBar>
 
-                    <Expander Header="2. Audio and analysis" IsExpanded="True">
-                        <StackPanel Padding="0,10,0,8" Spacing="10">
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Button
-                                    x:Name="ChooseAudioButton"
-                                    AutomationProperties.AutomationId="ChooseAudioButton"
-                                    AutomationProperties.HelpText="Choose a WAV, MP3, FLAC, M4A, AAC, OGG, or WMA audio track"
-                                    Click="ChooseAudio_Click"
-                                    Content="Choose audio" />
+        <ScrollViewer
+            Grid.Row="3"
+            HorizontalScrollBarVisibility="Disabled"
+            VerticalScrollBarVisibility="Auto">
+            <Grid x:Name="WorkspaceContentGrid">
+                <Grid x:Name="OverviewPanel" ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition x:Name="OverviewPrimaryColumn" Width="*" />
+                        <ColumnDefinition x:Name="OverviewSecondaryColumn" Width="400" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition x:Name="OverviewNarrowSecondRow" Height="0" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel x:Name="OverviewPrimaryPanel" Grid.Column="0" Spacing="16">
+                        <Border Style="{StaticResource WorkspaceCardStyle}">
+                            <StackPanel Spacing="12">
+                                <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Project session" />
                                 <TextBlock
-                                    x:Name="PendingAudioText"
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center"
-                                    Foreground="{ThemeResource StudioMutedTextBrush}"
-                                    Text="No local file selected"
-                                    TextTrimming="CharacterEllipsis"
-                                    ToolTipService.ToolTip="Selected local audio file" />
-                            </Grid>
-                            <CommandBar Background="Transparent" DefaultLabelPosition="Right">
-                                <AppBarButton
-                                    x:Name="UploadButton"
-                                    AutomationProperties.AutomationId="UploadAudioButton"
-                                    Click="Upload_Click"
-                                    Icon="Upload"
-                                    IsEnabled="False"
-                                    Label="Upload" />
-                                <AppBarButton
-                                    x:Name="AnalyzeButton"
-                                    AutomationProperties.AutomationId="AnalyzeAudioButton"
-                                    Click="Analyze_Click"
-                                    Icon="Play"
-                                    IsEnabled="False"
-                                    Label="Analyze + Transcribe" />
-                            </CommandBar>
-                            <Grid ColumnSpacing="12" RowSpacing="6">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <TextBlock FontWeight="SemiBold" Text="Saved track" />
-                                <TextBlock x:Name="SavedAudioText" Grid.Column="1" Text="None" TextWrapping="Wrap" />
-                                <TextBlock Grid.Row="1" FontWeight="SemiBold" Text="Analysis" />
-                                <TextBlock x:Name="AnalysisStateText" Grid.Row="1" Grid.Column="1" Text="Pending" TextWrapping="Wrap" />
-                                <TextBlock Grid.Row="2" FontWeight="SemiBold" Text="Tempo" />
-                                <TextBlock x:Name="TempoText" Grid.Row="2" Grid.Column="1" Text="—" />
-                                <TextBlock Grid.Row="3" FontWeight="SemiBold" Text="Duration / sections" />
-                                <TextBlock x:Name="DurationSectionsText" Grid.Row="3" Grid.Column="1" Text="—" />
-                            </Grid>
-                        </StackPanel>
-                    </Expander>
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="Select the project whose media and generated plan should drive this session."
+                                    TextWrapping="Wrap" />
+                                <ComboBox
+                                    x:Name="ProjectComboBox"
+                                    AutomationProperties.AutomationId="Workspace.ProjectSelector"
+                                    DisplayMemberPath="Name"
+                                    Header="Active project"
+                                    HorizontalAlignment="Stretch"
+                                    PlaceholderText="Choose a project"
+                                    SelectionChanged="ProjectComboBox_SelectionChanged" />
+                                <TextBlock
+                                    x:Name="ProjectStatusText"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="No project selected."
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
 
-                    <Expander Header="3. Plan variants" IsExpanded="True">
-                        <StackPanel Padding="0,10,0,8" Spacing="10">
-                            <ComboBox x:Name="PlanModePicker"
-                                      AutomationProperties.AutomationId="PlanModeComboBox"
-                                      Header="Planning mode"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="Auto — AI with local fallback" Tag="auto" />
-                                <ComboBoxItem Content="AI-only" Tag="ai" />
-                                <ComboBoxItem Content="Local-only" Tag="local" />
-                            </ComboBox>
-                            <Button
-                                x:Name="GeneratePlanButton"
-                                HorizontalAlignment="Left"
-                                AutomationProperties.AutomationId="GeneratePlanButton"
-                                AutomationProperties.HelpText="Requires current audio analysis"
-                                Click="GeneratePlan_Click"
-                                Content="Generate Plan Variants"
-                                IsEnabled="False"
-                                Style="{StaticResource AccentButtonStyle}" />
+                        <Expander
+                            x:Name="AudioAnalysisExpander"
+                            AutomationProperties.AutomationId="Workspace.AudioAnalysis"
+                            Header="Audio and analysis"
+                            IsExpanded="True">
+                            <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
+                                <StackPanel Spacing="14">
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="Upload a source track, then run analysis to derive rhythm, sections, tags, and transcript context."
+                                        TextWrapping="Wrap" />
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock
+                                            x:Name="PendingAudioText"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="No audio file selected."
+                                            TextTrimming="CharacterEllipsis" />
+                                        <Button
+                                            x:Name="ChooseAudioButton"
+                                            Grid.Column="1"
+                                            AccessKey="A"
+                                            AutomationProperties.AutomationId="Workspace.Audio.Choose"
+                                            Click="ChooseAudioButton_Click"
+                                            Content="Choose audio" />
+                                        <Button
+                                            x:Name="UploadAnalyzeButton"
+                                            Grid.Column="2"
+                                            AccessKey="U"
+                                            AutomationProperties.AutomationId="Workspace.Audio.UploadAnalyze"
+                                            Click="UploadAnalyzeButton_Click"
+                                            Content="Upload and analyze"
+                                            Style="{StaticResource AccentButtonStyle}" />
+                                    </Grid>
+                                    <Grid ColumnSpacing="18" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock FontWeight="SemiBold" Text="Tempo" />
+                                            <TextBlock x:Name="AnalysisBpmText" Text="—" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock FontWeight="SemiBold" Text="Duration" />
+                                            <TextBlock x:Name="AnalysisDurationText" Text="—" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock FontWeight="SemiBold" Text="Sections" />
+                                            <TextBlock x:Name="AnalysisSectionCountText" Text="—" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock FontWeight="SemiBold" Text="Analysis summary" />
+                                    <TextBlock x:Name="AnalysisSummaryText" Text="Analysis has not been run." TextWrapping="Wrap" />
+                                    <TextBlock FontWeight="SemiBold" Text="Transcript status" />
+                                    <TextBlock x:Name="TranscriptStatusText" Text="Waiting for analysis." TextWrapping="Wrap" />
+                                    <TextBlock FontWeight="SemiBold" Text="Tags" />
+                                    <TextBlock x:Name="AnalysisTagsText" Text="No analysis tags." TextWrapping="Wrap" />
+                                    <ListView
+                                        x:Name="AnalysisSectionsList"
+                                        MaxHeight="220"
+                                        AutomationProperties.AutomationId="Workspace.Analysis.Sections"
+                                        SelectionMode="None">
+                                        <ListView.Header>
+                                            <TextBlock Margin="12,8" FontWeight="SemiBold" Text="Detected sections" />
+                                        </ListView.Header>
+                                    </ListView>
+                                </StackPanel>
+                            </Border>
+                        </Expander>
+
+                        <Expander
+                            x:Name="ReferenceAssetsExpander"
+                            AutomationProperties.AutomationId="Workspace.ReferenceAssets"
+                            Header="Reference images and project assets">
+                            <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
+                                <StackPanel Spacing="12">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock
+                                            x:Name="PendingReferenceText"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="No reference image selected."
+                                            TextTrimming="CharacterEllipsis" />
+                                        <Button
+                                            x:Name="ChooseReferenceButton"
+                                            Grid.Column="1"
+                                            AccessKey="I"
+                                            AutomationProperties.AutomationId="Workspace.Reference.Choose"
+                                            Click="ChooseReferenceButton_Click"
+                                            Content="Choose image" />
+                                        <Button
+                                            x:Name="UploadReferenceButton"
+                                            Grid.Column="2"
+                                            AutomationProperties.AutomationId="Workspace.Reference.Upload"
+                                            Click="UploadReferenceButton_Click"
+                                            Content="Upload reference"
+                                            Style="{StaticResource AccentButtonStyle}" />
+                                    </Grid>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Margin="12,6" FontWeight="SemiBold" Text="Asset" />
+                                        <TextBlock Grid.Column="1" Margin="12,6" FontWeight="SemiBold" Text="Role" />
+                                        <TextBlock Grid.Column="2" Margin="12,6" FontWeight="SemiBold" Text="Availability" />
+                                    </Grid>
+                                    <Button
+                                       x:Name="RefreshAssetsButton"
+                                       AutomationProperties.AutomationId="Workspace.Assets.Refresh"
+                                       Click="RefreshAssetsButton_Click"
+                                       Content="Refresh assets"
+                                       HorizontalAlignment="Left" />
+                                    <ListView
+                                        x:Name="AssetsListView"
+                                        MaxHeight="280"
+                                        AutomationProperties.AutomationId="Workspace.Assets.List"
+                                        ItemsSource="{x:Bind AssetItems, Mode=OneWay}"
+                                        SelectionMode="None">
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="local:WorkspaceAssetItem">
+                                                <Grid ColumnSpacing="8" Padding="12,8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="2*" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{x:Bind DisplayName}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Path}" />
+                                                    <TextBlock Grid.Column="1" Text="{x:Bind Role}" />
+                                                    <TextBlock Grid.Column="2" Text="{x:Bind Availability}" />
+                                                    <Button
+                                                       Grid.Column="3"
+                                                       AutomationProperties.AutomationId="{x:Bind OpenAutomationId}"
+                                                       Click="OpenAssetButton_Click"
+                                                       Content="Open"
+                                                       IsEnabled="{x:Bind CanOpen}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                    <TextBlock
+                                        x:Name="AssetEmptyText"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="No project assets were returned."
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </Expander>
+
+                        <Expander
+                            x:Name="PlanExpander"
+                            AutomationProperties.AutomationId="Workspace.Plan"
+                            Header="Plan variants"
+                            IsExpanded="True">
+                            <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
+                                <StackPanel Spacing="12">
+                                    <ComboBox
+                                        x:Name="PlanModeComboBox"
+                                        AutomationProperties.AutomationId="Workspace.Plan.Mode"
+                                        Header="Planning mode"
+                                        SelectedIndex="0">
+                                        <ComboBoxItem Content="Auto" Tag="auto" />
+                                        <ComboBoxItem Content="AI" Tag="ai" />
+                                        <ComboBoxItem Content="Local" Tag="local" />
+                                    </ComboBox>
+                                    <TextBox
+                                        x:Name="PlanTitleTextBox"
+                                        AutomationProperties.AutomationId="Workspace.Plan.Title"
+                                        Header="Direction title"
+                                        PlaceholderText="Optional title" />
+                                    <TextBox
+                                        x:Name="PlanNotesTextBox"
+                                        AutomationProperties.AutomationId="Workspace.Plan.Notes"
+                                        Header="Creative notes"
+                                        MinHeight="86"
+                                        AcceptsReturn="True"
+                                        PlaceholderText="Describe pacing, visuals, motifs, or story intent"
+                                        TextWrapping="Wrap" />
+                                    <Button
+                                        x:Name="GeneratePlanButton"
+                                        AccessKey="G"
+                                        AutomationProperties.AutomationId="Workspace.Plan.Generate"
+                                        Click="GeneratePlanButton_Click"
+                                        Content="Generate plan variants"
+                                        HorizontalAlignment="Left"
+                                        Style="{StaticResource AccentButtonStyle}" />
+                                    <RadioButtons
+                                        x:Name="VariantRadioButtons"
+                                        AutomationProperties.AutomationId="Workspace.Plan.Variants"
+                                        Header="Selected variant"
+                                        ItemsSource="{x:Bind VariantItems, Mode=OneWay}"
+                                        SelectionChanged="VariantRadioButtons_SelectionChanged">
+                                        <RadioButtons.ItemTemplate>
+                                            <DataTemplate x:DataType="local:WorkspaceVariantItem">
+                                                <StackPanel Margin="0,4" Spacing="2">
+                                                    <TextBlock FontWeight="SemiBold" Text="{x:Bind DisplayName}" />
+                                                    <TextBlock
+                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                        Text="{x:Bind Summary}"
+                                                        TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </RadioButtons.ItemTemplate>
+                                    </RadioButtons>
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <Button
+                                            x:Name="ApplyPlanButton"
+                                            AccessKey="P"
+                                            AutomationProperties.AutomationId="Workspace.Plan.ApplyAppend"
+                                            Click="AppendTimelineButton_Click"
+                                            Content="Append to timeline"
+                                            Style="{StaticResource AccentButtonStyle}" />
+                                        <Button
+                                            x:Name="OverwritePlanButton"
+                                            AutomationProperties.AutomationId="Workspace.Plan.ApplyOverwrite"
+                                            Click="OverwriteTimelineButton_Click"
+                                            Content="Overwrite timeline" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </Expander>
+                    </StackPanel>
+
+                    <StackPanel
+                        x:Name="OverviewSecondaryPanel"
+                        Grid.Column="1"
+                        Spacing="16">
+                        <Border Style="{StaticResource WorkspaceCardStyle}">
+                            <StackPanel Spacing="12">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Project readiness" />
+                                    <Button
+                                       x:Name="RefreshHealthButton"
+                                        Grid.Column="1"
+                                       AutomationProperties.AutomationId="Workspace.Health.Refresh"
+                                       Click="RefreshHealthButton_Click"
+                                       Content="Refresh" />
+                                    <Button
+                                        x:Name="CollectProjectButton"
+                                       Grid.Column="2"
+                                        AutomationProperties.AutomationId="Workspace.Health.Collect"
+                                        Click="CollectProjectButton_Click"
+                                        Content="Collect project" />
+                                </Grid>
+                                <TextBlock x:Name="HealthStatusText" FontWeight="SemiBold" Text="Health not loaded." TextWrapping="Wrap" />
+                                <TextBlock
+                                    x:Name="HealthSummaryText"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="Select a project to inspect portable asset readiness."
+                                    TextWrapping="Wrap" />
+                                <TextBlock FontWeight="SemiBold" Text="Missing assets" />
+                                <ListView
+                                    x:Name="MissingAssetsList"
+                                    MaxHeight="160"
+                                    AutomationProperties.AutomationId="Workspace.Health.MissingAssets"
+                                    SelectionMode="None" />
+                                <TextBlock FontWeight="SemiBold" Text="Relink suggestions" />
+                                <ListView
+                                    x:Name="RelinkSuggestionsList"
+                                    MaxHeight="160"
+                                    AutomationProperties.AutomationId="Workspace.Health.RelinkSuggestions"
+                                    SelectionMode="None" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource WorkspaceCardStyle}">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Music and live readiness" />
+                                    <Button
+                                        x:Name="RefreshLiveDataButton"
+                                        Grid.Column="1"
+                                        AutomationProperties.AutomationId="Workspace.Live.Refresh"
+                                        Click="RefreshLiveDataButton_Click"
+                                        Content="Refresh" />
+                                </Grid>
+                                <TextBlock FontWeight="SemiBold" Text="Music Graph" />
+                                <TextBlock x:Name="MusicGraphSummaryText" Text="Music Graph is not available." TextWrapping="Wrap" />
+                                <ListView
+                                    x:Name="MusicGraphSectionsList"
+                                    MaxHeight="180"
+                                    AutomationProperties.AutomationId="Workspace.MusicGraph.Sections"
+                                    SelectionMode="None" />
+                                <TextBlock FontWeight="SemiBold" Text="Live cues" />
+                                <TextBlock x:Name="LiveCueSummaryText" Text="Live cue summary is not available." TextWrapping="Wrap" />
+                                <TextBlock FontWeight="SemiBold" Text="Live assets" />
+                                <TextBlock x:Name="LiveAssetSummaryText" Text="Live asset summary is not available." TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
+                        <Expander
+                            AutomationProperties.AutomationId="Workspace.DirectionSummary"
+                            Header="Creative direction and Visual DNA">
+                            <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock FontWeight="SemiBold" Text="Creative direction" />
+                                    <TextBlock x:Name="CreativeDirectionText" Text="No creative direction metadata." TextWrapping="Wrap" />
+                                    <TextBlock FontWeight="SemiBold" Text="Visual DNA" />
+                                    <TextBlock x:Name="VisualDnaText" Text="No Visual DNA metadata." TextWrapping="Wrap" />
+                                    <TextBlock FontWeight="SemiBold" Text="Timeline preview" />
+                                    <TextBlock x:Name="TimelinePreviewText" Text="No timeline has been applied." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </Expander>
+
+                        <Border Style="{StaticResource WorkspaceCardStyle}">
+                            <StackPanel Spacing="12">
+                                <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Specialist handoffs" />
+                                <TextBlock
+                                    x:Name="HandoffStatusText"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="Choose a project to enable workflow handoffs."
+                                    TextWrapping="Wrap" />
+                                <Grid ColumnSpacing="8" RowSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Button x:Name="OpenPlannerButton" AutomationProperties.AutomationId="Workspace.Handoff.Planner" Click="NavigatePlannerButton_Click" Content="Planner Lab" HorizontalAlignment="Stretch" />
+                                    <Button x:Name="OpenReactiveButton" Grid.Column="1" AutomationProperties.AutomationId="Workspace.Handoff.Reactive" Click="NavigateReactiveButton_Click" Content="Reactive Lab" HorizontalAlignment="Stretch" />
+                                    <Button x:Name="OpenTimelineButton" Grid.Row="1" AutomationProperties.AutomationId="Workspace.Handoff.Timeline" Click="NavigateTimelineButton_Click" Content="Timeline" HorizontalAlignment="Stretch" />
+                                    <Button x:Name="OpenRenderButton" Grid.Row="1" Grid.Column="1" AutomationProperties.AutomationId="Workspace.Handoff.Render" Click="NavigateRenderButton_Click" Content="Render" HorizontalAlignment="Stretch" />
+                                    <Button x:Name="OpenOutputsButton" Grid.Row="2" AutomationProperties.AutomationId="Workspace.Handoff.Outputs" Click="NavigateOutputsButton_Click" Content="Outputs" HorizontalAlignment="Stretch" />
+                                    <Button x:Name="OpenQueueButton" Grid.Row="2" Grid.Column="1" AutomationProperties.AutomationId="Workspace.Handoff.Queue" Click="NavigateQueueButton_Click" Content="Queue" HorizontalAlignment="Stretch" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Expander AutomationProperties.AutomationId="Workspace.TemplatePackage" Header="Template package">
+                            <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <Button
+                                        x:Name="ExportTemplateButton"
+                                        AutomationProperties.AutomationId="Workspace.Template.Export"
+                                        Click="ExportTemplateButton_Click"
+                                        Content="Preview export package"
+                                        HorizontalAlignment="Left" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock
+                                            x:Name="TemplateFileStatusText"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="Paste JSON or choose a package file."
+                                            TextTrimming="CharacterEllipsis" />
+                                        <Button
+                                            Grid.Column="1"
+                                            AutomationProperties.AutomationId="Workspace.Template.Choose"
+                                            Click="ChooseTemplateButton_Click"
+                                            Content="Choose JSON" />
+                                    </Grid>
+                                    <TextBox
+                                        x:Name="TemplateJsonTextBox"
+                                        AutomationProperties.AutomationId="Workspace.Template.Json"
+                                        Header="Template JSON"
+                                        MinHeight="150"
+                                        AcceptsReturn="True"
+                                        FontFamily="Consolas"
+                                        PlaceholderText="{}{ &quot;schema_version&quot;: 1, &quot;payload&quot;: { ... } }"
+                                        TextWrapping="NoWrap" />
+                                    <CheckBox
+                                        x:Name="TemplateMergeCheckBox"
+                                        AutomationProperties.AutomationId="Workspace.Template.Merge"
+                                        Content="Merge with existing metadata"
+                                        IsChecked="True" />
+                                    <Button
+                                        x:Name="ImportTemplateButton"
+                                        AutomationProperties.AutomationId="Workspace.Template.Import"
+                                        Click="ImportTemplateButton_Click"
+                                        Content="Validate and import"
+                                        HorizontalAlignment="Left"
+                                        Style="{StaticResource AccentButtonStyle}" />
+                                </StackPanel>
+                            </Border>
+                        </Expander>
+
+                        <Expander AutomationProperties.AutomationId="Workspace.Inspect" Header="Inspect JSON">
+                            <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBox
+                                        x:Name="AnalysisJsonTextBox"
+                                        AutomationProperties.AutomationId="Workspace.Inspect.Analysis"
+                                        Header="Analysis"
+                                        MinHeight="120"
+                                        AcceptsReturn="True"
+                                        FontFamily="Consolas"
+                                        IsReadOnly="True"
+                                        TextWrapping="NoWrap" />
+                                    <TextBox
+                                        x:Name="VariantJsonTextBox"
+                                        AutomationProperties.AutomationId="Workspace.Inspect.Variant"
+                                        Header="Selected variant"
+                                        MinHeight="120"
+                                        AcceptsReturn="True"
+                                        FontFamily="Consolas"
+                                        IsReadOnly="True"
+                                        TextWrapping="NoWrap" />
+                                    <TextBox
+                                        x:Name="LastOperationJsonTextBox"
+                                        AutomationProperties.AutomationId="Workspace.Inspect.LastOperation"
+                                        Header="Last operation"
+                                        MinHeight="100"
+                                        AcceptsReturn="True"
+                                        FontFamily="Consolas"
+                                        IsReadOnly="True"
+                                        TextWrapping="NoWrap" />
+                                </StackPanel>
+                            </Border>
+                        </Expander>
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel x:Name="StoryboardPanel" Visibility="Collapsed" Spacing="16">
+                    <Border Style="{StaticResource WorkspaceCardStyle}">
+                        <StackPanel Spacing="12">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Storyboard review" />
+                                    <TextBlock
+                                        x:Name="StoryboardSummaryText"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="Generate and select a plan variant to review its scenes."
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button
+                                    x:Name="StoryboardAppendButton"
+                                    Grid.Column="1"
+                                    AutomationProperties.AutomationId="Workspace.Storyboard.ApplyAppend"
+                                    Click="AppendTimelineButton_Click"
+                                    Content="Append to timeline"
+                                    Style="{StaticResource AccentButtonStyle}" />
+                                <Button
+                                    x:Name="StoryboardOverwriteButton"
+                                    Grid.Column="2"
+                                    AutomationProperties.AutomationId="Workspace.Storyboard.ApplyOverwrite"
+                                    Click="OverwriteTimelineButton_Click"
+                                    Content="Overwrite timeline" />
+                            </Grid>
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="60" />
+                                    <ColumnDefinition Width="110" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="190" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Margin="12,6" FontWeight="SemiBold" Text="#" />
+                                <TextBlock Grid.Column="1" Margin="12,6" FontWeight="SemiBold" Text="Timing" />
+                                <TextBlock Grid.Column="2" Margin="12,6" FontWeight="SemiBold" Text="Prompt" />
+                                <TextBlock Grid.Column="3" Margin="12,6" FontWeight="SemiBold" Text="Order" />
+                            </Grid>
                             <TextBlock
-                                x:Name="PlanEmptyText"
-                                Foreground="{ThemeResource StudioMutedTextBrush}"
-                                Text="Analyze the current track before generating a plan."
+                                x:Name="StoryboardEmptyText"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="The selected variant does not contain storyboard scenes."
                                 TextWrapping="Wrap" />
-                            <ItemsControl ItemsSource="{x:Bind Variants}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="local:VariantListItem">
-                                        <Grid Padding="8" ColumnSpacing="12">
+                            <ListView
+                                x:Name="StoryboardListView"
+                                MinHeight="300"
+                                MaxHeight="720"
+                                AutomationProperties.AutomationId="Workspace.Storyboard.List"
+                                ItemsSource="{x:Bind StoryboardItems, Mode=OneWay}"
+                                SelectionMode="None">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="local:WorkspaceStoryboardItem">
+                                        <Grid ColumnSpacing="10" Padding="12,10">
                                             <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="60" />
+                                                <ColumnDefinition Width="110" />
                                                 <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="190" />
                                             </Grid.ColumnDefinitions>
-                                            <StackPanel>
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind DisplayName}" TextWrapping="Wrap" />
+                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind PositionText}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind TimingText}" />
+                                            <StackPanel Grid.Column="2" Spacing="3">
+                                                <TextBlock Text="{x:Bind Prompt}" TextWrapping="Wrap" />
                                                 <TextBlock
-                                                    Foreground="{ThemeResource StudioMutedTextBrush}"
-                                                    Text="{x:Bind Description}"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Text="{x:Bind NegativePrompt}"
                                                     TextWrapping="Wrap" />
                                             </StackPanel>
-                                            <RadioButton
-                                                Grid.Column="1"
-                                                AutomationProperties.AutomationId="{x:Bind SelectLabel}"
-                                                AutomationProperties.Name="{x:Bind SelectLabel}"
-                                                Checked="Variant_Checked"
-                                                GroupName="PlanVariants"
-                                                IsChecked="{x:Bind IsSelected, Mode=OneTime}"
-                                                Tag="{x:Bind Index}" />
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8">
+                                                <Button
+                                                    AutomationProperties.AutomationId="{x:Bind MoveEarlierAutomationId}"
+                                                    Click="MoveSceneEarlierButton_Click"
+                                                    Content="Earlier"
+                                                    IsEnabled="{x:Bind CanMoveEarlier}"
+                                                    Tag="{x:Bind Index}" />
+                                                <Button
+                                                    AutomationProperties.AutomationId="{x:Bind MoveLaterAutomationId}"
+                                                    Click="MoveSceneLaterButton_Click"
+                                                    Content="Later"
+                                                    IsEnabled="{x:Bind CanMoveLater}"
+                                                    Tag="{x:Bind Index}" />
+                                            </StackPanel>
                                         </Grid>
                                     </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                </ListView.ItemTemplate>
+                            </ListView>
                         </StackPanel>
-                    </Expander>
-
-                    <Expander Header="4. Handoff" IsExpanded="True">
-                        <StackPanel Padding="0,10,0,8" Spacing="8">
-                            <TextBlock
-                                x:Name="HandoffText"
-                                Text="Generate a plan to unlock Timeline and Render handoff."
-                                TextWrapping="Wrap" />
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Button x:Name="TimelineButton"
-                                        AutomationProperties.AutomationId="OpenTimelineButton"
-                                        Click="Timeline_Click"
-                                        Content="Open Timeline"
-                                        IsEnabled="False" />
-                                <Button x:Name="RenderButton"
-                                        AutomationProperties.AutomationId="OpenRenderButton"
-                                        Click="Render_Click"
-                                        Content="Go to Render"
-                                        IsEnabled="False" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Expander>
+                    </Border>
                 </StackPanel>
 
-                <Border
-                    x:Name="SessionStatusCard"
-                    Grid.Column="1"
-                    Padding="20"
-                    VerticalAlignment="Top"
-                    Style="{StaticResource StudioCardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Studio session" />
-                        <TextBlock x:Name="SessionProjectText" FontWeight="SemiBold" Text="Project: none" TextWrapping="Wrap" />
-                        <TextBlock x:Name="SessionAudioText" Text="Audio: missing" />
-                        <TextBlock x:Name="SessionAnalysisText" Text="Analysis: pending" />
-                        <TextBlock x:Name="SessionPlanText" Text="Plan: pending" />
-                        <TextBlock x:Name="SessionVariantText" Text="Variant: none" TextWrapping="Wrap" />
-                        <Rectangle Height="1" Fill="{ThemeResource StudioBorderBrush}" />
-                        <TextBlock FontWeight="SemiBold" Text="Backend" />
-                        <TextBlock x:Name="SessionBackendText" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-
                 <VisualStateManager.VisualStateGroups>
-                    <VisualStateGroup>
-                        <VisualState x:Name="Narrow">
+                    <VisualStateGroup x:Name="WorkspaceWidthStates">
+                        <VisualState x:Name="WideWorkspace">
+                            <VisualState.StateTriggers>
+                                <AdaptiveTrigger MinWindowWidth="980" />
+                            </VisualState.StateTriggers>
+                            <VisualState.Setters>
+                                <Setter Target="OverviewPrimaryColumn.Width" Value="*" />
+                                <Setter Target="OverviewSecondaryColumn.Width" Value="400" />
+                                <Setter Target="OverviewNarrowSecondRow.Height" Value="0" />
+                                <Setter Target="OverviewSecondaryPanel.(Grid.Row)" Value="0" />
+                                <Setter Target="OverviewSecondaryPanel.(Grid.Column)" Value="1" />
+                            </VisualState.Setters>
+                        </VisualState>
+                        <VisualState x:Name="NarrowWorkspace">
                             <VisualState.StateTriggers>
                                 <AdaptiveTrigger MinWindowWidth="0" />
                             </VisualState.StateTriggers>
                             <VisualState.Setters>
-                                <Setter Target="SessionStatusCard.(Grid.Column)" Value="0" />
-                                <Setter Target="SessionStatusCard.(Grid.Row)" Value="1" />
-                            </VisualState.Setters>
-                        </VisualState>
-                        <VisualState x:Name="Wide">
-                            <VisualState.StateTriggers>
-                                <AdaptiveTrigger MinWindowWidth="960" />
-                            </VisualState.StateTriggers>
-                            <VisualState.Setters>
-                                <Setter Target="SessionStatusCard.(Grid.Column)" Value="1" />
-                                <Setter Target="SessionStatusCard.(Grid.Row)" Value="0" />
+                                <Setter Target="OverviewPrimaryColumn.Width" Value="*" />
+                                <Setter Target="OverviewSecondaryColumn.Width" Value="0" />
+                                <Setter Target="OverviewNarrowSecondRow.Height" Value="Auto" />
+                                <Setter Target="OverviewSecondaryPanel.(Grid.Row)" Value="1" />
+                                <Setter Target="OverviewSecondaryPanel.(Grid.Column)" Value="0" />
                             </VisualState.Setters>
                         </VisualState>
                     </VisualStateGroup>
                 </VisualStateManager.VisualStateGroups>
             </Grid>
-        </Grid>
         </ScrollViewer>
     </Grid>
 </Page>

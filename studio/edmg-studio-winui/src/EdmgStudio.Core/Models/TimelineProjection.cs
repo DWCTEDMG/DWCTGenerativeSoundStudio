@@ -67,6 +67,7 @@ public sealed class TimelineLaneDocument
     public double StartSeconds { get; set; }
     public double EndSeconds { get; set; }
     public int TrackIndex { get; internal set; }
+    public bool IsLayer => Origin == TimelineLaneOrigin.Layer;
 
     public string SourcePath
     {
@@ -172,12 +173,18 @@ public static class TimelineProjection
     public static IReadOnlyList<TimelineLaneDocument> Project(JsonObject timeline)
     {
         ArgumentNullException.ThrowIfNull(timeline);
+        var lanes = new List<TimelineLaneDocument>();
         if (timeline["tracks"] is JsonArray tracks)
         {
-            return ProjectTracks(tracks);
+            lanes.AddRange(ProjectTracks(tracks));
         }
 
-        return timeline["layers"] is JsonArray layers ? ProjectLayers(layers) : [];
+        if (timeline["layers"] is JsonArray layers)
+        {
+            lanes.AddRange(ProjectLayers(layers));
+        }
+
+        return OrderLanes(lanes);
     }
 
     public static TimelineLaneDocument CreateLane(
@@ -208,6 +215,34 @@ public static class TimelineProjection
             });
     }
 
+    public static TimelineLaneDocument CreateLayer(
+        string name,
+        string type,
+        double startSeconds,
+        double endSeconds)
+    {
+        ValidateTimes(startSeconds, endSeconds);
+        var stableId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        var normalizedName = NormalizeName(name, stableId);
+        var normalizedType = NormalizeType(type);
+        return new TimelineLaneDocument(
+            stableId,
+            normalizedName,
+            normalizedType,
+            startSeconds,
+            endSeconds,
+            TimelineLaneOrigin.Layer,
+            -1,
+            new JsonObject
+            {
+                ["id"] = stableId,
+                ["name"] = normalizedName,
+                ["type"] = normalizedType,
+                ["start_s"] = startSeconds,
+                ["end_s"] = endSeconds
+            });
+    }
+
     public static JsonObject Rebuild(JsonObject timeline, IEnumerable<TimelineLaneDocument> lanes)
     {
         ArgumentNullException.ThrowIfNull(timeline);
@@ -220,21 +255,35 @@ public static class TimelineProjection
         }
 
         var rebuilt = timeline.DeepClone().AsObject();
-        if (rebuilt["tracks"] is JsonArray tracks)
+        var trackLanes = materializedLanes.Where(lane => !lane.IsLayer).ToList();
+        var layerLanes = materializedLanes.Where(lane => lane.IsLayer).ToList();
+        bool hadTracks = rebuilt["tracks"] is JsonArray;
+        bool hadLayers = rebuilt["layers"] is JsonArray;
+
+        if (hadTracks || trackLanes.Count > 0)
         {
-            RebuildTracks(tracks, materializedLanes);
-            return rebuilt;
+            var tracks = rebuilt["tracks"] as JsonArray;
+            if (tracks is null)
+            {
+                tracks = [];
+                rebuilt["tracks"] = tracks;
+            }
+
+            RebuildTracks(tracks, trackLanes);
         }
 
-        if (rebuilt["layers"] is JsonArray layers)
+        if (hadLayers || layerLanes.Count > 0)
         {
-            RebuildLayers(layers, materializedLanes);
-            return rebuilt;
+            var layers = rebuilt["layers"] as JsonArray;
+            if (layers is null)
+            {
+                layers = [];
+                rebuilt["layers"] = layers;
+            }
+
+            RebuildLayers(layers, layerLanes);
         }
 
-        tracks = [];
-        rebuilt["tracks"] = tracks;
-        RebuildTracks(tracks, materializedLanes);
         return rebuilt;
     }
 
@@ -338,8 +387,14 @@ public static class TimelineProjection
 
     public static TimelineLaneDocument ReassignTrack(TimelineLaneDocument lane, int trackIndex)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
         var result = CloneLane(lane);
+        if (lane.IsLayer)
+        {
+            result.TrackIndex = -1;
+            return result;
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
         result.TrackIndex = trackIndex;
         return result;
     }
@@ -347,7 +402,8 @@ public static class TimelineProjection
     public static IReadOnlyList<TimelineLaneDocument> OrderLanes(
         IEnumerable<TimelineLaneDocument> lanes) =>
         lanes
-            .OrderBy(lane => lane.TrackIndex)
+            .OrderBy(lane => lane.IsLayer ? 1 : 0)
+            .ThenBy(lane => lane.TrackIndex)
             .ThenBy(lane => lane.StartSeconds)
             .ThenBy(lane => lane.EndSeconds)
             .ThenBy(lane => lane.StableId, StringComparer.Ordinal)
@@ -446,17 +502,63 @@ public static class TimelineProjection
             }
         }
 
-        foreach (var lane in lanes)
+        var orderedLanes = OrderLanes(lanes);
+        var assignments = new Dictionary<TimelineLaneDocument, int>();
+        var claimedTrackTypes = new Dictionary<int, string>();
+
+        foreach (var requestedTrack in orderedLanes
+                     .Where(lane => lane.TrackIndex >= 0)
+                     .GroupBy(lane => lane.TrackIndex)
+                     .OrderBy(group => group.Key))
         {
-            var trackIndex = lane.TrackIndex >= 0 ? lane.TrackIndex : FindOrCreateTrack(tracks, lane.Type);
-            EnsureTrackIndex(tracks, trackIndex, lane.Type);
-            var track = tracks[trackIndex]!.AsObject();
+            var requestedTrackIndex = requestedTrack.Key;
+            var firstLane = requestedTrack.First();
+            EnsureTrackIndex(tracks, requestedTrackIndex, firstLane.Type);
+            var track = tracks[requestedTrackIndex]!.AsObject();
+            var existingType = NormalizeType(GetString(track["type"]));
+            var desiredType = requestedTrack
+                .Select(lane => NormalizeType(lane.Type))
+                .FirstOrDefault(type => string.Equals(type, existingType, StringComparison.OrdinalIgnoreCase))
+                ?? NormalizeType(firstLane.Type);
+
+            claimedTrackTypes[requestedTrackIndex] = desiredType;
+            track["type"] = desiredType;
+            foreach (var lane in requestedTrack.Where(
+                         lane => string.Equals(
+                             NormalizeType(lane.Type),
+                             desiredType,
+                             StringComparison.OrdinalIgnoreCase)))
+            {
+                assignments[lane] = requestedTrackIndex;
+            }
+        }
+
+        foreach (var lane in orderedLanes.Where(lane => !assignments.ContainsKey(lane)))
+        {
+            var normalizedType = NormalizeType(lane.Type);
+            var trackIndex = FindOrCreateCompatibleTrack(tracks, claimedTrackTypes, normalizedType);
+            assignments[lane] = trackIndex;
+            claimedTrackTypes[trackIndex] = normalizedType;
+            tracks[trackIndex]!.AsObject()["type"] = normalizedType;
+        }
+
+        foreach (var group in orderedLanes
+                     .GroupBy(lane => assignments[lane])
+                     .OrderBy(group => group.Key))
+        {
+            var track = tracks[group.Key]!.AsObject();
             var clips = track["clips"]!.AsArray();
-            var clip = BuildLaneNode(lane);
-            var data = clip["data"] as JsonObject ?? [];
-            data["name"] = NormalizeName(lane.Name, lane.StableId);
-            clip["data"] = data;
-            clips.Add(clip);
+            foreach (var lane in group
+                         .OrderBy(lane => lane.StartSeconds)
+                         .ThenBy(lane => lane.EndSeconds)
+                         .ThenBy(lane => lane.StableId, StringComparer.Ordinal))
+            {
+                var clip = BuildLaneNode(lane);
+                var data = clip["data"] as JsonObject ?? [];
+                data["name"] = NormalizeName(lane.Name, lane.StableId);
+                clip["data"] = data;
+                clips.Add((JsonNode)clip);
+            }
         }
     }
 
@@ -468,7 +570,7 @@ public static class TimelineProjection
             var layer = BuildLaneNode(lane);
             layer["name"] = NormalizeName(lane.Name, lane.StableId);
             layer["type"] = NormalizeType(lane.Type);
-            layers.Add(layer);
+            layers.Add((JsonNode)layer);
         }
     }
 
@@ -512,7 +614,7 @@ public static class TimelineProjection
         while (tracks.Count <= trackIndex)
         {
             var normalizedType = NormalizeType(type);
-            tracks.Add(new JsonObject
+            tracks.Add((JsonNode)new JsonObject
             {
                 ["id"] = $"track-{Guid.NewGuid():N}",
                 ["name"] = normalizedType.Equals("audio", StringComparison.OrdinalIgnoreCase) ? "Audio" : "Video",
@@ -522,13 +624,29 @@ public static class TimelineProjection
         }
     }
 
-    private static int FindOrCreateTrack(JsonArray tracks, string type)
+    private static int FindOrCreateCompatibleTrack(
+        JsonArray tracks,
+        IReadOnlyDictionary<int, string> claimedTrackTypes,
+        string type)
     {
         var normalizedType = NormalizeType(type);
         for (var index = 0; index < tracks.Count; index++)
         {
+            if (claimedTrackTypes.TryGetValue(index, out var claimedType))
+            {
+                if (string.Equals(claimedType, normalizedType, StringComparison.OrdinalIgnoreCase))
+                {
+                    return index;
+                }
+
+                continue;
+            }
+
             if (tracks[index] is JsonObject track &&
-                string.Equals(GetString(track["type"]), normalizedType, StringComparison.OrdinalIgnoreCase))
+                string.Equals(
+                    NormalizeType(GetString(track["type"])),
+                    normalizedType,
+                    StringComparison.OrdinalIgnoreCase))
             {
                 return index;
             }

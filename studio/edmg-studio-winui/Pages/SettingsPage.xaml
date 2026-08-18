@@ -20,6 +20,27 @@
             <StackPanel Spacing="16">
                 <Border Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Appearance" />
+                        <TextBlock
+                            Opacity="0.72"
+                            Text="Choose the native palette used throughout Studio. Windows High Contrast always takes precedence."
+                            TextWrapping="Wrap" />
+                        <ComboBox
+                            x:Name="AppearanceThemeComboBox"
+                            AutomationProperties.AutomationId="SettingsAppearanceThemeComboBox"
+                            AutomationProperties.Name="Studio appearance"
+                            Header="Studio appearance"
+                            SelectionChanged="AppearanceThemeComboBox_SelectionChanged">
+                            <ComboBoxItem Content="Studio — teal production" Tag="studio" />
+                            <ComboBoxItem Content="Ember — warm editorial" Tag="ember" />
+                            <ComboBoxItem Content="Aurora — cool cinematic" Tag="aurora" />
+                            <ComboBoxItem Content="Atlas — natural reference" Tag="atlas" />
+                        </ComboBox>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Video generation route" />
                         <ComboBox
                             x:Name="VideoRouteComboBox"
@@ -71,12 +92,16 @@
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Secure provider secret" />
                         <Grid ColumnDefinitions="220,*,Auto,Auto" ColumnSpacing="8">
                             <ComboBox x:Name="SecretNameComboBox" AutomationProperties.AutomationId="SettingsSecretNameComboBox" SelectedIndex="0">
-                                <x:String>NVIDIA_API_KEY</x:String>
-                                <x:String>OPENAI_API_KEY</x:String>
-                                <x:String>AZURE_OPENAI_API_KEY</x:String>
-                                <x:String>ADOBE_CLIENT_ID</x:String>
-                                <x:String>ADOBE_CLIENT_SECRET</x:String>
-                                <x:String>IMAGINEART_API_KEY</x:String>
+                                <x:String>hf_token</x:String>
+                                <x:String>civitai_api_key</x:String>
+                                <x:String>openai_compat_api_key</x:String>
+                                <x:String>stability_api_key</x:String>
+                                <x:String>nvidia_api_key</x:String>
+                                <x:String>nvidia_service_key</x:String>
+                                <x:String>lightning_api_key</x:String>
+                                <x:String>adobe_client_id</x:String>
+                                <x:String>adobe_client_secret</x:String>
+                                <x:String>imagineart_api_key</x:String>
                             </ComboBox>
                             <PasswordBox x:Name="SecretValueBox" Grid.Column="1" AutomationProperties.AutomationId="SettingsSecretValueBox" PlaceholderText="New value (never displayed after saving)" />
                             <Button Grid.Column="2" AutomationProperties.AutomationId="SettingsSaveSecretButton" Click="SaveSecretButton_Click" Content="Save" />
@@ -87,11 +112,31 @@
                 </Border>
 
                 <Border Style="{StaticResource StudioCardStyle}">
-                    <StackPanel Spacing="8">
+                    <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Microsoft Foundry project" />
-                        <TextBlock Text="Project: jonlong-1185" />
-                        <TextBlock Text="Subscription: Azuredwct" />
-                        <TextBlock Text="Endpoint: https://jonlong-1185-resource.services.ai.azure.com/api/projects/jonlong-1185" TextWrapping="Wrap" />
+                        <TextBox
+                            x:Name="FoundryProjectTextBox"
+                            AutomationProperties.AutomationId="SettingsFoundryProjectTextBox"
+                            AutomationProperties.Name="Foundry project name"
+                            Header="Project name"
+                            MaxLength="200" />
+                        <TextBox
+                            x:Name="FoundrySubscriptionTextBox"
+                            AutomationProperties.AutomationId="SettingsFoundrySubscriptionTextBox"
+                            AutomationProperties.Name="Azure subscription"
+                            Header="Subscription"
+                            MaxLength="200" />
+                        <TextBox
+                            x:Name="FoundryEndpointTextBox"
+                            AutomationProperties.AutomationId="SettingsFoundryEndpointTextBox"
+                            AutomationProperties.Name="Foundry project endpoint"
+                            Header="Project endpoint"
+                            PlaceholderText="https://resource.services.ai.azure.com/api/projects/project-name" />
+                        <Button
+                            AutomationProperties.AutomationId="SettingsSaveFoundryButton"
+                            Click="SaveFoundryButton_Click"
+                            Content="Save Foundry metadata"
+                            HorizontalAlignment="Left" />
                         <TextBlock Opacity="0.68" Text="Authentication remains backend-managed; no credentials are stored in the WinUI source tree." TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>

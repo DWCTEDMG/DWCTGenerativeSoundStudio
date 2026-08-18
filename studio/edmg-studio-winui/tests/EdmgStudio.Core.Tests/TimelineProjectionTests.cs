@@ -157,6 +157,119 @@ public sealed class TimelineProjectionTests
     }
 
     [TestMethod]
+    public void TracksAndLayers_ProjectAndRebuildTogether()
+    {
+        var timeline = JsonNode.Parse(
+            """
+            {
+              "tracks": [{
+                "id": "track",
+                "type": "video",
+                "clips": [{"id":"clip","name":"Clip","start_s":0,"end_s":4,"custom":"clip"}]
+              }],
+              "layers": [
+                {"id":"overlay","name":"Overlay","type":"text","start_s":1,"end_s":3,"custom":"layer"}
+              ],
+              "unrelated": {"keep": true}
+            }
+            """)!.AsObject();
+
+        var lanes = TimelineProjection.Project(timeline);
+
+        Assert.HasCount(2, lanes);
+        Assert.IsFalse(lanes[0].IsLayer);
+        Assert.IsTrue(lanes[1].IsLayer);
+        lanes[0].Name = "Clip edited";
+        lanes[1].Name = "Overlay edited";
+        var rebuilt = TimelineProjection.Rebuild(timeline, lanes);
+
+        Assert.AreEqual(
+            "Clip edited",
+            rebuilt["tracks"]![0]!["clips"]![0]!["data"]!["name"]!.GetValue<string>());
+        Assert.AreEqual(
+            "Overlay edited",
+            rebuilt["layers"]![0]!["name"]!.GetValue<string>());
+        Assert.AreEqual(
+            "layer",
+            rebuilt["layers"]![0]!["custom"]!.GetValue<string>());
+        Assert.IsTrue(rebuilt["unrelated"]!["keep"]!.GetValue<bool>());
+    }
+
+    [TestMethod]
+    public void CreateLayer_UsesLegacyCollectionWithoutChangingTracks()
+    {
+        var timeline = CreateVideoTimeline();
+        var trackLane = TimelineProjection.Project(timeline).Single();
+        var layer = TimelineProjection.CreateLayer("Caption", "text", 2, 4);
+
+        var rebuilt = TimelineProjection.Rebuild(timeline, [trackLane, layer]);
+
+        Assert.HasCount(1, rebuilt["tracks"]!.AsArray());
+        Assert.HasCount(1, rebuilt["layers"]!.AsArray());
+        Assert.AreEqual("Caption", rebuilt["layers"]![0]!["name"]!.GetValue<string>());
+        Assert.AreEqual("text", rebuilt["layers"]![0]!["type"]!.GetValue<string>());
+    }
+
+    [TestMethod]
+    public void ReassignTrack_LeavesLegacyLayerInLayerCollection()
+    {
+        var timeline = JsonNode.Parse(
+            """
+            {
+              "tracks": [{"id":"track","type":"video","clips":[]}],
+              "layers": [{"id":"overlay","name":"Overlay","type":"text","start_s":1,"end_s":3}]
+            }
+            """)!.AsObject();
+        var layer = TimelineProjection.Project(timeline).Single(lane => lane.IsLayer);
+
+        var reassigned = TimelineProjection.ReassignTrack(layer, 4);
+        var rebuilt = TimelineProjection.Rebuild(timeline, [reassigned]);
+
+        Assert.IsTrue(reassigned.IsLayer);
+        Assert.AreEqual(-1, reassigned.TrackIndex);
+        Assert.HasCount(1, rebuilt["tracks"]!.AsArray());
+        Assert.HasCount(1, rebuilt["layers"]!.AsArray());
+        Assert.AreEqual("overlay", rebuilt["layers"]![0]!["id"]!.GetValue<string>());
+    }
+
+    [TestMethod]
+    public void Rebuild_PersistsEditedLaneTypeAndPreservesTrackMetadata()
+    {
+        var timeline = CreateVideoTimeline();
+        var lane = TimelineProjection.Project(timeline).Single();
+        lane.Type = "audio";
+
+        var rebuilt = TimelineProjection.Rebuild(timeline, [lane]);
+        var track = rebuilt["tracks"]![0]!.AsObject();
+        var projectedAgain = TimelineProjection.Project(rebuilt).Single();
+
+        Assert.AreEqual("audio", track["type"]!.GetValue<string>());
+        Assert.AreEqual("video", track["id"]!.GetValue<string>());
+        Assert.AreEqual("audio", projectedAgain.Type);
+        Assert.AreEqual("keep-me", track["clips"]![0]!["data"]!["custom"]!.GetValue<string>());
+    }
+
+    [TestMethod]
+    public void Rebuild_SplitsMixedEditedTypesIntoDeterministicTracks()
+    {
+        var timeline = CreateVideoTimeline();
+        var first = TimelineProjection.Project(timeline).Single();
+        var second = TimelineProjection.DuplicateAt(first, 6, 12);
+        second.Type = "audio";
+
+        var rebuilt = TimelineProjection.Rebuild(timeline, [second, first]);
+        var projectedAgain = TimelineProjection.Project(rebuilt);
+
+        Assert.HasCount(2, rebuilt["tracks"]!.AsArray());
+        Assert.HasCount(2, projectedAgain);
+        Assert.AreEqual("video", rebuilt["tracks"]![0]!["type"]!.GetValue<string>());
+        Assert.AreEqual("audio", rebuilt["tracks"]![1]!["type"]!.GetValue<string>());
+        CollectionAssert.AreEquivalent(
+            new[] { "video", "audio" },
+            projectedAgain.Select(lane => lane.Type).ToArray());
+    }
+
+    [TestMethod]
     public void EmptyTimeline_NewLaneUsesCanonicalTrackModel()
     {
         var timeline = new JsonObject { ["revision"] = "keep" };

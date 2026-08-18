@@ -1,6 +1,6 @@
+using EdmgStudio.Core.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Navigation;
 
 namespace EdmgStudio.WinUI.Pages;
 
@@ -9,28 +9,24 @@ public sealed partial class MigrationPage : Page
     public MigrationPage()
     {
         InitializeComponent();
+        Loaded += MigrationPage_Loaded;
     }
 
-    protected override void OnNavigatedTo(NavigationEventArgs e)
+    private void MigrationPage_Loaded(object sender, RoutedEventArgs e)
     {
-        base.OnNavigatedTo(e);
-        var destination = e.Parameter as string ?? "destination";
-        PageTitle.Text = DestinationLabel(destination);
-        PageDescription.Text =
-            "Projects, workspace, timeline, render, queue, review, outputs, models, and settings " +
-            "are native. Use the Electron compatibility frontend only for specialist interactions " +
-            "that are not available through the shared backend API.";
+        BackendConfiguration configuration = App.Services.Configuration;
+        PendingMigrationInfoBar.Title = configuration.HasPendingMigration
+            ? "Migration action is required"
+            : "No pending migration";
+        PendingMigrationInfoBar.Message = configuration.HasPendingMigration
+            ? configuration.PendingMigrationDetail ?? "Review legacy desktop state before continuing."
+            : "The active bootstrap configuration does not report legacy data requiring migration.";
+        PendingMigrationInfoBar.Severity = configuration.HasPendingMigration
+            ? InfoBarSeverity.Warning
+            : InfoBarSeverity.Success;
     }
 
-    private void OpenWorkspace_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
+    private void OpenProjects_Click(object sender, RoutedEventArgs e) => App.Navigate("projects");
+
     private void OpenDashboard_Click(object sender, RoutedEventArgs e) => App.Navigate("dashboard");
-
-    private static string DestinationLabel(string destination) => destination switch
-    {
-        "directorLab" => "EDMG Director compatibility surface",
-        "plannerLab" => "AI Planner Lab compatibility surface",
-        "reactiveLab" => "Reactive Lab compatibility surface",
-        "cloud" => "Cloud compatibility surface",
-        _ => "Compatibility surface"
-    };
 }

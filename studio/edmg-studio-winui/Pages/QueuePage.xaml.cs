@@ -135,6 +135,7 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
     private void UpdateSelection(JobListItem item)
     {
         var job = item.Job;
+        App.Services.Session.SetSelectedJob(job.ProjectId, job.Id);
         SelectedJobText.Text = $"{job.Type} · {StudioPageHelpers.ShortId(job.Id)}";
         SelectedJobSummaryText.Text = item.Summary;
         SelectedProgressBar.Value = item.Percent;
@@ -149,6 +150,9 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         DropCheckpointButton.IsEnabled = !job.IsActive;
         LogButton.IsEnabled = true;
         EventsButton.IsEnabled = true;
+        OpenOutputsButton.IsEnabled = true;
+        OpenReviewButton.IsEnabled = true;
+        OpenTimelineButton.IsEnabled = true;
         DetailsTextBox.Text = FormatJobDetails(job);
     }
 
@@ -276,6 +280,25 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
     private async void EventsButton_Click(object sender, RoutedEventArgs e) =>
         await LoadDiagnosticAsync("events", (projectId, jobId) => _apiClient.GetJobEventsAsync(projectId, jobId));
 
+    private void OpenOutputsButton_Click(object sender, RoutedEventArgs e) => NavigateWithSelectedJob("outputs");
+
+    private void OpenReviewButton_Click(object sender, RoutedEventArgs e) => NavigateWithSelectedJob("review");
+
+    private void OpenTimelineButton_Click(object sender, RoutedEventArgs e) => NavigateWithSelectedJob("timeline");
+
+    private void NavigateWithSelectedJob(string destination)
+    {
+        if (JobsList.SelectedItem is not JobListItem item)
+        {
+            return;
+        }
+
+        App.Services.Session.ActiveProjectId = item.Job.ProjectId;
+        App.Services.Session.SetSelectedJob(item.Job.ProjectId, item.Job.Id);
+        App.Services.Session.SetLastWorkflowDestination(destination);
+        App.Navigate(destination);
+    }
+
     private async Task LoadDiagnosticAsync(
         string label,
         Func<string, string, Task<JsonElement>> loader)
@@ -341,6 +364,7 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
 
     private void ClearSelection()
     {
+        App.Services.Session.SetSelectedJob(null, null);
         SelectedJobText.Text = "Select a job";
         SelectedJobSummaryText.Text = "Job actions and diagnostic details appear here.";
         SelectedProgressBar.Visibility = Visibility.Collapsed;
@@ -354,6 +378,9 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         DropCheckpointButton.IsEnabled = false;
         LogButton.IsEnabled = false;
         EventsButton.IsEnabled = false;
+        OpenOutputsButton.IsEnabled = false;
+        OpenReviewButton.IsEnabled = false;
+        OpenTimelineButton.IsEnabled = false;
         DetailsTextBox.Text = string.Empty;
     }
 

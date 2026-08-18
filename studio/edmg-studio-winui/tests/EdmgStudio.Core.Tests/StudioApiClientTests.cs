@@ -108,6 +108,108 @@ public sealed class StudioApiClientTests
     }
 
     [TestMethod]
+    public async Task PlannerReactiveTypedMethods_UseExactContractsAndDeserializeReadiness()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null
+                    ? string.Empty
+                    : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            return request.RequestUri!.AbsolutePath switch
+            {
+                "/v1/ai/status" => JsonResponse(
+                    """{"ok":true,"ai":{"available":true},"ai_config":{"mode":"provider","provider":"openai","label":"OpenAI","model":"gpt-4.1","ready":true,"future_field":"kept"}}"""),
+                "/v1/projects/p%20%2F%231/plan" => JsonResponse(
+                    """{"source":"edmg_core","duration_s":30,"variants":[{"index":0,"scenes":[]}]}"""),
+                "/v1/projects/p%20%2F%231/planner_lab/import" => JsonResponse(
+                    """{"ok":true,"plan":{"source":"planner_lab","duration_s":30,"variants":[]},"timeline":{},"visual_dna":{},"visual_dna_hints":{}}"""),
+                "/v1/projects/p%20%2F%231/reactive_lab/apply" => JsonResponse(
+                    """{"ok":true,"timeline":{"duration_s":30},"visual_dna":{},"visual_dna_hints":{}}"""),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("typed-token"),
+            httpClient);
+        using var objectDocument = JsonDocument.Parse("""{"value":1}""");
+        using var scheduleDocument = JsonDocument.Parse("""{"zoom":"0:(1.0)"}""");
+
+        var readiness = await client.GetAiReadinessAsync();
+        var plan = await client.GeneratePlanAsync(
+            "p /#1",
+            new PlanRequest("Project", "brief", "style", 1, 8),
+            "edmg_core");
+        var imported = await client.ImportPlannerLabAsync(
+            "p /#1",
+            new PlannerLabImportRequest
+            {
+                Analysis = objectDocument.RootElement.Clone(),
+                Plan = objectDocument.RootElement.Clone(),
+                Settings = new PlannerLabSettings { SceneCount = 6 },
+                ApplyTimeline = false,
+                OverwriteTimeline = false,
+            });
+        var applied = await client.ApplyReactiveLabAsync(
+            "p /#1",
+            new ReactiveLabApplyRequest
+            {
+                Metadata = objectDocument.RootElement.Clone(),
+                Schedules = scheduleDocument.RootElement.Clone(),
+                OverwriteMotionTrack = false,
+                OverwriteCamera = true,
+            });
+
+        Assert.AreEqual("OpenAI", readiness.AiConfiguration.Label);
+        Assert.AreEqual("gpt-4.1", readiness.AiConfiguration.Model);
+        Assert.AreEqual("kept", readiness.AiConfiguration.AdditionalData!["future_field"].GetString());
+        Assert.AreEqual("edmg_core", plan.Source);
+        Assert.IsTrue(imported.Ok);
+        Assert.IsTrue(applied.Ok);
+
+        var planRequest = captured.Single(item => item.Uri.AbsolutePath.EndsWith("/plan", StringComparison.Ordinal));
+        Assert.AreEqual("?mode=edmg_core", planRequest.Uri.Query);
+
+        using var plannerJson = JsonDocument.Parse(
+            captured.Single(item => item.Uri.AbsolutePath.EndsWith("/planner_lab/import", StringComparison.Ordinal)).Body);
+        Assert.AreEqual(6, plannerJson.RootElement.GetProperty("settings").GetProperty("sceneCount").GetInt32());
+        Assert.IsFalse(plannerJson.RootElement.GetProperty("apply_timeline").GetBoolean());
+        Assert.IsFalse(plannerJson.RootElement.GetProperty("overwrite_timeline").GetBoolean());
+
+        using var reactiveJson = JsonDocument.Parse(
+            captured.Single(item => item.Uri.AbsolutePath.EndsWith("/reactive_lab/apply", StringComparison.Ordinal)).Body);
+        Assert.AreEqual("0:(1.0)", reactiveJson.RootElement.GetProperty("schedules").GetProperty("zoom").GetString());
+        Assert.IsFalse(reactiveJson.RootElement.GetProperty("overwrite_motion_track").GetBoolean());
+        Assert.IsTrue(reactiveJson.RootElement.GetProperty("overwrite_camera").GetBoolean());
+    }
+
+    [TestMethod]
+    public async Task ReactiveTypedMethod_RejectsEmptyPayloadBeforeNetworkUse()
+    {
+        var callCount = 0;
+        using var httpClient = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            callCount++;
+            return Task.FromResult(JsonResponse("{}"));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.ApplyReactiveLabAsync("p1", new ReactiveLabApplyRequest()));
+        Assert.AreEqual(0, callCount);
+    }
+
+    [TestMethod]
     public async Task InvalidProjectAndPlanInputs_AreRejectedBeforeNetworkUse()
     {
         var callCount = 0;
@@ -232,7 +334,7 @@ public sealed class StudioApiClientTests
 
         var response = await client.QueueTimelineRenderAsync(
             "project one",
-            new TimelineRenderRequest(1920, 1080, 24, "H264", "AAC", "high", "edited-master"));
+            new TimelineRenderRequest(1920, 1080, 24, "H264", "AAC", 18, "edited-master"));
 
         Assert.IsTrue(response.Ok);
         Assert.AreEqual("timeline-job", response.Job.Id);
@@ -247,7 +349,7 @@ public sealed class StudioApiClientTests
         Assert.AreEqual(24, payload.RootElement.GetProperty("fps").GetDouble());
         Assert.AreEqual("h264", payload.RootElement.GetProperty("video_codec").GetString());
         Assert.AreEqual("aac", payload.RootElement.GetProperty("audio_codec").GetString());
-        Assert.AreEqual("high", payload.RootElement.GetProperty("quality").GetString());
+        Assert.AreEqual(18, payload.RootElement.GetProperty("quality").GetInt32());
         Assert.AreEqual("edited-master", payload.RootElement.GetProperty("name").GetString());
     }
 
@@ -267,18 +369,130 @@ public sealed class StudioApiClientTests
 
         await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => client.QueueTimelineRenderAsync(
             "p1",
-            new TimelineRenderRequest(1919, 1080, 24, "h264", "aac", "high", "master")));
+            new TimelineRenderRequest(1919, 1080, 24, "h264", "aac", 23, "master")));
         await Assert.ThrowsExactlyAsync<ArgumentException>(() => client.QueueTimelineRenderAsync(
             "p1",
-            new TimelineRenderRequest(1920, 1080, 24, "prores", "aac", "high", "master")));
+            new TimelineRenderRequest(1920, 1080, 24, "prores", "aac", 23, "master")));
+        await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => client.QueueTimelineRenderAsync(
+            "p1",
+            new TimelineRenderRequest(1920, 1080, 24, "h264", "aac", 0, "master")));
+        await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => client.QueueTimelineRenderAsync(
+            "p1",
+            new TimelineRenderRequest(1920, 1080, 24, "h264", "aac", 52, "master")));
         await Assert.ThrowsExactlyAsync<ArgumentException>(() => client.QueueTimelineRenderAsync(
             "p1",
-            new TimelineRenderRequest(1920, 1080, 24, "h264", "aac", "ultra", "master")));
-        await Assert.ThrowsExactlyAsync<ArgumentException>(() => client.QueueTimelineRenderAsync(
-            "p1",
-            new TimelineRenderRequest(1920, 1080, 24, "h264", "aac", "high", "../master")));
+            new TimelineRenderRequest(1920, 1080, 24, "h264", "aac", 23, "../master")));
 
         Assert.AreEqual(0, callCount);
+    }
+
+    [TestMethod]
+    public async Task ApplyMotionGrammarAsync_UsesTypedAuthenticatedContract()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                await request.Content!.ReadAsStringAsync(cancellationToken));
+            return JsonResponse(
+                """
+                {
+                  "ok": true,
+                  "timeline": {
+                    "tracks": [{"name": "Motion"}]
+                  }
+                }
+                """);
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        var response = await client.ApplyMotionGrammarAsync(
+            "project / one",
+            [
+                new MotionPhraseRequest("prepare", 0, 4),
+                new MotionPhraseRequest(
+                    "accent",
+                    4,
+                    6,
+                    new Dictionary<string, double> { ["intensity"] = 0.8 }),
+            ],
+            true);
+
+        Assert.IsTrue(response.Ok);
+        Assert.AreEqual("Motion", response.Timeline.GetProperty("tracks")[0].GetProperty("name").GetString());
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Post, captured.Method);
+        Assert.AreEqual("/v1/projects/project%20%2F%20one/motion_grammar/apply", captured.Uri.AbsolutePath);
+        Assert.AreEqual("Bearer " + "session" + "-token", captured.Authorization);
+        Assert.AreEqual("application/json", captured.ContentType);
+
+        using var payload = JsonDocument.Parse(captured.Body);
+        Assert.IsTrue(payload.RootElement.GetProperty("overwrite_motion_track").GetBoolean());
+        var phrases = payload.RootElement.GetProperty("phrases");
+        Assert.AreEqual(2, phrases.GetArrayLength());
+        Assert.AreEqual("prepare", phrases[0].GetProperty("phrase").GetString());
+        Assert.AreEqual(0D, phrases[0].GetProperty("start_s").GetDouble());
+        Assert.AreEqual(4D, phrases[0].GetProperty("end_s").GetDouble());
+        Assert.IsFalse(phrases[0].TryGetProperty("overrides", out _));
+        Assert.AreEqual(0.8D, phrases[1].GetProperty("overrides").GetProperty("intensity").GetDouble());
+    }
+
+    [TestMethod]
+    public async Task ApplyMotionGrammarAsync_RejectsEmptyPhrasesBeforeNetworkUse()
+    {
+        var callCount = 0;
+        using var httpClient = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            callCount++;
+            return Task.FromResult(JsonResponse("{}"));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.ApplyMotionGrammarAsync("p1", Array.Empty<MotionPhraseRequest>(), false));
+
+        Assert.AreEqual(0, callCount);
+    }
+
+    [TestMethod]
+    public async Task ApplyMotionGrammarAsync_PropagatesCancellationToTransport()
+    {
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken observedToken = default;
+        using var httpClient = new HttpClient(new RecordingHandler(async (_, cancellationToken) =>
+        {
+            observedToken = cancellationToken;
+            handlerStarted.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return JsonResponse("""{"ok":true,"timeline":{}}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+        using var cancellation = new CancellationTokenSource();
+
+        var request = client.ApplyMotionGrammarAsync(
+            "p1",
+            [new MotionPhraseRequest("settle", 0, 2)],
+            false,
+            cancellation.Token);
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => request);
+        Assert.IsTrue(observedToken.CanBeCanceled);
+        Assert.IsTrue(observedToken.IsCancellationRequested);
     }
 
     [TestMethod]
@@ -629,6 +843,57 @@ public sealed class StudioApiClientTests
     }
 
     [TestMethod]
+    public async Task ModelCatalogue_UsesGeneratedMetadataAndPreservesUnknownFields()
+    {
+        using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
+        {
+            Assert.AreEqual(HttpMethod.Get, request.Method);
+            Assert.AreEqual("/v1/models/catalog", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(JsonResponse(
+                """
+                {
+                  "catalog": [{
+                    "id": "sd15",
+                    "name": "Stable Diffusion 1.5",
+                    "kind": "checkpoint",
+                    "installed": true,
+                    "available": true,
+                    "future_compatibility": "kept"
+                  }],
+                  "user": [],
+                  "packs": [{
+                    "id": "starter",
+                    "name": "Starter pack",
+                    "models": ["sd15"],
+                    "future_pack_field": 7
+                  }],
+                  "accepted": {},
+                  "installed": {},
+                  "cloud": {},
+                  "lanes": {},
+                  "storage_mode": "local",
+                  "model_cache": "cache/models",
+                  "future_catalogue_field": {"enabled": true}
+                }
+                """));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+
+        var response = await client.GetTypedModelCatalogueAsync();
+        var model = response.Catalog!.Single();
+        var pack = response.Packs!.Single();
+
+        Assert.AreEqual("sd15", model.Id);
+        Assert.IsTrue(model.Installed);
+        Assert.AreEqual("kept", model.ExtensionData!["future_compatibility"].GetString());
+        Assert.AreEqual(7, pack.ExtensionData!["future_pack_field"].GetInt32());
+        Assert.IsTrue(response.ExtensionData!["future_catalogue_field"].GetProperty("enabled").GetBoolean());
+    }
+
+    [TestMethod]
     public async Task ModelManagement_UsesExactPathsBodiesAndTypedResponses()
     {
         var captured = new List<CapturedRequest>();
@@ -737,6 +1002,141 @@ public sealed class StudioApiClientTests
     }
 
     [TestMethod]
+    public async Task WorkspaceOperations_UseTypedEscapedBackendContracts()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            return request.RequestUri!.AbsolutePath switch
+            {
+                var path when path.EndsWith("/assets", StringComparison.Ordinal) =>
+                    JsonResponse("""{"project_id":"project / one","assets":{"audio":[{"path":"assets/audio/track.wav"}],"refs":[{"path":"assets/refs/board.png"}]}}"""),
+                var path when path.EndsWith("/health/relink", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"suggestions":[{"missing":"old.wav","candidate":"assets/audio/track.wav"}],"missing_count":1}"""),
+                var path when path.EndsWith("/health/collect", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"dest":"collected","copied_count":1,"skipped_count":0,"copied":["track.wav"],"skipped":[]}"""),
+                var path when path.EndsWith("/health", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"health":{"ok":false,"status":"missing_assets","issues":[{"code":"MISSING_ASSET","severity":"warning","message":"One asset is missing."}],"asset_index":{"schema_version":1,"generated_at":"now","asset_count":2,"missing_count":1,"total_bytes":42,"disk_estimate_gb":0.1,"missing":[{"path":"old.wav","reason":"not_found"}],"assets":[]},"actions":["relink"]}}"""),
+                var path when path.EndsWith("/music_graph", StringComparison.Ordinal) =>
+                    JsonResponse("""{"schemaVersion":1,"timebase":{"sampleRate":48000,"durationSeconds":32},"tempo":{"bpm":126,"confidence":0.9},"beats":[],"sections":[{"start":0,"end":8,"label":"intro","energy":0.4}],"stems":[],"confidenceNotes":[],"semantics":{"tags":["cinematic"]}}"""),
+                var path when path.EndsWith("/live_cues", StringComparison.Ordinal) =>
+                    JsonResponse("""{"schemaVersion":1,"advisory_only":true,"bpm":126,"duration_s":32,"event_count":2,"events":[],"notes":[]}"""),
+                var path when path.EndsWith("/live_assets", StringComparison.Ordinal) =>
+                    JsonResponse("""{"schema_version":1,"ready":true,"never_blocks_on_diffusion":true,"latency_budget_ms":16,"max_update_hz":30,"duration_s":32,"pack_count":1,"channel_count":3,"packs":[]}"""),
+                var path when path.EndsWith("/template_package/export", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"package":{"schema_version":1,"payload":{"visual_dna":{"palette":"neon"}}}}"""),
+                var path when path.EndsWith("/template_package/import", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"applied":["visual_dna"]}"""),
+                var path when path.EndsWith("/timeline/apply_plan", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"timeline":{"tracks":[]},"variant_index":2}"""),
+                var path when path.EndsWith("/plan/variant", StringComparison.Ordinal) =>
+                    JsonResponse(
+                        """
+                        {"ok":true,"variant_index":2,"plan":{"source":"planner","variants":[{"index":2,"name":"Treatment C","scenes":[{"start_s":0,"end_s":8,"prompt":"Opening","negative_prompt":"flicker","approved":true,"continuity":{"subject":"performer"}}]}]}}
+                        """),
+                _ => throw new InvalidOperationException(request.RequestUri.AbsolutePath),
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+        const string projectId = "project / one";
+
+        var assets = await client.GetProjectAssetsAsync(projectId);
+        var health = await client.GetProjectHealthAsync(projectId);
+        var relink = await client.GetProjectRelinkSuggestionsAsync(projectId);
+        var collect = await client.CollectProjectAsync(projectId);
+        var graph = await client.GetProjectMusicGraphAsync(projectId);
+        var cues = await client.GetProjectLiveCuesAsync(projectId);
+        var liveAssets = await client.GetProjectLiveAssetsAsync(projectId);
+        var template = await client.ExportProjectTemplatePackageAsync(projectId);
+        await client.ImportProjectTemplatePackageAsync(projectId, template.Package, true);
+        var appliedPlan = await client.ApplyPlanToTimelineAsync(projectId, 2, false);
+        using var sceneMetadata = JsonDocument.Parse("""{"approved":true,"continuity":{"subject":"performer"}}""");
+        var updatedPlan = await client.UpdatePlanVariantAsync(
+            projectId,
+            2,
+            [
+                new PlanSceneDto
+                {
+                    StartSeconds = 0,
+                    EndSeconds = 8,
+                    Prompt = "Opening",
+                    NegativePrompt = "flicker",
+                    AdditionalData = new Dictionary<string, JsonElement>
+                    {
+                        ["approved"] = sceneMetadata.RootElement.GetProperty("approved").Clone(),
+                        ["continuity"] = sceneMetadata.RootElement.GetProperty("continuity").Clone(),
+                    },
+                },
+            ]);
+
+        Assert.AreEqual("assets/audio/track.wav", assets.Assets.Audio.Single().Path);
+        Assert.AreEqual("MISSING_ASSET", health.Health.Issues.Single().Code);
+        Assert.AreEqual("assets/audio/track.wav", relink.Suggestions.Single().Candidate);
+        Assert.AreEqual(1, collect.CopiedCount);
+        Assert.AreEqual(126D, graph.Tempo.Bpm);
+        Assert.AreEqual("cinematic", graph.Semantics!.Tags.Single());
+        Assert.AreEqual(2, cues.EventCount);
+        Assert.IsTrue(liveAssets.Ready);
+        Assert.IsTrue(template.Ok);
+        Assert.IsTrue(appliedPlan.Ok);
+        Assert.AreEqual(2, appliedPlan.VariantIndex);
+        Assert.AreEqual(0, appliedPlan.Timeline.GetProperty("tracks").GetArrayLength());
+        Assert.IsTrue(updatedPlan.Ok);
+        Assert.AreEqual(2, updatedPlan.VariantIndex);
+        Assert.AreEqual("Treatment C", updatedPlan.Plan!.Variants.Single().Name);
+        Assert.IsTrue(updatedPlan.Plan.Variants.Single().Scenes.Single().AdditionalData!["approved"].GetBoolean());
+        Assert.AreEqual(
+            "performer",
+            updatedPlan.Plan.Variants.Single().Scenes.Single().AdditionalData!["continuity"]
+                .GetProperty("subject").GetString());
+
+        Assert.HasCount(11, captured);
+        Assert.IsTrue(captured.All(item =>
+            item.Authorization is not null
+            && item.Authorization.StartsWith("Bearer ", StringComparison.Ordinal)
+            && item.Authorization.EndsWith("-token", StringComparison.Ordinal)));
+        Assert.IsTrue(captured.All(item =>
+            item.Uri.AbsolutePath.StartsWith("/v1/projects/project%20%2F%20one/", StringComparison.Ordinal)));
+        Assert.AreEqual(HttpMethod.Post, captured.Single(item => item.Uri.AbsolutePath.EndsWith("/health/collect", StringComparison.Ordinal)).Method);
+        Assert.AreEqual("{}", captured.Single(item => item.Uri.AbsolutePath.EndsWith("/health/collect", StringComparison.Ordinal)).Body);
+
+        using (var import = JsonDocument.Parse(captured.Single(item => item.Uri.AbsolutePath.EndsWith("/template_package/import", StringComparison.Ordinal)).Body))
+        {
+            Assert.IsTrue(import.RootElement.GetProperty("merge").GetBoolean());
+            Assert.AreEqual(1, import.RootElement.GetProperty("package").GetProperty("schema_version").GetInt32());
+            Assert.IsFalse(import.RootElement.GetProperty("package").TryGetProperty("additionalData", out _));
+        }
+
+        using (var apply = JsonDocument.Parse(captured.Single(item => item.Uri.AbsolutePath.EndsWith("/timeline/apply_plan", StringComparison.Ordinal)).Body))
+        {
+            Assert.AreEqual(2, apply.RootElement.GetProperty("variant_index").GetInt32());
+            Assert.IsFalse(apply.RootElement.GetProperty("overwrite").GetBoolean());
+        }
+
+        using (var reorder = JsonDocument.Parse(captured.Single(item => item.Uri.AbsolutePath.EndsWith("/plan/variant", StringComparison.Ordinal)).Body))
+        {
+            Assert.AreEqual(2, reorder.RootElement.GetProperty("variant_index").GetInt32());
+            Assert.AreEqual("Opening", reorder.RootElement.GetProperty("scenes")[0].GetProperty("prompt").GetString());
+            Assert.AreEqual("flicker", reorder.RootElement.GetProperty("scenes")[0].GetProperty("negative_prompt").GetString());
+            Assert.IsTrue(reorder.RootElement.GetProperty("scenes")[0].GetProperty("approved").GetBoolean());
+            Assert.AreEqual(
+                "performer",
+                reorder.RootElement.GetProperty("scenes")[0].GetProperty("continuity")
+                    .GetProperty("subject").GetString());
+        }
+    }
+
+    [TestMethod]
     public async Task CloudOperations_UseAuthenticatedJsonContracts()
     {
         var captured = new List<CapturedRequest>();
@@ -841,6 +1241,447 @@ public sealed class StudioApiClientTests
         Assert.AreEqual(
             "/v1/projects/project%20%2F%20one/live_cues/publish/status",
             captured[4].Uri.AbsolutePath);
+    }
+
+    [TestMethod]
+    public async Task UnrealBridgeMutations_UseTypedAuthenticatedContractsAndPreserveExtensionData()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null
+                    ? string.Empty
+                    : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            return request.RequestUri!.AbsolutePath switch
+            {
+                "/v1/projects/project%20%2F%231/export/unreal" => JsonResponse(
+                    """
+                    {
+                      "ok": true,
+                      "bundle": {
+                        "bundle_dir": "outputs/unreal/hero",
+                        "manifest_path": "outputs/unreal/hero/bundle_manifest.json",
+                        "zip_path": "outputs/unreal/hero.zip",
+                        "variant_index": 2,
+                        "sequence_name": "HeroSequence",
+                        "files": ["bundle_manifest.json"],
+                        "future_bundle_field": "kept"
+                      },
+                      "future_response_field": 17
+                    }
+                    """),
+                "/v1/projects/project%20%2F%231/unreal/import-plan" => JsonResponse(
+                    """
+                    {
+                      "ok": true,
+                      "plan_path": "outputs/unreal/hero/unreal_import_plan.json",
+                      "plan": {"asset_name": "HeroAsset"},
+                      "future_plan_field": true
+                    }
+                    """),
+                "/v1/projects/project%20%2F%231/import/unreal" => JsonResponse(
+                    """
+                    {
+                      "ok": true,
+                      "imported": {
+                        "bundle_dir": "outputs/unreal/hero",
+                        "source_dir": "outputs/unreal/hero/returned",
+                        "manifest_path": "outputs/unreal/hero/bundle_manifest.json",
+                        "variant_index": 2,
+                        "sequence_name": "HeroSequence",
+                        "media": [{
+                          "kind": "video",
+                          "path": "outputs/videos/hero.mp4",
+                          "source_path": "outputs/unreal/hero/returned/hero.mp4",
+                          "metadata_path": "outputs/videos/hero.mp4.metadata.json",
+                          "future_media_field": "kept"
+                        }],
+                        "future_import_field": "kept"
+                      }
+                    }
+                    """),
+                _ => throw new InvalidOperationException("Unexpected Unreal route.")
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("unreal-token"),
+            httpClient);
+
+        var export = await client.ExportUnrealBundleAsync(
+            " project /#1 ",
+            new UnrealBundleExportRequest
+            {
+                VariantIndex = 2,
+                BundleName = "hero",
+                IncludeZip = false
+            });
+        var plan = await client.BuildUnrealImportPlanAsync(
+            " project /#1 ",
+            new UnrealImportPlanRequest
+            {
+                BundleDirectory = "outputs/unreal/hero",
+                ContentPath = "/Game/Cinematics",
+                AssetName = "HeroAsset"
+            });
+        var imported = await client.ImportUnrealReturnsAsync(
+            " project /#1 ",
+            new UnrealReturnImportRequest
+            {
+                BundleDirectory = "outputs/unreal/hero",
+                SourceDirectory = "outputs/unreal/hero/returned"
+            });
+
+        Assert.HasCount(3, captured);
+        Assert.IsTrue(captured.All(item => item.Method == HttpMethod.Post));
+        Assert.IsTrue(captured.All(item => item.Authorization == "Bearer unreal-token"));
+        Assert.IsTrue(captured.All(item => item.ContentType == "application/json"));
+
+        using var exportBody = JsonDocument.Parse(captured[0].Body);
+        Assert.AreEqual(2, exportBody.RootElement.GetProperty("variant_index").GetInt32());
+        Assert.AreEqual("hero", exportBody.RootElement.GetProperty("bundle_name").GetString());
+        Assert.IsFalse(exportBody.RootElement.GetProperty("include_zip").GetBoolean());
+        Assert.AreEqual("outputs/unreal/hero", export.Bundle.BundleDirectory);
+        Assert.AreEqual("kept", export.Bundle.AdditionalData!["future_bundle_field"].GetString());
+        Assert.AreEqual(17, export.AdditionalData!["future_response_field"].GetInt32());
+
+        using var planBody = JsonDocument.Parse(captured[1].Body);
+        Assert.AreEqual("/Game/Cinematics", planBody.RootElement.GetProperty("content_path").GetString());
+        Assert.AreEqual("HeroAsset", plan.Plan.GetProperty("asset_name").GetString());
+        Assert.IsTrue(plan.AdditionalData!["future_plan_field"].GetBoolean());
+
+        using var importBody = JsonDocument.Parse(captured[2].Body);
+        Assert.AreEqual(
+            "outputs/unreal/hero/returned",
+            importBody.RootElement.GetProperty("source_dir").GetString());
+        Assert.HasCount(1, imported.Imported.Media);
+        Assert.AreEqual("outputs/videos/hero.mp4", imported.Imported.Media[0].Path);
+        Assert.AreEqual("kept", imported.Imported.Media[0].AdditionalData!["future_media_field"].GetString());
+        Assert.AreEqual("kept", imported.Imported.AdditionalData!["future_import_field"].GetString());
+    }
+
+    [TestMethod]
+    public async Task UnrealBridgeMutations_ValidateAuthoritativeSchemaBounds()
+    {
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            new HttpClient(new RecordingHandler((_, _) =>
+                Task.FromResult(JsonResponse("""{"ok":true}""")))));
+
+        await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() =>
+            client.ExportUnrealBundleAsync(
+                "p1",
+                new UnrealBundleExportRequest { VariantIndex = -1 }));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.ExportUnrealBundleAsync(
+                "p1",
+                new UnrealBundleExportRequest { BundleName = new string('x', 121) }));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.BuildUnrealImportPlanAsync(
+                "p1",
+                new UnrealImportPlanRequest { BundleDirectory = " " }));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.BuildUnrealImportPlanAsync(
+                "p1",
+                new UnrealImportPlanRequest
+                {
+                    BundleDirectory = "outputs/unreal/hero",
+                    ContentPath = new string('x', 261)
+                }));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.BuildUnrealImportPlanAsync(
+                "p1",
+                new UnrealImportPlanRequest
+                {
+                    BundleDirectory = "outputs/unreal/hero",
+                    AssetName = new string('x', 121)
+                }));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.ImportUnrealReturnsAsync(
+                "p1",
+                new UnrealReturnImportRequest
+                {
+                    BundleDirectory = "outputs/unreal/hero",
+                    SourceDirectory = new string('x', 261)
+                }));
+    }
+
+    [TestMethod]
+    public async Task RenderSceneStillsAsync_UsesEscapedAuthenticatedContractAndSerializedDefaults()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                await request.Content!.ReadAsStringAsync(cancellationToken));
+            return JsonResponse("""{"ok":true}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("render-token"),
+            httpClient);
+
+        await client.RenderSceneStillsAsync(" project /#1 ", new RenderScenesRequest());
+
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Post, captured.Method);
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%231/render/stills/scenes",
+            captured.Uri.AbsolutePath);
+        Assert.AreEqual("Bearer " + "render" + "-token", captured.Authorization);
+        Assert.AreEqual("application/json", captured.ContentType);
+        using var body = JsonDocument.Parse(captured.Body);
+        Assert.AreEqual(0.75, body.RootElement.GetProperty("denoise_strength").GetDouble());
+        Assert.IsFalse(body.RootElement.TryGetProperty("model_id", out _));
+        Assert.IsFalse(body.RootElement.TryGetProperty("seed", out _));
+    }
+
+    [TestMethod]
+    public async Task ExportComfyUiWorkflowsAsync_EncodesQueryAndOmitsNullOptions()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                string.Empty);
+            return Task.FromResult(JsonResponse("""{"ok":true}"""));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+        var options = new ComfyUiWorkflowExportOptions(
+            VariantIndex: -7,
+            ModelId: "model /?#",
+            WorkflowFamily: "img2img",
+            ReferenceAsset: "refs/My Image.png",
+            NegativePrompt: "bad & blurry");
+
+        await client.ExportComfyUiWorkflowsAsync("p1", options);
+
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Get, captured.Method);
+        StringAssert.Contains(captured.Uri.Query, "variant_index=-7");
+        StringAssert.Contains(captured.Uri.Query, "model_id=model%20%2F%3F%23");
+        StringAssert.Contains(captured.Uri.Query, "reference_asset=refs%2FMy%20Image.png");
+        StringAssert.Contains(captured.Uri.Query, "negative_prompt=bad%20%26%20blurry");
+        Assert.IsFalse(captured.Uri.Query.Contains("source_asset=", StringComparison.Ordinal));
+        Assert.IsFalse(captured.Uri.Query.Contains("seed=", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task UploadReferenceAssetAsync_UsesMultipartFileFieldAndAuthentication()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                await request.Content!.ReadAsStringAsync(cancellationToken));
+            return JsonResponse("""{"ok":true}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("asset-token"),
+            httpClient);
+        var content = new TrackingStream(Encoding.UTF8.GetBytes("reference-payload"));
+
+        await client.UploadReferenceAssetAsync(
+            "p1",
+            content,
+            "reference image.png",
+            "image/png");
+
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Post, captured.Method);
+        Assert.AreEqual("/v1/projects/p1/assets/refs", captured.Uri.AbsolutePath);
+        Assert.AreEqual("Bearer " + "asset" + "-token", captured.Authorization);
+        Assert.AreEqual("multipart/form-data", captured.ContentType);
+        StringAssert.Contains(captured.Body, "name=file");
+        StringAssert.Contains(captured.Body, "filename=\"reference image.png\"");
+        StringAssert.Contains(captured.Body, "Content-Type: image/png");
+        StringAssert.Contains(captured.Body, "reference-payload");
+        Assert.IsTrue(content.IsDisposed);
+    }
+
+    [TestMethod]
+    public async Task ReviewPublishingAndAdapterMethods_UseTypedAuthenticatedContractsAndDefaults()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null
+                    ? string.Empty
+                    : await request.Content.ReadAsStringAsync(cancellationToken)));
+            return request.RequestUri!.AbsolutePath.EndsWith("/world_adapters/export", StringComparison.Ordinal)
+                ? JsonResponse("""{"ok":true,"adapter":"touchdesigner","payload":{},"simulation":{}}""")
+                : request.RequestUri.AbsolutePath.EndsWith("/variant_review/decision", StringComparison.Ordinal)
+                    ? JsonResponse("""{"ok":true,"variant_review":{}}""")
+                    : JsonResponse("""{"ok":true,"publish":{}}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("review-token"),
+            httpClient);
+
+        await client.SaveVariantDecisionAsync(
+            " project /#1 ",
+            new VariantReviewDecisionRequest
+            {
+                ArtifactPath = "outputs/frame 01.png",
+                Decision = "cherry_picked",
+                Notes = "Keep the lighting.",
+                CherryPickTraits = ["lighting"],
+                LockFields = ["seed"]
+            });
+        await client.StartLiveCuePublishAsync(" project /#1 ", new LiveCuePublishRequest());
+        await client.StopLiveCuePublishAsync(" project /#1 ");
+        await client.ExportWorldAdapterAsync(" project /#1 ", new WorldAdapterExportRequest());
+
+        Assert.HasCount(4, captured);
+        Assert.IsTrue(captured.All(item => item.Method == HttpMethod.Post));
+        Assert.IsTrue(captured.All(item => item.Authorization == "Bearer review-token"));
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%231/variant_review/decision",
+            captured[0].Uri.AbsolutePath);
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%231/live_cues/publish/start",
+            captured[1].Uri.AbsolutePath);
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%231/live_cues/publish/stop",
+            captured[2].Uri.AbsolutePath);
+        Assert.AreEqual(string.Empty, captured[2].Body);
+        Assert.AreEqual(
+            "/v1/projects/project%20%2F%231/world_adapters/export",
+            captured[3].Uri.AbsolutePath);
+
+        using var decision = JsonDocument.Parse(captured[0].Body);
+        Assert.AreEqual("outputs/frame 01.png", decision.RootElement.GetProperty("artifact_path").GetString());
+        Assert.AreEqual("cherry_picked", decision.RootElement.GetProperty("decision").GetString());
+        Assert.AreEqual("lighting", decision.RootElement.GetProperty("cherry_pick_traits")[0].GetString());
+        Assert.AreEqual("seed", decision.RootElement.GetProperty("lock_fields")[0].GetString());
+
+        using var publish = JsonDocument.Parse(captured[1].Body);
+        Assert.AreEqual("127.0.0.1", publish.RootElement.GetProperty("osc_host").GetString());
+        Assert.AreEqual(9000, publish.RootElement.GetProperty("osc_port").GetInt32());
+        Assert.IsTrue(publish.RootElement.GetProperty("midi_enabled").GetBoolean());
+        Assert.IsTrue(publish.RootElement.GetProperty("websocket_enabled").GetBoolean());
+        Assert.AreEqual(1.0, publish.RootElement.GetProperty("playback_speed").GetDouble());
+
+        using var export = JsonDocument.Parse(captured[3].Body);
+        Assert.AreEqual("touchdesigner", export.RootElement.GetProperty("adapter").GetString());
+        Assert.AreEqual(0, export.RootElement.GetProperty("variant_index").GetInt32());
+        Assert.IsFalse(export.RootElement.TryGetProperty("sequence_name", out _));
+    }
+
+    [TestMethod]
+    public async Task ReviewPublishingAndAdapterMethods_ValidateAuthoritativeSchemaBounds()
+    {
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            new HttpClient(new RecordingHandler((_, _) =>
+                Task.FromResult(JsonResponse("""{"ok":true}""")))));
+
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.SaveVariantDecisionAsync(
+                "p1",
+                new VariantReviewDecisionRequest { ArtifactPath = "a.png", Decision = "maybe" }));
+        await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() =>
+            client.StartLiveCuePublishAsync(
+                "p1",
+                new LiveCuePublishRequest { OscPort = 0 }));
+        await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() =>
+            client.ExportWorldAdapterAsync(
+                "p1",
+                new WorldAdapterExportRequest { VariantIndex = -1 }));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            client.ExportWorldAdapterAsync(
+                "p1",
+                new WorldAdapterExportRequest { Adapter = "unity" }));
+    }
+
+    [TestMethod]
+    public async Task LiveCuePublishingMethods_PropagateCancellationToTransport()
+    {
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken observedToken = default;
+        using var httpClient = new HttpClient(new RecordingHandler(async (_, cancellationToken) =>
+        {
+            observedToken = cancellationToken;
+            handlerStarted.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return JsonResponse("""{"ok":true,"publish":{}}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+        using var cancellation = new CancellationTokenSource();
+
+        var request = client.StartLiveCuePublishAsync(
+            "p1",
+            new LiveCuePublishRequest(),
+            cancellation.Token);
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => request);
+        Assert.IsTrue(observedToken.CanBeCanceled);
+        Assert.IsTrue(observedToken.IsCancellationRequested);
+    }
+
+    [TestMethod]
+    public async Task RenderSceneStillsAsync_PropagatesCancellationToTransport()
+    {
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken observedToken = default;
+        using var httpClient = new HttpClient(new RecordingHandler(async (_, cancellationToken) =>
+        {
+            observedToken = cancellationToken;
+            handlerStarted.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return JsonResponse("""{"ok":true}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+        using var cancellation = new CancellationTokenSource();
+
+        var request = client.RenderSceneStillsAsync(
+            "p1",
+            new RenderScenesRequest(),
+            cancellation.Token);
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => request);
+        Assert.IsTrue(observedToken.CanBeCanceled);
+        Assert.IsTrue(observedToken.IsCancellationRequested);
     }
 
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) => new(statusCode)

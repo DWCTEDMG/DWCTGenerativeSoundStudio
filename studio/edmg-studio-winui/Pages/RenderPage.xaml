@@ -6,7 +6,22 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Background="{ThemeResource AppCanvasBrush}">
+    <Page.Resources>
+        <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="FieldLabelStyle" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="WorkflowExpanderStyle" TargetType="Expander">
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="20" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -14,249 +29,1466 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid Margin="32,24,32,12" ColumnSpacing="16">
+        <Grid ColumnSpacing="16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Spacing="4">
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Render" />
-                <TextBlock Foreground="{ThemeResource SecondaryTextBrush}"
-                           Text="Submit validated internal renders to the CUDA-capable backend." />
+                <TextBlock Text="Render Studio" Style="{StaticResource TitleTextBlockStyle}" />
+                <TextBlock Text="Native controls for planning, generation, assembly, export, and worker operations."
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                <Border Padding="10,5" Background="{ThemeResource AccentFillColorTertiaryBrush}" CornerRadius="12">
-                    <TextBlock x:Name="ProjectText" Text="No active project" />
-                </Border>
+            <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+                <TextBlock Text="Active project" HorizontalAlignment="Right"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock x:Name="ActiveProjectText"
+                           Text="No project selected"
+                           FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="360" />
             </StackPanel>
         </Grid>
 
-        <InfoBar x:Name="StatusBar" Grid.Row="1" Margin="32,0,32,12"
-                 IsClosable="True" IsOpen="False" Severity="Informational" />
+        <InfoBar x:Name="StatusInfoBar"
+                 Grid.Row="1"
+                 IsOpen="False"
+                 IsClosable="True"
+                 Severity="Informational"
+                 AutomationProperties.AutomationId="RenderStatusInfoBar" />
 
-        <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Disabled">
-            <Grid Margin="32,0,32,24" ColumnSpacing="16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" MinWidth="480" />
-                    <ColumnDefinition Width="420" />
-                </Grid.ColumnDefinitions>
+        <Grid Grid.Row="2" ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="400" />
+            </Grid.ColumnDefinitions>
 
-                <StackPanel Spacing="16">
-                    <Border Padding="20" Background="{ThemeResource CardBackgroundBrush}"
-                            BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
-                        <StackPanel Spacing="16">
-                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="Generation" />
-                            <TextBox x:Name="PromptBox" AutomationProperties.AutomationId="Render.Prompt"
-                                     Header="Opening prompt override" AcceptsReturn="True" TextWrapping="Wrap"
-                                     PlaceholderText="Optional frame-zero prompt; timeline scenes remain authoritative." />
-                            <TextBox x:Name="NegativePromptBox" AutomationProperties.AutomationId="Render.NegativePrompt"
-                                     Header="Negative prompt" PlaceholderText="Artifacts, unwanted styles, or content to avoid" />
-                            <Grid ColumnSpacing="12" RowSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <ComboBox x:Name="ModeBox" AutomationProperties.AutomationId="Render.Mode"
-                                          Header="Mode" SelectedIndex="0">
-                                    <x:String>auto</x:String>
-                                    <x:String>diffusion</x:String>
-                                    <x:String>tensorrt</x:String>
-                                    <x:String>hosted</x:String>
-                                </ComboBox>
-                                <ComboBox x:Name="DeviceBox" Grid.Column="1" AutomationProperties.AutomationId="Render.Device"
-                                          Header="Device" SelectedIndex="0">
-                                    <x:String>auto</x:String>
-                                    <x:String>cuda</x:String>
-                                    <x:String>cpu</x:String>
-                                </ComboBox>
-                                <ComboBox x:Name="TierBox" Grid.Column="2" AutomationProperties.AutomationId="Render.Tier"
-                                          Header="Quality tier" SelectedIndex="2">
-                                    <x:String>auto</x:String>
-                                    <x:String>draft</x:String>
-                                    <x:String>balanced</x:String>
-                                    <x:String>quality</x:String>
-                                </ComboBox>
-                                <NumberBox x:Name="WidthBox" Grid.Row="1" AutomationProperties.AutomationId="Render.Width"
-                                           Header="Width" Minimum="256" Maximum="1920" SmallChange="64"
-                                           SpinButtonPlacementMode="Compact" Value="1280" />
-                                <NumberBox x:Name="HeightBox" Grid.Row="1" Grid.Column="1"
-                                           AutomationProperties.AutomationId="Render.Height"
-                                           Header="Height" Minimum="256" Maximum="1080" SmallChange="64"
-                                           SpinButtonPlacementMode="Compact" Value="720" />
-                                <NumberBox x:Name="FpsBox" Grid.Row="1" Grid.Column="2"
-                                           AutomationProperties.AutomationId="Render.Fps"
-                                           Header="Output FPS" Minimum="1" Maximum="60" SmallChange="1"
-                                           SpinButtonPlacementMode="Compact" Value="24" />
-                            </Grid>
-                        </StackPanel>
-                    </Border>
+            <TabView x:Name="WorkflowTabView"
+                     TabWidthMode="SizeToContent"
+                     AutomationProperties.AutomationId="RenderWorkflowTabs">
+                <TabViewItem Header="Internal"
+                             IsClosable="False"
+                             AutomationProperties.AutomationId="RenderInternalTab">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Padding="4,12,12,12" Spacing="12">
+                            <Expander Header="Generation"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="InternalGenerationExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <TextBlock Text="Prompt" Style="{StaticResource FieldLabelStyle}" />
+                                    <TextBox x:Name="PromptBox"
+                                             AcceptsReturn="True"
+                                             MinHeight="100"
+                                             TextWrapping="Wrap"
+                                             PlaceholderText="Describe the visual sequence"
+                                             AutomationProperties.AutomationId="RenderPromptBox" />
+                                    <TextBlock Text="Negative prompt" Style="{StaticResource FieldLabelStyle}" />
+                                    <TextBox x:Name="NegativePromptBox"
+                                             AcceptsReturn="True"
+                                             MinHeight="72"
+                                             TextWrapping="Wrap"
+                                             Text="blurry, low quality, watermark, text, logo"
+                                             AutomationProperties.AutomationId="RenderNegativePromptBox" />
 
-                    <Border Padding="20" Background="{ThemeResource CardBackgroundBrush}"
-                            BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
-                        <StackPanel Spacing="16">
-                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="Diffusion controls" />
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <NumberBox x:Name="StepsBox" AutomationProperties.AutomationId="Render.Steps"
-                                           Header="Steps" Minimum="1" Maximum="80"
-                                           SpinButtonPlacementMode="Compact" Value="28" />
-                                <NumberBox x:Name="CfgBox" Grid.Column="1" AutomationProperties.AutomationId="Render.Cfg"
-                                           Header="CFG scale" Minimum="1" Maximum="20" SmallChange="0.5"
-                                           SpinButtonPlacementMode="Compact" Value="7" />
-                                <NumberBox x:Name="SeedBox" Grid.Column="2" AutomationProperties.AutomationId="Render.Seed"
-                                           Header="Seed" Minimum="-1" Maximum="2147483647"
-                                           SpinButtonPlacementMode="Compact" Value="-1" />
-                            </Grid>
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <ComboBox x:Name="SamplerBox" AutomationProperties.AutomationId="Render.Sampler"
-                                          Header="Sampler" SelectedIndex="0">
-                                    <x:String>euler</x:String>
-                                    <x:String>euler_a</x:String>
-                                    <x:String>dpmpp_2m</x:String>
-                                    <x:String>dpmpp_sde</x:String>
-                                    <x:String>ddim</x:String>
-                                </ComboBox>
-                                <TextBox x:Name="ModelBox" Grid.Column="1" AutomationProperties.AutomationId="Render.Model"
-                                         Header="Model override" PlaceholderText="Use routing/default model" />
-                            </Grid>
-                        </StackPanel>
-                    </Border>
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Mode" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ModeComboBox"
+                                                      SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="RenderModeComboBox">
+                                                <ComboBoxItem Content="internal" />
+                                                <ComboBoxItem Content="preview" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Device" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="DeviceComboBox"
+                                                      SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="RenderDeviceComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="cuda" />
+                                                <ComboBoxItem Content="cpu" />
+                                                <ComboBoxItem Content="mps" />
+                                                <ComboBoxItem Content="directml" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Quality tier" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="TierComboBox"
+                                                      SelectedIndex="1"
+                                                      AutomationProperties.AutomationId="RenderTierComboBox">
+                                                <ComboBoxItem Content="draft" />
+                                                <ComboBoxItem Content="balanced" />
+                                                <ComboBoxItem Content="quality" />
+                                                <ComboBoxItem Content="ultra" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="Width" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="WidthBox" Value="768" Minimum="256" Maximum="1920"
+                                                       AutomationProperties.AutomationId="RenderWidthBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Height" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="HeightBox" Value="432" Minimum="256" Maximum="1080"
+                                                       AutomationProperties.AutomationId="RenderHeightBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="FPS" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="FpsBox" Value="24" Minimum="1" Maximum="60"
+                                                       AutomationProperties.AutomationId="RenderFpsBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Expander>
 
-                    <Expander Header="Advanced render options" IsExpanded="False">
-                        <Border Margin="0,8,0,0" Padding="20" Background="{ThemeResource CardBackgroundBrush}"
-                                BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
-                            <StackPanel Spacing="14">
-                                <Grid ColumnSpacing="12">
+                            <Expander Header="Diffusion and models"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="InternalDiffusionExpander">
+                                <Grid Padding="12" ColumnSpacing="12" RowSpacing="12">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox x:Name="LoraBox" AutomationProperties.AutomationId="Render.Lora"
-                                             Header="LoRAs" PlaceholderText="name@weight, another@0.7" />
-                                    <TextBox x:Name="VaeBox" Grid.Column="1" AutomationProperties.AutomationId="Render.Vae"
-                                             Header="VAE" PlaceholderText="Optional VAE override" />
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="Steps" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="StepsBox" Value="24" Minimum="1" Maximum="80"
+                                                   AutomationProperties.AutomationId="RenderStepsBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="CFG" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="CfgBox" Value="7" Minimum="1" Maximum="20" SmallChange="0.1"
+                                                   AutomationProperties.AutomationId="RenderCfgBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Spacing="4">
+                                        <TextBlock Text="Seed (blank = automatic)" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="SeedBox"
+                                                   Minimum="0"
+                                                   Maximum="4294967295"
+                                                   AutomationProperties.AutomationId="RenderSeedBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="Sampler" Style="{StaticResource FieldLabelStyle}" />
+                                        <ComboBox x:Name="SamplerComboBox"
+                                                  IsEditable="True"
+                                                  Text="euler"
+                                                  AutomationProperties.AutomationId="RenderSamplerComboBox">
+                                            <ComboBoxItem Content="euler" />
+                                            <ComboBoxItem Content="euler_a" />
+                                            <ComboBoxItem Content="dpmpp_2m" />
+                                            <ComboBoxItem Content="ddim" />
+                                            <ComboBoxItem Content="pndm" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="2" Spacing="4">
+                                        <TextBlock Text="Model ID" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="ModelBox" PlaceholderText="Optional model identifier"
+                                                 AutomationProperties.AutomationId="RenderModelBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="VAE" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="VaeBox" PlaceholderText="Optional VAE"
+                                                 AutomationProperties.AutomationId="RenderVaeBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Spacing="4">
+                                        <TextBlock Text="LoRAs (name:weight, comma separated)" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="LorasBox" PlaceholderText="detail.safetensors:0.7, style.safetensors:1.0"
+                                                 AutomationProperties.AutomationId="RenderLorasBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="4" Spacing="4">
+                                        <TextBlock Text="Refiner model" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="RefinerModelBox" PlaceholderText="Optional"
+                                                 AutomationProperties.AutomationId="RenderRefinerModelBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="4" Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="Refiner switch" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="RefinerSwitchBox" Value="0.8" Minimum="0" Maximum="1" SmallChange="0.05"
+                                                   AutomationProperties.AutomationId="RenderRefinerSwitchBox" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="EnableRefinerToggle"
+                                                  Grid.Row="5"
+                                                  Header="Enable refiner"
+                                                  AutomationProperties.AutomationId="RenderEnableRefinerToggle" />
+                                    <ToggleSwitch x:Name="FaceRestoreToggle"
+                                                  Grid.Row="5"
+                                                  Grid.Column="1"
+                                                  Header="Face restoration"
+                                                  AutomationProperties.AutomationId="RenderFaceRestoreToggle" />
                                 </Grid>
-                                <Grid ColumnSpacing="12">
+                            </Expander>
+
+                            <Expander Header="Temporal and motion controls"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="InternalMotionExpander">
+                                <Grid Padding="12" ColumnSpacing="12" RowSpacing="12">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox x:Name="RefinerBox" AutomationProperties.AutomationId="Render.Refiner"
-                                             Header="Refiner model" />
-                                    <TextBox x:Name="InterpolationBox" Grid.Column="1"
-                                             AutomationProperties.AutomationId="Render.Interpolation"
-                                             Header="Interpolation" PlaceholderText="auto, minterpolate, fps, rife" />
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="Duration (seconds)" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="DurationBox" Value="5" Minimum="0.5" Maximum="120" SmallChange="0.5"
+                                                   AutomationProperties.AutomationId="RenderDurationBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="Frames" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="FramesBox" Value="120" Minimum="1" Maximum="4000"
+                                                   AutomationProperties.AutomationId="RenderFramesBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Spacing="4">
+                                        <TextBlock Text="Motion strength" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="MotionStrengthBox" Value="1" Minimum="0" Maximum="4" SmallChange="0.1"
+                                                   AutomationProperties.AutomationId="RenderMotionStrengthBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="Temporal consistency" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="TemporalConsistencyBox" Value="0.75" Minimum="0" Maximum="1" SmallChange="0.05"
+                                                   AutomationProperties.AutomationId="RenderTemporalConsistencyBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="2" Spacing="4">
+                                        <TextBlock Text="Motion source" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="MotionSourceBox" PlaceholderText="Optional motion asset"
+                                                 AutomationProperties.AutomationId="RenderMotionSourceBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="Interpolation" Style="{StaticResource FieldLabelStyle}" />
+                                        <ComboBox x:Name="InterpolationComboBox"
+                                                  SelectedIndex="0"
+                                                  AutomationProperties.AutomationId="RenderInterpolationComboBox">
+                                            <ComboBoxItem Content="none" />
+                                            <ComboBoxItem Content="rife" />
+                                            <ComboBoxItem Content="film" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Spacing="4">
+                                        <TextBlock Text="Parseq manifest (optional JSON)" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="ParseqBox"
+                                                 AcceptsReturn="True"
+                                                 MinHeight="110"
+                                                 TextWrapping="Wrap"
+                                                 PlaceholderText="JSON object"
+                                                 AutomationProperties.AutomationId="RenderParseqBox" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="LoopToggle"
+                                                  Grid.Row="4"
+                                                  Header="Loop output"
+                                                  AutomationProperties.AutomationId="RenderLoopToggle" />
+                                    <ToggleSwitch x:Name="IncludeAudioToggle"
+                                                  Grid.Row="4"
+                                                  Grid.Column="1"
+                                                  Header="Include audio"
+                                                  AutomationProperties.AutomationId="RenderIncludeAudioToggle" />
                                 </Grid>
-                                <Grid ColumnSpacing="12">
+                            </Expander>
+
+                            <Expander Header="Hosted provider"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="InternalHostedExpander">
+                                <Grid Padding="12" ColumnSpacing="12" RowSpacing="12">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <NumberBox x:Name="KeyframeBox" AutomationProperties.AutomationId="Render.KeyframeInterval"
-                                               Header="Keyframe interval (s)" Minimum="0.5" Maximum="60" SmallChange="0.5"
-                                               SpinButtonPlacementMode="Compact" Value="5" />
-                                    <NumberBox x:Name="TemporalBox" Grid.Column="1"
-                                               AutomationProperties.AutomationId="Render.Temporal"
-                                               Header="Temporal strength" Minimum="0.01" Maximum="0.99" SmallChange="0.05"
-                                               SpinButtonPlacementMode="Compact" Value="0.35" />
-                                    <NumberBox x:Name="MotionBox" Grid.Column="2"
-                                               AutomationProperties.AutomationId="Render.Motion"
-                                               Header="Motion strategy bias" Minimum="0.25" Maximum="4.75" SmallChange="0.25"
-                                               SpinButtonPlacementMode="Compact" Value="1" />
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="Provider" Style="{StaticResource FieldLabelStyle}" />
+                                        <ComboBox x:Name="HostedProviderComboBox"
+                                                  SelectedIndex="0"
+                                                  AutomationProperties.AutomationId="RenderHostedProviderComboBox">
+                                            <ComboBoxItem Content="auto" />
+                                            <ComboBoxItem Content="replicate" />
+                                            <ComboBoxItem Content="fal" />
+                                            <ComboBoxItem Content="runway" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="Hosted model" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="HostedModelBox" PlaceholderText="Optional hosted model"
+                                                 AutomationProperties.AutomationId="RenderHostedModelBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="4">
+                                        <TextBlock Text="Provider options (JSON)" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="HostedOptionsBox"
+                                                 AcceptsReturn="True"
+                                                 MinHeight="90"
+                                                 TextWrapping="Wrap"
+                                                 PlaceholderText="JSON object"
+                                                 AutomationProperties.AutomationId="RenderHostedOptionsBox" />
+                                    </StackPanel>
                                 </Grid>
-                                <TextBox x:Name="DeforumBox" AutomationProperties.AutomationId="Render.Deforum"
-                                         Header="Parseq manifest JSON" AcceptsReturn="True"
-                                         FontFamily="Consolas" Height="110" TextWrapping="NoWrap" />
-                                <Grid ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBox x:Name="AudioAssetBox" AutomationProperties.AutomationId="Render.AudioAsset"
-                                             Header="Project audio" IsReadOnly="True"
-                                             Text="Uses active project timeline audio" />
-                                    <TextBox x:Name="VideoAssetBox" Grid.Column="1"
-                                             AutomationProperties.AutomationId="Render.VideoAsset"
-                                             Header="Source asset path" PlaceholderText="assets/refs/example.png" />
-                                </Grid>
+                            </Expander>
+
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="PreflightButton"
+                                        Content="Run preflight"
+                                        Click="Preflight_Click"
+                                        AutomationProperties.AutomationId="RenderPreflightButton" />
+                                <Button x:Name="RenderButton"
+                                        Content="Start internal render"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Click="Render_Click"
+                                        AutomationProperties.AutomationId="RenderStartButton" />
                             </StackPanel>
-                        </Border>
-                    </Expander>
-                </StackPanel>
-
-                <StackPanel Grid.Column="1" Spacing="16">
-                    <Border Padding="20" Background="{ThemeResource CardBackgroundBrush}"
-                            BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
-                        <StackPanel Spacing="14">
-                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="Hosted provider" />
-                            <ToggleSwitch x:Name="HostedBox" AutomationProperties.AutomationId="Render.UseHosted"
-                                          Header="Use hosted generation" />
-                            <ComboBox x:Name="ProviderBox" AutomationProperties.AutomationId="Render.Provider"
-                                      Header="Hosted service" SelectedIndex="0">
-                                <x:String>default</x:String>
-                                <x:String>core</x:String>
-                                <x:String>ultra</x:String>
-                                <x:String>sd3</x:String>
-                            </ComboBox>
-                            <TextBox x:Name="HostedModelBox" AutomationProperties.AutomationId="Render.HostedModel"
-                                     Header="Hosted model" PlaceholderText="Use provider default" />
-                            <ToggleSwitch x:Name="HostedFallbackBox"
-                                          AutomationProperties.AutomationId="Render.HostedFallback"
-                                          Header="Allow hosted fallback" IsOn="True" />
-                            <TextBlock Foreground="{ThemeResource SecondaryTextBrush}" TextWrapping="Wrap"
-                                       Text="Credentials remain in the backend secret store. Configure Foundry and routing under Settings." />
+                            <TextBox x:Name="PreflightResultBox"
+                                     Header="Internal preflight and render response"
+                                     AcceptsReturn="True"
+                                     IsReadOnly="True"
+                                     MinHeight="160"
+                                     TextWrapping="Wrap"
+                                     FontFamily="Consolas"
+                                     AutomationProperties.AutomationId="RenderPreflightResultBox" />
                         </StackPanel>
-                    </Border>
+                    </ScrollViewer>
+                </TabViewItem>
 
-                    <Border Padding="20" Background="{ThemeResource CardBackgroundBrush}"
-                            BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="1" CornerRadius="8">
-                        <StackPanel Spacing="12">
-                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="Preflight" />
-                            <TextBlock Foreground="{ThemeResource SecondaryTextBrush}" TextWrapping="Wrap"
-                                       Text="The backend checks project assets, capabilities, model/provider availability, and render settings." />
-                            <Button x:Name="PreflightButton" AutomationProperties.AutomationId="Render.Preflight"
-                                    Click="PreflightButton_Click" Content="Run preflight" />
-                            <TextBox x:Name="PreflightResultBox" Height="250" IsReadOnly="True"
-                                     AutomationProperties.AutomationId="Render.PreflightResult"
-                                     FontFamily="Consolas" TextWrapping="Wrap"
-                                     ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                <TabViewItem Header="Pipeline &amp; Plans"
+                             IsClosable="False"
+                             AutomationProperties.AutomationId="RenderPipelinePlansTab">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Padding="4,12,12,12" Spacing="12">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="180" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Variant index" Style="{StaticResource FieldLabelStyle}" />
+                                    <NumberBox x:Name="WorkflowVariantBox" Value="0" Minimum="0"
+                                               AutomationProperties.AutomationId="WorkflowVariantBox" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           Text="This variant is shared by pipeline, conductor, performer, and motion-sequencer actions."
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                            </Grid>
+
+                            <Expander Header="Pipeline"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="PipelineExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Preset" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="PipelinePresetComboBox" SelectedIndex="1"
+                                                      AutomationProperties.AutomationId="PipelinePresetComboBox">
+                                                <ComboBoxItem Content="fast" />
+                                                <ComboBoxItem Content="balanced" />
+                                                <ComboBoxItem Content="quality" />
+                                                <ComboBoxItem Content="ultra" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Mode" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="PipelineModeComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="PipelineModeComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="internal" />
+                                                <ComboBoxItem Content="stills" />
+                                                <ComboBoxItem Content="motion" />
+                                                <ComboBoxItem Content="smart_video" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Engine" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="PipelineEngineComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="PipelineEngineComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="internal" />
+                                                <ComboBoxItem Content="comfyui" />
+                                                <ComboBoxItem Content="hosted" />
+                                                <ComboBoxItem Content="tensorrt_standalone" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="Validate pipeline" Click="ValidatePipeline_Click"
+                                                AutomationProperties.AutomationId="ValidatePipelineButton" />
+                                        <Button Content="Run pipeline" Click="RunPipeline_Click"
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                AutomationProperties.AutomationId="RunPipelineButton" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="Render conductor"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="ConductorExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Preset" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ConductorPresetComboBox" SelectedIndex="1"
+                                                      AutomationProperties.AutomationId="ConductorPresetComboBox">
+                                                <ComboBoxItem Content="fast" />
+                                                <ComboBoxItem Content="balanced" />
+                                                <ComboBoxItem Content="quality" />
+                                                <ComboBoxItem Content="ultra" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Aspect ratio" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ConductorAspectComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="ConductorAspectComboBox">
+                                                <ComboBoxItem Content="16:9" />
+                                                <ComboBoxItem Content="9:16" />
+                                                <ComboBoxItem Content="1:1" />
+                                                <ComboBoxItem Content="21:9" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Output mode" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ConductorOutputModeComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="ConductorOutputModeComboBox">
+                                                <ComboBoxItem Content="full_video" />
+                                                <ComboBoxItem Content="scene_batch" />
+                                                <ComboBoxItem Content="preview" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="Quality tier" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ConductorQualityComboBox" SelectedIndex="1"
+                                                      AutomationProperties.AutomationId="ConductorQualityComboBox">
+                                                <ComboBoxItem Content="draft" />
+                                                <ComboBoxItem Content="balanced" />
+                                                <ComboBoxItem Content="quality" />
+                                                <ComboBoxItem Content="ultra" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Continuity priority" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="ConductorContinuityBox" Value="0.7" Minimum="0" Maximum="1" SmallChange="0.05"
+                                                       AutomationProperties.AutomationId="ConductorContinuityBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Speed priority" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="ConductorSpeedBox" Value="0.5" Minimum="0" Maximum="1" SmallChange="0.05"
+                                                       AutomationProperties.AutomationId="ConductorSpeedBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Spacing="4">
+                                            <TextBlock Text="Style lock" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="ConductorStyleLockBox" Value="0.75" Minimum="0" Maximum="1" SmallChange="0.05"
+                                                       AutomationProperties.AutomationId="ConductorStyleLockBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Fallback policy" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ConductorFallbackComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="ConductorFallbackComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="strict" />
+                                                <ComboBoxItem Content="manual" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Plan ID" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="ConductorPlanIdBox" PlaceholderText="Optional plan ID"
+                                                     AutomationProperties.AutomationId="ConductorPlanIdBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="3" Grid.ColumnSpan="3" Spacing="4">
+                                            <TextBlock Text="Allowed engines (comma separated)" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="ConductorAllowedEnginesBox"
+                                                     Text="internal, comfyui_still, comfyui_motion, hosted_video, deforum_export, tensorrt_standalone"
+                                                     AutomationProperties.AutomationId="ConductorAllowedEnginesBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="Inspect plan" Click="InspectConductorPlan_Click"
+                                                AutomationProperties.AutomationId="InspectConductorPlanButton" />
+                                        <Button Content="Create plan" Click="CreateConductorPlan_Click"
+                                                AutomationProperties.AutomationId="CreateConductorPlanButton" />
+                                        <Button Content="Inspect continuity" Click="InspectConductorContinuity_Click"
+                                                AutomationProperties.AutomationId="InspectConductorContinuityButton" />
+                                    </StackPanel>
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Promote scene IDs (comma separated)" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="ConductorSceneIdsBox" AutomationProperties.AutomationId="ConductorSceneIdsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Target engine" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ConductorTargetEngineComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="ConductorTargetEngineComboBox">
+                                                <ComboBoxItem Content="internal" />
+                                                <ComboBoxItem Content="comfyui_still" />
+                                                <ComboBoxItem Content="comfyui_motion" />
+                                                <ComboBoxItem Content="hosted_video" />
+                                                <ComboBoxItem Content="proxy" />
+                                                <ComboBoxItem Content="deforum_export" />
+                                                <ComboBoxItem Content="tensorrt_standalone" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="Promotion quality" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ConductorPromoteQualityComboBox" SelectedIndex="2"
+                                                      AutomationProperties.AutomationId="ConductorPromoteQualityComboBox">
+                                                <ComboBoxItem Content="draft" />
+                                                <ComboBoxItem Content="balanced" />
+                                                <ComboBoxItem Content="quality" />
+                                                <ComboBoxItem Content="ultra" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Promotion reason" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="ConductorPromoteReasonBox" MaxLength="400"
+                                                     AutomationProperties.AutomationId="ConductorPromoteReasonBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <Button Content="Promote conductor plan"
+                                            HorizontalAlignment="Left"
+                                            Click="PromoteConductorPlan_Click"
+                                            AutomationProperties.AutomationId="PromoteConductorPlanButton" />
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="Performer workflow"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="PerformerExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Scene IDs (comma separated)" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="PerformerSceneIdsBox" AutomationProperties.AutomationId="PerformerSceneIdsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Model ID" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="PerformerModelBox" Text="wan_s2v_14b"
+                                                     AutomationProperties.AutomationId="PerformerModelBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="Plan ID" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="PerformerPlanIdBox" AutomationProperties.AutomationId="PerformerPlanIdBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Provider" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="PerformerProviderComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="PerformerProviderComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="high_end" />
+                                                <ComboBoxItem Content="mock" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="4">
+                                            <TextBlock Text="Render settings (JSON object)" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="PerformerSettingsBox"
+                                                     Text="{}{ }"
+                                                     AcceptsReturn="True"
+                                                     MinHeight="90"
+                                                     FontFamily="Consolas"
+                                                     TextWrapping="Wrap"
+                                                     AutomationProperties.AutomationId="PerformerSettingsBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <ToggleSwitch x:Name="PerformerMockFallbackToggle"
+                                                  Header="Allow mock fallback"
+                                                  AutomationProperties.AutomationId="PerformerMockFallbackToggle" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="Inspect plan" Click="InspectPerformerPlan_Click"
+                                                AutomationProperties.AutomationId="InspectPerformerPlanButton" />
+                                        <Button Content="Create plan" Click="CreatePerformerPlan_Click"
+                                                AutomationProperties.AutomationId="CreatePerformerPlanButton" />
+                                        <Button Content="Run performer" Click="RunPerformer_Click"
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                AutomationProperties.AutomationId="RunPerformerButton" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="Motion sequencer"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="MotionSequencerExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <StackPanel Width="180" Spacing="4">
+                                            <TextBlock Text="FPS" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="MotionSequencerFpsBox" Value="24" Minimum="1" Maximum="60"
+                                                       AutomationProperties.AutomationId="MotionSequencerFpsBox" />
+                                        </StackPanel>
+                                        <ToggleSwitch x:Name="MotionSequencerActivateToggle"
+                                                      Header="Activate manifest"
+                                                      IsOn="True"
+                                                      VerticalAlignment="Bottom"
+                                                      AutomationProperties.AutomationId="MotionSequencerActivateToggle" />
+                                    </StackPanel>
+                                    <TextBox x:Name="MotionSequencerManifestBox"
+                                             Header="Manifest JSON (blank lets the backend generate one)"
+                                             AcceptsReturn="True"
+                                             MinHeight="130"
+                                             FontFamily="Consolas"
+                                             TextWrapping="Wrap"
+                                             AutomationProperties.AutomationId="MotionSequencerManifestBox" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="Inspect sequencer" Click="InspectMotionSequencer_Click"
+                                                AutomationProperties.AutomationId="InspectMotionSequencerButton" />
+                                        <Button Content="Apply motion" Click="ApplyMotionSequencer_Click"
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                AutomationProperties.AutomationId="ApplyMotionSequencerButton" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
                         </StackPanel>
-                    </Border>
-                </StackPanel>
-            </Grid>
-        </ScrollViewer>
+                    </ScrollViewer>
+                </TabViewItem>
 
-        <Border Grid.Row="3" Padding="20,12" Background="{ThemeResource CardBackgroundBrush}"
-                BorderBrush="{ThemeResource CardStrokeBrush}" BorderThickness="0,1,0,0">
-            <Grid>
-                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <ProgressRing x:Name="BusyRing" Width="20" Height="20" IsActive="False" />
-                    <TextBlock Foreground="{ThemeResource SecondaryTextBrush}"
-                               Text="Final renders always use the internal backend pipeline; proxy rendering is not available." />
-                </StackPanel>
-                <Button x:Name="RenderButton" HorizontalAlignment="Right"
-                        AutomationProperties.AutomationId="Render.Start"
-                        Click="RenderButton_Click" Style="{StaticResource AccentButtonStyle}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <SymbolIcon Symbol="Play" />
-                        <TextBlock Text="Start render" />
+                <TabViewItem Header="Render Tools"
+                             IsClosable="False"
+                             AutomationProperties.AutomationId="RenderToolsTab">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Padding="4,12,12,12" Spacing="12">
+                            <StackPanel Width="180" HorizontalAlignment="Left" Spacing="4">
+                                <TextBlock Text="Variant index" Style="{StaticResource FieldLabelStyle}" />
+                                <NumberBox x:Name="ToolsVariantBox" Value="0" Minimum="0"
+                                           AutomationProperties.AutomationId="ToolsVariantBox" />
+                            </StackPanel>
+
+                            <Expander Header="Auto render"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="AutoRenderExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="160" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Preset" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="AutoPresetBox" Text="balanced_motion"
+                                                     AutomationProperties.AutomationId="AutoPresetBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Engine" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="AutoEngineComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="AutoEngineComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="internal" />
+                                                <ComboBoxItem Content="comfyui" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="FPS" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="AutoFpsBox" Value="24" Minimum="1" Maximum="60"
+                                                       AutomationProperties.AutomationId="AutoFpsBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBox x:Name="AutoSourceBox" Header="Source asset (optional)"
+                                             AutomationProperties.AutomationId="AutoSourceBox" />
+                                    <ToggleSwitch x:Name="AutoRunToggle" Header="Run immediately" IsOn="True"
+                                                  AutomationProperties.AutomationId="AutoRunToggle" />
+                                    <Button Content="Start auto render"
+                                            HorizontalAlignment="Left"
+                                            Click="AutoRender_Click"
+                                            AutomationProperties.AutomationId="AutoRenderButton" />
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="Animated layers"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="AnimatedLayersExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <TextBox x:Name="LayerSourceBox" Header="Source asset" PlaceholderText="Required project-relative asset"
+                                             AutomationProperties.AutomationId="LayerSourceBox" />
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Mode" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="LayerModeComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="LayerModeComboBox">
+                                                <ComboBoxItem Content="parallax" />
+                                                <ComboBoxItem Content="masked" />
+                                                <ComboBoxItem Content="segment" />
+                                                <ComboBoxItem Content="background" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Motion preset" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="LayerMotionBox" PlaceholderText="Optional"
+                                                     AutomationProperties.AutomationId="LayerMotionBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Bands" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="LayerBandsBox" Value="3" Minimum="1" Maximum="8"
+                                                       AutomationProperties.AutomationId="LayerBandsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="Subject motion" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="LayerSubjectMotionBox" Value="1" Minimum="0" Maximum="4" SmallChange="0.1"
+                                                       AutomationProperties.AutomationId="LayerSubjectMotionBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Background motion" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="LayerBackgroundMotionBox" Value="0.12" Minimum="0" Maximum="4" SmallChange="0.01"
+                                                       AutomationProperties.AutomationId="LayerBackgroundMotionBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="FPS" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="LayerFpsBox" Value="24" Minimum="1" Maximum="60"
+                                                       AutomationProperties.AutomationId="LayerFpsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Spacing="4">
+                                            <TextBlock Text="Duration (seconds)" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="LayerDurationBox" Value="5" Minimum="0.5" Maximum="120" SmallChange="0.5"
+                                                       AutomationProperties.AutomationId="LayerDurationBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Width" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="LayerWidthBox" Value="768" Minimum="256" Maximum="1920"
+                                                       AutomationProperties.AutomationId="LayerWidthBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Height" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="LayerHeightBox" Value="432" Minimum="256" Maximum="1080"
+                                                       AutomationProperties.AutomationId="LayerHeightBox" />
+                                        </StackPanel>
+                                        <ToggleSwitch x:Name="LayerIncludeAudioToggle"
+                                                      Grid.Row="3"
+                                                      Header="Include audio"
+                                                      AutomationProperties.AutomationId="LayerIncludeAudioToggle" />
+                                        <ToggleSwitch x:Name="LayerRefineToggle"
+                                                      Grid.Row="3"
+                                                      Grid.Column="1"
+                                                      Header="Diffusion refine"
+                                                      AutomationProperties.AutomationId="LayerRefineToggle" />
+                                    </Grid>
+                                    <TextBox x:Name="LayerMasksBox"
+                                             Header="Masks (JSON array; required for masked mode)"
+                                             Text="[ ]"
+                                             AcceptsReturn="True"
+                                             MinHeight="100"
+                                             FontFamily="Consolas"
+                                             TextWrapping="Wrap"
+                                             AutomationProperties.AutomationId="LayerMasksBox" />
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Refine model" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="LayerRefineModelBox" Text="auto"
+                                                     AutomationProperties.AutomationId="LayerRefineModelBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Refine device" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="LayerDeviceComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="LayerDeviceComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="cuda" />
+                                                <ComboBoxItem Content="cpu" />
+                                                <ComboBoxItem Content="mps" />
+                                                <ComboBoxItem Content="directml" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                    <Button Content="Animate layers"
+                                            HorizontalAlignment="Left"
+                                            Click="AnimateLayers_Click"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            AutomationProperties.AutomationId="AnimateLayersButton" />
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="Scene stills"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="SceneStillsExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Model ID" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="StillsModelBox" AutomationProperties.AutomationId="StillsModelBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Checkpoint" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="StillsCheckpointBox" AutomationProperties.AutomationId="StillsCheckpointBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Workflow family" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="StillsWorkflowComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="StillsWorkflowComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="txt2img" />
+                                                <ComboBoxItem Content="img2img" />
+                                                <ComboBoxItem Content="inpaint" />
+                                                <ComboBoxItem Content="outpaint" />
+                                                <ComboBoxItem Content="controlnet" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="Reference asset" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="StillsReferenceBox" AutomationProperties.AutomationId="StillsReferenceBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Source asset" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="StillsSourceBox" AutomationProperties.AutomationId="StillsSourceBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Inpaint mask" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="StillsMaskBox" AutomationProperties.AutomationId="StillsMaskBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Spacing="4">
+                                            <TextBlock Text="Width" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="StillsWidthBox" Value="1024" Minimum="256" Maximum="1920"
+                                                       AutomationProperties.AutomationId="StillsWidthBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Height" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="StillsHeightBox" Value="576" Minimum="256" Maximum="1080"
+                                                       AutomationProperties.AutomationId="StillsHeightBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Steps" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="StillsStepsBox" Value="28" Minimum="1" Maximum="80"
+                                                       AutomationProperties.AutomationId="StillsStepsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="3" Spacing="4">
+                                            <TextBlock Text="CFG" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="StillsCfgBox" Value="7" Minimum="1" Maximum="20" SmallChange="0.1"
+                                                       AutomationProperties.AutomationId="StillsCfgBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Denoise" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="StillsDenoiseBox" Value="0.75" Minimum="0" Maximum="1" SmallChange="0.05"
+                                                       AutomationProperties.AutomationId="StillsDenoiseBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="3" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Seed (blank = automatic)" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="StillsSeedBox" Minimum="0" Maximum="4294967295"
+                                                       AutomationProperties.AutomationId="StillsSeedBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBox x:Name="StillsNegativeBox"
+                                             Header="Negative prompt"
+                                             Text="blurry, low quality, watermark, text, logo"
+                                             AutomationProperties.AutomationId="StillsNegativeBox" />
+                                    <Button Content="Render scene stills"
+                                            HorizontalAlignment="Left"
+                                            Click="RenderStills_Click"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            AutomationProperties.AutomationId="RenderStillsButton" />
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="ComfyUI motion scenes"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="MotionScenesExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Engine" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="MotionEngineComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="MotionEngineComboBox">
+                                                <ComboBoxItem Content="animatediff" />
+                                                <ComboBoxItem Content="svd" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Model ID" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="MotionModelBox" AutomationProperties.AutomationId="MotionModelBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Checkpoint" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="MotionCheckpointBox" AutomationProperties.AutomationId="MotionCheckpointBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="FPS" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="MotionFpsBox" Value="12" Minimum="1" Maximum="60"
+                                                       AutomationProperties.AutomationId="MotionFpsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Max frames per scene" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="MotionFramesBox" Value="240" Minimum="1" Maximum="4000"
+                                                       AutomationProperties.AutomationId="MotionFramesBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Device" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="MotionDeviceComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="MotionDeviceComboBox">
+                                                <ComboBoxItem Content="cuda" />
+                                                <ComboBoxItem Content="cpu" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Spacing="4">
+                                            <TextBlock Text="Width" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="MotionWidthBox" Value="768"
+                                                       AutomationProperties.AutomationId="MotionWidthBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Height" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="MotionHeightBox" Value="432"
+                                                       AutomationProperties.AutomationId="MotionHeightBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Steps" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="MotionStepsBox" Value="24"
+                                                       AutomationProperties.AutomationId="MotionStepsBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBox x:Name="MotionNegativeBox"
+                                             Header="Negative prompt"
+                                             Text="blurry, low quality, watermark, text, logo"
+                                             AutomationProperties.AutomationId="MotionNegativeBox" />
+                                    <Button Content="Render motion scenes"
+                                            HorizontalAlignment="Left"
+                                            Click="RenderMotionScenes_Click"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            AutomationProperties.AutomationId="RenderMotionScenesButton" />
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="Smart video (advanced JSON)"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="SmartVideoExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <TextBlock Text="Smart-video intentionally accepts a dynamic backend payload. Enter a JSON object."
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
+                                    <TextBox x:Name="SmartVideoJsonBox"
+                                             Text="{}{&#x0a;  &quot;variant_index&quot;: 0&#x0a;}"
+                                             AcceptsReturn="True"
+                                             MinHeight="160"
+                                             FontFamily="Consolas"
+                                             TextWrapping="Wrap"
+                                             AutomationProperties.AutomationId="SmartVideoJsonBox" />
+                                    <Button Content="Start smart video"
+                                            HorizontalAlignment="Left"
+                                            Click="SmartVideo_Click"
+                                            AutomationProperties.AutomationId="SmartVideoButton" />
+                                </StackPanel>
+                            </Expander>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabViewItem>
+
+                <TabViewItem Header="TensorRT &amp; Assembly"
+                             IsClosable="False"
+                             AutomationProperties.AutomationId="TensorRtAssemblyTab">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Padding="4,12,12,12" Spacing="12">
+                            <Expander Header="Standalone TensorRT"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="TensorRtExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <TextBox x:Name="TensorPromptBox"
+                                             Header="Prompt (blank uses project scene prompts)"
+                                             AcceptsReturn="True"
+                                             MinHeight="90"
+                                             TextWrapping="Wrap"
+                                             AutomationProperties.AutomationId="TensorPromptBox" />
+                                    <TextBox x:Name="TensorNegativeBox"
+                                             Header="Negative prompt"
+                                             Text="blurry, low quality, watermark, text, logo"
+                                             AutomationProperties.AutomationId="TensorNegativeBox" />
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Variant" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="TensorVariantBox" Value="0" Minimum="0" Maximum="9999"
+                                                       AutomationProperties.AutomationId="TensorVariantBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Model ID" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="TensorModelBox" AutomationProperties.AutomationId="TensorModelBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Seed" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="TensorSeedBox" Minimum="0" Maximum="4294967295"
+                                                       AutomationProperties.AutomationId="TensorSeedBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="Width" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="TensorWidthBox" Value="1024" Minimum="256" Maximum="1920"
+                                                       AutomationProperties.AutomationId="TensorWidthBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Height" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="TensorHeightBox" Value="1024" Minimum="256" Maximum="1080"
+                                                       AutomationProperties.AutomationId="TensorHeightBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Steps" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="TensorStepsBox" Value="28" Minimum="1" Maximum="80"
+                                                       AutomationProperties.AutomationId="TensorStepsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Spacing="4">
+                                            <TextBlock Text="CFG" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="TensorCfgBox" Value="7" Minimum="1" Maximum="20" SmallChange="0.1"
+                                                       AutomationProperties.AutomationId="TensorCfgBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Sampler" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="TensorSamplerComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="TensorSamplerComboBox">
+                                                <ComboBoxItem Content="pndm" />
+                                                <ComboBoxItem Content="euler" />
+                                                <ComboBoxItem Content="ddim" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Batch size" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="TensorBatchBox" Value="1" Minimum="1" Maximum="8"
+                                                       AutomationProperties.AutomationId="TensorBatchBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="Preview TensorRT" Click="PreviewTensorRt_Click"
+                                                AutomationProperties.AutomationId="PreviewTensorRtButton" />
+                                        <Button Content="Run TensorRT" Click="RunTensorRt_Click"
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                AutomationProperties.AutomationId="RunTensorRtButton" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="Scene assembly"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="AssemblyExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <TextBlock Text="Assembly uses motion clips when available and otherwise falls back to scene stills."
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <StackPanel Width="180" Spacing="4">
+                                            <TextBlock Text="Variant" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="AssemblyVariantBox" Value="0"
+                                                       AutomationProperties.AutomationId="AssemblyVariantBox" />
+                                        </StackPanel>
+                                        <StackPanel Width="180" Spacing="4">
+                                            <TextBlock Text="FPS" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="AssemblyFpsBox" Value="30"
+                                                       AutomationProperties.AutomationId="AssemblyFpsBox" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <Button Content="Assemble video"
+                                            HorizontalAlignment="Left"
+                                            Click="AssembleVideo_Click"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            AutomationProperties.AutomationId="AssembleVideoButton" />
+                                </StackPanel>
+                            </Expander>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabViewItem>
+
+                <TabViewItem Header="Exports &amp; Assets"
+                             IsClosable="False"
+                             AutomationProperties.AutomationId="ExportsAssetsTab">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Padding="4,12,12,12" Spacing="12">
+                            <Expander Header="Deforum export"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="DeforumExportExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Variant" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="DeforumVariantBox" Value="0"
+                                                       AutomationProperties.AutomationId="DeforumVariantBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="FPS" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="DeforumFpsBox" Value="30"
+                                                       AutomationProperties.AutomationId="DeforumFpsBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Preset" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="DeforumPresetComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="DeforumPresetComboBox">
+                                                <ComboBoxItem Content="cinematic" />
+                                                <ComboBoxItem Content="psychedelic" />
+                                                <ComboBoxItem Content="ambient" />
+                                                <ComboBoxItem Content="narrative" />
+                                                <ComboBoxItem Content="performance" />
+                                                <ComboBoxItem Content="abstract" />
+                                                <ComboBoxItem Content="lyric" />
+                                                <ComboBoxItem Content="product" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <StackPanel Width="180" Spacing="4">
+                                            <TextBlock Text="Width" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="DeforumWidthBox" Value="1024"
+                                                       AutomationProperties.AutomationId="DeforumWidthBox" />
+                                        </StackPanel>
+                                        <StackPanel Width="180" Spacing="4">
+                                            <TextBlock Text="Height" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="DeforumHeightBox" Value="576"
+                                                       AutomationProperties.AutomationId="DeforumHeightBox" />
+                                        </StackPanel>
+                                        <StackPanel Width="180" Spacing="4">
+                                            <TextBlock Text="Sensitivity" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="DeforumSensitivityBox" Value="1" Minimum="0.1" Maximum="3" SmallChange="0.1"
+                                                       AutomationProperties.AutomationId="DeforumSensitivityBox" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <Button Content="Export Deforum"
+                                            HorizontalAlignment="Left"
+                                            Click="ExportDeforum_Click"
+                                            AutomationProperties.AutomationId="ExportDeforumButton" />
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="ComfyUI workflow export"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="ComfyUiExportExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Grid ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Variant" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="ComfyExportVariantBox" Value="0"
+                                                       AutomationProperties.AutomationId="ComfyExportVariantBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Model ID" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="ComfyExportModelBox" AutomationProperties.AutomationId="ComfyExportModelBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Workflow family" Style="{StaticResource FieldLabelStyle}" />
+                                            <ComboBox x:Name="ComfyExportFamilyComboBox" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="ComfyExportFamilyComboBox">
+                                                <ComboBoxItem Content="auto" />
+                                                <ComboBoxItem Content="txt2img" />
+                                                <ComboBoxItem Content="img2img" />
+                                                <ComboBoxItem Content="inpaint" />
+                                                <ComboBoxItem Content="outpaint" />
+                                                <ComboBoxItem Content="controlnet" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Spacing="4">
+                                            <TextBlock Text="Source asset" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="ComfyExportSourceBox" AutomationProperties.AutomationId="ComfyExportSourceBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Reference asset" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="ComfyExportReferenceBox" AutomationProperties.AutomationId="ComfyExportReferenceBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Inpaint mask" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="ComfyExportMaskBox" AutomationProperties.AutomationId="ComfyExportMaskBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Spacing="4">
+                                            <TextBlock Text="Width" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="ComfyExportWidthBox" Value="1024"
+                                                       AutomationProperties.AutomationId="ComfyExportWidthBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="Height" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="ComfyExportHeightBox" Value="576"
+                                                       AutomationProperties.AutomationId="ComfyExportHeightBox" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="Steps" Style="{StaticResource FieldLabelStyle}" />
+                                            <NumberBox x:Name="ComfyExportStepsBox" Value="28"
+                                                       AutomationProperties.AutomationId="ComfyExportStepsBox" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBox x:Name="ComfyExportAdvancedBox"
+                                             Header="Optional advanced query JSON (loras, outpaint, controlnet_units, hires_fix, refiner, upscaler)"
+                                             Text="{}{}"
+                                             AcceptsReturn="True"
+                                             MinHeight="120"
+                                             FontFamily="Consolas"
+                                             TextWrapping="Wrap"
+                                             AutomationProperties.AutomationId="ComfyExportAdvancedBox" />
+                                    <Button Content="Export ComfyUI workflows"
+                                            HorizontalAlignment="Left"
+                                            Click="ExportComfyUi_Click"
+                                            AutomationProperties.AutomationId="ExportComfyUiButton" />
+                                </StackPanel>
+                            </Expander>
+
+                            <Expander Header="Project assets"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="AssetsExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <TextBlock Text="Choose a local file to upload it into the active project. The returned project-relative path is copied into the matching field below."
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
+                                    <Grid ColumnSpacing="8" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Button Content="Upload reference" Click="UploadReference_Click"
+                                                AutomationProperties.AutomationId="UploadReferenceButton" />
+                                        <TextBox x:Name="UploadedReferenceBox"
+                                                 Grid.Column="1"
+                                                 IsReadOnly="True"
+                                                 PlaceholderText="No reference uploaded"
+                                                 AutomationProperties.AutomationId="UploadedReferenceBox" />
+                                        <Button Grid.Row="1" Content="Upload mask" Click="UploadMask_Click"
+                                                AutomationProperties.AutomationId="UploadMaskButton" />
+                                        <TextBox x:Name="UploadedMaskBox"
+                                                 Grid.Row="1"
+                                                 Grid.Column="1"
+                                                 IsReadOnly="True"
+                                                 PlaceholderText="No mask uploaded"
+                                                 AutomationProperties.AutomationId="UploadedMaskBox" />
+                                        <Button Grid.Row="2" Content="Upload overlay" Click="UploadOverlay_Click"
+                                                AutomationProperties.AutomationId="UploadOverlayButton" />
+                                        <TextBox x:Name="UploadedOverlayBox"
+                                                 Grid.Row="2"
+                                                 Grid.Column="1"
+                                                 IsReadOnly="True"
+                                                 PlaceholderText="No overlay uploaded"
+                                                 AutomationProperties.AutomationId="UploadedOverlayBox" />
+                                    </Grid>
+                                </StackPanel>
+                            </Expander>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabViewItem>
+
+                <TabViewItem Header="Operations"
+                             IsClosable="False"
+                             AutomationProperties.AutomationId="RenderOperationsTab">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Padding="4,12,12,12" Spacing="12">
+                            <Expander Header="Worker"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="WorkerExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <TextBlock Text="Run one manual worker tick to claim and execute the next queued job."
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
+                                    <Button Content="Run worker tick"
+                                            HorizontalAlignment="Left"
+                                            Click="WorkerTick_Click"
+                                            AutomationProperties.AutomationId="WorkerTickButton" />
+                                </StackPanel>
+                            </Expander>
+                            <Expander Header="EDMG runtime"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="EdmgRuntimeExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="Get EDMG status" Click="GetEdmgStatus_Click"
+                                                AutomationProperties.AutomationId="GetEdmgStatusButton" />
+                                        <Button Content="Verify EDMG" Click="VerifyEdmg_Click"
+                                                AutomationProperties.AutomationId="VerifyEdmgButton" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
+                            <Expander Header="Project jobs"
+                                      IsExpanded="True"
+                                      Style="{StaticResource WorkflowExpanderStyle}"
+                                      AutomationProperties.AutomationId="ProjectJobsExpander">
+                                <StackPanel Padding="12" Spacing="12">
+                                    <Button Content="Refresh project jobs"
+                                            HorizontalAlignment="Left"
+                                            Click="RefreshJobs_Click"
+                                            AutomationProperties.AutomationId="RefreshRenderJobsButton" />
+                                    <TextBox x:Name="JobFeedbackBox"
+                                             AcceptsReturn="True"
+                                             IsReadOnly="True"
+                                             MinHeight="240"
+                                             FontFamily="Consolas"
+                                             TextWrapping="Wrap"
+                                             AutomationProperties.AutomationId="RenderJobFeedbackBox" />
+                                </StackPanel>
+                            </Expander>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabViewItem>
+            </TabView>
+
+            <Border Grid.Column="1"
+                    Padding="14"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                <Grid RowSpacing="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="180" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="Diagnostics" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="The latest backend response or actionable error."
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap" />
                     </StackPanel>
-                </Button>
-            </Grid>
-        </Border>
+                    <TextBox x:Name="GlobalResultBox"
+                             Grid.Row="1"
+                             AcceptsReturn="True"
+                             IsReadOnly="True"
+                             FontFamily="Consolas"
+                             TextWrapping="NoWrap"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.AutomationId="RenderGlobalDiagnosticsBox" />
+                    <Grid Grid.Row="2">
+                        <TextBlock Text="Activity log" FontWeight="SemiBold" />
+                        <Button Content="Clear"
+                                HorizontalAlignment="Right"
+                                Click="ClearLog_Click"
+                                AutomationProperties.AutomationId="ClearRenderLogButton" />
+                    </Grid>
+                    <TextBox x:Name="ActionLogBox"
+                             Grid.Row="3"
+                             AcceptsReturn="True"
+                             IsReadOnly="True"
+                             FontFamily="Consolas"
+                             TextWrapping="Wrap"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.AutomationId="RenderActionLogBox" />
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Grid Grid.Row="3" ColumnSpacing="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <ProgressRing x:Name="BusyRing"
+                          Width="24"
+                          Height="24"
+                          IsActive="False"
+                          AutomationProperties.AutomationId="RenderBusyRing" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock x:Name="BusyText"
+                           Text="Ready"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ProgressBar x:Name="BusyProgressBar"
+                             IsIndeterminate="False"
+                             Value="0"
+                             AutomationProperties.AutomationId="RenderBusyProgressBar" />
+            </StackPanel>
+        </Grid>
     </Grid>
 </Page>

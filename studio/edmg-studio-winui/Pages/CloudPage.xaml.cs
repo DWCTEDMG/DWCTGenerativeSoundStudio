@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -17,7 +18,30 @@ public sealed partial class CloudPage : Page
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        LoadFoundrySettings();
         await LoadHuggingFaceSettingsAsync();
+    }
+
+    private void OpenSettings_Click(object sender, RoutedEventArgs e) =>
+        App.Navigate("settings");
+
+    private void LoadFoundrySettings()
+    {
+        try
+        {
+            FoundryProjectSettings settings = BackendSettingsStore.LoadFoundrySettings();
+            FoundryProjectText.Text = $"Project: {settings.ProjectName}";
+            FoundrySubscriptionText.Text = $"Subscription: {settings.SubscriptionName}";
+            FoundryEndpointText.Text = $"Endpoint: {settings.ProjectEndpoint.AbsoluteUri}";
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            FoundryProjectText.Text = "Project metadata unavailable";
+            FoundrySubscriptionText.Text = "Subscription: —";
+            FoundryEndpointText.Text = "Endpoint: —";
+            ShowStatus($"Foundry metadata: {exception.Message}", InfoBarSeverity.Warning);
+        }
     }
 
     private async void AwsTest_Click(object sender, RoutedEventArgs e) =>

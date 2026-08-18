@@ -1,227 +1,996 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
+using EdmgStudio.Core.Models;
+using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.Storage;
+using Windows.Storage.Pickers;
 
 namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class AiPlannerLabPage : Page
 {
-    private const string EmptyAnalysis = """
-        {
-          "basicInfo": {},
-          "emotions": [],
-          "themes": [],
-          "visualImagery": [],
-          "spectralFeatures": {},
-          "energyCurve": []
-        }
-        """;
+    private static readonly StudioJsonContext _indentedJsonContext =
+        new(new JsonSerializerOptions { WriteIndented = true });
+    private readonly StudioSessionService _session = App.Services.Session;
+    private CancellationTokenSource? _operationCancellation;
+    private List<ProjectDto> _projects = [];
+    private PlanDto? _plan;
+    private int _selectedVariantIndex = -1;
+    private int _selectedSceneIndex = -1;
+    private bool _isLoadingProject;
+    private bool _isOperationBusy;
+    private bool _isVariantDirty;
+    private bool _suppressSceneEditorChanges;
+    private bool _suppressSceneSelection;
 
-    private const string EmptyPlan = """
-        {
-          "scenes": [],
-          "scenePlan": [],
-          "direction": {},
-          "renderManifest": {},
-          "repairSuggestions": [],
-          "approval": {}
-        }
-        """;
+    private PlanVariantDto? SelectedVariant =>
+        _plan is not null &&
+        _selectedVariantIndex >= 0 &&
+        _selectedVariantIndex < _plan.Variants.Count
+            ? _plan.Variants[_selectedVariantIndex]
+            : null;
+
+    private PlanSceneDto? SelectedScene =>
+        SelectedVariant is { } variant &&
+        _selectedSceneIndex >= 0 &&
+        _selectedSceneIndex < variant.Scenes.Count
+            ? variant.Scenes[_selectedSceneIndex]
+            : null;
 
     public AiPlannerLabPage()
     {
         InitializeComponent();
-        AnalysisJsonBox.Text = EmptyAnalysis;
-        PlanJsonBox.Text = EmptyPlan;
         Loaded += AiPlannerLabPage_Loaded;
+        Unloaded += AiPlannerLabPage_Unloaded;
     }
 
     private async void AiPlannerLabPage_Loaded(object sender, RoutedEventArgs e)
     {
-        Loaded -= AiPlannerLabPage_Loaded;
-        await LoadProjectSummaryAsync(loadPayload: true);
+        await LoadAsync();
     }
 
-    private async void LoadLastPayload_Click(object sender, RoutedEventArgs e) =>
-        await LoadProjectSummaryAsync(loadPayload: true);
-
-    private async Task LoadProjectSummaryAsync(bool loadPayload)
+    private void AiPlannerLabPage_Unloaded(object sender, RoutedEventArgs e)
     {
-        var projectId = App.Services.Session.ActiveProjectId;
-        if (string.IsNullOrWhiteSpace(projectId))
-        {
-            ProjectSummaryText.Text = "No active project. Select one in Projects before importing a Planner payload.";
-            ShowStatus("Select an active project first.", InfoBarSeverity.Warning);
-            return;
-        }
+        _operationCancellation?.Cancel();
+    }
 
-        SetBusy(true);
-        try
-        {
-            var response = await App.Services.ApiClient.GetProjectAsync(projectId);
-            var project = response.Project;
-            ProjectSummaryText.Text = $"{project.Name} • {StudioPageHelpers.ShortId(project.Id)} • variant {App.Services.Session.SelectedVariantIndex + 1}";
-            if (loadPayload && project.Meta.TryGetProperty("last_planner_lab", out var last) &&
-                last.ValueKind == JsonValueKind.Object)
+    private async Task LoadAsync()
+    {
+        await RunOperationAsync(
+            "Loading Planner context",
+            async cancellationToken =>
             {
-                if (last.TryGetProperty("analysis", out var analysis))
+                var projectsResponse = await App.Services.ApiClient.GetProjectsAsync(cancellationToken);
+                _projects = projectsResponse.Projects;
+                ProjectComboBox.ItemsSource = _projects;
+
+                var activeProjectId = _session.ActiveProjectId;
+                var selectedProject = _projects.FirstOrDefault(project => project.Id == activeProjectId)
+                                      ?? _projects.FirstOrDefault();
+                if (selectedProject is null)
                 {
-                    AnalysisJsonBox.Text = StudioPageHelpers.FormatJson(analysis);
+                    ClearPlan();
+                    ShowStatus(InfoBarSeverity.Warning, "No project", "Create a project in Workspace before using Planner.");
+                    return;
                 }
 
-                if (last.TryGetProperty("plan", out var plan))
-                {
-                    PlanJsonBox.Text = StudioPageHelpers.FormatJson(plan);
-                }
+                _isLoadingProject = true;
+                ProjectComboBox.SelectedItem = selectedProject;
+                _isLoadingProject = false;
+                await LoadProjectAsync(selectedProject.Id, cancellationToken);
+                await LoadAiReadinessAsync(cancellationToken);
+                ShowStatus(InfoBarSeverity.Success, "Planner ready", $"Loaded {selectedProject.Name}.");
+            });
+    }
 
-                if (last.TryGetProperty("settings", out var settings))
-                {
-                    LoadSettings(settings);
-                }
-            }
-        }
-        catch (Exception ex)
+    private async Task LoadProjectAsync(string projectId, CancellationToken cancellationToken)
+    {
+        var response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        _session.ActiveProjectId = response.Project.Id;
+        if (response.VisualDna.ValueKind == JsonValueKind.Object)
         {
-            ShowStatus(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+            VisualDnaTextBox.Text = FormatJson(response.VisualDna);
         }
-        finally
+
+        if (response.Project.HasPlan &&
+            response.Project.Meta.TryGetProperty("last_plan", out var planJson) &&
+            planJson.ValueKind == JsonValueKind.Object)
         {
-            SetBusy(false);
+            _plan = JsonSerializer.Deserialize(planJson.GetRawText(), StudioJson.GetTypeInfo<PlanDto>());
+            PresentPlan();
+        }
+        else
+        {
+            ClearPlan();
         }
     }
 
-    private async void ImportPlanner_Click(object sender, RoutedEventArgs e)
+    private async Task LoadAiReadinessAsync(CancellationToken cancellationToken)
     {
-        var projectId = App.Services.Session.ActiveProjectId;
-        if (string.IsNullOrWhiteSpace(projectId))
+        var response = await App.Services.ApiClient.GetAiReadinessAsync(cancellationToken);
+        var configuration = response.AiConfiguration;
+        var readiness = configuration.IsReady switch
         {
-            ShowStatus("Select an active project first.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        if (!TryParseObject(AnalysisJsonBox.Text, "Analysis", out var analysis) ||
-            !TryParseObject(PlanJsonBox.Text, "Plan", out var plan))
-        {
-            return;
-        }
-
-        var request = new JsonObject
-        {
-            ["analysis"] = analysis,
-            ["plan"] = plan,
-            ["settings"] = BuildSettings(),
-            ["apply_timeline"] = ApplyTimelineCheckBox.IsChecked == true,
-            ["overwrite_timeline"] = OverwriteTimelineCheckBox.IsChecked == true,
+            true => "ready",
+            false => "not ready",
+            null => "status unknown",
         };
-
-        SetBusy(true);
-        try
-        {
-            await App.Services.ApiClient.ImportPlannerLabAsync(projectId, ToJsonElement(request));
-            ShowStatus("Planner payload imported. Canonical analysis, plan, Visual DNA, and requested timeline state were updated by the backend.", InfoBarSeverity.Success);
-        }
-        catch (Exception ex)
-        {
-            ShowStatus(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+        var provider = string.IsNullOrWhiteSpace(configuration.Label)
+            ? configuration.Provider
+            : configuration.Label;
+        var model = string.IsNullOrWhiteSpace(configuration.Model) ? string.Empty : $" · {configuration.Model}";
+        ProviderStatusText.Text = $"{provider} · {readiness}{model}" +
+                                  (string.IsNullOrWhiteSpace(configuration.Warning)
+                                      ? string.Empty
+                                      : $"\n{configuration.Warning}");
     }
 
-    private JsonObject BuildSettings() => new()
+    private async void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        ["analysisFocus"] = SelectedText(AnalysisFocusCombo),
-        ["promptStyle"] = SelectedText(PromptStyleCombo),
-        ["promptDetail"] = SelectedText(PromptDetailCombo),
-        ["aspectRatio"] = SelectedText(AspectRatioCombo),
-        ["target"] = SelectedText(TargetCombo),
-        ["sceneCount"] = (int)SceneCountBox.Value,
-        ["subjectFocus"] = SubjectFocusBox.Text,
-        ["creativeBrief"] = CreativeBriefBox.Text,
-        ["negativePromptSeed"] = NegativePromptBox.Text,
-        ["selectedVariantMode"] = SelectedText(VariantModeCombo),
-    };
-
-    private void LoadSettings(JsonElement settings)
-    {
-        SelectText(AnalysisFocusCombo, settings, "analysisFocus");
-        SelectText(PromptStyleCombo, settings, "promptStyle");
-        SelectText(PromptDetailCombo, settings, "promptDetail");
-        SelectText(AspectRatioCombo, settings, "aspectRatio");
-        SelectText(TargetCombo, settings, "target");
-        SelectText(VariantModeCombo, settings, "selectedVariantMode");
-        if (settings.TryGetProperty("sceneCount", out var sceneCount) && sceneCount.TryGetDouble(out var count))
+        if (_isLoadingProject || ProjectComboBox.SelectedItem is not ProjectDto project)
         {
-            SceneCountBox.Value = count;
+            return;
         }
-        SubjectFocusBox.Text = ReadString(settings, "subjectFocus");
-        CreativeBriefBox.Text = ReadString(settings, "creativeBrief");
-        NegativePromptBox.Text = ReadString(settings, "negativePromptSeed");
+
+        if (!string.Equals(project.Id, _session.ActiveProjectId, StringComparison.Ordinal) &&
+            !CanReplacePlan("switching projects"))
+        {
+            RestoreActiveProjectSelection();
+            return;
+        }
+
+        await RunOperationAsync(
+            "Switching project",
+            cancellationToken => LoadProjectAsync(project.Id, cancellationToken),
+            successMessage: $"Planner is now using {project.Name}.");
     }
 
-    private bool TryParseObject(string json, string label, out JsonNode? node)
+    private async void RefreshPlannerButton_Click(object sender, RoutedEventArgs e)
     {
-        try
+        if (!CanReplacePlan("refreshing Planner"))
         {
-            node = JsonNode.Parse(json);
-            if (node is JsonObject)
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async void GeneratePlanButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CanReplacePlan("generating a new plan"))
+        {
+            return;
+        }
+
+        if (ProjectComboBox.SelectedItem is not ProjectDto project)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Select a project", "Planner needs an active project.");
+            return;
+        }
+
+        var request = BuildPlanRequest();
+        var errors = PlannerWorkflow.Validate(request);
+        if (errors.Count > 0)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Review Planner settings", string.Join(Environment.NewLine, errors));
+            return;
+        }
+
+        var mode = (PlanningModeComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
+        await RunOperationAsync(
+            "Generating plan variants",
+            async cancellationToken =>
             {
-                return true;
+                _plan = await App.Services.ApiClient.GeneratePlanAsync(project.Id, request, mode, cancellationToken);
+                PresentPlan();
+                var refreshed = await App.Services.ApiClient.GetProjectAsync(project.Id, cancellationToken);
+                _session.ActiveProjectId = refreshed.Project.Id;
+            },
+            successMessage: $"Generated {_plan?.Variants.Count ?? 0} plan variants.");
+    }
+
+    private PlanRequest BuildPlanRequest()
+    {
+        var creativeSettings = new PlannerCreativeSettings(
+            CreativeBriefTextBox.Text,
+            VisualDnaTextBox.Text,
+            ConstraintsTextBox.Text,
+            PromptSeedTextBox.Text,
+            DirectorPresetComboBox.Text,
+            MotionPresetComboBox.Text,
+            AnimationPresetComboBox.Text,
+            RenderPresetComboBox.Text,
+            ConductorIntentTextBox.Text);
+
+        return new PlanRequest(
+            NullIfWhiteSpace(TitleTextBox.Text),
+            NullIfWhiteSpace(CreativeBriefTextBox.Text),
+            NullIfWhiteSpace(PlannerWorkflow.BuildStylePreferences(creativeSettings)),
+            (int)VariantCountNumberBox.Value,
+            (int)SceneCountNumberBox.Value);
+    }
+
+    private void PresentPlan()
+    {
+        _isVariantDirty = false;
+        var items = _plan?.Variants
+            .Select((variant, index) => new PlannerVariantItem(variant, index))
+            .ToList() ?? [];
+        VariantListView.ItemsSource = items;
+        RawPlanTextBox.Text = _plan is null
+            ? string.Empty
+            : JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>());
+
+        if (items.Count == 0)
+        {
+            _selectedVariantIndex = -1;
+            _selectedSceneIndex = -1;
+            SceneListView.ItemsSource = null;
+            VariantTitleText.Text = "No variants";
+            VariantLoglineText.Text = "Generate or import a plan to begin.";
+            ClearSceneEditor();
+            return;
+        }
+
+        var preferredIndex = Math.Clamp(_session.SelectedVariantIndex, 0, items.Count - 1);
+        VariantListView.SelectedIndex = preferredIndex;
+        SelectVariant(items[preferredIndex]);
+    }
+
+    private void VariantListView_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is PlannerVariantItem item)
+        {
+            if (item.Position != _selectedVariantIndex && !CommitPendingSceneEdits())
+            {
+                VariantListView.SelectedIndex = _selectedVariantIndex;
+                return;
             }
-            ShowStatus($"{label} JSON must have an object at its root.", InfoBarSeverity.Warning);
+
+            if (item.Position != _selectedVariantIndex && _isVariantDirty)
+            {
+                VariantListView.SelectedIndex = _selectedVariantIndex;
+                ShowStatus(
+                    InfoBarSeverity.Warning,
+                    "Save scene edits",
+                    "Save the current variant before switching to another variant.");
+                return;
+            }
+
+            SelectVariant(item);
+        }
+    }
+
+    private void SelectVariant(PlannerVariantItem item)
+    {
+        _selectedVariantIndex = item.Position;
+        _session.SelectedVariantIndex = item.Position;
+        VariantTitleText.Text = item.DisplayName;
+        VariantLoglineText.Text = string.IsNullOrWhiteSpace(item.Variant.Logline)
+            ? $"{item.Variant.SceneCount} scenes"
+            : item.Variant.Logline;
+        RefreshSceneList();
+    }
+
+    private async void ApplyTimelineButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProjectComboBox.SelectedItem is not ProjectDto project || _selectedVariantIndex < 0)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Select a variant", "Choose the variant to apply to Timeline.");
+            return;
+        }
+
+        if (!CommitPendingSceneEdits())
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Apply selected plan to Timeline?",
+            Content = "This replaces generated Timeline content with the selected Planner variant.",
+            PrimaryButtonText = "Apply plan",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        if (!await SaveSelectedVariantAsync())
+        {
+            return;
+        }
+
+        await RunOperationAsync(
+            "Applying plan to Timeline",
+            cancellationToken => App.Services.ApiClient.ApplyPlanToTimelineAsync(
+                project.Id,
+                _selectedVariantIndex,
+                true,
+                cancellationToken),
+            successMessage: "The selected variant is now applied to Timeline.");
+    }
+
+    private void SceneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSceneSelection || SceneListView.SelectedItem is not PlannerSceneItem item)
+        {
+            return;
+        }
+
+        int previousIndex = _selectedSceneIndex;
+        if (item.Index != previousIndex && !CommitPendingSceneEdits())
+        {
+            SetSceneListSelection(previousIndex);
+            return;
+        }
+
+        SelectScene(item.Index);
+    }
+
+    private void SceneTimingNumberBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args) =>
+        MarkSceneEditorDirty();
+
+    private void ScenePromptTextBox_TextChanged(object sender, TextChangedEventArgs e) =>
+        MarkSceneEditorDirty();
+
+    private void PreviousSceneButton_Click(object sender, RoutedEventArgs e) =>
+        NavigateScene(-1);
+
+    private void NextSceneButton_Click(object sender, RoutedEventArgs e) =>
+        NavigateScene(1);
+
+    private void MoveSceneEarlierButton_Click(object sender, RoutedEventArgs e) =>
+        MoveSelectedScene(-1);
+
+    private void MoveSceneLaterButton_Click(object sender, RoutedEventArgs e) =>
+        MoveSelectedScene(1);
+
+    private void ApproveSceneButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CommitPendingSceneEdits() || SelectedScene is not { } scene)
+        {
+            return;
+        }
+
+        ReplaceSelectedScene(
+            WorkspaceModelHelpers.SetSceneApproval(
+                scene,
+                !WorkspaceModelHelpers.IsSceneApproved(scene)));
+    }
+
+    private void LockSceneButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedScene is not { } scene)
+        {
+            return;
+        }
+
+        bool wasLocked = WorkspaceModelHelpers.IsSceneLocked(scene);
+        if (!wasLocked && !CommitPendingSceneEdits())
+        {
+            return;
+        }
+
+        scene = SelectedScene ?? scene;
+        ReplaceSelectedScene(WorkspaceModelHelpers.SetSceneLocked(scene, !wasLocked));
+    }
+
+    private void RepairSceneButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CommitPendingSceneEdits() || SelectedScene is not { } scene)
+        {
+            return;
+        }
+
+        if (WorkspaceModelHelpers.IsSceneLocked(scene))
+        {
+            ShowStatus(
+                InfoBarSeverity.Warning,
+                "Scene locked",
+                "Unlock the scene before marking it for repair.");
+            return;
+        }
+
+        ReplaceSelectedScene(WorkspaceModelHelpers.MarkSceneNeedsRepair(scene));
+    }
+
+    private async void SaveScenesButton_Click(object sender, RoutedEventArgs e) =>
+        _ = await SaveSelectedVariantAsync();
+
+    private async void ImportPlanButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CanReplacePlan("importing a plan"))
+        {
+            return;
+        }
+
+        if (ProjectComboBox.SelectedItem is not ProjectDto project)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Select a project", "Choose the destination project first.");
+            return;
+        }
+
+        var picker = new FileOpenPicker();
+        InitializePicker(picker);
+        picker.FileTypeFilter.Add(".json");
+        var file = await picker.PickSingleFileAsync();
+        if (file is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var json = await FileIO.ReadTextAsync(file);
+            var request = JsonSerializer.Deserialize(json, StudioJson.GetTypeInfo<PlannerLabImportRequest>())
+                          ?? throw new JsonException("The file did not contain a Planner import document.");
+            await RunOperationAsync(
+                "Importing Planner document",
+                async cancellationToken =>
+                {
+                    var response = await App.Services.ApiClient.ImportPlannerLabAsync(project.Id, request, cancellationToken);
+                    _plan = response.Plan;
+                    PresentPlan();
+                    var refreshed = await App.Services.ApiClient.GetProjectAsync(project.Id, cancellationToken);
+                    _session.ActiveProjectId = refreshed.Project.Id;
+                },
+                successMessage: $"Imported {file.Name}.");
         }
         catch (JsonException ex)
         {
-            ShowStatus($"{label} JSON is invalid: {ex.Message}", InfoBarSeverity.Warning);
+            ShowStatus(InfoBarSeverity.Error, "Import failed", ex.Message);
         }
-        node = null;
+    }
+
+    private async void ExportPlanButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_plan is null || ProjectComboBox.SelectedItem is not ProjectDto project)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Nothing to export", "Generate or import a plan first.");
+            return;
+        }
+
+        var picker = new FileSavePicker();
+        InitializePicker(picker);
+        picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+        picker.FileTypeChoices.Add("JSON document", [".json"]);
+        picker.SuggestedFileName = $"{SafeFileName(project.Name)}-plan";
+        var file = await picker.PickSaveFileAsync();
+        if (file is null)
+        {
+            return;
+        }
+
+        await FileIO.WriteTextAsync(file, JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>()));
+        ShowStatus(InfoBarSeverity.Success, "Plan exported", file.Path);
+    }
+
+    private void RefreshSceneList()
+    {
+        var variant = SelectedVariant;
+        if (variant is null || variant.Scenes.Count == 0)
+        {
+            _selectedSceneIndex = -1;
+            SceneListView.ItemsSource = null;
+            ClearSceneEditor();
+            return;
+        }
+
+        int preferredIndex = _selectedSceneIndex >= 0
+            ? Math.Min(_selectedSceneIndex, variant.Scenes.Count - 1)
+            : 0;
+        var items = variant.Scenes
+            .Select((scene, index) => new PlannerSceneItem(scene, index, variant.Scenes.Count))
+            .ToList();
+
+        _suppressSceneSelection = true;
+        try
+        {
+            SceneListView.ItemsSource = items;
+            SceneListView.SelectedIndex = preferredIndex;
+        }
+        finally
+        {
+            _suppressSceneSelection = false;
+        }
+
+        SelectScene(preferredIndex);
+    }
+
+    private void SelectScene(int index)
+    {
+        var variant = SelectedVariant;
+        if (variant is null || index < 0 || index >= variant.Scenes.Count)
+        {
+            ClearSceneEditor();
+            return;
+        }
+
+        _selectedSceneIndex = index;
+        var scene = variant.Scenes[index];
+        _suppressSceneEditorChanges = true;
+        try
+        {
+            SceneSelectionHint.Visibility = Visibility.Collapsed;
+            SceneEditorPanel.Visibility = Visibility.Visible;
+            ScenePositionText.Text = $"Scene {index + 1} of {variant.Scenes.Count}";
+            SceneStartNumberBox.Value = scene.StartSeconds;
+            SceneEndNumberBox.Value = scene.EndSeconds;
+            ScenePromptTextBox.Text = scene.Prompt;
+            SceneNegativePromptTextBox.Text = scene.NegativePrompt ?? string.Empty;
+        }
+        finally
+        {
+            _suppressSceneEditorChanges = false;
+        }
+
+        UpdateCurationControls();
+    }
+
+    private void ClearSceneEditor()
+    {
+        _selectedSceneIndex = -1;
+        _suppressSceneEditorChanges = true;
+        try
+        {
+            SceneSelectionHint.Text = "Select a scene to edit timing, prompts, approval, and continuity state.";
+            SceneSelectionHint.Visibility = Visibility.Visible;
+            SceneEditorPanel.Visibility = Visibility.Collapsed;
+            ScenePositionText.Text = string.Empty;
+            SceneStartNumberBox.Value = double.NaN;
+            SceneEndNumberBox.Value = double.NaN;
+            ScenePromptTextBox.Text = string.Empty;
+            SceneNegativePromptTextBox.Text = string.Empty;
+        }
+        finally
+        {
+            _suppressSceneEditorChanges = false;
+        }
+
+        UpdateCurationControls();
+    }
+
+    private void UpdateCurationControls()
+    {
+        var variant = SelectedVariant;
+        var scene = SelectedScene;
+        bool hasScene = scene is not null;
+        bool isLocked = scene is not null && WorkspaceModelHelpers.IsSceneLocked(scene);
+        bool canEdit = hasScene && !isLocked && !_isOperationBusy;
+
+        SceneStartNumberBox.IsEnabled = canEdit;
+        SceneEndNumberBox.IsEnabled = canEdit;
+        ScenePromptTextBox.IsEnabled = canEdit;
+        SceneNegativePromptTextBox.IsEnabled = canEdit;
+        PreviousSceneButton.IsEnabled = hasScene && _selectedSceneIndex > 0 && !_isOperationBusy;
+        NextSceneButton.IsEnabled =
+            hasScene &&
+            variant is not null &&
+            _selectedSceneIndex < variant.Scenes.Count - 1 &&
+            !_isOperationBusy;
+        MoveSceneEarlierButton.IsEnabled = canEdit && _selectedSceneIndex > 0;
+        MoveSceneLaterButton.IsEnabled =
+            canEdit &&
+            variant is not null &&
+            _selectedSceneIndex < variant.Scenes.Count - 1;
+        ApproveSceneButton.IsEnabled = hasScene && !_isOperationBusy;
+        LockSceneButton.IsEnabled = hasScene && !_isOperationBusy;
+        RepairSceneButton.IsEnabled = canEdit;
+        SaveScenesButton.IsEnabled = variant is not null && _isVariantDirty && !_isOperationBusy;
+
+        if (scene is null)
+        {
+            SceneStateText.Text = "No scene selected.";
+            CurationStatusText.Text = string.Empty;
+            ApproveSceneButton.Content = "Approve";
+            LockSceneButton.Content = "Lock";
+            return;
+        }
+
+        bool isApproved = WorkspaceModelHelpers.IsSceneApproved(scene);
+        var stateParts = new List<string>
+        {
+            string.IsNullOrWhiteSpace(WorkspaceModelHelpers.GetSceneStatus(scene))
+                ? "draft"
+                : WorkspaceModelHelpers.GetSceneStatus(scene),
+        };
+        if (isApproved)
+        {
+            stateParts.Add("approved");
+        }
+
+        if (isLocked)
+        {
+            stateParts.Add("locked");
+        }
+
+        SceneStateText.Text = $"State: {string.Join(" · ", stateParts.Distinct(StringComparer.OrdinalIgnoreCase))}";
+        CurationStatusText.Text = isLocked
+            ? "Unlock this scene to change timing, prompts, order, or repair state."
+            : _isVariantDirty
+                ? "This variant has unsaved scene changes."
+                : "Scene changes are synchronized with the saved variant.";
+        ApproveSceneButton.Content = isApproved ? "Clear approval" : "Approve";
+        LockSceneButton.Content = isLocked ? "Unlock" : "Lock";
+    }
+
+    private void MarkSceneEditorDirty()
+    {
+        if (_suppressSceneEditorChanges || SelectedScene is null)
+        {
+            return;
+        }
+
+        _isVariantDirty = true;
+        UpdateCurationControls();
+    }
+
+    private bool CommitPendingSceneEdits()
+    {
+        if (!_isVariantDirty || SelectedScene is not { } scene)
+        {
+            return true;
+        }
+
+        if (WorkspaceModelHelpers.IsSceneLocked(scene))
+        {
+            return true;
+        }
+
+        double start = SceneStartNumberBox.Value;
+        double end = SceneEndNumberBox.Value;
+        string prompt = ScenePromptTextBox.Text.Trim();
+        if (!double.IsFinite(start) || start < 0 ||
+            !double.IsFinite(end) || end <= start)
+        {
+            ShowStatus(
+                InfoBarSeverity.Warning,
+                "Review scene timing",
+                "Scene timing must be finite and nonnegative, and the end must be later than the start.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            ShowStatus(
+                InfoBarSeverity.Warning,
+                "Review scene prompt",
+                "The scene prompt cannot be empty.");
+            return false;
+        }
+
+        ReplaceSelectedScene(
+            WorkspaceModelHelpers.CloneScene(
+                scene,
+                startSeconds: start,
+                endSeconds: end,
+                prompt: prompt,
+                negativePrompt: NullIfWhiteSpace(SceneNegativePromptTextBox.Text),
+                replaceNegativePrompt: true),
+            refreshList: false);
+        RefreshSceneList();
+        return true;
+    }
+
+    private void ReplaceSelectedScene(PlanSceneDto replacement, bool refreshList = true)
+    {
+        var variant = SelectedVariant;
+        if (variant is null || _selectedSceneIndex < 0 || _selectedSceneIndex >= variant.Scenes.Count)
+        {
+            return;
+        }
+
+        variant.Scenes[_selectedSceneIndex] = replacement;
+        _isVariantDirty = true;
+        SynchronizeRawPlan();
+        if (refreshList)
+        {
+            RefreshSceneList();
+        }
+        else
+        {
+            UpdateCurationControls();
+        }
+    }
+
+    private void NavigateScene(int offset)
+    {
+        var variant = SelectedVariant;
+        int targetIndex = _selectedSceneIndex + offset;
+        if (variant is null || targetIndex < 0 || targetIndex >= variant.Scenes.Count)
+        {
+            return;
+        }
+
+        if (!CommitPendingSceneEdits())
+        {
+            return;
+        }
+
+        SetSceneListSelection(targetIndex);
+        SelectScene(targetIndex);
+    }
+
+    private void MoveSelectedScene(int offset)
+    {
+        var variant = SelectedVariant;
+        int targetIndex = _selectedSceneIndex + offset;
+        if (variant is null || SelectedScene is not { } scene ||
+            targetIndex < 0 || targetIndex >= variant.Scenes.Count)
+        {
+            return;
+        }
+
+        if (WorkspaceModelHelpers.IsSceneLocked(scene))
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Scene locked", "Unlock the scene before moving it.");
+            return;
+        }
+
+        if (!CommitPendingSceneEdits())
+        {
+            return;
+        }
+
+        var reordered = WorkspaceModelHelpers.MoveScene(variant.Scenes, _selectedSceneIndex, offset);
+        variant.Scenes.Clear();
+        variant.Scenes.AddRange(reordered);
+        _selectedSceneIndex = Math.Clamp(targetIndex, 0, variant.Scenes.Count - 1);
+        _isVariantDirty = true;
+        SynchronizeRawPlan();
+        RefreshSceneList();
+    }
+
+    private void SetSceneListSelection(int index)
+    {
+        _suppressSceneSelection = true;
+        try
+        {
+            SceneListView.SelectedIndex = index;
+        }
+        finally
+        {
+            _suppressSceneSelection = false;
+        }
+    }
+
+    private async Task<bool> SaveSelectedVariantAsync()
+    {
+        if (!CommitPendingSceneEdits())
+        {
+            return false;
+        }
+
+        if (!_isVariantDirty)
+        {
+            return true;
+        }
+
+        if (ProjectComboBox.SelectedItem is not ProjectDto project ||
+            SelectedVariant is not { } variant)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Cannot save scenes", "Select a project and plan variant first.");
+            return false;
+        }
+
+        int sceneIndex = _selectedSceneIndex;
+        bool saved = false;
+        await RunOperationAsync(
+            "Saving curated scenes",
+            async cancellationToken =>
+            {
+                var response = await App.Services.ApiClient.UpdatePlanVariantAsync(
+                    project.Id,
+                    _selectedVariantIndex,
+                    variant.Scenes,
+                    cancellationToken);
+                if (!response.Ok || response.Plan is null)
+                {
+                    throw new InvalidDataException("The backend did not return the normalized saved plan.");
+                }
+
+                _plan = response.Plan;
+                int normalizedVariantIndex = response.VariantIndex ?? _selectedVariantIndex;
+                if (normalizedVariantIndex < 0 || normalizedVariantIndex >= _plan.Variants.Count)
+                {
+                    throw new InvalidDataException("The backend returned an invalid saved variant index.");
+                }
+
+                _selectedVariantIndex = normalizedVariantIndex;
+                _selectedSceneIndex = sceneIndex;
+                _session.SelectedVariantIndex = _selectedVariantIndex;
+                PresentPlan();
+                saved = true;
+            },
+            successMessage: "Curated scenes were saved to the project.");
+        return saved;
+    }
+
+    private bool CanReplacePlan(string action)
+    {
+        if (!_isVariantDirty || CommitPendingSceneEdits() && !_isVariantDirty)
+        {
+            return true;
+        }
+
+        ShowStatus(
+            InfoBarSeverity.Warning,
+            "Save scene edits",
+            $"Save the current variant before {action}.");
         return false;
     }
 
-    private static string SelectedText(ComboBox combo) =>
-        (combo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? string.Empty;
-
-    private static void SelectText(ComboBox combo, JsonElement source, string property)
+    private void RestoreActiveProjectSelection()
     {
-        var value = ReadString(source, property);
-        for (var index = 0; index < combo.Items.Count; index++)
+        var activeProject = _projects.FirstOrDefault(
+            project => string.Equals(project.Id, _session.ActiveProjectId, StringComparison.Ordinal));
+        _isLoadingProject = true;
+        ProjectComboBox.SelectedItem = activeProject;
+        _isLoadingProject = false;
+    }
+
+    private void CancelPlannerButton_Click(object sender, RoutedEventArgs e) =>
+        _operationCancellation?.Cancel();
+
+    private void OpenWorkspaceButton_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
+
+    private void OpenTimelineButton_Click(object sender, RoutedEventArgs e) => App.Navigate("timeline");
+
+    private void OpenRenderButton_Click(object sender, RoutedEventArgs e) => App.Navigate("render");
+
+    private async Task RunOperationAsync(
+        string title,
+        Func<CancellationToken, Task> operation,
+        string? successMessage = null)
+    {
+        _operationCancellation?.Cancel();
+        var operationCancellation = new CancellationTokenSource();
+        _operationCancellation = operationCancellation;
+        SetBusy(true);
+        ShowStatus(InfoBarSeverity.Informational, title, "Working…");
+        try
         {
-            if (combo.Items[index] is ComboBoxItem item &&
-                string.Equals(item.Content?.ToString(), value, StringComparison.Ordinal))
+            await operation(operationCancellation.Token);
+            if (!string.IsNullOrWhiteSpace(successMessage))
             {
-                combo.SelectedIndex = index;
-                return;
+                ShowStatus(InfoBarSeverity.Success, "Planner updated", successMessage);
+            }
+        }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Operation canceled", "No additional Planner changes were requested.");
+        }
+        catch (InvalidDataException ex)
+        {
+            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
+        }
+        catch (HttpRequestException ex)
+        {
+            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
+        }
+        finally
+        {
+            operationCancellation.Dispose();
+            if (ReferenceEquals(_operationCancellation, operationCancellation))
+            {
+                _operationCancellation = null;
+                SetBusy(false);
             }
         }
     }
 
-    private static string ReadString(JsonElement source, string property) =>
-        source.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString() ?? string.Empty
-            : string.Empty;
-
-    private static JsonElement ToJsonElement(JsonObject value)
-    {
-        using var document = JsonDocument.Parse(value.ToJsonString());
-        return document.RootElement.Clone();
-    }
+    private async Task RunOperationAsync<T>(
+        string title,
+        Func<CancellationToken, Task<T>> operation,
+        string? successMessage = null) =>
+        await RunOperationAsync(title, async cancellationToken => _ = await operation(cancellationToken), successMessage);
 
     private void SetBusy(bool isBusy)
     {
-        BusyIndicator.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
-        StudioPageHelpers.SetControlsEnabled(this, !isBusy);
+        _isOperationBusy = isBusy;
+        PlannerProgressRing.IsActive = isBusy;
+        PlannerProgressRing.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
+        CancelPlannerButton.IsEnabled = isBusy;
+        RefreshPlannerButton.IsEnabled = !isBusy;
+        GeneratePlanButton.IsEnabled = !isBusy;
+        ProjectComboBox.IsEnabled = !isBusy;
+        UpdateCurationControls();
     }
 
-    private void ShowStatus(string message, InfoBarSeverity severity)
+    private void ShowStatus(InfoBarSeverity severity, string title, string message)
     {
-        StatusInfoBar.Title = severity == InfoBarSeverity.Success ? "Planner import complete" : "Planner";
-        StatusInfoBar.Message = message;
-        StatusInfoBar.Severity = severity;
-        StatusInfoBar.IsOpen = true;
+        PlannerInfoBar.Severity = severity;
+        PlannerInfoBar.Title = title;
+        PlannerInfoBar.Message = message;
+        PlannerInfoBar.IsOpen = true;
     }
 
-    private void OpenWorkspace_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
+    private void ClearPlan()
+    {
+        _plan = null;
+        _selectedVariantIndex = -1;
+        _selectedSceneIndex = -1;
+        _isVariantDirty = false;
+        VariantListView.ItemsSource = null;
+        SceneListView.ItemsSource = null;
+        RawPlanTextBox.Text = string.Empty;
+        VariantTitleText.Text = "Select a variant";
+        VariantLoglineText.Text = "Generated scene structure and raw backend data will appear here.";
+        ClearSceneEditor();
+    }
+
+    private void SynchronizeRawPlan()
+    {
+        RawPlanTextBox.Text = _plan is null
+            ? string.Empty
+            : JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>());
+    }
+
+    private static void InitializePicker(object picker)
+    {
+        var window = App.MainWindowInstance
+                     ?? throw new InvalidOperationException("The main window is not available.");
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+    }
+
+    private static string FormatJson(JsonElement value) =>
+        JsonSerializer.Serialize(value, _indentedJsonContext.JsonElement);
+
+    private static string? NullIfWhiteSpace(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string SafeFileName(string value) =>
+        string.Concat(value.Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '-' : character));
+
+    private sealed record PlannerVariantItem(PlanVariantDto Variant, int Position)
+    {
+        public string DisplayName => Variant.DisplayName;
+
+        public string Summary =>
+            $"{Variant.SceneCount} scenes" +
+            (Variant.DurationSeconds is double duration ? $" · {duration:0.#} s" : string.Empty);
+    }
+
+    private sealed record PlannerSceneItem(PlanSceneDto Scene, int Index, int Total)
+    {
+        public string Position => $"Scene {Index + 1} of {Total}";
+
+        public string TimeRange => $"{Scene.StartSeconds:0.##}–{Scene.EndSeconds:0.##} s";
+
+        public string Prompt => Scene.Prompt;
+
+        public string NegativePrompt => string.IsNullOrWhiteSpace(Scene.NegativePrompt)
+            ? string.Empty
+            : $"Avoid: {Scene.NegativePrompt}";
+
+        public string StateSummary
+        {
+            get
+            {
+                var parts = new List<string>
+                {
+                    string.IsNullOrWhiteSpace(WorkspaceModelHelpers.GetSceneStatus(Scene))
+                        ? "draft"
+                        : WorkspaceModelHelpers.GetSceneStatus(Scene),
+                };
+                if (WorkspaceModelHelpers.IsSceneApproved(Scene))
+                {
+                    parts.Add("approved");
+                }
+
+                if (WorkspaceModelHelpers.IsSceneLocked(Scene))
+                {
+                    parts.Add("locked");
+                }
+
+                return string.Join(" · ", parts.Distinct(StringComparer.OrdinalIgnoreCase));
+            }
+        }
+    }
 }

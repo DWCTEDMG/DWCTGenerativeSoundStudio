@@ -80,6 +80,10 @@
                                 AutomationProperties.AutomationId="StudioForgeReactiveButton" />
                         <Button Content="Render · generation jobs" Tag="render" Click="Navigate_Click"
                                 AutomationProperties.AutomationId="StudioForgeRenderButton" />
+                        <Button Content="Outputs · generated artifacts" Tag="outputs" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeOutputsButton" />
+                        <Button Content="Review · editorial decisions" Tag="review" Click="Navigate_Click"
+                                AutomationProperties.AutomationId="StudioForgeReviewButton" />
                         <Button Content="Models · model readiness" Tag="models" Click="Navigate_Click"
                                 AutomationProperties.AutomationId="StudioForgeModelsButton" />
                         <Button Content="Cloud · provider tools" Tag="cloud" Click="Navigate_Click"

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using EdmgStudio.Core.Models;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -36,8 +37,15 @@ public sealed partial class StudioForgePage : Page
         try
         {
             SetBusy(true);
-            await Task.WhenAll(LoadRuntimeReadinessAsync(), LoadProjectReadinessAsync());
-            ShowStatus("Forge readiness probes completed.", InfoBarSeverity.Success);
+            var runtimeTask = LoadRuntimeReadinessAsync();
+            var projectTask = LoadProjectReadinessAsync();
+            await Task.WhenAll(runtimeTask, projectTask);
+            var allReady = await runtimeTask && await projectTask;
+            ShowStatus(
+                allReady
+                    ? "Forge readiness probes completed."
+                    : "Forge readiness completed with unavailable optional services. Review the details below.",
+                allReady ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
         }
         catch (Exception ex)
         {
@@ -49,7 +57,7 @@ public sealed partial class StudioForgePage : Page
         }
     }
 
-    private async Task LoadRuntimeReadinessAsync()
+    private async Task<bool> LoadRuntimeReadinessAsync()
     {
         var probes = new Task<string>[]
         {
@@ -59,7 +67,13 @@ public sealed partial class StudioForgePage : Page
                 return health.Ok ? $"ready · version {health.Version}" : "backend reported not ready";
             }),
             ProbeJsonAsync("System readiness", App.Services.ApiClient.GetSystemReadinessAsync),
-            ProbeJsonAsync("Setup status", App.Services.ApiClient.GetSetupStatusAsync),
+            ProbeTypedAsync("Setup status", async () =>
+            {
+                var status = await App.Services.ApiClient.GetSetupStatusAsync();
+                return status.Ok
+                    ? $"{status.Tasks.Count} tracked task(s)"
+                    : "setup status reported not ready";
+            }),
             ProbeJsonAsync("Configuration", App.Services.ApiClient.GetConfigAsync),
             ProbeJsonAsync("AI runtime", App.Services.ApiClient.GetAiStatusAsync),
             ProbeJsonAsync("Render providers", App.Services.ApiClient.GetRenderProvidersAsync),
@@ -72,10 +86,12 @@ public sealed partial class StudioForgePage : Page
             }),
         };
 
-        RuntimeSummaryTextBlock.Text = string.Join(Environment.NewLine, await Task.WhenAll(probes));
+        var results = await Task.WhenAll(probes);
+        RuntimeSummaryTextBlock.Text = string.Join(Environment.NewLine, results);
+        return results.All(result => !result.StartsWith("!", StringComparison.Ordinal));
     }
 
-    private async Task LoadProjectReadinessAsync()
+    private async Task<bool> LoadProjectReadinessAsync()
     {
         var projectId = App.Services.Session.ActiveProjectId;
         if (string.IsNullOrWhiteSpace(projectId))
@@ -85,14 +101,16 @@ public sealed partial class StudioForgePage : Page
                 "Select or create a project in Workspace to inspect its Forge readiness.";
             BridgePreviewTextBox.Text =
                 "Unreal and live-cue probes require an active project and were not requested.";
-            return;
+            return true;
         }
 
         var projectTask = App.Services.ApiClient.GetProjectAsync(projectId);
         var outputsTask = App.Services.ApiClient.GetOutputsAsync(projectId);
         var jobsTask = App.Services.ApiClient.GetProjectJobsAsync(projectId);
         var unrealTask = ProbeJsonValueAsync(
-            () => App.Services.ApiClient.GetUnrealPreviewAsync(projectId, 0));
+            () => App.Services.ApiClient.GetUnrealPreviewAsync(
+                projectId,
+                App.Services.Session.SelectedVariantIndex));
         var liveCueTask = ProbeJsonValueAsync(
             () => App.Services.ApiClient.GetLiveCuePublishStatusAsync(projectId));
 
@@ -109,13 +127,14 @@ public sealed partial class StudioForgePage : Page
             .AppendLine($"Audio:    {ReadyLabel(project.HasAudio)}")
             .AppendLine($"Analysis: {ReadyLabel(project.HasAnalysis)}")
             .AppendLine($"Plan:     {ReadyLabel(project.HasPlan)}")
-            .AppendLine($"Outputs:  {CountCollection(outputs)} item(s)")
+            .AppendLine($"Outputs:  {StudioOutputCatalog.CountArtifacts(outputs)} artifact(s)")
             .Append($"Jobs:     {jobs.Jobs.Count} tracked");
         ProjectSummaryTextBlock.Text = summary.ToString();
 
         BridgePreviewTextBox.Text =
-            $"Unreal variant 0: {SummarizeProbe(unreal)}{Environment.NewLine}" +
+            $"Unreal variant {App.Services.Session.SelectedVariantIndex + 1}: {SummarizeProbe(unreal)}{Environment.NewLine}" +
             $"Live-cue publisher: {SummarizeProbe(liveCue)}";
+        return unreal.Error is null && liveCue.Error is null;
     }
 
     private async Task<string> ProbeJsonAsync(
@@ -201,25 +220,4 @@ public sealed partial class StudioForgePage : Page
         };
     }
 
-    private static int CountCollection(JsonElement value)
-    {
-        if (value.ValueKind == JsonValueKind.Array)
-        {
-            return value.GetArrayLength();
-        }
-
-        if (value.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var propertyName in new[] { "outputs", "items", "artifacts" })
-            {
-                if (value.TryGetProperty(propertyName, out var collection)
-                    && collection.ValueKind == JsonValueKind.Array)
-                {
-                    return collection.GetArrayLength();
-                }
-            }
-        }
-
-        return 0;
-    }
 }

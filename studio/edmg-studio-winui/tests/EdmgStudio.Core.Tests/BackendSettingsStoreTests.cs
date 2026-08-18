@@ -106,4 +106,115 @@ public sealed class BackendSettingsStoreTests
             BackendConfigurationTests.DeleteTemporaryRoot(root);
         }
     }
+
+    [TestMethod]
+    public void LoadFoundrySettings_UsesRepresentedDefaultsWhenBootstrapIsMissing()
+    {
+        var root = BackendConfigurationTests.CreateTemporaryRoot();
+        try
+        {
+            var settings = BackendSettingsStore.LoadFoundrySettings(Path.Combine(root, "missing.json"));
+
+            Assert.AreEqual("jonlong-1185", settings.ProjectName);
+            Assert.AreEqual("Azuredwct", settings.SubscriptionName);
+            Assert.AreEqual(
+                "https://jonlong-1185-resource.services.ai.azure.com/api/projects/jonlong-1185",
+                settings.ProjectEndpoint.AbsoluteUri.TrimEnd('/'));
+        }
+        finally
+        {
+            BackendConfigurationTests.DeleteTemporaryRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public void SaveFoundrySettings_RoundTripsAndPreservesUnknownFields()
+    {
+        var root = BackendConfigurationTests.CreateTemporaryRoot();
+        try
+        {
+            var bootstrapPath = Path.Combine(root, "bootstrap.json");
+            File.WriteAllText(
+                bootstrapPath,
+                """
+                {
+                  "aiSettings": {
+                    "provider": "foundry",
+                    "customProviderSetting": 42
+                  },
+                  "storageSettings": {
+                    "models": "D:\\EDMG\\Models"
+                  },
+                  "unknownRoot": true
+                }
+                """);
+            var expected = new FoundryProjectSettings(
+                "production-project",
+                "Production subscription",
+                new Uri("https://foundry.example/api/projects/production-project/"));
+
+            BackendSettingsStore.SaveFoundrySettings(expected, bootstrapPath);
+            var actual = BackendSettingsStore.LoadFoundrySettings(bootstrapPath);
+
+            Assert.AreEqual("production-project", actual.ProjectName);
+            Assert.AreEqual("Production subscription", actual.SubscriptionName);
+            Assert.AreEqual(
+                "https://foundry.example/api/projects/production-project",
+                actual.ProjectEndpoint.AbsoluteUri.TrimEnd('/'));
+            using var document = JsonDocument.Parse(File.ReadAllText(bootstrapPath));
+            var json = document.RootElement;
+            Assert.AreEqual("foundry", json.GetProperty("aiSettings").GetProperty("provider").GetString());
+            Assert.AreEqual(42, json.GetProperty("aiSettings").GetProperty("customProviderSetting").GetInt32());
+            Assert.AreEqual("D:\\EDMG\\Models", json.GetProperty("storageSettings").GetProperty("models").GetString());
+            Assert.IsTrue(json.GetProperty("unknownRoot").GetBoolean());
+        }
+        finally
+        {
+            BackendConfigurationTests.DeleteTemporaryRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public void SaveFoundrySettings_RejectsInvalidEndpointWithoutChangingBootstrap()
+    {
+        var root = BackendConfigurationTests.CreateTemporaryRoot();
+        try
+        {
+            var bootstrapPath = Path.Combine(root, "bootstrap.json");
+            const string original = """{"customSetting":{"preserve":true}}""";
+            File.WriteAllText(bootstrapPath, original);
+            var settings = new FoundryProjectSettings(
+                "project",
+                "subscription",
+                new Uri("ftp://user:secret@foundry.example/project"));
+
+            Assert.ThrowsExactly<ArgumentException>(
+                () => BackendSettingsStore.SaveFoundrySettings(settings, bootstrapPath));
+            Assert.AreEqual(original, File.ReadAllText(bootstrapPath));
+        }
+        finally
+        {
+            BackendConfigurationTests.DeleteTemporaryRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public void LoadFoundrySettings_RejectsInvalidPersistedEndpoint()
+    {
+        var root = BackendConfigurationTests.CreateTemporaryRoot();
+        try
+        {
+            var bootstrapPath = Path.Combine(root, "bootstrap.json");
+            File.WriteAllText(
+                bootstrapPath,
+                """{"aiSettings":{"foundryProjectEndpoint":"relative/project"}}""");
+
+            Assert.ThrowsExactly<ArgumentException>(
+                () => BackendSettingsStore.LoadFoundrySettings(bootstrapPath));
+        }
+        finally
+        {
+            BackendConfigurationTests.DeleteTemporaryRoot(root);
+        }
+    }
 }

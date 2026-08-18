@@ -28,6 +28,7 @@
             <Button
                 x:Name="RefreshButton"
                 Grid.Column="1"
+                AutomationProperties.AutomationId="ModelsRefreshButton"
                 Click="Refresh_Click"
                 Style="{StaticResource AccentButtonStyle}">
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -65,6 +66,7 @@
 
                 <TextBox
                     x:Name="SearchBox"
+                    AutomationProperties.AutomationId="ModelsSearchBox"
                     Header="Search catalogue"
                     PlaceholderText="Name, ID, source, kind, or lane"
                     TextChanged="SearchBox_TextChanged" />
@@ -72,6 +74,8 @@
                 <ListView
                     x:Name="ModelList"
                     Grid.Row="1"
+                    AutomationProperties.AutomationId="ModelsCatalogList"
+                    AutomationProperties.Name="Model catalogue"
                     IsItemClickEnabled="True"
                     ItemClick="ModelList_ItemClick"
                     SelectionMode="Single">
@@ -185,6 +189,7 @@
                                 <Button
                                     x:Name="PrimaryActionButton"
                                     Margin="0,0,8,8"
+                                    AutomationProperties.AutomationId="ModelsPrimaryActionButton"
                                     Click="PrimaryAction_Click"
                                     IsEnabled="False"
                                     Style="{StaticResource AccentButtonStyle}"
@@ -192,18 +197,21 @@
                                 <Button
                                     x:Name="AcceptLicenseButton"
                                     Margin="0,0,8,8"
+                                    AutomationProperties.AutomationId="ModelsAcceptLicenseButton"
                                     Click="AcceptLicense_Click"
                                     IsEnabled="False"
                                     Content="Review license" />
                                 <Button
                                     x:Name="BenchmarkButton"
                                     Margin="0,0,8,8"
+                                    AutomationProperties.AutomationId="ModelsBenchmarkButton"
                                     Click="Benchmark_Click"
                                     IsEnabled="False"
                                     Content="Record benchmark" />
                                 <Button
                                     x:Name="RemoveButton"
                                     Margin="0,0,8,8"
+                                    AutomationProperties.AutomationId="ModelsRemoveButton"
                                     Click="Remove_Click"
                                     IsEnabled="False"
                                     Content="Remove" />
@@ -212,13 +220,19 @@
                             <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
                             <TextBlock FontWeight="SemiBold" Text="Promotion lane" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <ComboBox x:Name="LaneCombo" Width="220" SelectedIndex="0">
+                                <ComboBox
+                                    x:Name="LaneCombo"
+                                    Width="220"
+                                    AutomationProperties.AutomationId="ModelsPromotionLaneComboBox"
+                                    Header="Promotion lane"
+                                    SelectedIndex="0">
                                     <ComboBoxItem Content="Experimental" Tag="experimental" />
                                     <ComboBoxItem Content="Preview" Tag="preview" />
                                     <ComboBoxItem Content="Production" Tag="production" />
                                 </ComboBox>
                                 <Button
                                     x:Name="PromoteButton"
+                                    AutomationProperties.AutomationId="ModelsPromoteButton"
                                     Click="Promote_Click"
                                     IsEnabled="False"
                                     Content="Promote" />
@@ -240,6 +254,7 @@
                                 TextWrapping="Wrap" />
                             <ComboBox
                                 x:Name="PackCombo"
+                                AutomationProperties.AutomationId="ModelsPackComboBox"
                                 DisplayMemberPath="DisplayName"
                                 PlaceholderText="Choose a pack"
                                 SelectionChanged="PackCombo_SelectionChanged" />
@@ -251,6 +266,7 @@
                                 <Button
                                     x:Name="InstallPackButton"
                                     Margin="0,0,8,8"
+                                    AutomationProperties.AutomationId="ModelsInstallPackButton"
                                     Click="InstallPack_Click"
                                     IsEnabled="False"
                                     Style="{StaticResource AccentButtonStyle}"
@@ -273,25 +289,35 @@
                                 TextWrapping="Wrap" />
                             <TextBox
                                 x:Name="CivitaiUrlBox"
+                                AutomationProperties.AutomationId="ModelsCivitaiUrlTextBox"
                                 Header="Civitai URL"
                                 PlaceholderText="https://civitai.com/models/..."
                                 TextChanged="CivitaiUrlBox_TextChanged" />
                             <Button
                                 x:Name="CivitaiImportButton"
                                 HorizontalAlignment="Left"
+                                AutomationProperties.AutomationId="ModelsCivitaiImportButton"
                                 Click="CivitaiImport_Click"
                                 IsEnabled="False"
                                 Content="Import from Civitai" />
                             <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <ComboBox x:Name="LocalFolderCombo" Width="220" SelectedIndex="0">
+                                <ComboBox
+                                    x:Name="LocalFolderCombo"
+                                    Width="220"
+                                    AutomationProperties.AutomationId="ModelsLocalFolderComboBox"
+                                    Header="Model folder"
+                                    SelectedIndex="0">
                                     <ComboBoxItem Content="Checkpoints" Tag="checkpoints" />
                                     <ComboBoxItem Content="LoRAs" Tag="loras" />
                                     <ComboBoxItem Content="Embeddings" Tag="embeddings" />
                                     <ComboBoxItem Content="VAE" Tag="vae" />
                                     <ComboBoxItem Content="ControlNet" Tag="controlnet" />
                                 </ComboBox>
-                                <Button Click="LocalImport_Click" Content="Choose local model file" />
+                                <Button
+                                    AutomationProperties.AutomationId="ModelsLocalImportButton"
+                                    Click="LocalImport_Click"
+                                    Content="Choose local model file" />
                             </StackPanel>
                         </StackPanel>
                     </Border>
@@ -315,6 +341,7 @@
                                 <Button
                                     x:Name="TensorRtImportButton"
                                     Margin="0,0,8,8"
+                                    AutomationProperties.AutomationId="ModelsTensorRtImportButton"
                                     Click="TensorRtImport_Click"
                                     IsEnabled="False"
                                     Style="{StaticResource AccentButtonStyle}"
@@ -322,6 +349,7 @@
                                 <Button
                                     x:Name="TensorRtCancelButton"
                                     Margin="0,0,8,8"
+                                    AutomationProperties.AutomationId="ModelsTensorRtCancelButton"
                                     Click="TensorRtCancel_Click"
                                     IsEnabled="False"
                                     Content="Cancel migration" />

@@ -305,16 +305,270 @@ public sealed record TimelineRenderRequest(
     [property: JsonPropertyName("fps")] double Fps,
     [property: JsonPropertyName("video_codec")] string VideoCodec,
     [property: JsonPropertyName("audio_codec")] string AudioCodec,
-    [property: JsonPropertyName("quality")] string Quality,
+    [property: JsonPropertyName("quality")] int Quality,
     [property: JsonPropertyName("name")] string Name);
 
 public sealed record TimelineRenderResponse(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("job")] StudioJob Job);
 
+public sealed record MotionPhraseRequest(
+    [property: JsonPropertyName("phrase")] string Phrase,
+    [property: JsonPropertyName("start_s")] double StartSeconds,
+    [property: JsonPropertyName("end_s")] double EndSeconds,
+    [property: JsonPropertyName("overrides")] IReadOnlyDictionary<string, double>? Overrides = null);
+
+public sealed record ApplyMotionGrammarRequest(
+    [property: JsonPropertyName("phrases")] IReadOnlyList<MotionPhraseRequest> Phrases,
+    [property: JsonPropertyName("overwrite_motion_track")] bool OverwriteMotionTrack = false);
+
+public sealed record ApplyMotionGrammarResponse(
+    [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("timeline")] JsonElement Timeline);
+
 public sealed record RecoveryApplyRequest(
     [property: JsonPropertyName("source")] string Source = "journal",
     [property: JsonPropertyName("snapshot_name")] string? SnapshotName = null);
+
+public sealed class VariantReviewDecisionRequest
+{
+    [JsonPropertyName("artifact_path")]
+    public required string ArtifactPath { get; init; }
+
+    [JsonPropertyName("decision")]
+    public required string Decision { get; init; }
+
+    [JsonPropertyName("notes")]
+    public string? Notes { get; init; }
+
+    [JsonPropertyName("cherry_pick_traits")]
+    public IReadOnlyList<string> CherryPickTraits { get; init; } = [];
+
+    [JsonPropertyName("lock_fields")]
+    public IReadOnlyList<string> LockFields { get; init; } = [];
+}
+
+public sealed class VariantReviewDecisionResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("variant_review")]
+    public JsonElement VariantReview { get; init; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class LiveCuePublishRequest
+{
+    [JsonPropertyName("osc_host")]
+    public string OscHost { get; init; } = "127.0.0.1";
+
+    [JsonPropertyName("osc_port")]
+    public int OscPort { get; init; } = 9000;
+
+    [JsonPropertyName("midi_enabled")]
+    public bool MidiEnabled { get; init; } = true;
+
+    [JsonPropertyName("websocket_enabled")]
+    public bool WebsocketEnabled { get; init; } = true;
+
+    [JsonPropertyName("playback_speed")]
+    public double PlaybackSpeed { get; init; } = 1.0;
+}
+
+public sealed class LiveCuePublishResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("publish")]
+    public JsonElement Publish { get; init; }
+
+    [JsonPropertyName("event_count")]
+    public int? EventCount { get; init; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class WorldAdapterExportRequest
+{
+    [JsonPropertyName("adapter")]
+    public string Adapter { get; init; } = "touchdesigner";
+
+    [JsonPropertyName("variant_index")]
+    public int VariantIndex { get; init; }
+
+    [JsonPropertyName("sequence_name")]
+    public string? SequenceName { get; init; }
+}
+
+public sealed class WorldAdapterExportResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("adapter")]
+    public string Adapter { get; init; } = string.Empty;
+
+    [JsonPropertyName("payload")]
+    public JsonElement Payload { get; init; }
+
+    [JsonPropertyName("simulation")]
+    public JsonElement Simulation { get; init; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class UnrealBundleExportRequest
+{
+    [JsonPropertyName("variant_index")]
+    public int VariantIndex { get; init; }
+
+    [JsonPropertyName("bundle_name")]
+    public string? BundleName { get; init; }
+
+    [JsonPropertyName("include_zip")]
+    public bool IncludeZip { get; init; } = true;
+}
+
+public sealed class UnrealBundleDto
+{
+    [JsonPropertyName("bundle_dir")]
+    public string BundleDirectory { get; init; } = string.Empty;
+
+    [JsonPropertyName("manifest_path")]
+    public string ManifestPath { get; init; } = string.Empty;
+
+    [JsonPropertyName("zip_path")]
+    public string? ZipPath { get; init; }
+
+    [JsonPropertyName("created_at")]
+    public string? CreatedAt { get; init; }
+
+    [JsonPropertyName("variant_index")]
+    public int VariantIndex { get; init; }
+
+    [JsonPropertyName("sequence_name")]
+    public string? SequenceName { get; init; }
+
+    [JsonPropertyName("files")]
+    public List<string> Files { get; init; } = [];
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class UnrealBundleExportResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("bundle")]
+    public UnrealBundleDto Bundle { get; init; } = new();
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class UnrealImportPlanRequest
+{
+    [JsonPropertyName("bundle_dir")]
+    public string BundleDirectory { get; init; } = string.Empty;
+
+    [JsonPropertyName("content_path")]
+    public string? ContentPath { get; init; }
+
+    [JsonPropertyName("asset_name")]
+    public string? AssetName { get; init; }
+}
+
+public sealed class UnrealImportPlanResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("plan_path")]
+    public string PlanPath { get; init; } = string.Empty;
+
+    [JsonPropertyName("plan")]
+    public JsonElement Plan { get; init; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class UnrealReturnImportRequest
+{
+    [JsonPropertyName("bundle_dir")]
+    public string BundleDirectory { get; init; } = string.Empty;
+
+    [JsonPropertyName("source_dir")]
+    public string? SourceDirectory { get; init; }
+}
+
+public sealed class UnrealReturnedMediaDto
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = string.Empty;
+
+    [JsonPropertyName("path")]
+    public string Path { get; init; } = string.Empty;
+
+    [JsonPropertyName("source_path")]
+    public string SourcePath { get; init; } = string.Empty;
+
+    [JsonPropertyName("metadata_path")]
+    public string MetadataPath { get; init; } = string.Empty;
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class UnrealReturnImportDto
+{
+    [JsonPropertyName("bundle_dir")]
+    public string BundleDirectory { get; init; } = string.Empty;
+
+    [JsonPropertyName("source_dir")]
+    public string SourceDirectory { get; init; } = string.Empty;
+
+    [JsonPropertyName("manifest_path")]
+    public string? ManifestPath { get; init; }
+
+    [JsonPropertyName("return_contract_path")]
+    public string? ReturnContractPath { get; init; }
+
+    [JsonPropertyName("created_at")]
+    public string? CreatedAt { get; init; }
+
+    [JsonPropertyName("variant_index")]
+    public int VariantIndex { get; init; }
+
+    [JsonPropertyName("sequence_name")]
+    public string? SequenceName { get; init; }
+
+    [JsonPropertyName("media")]
+    public List<UnrealReturnedMediaDto> Media { get; init; } = [];
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class UnrealReturnImportResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("imported")]
+    public UnrealReturnImportDto Imported { get; init; } = new();
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
 
 public static class StudioJson
 {
@@ -341,6 +595,19 @@ public static class StudioJson
 [JsonSerializable(typeof(PlanRequest))]
 [JsonSerializable(typeof(PlanDto))]
 [JsonSerializable(typeof(List<PlanVariantDto>))]
+[JsonSerializable(typeof(PlannerLabSettings))]
+[JsonSerializable(typeof(PlannerLabImportRequest))]
+[JsonSerializable(typeof(PlannerLabImportResponse))]
+[JsonSerializable(typeof(AiReadinessResponse))]
+[JsonSerializable(typeof(AiProviderConfiguration))]
+[JsonSerializable(typeof(ReactiveLabApplyRequest))]
+[JsonSerializable(typeof(ReactiveLabApplyResponse))]
+[JsonSerializable(typeof(ReactiveMapping))]
+[JsonSerializable(typeof(List<ReactiveMapping>))]
+[JsonSerializable(typeof(ReactivePreset))]
+[JsonSerializable(typeof(List<ReactivePreset>))]
+[JsonSerializable(typeof(ReactiveLabLocalState))]
+[JsonSerializable(typeof(ReactiveLabMetadata))]
 [JsonSerializable(typeof(StudioJobListResponse))]
 [JsonSerializable(typeof(StudioJobActionResponse))]
 [JsonSerializable(typeof(StudioJob))]
@@ -348,7 +615,32 @@ public static class StudioJson
 [JsonSerializable(typeof(TimelineAutosaveRequest))]
 [JsonSerializable(typeof(TimelineRenderRequest))]
 [JsonSerializable(typeof(TimelineRenderResponse))]
+[JsonSerializable(typeof(MotionPhraseRequest))]
+[JsonSerializable(typeof(ApplyMotionGrammarRequest))]
+[JsonSerializable(typeof(ApplyMotionGrammarResponse))]
 [JsonSerializable(typeof(RecoveryApplyRequest))]
+[JsonSerializable(typeof(VariantReviewDecisionRequest))]
+[JsonSerializable(typeof(VariantReviewDecisionResponse))]
+[JsonSerializable(typeof(LiveCuePublishRequest))]
+[JsonSerializable(typeof(LiveCuePublishResponse))]
+[JsonSerializable(typeof(WorldAdapterExportRequest))]
+[JsonSerializable(typeof(WorldAdapterExportResponse))]
+[JsonSerializable(typeof(UnrealBundleExportRequest))]
+[JsonSerializable(typeof(UnrealBundleExportResponse))]
+[JsonSerializable(typeof(UnrealImportPlanRequest))]
+[JsonSerializable(typeof(UnrealImportPlanResponse))]
+[JsonSerializable(typeof(UnrealReturnImportRequest))]
+[JsonSerializable(typeof(UnrealReturnImportResponse))]
+[JsonSerializable(typeof(SetupStatusResponse))]
+[JsonSerializable(typeof(SetupTaskListResponse))]
+[JsonSerializable(typeof(SetupTaskActionResponse))]
+[JsonSerializable(typeof(SetupOperationResponse))]
+[JsonSerializable(typeof(SetupOllamaPullRequest))]
+[JsonSerializable(typeof(SetupProfileRequest))]
+[JsonSerializable(typeof(SetupFullInstallRequest))]
+[JsonSerializable(typeof(SetupComfyUiInstallRequest))]
+[JsonSerializable(typeof(SetupComfyUiStartRequest))]
+[JsonSerializable(typeof(SetupEdmgInstallRequest))]
 [JsonSerializable(typeof(ModelCatalogueResponse))]
 [JsonSerializable(typeof(ModelCatalogueEntry))]
 [JsonSerializable(typeof(ModelPackEntry))]
@@ -367,4 +659,40 @@ public static class StudioJson
 [JsonSerializable(typeof(TensorRtCanonicalStatus))]
 [JsonSerializable(typeof(TensorRtMigrationAvailability))]
 [JsonSerializable(typeof(TensorRtDiskStatus))]
+[JsonSerializable(typeof(JsonElement))]
+[JsonSerializable(typeof(Dictionary<string, JsonElement>))]
+[JsonSerializable(typeof(WorkspaceAssetsResponse))]
+[JsonSerializable(typeof(ProjectHealthResponse))]
+[JsonSerializable(typeof(ProjectRelinkResponse))]
+[JsonSerializable(typeof(ProjectCollectResponse))]
+[JsonSerializable(typeof(MusicGraphResponse))]
+[JsonSerializable(typeof(LiveCuesResponse))]
+[JsonSerializable(typeof(LiveAssetsResponse))]
+[JsonSerializable(typeof(ApplyPlanToTimelineRequest))]
+[JsonSerializable(typeof(ApplyPlanToTimelineResponse))]
+[JsonSerializable(typeof(UpdatePlanVariantRequest))]
+[JsonSerializable(typeof(UpdatePlanVariantResponse))]
+[JsonSerializable(typeof(TemplatePackageDto))]
+[JsonSerializable(typeof(ExportTemplatePackageResponse))]
+[JsonSerializable(typeof(ImportTemplatePackageRequest))]
+[JsonSerializable(typeof(ImportTemplatePackageResponse))]
+[JsonSerializable(typeof(LoraSelection))]
+[JsonSerializable(typeof(ControlNetUnit))]
+[JsonSerializable(typeof(HiresFixSettings))]
+[JsonSerializable(typeof(RefinerSettings))]
+[JsonSerializable(typeof(OutpaintSettings))]
+[JsonSerializable(typeof(RenderScenesRequest))]
+[JsonSerializable(typeof(RenderMotionRequest))]
+[JsonSerializable(typeof(TensorRtStandaloneRenderRequest))]
+[JsonSerializable(typeof(AutoAnimateRequest))]
+[JsonSerializable(typeof(ParseqMotionApplyRequest))]
+[JsonSerializable(typeof(LayerMaskSpec))]
+[JsonSerializable(typeof(LayeredAnimateRequest))]
+[JsonSerializable(typeof(AssembleVideoRequest))]
+[JsonSerializable(typeof(ExportDeforumRequest))]
+[JsonSerializable(typeof(RenderIntentSection))]
+[JsonSerializable(typeof(RenderConductorPlanRequest))]
+[JsonSerializable(typeof(RenderConductorPromoteRequest))]
+[JsonSerializable(typeof(PerformerWorkflowPlanRequest))]
+[JsonSerializable(typeof(PerformerWorkflowRunRequest))]
 public sealed partial class StudioJsonContext : JsonSerializerContext;

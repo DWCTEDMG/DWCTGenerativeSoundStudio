@@ -121,7 +121,8 @@
                           Grid.Column="8"
                           AutomationProperties.AutomationId="Timeline.Snap"
                           MinWidth="118"
-                          SelectedIndex="1">
+                          SelectedIndex="1"
+                          SelectionChanged="SnapCombo_SelectionChanged">
                     <ComboBoxItem Content="Snap off" Tag="off" />
                     <ComboBoxItem Content="Snap: beat" Tag="beat" />
                     <ComboBoxItem Content="Snap: 1/2 beat" Tag="half" />
@@ -155,7 +156,7 @@
                         <RowDefinition Height="34" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <Grid Background="{ThemeResource StudioLayerFillColorDefaultBrush}">
+                    <Grid Background="{ThemeResource StudioCardBrush}">
                         <TextBlock Margin="12,0"
                                    VerticalAlignment="Center"
                                    Text="TRACKS"
@@ -187,7 +188,7 @@
                                   HorizontalScrollMode="Enabled">
                         <Canvas x:Name="RulerCanvas"
                                 Height="34"
-                                Background="{ThemeResource StudioLayerFillColorDefaultBrush}" />
+                                Background="{ThemeResource StudioCardBrush}" />
                     </ScrollViewer>
                     <ScrollViewer x:Name="TimelineScroll"
                                   Grid.Row="1"
@@ -198,7 +199,7 @@
                                   ViewChanged="TimelineScroll_ViewChanged">
                         <Canvas x:Name="TimelineCanvas"
                                 AutomationProperties.AutomationId="Timeline.ClipSurface"
-                                Background="{ThemeResource StudioControlFillColorDefaultBrush}"
+                                Background="{ThemeResource StudioCardBrush}"
                                 PointerPressed="TimelineCanvas_PointerPressed" />
                     </ScrollViewer>
                 </Grid>
@@ -220,6 +221,21 @@
                                                Style="{StaticResource StudioCaptionTextStyle}" />
                                 </StackPanel>
 
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="LaneNameTextBox"
+                                             Grid.Column="0"
+                                             AutomationProperties.AutomationId="Timeline.Inspector.Name"
+                                             Header="Name" />
+                                    <TextBox x:Name="LaneTypeTextBox"
+                                             Grid.Column="1"
+                                             AutomationProperties.AutomationId="Timeline.Inspector.Type"
+                                             Header="Type" />
+                                </Grid>
+
                                 <Grid ColumnSpacing="8" RowSpacing="8">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -231,30 +247,35 @@
                                         <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
                                     <NumberBox x:Name="StartNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.Start"
                                                Grid.Row="0"
                                                Grid.Column="0"
                                                Header="Start (s)"
                                                Minimum="0"
                                                SpinButtonPlacementMode="Compact" />
                                     <NumberBox x:Name="EndNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.End"
                                                Grid.Row="0"
                                                Grid.Column="1"
                                                Header="End (s)"
                                                Minimum="0"
                                                SpinButtonPlacementMode="Compact" />
                                     <NumberBox x:Name="SourceInNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.SourceIn"
                                                Grid.Row="1"
                                                Grid.Column="0"
                                                Header="Source in (s)"
                                                Minimum="0"
                                                SpinButtonPlacementMode="Compact" />
                                     <NumberBox x:Name="SourceOutNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.SourceOut"
                                                Grid.Row="1"
                                                Grid.Column="1"
                                                Header="Source out (s)"
                                                Minimum="0"
                                                SpinButtonPlacementMode="Compact" />
                                     <NumberBox x:Name="SpeedNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.Speed"
                                                Grid.Row="2"
                                                Grid.Column="0"
                                                Header="Speed"
@@ -263,14 +284,20 @@
                                                SmallChange="0.05"
                                                SpinButtonPlacementMode="Compact" />
                                     <NumberBox x:Name="TrackNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.Track"
                                                Grid.Row="2"
                                                Grid.Column="1"
                                                Header="Track"
                                                Minimum="1"
                                                SpinButtonPlacementMode="Compact" />
                                 </Grid>
+                                <TextBlock x:Name="TrackInspectorHintText"
+                                           Text="Track clips can move between numbered tracks."
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
 
                                 <TextBox x:Name="SourcePathTextBox"
+                                         AutomationProperties.AutomationId="Timeline.Inspector.SourcePath"
                                          Header="Source path"
                                          PlaceholderText="Backend media source" />
 
@@ -280,6 +307,7 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <NumberBox x:Name="VolumeNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.Volume"
                                                Grid.Column="0"
                                                Header="Volume"
                                                Minimum="0"
@@ -287,6 +315,7 @@
                                                SmallChange="0.05"
                                                SpinButtonPlacementMode="Compact" />
                                     <ToggleSwitch x:Name="MutedToggle"
+                                                  AutomationProperties.AutomationId="Timeline.Inspector.Muted"
                                                   Grid.Column="1"
                                                   Header="Muted"
                                                   VerticalAlignment="Bottom" />
@@ -298,11 +327,13 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <NumberBox x:Name="FadeInNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.FadeIn"
                                                Grid.Column="0"
                                                Header="Fade in (s)"
                                                Minimum="0"
                                                SpinButtonPlacementMode="Compact" />
                                     <NumberBox x:Name="FadeOutNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Inspector.FadeOut"
                                                Grid.Column="1"
                                                Header="Fade out (s)"
                                                Minimum="0"
@@ -315,6 +346,42 @@
                                         HorizontalAlignment="Stretch"
                                         Content="Apply clip changes"
                                         Click="ApplyInspector_Click" />
+
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0"
+                                            AutomationProperties.AutomationId="Timeline.AddClip"
+                                            HorizontalAlignment="Stretch"
+                                            Content="Add clip here"
+                                            Click="AddClipAtPlayhead_Click" />
+                                    <Button Grid.Column="1"
+                                            AutomationProperties.AutomationId="Timeline.AddOverlay"
+                                            HorizontalAlignment="Stretch"
+                                            Content="Add overlay here"
+                                            Click="AddOverlayAtPlayhead_Click" />
+                                </Grid>
+
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="MoveClipButton"
+                                            Grid.Column="0"
+                                            AutomationProperties.AutomationId="Timeline.MoveToPlayhead"
+                                            HorizontalAlignment="Stretch"
+                                            Content="Move to playhead"
+                                            Click="MoveSelectedToPlayhead_Click" />
+                                    <Button x:Name="QuantizeClipButton"
+                                            Grid.Column="1"
+                                            AutomationProperties.AutomationId="Timeline.Quantize"
+                                            HorizontalAlignment="Stretch"
+                                            Content="Quantize"
+                                            Click="QuantizeSelected_Click" />
+                                </Grid>
 
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions>
@@ -351,6 +418,241 @@
                                            Text="Scrub or play to preview the current timeline frame."
                                            TextWrapping="Wrap"
                                            Style="{StaticResource StudioCaptionTextStyle}" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </PivotItem>
+
+                    <PivotItem Header="Workflow">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Padding="14" Spacing="14">
+                                <InfoBar x:Name="AutomationInfoBar"
+                                         AutomationProperties.AutomationId="Timeline.Automation.Status"
+                                         IsOpen="False"
+                                         IsClosable="True" />
+                                <ProgressBar x:Name="AutomationProgressBar"
+                                             AutomationProperties.AutomationId="Timeline.Automation.Progress"
+                                             IsIndeterminate="True"
+                                             Visibility="Collapsed" />
+                                <Button x:Name="CancelAutomationButton"
+                                        AutomationProperties.AutomationId="Timeline.Automation.Cancel"
+                                        Content="Cancel operation"
+                                        HorizontalAlignment="Stretch"
+                                        IsEnabled="False"
+                                        Click="CancelAutomation_Click" />
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="WORKSPACE PLAN"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               CharacterSpacing="90"
+                                               Style="{StaticResource StudioSecondaryTextStyle}" />
+                                    <TextBlock x:Name="WorkspacePlanText"
+                                               Text="No Workspace plan variant is selected."
+                                               TextWrapping="Wrap"
+                                               Style="{StaticResource StudioCaptionTextStyle}" />
+                                    <Button x:Name="RefreshWorkflowButton"
+                                            AutomationProperties.AutomationId="Timeline.Workflow.RefreshContext"
+                                            Content="Refresh plan and assets"
+                                            HorizontalAlignment="Stretch"
+                                            Click="RefreshWorkflow_Click" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button x:Name="AppendPlanButton"
+                                                Grid.Column="0"
+                                                AutomationProperties.AutomationId="Timeline.Workflow.AppendPlan"
+                                                Content="Append plan"
+                                                HorizontalAlignment="Stretch"
+                                                Click="AppendPlan_Click" />
+                                        <Button x:Name="OverwritePlanButton"
+                                                Grid.Column="1"
+                                                AutomationProperties.AutomationId="Timeline.Workflow.OverwritePlan"
+                                                Content="Overwrite"
+                                                Style="{StaticResource StudioDangerButtonStyle}"
+                                                HorizontalAlignment="Stretch"
+                                                Click="OverwritePlan_Click" />
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="SOURCE ASSIGNMENT"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               CharacterSpacing="90"
+                                               Style="{StaticResource StudioSecondaryTextStyle}" />
+                                    <ComboBox x:Name="SourceAssetComboBox"
+                                              AutomationProperties.AutomationId="Timeline.Workflow.SourceAsset"
+                                              Header="Project artifact"
+                                              PlaceholderText="Select generated output or reference"
+                                              HorizontalAlignment="Stretch"
+                                              SelectionChanged="SourceAssetComboBox_SelectionChanged" />
+                                    <Button x:Name="BrowseSourceButton"
+                                            AutomationProperties.AutomationId="Timeline.Workflow.BrowseSource"
+                                            Content="Choose local source..."
+                                            HorizontalAlignment="Stretch"
+                                            Click="BrowseSource_Click" />
+                                    <TextBlock x:Name="SelectedSourceText"
+                                               Text="No source selected."
+                                               TextWrapping="Wrap"
+                                               Style="{StaticResource StudioCaptionTextStyle}" />
+                                    <NumberBox x:Name="NewClipDurationNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Workflow.NewClipDuration"
+                                               Header="New clip duration (s)"
+                                               Minimum="0.05"
+                                               Value="5"
+                                               SmallChange="0.5"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button x:Name="AssignSourceButton"
+                                                Grid.Column="0"
+                                                AutomationProperties.AutomationId="Timeline.Workflow.AssignSource"
+                                                Content="Assign to clip"
+                                                HorizontalAlignment="Stretch"
+                                                Click="AssignSource_Click" />
+                                        <Button x:Name="AddSourceClipButton"
+                                                Grid.Column="1"
+                                                AutomationProperties.AutomationId="Timeline.Workflow.AddSourceClip"
+                                                Content="Add at playhead"
+                                                HorizontalAlignment="Stretch"
+                                                Click="AddSourceClip_Click" />
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="SCENE LAYOUT"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               CharacterSpacing="90"
+                                               Style="{StaticResource StudioSecondaryTextStyle}" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <NumberBox x:Name="SequenceTrackNumberBox"
+                                                   Grid.Column="0"
+                                                   AutomationProperties.AutomationId="Timeline.Workflow.SequenceTrack"
+                                                   Header="Track"
+                                                   Minimum="1"
+                                                   Value="1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                        <NumberBox x:Name="SequenceGapNumberBox"
+                                                   Grid.Column="1"
+                                                   AutomationProperties.AutomationId="Timeline.Workflow.SequenceGap"
+                                                   Header="Gap (s)"
+                                                   Minimum="0"
+                                                   Value="0"
+                                                   SmallChange="0.1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                    </Grid>
+                                    <NumberBox x:Name="SequenceStartNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Workflow.SequenceStart"
+                                               Header="Sequence start (s)"
+                                               Minimum="0"
+                                               Value="0"
+                                               SmallChange="0.5"
+                                               SpinButtonPlacementMode="Compact" />
+                                    <Button x:Name="SequenceTrackButton"
+                                            AutomationProperties.AutomationId="Timeline.Workflow.Sequence"
+                                            Content="Sequence track clips"
+                                            HorizontalAlignment="Stretch"
+                                            Click="SequenceTrack_Click" />
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="MOTION GRAMMAR"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               CharacterSpacing="90"
+                                               Style="{StaticResource StudioSecondaryTextStyle}" />
+                                    <ComboBox x:Name="MotionPhraseComboBox"
+                                              AutomationProperties.AutomationId="Timeline.Workflow.MotionPhrase"
+                                              Header="Phrase"
+                                              SelectedIndex="1"
+                                              HorizontalAlignment="Stretch">
+                                        <ComboBoxItem Content="Prepare" Tag="prepare" />
+                                        <ComboBoxItem Content="Accent" Tag="accent" />
+                                        <ComboBoxItem Content="Travel" Tag="travel" />
+                                        <ComboBoxItem Content="Settle" Tag="settle" />
+                                        <ComboBoxItem Content="Contrast" Tag="contrast" />
+                                    </ComboBox>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <NumberBox x:Name="MotionStartNumberBox"
+                                                   Grid.Column="0"
+                                                   AutomationProperties.AutomationId="Timeline.Workflow.MotionStart"
+                                                   Header="Start (s)"
+                                                   Minimum="0"
+                                                   Value="0"
+                                                   SmallChange="0.25"
+                                                   SpinButtonPlacementMode="Compact" />
+                                        <NumberBox x:Name="MotionEndNumberBox"
+                                                   Grid.Column="1"
+                                                   AutomationProperties.AutomationId="Timeline.Workflow.MotionEnd"
+                                                   Header="End (s)"
+                                                   Minimum="0.05"
+                                                   Value="2"
+                                                   SmallChange="0.25"
+                                                   SpinButtonPlacementMode="Compact" />
+                                    </Grid>
+                                    <ToggleSwitch x:Name="OverwriteMotionToggle"
+                                                  AutomationProperties.AutomationId="Timeline.Workflow.OverwriteMotion"
+                                                  Header="Replace current Motion track"
+                                                  OffContent="Append"
+                                                  OnContent="Replace" />
+                                    <Button x:Name="ApplyMotionButton"
+                                            AutomationProperties.AutomationId="Timeline.Workflow.ApplyMotion"
+                                            Content="Apply motion phrase"
+                                            HorizontalAlignment="Stretch"
+                                            Click="ApplyMotion_Click" />
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="CONTINUE WORKFLOW"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               CharacterSpacing="90"
+                                               Style="{StaticResource StudioSecondaryTextStyle}" />
+                                    <Grid ColumnSpacing="6" RowSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Button x:Name="OpenWorkspaceButton" Grid.Row="0" Grid.Column="0" AutomationProperties.AutomationId="Timeline.Navigate.Workspace" Content="Workspace" Click="OpenWorkspace_Click" />
+                                        <Button x:Name="OpenRenderButton" Grid.Row="0" Grid.Column="1" AutomationProperties.AutomationId="Timeline.Navigate.Render" Content="Render" Click="OpenRender_Click" />
+                                        <Button x:Name="OpenReviewButton" Grid.Row="1" Grid.Column="0" AutomationProperties.AutomationId="Timeline.Navigate.Review" Content="Review" Click="OpenReview_Click" />
+                                        <Button x:Name="OpenOutputsButton" Grid.Row="1" Grid.Column="1" AutomationProperties.AutomationId="Timeline.Navigate.Outputs" Content="Outputs" Click="OpenOutputs_Click" />
+                                        <Button x:Name="OpenQueueButton" Grid.Row="2" Grid.Column="0" AutomationProperties.AutomationId="Timeline.Navigate.Queue" Content="Queue" Click="OpenQueue_Click" />
+                                        <Button x:Name="OpenPlannerButton" Grid.Row="2" Grid.Column="1" AutomationProperties.AutomationId="Timeline.Navigate.Planner" Content="Planner Lab" Click="OpenPlanner_Click" />
+                                        <Button x:Name="OpenReactiveButton" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" AutomationProperties.AutomationId="Timeline.Navigate.Reactive" Content="Reactive Lab" HorizontalAlignment="Stretch" Click="OpenReactive_Click" />
+                                    </Grid>
+                                </StackPanel>
+
+                                <TextBox x:Name="AutomationResultTextBox"
+                                         AutomationProperties.AutomationId="Timeline.Automation.Result"
+                                         Header="Last automation result"
+                                         MinHeight="130"
+                                         IsReadOnly="True"
+                                         AcceptsReturn="True"
+                                         TextWrapping="NoWrap"
+                                         FontFamily="Consolas"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto" />
                             </StackPanel>
                         </ScrollViewer>
                     </PivotItem>
@@ -431,6 +733,192 @@
                                            Style="{StaticResource StudioCaptionTextStyle}" />
                             </StackPanel>
                         </ScrollViewer>
+                    </PivotItem>
+
+                    <PivotItem Header="Camera">
+                        <Grid Padding="14" RowSpacing="10">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="180" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Camera automation"
+                                               Style="{StaticResource StudioSectionTitleTextStyle}" />
+                                    <TextBlock Text="Keyframes are sorted by time."
+                                               Style="{StaticResource StudioCaptionTextStyle}" />
+                                </StackPanel>
+                                <Button x:Name="AddCameraButton"
+                                        Grid.Column="1"
+                                        AutomationProperties.AutomationId="Timeline.Camera.Add"
+                                        Content="Add at playhead"
+                                        Click="AddCameraKeyframe_Click" />
+                            </Grid>
+
+                            <ListView x:Name="CameraKeyframeListView"
+                                      Grid.Row="1"
+                                      AutomationProperties.AutomationId="Timeline.Camera.Keyframes"
+                                      SelectionMode="Single"
+                                      SelectionChanged="CameraKeyframeListView_SelectionChanged">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Padding="2" Spacing="2">
+                                            <TextBlock Text="{Binding Summary}"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Detail}"
+                                                       Style="{StaticResource StudioCaptionTextStyle}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+
+                            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                                <StackPanel Spacing="10">
+                                    <TextBlock x:Name="CameraSelectionHintText"
+                                               Text="Select a keyframe to edit camera values."
+                                               TextWrapping="Wrap"
+                                               Style="{StaticResource StudioCaptionTextStyle}" />
+
+                                    <NumberBox x:Name="CameraTimeNumberBox"
+                                               AutomationProperties.AutomationId="Timeline.Camera.Time"
+                                               Header="Time (s)"
+                                               Minimum="0"
+                                               SmallChange="0.1"
+                                               SpinButtonPlacementMode="Compact" />
+
+                                    <TextBlock Text="Translation"
+                                               FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <NumberBox x:Name="CameraTranslationXNumberBox"
+                                                   Grid.Column="0"
+                                                   AutomationProperties.AutomationId="Timeline.Camera.TranslationX"
+                                                   Header="X"
+                                                   SmallChange="0.1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                        <NumberBox x:Name="CameraTranslationYNumberBox"
+                                                   Grid.Column="1"
+                                                   AutomationProperties.AutomationId="Timeline.Camera.TranslationY"
+                                                   Header="Y"
+                                                   SmallChange="0.1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                        <NumberBox x:Name="CameraTranslationZNumberBox"
+                                                   Grid.Column="2"
+                                                   AutomationProperties.AutomationId="Timeline.Camera.TranslationZ"
+                                                   Header="Z"
+                                                   SmallChange="0.1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                    </Grid>
+
+                                    <TextBlock Text="Rotation"
+                                               FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <NumberBox x:Name="CameraRotationXNumberBox"
+                                                   Grid.Column="0"
+                                                   AutomationProperties.AutomationId="Timeline.Camera.RotationX"
+                                                   Header="X"
+                                                   SmallChange="1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                        <NumberBox x:Name="CameraRotationYNumberBox"
+                                                   Grid.Column="1"
+                                                   AutomationProperties.AutomationId="Timeline.Camera.RotationY"
+                                                   Header="Y"
+                                                   SmallChange="1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                        <NumberBox x:Name="CameraRotationZNumberBox"
+                                                   Grid.Column="2"
+                                                   AutomationProperties.AutomationId="Timeline.Camera.RotationZ"
+                                                   Header="Z"
+                                                   SmallChange="1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                    </Grid>
+
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <NumberBox x:Name="CameraZoomNumberBox"
+                                                   Grid.Column="0"
+                                                   AutomationProperties.AutomationId="Timeline.Camera.Zoom"
+                                                   Header="Zoom"
+                                                   Minimum="0.001"
+                                                   SmallChange="0.1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                        <NumberBox x:Name="CameraFovNumberBox"
+                                                   Grid.Column="1"
+                                                   AutomationProperties.AutomationId="Timeline.Camera.Fov"
+                                                   Header="Field of view"
+                                                   Minimum="0.001"
+                                                   SmallChange="1"
+                                                   SpinButtonPlacementMode="Compact" />
+                                    </Grid>
+
+                                    <Button x:Name="ApplyCameraButton"
+                                            AutomationProperties.AutomationId="Timeline.Camera.Apply"
+                                            Style="{StaticResource StudioPrimaryButtonStyle}"
+                                            HorizontalAlignment="Stretch"
+                                            Content="Apply keyframe changes"
+                                            Click="ApplyCameraKeyframe_Click" />
+
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button x:Name="MoveCameraButton"
+                                                Grid.Column="0"
+                                                AutomationProperties.AutomationId="Timeline.Camera.MoveToPlayhead"
+                                                HorizontalAlignment="Stretch"
+                                                Content="Move to playhead"
+                                                Click="MoveCameraToPlayhead_Click" />
+                                        <Button x:Name="QuantizeCameraButton"
+                                                Grid.Column="1"
+                                                AutomationProperties.AutomationId="Timeline.Camera.Quantize"
+                                                HorizontalAlignment="Stretch"
+                                                Content="Quantize"
+                                                Click="QuantizeCamera_Click" />
+                                    </Grid>
+
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button x:Name="DuplicateCameraButton"
+                                                Grid.Column="0"
+                                                AutomationProperties.AutomationId="Timeline.Camera.Duplicate"
+                                                HorizontalAlignment="Stretch"
+                                                Content="Duplicate here"
+                                                Click="DuplicateCameraKeyframe_Click" />
+                                        <Button x:Name="DeleteCameraButton"
+                                                Grid.Column="1"
+                                                AutomationProperties.AutomationId="Timeline.Camera.Delete"
+                                                Style="{StaticResource StudioDangerButtonStyle}"
+                                                HorizontalAlignment="Stretch"
+                                                Content="Delete"
+                                                Click="DeleteCameraKeyframe_Click" />
+                                    </Grid>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
                     </PivotItem>
 
                     <PivotItem Header="JSON">

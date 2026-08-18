@@ -2,93 +2,504 @@
     x:Class="EdmgStudio.WinUI.Pages.ReviewPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:controls="using:EdmgStudio.WinUI.Controls"
-    Unloaded="ReviewPage_Unloaded">
-    <Grid Padding="24" RowSpacing="16">
+    xmlns:local="using:EdmgStudio.WinUI.Pages"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Loaded="OnLoaded"
+    Unloaded="OnUnloaded"
+    mc:Ignorable="d">
+
+    <Grid Padding="24" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <Grid ColumnDefinitions="*,Auto">
-            <StackPanel>
-                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Variant review" />
-                <TextBlock x:Name="SummaryText" Opacity="0.72" Text="Compare render variants and persist editorial decisions." />
+
+        <Grid ColumnSpacing="12" RowSpacing="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource StudioTitleTextBlockStyle}"
+                           Text="Variant review" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Text="Compare up to four artifacts, record editorial decisions, validate continuity, and manage live outputs."
+                           TextWrapping="Wrap" />
             </StackPanel>
-            <Button
-                x:Name="RefreshButton"
-                Grid.Column="1"
-                AutomationProperties.AutomationId="ReviewRefreshButton"
-                Click="RefreshButton_Click"
-                Content="Refresh" />
+
+            <Button Grid.Column="1"
+                    AutomationProperties.AutomationId="ReviewRefreshButton"
+                    AutomationProperties.Name="Refresh review"
+                    Click="OnRefreshClick"
+                    Content="Refresh" />
+
+            <StackPanel Grid.Row="1"
+                        Grid.ColumnSpan="2"
+                        Orientation="Horizontal"
+                        Spacing="12">
+                <StackPanel Width="280" Spacing="4">
+                    <TextBlock Text="Project" />
+                    <ComboBox x:Name="ProjectComboBox"
+                              AutomationProperties.AutomationId="ReviewProjectComboBox"
+                              AutomationProperties.Name="Review project"
+                              DisplayMemberPath="Name"
+                              HorizontalAlignment="Stretch"
+                              SelectionChanged="OnProjectSelectionChanged" />
+                </StackPanel>
+                <StackPanel Width="180" Spacing="4">
+                    <TextBlock Text="Plan variant" />
+                    <ComboBox x:Name="VariantComboBox"
+                              AutomationProperties.AutomationId="ReviewVariantComboBox"
+                              AutomationProperties.Name="Review plan variant"
+                              DisplayMemberPath="Label"
+                              HorizontalAlignment="Stretch"
+                              SelectionChanged="OnVariantSelectionChanged" />
+                </StackPanel>
+                <TextBlock x:Name="ReviewSummaryText"
+                           VerticalAlignment="Bottom"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Text="Select a project to review."
+                           TextWrapping="Wrap" />
+            </StackPanel>
         </Grid>
-        <InfoBar x:Name="StatusInfoBar" Grid.Row="1" IsClosable="True" IsOpen="False" />
-        <Grid x:Name="ReviewWorkspace" Grid.Row="2" ColumnDefinitions="420,*" ColumnSpacing="20">
-            <ListView
-                x:Name="ArtifactsList"
-                AutomationProperties.AutomationId="ReviewArtifactsList"
-                ItemsSource="{x:Bind Artifacts}"
-                SelectionChanged="ArtifactsList_SelectionChanged">
-                <ListView.ItemTemplate>
-                    <DataTemplate>
-                        <Grid Padding="8" RowSpacing="3">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Grid.Row="1" Opacity="0.68" Text="{Binding Summary}" />
-                        </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-                <StackPanel Spacing="12">
-                    <TextBlock x:Name="SelectedArtifactText" Style="{StaticResource SubtitleTextBlockStyle}" Text="Select an artifact" />
-                    <TextBlock x:Name="SelectedPathText" Opacity="0.68" TextWrapping="Wrap" />
-                    <controls:Direct3DPreviewControl
-                        x:Name="ArtifactPreview"
-                        Height="300"
-                        AutomationProperties.AutomationId="Review.ArtifactPreview"
-                        AutomationProperties.Name="Selected review artifact Direct3D preview" />
-                    <TextBox
-                        x:Name="NotesTextBox"
-                        AutomationProperties.AutomationId="ReviewNotesTextBox"
-                        Header="Review notes"
-                        AcceptsReturn="True"
-                        MinHeight="96"
-                        TextWrapping="Wrap" />
-                    <TextBox
-                        x:Name="TraitsTextBox"
-                        AutomationProperties.AutomationId="ReviewTraitsTextBox"
-                        Header="Cherry-pick traits (comma separated)"
-                        PlaceholderText="composition, motion, palette" />
-                    <TextBox
-                        x:Name="LockFieldsTextBox"
-                        AutomationProperties.AutomationId="ReviewLockFieldsTextBox"
-                        Header="Locked fields (comma separated)"
-                        PlaceholderText="seed, model, prompt" />
-                    <TextBlock Text="Decision" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button AutomationProperties.AutomationId="ReviewApproveButton" Click="ApproveButton_Click" Content="Approve" />
-                        <Button AutomationProperties.AutomationId="ReviewRejectButton" Click="RejectButton_Click" Content="Reject" />
-                        <Button AutomationProperties.AutomationId="ReviewCherryPickButton" Click="CherryPickButton_Click" Content="Cherry-pick" />
-                        <Button AutomationProperties.AutomationId="ReviewClearButton" Click="ClearButton_Click" Content="Clear decision" />
+
+        <StackPanel Grid.Row="1" Spacing="8">
+            <InfoBar x:Name="StatusBar"
+                     IsClosable="True"
+                     IsOpen="False"
+                     Severity="Informational" />
+            <ProgressBar x:Name="BusyProgressBar"
+                         IsIndeterminate="True"
+                         Visibility="Collapsed" />
+        </StackPanel>
+
+        <Grid x:Name="ReviewContentGrid"
+              Grid.Row="2"
+              ColumnSpacing="16"
+              RowSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="MasterColumn" Width="360" />
+                <ColumnDefinition x:Name="DetailColumn" Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="MasterRow" Height="*" />
+                <RowDefinition x:Name="DetailRow" Height="0" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="MasterPanel"
+                    Padding="12"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="12">
+                <Grid RowSpacing="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Spacing="4">
+                        <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                   Text="Artifacts" />
+                        <TextBlock x:Name="SelectionSummaryText"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Select up to four artifacts."
+                                   TextWrapping="Wrap" />
                     </StackPanel>
-                    <TextBlock Text="Artifact metadata" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <TextBox
-                        x:Name="MetadataTextBox"
-                        AutomationProperties.AutomationId="ReviewMetadataTextBox"
-                        AcceptsReturn="True"
-                        FontFamily="Consolas"
-                        IsReadOnly="True"
-                        MinHeight="220"
-                        ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                        ScrollViewer.VerticalScrollBarVisibility="Auto"
-                        TextWrapping="NoWrap" />
+                    <ListView x:Name="ArtifactList"
+                              Grid.Row="1"
+                              AutomationProperties.AutomationId="ReviewArtifactList"
+                              AutomationProperties.Name="Review artifacts"
+                              IsItemClickEnabled="False"
+                              ItemsSource="{x:Bind Artifacts}"
+                              SelectionChanged="OnArtifactSelectionChanged"
+                              SelectionMode="Multiple">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:ReviewArtifact">
+                                <Grid Padding="4" ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="{x:Bind Name}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   Text="{x:Bind VariantLabel}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   Text="{x:Bind Provenance}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <Border Grid.Column="1"
+                                            Padding="8,3"
+                                            Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                            CornerRadius="8">
+                                        <TextBlock Text="{x:Bind ReviewState}" />
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </Border>
+
+            <ScrollViewer x:Name="DetailScrollViewer"
+                          Grid.Column="1"
+                          HorizontalScrollMode="Disabled"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="16">
+                    <Border Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                        <StackPanel Spacing="12">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="4">
+                                    <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                               Text="Active preview" />
+                                    <TextBlock x:Name="PreviewTitleText"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               Text="Select an artifact."
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Button Grid.Column="1"
+                                        AutomationProperties.AutomationId="ReviewOpenOutputsButton"
+                                        AutomationProperties.Name="Open outputs"
+                                        Click="OnOpenOutputsClick"
+                                        Content="Outputs" />
+                            </Grid>
+                            <controls:Direct3DPreviewControl x:Name="ArtifactPreview"
+                                                             Height="300"
+                                                             AutomationProperties.AutomationId="ReviewArtifactPreview"
+                                                             AutomationProperties.Name="Selected artifact preview" />
+                            <TextBlock x:Name="ArtifactMetadataText"
+                                       FontFamily="Consolas"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="No artifact selected."
+                                       TextWrapping="Wrap" />
+                            <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                       Text="Comparison set" />
+                            <ItemsRepeater ItemsSource="{x:Bind SelectedArtifacts}">
+                                <ItemsRepeater.Layout>
+                                    <UniformGridLayout MinColumnSpacing="8"
+                                                       MinItemWidth="180"
+                                                       MinRowSpacing="8" />
+                                </ItemsRepeater.Layout>
+                                <ItemsRepeater.ItemTemplate>
+                                    <DataTemplate x:DataType="local:ReviewArtifact">
+                                        <Border Padding="10"
+                                                Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                                CornerRadius="8">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock FontWeight="SemiBold"
+                                                           Text="{x:Bind Name}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                           Text="{x:Bind ComparisonSummary}"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsRepeater.ItemTemplate>
+                            </ItemsRepeater>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                       Text="Editorial decision" />
+                            <TextBlock Text="Review notes" />
+                            <TextBox x:Name="NotesTextBox"
+                                     AutomationProperties.AutomationId="ReviewNotesTextBox"
+                                     AutomationProperties.Name="Review notes"
+                                     AcceptsReturn="True"
+                                     MaxLength="2000"
+                                     MinHeight="72"
+                                     PlaceholderText="Why these artifacts should survive"
+                                     TextWrapping="Wrap" />
+                            <TextBlock Text="Cherry-pick traits" />
+                            <TextBox x:Name="TraitsTextBox"
+                                     AutomationProperties.AutomationId="ReviewTraitsTextBox"
+                                     AutomationProperties.Name="Cherry-pick traits"
+                                     PlaceholderText="palette, motion, reference frame"
+                                     Text="palette, motion" />
+                            <CommandBar DefaultLabelPosition="Right">
+                                <AppBarButton x:Name="ApproveButton"
+                                              AutomationProperties.AutomationId="ReviewApproveButton"
+                                              AutomationProperties.Name="Approve selected artifacts"
+                                              Click="OnApproveClick"
+                                              Icon="Accept"
+                                              Label="Approve" />
+                                <AppBarButton x:Name="CherryPickButton"
+                                              AutomationProperties.AutomationId="ReviewCherryPickButton"
+                                              AutomationProperties.Name="Cherry-pick traits from selected artifacts"
+                                              Click="OnCherryPickClick"
+                                              Icon="Copy"
+                                              Label="Cherry-pick" />
+                                <AppBarButton x:Name="RejectButton"
+                                              AutomationProperties.AutomationId="ReviewRejectButton"
+                                              AutomationProperties.Name="Reject selected artifacts"
+                                              Click="OnRejectClick"
+                                              Icon="Cancel"
+                                              Label="Reject" />
+                            </CommandBar>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                       Text="Continuity validation" />
+                            <TextBlock x:Name="ContinuitySummaryText"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Run analysis and generate a plan to populate continuity checks."
+                                       TextWrapping="Wrap" />
+                            <ItemsRepeater ItemsSource="{x:Bind ContinuityWarnings}">
+                                <ItemsRepeater.ItemTemplate>
+                                    <DataTemplate x:DataType="local:ReviewContinuityWarning">
+                                        <Border Margin="0,0,0,8"
+                                                Padding="10"
+                                                Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                                CornerRadius="8">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock FontWeight="SemiBold"
+                                                           Text="{x:Bind Heading}" />
+                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                           Text="{x:Bind Detail}"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsRepeater.ItemTemplate>
+                            </ItemsRepeater>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                        <StackPanel Spacing="10">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="3">
+                                    <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                               Text="Project render jobs" />
+                                    <TextBlock x:Name="JobsSummaryText"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               Text="No jobs loaded."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button Grid.Column="1"
+                                        AutomationProperties.AutomationId="ReviewOpenQueueButton"
+                                        AutomationProperties.Name="Open render queue"
+                                        Click="OnOpenQueueClick"
+                                        Content="Open queue" />
+                            </Grid>
+                            <ListView x:Name="JobsList"
+                                      AutomationProperties.AutomationId="ReviewJobsList"
+                                      AutomationProperties.Name="Project render jobs"
+                                      ItemsSource="{x:Bind Jobs}"
+                                      MaxHeight="220"
+                                      SelectionChanged="OnJobSelectionChanged"
+                                      SelectionMode="Single">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="local:ReviewJobItem">
+                                        <Grid Padding="4" ColumnSpacing="10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock FontWeight="SemiBold"
+                                                           Text="{x:Bind Title}" />
+                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                           Text="{x:Bind ProgressSummary}"
+                                                           TextWrapping="Wrap" />
+                                                <TextBlock Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                                           Text="{x:Bind Error}"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{x:Bind Status}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <CommandBar DefaultLabelPosition="Right">
+                                <AppBarButton x:Name="PauseJobButton"
+                                              AutomationProperties.AutomationId="ReviewPauseJobButton"
+                                              AutomationProperties.Name="Pause or resume selected job"
+                                              Click="OnPauseResumeJobClick"
+                                              Icon="Pause"
+                                              Label="Pause/resume" />
+                                <AppBarButton x:Name="CancelJobButton"
+                                              AutomationProperties.AutomationId="ReviewCancelJobButton"
+                                              AutomationProperties.Name="Cancel selected job"
+                                              Click="OnCancelJobClick"
+                                              Icon="Cancel"
+                                              Label="Cancel" />
+                                <AppBarButton x:Name="RetryJobButton"
+                                              AutomationProperties.AutomationId="ReviewRetryJobButton"
+                                              AutomationProperties.Name="Retry selected job"
+                                              Click="OnRetryJobClick"
+                                              Icon="RepeatAll"
+                                              Label="Retry" />
+                                <AppBarButton x:Name="ViewJobLogButton"
+                                              AutomationProperties.AutomationId="ReviewViewJobLogButton"
+                                              AutomationProperties.Name="View selected job log"
+                                              Click="OnViewJobLogClick"
+                                              Icon="Document"
+                                              Label="View log" />
+                            </CommandBar>
+                            <TextBox x:Name="JobLogTextBox"
+                                     AutomationProperties.AutomationId="ReviewJobLogTextBox"
+                                     AutomationProperties.Name="Selected job log"
+                                     AcceptsReturn="True"
+                                     FontFamily="Consolas"
+                                     IsReadOnly="True"
+                                     MaxHeight="220"
+                                     TextWrapping="NoWrap"
+                                     Visibility="Collapsed" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                       Text="Live cue publishers (Labs)" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Experimental OSC, MIDI, and WebSocket playback compiled from the Music Graph. Playback speed is 1×."
+                                       TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <StackPanel Width="240" Spacing="4">
+                                    <TextBlock Text="OSC host" />
+                                    <TextBox x:Name="OscHostTextBox"
+                                             AutomationProperties.AutomationId="ReviewOscHostTextBox"
+                                             AutomationProperties.Name="OSC host"
+                                             Text="127.0.0.1" />
+                                </StackPanel>
+                                <StackPanel Width="160" Spacing="4">
+                                    <TextBlock Text="OSC port" />
+                                    <NumberBox x:Name="OscPortNumberBox"
+                                               AutomationProperties.AutomationId="ReviewOscPortNumberBox"
+                                               AutomationProperties.Name="OSC port"
+                                               Maximum="65535"
+                                               Minimum="1"
+                                               SpinButtonPlacementMode="Compact"
+                                               Value="9000" />
+                                </StackPanel>
+                            </StackPanel>
+                            <CommandBar DefaultLabelPosition="Right">
+                                <AppBarButton x:Name="StartPublishButton"
+                                              AutomationProperties.AutomationId="ReviewStartPublishButton"
+                                              AutomationProperties.Name="Start live cue publishing"
+                                              Click="OnStartPublishClick"
+                                              Icon="Play"
+                                              Label="Start" />
+                                <AppBarButton x:Name="StopPublishButton"
+                                              AutomationProperties.AutomationId="ReviewStopPublishButton"
+                                              AutomationProperties.Name="Stop live cue publishing"
+                                              Click="OnStopPublishClick"
+                                              Icon="Stop"
+                                              Label="Stop" />
+                                <AppBarButton x:Name="ExportTouchDesignerButton"
+                                              AutomationProperties.AutomationId="ReviewExportTouchDesignerButton"
+                                              AutomationProperties.Name="Export TouchDesigner adapter"
+                                              Click="OnExportTouchDesignerClick"
+                                              Icon="Save"
+                                              Label="TouchDesigner" />
+                                <AppBarButton x:Name="ExportUnrealButton"
+                                              AutomationProperties.AutomationId="ReviewExportUnrealButton"
+                                              AutomationProperties.Name="Export Unreal adapter"
+                                              Click="OnExportUnrealClick"
+                                              Icon="Save"
+                                              Label="Unreal" />
+                            </CommandBar>
+                            <TextBlock x:Name="PublishStatusText"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Publishing status unavailable."
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                       Text="Continue workflow" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button AutomationProperties.AutomationId="ReviewOpenTimelineButton"
+                                        AutomationProperties.Name="Open selected artifact in timeline"
+                                        Click="OnOpenTimelineClick"
+                                        Content="Timeline" />
+                                <Button AutomationProperties.AutomationId="ReviewOpenRenderButton"
+                                        AutomationProperties.Name="Open selected artifact in render"
+                                        Click="OnOpenRenderClick"
+                                        Content="Render" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
+
+            <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup>
+                    <VisualState x:Name="WideLayout">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="900" />
+                        </VisualState.StateTriggers>
+                    </VisualState>
+                    <VisualState x:Name="NarrowLayout">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="0" />
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="MasterColumn.Width" Value="*" />
+                            <Setter Target="DetailColumn.Width" Value="0" />
+                            <Setter Target="MasterRow.Height" Value="320" />
+                            <Setter Target="DetailRow.Height" Value="*" />
+                            <Setter Target="DetailScrollViewer.(Grid.Column)" Value="0" />
+                            <Setter Target="DetailScrollViewer.(Grid.Row)" Value="1" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
         </Grid>
-        <ProgressRing x:Name="BusyRing" Grid.RowSpan="3" HorizontalAlignment="Center" VerticalAlignment="Center" IsActive="False" />
     </Grid>
 </Page>

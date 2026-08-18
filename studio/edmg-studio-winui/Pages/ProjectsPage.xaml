@@ -80,6 +80,7 @@
         <Grid Grid.Row="3" RowSpacing="8">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
             <Grid ColumnSpacing="8">
@@ -96,14 +97,23 @@
                     Text="Loading…" />
             </Grid>
 
-            <Grid Grid.Row="1">
+            <InfoBar
+                x:Name="ProjectHealthInfoBar"
+                Grid.Row="1"
+                AutomationProperties.AutomationId="ProjectHealthInfoBar"
+                IsClosable="False"
+                IsOpen="False"
+                Severity="Informational"
+                Title="Selected project health" />
+
+            <Grid Grid.Row="2">
                 <ListView
                     x:Name="ProjectList"
                     AutomationProperties.AutomationId="ProjectList"
                     AutomationProperties.Name="Studio projects"
-                    IsItemClickEnabled="True"
-                    ItemClick="ProjectList_ItemClick"
-                    ItemsSource="{x:Bind Projects}"
+                    IsItemClickEnabled="False"
+                    ItemsSource="{x:Bind Projects, Mode=OneWay}"
+                    SelectionChanged="ProjectList_SelectionChanged"
                     SelectionMode="Single">
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="local:ProjectListItem">

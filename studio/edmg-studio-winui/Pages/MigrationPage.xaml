@@ -7,34 +7,41 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid MaxWidth="920" Padding="24">
-        <StackPanel VerticalAlignment="Center" Spacing="14">
-            <SymbolIcon Symbol="Repair" />
-            <TextBlock x:Name="PageTitle" HorizontalAlignment="Center" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource PageTitleStyle}" Text="Native surface in progress" />
-            <TextBlock
-                x:Name="PageDescription"
-                HorizontalAlignment="Center"
-                MaxWidth="680"
-                Foreground="{ThemeResource StudioMutedTextBrush}"
-                Text="This destination is represented in the native shell and will be migrated after the complete create, audio, analysis, and planning workflow."
-                TextAlignment="Center"
-                TextWrapping="Wrap" />
-            <InfoBar
-                IsIconVisible="True"
-                IsOpen="True"
-                IsClosable="False"
-                Message="Core Studio workflows are native on Windows. Specialist interactions that are not represented by the shared backend API remain available through the Electron compatibility frontend."
-                Severity="Informational"
-                Title="Compatibility boundary" />
-            <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
-                <Button AutomationProperties.AutomationId="OpenNativeWorkspaceButton"
-                        Click="OpenWorkspace_Click"
-                        Content="Open Workspace"
-                        Style="{StaticResource AccentButtonStyle}" />
-                <Button AutomationProperties.AutomationId="BackToDashboardButton"
-                        Click="OpenDashboard_Click"
-                        Content="Back to Dashboard" />
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="920" Padding="24" Spacing="16">
+            <StackPanel Spacing="5">
+                <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource PageTitleStyle}" Text="Migration" />
+                <TextBlock
+                    Foreground="{ThemeResource StudioMutedTextBrush}"
+                    Text="Review legacy desktop state reported by the native bootstrap configuration."
+                    TextWrapping="Wrap" />
             </StackPanel>
+            <InfoBar
+                x:Name="PendingMigrationInfoBar"
+                AutomationProperties.AutomationId="Migration.PendingState"
+                IsClosable="False"
+                IsOpen="True"
+                Severity="Informational"
+                Title="Migration state" />
+            <Border Padding="20" Style="{StaticResource StudioCardStyle}">
+                <StackPanel Spacing="10">
+                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Compatibility boundary" />
+                    <TextBlock
+                        Text="This workflow reports migration state without changing authoritative Python services or silently rewriting project documents. All canonical Studio destinations are available in the native shell."
+                        TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button
+                            AutomationProperties.AutomationId="Migration.OpenProjects"
+                            Click="OpenProjects_Click"
+                            Content="Open projects"
+                            Style="{StaticResource AccentButtonStyle}" />
+                        <Button
+                            AutomationProperties.AutomationId="Migration.OpenDashboard"
+                            Click="OpenDashboard_Click"
+                            Content="Open dashboard" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </StackPanel>
-    </Grid>
+    </ScrollViewer>
 </Page>

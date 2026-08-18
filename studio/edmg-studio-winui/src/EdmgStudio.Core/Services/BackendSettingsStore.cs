@@ -3,6 +3,17 @@ using System.Text.Json.Nodes;
 
 namespace EdmgStudio.Core.Services;
 
+public sealed record FoundryProjectSettings(
+    string ProjectName,
+    string SubscriptionName,
+    Uri ProjectEndpoint)
+{
+    public static FoundryProjectSettings Default { get; } = new(
+        "jonlong-1185",
+        "Azuredwct",
+        new Uri("https://jonlong-1185-resource.services.ai.azure.com/api/projects/jonlong-1185"));
+}
+
 public static class BackendSettingsStore
 {
     public static string GetDefaultBootstrapPath() =>
@@ -24,25 +35,7 @@ public static class BackendSettingsStore
         }
 
         var path = Path.GetFullPath(bootstrapPath ?? GetDefaultBootstrapPath());
-        JsonObject root;
-        if (File.Exists(path))
-        {
-            try
-            {
-                root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
-                    ?? throw new InvalidDataException("The Studio bootstrap file must contain a JSON object.");
-            }
-            catch (JsonException exception)
-            {
-                throw new InvalidDataException(
-                    "The Studio bootstrap file is malformed. It was not changed so the existing configuration can be recovered safely.",
-                    exception);
-            }
-        }
-        else
-        {
-            root = new JsonObject();
-        }
+        var root = ReadRoot(path);
 
         root["backendSettings"] = new JsonObject
         {
@@ -54,6 +47,108 @@ public static class BackendSettingsStore
         root["updatedAt"] = DateTimeOffset.UtcNow.ToString("O");
 
         WriteAtomically(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+    }
+
+    public static FoundryProjectSettings LoadFoundrySettings(string? bootstrapPath = null)
+    {
+        var path = Path.GetFullPath(bootstrapPath ?? GetDefaultBootstrapPath());
+        var root = ReadRoot(path);
+        if (root["aiSettings"] is not JsonObject aiSettings)
+        {
+            return FoundryProjectSettings.Default;
+        }
+
+        var defaults = FoundryProjectSettings.Default;
+        var projectName = ReadOptionalString(aiSettings, "foundryProjectName") ?? defaults.ProjectName;
+        var subscriptionName = ReadOptionalString(aiSettings, "foundrySubscription") ?? defaults.SubscriptionName;
+        var endpointText = ReadOptionalString(aiSettings, "foundryProjectEndpoint");
+        if (endpointText is null)
+        {
+            return new FoundryProjectSettings(projectName, subscriptionName, defaults.ProjectEndpoint);
+        }
+
+        return new FoundryProjectSettings(
+            projectName,
+            subscriptionName,
+            ValidateEndpoint(endpointText, nameof(FoundryProjectSettings.ProjectEndpoint)));
+    }
+
+    public static void SaveFoundrySettings(
+        FoundryProjectSettings settings,
+        string? bootstrapPath = null)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var projectName = RequireValue(settings.ProjectName, "Foundry project name");
+        var subscriptionName = RequireValue(settings.SubscriptionName, "Foundry subscription name");
+        var endpoint = ValidateEndpoint(settings.ProjectEndpoint?.OriginalString, nameof(settings.ProjectEndpoint));
+        var path = Path.GetFullPath(bootstrapPath ?? GetDefaultBootstrapPath());
+        var root = ReadRoot(path);
+        var aiSettings = root["aiSettings"] as JsonObject ?? new JsonObject();
+        aiSettings["foundryProjectName"] = projectName;
+        aiSettings["foundrySubscription"] = subscriptionName;
+        aiSettings["foundryProjectEndpoint"] = endpoint.AbsoluteUri.TrimEnd('/');
+        root["aiSettings"] = aiSettings;
+        root["updatedAt"] = DateTimeOffset.UtcNow.ToString("O");
+
+        WriteAtomically(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+    }
+
+    private static JsonObject ReadRoot(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return new JsonObject();
+        }
+
+        try
+        {
+            return JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+                ?? throw new InvalidDataException("The Studio bootstrap file must contain a JSON object.");
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException(
+                "The Studio bootstrap file is malformed. It was not changed so the existing configuration can be recovered safely.",
+                exception);
+        }
+    }
+
+    private static string? ReadOptionalString(JsonObject source, string propertyName)
+    {
+        if (source[propertyName] is not JsonValue value ||
+            !value.TryGetValue<string>(out var text) ||
+            string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        return text.Trim();
+    }
+
+    private static string RequireValue(string? value, string displayName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"{displayName} is required.");
+        }
+
+        return value.Trim();
+    }
+
+    private static Uri ValidateEndpoint(string? value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var endpoint) ||
+            endpoint.Scheme is not ("http" or "https") ||
+            string.IsNullOrWhiteSpace(endpoint.Host) ||
+            !string.IsNullOrEmpty(endpoint.UserInfo))
+        {
+            throw new ArgumentException(
+                "Foundry project endpoint must be an absolute http:// or https:// URL without embedded credentials.",
+                parameterName);
+        }
+
+        return endpoint;
     }
 
     private static void WriteAtomically(string path, string content)

@@ -3,46 +3,94 @@ using System.Text.Json.Serialization;
 
 namespace EdmgStudio.Core.Models;
 
-public sealed record ModelCatalogueResponse(
-    [property: JsonPropertyName("catalog")] IReadOnlyList<ModelCatalogueEntry>? Catalog,
-    [property: JsonPropertyName("user")] IReadOnlyList<ModelCatalogueEntry>? User,
-    [property: JsonPropertyName("packs")] IReadOnlyList<ModelPackEntry>? Packs,
-    [property: JsonPropertyName("accepted")] IReadOnlyDictionary<string, JsonElement>? Accepted,
-    [property: JsonPropertyName("installed")] IReadOnlyDictionary<string, JsonElement>? Installed,
-    [property: JsonPropertyName("cloud")] JsonElement Cloud,
-    [property: JsonPropertyName("lanes")] JsonElement Lanes,
-    [property: JsonPropertyName("storage_mode")] string? StorageMode,
-    [property: JsonPropertyName("model_cache")] string? ModelCache,
-    [property: JsonPropertyName("tensorrt_migration")] TensorRtMigrationStatus? TensorRtMigration)
+public sealed class ModelCatalogueResponse
 {
+    [JsonPropertyName("catalog")]
+    public IReadOnlyList<ModelCatalogueEntry>? Catalog { get; set; }
+
+    [JsonPropertyName("user")]
+    public IReadOnlyList<ModelCatalogueEntry>? User { get; set; }
+
+    [JsonPropertyName("packs")]
+    public IReadOnlyList<ModelPackEntry>? Packs { get; set; }
+
+    [JsonPropertyName("accepted")]
+    public IReadOnlyDictionary<string, JsonElement>? Accepted { get; set; }
+
+    [JsonPropertyName("installed")]
+    public IReadOnlyDictionary<string, JsonElement>? Installed { get; set; }
+
+    [JsonPropertyName("cloud")]
+    public JsonElement Cloud { get; set; }
+
+    [JsonPropertyName("lanes")]
+    public JsonElement Lanes { get; set; }
+
+    [JsonPropertyName("storage_mode")]
+    public string? StorageMode { get; set; }
+
+    [JsonPropertyName("model_cache")]
+    public string? ModelCache { get; set; }
+
+    [JsonPropertyName("tensorrt_migration")]
+    public TensorRtMigrationStatus? TensorRtMigration { get; set; }
+
     [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; init; }
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
-public sealed record ModelCatalogueEntry(
-    [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("name")] string? Name,
-    [property: JsonPropertyName("kind")] string? Kind,
-    [property: JsonPropertyName("source")] string? Source,
-    [property: JsonPropertyName("license_id")] string? LicenseId,
-    [property: JsonPropertyName("license_name")] string? LicenseName,
-    [property: JsonPropertyName("license_url")] string? LicenseUrl,
-    [property: JsonPropertyName("description")] string? Description,
-    [property: JsonPropertyName("path")] string? Path,
-    [property: JsonPropertyName("installed")] bool Installed,
-    [property: JsonPropertyName("available")] bool Available)
+public sealed class ModelCatalogueEntry
 {
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("kind")]
+    public string? Kind { get; set; }
+
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
+
+    [JsonPropertyName("license_id")]
+    public string? LicenseId { get; set; }
+
+    [JsonPropertyName("license_name")]
+    public string? LicenseName { get; set; }
+
+    [JsonPropertyName("license_url")]
+    public string? LicenseUrl { get; set; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+
+    [JsonPropertyName("path")]
+    public string? Path { get; set; }
+
+    [JsonPropertyName("installed")]
+    public bool Installed { get; set; }
+
+    [JsonPropertyName("available")]
+    public bool Available { get; set; }
+
     [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; init; }
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
-public sealed record ModelPackEntry(
-    [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("name")] string? Name,
-    [property: JsonPropertyName("models")] IReadOnlyList<string>? Models)
+public sealed class ModelPackEntry
 {
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("models")]
+    public IReadOnlyList<string>? Models { get; set; }
+
     [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; init; }
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public sealed record ModelTask(

@@ -11,6 +11,7 @@ namespace EdmgStudio.WinUI;
 public sealed partial class MainPage : Page
 {
     private bool _started;
+    private bool _isBackendStatusSubscribed;
 
     public MainPage()
     {
@@ -23,11 +24,11 @@ public sealed partial class MainPage : Page
         App.Shell = this;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
-        App.Services.BackendSupervisor.StatusChanged += BackendSupervisor_StatusChanged;
     }
 
     public void NavigateTo(string destination)
     {
+        destination = StudioNavigationDestination.NormalizeOrDefault(destination);
         var item = FindNavigationItem(destination);
         if (item is not null)
         {
@@ -35,7 +36,7 @@ public sealed partial class MainPage : Page
         }
 
         var pageType = ResolvePageType(destination);
-        if (ContentFrame.CurrentSourcePageType != pageType || pageType == typeof(MigrationPage))
+        if (ContentFrame.CurrentSourcePageType != pageType)
         {
             ContentFrame.Navigate(pageType, destination);
         }
@@ -43,14 +44,20 @@ public sealed partial class MainPage : Page
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        if (!_isBackendStatusSubscribed)
+        {
+            App.Services.BackendSupervisor.StatusChanged += BackendSupervisor_StatusChanged;
+            _isBackendStatusSubscribed = true;
+        }
+
         if (!_started)
         {
             _started = true;
-            NavigateTo("dashboard");
             var status = await App.Services.BackendSupervisor.StartAsync();
             UpdateBackendStatus(status);
             if (status.State == BackendLifecycleState.WaitingForHealth)
             {
+                NavigateTo("setup");
                 return;
             }
 
@@ -63,9 +70,8 @@ public sealed partial class MainPage : Page
             try
             {
                 var setup = await App.Services.ApiClient.GetSetupStatusAsync();
-                if (setup.ValueKind == System.Text.Json.JsonValueKind.Object &&
-                    setup.TryGetProperty("system_readiness", out var readiness) &&
-                    readiness.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                var readiness = setup.SystemReadiness;
+                if (readiness.ValueKind == System.Text.Json.JsonValueKind.Object &&
                     readiness.TryGetProperty("ready", out var ready) &&
                     ready.ValueKind == System.Text.Json.JsonValueKind.False)
                 {
@@ -79,10 +85,10 @@ public sealed partial class MainPage : Page
                 return;
             }
 
-            if (ContentFrame.Content is IStudioRefreshable refreshable)
-            {
-                await refreshable.RefreshAsync();
-            }
+            NavigateTo(App.Services.Configuration.HasPendingMigration
+                ? "migration"
+                : StudioNavigationDestination.NormalizeRestorableOrDefault(
+                    App.Services.Session.LastWorkflowDestination));
         }
     }
 
@@ -91,6 +97,12 @@ public sealed partial class MainPage : Page
         if (App.Shell == this)
         {
             App.Shell = null;
+        }
+
+        if (_isBackendStatusSubscribed)
+        {
+            App.Services.BackendSupervisor.StatusChanged -= BackendSupervisor_StatusChanged;
+            _isBackendStatusSubscribed = false;
         }
     }
 
@@ -201,10 +213,19 @@ public sealed partial class MainPage : Page
         if (args.SelectedItemContainer?.Tag is string destination)
         {
             var pageType = ResolvePageType(destination);
-            if (ContentFrame.CurrentSourcePageType != pageType || pageType == typeof(MigrationPage))
+            if (ContentFrame.CurrentSourcePageType != pageType)
             {
                 ContentFrame.Navigate(pageType, destination);
             }
+        }
+
+    }
+
+    private void Navigation_BackRequested(NavigationView sender, NavigationViewBackRequestedEventArgs args)
+    {
+        if (ContentFrame.CanGoBack)
+        {
+            ContentFrame.GoBack();
         }
     }
 
@@ -215,17 +236,31 @@ public sealed partial class MainPage : Page
             return;
         }
 
+        destination = StudioNavigationDestination.NormalizeOrDefault(destination);
         var item = FindNavigationItem(destination);
         if (item is not null && !ReferenceEquals(StudioNavigation.SelectedItem, item))
         {
             StudioNavigation.SelectedItem = item;
         }
+
+        StudioNavigation.IsBackEnabled = ContentFrame.CanGoBack;
+        if (StudioNavigationDestination.IsRestorable(destination))
+        {
+            App.Services.Session.SetLastWorkflowDestination(destination);
+        }
     }
 
-    private NavigationViewItem? FindNavigationItem(string destination) =>
-        StudioNavigation.MenuItems
+    private NavigationViewItem? FindNavigationItem(string destination)
+    {
+        if (string.Equals(destination, "settings", StringComparison.OrdinalIgnoreCase))
+        {
+            return StudioNavigation.SettingsItem as NavigationViewItem;
+        }
+
+        return StudioNavigation.MenuItems
             .OfType<NavigationViewItem>()
             .FirstOrDefault(item => string.Equals(item.Tag as string, destination, StringComparison.OrdinalIgnoreCase));
+    }
 
     private static Type ResolvePageType(string destination) => destination switch
     {
@@ -243,9 +278,10 @@ public sealed partial class MainPage : Page
         "plannerLab" => typeof(AiPlannerLabPage),
         "reactiveLab" => typeof(ReactiveLabPage),
         "studioForge" => typeof(StudioForgePage),
+        "migration" => typeof(MigrationPage),
         "settings" => typeof(SettingsPage),
         "setup" => typeof(SetupPage),
-        _ => typeof(MigrationPage)
+        _ => typeof(DashboardPage)
     };
 
     private static string StatusLabel(BackendStatus status) => status.State switch

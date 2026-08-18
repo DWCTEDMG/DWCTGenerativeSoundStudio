@@ -11,11 +11,18 @@ public sealed partial class ProjectsPage : Page, IStudioRefreshable
 {
     private bool _refreshing;
     private bool _creating;
+    private CancellationTokenSource? _healthCancellation;
 
     public ProjectsPage()
     {
         InitializeComponent();
         Loaded += async (_, _) => await RefreshAsync();
+        Unloaded += (_, _) =>
+        {
+            _healthCancellation?.Cancel();
+            _healthCancellation?.Dispose();
+            _healthCancellation = null;
+        };
     }
 
     public ObservableCollection<ProjectListItem> Projects { get; } = [];
@@ -109,11 +116,52 @@ public sealed partial class ProjectsPage : Page, IStudioRefreshable
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
-    private void ProjectList_ItemClick(object sender, ItemClickEventArgs e)
+    private async void ProjectList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.ClickedItem is ProjectListItem project)
+        _healthCancellation?.Cancel();
+        _healthCancellation?.Dispose();
+        _healthCancellation = null;
+
+        if (ProjectList.SelectedItem is not ProjectListItem project)
         {
-            OpenProject(project.Id);
+            ProjectHealthInfoBar.IsOpen = false;
+            return;
+        }
+
+        App.Services.Session.ActiveProjectId = project.Id;
+        _healthCancellation = new CancellationTokenSource();
+        CancellationToken cancellationToken = _healthCancellation.Token;
+        ProjectHealthInfoBar.Title = $"{project.Name} health";
+        ProjectHealthInfoBar.Message = "Checking referenced assets...";
+        ProjectHealthInfoBar.Severity = InfoBarSeverity.Informational;
+        ProjectHealthInfoBar.IsOpen = true;
+
+        try
+        {
+            ProjectHealthResponse response =
+                await App.Services.ApiClient.GetProjectHealthAsync(project.Id, cancellationToken);
+            ProjectHealthDto health = response.Health;
+            int missingAssets = health.AssetIndex.MissingCount;
+            int issueCount = health.Issues.Count;
+            ProjectHealthInfoBar.Message =
+                $"{health.Status} · {health.AssetIndex.AssetCount} assets · {missingAssets} missing · {issueCount} issues" +
+                (issueCount > 0
+                    ? $" — {string.Join("; ", health.Issues.Take(2).Select(issue => issue.Message))}"
+                    : string.Empty);
+            ProjectHealthInfoBar.Severity = health.Ok
+                ? InfoBarSeverity.Success
+                : health.Issues.Any(issue =>
+                    string.Equals(issue.Severity, "error", StringComparison.OrdinalIgnoreCase))
+                    ? InfoBarSeverity.Error
+                    : InfoBarSeverity.Warning;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            ProjectHealthInfoBar.Message = UserMessage(exception);
+            ProjectHealthInfoBar.Severity = InfoBarSeverity.Error;
         }
     }
 

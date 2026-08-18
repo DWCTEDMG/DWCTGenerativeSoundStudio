@@ -7,6 +7,8 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -23,17 +25,99 @@
                 Content="Refresh" />
         </Grid>
 
+        <Grid Grid.Row="1" ColumnDefinitions="*,180,180" ColumnSpacing="12">
+            <AutoSuggestBox
+                x:Name="SearchBox"
+                AutomationProperties.AutomationId="Outputs.Search"
+                AutomationProperties.Name="Filter outputs"
+                PlaceholderText="Filter by name, path, or group"
+                TextChanged="SearchBox_TextChanged" />
+            <ComboBox
+                x:Name="KindFilter"
+                Grid.Column="1"
+                AutomationProperties.AutomationId="Outputs.KindFilter"
+                Header="Media type"
+                SelectedIndex="0"
+                SelectionChanged="Filter_SelectionChanged">
+                <x:String>All</x:String>
+                <x:String>Images</x:String>
+                <x:String>Videos</x:String>
+                <x:String>Unreal</x:String>
+                <x:String>Other</x:String>
+            </ComboBox>
+            <ComboBox
+                x:Name="SortOrder"
+                Grid.Column="2"
+                AutomationProperties.AutomationId="Outputs.SortOrder"
+                Header="Sort"
+                SelectedIndex="0"
+                SelectionChanged="Filter_SelectionChanged">
+                <x:String>Newest</x:String>
+                <x:String>Name</x:String>
+                <x:String>Largest</x:String>
+            </ComboBox>
+        </Grid>
+
         <InfoBar
             x:Name="StatusInfoBar"
-            Grid.Row="1"
+            Grid.Row="2"
             IsClosable="True"
             IsOpen="False" />
 
-        <Grid Grid.Row="2" ColumnDefinitions="360,*" ColumnSpacing="20">
+        <Border
+            Grid.Row="3"
+            Padding="16"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+            <Grid ColumnDefinitions="120,*,Auto,Auto" ColumnSpacing="12">
+                <NumberBox
+                    x:Name="UnrealVariantNumber"
+                    AutomationProperties.AutomationId="Outputs.UnrealVariant"
+                    Header="Plan variant"
+                    Minimum="1"
+                    SpinButtonPlacementMode="Compact"
+                    Value="1" />
+                <TextBox
+                    x:Name="UnrealBundleNameBox"
+                    Grid.Column="1"
+                    AutomationProperties.AutomationId="Outputs.UnrealBundleName"
+                    Header="Unreal bundle name (optional)"
+                    MaxLength="120"
+                    PlaceholderText="Timestamped when left blank" />
+                <CheckBox
+                    x:Name="UnrealIncludeZipCheckBox"
+                    Grid.Column="2"
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="Outputs.UnrealIncludeZip"
+                    Content="Include ZIP"
+                    IsChecked="True"
+                    Margin="0,0,0,9" />
+                <Button
+                    x:Name="ExportUnrealButton"
+                    Grid.Column="3"
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="Outputs.ExportUnreal"
+                    Click="ExportUnrealButton_Click"
+                    Content="Export Unreal bundle"
+                    Margin="0,0,0,4" />
+            </Grid>
+        </Border>
+
+        <Grid x:Name="OutputsWorkspace" Grid.Row="4" ColumnSpacing="20" RowSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="OutputListColumn" Width="360" />
+                <ColumnDefinition x:Name="OutputDetailColumn" Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="OutputListRow" Height="*" />
+                <RowDefinition x:Name="OutputDetailRow" Height="0" />
+            </Grid.RowDefinitions>
             <ListView
                 x:Name="OutputsList"
                 AutomationProperties.AutomationId="OutputsList"
-                ItemsSource="{x:Bind Items}"
+                ItemsSource="{x:Bind VisibleItems}"
                 SelectionChanged="OutputsList_SelectionChanged"
                 SelectionMode="Single">
                 <ListView.ItemTemplate>
@@ -50,10 +134,11 @@
                 </ListView.ItemTemplate>
             </ListView>
 
-            <Grid Grid.Column="1" RowSpacing="12">
+            <Grid x:Name="OutputDetails" Grid.Column="1" RowSpacing="12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
@@ -73,30 +158,151 @@
                         AutomationProperties.Name="Selected output Direct3D preview" />
                 </Border>
                 <TextBlock x:Name="MetadataText" Grid.Row="2" FontFamily="Consolas" TextWrapping="Wrap" />
-                <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
-                    <Button
+                <Border
+                    x:Name="UnrealBundlePanel"
+                    Grid.Row="3"
+                    Padding="12"
+                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                    CornerRadius="8"
+                    Visibility="Collapsed">
+                    <StackPanel Spacing="10">
+                        <TextBlock FontWeight="SemiBold" Text="Unreal bridge workflow" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <TextBox
+                                x:Name="UnrealContentPathBox"
+                                AutomationProperties.AutomationId="Outputs.UnrealContentPath"
+                                Header="Unreal content path (optional)"
+                                MaxLength="260"
+                                PlaceholderText="/Game/EDMG" />
+                            <TextBox
+                                x:Name="UnrealAssetNameBox"
+                                Grid.Column="1"
+                                AutomationProperties.AutomationId="Outputs.UnrealAssetName"
+                                Header="Asset name (optional)"
+                                MaxLength="120" />
+                        </Grid>
+                        <TextBox
+                            x:Name="UnrealReturnSourceBox"
+                            AutomationProperties.AutomationId="Outputs.UnrealReturnSource"
+                            Header="Returned-media source folder (optional)"
+                            MaxLength="260"
+                            PlaceholderText="Defaults to the bundle returned folder" />
+                        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+                            <Button
+                                x:Name="BuildUnrealPlanButton"
+                                Click="BuildUnrealPlanButton_Click"
+                                Content="Build import plan" />
+                            <Button
+                                x:Name="ImportUnrealReturnButton"
+                                Grid.Column="1"
+                                Click="ImportUnrealReturnButton_Click"
+                                Content="Import returned media" />
+                            <Button
+                                x:Name="RevealBundleButton"
+                                Grid.Column="2"
+                                Click="RevealBundleButton_Click"
+                                Content="Reveal bundle"
+                                IsEnabled="False" />
+                            <Button
+                                x:Name="SaveManifestButton"
+                                Grid.Column="3"
+                                Click="SaveManifestButton_Click"
+                                Content="Save manifest"
+                                IsEnabled="False" />
+                            <Button
+                                x:Name="SavePlanButton"
+                                Grid.Column="4"
+                                Click="SavePlanButton_Click"
+                                Content="Save plan"
+                                IsEnabled="False" />
+                            <Button
+                                x:Name="SaveZipButton"
+                                Grid.Column="5"
+                                Click="SaveZipButton_Click"
+                                Content="Save ZIP"
+                                IsEnabled="False" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <CommandBar Grid.Row="4" DefaultLabelPosition="Right">
+                    <AppBarButton
                         x:Name="SaveButton"
                         AutomationProperties.AutomationId="OutputsSaveButton"
                         Click="SaveButton_Click"
-                        Content="Save a copy"
-                        IsEnabled="False" />
-                    <Button
+                        Icon="Save"
+                        IsEnabled="False"
+                        Label="Save a copy" />
+                    <AppBarButton
                         x:Name="RevealButton"
                         AutomationProperties.AutomationId="OutputsRevealButton"
                         Click="RevealButton_Click"
-                        Content="Reveal preview"
-                        IsEnabled="False" />
-                </StackPanel>
+                        Icon="OpenLocal"
+                        IsEnabled="False"
+                        Label="Reveal preview" />
+                    <AppBarSeparator />
+                    <AppBarButton
+                        x:Name="ReviewButton"
+                        AutomationProperties.AutomationId="Outputs.OpenReview"
+                        Click="ReviewButton_Click"
+                        Icon="View"
+                        IsEnabled="False"
+                        Label="Review" />
+                    <AppBarButton
+                        x:Name="TimelineButton"
+                        AutomationProperties.AutomationId="Outputs.OpenTimeline"
+                        Click="TimelineButton_Click"
+                        Icon="Clock"
+                        IsEnabled="False"
+                        Label="Timeline" />
+                    <AppBarButton
+                        x:Name="RenderButton"
+                        AutomationProperties.AutomationId="Outputs.OpenRender"
+                        Click="RenderButton_Click"
+                        Icon="Play"
+                        IsEnabled="False"
+                        Label="Render" />
+                </CommandBar>
             </Grid>
         </Grid>
 
         <ProgressRing
             x:Name="BusyRing"
-            Grid.RowSpan="3"
+            Grid.RowSpan="5"
             Width="40"
             Height="40"
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
             IsActive="False" />
+
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup>
+                <VisualState x:Name="Narrow">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="OutputListColumn.Width" Value="*" />
+                        <Setter Target="OutputDetailColumn.Width" Value="0" />
+                        <Setter Target="OutputListRow.Height" Value="280" />
+                        <Setter Target="OutputDetailRow.Height" Value="*" />
+                        <Setter Target="OutputDetails.(Grid.Column)" Value="0" />
+                        <Setter Target="OutputDetails.(Grid.Row)" Value="1" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Wide">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="900" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="OutputListColumn.Width" Value="360" />
+                        <Setter Target="OutputDetailColumn.Width" Value="*" />
+                        <Setter Target="OutputListRow.Height" Value="*" />
+                        <Setter Target="OutputDetailRow.Height" Value="0" />
+                        <Setter Target="OutputDetails.(Grid.Column)" Value="1" />
+                        <Setter Target="OutputDetails.(Grid.Row)" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
     </Grid>
 </Page>

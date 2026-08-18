@@ -7,7 +7,28 @@
     mc:Ignorable="d">
 
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-        <ScrollViewer>
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup>
+                <VisualState x:Name="WideLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="720" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+                <VisualState x:Name="NarrowLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="BridgeSecondColumn.Width" Value="0" />
+                        <Setter Target="VariantComboBox.(Grid.Row)" Value="1" />
+                        <Setter Target="VariantComboBox.(Grid.Column)" Value="0" />
+                        <Setter Target="ProjectDetailsLabelColumn.Width" Value="120" />
+                        <Setter Target="ContextLabelColumn.Width" Value="120" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
             <StackPanel Padding="32,28,32,48" Spacing="16" MaxWidth="1120" HorizontalAlignment="Stretch">
                 <Grid ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
@@ -16,21 +37,63 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Spacing="4">
                         <TextBlock Text="EDMG Director" Style="{ThemeResource TitleTextBlockStyle}" />
-                        <TextBlock Text="Coordinate the native planning, reactive, workspace, and render workflow for the active project."
-                                   TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock
+                            Text="Coordinate creative direction, reactive behavior, editorial assembly, and production handoffs without leaving the active Studio session."
+                            TextWrapping="Wrap"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
-                    <Button Grid.Column="1" Content="Refresh project" Click="RefreshProject_Click"
-                            AutomationProperties.AutomationId="DirectorRefreshProjectButton" />
+                    <Button
+                        x:Name="RefreshProjectButton"
+                        Grid.Column="1"
+                        AccessKey="R"
+                        AutomationProperties.AutomationId="Director.RefreshProject"
+                        Click="RefreshProject_Click"
+                        Content="Refresh" />
                 </Grid>
 
-                <InfoBar x:Name="StatusInfoBar" IsOpen="False" IsClosable="True" />
+                <InfoBar
+                    x:Name="StatusInfoBar"
+                    AutomationProperties.AutomationId="Director.Status"
+                    IsClosable="True"
+                    IsOpen="False" />
 
                 <Border Style="{StaticResource StudioCardBorderStyle}">
                     <StackPanel Spacing="12">
-                        <TextBlock Text="Active production" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Production bridge" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock
+                            Text="Project and variant choices are shared immediately with Planner, Reactive Lab, Workspace, Timeline, Render, Review, and Studio Forge."
+                            TextWrapping="Wrap"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Grid ColumnSpacing="16" RowSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition x:Name="BridgeSecondColumn" Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <ComboBox
+                                x:Name="ProjectComboBox"
+                                AutomationProperties.AutomationId="Director.Project"
+                                DisplayMemberPath="Name"
+                                Header="Active project"
+                                HorizontalAlignment="Stretch"
+                                PlaceholderText="Choose a project"
+                                SelectionChanged="ProjectComboBox_SelectionChanged" />
+                            <ComboBox
+                                x:Name="VariantComboBox"
+                                Grid.Column="1"
+                                AutomationProperties.AutomationId="Director.Variant"
+                                DisplayMemberPath="Label"
+                                Header="Selected plan variant"
+                                HorizontalAlignment="Stretch"
+                                PlaceholderText="Generate a plan first"
+                                SelectionChanged="VariantComboBox_SelectionChanged" />
+                        </Grid>
                         <Grid ColumnSpacing="24" RowSpacing="10">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition x:Name="ProjectDetailsLabelColumn" Width="180" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
@@ -40,16 +103,57 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
-                            <TextBlock Text="Project" FontWeight="SemiBold" />
-                            <TextBlock x:Name="ProjectNameText" Grid.Column="1" Text="No active project" TextWrapping="Wrap" />
-                            <TextBlock Grid.Row="1" Text="Project ID" FontWeight="SemiBold" />
-                            <TextBlock x:Name="ProjectIdText" Grid.Row="1" Grid.Column="1" Text="—" TextWrapping="Wrap" />
-                            <TextBlock Grid.Row="2" Text="Selected variant" FontWeight="SemiBold" />
-                            <TextBlock x:Name="VariantText" Grid.Row="2" Grid.Column="1" Text="Variant 1" />
-                            <TextBlock Grid.Row="3" Text="Analysis" FontWeight="SemiBold" />
-                            <TextBlock x:Name="AnalysisText" Grid.Row="3" Grid.Column="1" Text="Not loaded" />
-                            <TextBlock Grid.Row="4" Text="Plan" FontWeight="SemiBold" />
-                            <TextBlock x:Name="PlanText" Grid.Row="4" Grid.Column="1" Text="Not loaded" />
+                            <TextBlock Text="Project ID" FontWeight="SemiBold" />
+                            <TextBlock x:Name="ProjectIdText" Grid.Column="1" Text="—" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="1" Text="Analysis" FontWeight="SemiBold" />
+                            <TextBlock x:Name="AnalysisText" Grid.Row="1" Grid.Column="1" Text="Not loaded" />
+                            <TextBlock Grid.Row="2" Text="Creative plan" FontWeight="SemiBold" />
+                            <TextBlock x:Name="PlanText" Grid.Row="2" Grid.Column="1" Text="Not loaded" />
+                            <TextBlock Grid.Row="3" Text="Project health" FontWeight="SemiBold" />
+                            <TextBlock x:Name="HealthText" Grid.Row="3" Grid.Column="1" Text="Not checked" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="4" Text="Recommended next step" FontWeight="SemiBold" />
+                            <StackPanel Grid.Row="4" Grid.Column="1" Spacing="8">
+                                <TextBlock x:Name="NextStepText" Text="Choose a project to begin." TextWrapping="Wrap" />
+                                <Button
+                                    x:Name="NextStepButton"
+                                    HorizontalAlignment="Left"
+                                    AutomationProperties.AutomationId="Director.NextStep"
+                                    Click="NextStepButton_Click"
+                                    Content="Open Projects" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardBorderStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Current handoff context" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock
+                            Text="Director carries the current source, artifact, queue job, timeline focus, and render intent into the next native surface."
+                            TextWrapping="Wrap"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Grid ColumnSpacing="24" RowSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition x:Name="ContextLabelColumn" Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Source asset" FontWeight="SemiBold" />
+                            <TextBlock x:Name="SourceAssetText" Grid.Column="1" Text="None selected" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="1" Text="Output artifact" FontWeight="SemiBold" />
+                            <TextBlock x:Name="ArtifactText" Grid.Row="1" Grid.Column="1" Text="None selected" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="2" Text="Queue job" FontWeight="SemiBold" />
+                            <TextBlock x:Name="JobText" Grid.Row="2" Grid.Column="1" Text="None selected" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="3" Text="Timeline focus" FontWeight="SemiBold" />
+                            <TextBlock x:Name="TimelineFocusText" Grid.Row="3" Grid.Column="1" Text="No focused time" />
+                            <TextBlock Grid.Row="4" Text="Render context" FontWeight="SemiBold" />
+                            <TextBlock x:Name="RenderContextText" Grid.Row="4" Grid.Column="1" Text="Default" TextWrapping="Wrap" />
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -57,29 +161,51 @@
                 <Border Style="{StaticResource StudioCardBorderStyle}">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Direct the workflow" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                        <TextBlock Text="Each action opens a dedicated native surface. The Python backend remains authoritative for every mutation."
-                                   TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="AI Planner Lab" Click="OpenPlanner_Click"
-                                    AutomationProperties.AutomationId="DirectorOpenPlannerButton" />
-                            <Button Content="Reactive Lab" Click="OpenReactive_Click"
-                                    AutomationProperties.AutomationId="DirectorOpenReactiveButton" />
-                            <Button Content="Workspace" Click="OpenWorkspace_Click"
-                                    AutomationProperties.AutomationId="DirectorOpenWorkspaceButton" />
-                            <Button Content="Render" Click="OpenRender_Click"
-                                    AutomationProperties.AutomationId="DirectorOpenRenderButton" />
-                            <Button Content="Studio Forge" Click="OpenForge_Click"
-                                    AutomationProperties.AutomationId="DirectorOpenForgeButton" />
-                        </StackPanel>
+                        <TextBlock
+                            Text="Planner owns conductor intent and director presets; Reactive Lab owns audio mappings; the production surfaces preserve the selected session context."
+                            TextWrapping="Wrap"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <ItemsControl x:Name="ProductionActions">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <ItemsWrapGrid Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <Button Margin="0,0,8,8" Content="AI Planner Lab" Click="OpenPlanner_Click"
+                                    AutomationProperties.AutomationId="Director.OpenPlanner" />
+                            <Button Margin="0,0,8,8" Content="Reactive Lab" Click="OpenReactive_Click"
+                                    AutomationProperties.AutomationId="Director.OpenReactive" />
+                            <Button Margin="0,0,8,8" Content="Workspace" Click="OpenWorkspace_Click"
+                                    AutomationProperties.AutomationId="Director.OpenWorkspace" />
+                            <Button Margin="0,0,8,8" Content="Timeline" Click="OpenTimeline_Click"
+                                    AutomationProperties.AutomationId="Director.OpenTimeline" />
+                            <Button Margin="0,0,8,8" Content="Render" Click="OpenRender_Click"
+                                    AutomationProperties.AutomationId="Director.OpenRender" />
+                            <Button Margin="0,0,8,8" Content="Queue" Click="OpenQueue_Click"
+                                    AutomationProperties.AutomationId="Director.OpenQueue" />
+                            <Button Margin="0,0,8,8" Content="Outputs" Click="OpenOutputs_Click"
+                                    AutomationProperties.AutomationId="Director.OpenOutputs" />
+                            <Button Margin="0,0,8,8" Content="Review" Click="OpenReview_Click"
+                                    AutomationProperties.AutomationId="Director.OpenReview" />
+                            <Button Margin="0,0,8,8" Content="Studio Forge" Click="OpenForge_Click"
+                                    AutomationProperties.AutomationId="Director.OpenForge" />
+                        </ItemsControl>
                     </StackPanel>
                 </Border>
 
-                <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
-                         Title="Desktop service lifecycle is managed outside this page"
-                         Message="The Electron Director can manage its own embedded service process. WinUI uses the configured backend supervisor and does not expose fake start, stop, or restart controls here." />
+                <InfoBar
+                    IsClosable="False"
+                    IsOpen="True"
+                    Severity="Informational"
+                    Title="Native service lifecycle"
+                    Message="WinUI uses the configured Studio backend supervisor. Electron-only embedded sidecar controls are intentionally not reproduced here." />
             </StackPanel>
         </ScrollViewer>
-        <ProgressBar x:Name="BusyIndicator" IsIndeterminate="True" Visibility="Collapsed"
-                     VerticalAlignment="Top" AutomationProperties.Name="Loading Director project" />
+        <ProgressBar
+            x:Name="BusyIndicator"
+            AutomationProperties.Name="Loading Director project"
+            IsIndeterminate="True"
+            VerticalAlignment="Top"
+            Visibility="Collapsed" />
     </Grid>
 </Page>

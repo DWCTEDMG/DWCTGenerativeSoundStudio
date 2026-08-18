@@ -3,6 +3,7 @@
     x:Class="EdmgStudio.WinUI.Pages.SetupPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EdmgStudio.WinUI.Pages"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     NavigationCacheMode="Required"
@@ -11,6 +12,8 @@
     <ScrollViewer>
         <Grid MaxWidth="{StaticResource StudioPageMaxWidth}" Padding="24" RowSpacing="14">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -30,6 +33,7 @@
                 </StackPanel>
                 <CommandBar Grid.Column="1" Background="Transparent" DefaultLabelPosition="Right">
                     <AppBarButton
+                        x:Name="RefreshButton"
                         AutomationProperties.AutomationId="RefreshSetupButton"
                         Click="Refresh_Click"
                         Icon="Refresh"
@@ -63,6 +67,9 @@
                         <TextBlock x:Name="FfmpegReadinessText" Text="FFmpeg: checking" TextWrapping="Wrap" />
                         <TextBlock x:Name="AiReadinessText" Text="AI path: checking" TextWrapping="Wrap" />
                         <TextBlock x:Name="ModelReadinessText" Text="AI model: checking" TextWrapping="Wrap" />
+                        <TextBlock x:Name="ComfyReadinessText" Text="ComfyUI: checking" TextWrapping="Wrap" />
+                        <TextBlock x:Name="EdmgReadinessText" Text="EDMG Core: checking" TextWrapping="Wrap" />
+                        <TextBlock x:Name="SevenZipReadinessText" Text="7-Zip: checking" TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
 
@@ -132,9 +139,149 @@
                     <StackPanel Spacing="8">
                         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Native workflow status" />
                         <TextBlock Text="Current coverage" FontWeight="SemiBold" />
-                        <TextBlock Text="Backend lifecycle, project management, core workspace and timeline editing, render queue, review, output preview, models, and settings." TextWrapping="Wrap" />
-                        <TextBlock Text="Parity work in progress" FontWeight="SemiBold" />
-                        <TextBlock Text="Advanced Electron timeline tools and dedicated Director, Planner, Reactive Lab, Cloud, and Studio Forge experiences are still being transferred to WinUI." TextWrapping="Wrap" />
+                        <TextBlock Text="Backend lifecycle, project management, workspace and timeline editing, render queue, review, output preview, models, settings, Director, Planner, Reactive Lab, Cloud, and Studio Forge are reachable in the native shell." TextWrapping="Wrap" />
+                        <TextBlock Text="Setup operations remain Python-owned" FontWeight="SemiBold" />
+                        <TextBlock Text="The native client invokes the supported setup API and reports its task progress. Install and dependency logic is not duplicated in C#." TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border
+                    x:Name="TasksCard"
+                    Grid.Row="2"
+                    Grid.ColumnSpan="2"
+                    Padding="20"
+                    Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="10">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="3">
+                                <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Installer tasks" />
+                                <TextBlock x:Name="TasksSummaryText" Foreground="{ThemeResource StudioMutedTextBrush}" Text="No installer tasks are active." TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button
+                                Grid.Column="1"
+                                AutomationProperties.AutomationId="RefreshSetupTasksButton"
+                                Click="RefreshTasks_Click"
+                                Content="Refresh tasks" />
+                        </Grid>
+                        <ItemsControl x:Name="SetupTasksItems">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="local:SetupTaskView">
+                                    <Border Margin="0,0,0,8" Padding="12" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="6">
+                                        <Grid ColumnSpacing="12" RowSpacing="6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <StackPanel>
+                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" TextWrapping="Wrap" />
+                                                <TextBlock Foreground="{ThemeResource StudioMutedTextBrush}" Text="{x:Bind StatusText}" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <Button
+                                                Grid.Column="1"
+                                                AutomationProperties.AutomationId="{x:Bind CancelAutomationId}"
+                                                Click="CancelTask_Click"
+                                                Content="Cancel"
+                                                IsEnabled="{x:Bind CanCancel}"
+                                                Tag="{x:Bind Id}" />
+                                            <ProgressBar
+                                                Grid.Row="1"
+                                                Grid.ColumnSpan="2"
+                                                AutomationProperties.Name="{x:Bind ProgressAutomationName}"
+                                                Maximum="100"
+                                                Value="{x:Bind ProgressPercent}" />
+                                            <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="{x:Bind DetailText}" TextWrapping="Wrap" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border
+                    x:Name="ActionsCard"
+                    Grid.Row="3"
+                    Grid.ColumnSpan="2"
+                    Padding="20"
+                    Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="3">
+                            <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Supported setup actions" />
+                            <TextBlock Foreground="{ThemeResource StudioMutedTextBrush}" Text="Choose a runtime profile, model, and ComfyUI endpoint. Actions queue work in the Python setup service and can be canceled above." TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Grid x:Name="ActionColumns" ColumnSpacing="14" RowSpacing="14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel x:Name="RuntimeActions" Spacing="8">
+                                <TextBlock FontWeight="SemiBold" Text="Runtime profile" />
+                                <ComboBox
+                                    x:Name="AcceleratorProfileComboBox"
+                                    AutomationProperties.AutomationId="SetupAcceleratorProfileComboBox"
+                                    Header="Accelerator profile"
+                                    SelectedIndex="0">
+                                    <ComboBoxItem Content="CPU" Tag="cpu" />
+                                    <ComboBoxItem Content="NVIDIA CUDA" Tag="cuda" />
+                                    <ComboBoxItem Content="DirectML" Tag="directml" />
+                                </ComboBox>
+                                <Button AutomationProperties.AutomationId="InstallFullSetupButton" Click="InstallFullSetup_Click" Content="Run full setup" HorizontalAlignment="Stretch" />
+                                <Button AutomationProperties.AutomationId="SyncBackendProfileButton" Click="InstallBackend_Click" Content="Sync backend profile" HorizontalAlignment="Stretch" />
+                                <Button AutomationProperties.AutomationId="InstallSevenZipButton" Click="InstallSevenZip_Click" Content="Install or repair 7-Zip" HorizontalAlignment="Stretch" />
+                                <Button AutomationProperties.AutomationId="InstallEdmgCoreButton" Click="InstallEdmg_Click" Content="Install or repair EDMG Core" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                            <StackPanel x:Name="OllamaActions" Grid.Column="1" Spacing="8">
+                                <TextBlock FontWeight="SemiBold" Text="Ollama" />
+                                <TextBox
+                                    x:Name="OllamaModelTextBox"
+                                    AutomationProperties.AutomationId="SetupOllamaModelTextBox"
+                                    Header="Model"
+                                    MaxLength="200"
+                                    Text="qwen3:8b" />
+                                <Button AutomationProperties.AutomationId="InstallManagedOllamaButton" Click="InstallOllama_Click" Content="Install managed Ollama" HorizontalAlignment="Stretch" />
+                                <Button AutomationProperties.AutomationId="DownloadRunOllamaButton" Click="DownloadRunOllama_Click" Content="Download and run Ollama" HorizontalAlignment="Stretch" />
+                                <Button AutomationProperties.AutomationId="StartManagedOllamaButton" Click="StartOllama_Click" Content="Start managed Ollama" HorizontalAlignment="Stretch" />
+                                <Button AutomationProperties.AutomationId="PullOllamaModelButton" Click="PullOllamaModel_Click" Content="Pull model" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                            <StackPanel x:Name="ComfyActions" Grid.Column="2" Spacing="8">
+                                <TextBlock FontWeight="SemiBold" Text="ComfyUI" />
+                                <ComboBox
+                                    x:Name="ComfyFlavorComboBox"
+                                    AutomationProperties.AutomationId="SetupComfyFlavorComboBox"
+                                    Header="Portable flavor"
+                                    SelectedIndex="0">
+                                    <ComboBoxItem Content="CPU" Tag="cpu" />
+                                    <ComboBoxItem Content="NVIDIA" Tag="nvidia" />
+                                    <ComboBoxItem Content="AMD" Tag="amd" />
+                                </ComboBox>
+                                <NumberBox
+                                    x:Name="ComfyPortNumberBox"
+                                    AutomationProperties.AutomationId="SetupComfyPortNumberBox"
+                                    Header="Port"
+                                    Maximum="65535"
+                                    Minimum="1"
+                                    SpinButtonPlacementMode="Inline"
+                                    Value="8188" />
+                                <Button AutomationProperties.AutomationId="InstallComfyUiButton" Click="InstallComfyUi_Click" Content="Install portable ComfyUI" HorizontalAlignment="Stretch" />
+                                <Button AutomationProperties.AutomationId="StartComfyUiButton" Click="StartComfyUi_Click" Content="Start ComfyUI" HorizontalAlignment="Stretch" />
+                                <Button AutomationProperties.AutomationId="StopComfyUiButton" Click="StopComfyUi_Click" Content="Stop ComfyUI" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
                 </Border>
 
@@ -148,6 +295,14 @@
                                 <Setter Target="ConnectionCard.(Grid.Row)" Value="2" />
                                 <Setter Target="MigrationCard.(Grid.Column)" Value="0" />
                                 <Setter Target="MigrationCard.(Grid.Row)" Value="3" />
+                                <Setter Target="TasksCard.(Grid.ColumnSpan)" Value="1" />
+                                <Setter Target="TasksCard.(Grid.Row)" Value="4" />
+                                <Setter Target="ActionsCard.(Grid.ColumnSpan)" Value="1" />
+                                <Setter Target="ActionsCard.(Grid.Row)" Value="5" />
+                                <Setter Target="OllamaActions.(Grid.Column)" Value="0" />
+                                <Setter Target="OllamaActions.(Grid.Row)" Value="1" />
+                                <Setter Target="ComfyActions.(Grid.Column)" Value="0" />
+                                <Setter Target="ComfyActions.(Grid.Row)" Value="2" />
                             </VisualState.Setters>
                         </VisualState>
                         <VisualState x:Name="Wide">
@@ -158,6 +313,14 @@
                                 <Setter Target="ConnectionCard.(Grid.Row)" Value="1" />
                                 <Setter Target="MigrationCard.(Grid.Column)" Value="1" />
                                 <Setter Target="MigrationCard.(Grid.Row)" Value="1" />
+                                <Setter Target="TasksCard.(Grid.ColumnSpan)" Value="2" />
+                                <Setter Target="TasksCard.(Grid.Row)" Value="2" />
+                                <Setter Target="ActionsCard.(Grid.ColumnSpan)" Value="2" />
+                                <Setter Target="ActionsCard.(Grid.Row)" Value="3" />
+                                <Setter Target="OllamaActions.(Grid.Column)" Value="1" />
+                                <Setter Target="OllamaActions.(Grid.Row)" Value="0" />
+                                <Setter Target="ComfyActions.(Grid.Column)" Value="2" />
+                                <Setter Target="ComfyActions.(Grid.Row)" Value="0" />
                             </VisualState.Setters>
                         </VisualState>
                     </VisualStateGroup>
@@ -165,7 +328,7 @@
             </Grid>
 
             <Button
-                Grid.Row="3"
+                Grid.Row="4"
                 HorizontalAlignment="Left"
                 AutomationProperties.AutomationId="OpenWorkspaceButton"
                 Click="OpenWorkspace_Click"

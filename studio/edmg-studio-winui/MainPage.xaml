@@ -42,9 +42,10 @@
             x:Name="StudioNavigation"
             Grid.Row="1"
             AutomationProperties.AutomationId="StudioNavigation"
+            BackRequested="Navigation_BackRequested"
             CompactModeThresholdWidth="720"
             ExpandedModeThresholdWidth="1120"
-            IsBackButtonVisible="Collapsed"
+            IsBackButtonVisible="Auto"
             IsSettingsVisible="True"
             IsTitleBarAutoPaddingEnabled="False"
             OpenPaneLength="260"
@@ -173,6 +174,14 @@
                 </NavigationViewItem>
                 <NavigationViewItem AutomationProperties.AutomationId="SetupNavigationItem" Content="Setup" Tag="setup" ToolTipService.ToolTip="Dependency and storage readiness">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Repair" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem
+                    AutomationProperties.AutomationId="MigrationNavigationItem"
+                    AutomationProperties.Name="Migration and compatibility"
+                    Content="Migration"
+                    Tag="migration"
+                    ToolTipService.ToolTip="Compatibility and migration workflow">
+                    <NavigationViewItem.Icon><SymbolIcon Symbol="Sync" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
 

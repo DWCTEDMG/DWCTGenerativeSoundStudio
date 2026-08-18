@@ -111,6 +111,23 @@
                         <Button x:Name="EventsButton" AutomationProperties.AutomationId="Queue.LoadEvents"
                                 Click="EventsButton_Click" Content="Load events" IsEnabled="False" />
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="OpenOutputsButton"
+                                AutomationProperties.AutomationId="Queue.OpenOutputs"
+                                Click="OpenOutputsButton_Click"
+                                Content="Outputs"
+                                IsEnabled="False" />
+                        <Button x:Name="OpenReviewButton"
+                                AutomationProperties.AutomationId="Queue.OpenReview"
+                                Click="OpenReviewButton_Click"
+                                Content="Review"
+                                IsEnabled="False" />
+                        <Button x:Name="OpenTimelineButton"
+                                AutomationProperties.AutomationId="Queue.OpenTimeline"
+                                Click="OpenTimelineButton_Click"
+                                Content="Timeline"
+                                IsEnabled="False" />
+                    </StackPanel>
                     <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Result and diagnostics" />
                     <TextBox x:Name="DetailsTextBox"
                              AutomationProperties.AutomationId="Queue.Details"

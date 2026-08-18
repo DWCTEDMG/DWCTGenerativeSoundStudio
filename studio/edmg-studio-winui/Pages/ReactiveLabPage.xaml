@@ -2,110 +2,621 @@
     x:Class="EdmgStudio.WinUI.Pages.ReactiveLabPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:core="using:EdmgStudio.Core.Models"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-        <ScrollViewer>
-            <StackPanel Padding="32,28,32,48" Spacing="16" MaxWidth="1120" HorizontalAlignment="Stretch">
-                <StackPanel Spacing="4">
-                    <TextBlock Text="Reactive Lab" Style="{ThemeResource TitleTextBlockStyle}" />
-                    <TextBlock x:Name="ProjectSummaryText" Text="Validated reactive bundle apply for the active project."
-                               TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                </StackPanel>
+    <Grid Padding="24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
 
-                <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
-                         Title="Audio analysis remains a browser workbench capability"
-                         Message="WinUI can hydrate and apply real reactive bundles through FastAPI. No native or backend contract currently exposes Web Audio microphone or file analysis, so this page does not simulate it." />
-                <InfoBar x:Name="StatusInfoBar" IsOpen="False" IsClosable="True" />
+        <InfoBar
+            x:Name="StatusInfoBar"
+            Grid.Row="0"
+            AutomationProperties.AutomationId="ReactiveStatusInfoBar"
+            AutomationProperties.Name="Reactive Lab status"
+            IsClosable="True"
+            IsOpen="False" />
 
-                <Border Style="{StaticResource StudioCardBorderStyle}">
-                    <StackPanel Spacing="14">
-                        <TextBlock Text="Reactive mapping" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                        <Grid ColumnSpacing="16" RowSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <StackPanel Spacing="6">
-                                <TextBlock Text="Mapping preset" />
-                                <ComboBox x:Name="PresetCombo" SelectedIndex="0"
-                                          AutomationProperties.AutomationId="ReactivePresetComboBox">
-                                    <ComboBoxItem Content="cinematic" />
-                                    <ComboBoxItem Content="psychedelic" />
-                                    <ComboBoxItem Content="ambient" />
-                                    <ComboBoxItem Content="percussive" />
-                                </ComboBox>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="6">
-                                <TextBlock Text="Render mode" />
-                                <ComboBox x:Name="RenderModeCombo" SelectedIndex="0"
-                                          AutomationProperties.AutomationId="ReactiveRenderModeComboBox">
-                                    <ComboBoxItem Content="smooth" />
-                                    <ComboBoxItem Content="cut-heavy" />
-                                    <ComboBoxItem Content="performance-led" />
-                                    <ComboBoxItem Content="ambient" />
-                                </ComboBox>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="6">
-                                <TextBlock Text="Frames per second" />
-                                <NumberBox x:Name="FpsBox" Value="24" Minimum="12" Maximum="60" SpinButtonPlacementMode="Inline"
-                                           AutomationProperties.AutomationId="ReactiveFpsNumberBox" />
-                            </StackPanel>
-                            <StackPanel Grid.Row="1" Spacing="6">
-                                <TextBlock Text="Sensitivity" />
-                                <NumberBox x:Name="SensitivityBox" Value="1" Minimum="0.2" Maximum="2.5" SmallChange="0.1"
-                                           SpinButtonPlacementMode="Inline" AutomationProperties.AutomationId="ReactiveSensitivityNumberBox" />
-                            </StackPanel>
-                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
-                                <TextBlock Text="Smoothing" />
-                                <NumberBox x:Name="SmoothingBox" Value="0.28" Minimum="0" Maximum="1" SmallChange="0.05"
-                                           SpinButtonPlacementMode="Inline" AutomationProperties.AutomationId="ReactiveSmoothingNumberBox" />
-                            </StackPanel>
-                            <StackPanel Grid.Row="1" Grid.Column="2" Spacing="6">
-                                <TextBlock Text="Schedule stride" />
-                                <NumberBox x:Name="ScheduleStrideBox" Value="4" Minimum="1" Maximum="120" SpinButtonPlacementMode="Inline"
-                                           AutomationProperties.AutomationId="ReactiveScheduleStrideNumberBox" />
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </Border>
-
-                <Border Style="{StaticResource StudioCardBorderStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Reactive bundle" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                        <TextBlock Text="Paste the browser workbench sync payload. Mapping controls above update its metadata before apply."
-                                   TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <TextBox x:Name="PayloadJsonBox" AcceptsReturn="True" TextWrapping="NoWrap"
-                                 FontFamily="Cascadia Mono" MinHeight="320"
-                                 AutomationProperties.AutomationId="ReactivePayloadJsonTextBox" />
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <CheckBox x:Name="OverwriteMotionCheckBox" Content="Overwrite motion track" IsChecked="True"
-                                      AutomationProperties.AutomationId="ReactiveOverwriteMotionCheckBox" />
-                            <CheckBox x:Name="OverwriteCameraCheckBox" Content="Overwrite camera" IsChecked="True"
-                                      AutomationProperties.AutomationId="ReactiveOverwriteCameraCheckBox" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="Load last reactive payload" Click="LoadLastPayload_Click"
-                                    AutomationProperties.AutomationId="ReactiveLoadLastPayloadButton" />
-                            <Button Content="Apply to project" Style="{StaticResource AccentButtonStyle}" Click="ApplyReactive_Click"
-                                    AutomationProperties.AutomationId="ReactiveApplyButton" />
-                            <Button Content="Open Workspace" Click="OpenWorkspace_Click"
-                                    AutomationProperties.AutomationId="ReactiveOpenWorkspaceButton" />
-                            <Button Content="Open Render" Click="OpenRender_Click"
-                                    AutomationProperties.AutomationId="ReactiveOpenRenderButton" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
+        <ScrollViewer
+            Grid.Row="1"
+            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+            HorizontalScrollMode="Enabled"
+            VerticalScrollMode="Disabled">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <ComboBox
+                    x:Name="ProjectComboBox"
+                    Width="260"
+                    Header="Active project"
+                    AutomationProperties.AutomationId="ReactiveProjectComboBox"
+                    AutomationProperties.Name="Active project"
+                    DisplayMemberPath="Name"
+                    SelectionChanged="ProjectComboBox_SelectionChanged" />
+                <Button
+                    x:Name="RefreshButton"
+                    VerticalAlignment="Bottom"
+                    AccessKey="R"
+                    AutomationProperties.AutomationId="ReactiveRefreshButton"
+                    AutomationProperties.Name="Refresh Reactive Lab context"
+                    Click="RefreshButton_Click"
+                    Content="Refresh" />
+                <Button
+                    x:Name="ImportButton"
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="ReactiveImportButton"
+                    AutomationProperties.Name="Import Reactive Lab document"
+                    Click="ImportButton_Click"
+                    Content="Import JSON" />
+                <Button
+                    x:Name="ExportButton"
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="ReactiveExportButton"
+                    AutomationProperties.Name="Export Reactive Lab document"
+                    Click="ExportButton_Click"
+                    Content="Export JSON" />
+                <Button
+                    x:Name="ApplyButton"
+                    VerticalAlignment="Bottom"
+                    AccessKey="A"
+                    AutomationProperties.AutomationId="ReactiveApplyButton"
+                    AutomationProperties.Name="Apply Reactive Lab result to timeline"
+                    Click="ApplyButton_Click"
+                    Content="Apply to Timeline"
+                    Style="{StaticResource AccentButtonStyle}" />
+                <Button
+                    x:Name="CancelButton"
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="ReactiveCancelButton"
+                    AutomationProperties.Name="Cancel Reactive Lab operation"
+                    Click="CancelButton_Click"
+                    Content="Cancel"
+                    IsEnabled="False" />
+                <Button
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="ReactiveWorkspaceButton"
+                    AutomationProperties.Name="Open Workspace"
+                    Click="WorkspaceButton_Click"
+                    Content="Workspace" />
+                <Button
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="ReactiveTimelineButton"
+                    AutomationProperties.Name="Open Timeline"
+                    Click="TimelineButton_Click"
+                    Content="Timeline" />
+                <Button
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="ReactiveRenderButton"
+                    AutomationProperties.Name="Open Render"
+                    Click="RenderButton_Click"
+                    Content="Render" />
             </StackPanel>
         </ScrollViewer>
-        <ProgressBar x:Name="BusyIndicator" IsIndeterminate="True" Visibility="Collapsed"
-                     VerticalAlignment="Top" AutomationProperties.Name="Reactive operation in progress" />
+
+        <Grid Grid.Row="2" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="340" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border
+                Grid.Column="0"
+                Padding="16"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid RowSpacing="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Reactive mappings" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Map analyzed signals and cues to visual parameters."
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <ComboBox
+                        x:Name="PresetComboBox"
+                        Grid.Row="1"
+                        Header="Project preset"
+                        AutomationProperties.AutomationId="ReactivePresetComboBox"
+                        AutomationProperties.Name="Project preset"
+                        SelectionChanged="PresetComboBox_SelectionChanged" />
+
+                    <ScrollViewer
+                        Grid.Row="2"
+                        ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                        HorizontalScrollMode="Enabled"
+                        VerticalScrollMode="Disabled">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button
+                                x:Name="AddMappingButton"
+                                AutomationProperties.AutomationId="ReactiveAddMappingButton"
+                                AutomationProperties.Name="Add mapping"
+                                Click="AddMappingButton_Click"
+                                Content="Add" />
+                            <Button
+                                x:Name="DuplicateMappingButton"
+                                AutomationProperties.AutomationId="ReactiveDuplicateMappingButton"
+                                AutomationProperties.Name="Duplicate selected mapping"
+                                Click="DuplicateMappingButton_Click"
+                                Content="Duplicate" />
+                            <Button
+                                x:Name="MoveMappingUpButton"
+                                AutomationProperties.AutomationId="ReactiveMoveMappingUpButton"
+                                AutomationProperties.Name="Move selected mapping up"
+                                Click="MoveMappingUpButton_Click"
+                                Content="Up" />
+                            <Button
+                                x:Name="MoveMappingDownButton"
+                                AutomationProperties.AutomationId="ReactiveMoveMappingDownButton"
+                                AutomationProperties.Name="Move selected mapping down"
+                                Click="MoveMappingDownButton_Click"
+                                Content="Down" />
+                            <Button
+                                x:Name="DeleteMappingButton"
+                                AutomationProperties.AutomationId="ReactiveDeleteMappingButton"
+                                AutomationProperties.Name="Delete selected mapping"
+                                Click="DeleteMappingButton_Click"
+                                Content="Delete" />
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <ListView
+                        x:Name="MappingListView"
+                        Grid.Row="3"
+                        AutomationProperties.AutomationId="ReactiveMappingListView"
+                        AutomationProperties.Name="Reactive mappings"
+                        ItemsSource="{x:Bind Mappings, Mode=OneWay}"
+                        SelectionChanged="MappingListView_SelectionChanged"
+                        SelectionMode="Single">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="core:ReactiveMapping">
+                                <Grid Padding="4" ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox
+                                        IsChecked="{x:Bind IsEnabled, Mode=OneTime}"
+                                        IsHitTestVisible="False"
+                                        IsTabStop="False" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind Name, Mode=OneTime}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="{x:Bind TargetParameter, Mode=OneTime}"
+                                            TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <StackPanel Grid.Row="4" Spacing="8">
+                        <TextBox
+                            x:Name="PresetNameTextBox"
+                            Header="Preset name"
+                            AutomationProperties.AutomationId="ReactivePresetNameTextBox"
+                            AutomationProperties.Name="Preset name"
+                            PlaceholderText="My reactive preset" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button
+                                AutomationProperties.AutomationId="ReactiveSavePresetButton"
+                                AutomationProperties.Name="Save project preset"
+                                Click="SavePresetButton_Click"
+                                Content="Save preset" />
+                            <Button
+                                x:Name="DeletePresetButton"
+                                AutomationProperties.AutomationId="ReactiveDeletePresetButton"
+                                AutomationProperties.Name="Delete project preset"
+                                Click="DeletePresetButton_Click"
+                                Content="Delete preset" />
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <TabView
+                x:Name="ReactiveTabView"
+                Grid.Column="1"
+                AutomationProperties.AutomationId="ReactiveTabView"
+                AutomationProperties.Name="Reactive Lab editors"
+                IsAddTabButtonVisible="False">
+                <TabViewItem
+                    AutomationProperties.Name="Mapping editor"
+                    Header="Mapping editor"
+                    IsClosable="False">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="900" Padding="4,8,20,20" Spacing="14">
+                            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Mapping editor" />
+                            <ToggleSwitch
+                                x:Name="MappingEnabledToggle"
+                                Header="Mapping enabled"
+                                AutomationProperties.AutomationId="ReactiveMappingEnabledToggle"
+                                AutomationProperties.Name="Mapping enabled"
+                                Toggled="MappingEditor_Changed" />
+                            <TextBox
+                                x:Name="MappingNameTextBox"
+                                Header="Name"
+                                AutomationProperties.AutomationId="ReactiveMappingNameTextBox"
+                                AutomationProperties.Name="Mapping name"
+                                TextChanged="MappingEditor_Changed" />
+
+                            <Grid ColumnSpacing="12" RowSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <ComboBox
+                                    x:Name="SourceSignalComboBox"
+                                    Header="Source feature or signal"
+                                    AutomationProperties.AutomationId="ReactiveSourceSignalComboBox"
+                                    AutomationProperties.Name="Source feature or signal"
+                                    IsEditable="True"
+                                    SelectionChanged="MappingEditor_Changed" />
+                                <ComboBox
+                                    x:Name="TargetParameterComboBox"
+                                    Grid.Column="1"
+                                    Header="Target parameter"
+                                    AutomationProperties.AutomationId="ReactiveTargetParameterComboBox"
+                                    AutomationProperties.Name="Target parameter"
+                                    IsEditable="True"
+                                    SelectionChanged="MappingEditor_Changed" />
+                                <ComboBox
+                                    x:Name="ResponseCurveComboBox"
+                                    Grid.Row="1"
+                                    Header="Response curve"
+                                    AutomationProperties.AutomationId="ReactiveResponseCurveComboBox"
+                                    AutomationProperties.Name="Response curve"
+                                    SelectionChanged="MappingEditor_Changed" />
+                                <ComboBox
+                                    x:Name="GrammarComboBox"
+                                    Grid.Row="1"
+                                    Grid.Column="1"
+                                    Header="Response grammar"
+                                    AutomationProperties.AutomationId="ReactiveGrammarComboBox"
+                                    AutomationProperties.Name="Response grammar"
+                                    SelectionChanged="MappingEditor_Changed" />
+                                <ComboBox
+                                    x:Name="QuantizationComboBox"
+                                    Grid.Row="2"
+                                    Header="Timing and quantization"
+                                    AutomationProperties.AutomationId="ReactiveQuantizationComboBox"
+                                    AutomationProperties.Name="Timing and quantization"
+                                    SelectionChanged="MappingEditor_Changed" />
+                            </Grid>
+
+                            <Grid ColumnSpacing="12" RowSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <NumberBox
+                                    x:Name="GainNumberBox"
+                                    Header="Gain / intensity"
+                                    AutomationProperties.AutomationId="ReactiveGainNumberBox"
+                                    AutomationProperties.Name="Gain or intensity"
+                                    Minimum="0"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValueChanged="MappingEditor_ValueChanged" />
+                                <NumberBox
+                                    x:Name="MappingSmoothingNumberBox"
+                                    Grid.Column="1"
+                                    Header="Smoothing"
+                                    AutomationProperties.AutomationId="ReactiveMappingSmoothingNumberBox"
+                                    AutomationProperties.Name="Mapping smoothing"
+                                    LargeChange="0.1"
+                                    Maximum="1"
+                                    Minimum="0"
+                                    SmallChange="0.05"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValueChanged="MappingEditor_ValueChanged" />
+                                <NumberBox
+                                    x:Name="ThresholdNumberBox"
+                                    Grid.Column="2"
+                                    Header="Threshold"
+                                    AutomationProperties.AutomationId="ReactiveThresholdNumberBox"
+                                    AutomationProperties.Name="Mapping threshold"
+                                    LargeChange="0.1"
+                                    Maximum="1"
+                                    Minimum="0"
+                                    SmallChange="0.05"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValueChanged="MappingEditor_ValueChanged" />
+                            </Grid>
+
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <NumberBox
+                                    x:Name="InputMinimumNumberBox"
+                                    Header="Input minimum"
+                                    AutomationProperties.AutomationId="ReactiveInputMinimumNumberBox"
+                                    AutomationProperties.Name="Input minimum"
+                                    ValueChanged="MappingEditor_ValueChanged" />
+                                <NumberBox
+                                    x:Name="InputMaximumNumberBox"
+                                    Grid.Column="1"
+                                    Header="Input maximum"
+                                    AutomationProperties.AutomationId="ReactiveInputMaximumNumberBox"
+                                    AutomationProperties.Name="Input maximum"
+                                    ValueChanged="MappingEditor_ValueChanged" />
+                                <NumberBox
+                                    x:Name="OutputMinimumNumberBox"
+                                    Grid.Column="2"
+                                    Header="Output minimum"
+                                    AutomationProperties.AutomationId="ReactiveOutputMinimumNumberBox"
+                                    AutomationProperties.Name="Output minimum"
+                                    ValueChanged="MappingEditor_ValueChanged" />
+                                <NumberBox
+                                    x:Name="OutputMaximumNumberBox"
+                                    Grid.Column="3"
+                                    Header="Output maximum"
+                                    AutomationProperties.AutomationId="ReactiveOutputMaximumNumberBox"
+                                    AutomationProperties.Name="Output maximum"
+                                    ValueChanged="MappingEditor_ValueChanged" />
+                            </Grid>
+
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox
+                                    x:Name="SectionComboBox"
+                                    Header="Section"
+                                    AutomationProperties.AutomationId="ReactiveSectionComboBox"
+                                    AutomationProperties.Name="Music Graph section"
+                                    IsEditable="True"
+                                    SelectionChanged="MappingEditor_Changed" />
+                                <ComboBox
+                                    x:Name="CueComboBox"
+                                    Grid.Column="1"
+                                    Header="Cue"
+                                    AutomationProperties.AutomationId="ReactiveCueComboBox"
+                                    AutomationProperties.Name="Live cue"
+                                    IsEditable="True"
+                                    SelectionChanged="MappingEditor_Changed" />
+                            </Grid>
+
+                            <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Generation controls" />
+                            <Grid ColumnSpacing="12" RowSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <ComboBox
+                                    x:Name="MappingPresetComboBox"
+                                    Header="Mapping preset"
+                                    AutomationProperties.AutomationId="ReactiveMappingPresetComboBox"
+                                    AutomationProperties.Name="Mapping preset" />
+                                <NumberBox
+                                    x:Name="SensitivityNumberBox"
+                                    Grid.Column="1"
+                                    Header="Sensitivity"
+                                    AutomationProperties.AutomationId="ReactiveSensitivityNumberBox"
+                                    AutomationProperties.Name="Reactive sensitivity"
+                                    Minimum="0"
+                                    SmallChange="0.1"
+                                    SpinButtonPlacementMode="Compact"
+                                    Value="1" />
+                                <NumberBox
+                                    x:Name="GlobalSmoothingNumberBox"
+                                    Grid.Column="2"
+                                    Header="Global smoothing"
+                                    AutomationProperties.AutomationId="ReactiveGlobalSmoothingNumberBox"
+                                    AutomationProperties.Name="Global reactive smoothing"
+                                    Maximum="1"
+                                    Minimum="0"
+                                    SmallChange="0.05"
+                                    SpinButtonPlacementMode="Compact"
+                                    Value="0.82" />
+                                <NumberBox
+                                    x:Name="FramesPerSecondNumberBox"
+                                    Grid.Row="1"
+                                    Header="Frames per second"
+                                    AutomationProperties.AutomationId="ReactiveFramesPerSecondNumberBox"
+                                    AutomationProperties.Name="Frames per second"
+                                    Maximum="240"
+                                    Minimum="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    Value="30" />
+                                <NumberBox
+                                    x:Name="MinimumCutFramesNumberBox"
+                                    Grid.Row="1"
+                                    Grid.Column="1"
+                                    Header="Minimum cut frames"
+                                    AutomationProperties.AutomationId="ReactiveMinimumCutFramesNumberBox"
+                                    AutomationProperties.Name="Minimum cut frames"
+                                    Maximum="10000"
+                                    Minimum="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    Value="12" />
+                                <NumberBox
+                                    x:Name="ScheduleStrideNumberBox"
+                                    Grid.Row="1"
+                                    Grid.Column="2"
+                                    Header="Schedule stride"
+                                    AutomationProperties.AutomationId="ReactiveScheduleStrideNumberBox"
+                                    AutomationProperties.Name="Schedule stride"
+                                    Maximum="10000"
+                                    Minimum="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    Value="4" />
+                            </Grid>
+                            <ComboBox
+                                x:Name="RenderModeComboBox"
+                                Width="260"
+                                HorizontalAlignment="Left"
+                                Header="Render mode"
+                                AutomationProperties.AutomationId="ReactiveRenderModeComboBox"
+                                AutomationProperties.Name="Reactive render mode" />
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ToggleSwitch
+                                    x:Name="OverwriteMotionTrackToggle"
+                                    Header="Replace motion track"
+                                    AutomationProperties.AutomationId="ReactiveOverwriteMotionTrackToggle"
+                                    AutomationProperties.Name="Replace motion track"
+                                    IsOn="True"
+                                    OffContent="Merge"
+                                    OnContent="Replace" />
+                                <ToggleSwitch
+                                    x:Name="OverwriteCameraToggle"
+                                    Grid.Column="1"
+                                    Header="Replace camera data"
+                                    AutomationProperties.AutomationId="ReactiveOverwriteCameraToggle"
+                                    AutomationProperties.Name="Replace camera data"
+                                    IsOn="True"
+                                    OffContent="Preserve"
+                                    OnContent="Replace" />
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabViewItem>
+
+                <TabViewItem
+                    AutomationProperties.Name="Resources"
+                    Header="Resources"
+                    IsClosable="False">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Padding="8,12,20,20" Spacing="12">
+                            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Project context" />
+                            <Border
+                                Padding="16"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                CornerRadius="8">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Selected plan variant" />
+                                    <TextBlock x:Name="VariantSummaryTextBlock" Text="No variant selected." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <Border
+                                Padding="16"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                CornerRadius="8">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Music Graph" />
+                                    <TextBlock x:Name="MusicGraphSummaryTextBlock" Text="Not loaded." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <Border
+                                Padding="16"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                CornerRadius="8">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Live cues" />
+                                    <TextBlock x:Name="LiveCuesSummaryTextBlock" Text="Not loaded." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <Border
+                                Padding="16"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                CornerRadius="8">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Live assets" />
+                                    <TextBlock x:Name="LiveAssetsSummaryTextBlock" Text="Not loaded." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <Border
+                                Padding="16"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                CornerRadius="8">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Timeline" />
+                                    <TextBlock x:Name="TimelineSummaryTextBlock" Text="Not loaded." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabViewItem>
+
+                <TabViewItem
+                    AutomationProperties.Name="JSON and diagnostics"
+                    Header="JSON &amp; diagnostics"
+                    IsClosable="False">
+                    <Grid Padding="8,12,20,20" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Inspect or edit the complete Reactive Lab document. Imported unknown fields are retained."
+                            TextWrapping="Wrap" />
+                        <TextBox
+                            x:Name="RawJsonTextBox"
+                            Grid.Row="1"
+                            AcceptsReturn="True"
+                            AutomationProperties.AutomationId="ReactiveRawJsonTextBox"
+                            AutomationProperties.Name="Reactive Lab raw JSON"
+                            FontFamily="Consolas"
+                            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                            TextWrapping="NoWrap"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                            <Button
+                                AutomationProperties.AutomationId="ReactiveValidateJsonButton"
+                                AutomationProperties.Name="Validate raw JSON"
+                                Click="ValidateJsonButton_Click"
+                                Content="Validate JSON" />
+                            <Button
+                                AutomationProperties.AutomationId="ReactiveUseJsonButton"
+                                AutomationProperties.Name="Use raw JSON"
+                                Click="UseJsonButton_Click"
+                                Content="Use JSON" />
+                        </StackPanel>
+                        <TextBlock
+                            x:Name="DiagnosticsTextBlock"
+                            Grid.Row="3"
+                            AutomationProperties.Name="Reactive Lab diagnostics"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Diagnostics will appear after context refresh."
+                            TextWrapping="Wrap" />
+                    </Grid>
+                </TabViewItem>
+            </TabView>
+        </Grid>
+
+        <ProgressBar
+            x:Name="OperationProgressBar"
+            Grid.Row="3"
+            AutomationProperties.AutomationId="ReactiveOperationProgressBar"
+            AutomationProperties.Name="Reactive Lab operation progress"
+            IsIndeterminate="True"
+            Visibility="Collapsed" />
     </Grid>
 </Page>

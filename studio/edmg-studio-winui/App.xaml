@@ -29,6 +29,12 @@
             <Style x:Key="StudioPageTitleTextStyle"
                    TargetType="TextBlock"
                    BasedOn="{StaticResource PageTitleStyle}" />
+            <Style x:Key="PageTitleTextBlockStyle"
+                   TargetType="TextBlock"
+                   BasedOn="{StaticResource PageTitleStyle}" />
+            <Style x:Key="StudioTitleTextBlockStyle"
+                   TargetType="TextBlock"
+                   BasedOn="{StaticResource PageTitleStyle}" />
             <Style x:Key="PageSubtitleStyle" TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{ThemeResource StudioMutedTextBrush}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
@@ -48,6 +54,9 @@
                 <Setter Property="TextWrapping" Value="Wrap" />
             </Style>
             <Style x:Key="StudioSectionTitleTextStyle"
+                   TargetType="TextBlock"
+                   BasedOn="{StaticResource SectionTitleStyle}" />
+            <Style x:Key="StudioSectionTextBlockStyle"
                    TargetType="TextBlock"
                    BasedOn="{StaticResource SectionTitleStyle}" />
             <Style x:Key="StudioPrimaryButtonStyle"

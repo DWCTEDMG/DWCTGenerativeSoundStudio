@@ -6,143 +6,494 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-        <ScrollViewer>
-            <StackPanel Padding="32,28,32,48" Spacing="16" MaxWidth="1120" HorizontalAlignment="Stretch">
-                <StackPanel Spacing="4">
-                    <TextBlock Text="AI Planner Lab" Style="{ThemeResource TitleTextBlockStyle}" />
-                    <TextBlock x:Name="ProjectSummaryText" Text="Validated browser-plan import for the active project."
-                               TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+    <Page.Resources>
+        <Style x:Key="PlannerCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="18" />
+        </Style>
+        <Style x:Key="PlannerSectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="24,20,24,28">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="AI Planner Lab" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="Develop creative direction, compare native plan variants, and carry the selected treatment into production."
+                    TextWrapping="Wrap" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <ProgressRing
+                    x:Name="PlannerProgressRing"
+                    Width="22"
+                    Height="22"
+                    AutomationProperties.Name="Planner operation progress"
+                    IsActive="False"
+                    Visibility="Collapsed" />
+                <Button
+                    x:Name="CancelPlannerButton"
+                    AutomationProperties.AutomationId="Planner.Cancel"
+                    Click="CancelPlannerButton_Click"
+                    Content="Cancel"
+                    IsEnabled="False" />
+                <Button
+                    x:Name="RefreshPlannerButton"
+                    AccessKey="R"
+                    AutomationProperties.AutomationId="Planner.Refresh"
+                    Click="RefreshPlannerButton_Click"
+                    Content="Refresh" />
+            </StackPanel>
+        </Grid>
+
+        <InfoBar
+            x:Name="PlannerInfoBar"
+            Grid.Row="1"
+            Margin="0,16,0,14"
+            AutomationProperties.AutomationId="Planner.Status"
+            IsClosable="True"
+            IsOpen="False" />
+
+        <Grid Grid.Row="2" ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="380" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="14">
+                    <Border Style="{StaticResource PlannerCardStyle}">
+                        <StackPanel Spacing="12">
+                            <TextBlock Style="{StaticResource PlannerSectionTitleStyle}" Text="Project and engine" />
+                            <ComboBox
+                                x:Name="ProjectComboBox"
+                                AutomationProperties.AutomationId="Planner.Project"
+                                DisplayMemberPath="Name"
+                                Header="Active project"
+                                HorizontalAlignment="Stretch"
+                                PlaceholderText="Choose a project"
+                                SelectionChanged="ProjectComboBox_SelectionChanged" />
+                            <ComboBox
+                                x:Name="PlanningModeComboBox"
+                                AutomationProperties.AutomationId="Planner.Mode"
+                                Header="Planning mode"
+                                HorizontalAlignment="Stretch"
+                                SelectedIndex="0">
+                                <ComboBoxItem Content="Auto" Tag="auto" />
+                                <ComboBoxItem Content="AI provider" Tag="ai" />
+                                <ComboBoxItem Content="Local rule-based" Tag="local" />
+                                <ComboBoxItem Content="EDMG Core" Tag="edmg_core" />
+                            </ComboBox>
+                            <TextBlock
+                                x:Name="ProviderStatusText"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Provider readiness has not been checked."
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource PlannerCardStyle}">
+                        <StackPanel Spacing="12">
+                            <TextBlock Style="{StaticResource PlannerSectionTitleStyle}" Text="Creative direction" />
+                            <TextBox
+                                x:Name="TitleTextBox"
+                                AutomationProperties.AutomationId="Planner.Title"
+                                Header="Plan title"
+                                PlaceholderText="A concise treatment title" />
+                            <TextBox
+                                x:Name="CreativeBriefTextBox"
+                                AcceptsReturn="True"
+                                AutomationProperties.AutomationId="Planner.CreativeBrief"
+                                Header="Creative brief"
+                                MinHeight="92"
+                                PlaceholderText="Describe the story, emotional arc, and desired result"
+                                TextWrapping="Wrap" />
+                            <TextBox
+                                x:Name="VisualDnaTextBox"
+                                AutomationProperties.AutomationId="Planner.VisualDna"
+                                Header="Visual DNA"
+                                PlaceholderText="Palette, texture, lenses, composition" />
+                            <TextBox
+                                x:Name="ConstraintsTextBox"
+                                AutomationProperties.AutomationId="Planner.Constraints"
+                                Header="Constraints"
+                                PlaceholderText="Safety, continuity, budget, excluded motifs" />
+                            <TextBox
+                                x:Name="PromptSeedTextBox"
+                                AutomationProperties.AutomationId="Planner.PromptSeed"
+                                Header="Prompt seed"
+                                PlaceholderText="Subject, location, or visual motif" />
+                            <TextBox
+                                x:Name="ConductorIntentTextBox"
+                                AutomationProperties.AutomationId="Planner.ConductorIntent"
+                                Header="Conductor intent"
+                                PlaceholderText="How musical structure should drive picture" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource PlannerCardStyle}">
+                        <StackPanel Spacing="12">
+                            <TextBlock Style="{StaticResource PlannerSectionTitleStyle}" Text="Production presets" />
+                            <ComboBox
+                                x:Name="DirectorPresetComboBox"
+                                AutomationProperties.AutomationId="Planner.DirectorPreset"
+                                Header="Director preset"
+                                HorizontalAlignment="Stretch"
+                                IsEditable="True"
+                                PlaceholderText="cinematic"
+                                Text="cinematic" />
+                            <ComboBox
+                                x:Name="MotionPresetComboBox"
+                                AutomationProperties.AutomationId="Planner.MotionPreset"
+                                Header="Motion preset"
+                                HorizontalAlignment="Stretch"
+                                IsEditable="True"
+                                PlaceholderText="music-driven"
+                                Text="music-driven" />
+                            <ComboBox
+                                x:Name="AnimationPresetComboBox"
+                                AutomationProperties.AutomationId="Planner.AnimationPreset"
+                                Header="Animation preset"
+                                HorizontalAlignment="Stretch"
+                                IsEditable="True"
+                                PlaceholderText="hybrid"
+                                Text="hybrid" />
+                            <ComboBox
+                                x:Name="RenderPresetComboBox"
+                                AutomationProperties.AutomationId="Planner.RenderPreset"
+                                Header="Render preset"
+                                HorizontalAlignment="Stretch"
+                                IsEditable="True"
+                                PlaceholderText="preview"
+                                Text="preview" />
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <NumberBox
+                                    x:Name="VariantCountNumberBox"
+                                    AutomationProperties.AutomationId="Planner.VariantCount"
+                                    Header="Variants"
+                                    LargeChange="1"
+                                    Maximum="10"
+                                    Minimum="1"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    Value="3" />
+                                <NumberBox
+                                    x:Name="SceneCountNumberBox"
+                                    Grid.Column="1"
+                                    AutomationProperties.AutomationId="Planner.SceneCount"
+                                    Header="Max scenes"
+                                    LargeChange="4"
+                                    Maximum="64"
+                                    Minimum="1"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    Value="12" />
+                            </Grid>
+                            <Button
+                                x:Name="GeneratePlanButton"
+                                AccessKey="G"
+                                AutomationProperties.AutomationId="Planner.Generate"
+                                Click="GeneratePlanButton_Click"
+                                Content="Generate variants"
+                                HorizontalAlignment="Stretch"
+                                Style="{StaticResource AccentButtonStyle}" />
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
+            </ScrollViewer>
 
-                <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
-                         Title="Native generation is not exposed by the backend"
-                         Message="This page imports the same Planner workbench analysis and plan shapes used by Electron. It does not pretend to run browser NLP generation." />
-                <InfoBar x:Name="StatusInfoBar" IsOpen="False" IsClosable="True" />
+            <Grid Grid.Column="1" RowSpacing="14">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <CommandBar DefaultLabelPosition="Right">
+                    <AppBarButton
+                        AutomationProperties.AutomationId="Planner.Import"
+                        Click="ImportPlanButton_Click"
+                        Icon="OpenFile"
+                        Label="Import plan" />
+                    <AppBarButton
+                        AutomationProperties.AutomationId="Planner.Export"
+                        Click="ExportPlanButton_Click"
+                        Icon="Save"
+                        Label="Export JSON" />
+                    <AppBarSeparator />
+                    <AppBarButton
+                        AutomationProperties.AutomationId="Planner.ApplyTimeline"
+                        Click="ApplyTimelineButton_Click"
+                        Icon="Accept"
+                        Label="Apply to timeline" />
+                    <AppBarButton
+                        AutomationProperties.AutomationId="Planner.OpenWorkspace"
+                        Click="OpenWorkspaceButton_Click"
+                        Icon="Library"
+                        Label="Workspace" />
+                    <AppBarButton
+                        AutomationProperties.AutomationId="Planner.OpenTimeline"
+                        Click="OpenTimelineButton_Click"
+                        Icon="Forward"
+                        Label="Timeline" />
+                    <CommandBar.SecondaryCommands>
+                        <AppBarButton
+                            AutomationProperties.AutomationId="Planner.OpenRender"
+                            Click="OpenRenderButton_Click"
+                            Label="Open Render" />
+                    </CommandBar.SecondaryCommands>
+                </CommandBar>
 
-                <Border Style="{StaticResource StudioCardBorderStyle}">
-                    <StackPanel Spacing="14">
-                        <TextBlock Text="Planning settings" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                        <Grid ColumnSpacing="16" RowSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
+                <Grid Grid.Row="1" ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="300" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource PlannerCardStyle}">
+                        <Grid RowSpacing="10">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Style="{StaticResource PlannerSectionTitleStyle}" Text="Plan variants" />
+                            <ListView
+                                x:Name="VariantListView"
+                                Grid.Row="1"
+                                AutomationProperties.AutomationId="Planner.Variants"
+                                IsItemClickEnabled="True"
+                                ItemClick="VariantListView_ItemClick"
+                                SelectionMode="Single">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Padding="2,8" Spacing="3">
+                                            <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" TextWrapping="Wrap" />
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Summary}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Column="1" Style="{StaticResource PlannerCardStyle}">
+                        <Grid RowSpacing="10">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <StackPanel Spacing="6">
-                                <TextBlock Text="Analysis focus" />
-                                <ComboBox x:Name="AnalysisFocusCombo" SelectedIndex="0"
-                                          AutomationProperties.AutomationId="PlannerAnalysisFocusComboBox">
-                                    <ComboBoxItem Content="balanced" />
-                                    <ComboBoxItem Content="emotion" />
-                                    <ComboBoxItem Content="visual" />
-                                </ComboBox>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="6">
-                                <TextBlock Text="Prompt style" />
-                                <ComboBox x:Name="PromptStyleCombo" SelectedIndex="0"
-                                          AutomationProperties.AutomationId="PlannerPromptStyleComboBox">
-                                    <ComboBoxItem Content="cinematic" />
-                                    <ComboBoxItem Content="music-video" />
-                                    <ComboBoxItem Content="experimental" />
-                                    <ComboBoxItem Content="documentary" />
-                                </ComboBox>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="6">
-                                <TextBlock Text="Prompt detail" />
-                                <ComboBox x:Name="PromptDetailCombo" SelectedIndex="1"
-                                          AutomationProperties.AutomationId="PlannerPromptDetailComboBox">
-                                    <ComboBoxItem Content="tight" />
-                                    <ComboBoxItem Content="standard" />
-                                    <ComboBoxItem Content="expanded" />
-                                </ComboBox>
-                            </StackPanel>
-                            <StackPanel Grid.Row="1" Spacing="6">
-                                <TextBlock Text="Aspect ratio" />
-                                <ComboBox x:Name="AspectRatioCombo" SelectedIndex="0"
-                                          AutomationProperties.AutomationId="PlannerAspectRatioComboBox">
-                                    <ComboBoxItem Content="16:9" />
-                                    <ComboBoxItem Content="9:16" />
-                                    <ComboBoxItem Content="1:1" />
-                                    <ComboBoxItem Content="21:9" />
-                                </ComboBox>
-                            </StackPanel>
-                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
-                                <TextBlock Text="Target" />
-                                <ComboBox x:Name="TargetCombo" SelectedIndex="0"
-                                          AutomationProperties.AutomationId="PlannerTargetComboBox">
-                                    <ComboBoxItem Content="general-video" />
-                                    <ComboBoxItem Content="runway" />
-                                    <ComboBoxItem Content="deforum" />
-                                    <ComboBoxItem Content="storyboard" />
-                                </ComboBox>
-                            </StackPanel>
-                            <StackPanel Grid.Row="1" Grid.Column="2" Spacing="6">
-                                <TextBlock Text="Variant mode" />
-                                <ComboBox x:Name="VariantModeCombo" SelectedIndex="0"
-                                          AutomationProperties.AutomationId="PlannerVariantModeComboBox">
-                                    <ComboBoxItem Content="safe" />
-                                    <ComboBoxItem Content="bold" />
-                                    <ComboBoxItem Content="weird" />
-                                </ComboBox>
-                            </StackPanel>
-                            <StackPanel Grid.Row="2" Spacing="6">
-                                <TextBlock Text="Scene count" />
-                                <NumberBox x:Name="SceneCountBox" Value="8" Minimum="1" Maximum="64" SpinButtonPlacementMode="Inline"
-                                           AutomationProperties.AutomationId="PlannerSceneCountNumberBox" />
-                            </StackPanel>
-                            <StackPanel Grid.Row="2" Grid.Column="1" Spacing="6">
-                                <TextBlock Text="Subject focus" />
-                                <TextBox x:Name="SubjectFocusBox" AutomationProperties.AutomationId="PlannerSubjectFocusTextBox" />
-                            </StackPanel>
-                            <StackPanel Grid.Row="2" Grid.Column="2" Spacing="6">
-                                <TextBlock Text="Negative prompt seed" />
-                                <TextBox x:Name="NegativePromptBox" AutomationProperties.AutomationId="PlannerNegativePromptTextBox" />
-                            </StackPanel>
-                        </Grid>
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="Creative brief" />
-                            <TextBox x:Name="CreativeBriefBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="72"
-                                     AutomationProperties.AutomationId="PlannerCreativeBriefTextBox" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
+                            <TextBlock x:Name="VariantTitleText" Style="{StaticResource PlannerSectionTitleStyle}" Text="Select a variant" />
+                            <TextBlock
+                                x:Name="VariantLoglineText"
+                                Grid.Row="1"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Generated scene structure and raw backend data will appear here."
+                                TextWrapping="Wrap" />
+                            <TabView Grid.Row="2" AutomationProperties.AutomationId="Planner.DetailTabs">
+                                <TabViewItem Header="Scenes" IsClosable="False">
+                                    <Grid ColumnSpacing="14">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="280" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <ListView
+                                            x:Name="SceneListView"
+                                            AutomationProperties.AutomationId="Planner.Scenes"
+                                            SelectionChanged="SceneListView_SelectionChanged"
+                                            SelectionMode="Single">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Padding="4,8" Spacing="3">
+                                                        <Grid ColumnSpacing="8">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock FontWeight="SemiBold" Text="{Binding Position}" />
+                                                            <TextBlock
+                                                                Grid.Column="1"
+                                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                                Text="{Binding TimeRange}" />
+                                                        </Grid>
+                                                        <TextBlock
+                                                            MaxLines="2"
+                                                            Text="{Binding Prompt}"
+                                                            TextTrimming="CharacterEllipsis"
+                                                            TextWrapping="Wrap" />
+                                                        <TextBlock
+                                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                            Text="{Binding StateSummary}" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
 
-                <Border Style="{StaticResource StudioCardBorderStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Workbench payload" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                        <TextBlock Text="Analysis JSON" FontWeight="SemiBold" />
-                        <TextBox x:Name="AnalysisJsonBox" AcceptsReturn="True" TextWrapping="NoWrap"
-                                 FontFamily="Cascadia Mono" MinHeight="180"
-                                 AutomationProperties.AutomationId="PlannerAnalysisJsonTextBox" />
-                        <TextBlock Text="Plan JSON" FontWeight="SemiBold" />
-                        <TextBox x:Name="PlanJsonBox" AcceptsReturn="True" TextWrapping="NoWrap"
-                                 FontFamily="Cascadia Mono" MinHeight="180"
-                                 AutomationProperties.AutomationId="PlannerPlanJsonTextBox" />
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <CheckBox x:Name="ApplyTimelineCheckBox" Content="Apply to timeline" IsChecked="True"
-                                      AutomationProperties.AutomationId="PlannerApplyTimelineCheckBox" />
-                            <CheckBox x:Name="OverwriteTimelineCheckBox" Content="Overwrite timeline" IsChecked="True"
-                                      AutomationProperties.AutomationId="PlannerOverwriteTimelineCheckBox" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="Load last Planner payload" Click="LoadLastPayload_Click"
-                                    AutomationProperties.AutomationId="PlannerLoadLastPayloadButton" />
-                            <Button Content="Import into project" Style="{StaticResource AccentButtonStyle}" Click="ImportPlanner_Click"
-                                    AutomationProperties.AutomationId="PlannerImportButton" />
-                            <Button Content="Open Workspace" Click="OpenWorkspace_Click"
-                                    AutomationProperties.AutomationId="PlannerOpenWorkspaceButton" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-            </StackPanel>
-        </ScrollViewer>
-        <ProgressBar x:Name="BusyIndicator" IsIndeterminate="True" Visibility="Collapsed"
-                     VerticalAlignment="Top" AutomationProperties.Name="Planner operation in progress" />
+                                        <Border
+                                            Grid.Column="1"
+                                            Padding="14"
+                                            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                            CornerRadius="8">
+                                            <Grid x:Name="CurationRoot">
+                                                <TextBlock
+                                                    x:Name="SceneSelectionHint"
+                                                    HorizontalAlignment="Center"
+                                                    VerticalAlignment="Center"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Text="Select a scene to edit timing, prompts, approval, and continuity state."
+                                                    TextAlignment="Center"
+                                                    TextWrapping="Wrap" />
+                                                <ScrollViewer x:Name="SceneEditorPanel" Visibility="Collapsed">
+                                                    <StackPanel Spacing="12">
+                                                        <Grid ColumnSpacing="8">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel>
+                                                                <TextBlock x:Name="ScenePositionText" FontWeight="SemiBold" />
+                                                                <TextBlock
+                                                                    x:Name="SceneStateText"
+                                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                            </StackPanel>
+                                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                                                                <Button
+                                                                    x:Name="PreviousSceneButton"
+                                                                    Click="PreviousSceneButton_Click"
+                                                                    Content="Previous" />
+                                                                <Button
+                                                                    x:Name="NextSceneButton"
+                                                                    Click="NextSceneButton_Click"
+                                                                    Content="Next" />
+                                                            </StackPanel>
+                                                        </Grid>
+
+                                                        <Grid ColumnSpacing="10">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <NumberBox
+                                                                x:Name="SceneStartNumberBox"
+                                                                Header="Start (seconds)"
+                                                                Minimum="0"
+                                                                SpinButtonPlacementMode="Compact"
+                                                                ValueChanged="SceneTimingNumberBox_ValueChanged" />
+                                                            <NumberBox
+                                                                x:Name="SceneEndNumberBox"
+                                                                Grid.Column="1"
+                                                                Header="End (seconds)"
+                                                                Minimum="0.01"
+                                                                SpinButtonPlacementMode="Compact"
+                                                                ValueChanged="SceneTimingNumberBox_ValueChanged" />
+                                                        </Grid>
+                                                        <TextBox
+                                                            x:Name="ScenePromptTextBox"
+                                                            AcceptsReturn="True"
+                                                            Header="Prompt"
+                                                            Height="106"
+                                                            TextChanged="ScenePromptTextBox_TextChanged"
+                                                            TextWrapping="Wrap" />
+                                                        <TextBox
+                                                            x:Name="SceneNegativePromptTextBox"
+                                                            AcceptsReturn="True"
+                                                            Header="Negative prompt"
+                                                            Height="76"
+                                                            TextChanged="ScenePromptTextBox_TextChanged"
+                                                            TextWrapping="Wrap" />
+
+                                                        <Grid ColumnSpacing="8" RowSpacing="8">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto" />
+                                                                <RowDefinition Height="Auto" />
+                                                            </Grid.RowDefinitions>
+                                                            <Button
+                                                                x:Name="MoveSceneEarlierButton"
+                                                                Click="MoveSceneEarlierButton_Click"
+                                                                Content="Move earlier"
+                                                                HorizontalAlignment="Stretch" />
+                                                            <Button
+                                                                x:Name="MoveSceneLaterButton"
+                                                                Grid.Column="1"
+                                                                Click="MoveSceneLaterButton_Click"
+                                                                Content="Move later"
+                                                                HorizontalAlignment="Stretch" />
+                                                            <Button
+                                                                x:Name="ApproveSceneButton"
+                                                                Grid.Column="2"
+                                                                Click="ApproveSceneButton_Click"
+                                                                Content="Approve"
+                                                                HorizontalAlignment="Stretch" />
+                                                            <Button
+                                                                x:Name="LockSceneButton"
+                                                                Grid.Row="1"
+                                                                Click="LockSceneButton_Click"
+                                                                Content="Lock"
+                                                                HorizontalAlignment="Stretch" />
+                                                            <Button
+                                                                x:Name="RepairSceneButton"
+                                                                Grid.Row="1"
+                                                                Grid.Column="1"
+                                                                Click="RepairSceneButton_Click"
+                                                                Content="Needs repair"
+                                                                HorizontalAlignment="Stretch" />
+                                                            <Button
+                                                                x:Name="SaveScenesButton"
+                                                                Grid.Row="1"
+                                                                Grid.Column="2"
+                                                                Click="SaveScenesButton_Click"
+                                                                Content="Save variant"
+                                                                HorizontalAlignment="Stretch"
+                                                                Style="{StaticResource AccentButtonStyle}" />
+                                                        </Grid>
+                                                        <TextBlock
+                                                            x:Name="CurationStatusText"
+                                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                            TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </Border>
+                                    </Grid>
+                                </TabViewItem>
+                                <TabViewItem Header="Raw JSON" IsClosable="False">
+                                    <TextBox
+                                        x:Name="RawPlanTextBox"
+                                        AcceptsReturn="True"
+                                        AutomationProperties.AutomationId="Planner.RawJson"
+                                        FontFamily="Consolas"
+                                        IsReadOnly="True"
+                                        TextWrapping="NoWrap"
+                                        ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                                </TabViewItem>
+                            </TabView>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
+        </Grid>
     </Grid>
 </Page>

@@ -1,56 +1,244 @@
+using EdmgStudio.Core.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
 namespace EdmgStudio.WinUI.Pages;
 
-public sealed partial class EdmgDirectorPage : Page
+public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
 {
+    private CancellationTokenSource? _loadCancellation;
+    private bool _isSynchronizingSelection;
+    private string _nextDestination = "projects";
+
     public EdmgDirectorPage()
     {
         InitializeComponent();
         Loaded += EdmgDirectorPage_Loaded;
+        Unloaded += EdmgDirectorPage_Unloaded;
     }
 
     private async void EdmgDirectorPage_Loaded(object sender, RoutedEventArgs e)
     {
-        Loaded -= EdmgDirectorPage_Loaded;
-        await RefreshProjectAsync();
+        await RefreshAsync();
     }
 
-    private async void RefreshProject_Click(object sender, RoutedEventArgs e) => await RefreshProjectAsync();
-
-    private async Task RefreshProjectAsync()
+    private void EdmgDirectorPage_Unloaded(object sender, RoutedEventArgs e)
     {
-        var projectId = App.Services.Session.ActiveProjectId;
-        ProjectIdText.Text = string.IsNullOrWhiteSpace(projectId) ? "—" : projectId;
-        VariantText.Text = $"Variant {App.Services.Session.SelectedVariantIndex + 1}";
-        if (string.IsNullOrWhiteSpace(projectId))
-        {
-            ProjectNameText.Text = "No active project";
-            AnalysisText.Text = "Unavailable";
-            PlanText.Text = "Unavailable";
-            ShowStatus("Select a project in Projects before directing a production.", InfoBarSeverity.Warning);
-            return;
-        }
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        _loadCancellation = null;
+    }
+
+    public async Task RefreshAsync(CancellationToken cancellationToken = default)
+    {
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        _loadCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationToken loadToken = _loadCancellation.Token;
 
         SetBusy(true);
+        StatusInfoBar.IsOpen = false;
         try
         {
-            var response = await App.Services.ApiClient.GetProjectAsync(projectId);
-            var project = response.Project;
-            ProjectNameText.Text = project.Name;
-            AnalysisText.Text = project.HasAnalysis ? "Ready" : "Not available";
-            PlanText.Text = project.HasPlan ? "Ready" : "Not available";
-            StatusInfoBar.IsOpen = false;
+            ProjectListResponse response = await App.Services.ApiClient.GetProjectsAsync(loadToken);
+            IReadOnlyList<ProjectDto> projects = response.Projects
+                .OrderByDescending(project => project.CreatedAt, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _isSynchronizingSelection = true;
+            ProjectComboBox.ItemsSource = projects;
+            string? projectId = App.Services.Session.ActiveProjectId;
+            ProjectComboBox.SelectedItem = projects.FirstOrDefault(project =>
+                string.Equals(project.Id, projectId, StringComparison.Ordinal));
+            _isSynchronizingSelection = false;
+
+            if (ProjectComboBox.SelectedItem is ProjectDto project)
+            {
+                await LoadProjectAsync(project.Id, loadToken);
+            }
+            else
+            {
+                ClearProjectSummary();
+                ShowStatus(
+                    projects.Count == 0
+                        ? "Create a project before directing a production."
+                        : "Choose an active project to share its context across the Studio workflow.",
+                    InfoBarSeverity.Warning);
+            }
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (loadToken.IsCancellationRequested)
         {
-            ShowStatus(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+        }
+        catch (Exception exception)
+        {
+            ClearProjectSummary();
+            ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
         }
         finally
         {
             SetBusy(false);
+            UpdateProjectActionAvailability();
         }
+    }
+
+    private async Task LoadProjectAsync(string projectId, CancellationToken cancellationToken)
+    {
+        ProjectResponse response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        ProjectDto project = response.Project;
+
+        ProjectIdText.Text = project.Id;
+        AnalysisText.Text = project.HasAnalysis
+            ? $"Ready · {project.SectionCount} sections"
+            : project.HasAudio ? "Audio loaded; analysis pending" : "Audio required";
+        PlanText.Text = project.HasPlan
+            ? $"{project.PlanVariants.Count} plan variant{(project.PlanVariants.Count == 1 ? string.Empty : "s")} ready"
+            : "Generate a creative plan";
+
+        PopulateVariants(project.PlanVariants);
+        UpdateSessionContext();
+        ConfigureNextStep(project);
+
+        try
+        {
+            ProjectHealthResponse healthResponse =
+                await App.Services.ApiClient.GetProjectHealthAsync(projectId, cancellationToken);
+            ProjectHealthDto health = healthResponse.Health;
+            HealthText.Text =
+                $"{(string.IsNullOrWhiteSpace(health.Status) ? (health.Ok ? "Ready" : "Attention required") : health.Status)}" +
+                $" · {health.AssetIndex.AssetCount} assets · {health.AssetIndex.MissingCount} missing" +
+                (health.Issues.Count == 0 ? string.Empty : $" · {health.Issues.Count} issues");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            HealthText.Text = $"Health check unavailable: {StudioPageHelpers.GetErrorMessage(exception)}";
+        }
+    }
+
+    private async void RefreshProject_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+
+    private async void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isSynchronizingSelection || ProjectComboBox.SelectedItem is not ProjectDto project)
+        {
+            return;
+        }
+
+        App.Services.Session.ActiveProjectId = project.Id;
+        await RefreshAsync();
+    }
+
+    private void VariantComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isSynchronizingSelection || VariantComboBox.SelectedItem is not DirectorVariantOption variant)
+        {
+            return;
+        }
+
+        App.Services.Session.SelectedVariantIndex = variant.Index;
+        UpdateSessionContext();
+        ShowStatus($"{variant.Label} is now active across the Studio workflow.", InfoBarSeverity.Success);
+    }
+
+    private void PopulateVariants(IReadOnlyList<PlanVariantDto> variants)
+    {
+        IReadOnlyList<DirectorVariantOption> options = variants
+            .Select((variant, index) => new DirectorVariantOption(
+                index,
+                string.IsNullOrWhiteSpace(variant.Name) ? $"Variant {index + 1}" : variant.Name!))
+            .ToList();
+
+        _isSynchronizingSelection = true;
+        VariantComboBox.ItemsSource = options;
+        if (options.Count > 0)
+        {
+            int index = Math.Clamp(App.Services.Session.SelectedVariantIndex, 0, options.Count - 1);
+            App.Services.Session.SelectedVariantIndex = index;
+            VariantComboBox.SelectedIndex = index;
+        }
+        else
+        {
+            App.Services.Session.SelectedVariantIndex = 0;
+            VariantComboBox.SelectedIndex = -1;
+        }
+
+        _isSynchronizingSelection = false;
+        VariantComboBox.IsEnabled = options.Count > 0;
+    }
+
+    private void ConfigureNextStep(ProjectDto project)
+    {
+        if (!project.HasAudio)
+        {
+            _nextDestination = "workspace";
+            NextStepText.Text = "Add a source track or reference asset before developing direction.";
+            NextStepButton.Content = "Open Workspace";
+        }
+        else if (!project.HasAnalysis)
+        {
+            _nextDestination = "workspace";
+            NextStepText.Text = "Analyze the source track so planning and reactive tools can use its structure.";
+            NextStepButton.Content = "Analyze in Workspace";
+        }
+        else if (!project.HasPlan)
+        {
+            _nextDestination = "plannerLab";
+            NextStepText.Text = "Set conductor intent and director presets, then generate creative plan variants.";
+            NextStepButton.Content = "Open AI Planner Lab";
+        }
+        else if (!string.IsNullOrWhiteSpace(App.Services.Session.SelectedJobId))
+        {
+            _nextDestination = "queue";
+            NextStepText.Text = "A queue job is selected. Inspect progress or continue its production handoff.";
+            NextStepButton.Content = "Open Queue";
+        }
+        else if (!string.IsNullOrWhiteSpace(App.Services.Session.SelectedArtifactPath))
+        {
+            _nextDestination = "review";
+            NextStepText.Text = "An output is selected. Review the artifact and record editorial decisions.";
+            NextStepButton.Content = "Open Review";
+        }
+        else
+        {
+            _nextDestination = "timeline";
+            NextStepText.Text = "Direction is ready. Assemble the selected variant on the timeline before rendering.";
+            NextStepButton.Content = "Open Timeline";
+        }
+
+        NextStepButton.IsEnabled = true;
+    }
+
+    private void ClearProjectSummary()
+    {
+        _isSynchronizingSelection = true;
+        VariantComboBox.ItemsSource = null;
+        VariantComboBox.SelectedIndex = -1;
+        _isSynchronizingSelection = false;
+
+        ProjectIdText.Text = "—";
+        AnalysisText.Text = "Unavailable";
+        PlanText.Text = "Unavailable";
+        HealthText.Text = "Not checked";
+        VariantComboBox.IsEnabled = false;
+        _nextDestination = "projects";
+        NextStepText.Text = "Choose or create a project to begin.";
+        NextStepButton.Content = "Open Projects";
+        NextStepButton.IsEnabled = true;
+        UpdateSessionContext();
+    }
+
+    private void UpdateSessionContext()
+    {
+        SourceAssetText.Text = DisplayPath(App.Services.Session.SourceAssetPath, "None selected");
+        ArtifactText.Text = DisplayPath(App.Services.Session.SelectedArtifactPath, "None selected");
+        JobText.Text = App.Services.Session.SelectedJobId ?? "None selected";
+        TimelineFocusText.Text = App.Services.Session.TimelineFocusSeconds is double focus
+            ? $"{focus:0.###} seconds"
+            : "No focused time";
+        RenderContextText.Text = DisplayPath(App.Services.Session.RenderContext, "Default");
     }
 
     private void SetBusy(bool isBusy)
@@ -59,17 +247,48 @@ public sealed partial class EdmgDirectorPage : Page
         StudioPageHelpers.SetControlsEnabled(this, !isBusy);
     }
 
+    private void UpdateProjectActionAvailability()
+    {
+        bool hasProject = !string.IsNullOrWhiteSpace(App.Services.Session.ActiveProjectId);
+        ProductionActions.IsEnabled = hasProject;
+        VariantComboBox.IsEnabled = hasProject && VariantComboBox.Items.Count > 0;
+        NextStepButton.IsEnabled = true;
+    }
+
     private void ShowStatus(string message, InfoBarSeverity severity)
     {
-        StatusInfoBar.Title = severity == InfoBarSeverity.Error ? "Director unavailable" : "Director";
+        StatusInfoBar.Title = severity switch
+        {
+            InfoBarSeverity.Error => "Director unavailable",
+            InfoBarSeverity.Success => "Director updated",
+            _ => "Director",
+        };
         StatusInfoBar.Message = message;
         StatusInfoBar.Severity = severity;
         StatusInfoBar.IsOpen = true;
     }
 
+    private static string DisplayPath(string? value, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return fallback;
+        }
+
+        string fileName = Path.GetFileName(value);
+        return string.IsNullOrWhiteSpace(fileName) ? value : fileName;
+    }
+
+    private void NextStepButton_Click(object sender, RoutedEventArgs e) => App.Navigate(_nextDestination);
     private void OpenPlanner_Click(object sender, RoutedEventArgs e) => App.Navigate("plannerLab");
     private void OpenReactive_Click(object sender, RoutedEventArgs e) => App.Navigate("reactiveLab");
     private void OpenWorkspace_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
+    private void OpenTimeline_Click(object sender, RoutedEventArgs e) => App.Navigate("timeline");
     private void OpenRender_Click(object sender, RoutedEventArgs e) => App.Navigate("render");
+    private void OpenQueue_Click(object sender, RoutedEventArgs e) => App.Navigate("queue");
+    private void OpenOutputs_Click(object sender, RoutedEventArgs e) => App.Navigate("outputs");
+    private void OpenReview_Click(object sender, RoutedEventArgs e) => App.Navigate("review");
     private void OpenForge_Click(object sender, RoutedEventArgs e) => App.Navigate("studioForge");
+
+    private sealed record DirectorVariantOption(int Index, string Label);
 }

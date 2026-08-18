@@ -170,11 +170,7 @@ public sealed class StudioApiClient : IDisposable
             throw new ArgumentOutOfRangeException(nameof(request), "Maximum scenes must be between 1 and 64.");
         }
 
-        var normalizedMode = (mode ?? string.Empty).Trim().ToLowerInvariant();
-        if (normalizedMode is not ("auto" or "ai" or "local"))
-        {
-            normalizedMode = "auto";
-        }
+        var normalizedMode = PlannerWorkflow.NormalizeMode(mode);
 
         return SendJsonAsync<PlanDto>(
             HttpMethod.Post,
@@ -183,6 +179,142 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
     }
+
+    public Task<WorkspaceAssetsResponse> GetProjectAssetsAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<WorkspaceAssetsResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/assets",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<ProjectHealthResponse> GetProjectHealthAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ProjectHealthResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/health",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<ProjectRelinkResponse> GetProjectRelinkSuggestionsAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ProjectRelinkResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/health/relink",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<ProjectCollectResponse> CollectProjectAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ProjectCollectResponse>(
+            HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/health/collect",
+            new StringContent("{}", Encoding.UTF8, "application/json"),
+            true,
+            cancellationToken);
+
+    public Task<MusicGraphResponse> GetProjectMusicGraphAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<MusicGraphResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/music_graph",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<LiveCuesResponse> GetProjectLiveCuesAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<LiveCuesResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/live_cues",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<LiveAssetsResponse> GetProjectLiveAssetsAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<LiveAssetsResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/live_assets",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<ExportTemplatePackageResponse> ExportProjectTemplatePackageAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ExportTemplatePackageResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/template_package/export",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<ImportTemplatePackageResponse> ImportProjectTemplatePackageAsync(
+        string projectId,
+        TemplatePackageDto package,
+        bool merge,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<ImportTemplatePackageRequest, ImportTemplatePackageResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/template_package/import",
+            new ImportTemplatePackageRequest { Package = package, Merge = merge },
+            cancellationToken);
+
+    public Task<ApplyPlanToTimelineResponse> ApplyPlanToTimelineAsync(
+        string projectId,
+        int variantIndex,
+        bool overwrite,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<ApplyPlanToTimelineRequest, ApplyPlanToTimelineResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/timeline/apply_plan",
+            new ApplyPlanToTimelineRequest
+            {
+                VariantIndex = variantIndex,
+                Overwrite = overwrite,
+            },
+            cancellationToken);
+
+    public Task<ApplyMotionGrammarResponse> ApplyMotionGrammarAsync(
+        string projectId,
+        IReadOnlyList<MotionPhraseRequest> phrases,
+        bool overwriteMotionTrack,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(phrases);
+        if (phrases.Count == 0)
+        {
+            throw new ArgumentException("At least one motion phrase is required.", nameof(phrases));
+        }
+
+        return PostJsonAsync<ApplyMotionGrammarRequest, ApplyMotionGrammarResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/motion_grammar/apply",
+            new ApplyMotionGrammarRequest(phrases, overwriteMotionTrack),
+            cancellationToken);
+    }
+
+    public Task<UpdatePlanVariantResponse> UpdatePlanVariantAsync(
+        string projectId,
+        int variantIndex,
+        IReadOnlyList<PlanSceneDto> scenes,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<UpdatePlanVariantRequest, UpdatePlanVariantResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/plan/variant",
+            new UpdatePlanVariantRequest
+            {
+                VariantIndex = variantIndex,
+                Scenes = scenes,
+            },
+            cancellationToken);
 
     public Task<JsonElement> ImportPlannerLabAsync(
         string projectId,
@@ -193,6 +325,28 @@ public sealed class StudioApiClient : IDisposable
             request,
             cancellationToken);
 
+    public Task<PlannerLabImportResponse> ImportPlannerLabAsync(
+        string projectId,
+        PlannerLabImportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Analysis.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("Planner analysis must be a JSON object.", nameof(request));
+        }
+
+        if (request.Plan.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("Planner plan must be a JSON object.", nameof(request));
+        }
+
+        return PostJsonAsync<PlannerLabImportRequest, PlannerLabImportResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/planner_lab/import",
+            request,
+            cancellationToken);
+    }
+
     public Task<JsonElement> ApplyReactiveLabAsync(
         string projectId,
         JsonElement request,
@@ -201,6 +355,25 @@ public sealed class StudioApiClient : IDisposable
             $"/v1/projects/{EscapeIdentifier(projectId)}/reactive_lab/apply",
             request,
             cancellationToken);
+
+    public Task<ReactiveLabApplyResponse> ApplyReactiveLabAsync(
+        string projectId,
+        ReactiveLabApplyRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!ReactiveWorkflow.HasMeaningfulPayload(request))
+        {
+            throw new ArgumentException(
+                "Reactive Lab requires keyframes, beats, cues, sections, schedules, repairs, or a handoff manifest.",
+                nameof(request));
+        }
+
+        return PostJsonAsync<ReactiveLabApplyRequest, ReactiveLabApplyResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/reactive_lab/apply",
+            request,
+            cancellationToken);
+    }
 
     public Task<JsonElement> TestAwsCloudAsync(JsonElement request, CancellationToken cancellationToken = default) =>
         PostJsonElementAsync("/v1/cloud/aws/test", request, cancellationToken);
@@ -226,6 +399,9 @@ public sealed class StudioApiClient : IDisposable
     public Task<JsonElement> GetAiStatusAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/ai/status", null, true, cancellationToken);
 
+    public Task<AiReadinessResponse> GetAiReadinessAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<AiReadinessResponse>(HttpMethod.Get, "/v1/ai/status", null, true, cancellationToken);
+
     public Task<JsonElement> GetComfyUiCapabilitiesAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/comfyui/capabilities", null, true, cancellationToken);
 
@@ -250,11 +426,154 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
 
+    public Task<LiveCuePublishResponse> GetTypedLiveCuePublishStatusAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<LiveCuePublishResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/live_cues/publish/status",
+            null,
+            true,
+            cancellationToken);
+
     public Task<JsonElement> GetConfigAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/config", null, true, cancellationToken);
 
-    public Task<JsonElement> GetSetupStatusAsync(CancellationToken cancellationToken = default) =>
-        SendJsonElementAsync(HttpMethod.Get, "/v1/setup/status", null, true, cancellationToken);
+    public Task<SetupStatusResponse> GetSetupStatusAsync(
+        bool refresh = false,
+        bool includeOptional = false,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<SetupStatusResponse>(
+            HttpMethod.Get,
+            "/v1/setup/status" + BuildQuery(
+                ("refresh", refresh ? "true" : "false"),
+                ("include_optional", includeOptional ? "true" : "false")),
+            null,
+            true,
+            cancellationToken);
+
+    public Task<SetupTaskListResponse> GetSetupTasksAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<SetupTaskListResponse>(
+            HttpMethod.Get,
+            "/v1/setup/tasks",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<SetupTaskActionResponse> CancelSetupTaskAsync(
+        string taskId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<SetupTaskActionResponse>(
+            HttpMethod.Post,
+            $"/v1/setup/tasks/{EscapeIdentifier(taskId)}/cancel",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<SetupTaskActionResponse> InstallManagedOllamaAsync(
+        CancellationToken cancellationToken = default) =>
+        PostEmptySetupActionAsync("/v1/setup/ollama/install_managed", cancellationToken);
+
+    public Task<SetupTaskActionResponse> DownloadAndRunOllamaAsync(
+        CancellationToken cancellationToken = default) =>
+        PostEmptySetupActionAsync("/v1/setup/ollama/download_and_run", cancellationToken);
+
+    public Task<SetupTaskActionResponse> StartManagedOllamaAsync(
+        CancellationToken cancellationToken = default) =>
+        PostEmptySetupActionAsync("/v1/setup/ollama/start_managed", cancellationToken);
+
+    public Task<SetupTaskActionResponse> PullOllamaModelAsync(
+        string model = "qwen3:8b",
+        CancellationToken cancellationToken = default)
+    {
+        model = RequireShortValue(model, nameof(model), 200);
+        return PostSetupActionAsync(
+            "/v1/setup/ollama/pull",
+            new SetupOllamaPullRequest(model),
+            StudioJson.GetTypeInfo<SetupOllamaPullRequest>(),
+            cancellationToken);
+    }
+
+    public Task<SetupTaskActionResponse> InstallSevenZipAsync(
+        CancellationToken cancellationToken = default) =>
+        PostEmptySetupActionAsync("/v1/setup/7zip/install", cancellationToken);
+
+    public Task<SetupTaskActionResponse> InstallBackendAsync(
+        string acceleratorProfile = "cpu",
+        CancellationToken cancellationToken = default)
+    {
+        acceleratorProfile = ValidateSetupProfile(acceleratorProfile);
+        return PostSetupActionAsync(
+            "/v1/setup/backend/install",
+            new SetupProfileRequest(acceleratorProfile),
+            StudioJson.GetTypeInfo<SetupProfileRequest>(),
+            cancellationToken);
+    }
+
+    public Task<SetupTaskActionResponse> InstallFullSetupAsync(
+        string acceleratorProfile = "cpu",
+        int comfyPort = 8188,
+        string model = "qwen3:8b",
+        CancellationToken cancellationToken = default)
+    {
+        acceleratorProfile = ValidateSetupProfile(acceleratorProfile);
+        ValidatePort(comfyPort, nameof(comfyPort));
+        model = RequireShortValue(model, nameof(model), 200);
+        return PostSetupActionAsync(
+            "/v1/setup/full/install",
+            new SetupFullInstallRequest(acceleratorProfile, comfyPort, model),
+            StudioJson.GetTypeInfo<SetupFullInstallRequest>(),
+            cancellationToken);
+    }
+
+    public Task<SetupTaskActionResponse> InstallPortableComfyUiAsync(
+        string flavor = "cpu",
+        CancellationToken cancellationToken = default)
+    {
+        flavor = ValidateComfyUiFlavor(flavor, allowAuto: false);
+        return PostSetupActionAsync(
+            "/v1/setup/comfyui/portable/install",
+            new SetupComfyUiInstallRequest(flavor),
+            StudioJson.GetTypeInfo<SetupComfyUiInstallRequest>(),
+            cancellationToken);
+    }
+
+    public Task<SetupTaskActionResponse> StartPortableComfyUiAsync(
+        string flavor = "auto",
+        int port = 8188,
+        CancellationToken cancellationToken = default)
+    {
+        flavor = ValidateComfyUiFlavor(flavor, allowAuto: true);
+        ValidatePort(port, nameof(port));
+        return PostSetupActionAsync(
+            "/v1/setup/comfyui/portable/start",
+            new SetupComfyUiStartRequest(flavor, port),
+            StudioJson.GetTypeInfo<SetupComfyUiStartRequest>(),
+            cancellationToken);
+    }
+
+    public Task<SetupOperationResponse> StopPortableComfyUiAsync(
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<SetupOperationResponse>(
+            HttpMethod.Post,
+            "/v1/setup/comfyui/portable/stop",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<SetupTaskActionResponse> InstallEdmgCoreAsync(
+        string mode = "standard",
+        string backend = "cpu",
+        CancellationToken cancellationToken = default)
+    {
+        mode = RequireShortValue(mode, nameof(mode), 50).ToLowerInvariant();
+        backend = RequireShortValue(backend, nameof(backend), 50).ToLowerInvariant();
+        return PostSetupActionAsync(
+            "/v1/setup/edmg/install",
+            new SetupEdmgInstallRequest(mode, backend),
+            StudioJson.GetTypeInfo<SetupEdmgInstallRequest>(),
+            cancellationToken);
+    }
 
     public Task<JsonElement> GetEdmgStatusAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/edmg/status", null, true, cancellationToken);
@@ -380,6 +699,299 @@ public sealed class StudioApiClient : IDisposable
             $"/v1/projects/{EscapeIdentifier(projectId)}/render/internal/video",
             request,
             cancellationToken);
+
+    public Task<JsonElement> ValidatePipelineAsync(
+        string projectId,
+        PipelineRunOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        options ??= new PipelineRunOptions();
+        return SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/pipeline/validate{BuildQuery(
+                ("variant_index", Invariant(options.VariantIndex)),
+                ("preset", options.Preset),
+                ("mode", options.Mode),
+                ("engine", options.Engine))}",
+            null,
+            true,
+            cancellationToken);
+    }
+
+    public Task<JsonElement> RunPipelineAsync(
+        string projectId,
+        PipelineRunOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        options ??= new PipelineRunOptions();
+        return SendJsonElementAsync(
+            HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/pipeline/run{BuildQuery(
+                ("variant_index", Invariant(options.VariantIndex)),
+                ("preset", options.Preset),
+                ("mode", options.Mode),
+                ("engine", options.Engine))}",
+            null,
+            true,
+            cancellationToken);
+    }
+
+    public Task<JsonElement> GetRenderConductorPlanAsync(
+        string projectId,
+        int variantIndex = 0,
+        CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/conductor/plan{BuildQuery(
+                ("variant_index", Invariant(variantIndex)))}",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> CreateRenderConductorPlanAsync(
+        string projectId,
+        RenderConductorPlanRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/conductor/plan",
+            request,
+            StudioJson.GetTypeInfo<RenderConductorPlanRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> PromoteRenderConductorPlanAsync(
+        string projectId,
+        RenderConductorPromoteRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/conductor/promote",
+            request,
+            StudioJson.GetTypeInfo<RenderConductorPromoteRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> GetRenderConductorContinuityAsync(
+        string projectId,
+        int variantIndex = 0,
+        CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/conductor/continuity{BuildQuery(
+                ("variant_index", Invariant(variantIndex)))}",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> GetRenderPerformerPlanAsync(
+        string projectId,
+        int variantIndex = 0,
+        CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/performer/plan{BuildQuery(
+                ("variant_index", Invariant(variantIndex)))}",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> CreateRenderPerformerPlanAsync(
+        string projectId,
+        PerformerWorkflowPlanRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/performer/plan",
+            request,
+            StudioJson.GetTypeInfo<PerformerWorkflowPlanRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> RunRenderPerformerAsync(
+        string projectId,
+        PerformerWorkflowRunRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/performer/run",
+            request,
+            StudioJson.GetTypeInfo<PerformerWorkflowRunRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> GetMotionSequencerAsync(
+        string projectId,
+        MotionSequencerOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        options ??= new MotionSequencerOptions();
+        return SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/motion_sequencer{BuildQuery(
+                ("variant_index", Invariant(options.VariantIndex)),
+                ("fps", Invariant(options.Fps)))}",
+            null,
+            true,
+            cancellationToken);
+    }
+
+    public Task<JsonElement> ApplyMotionSequencerAsync(
+        string projectId,
+        ParseqMotionApplyRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/motion_sequencer/apply",
+            request,
+            StudioJson.GetTypeInfo<ParseqMotionApplyRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> AutoRenderAsync(
+        string projectId,
+        AutoAnimateRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/auto",
+            request,
+            StudioJson.GetTypeInfo<AutoAnimateRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> AnimateLayersAsync(
+        string projectId,
+        LayeredAnimateRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/animate_layers",
+            request,
+            StudioJson.GetTypeInfo<LayeredAnimateRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> RenderSceneStillsAsync(
+        string projectId,
+        RenderScenesRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/stills/scenes",
+            request,
+            StudioJson.GetTypeInfo<RenderScenesRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> RenderComfyUiMotionScenesAsync(
+        string projectId,
+        RenderMotionRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/comfyui/motion_scenes",
+            request,
+            StudioJson.GetTypeInfo<RenderMotionRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> RenderSmartVideoAsync(
+        string projectId,
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/video/smart",
+            request,
+            cancellationToken);
+
+    public Task<JsonElement> RenderTensorRtStandaloneAsync(
+        string projectId,
+        TensorRtStandaloneRenderRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/tensorrt-standalone",
+            request,
+            StudioJson.GetTypeInfo<TensorRtStandaloneRenderRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> PreviewTensorRtStandaloneAsync(
+        string projectId,
+        TensorRtStandaloneRenderRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/render/tensorrt-standalone/preview",
+            request,
+            StudioJson.GetTypeInfo<TensorRtStandaloneRenderRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> AssembleVideoAsync(
+        string projectId,
+        AssembleVideoRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/assemble_video",
+            request,
+            StudioJson.GetTypeInfo<AssembleVideoRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> ExportDeforumAsync(
+        string projectId,
+        ExportDeforumRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/export/deforum",
+            request,
+            StudioJson.GetTypeInfo<ExportDeforumRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> ExportComfyUiWorkflowsAsync(
+        string projectId,
+        ComfyUiWorkflowExportOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        options ??= new ComfyUiWorkflowExportOptions();
+        return SendJsonElementAsync(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/export/comfyui_workflows{BuildQuery(
+                ("variant_index", Invariant(options.VariantIndex)),
+                ("model_id", options.ModelId),
+                ("workflow_family", options.WorkflowFamily),
+                ("source_asset", options.SourceAsset),
+                ("reference_asset", options.ReferenceAsset),
+                ("inpaint_mask", options.InpaintMask),
+                ("controlnet_model", options.ControlnetModel),
+                ("conditioning_mode", options.ConditioningMode),
+                ("width", Invariant(options.Width)),
+                ("height", Invariant(options.Height)),
+                ("steps", Invariant(options.Steps)),
+                ("cfg", Invariant(options.Cfg)),
+                ("sampler", options.Sampler),
+                ("negative_prompt", options.NegativePrompt),
+                ("seed", options.Seed is null ? null : Invariant(options.Seed.Value)),
+                ("denoise_strength", Invariant(options.DenoiseStrength)),
+                ("loras_json", options.LorasJson),
+                ("outpaint_json", options.OutpaintJson),
+                ("controlnet_units_json", options.ControlnetUnitsJson),
+                ("hires_fix_json", options.HiresFixJson),
+                ("refiner_json", options.RefinerJson),
+                ("upscaler", options.Upscaler))}",
+            null,
+            true,
+            cancellationToken);
+    }
+
+    public Task<JsonElement> UploadReferenceAssetAsync(
+        string projectId,
+        Stream content,
+        string fileName,
+        string? contentType = null,
+        CancellationToken cancellationToken = default) =>
+        UploadProjectAssetAsync(projectId, "refs", content, fileName, contentType, cancellationToken);
+
+    public Task<JsonElement> UploadMaskAssetAsync(
+        string projectId,
+        Stream content,
+        string fileName,
+        string? contentType = null,
+        CancellationToken cancellationToken = default) =>
+        UploadProjectAssetAsync(projectId, "mask", content, fileName, contentType, cancellationToken);
+
+    public Task<JsonElement> UploadOverlayAssetAsync(
+        string projectId,
+        Stream content,
+        string fileName,
+        string? contentType = null,
+        CancellationToken cancellationToken = default) =>
+        UploadProjectAssetAsync(projectId, "overlay", content, fileName, contentType, cancellationToken);
+
+    public Task<JsonElement> TickWorkerAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Post, "/v1/jobs/tick", null, true, cancellationToken);
+
+    public Task<JsonElement> VerifyEdmgAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Post, "/v1/edmg/verify", null, true, cancellationToken);
 
     public Task<StudioJobListResponse> GetJobsAsync(CancellationToken cancellationToken = default) =>
         SendJsonAsync<StudioJobListResponse>(HttpMethod.Get, "/v1/jobs", null, true, cancellationToken);
@@ -562,13 +1174,96 @@ public sealed class StudioApiClient : IDisposable
             request,
             cancellationToken);
 
-    public Task<JsonElement> GetContinuityAsync(string projectId, CancellationToken cancellationToken = default) =>
-        SendJsonElementAsync(
-            HttpMethod.Get,
-            $"/v1/projects/{EscapeIdentifier(projectId)}/render/conductor/continuity",
+    public Task<VariantReviewDecisionResponse> SaveVariantDecisionAsync(
+        string projectId,
+        VariantReviewDecisionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateVariantReviewDecision(request);
+        return PostJsonAsync<VariantReviewDecisionRequest, VariantReviewDecisionResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/variant_review/decision",
+            request,
+            cancellationToken);
+    }
+
+    public Task<LiveCuePublishResponse> StartLiveCuePublishAsync(
+        string projectId,
+        LiveCuePublishRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateLiveCuePublish(request);
+        return PostJsonAsync<LiveCuePublishRequest, LiveCuePublishResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/live_cues/publish/start",
+            request,
+            cancellationToken);
+    }
+
+    public Task<LiveCuePublishResponse> StopLiveCuePublishAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<LiveCuePublishResponse>(
+            HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/live_cues/publish/stop",
             null,
             true,
             cancellationToken);
+
+    public Task<WorldAdapterExportResponse> ExportWorldAdapterAsync(
+        string projectId,
+        WorldAdapterExportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateWorldAdapterExport(request);
+        return PostJsonAsync<WorldAdapterExportRequest, WorldAdapterExportResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/world_adapters/export",
+            request,
+            cancellationToken);
+    }
+
+    public Task<UnrealBundleExportResponse> ExportUnrealBundleAsync(
+        string projectId,
+        UnrealBundleExportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateUnrealBundleExport(request);
+        return PostJsonAsync<UnrealBundleExportRequest, UnrealBundleExportResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/export/unreal",
+            request,
+            cancellationToken);
+    }
+
+    public Task<UnrealImportPlanResponse> BuildUnrealImportPlanAsync(
+        string projectId,
+        UnrealImportPlanRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateUnrealImportPlan(request);
+        return PostJsonAsync<UnrealImportPlanRequest, UnrealImportPlanResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/unreal/import-plan",
+            request,
+            cancellationToken);
+    }
+
+    public Task<UnrealReturnImportResponse> ImportUnrealReturnsAsync(
+        string projectId,
+        UnrealReturnImportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateUnrealReturnImport(request);
+        return PostJsonAsync<UnrealReturnImportRequest, UnrealReturnImportResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/import/unreal",
+            request,
+            cancellationToken);
+    }
+
+    public Task<JsonElement> GetContinuityAsync(string projectId, CancellationToken cancellationToken = default) =>
+        GetRenderConductorContinuityAsync(projectId, 0, cancellationToken);
 
     public Task<JsonElement> GetModelCatalogAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/models/catalog", null, true, cancellationToken);
@@ -777,6 +1472,108 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
 
+    private static void ValidateVariantReviewDecision(VariantReviewDecisionRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.ArtifactPath) || request.ArtifactPath.Length > 1024)
+        {
+            throw new ArgumentException(
+                "Artifact path must contain between 1 and 1024 characters.",
+                nameof(request));
+        }
+
+        if (request.Decision is not ("approved" or "rejected" or "cherry_picked" or "unreviewed"))
+        {
+            throw new ArgumentException("Review decision is not supported.", nameof(request));
+        }
+
+        if (request.Notes?.Length > 2000)
+        {
+            throw new ArgumentException("Review notes cannot exceed 2000 characters.", nameof(request));
+        }
+    }
+
+    private static void ValidateLiveCuePublish(LiveCuePublishRequest request)
+    {
+        if (request.OscHost.Length > 200)
+        {
+            throw new ArgumentException("OSC host cannot exceed 200 characters.", nameof(request));
+        }
+
+        if (request.OscPort is < 1 or > 65535)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "OSC port must be between 1 and 65535.");
+        }
+
+        if (!double.IsFinite(request.PlaybackSpeed) || request.PlaybackSpeed is <= 0 or > 8)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Playback speed must be greater than 0 and at most 8.");
+        }
+    }
+
+    private static void ValidateWorldAdapterExport(WorldAdapterExportRequest request)
+    {
+        if (request.Adapter is not ("touchdesigner" or "unreal"))
+        {
+            throw new ArgumentException("World adapter must be touchdesigner or unreal.", nameof(request));
+        }
+
+        if (request.VariantIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Variant index cannot be negative.");
+        }
+
+        if (request.SequenceName?.Length > 200)
+        {
+            throw new ArgumentException("Sequence name cannot exceed 200 characters.", nameof(request));
+        }
+    }
+
+    private static void ValidateUnrealBundleExport(UnrealBundleExportRequest request)
+    {
+        if (request.VariantIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Variant index cannot be negative.");
+        }
+
+        if (request.BundleName?.Length > 120)
+        {
+            throw new ArgumentException("Bundle name cannot exceed 120 characters.", nameof(request));
+        }
+    }
+
+    private static void ValidateUnrealImportPlan(UnrealImportPlanRequest request)
+    {
+        ValidateUnrealPath(request.BundleDirectory, "Bundle directory", nameof(request), required: true);
+        ValidateUnrealPath(request.ContentPath, "Content path", nameof(request), required: false);
+        if (request.AssetName?.Length > 120)
+        {
+            throw new ArgumentException("Asset name cannot exceed 120 characters.", nameof(request));
+        }
+    }
+
+    private static void ValidateUnrealReturnImport(UnrealReturnImportRequest request)
+    {
+        ValidateUnrealPath(request.BundleDirectory, "Bundle directory", nameof(request), required: true);
+        ValidateUnrealPath(request.SourceDirectory, "Source directory", nameof(request), required: false);
+    }
+
+    private static void ValidateUnrealPath(
+        string? value,
+        string label,
+        string parameterName,
+        bool required)
+    {
+        if (required && string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"{label} must contain at least one character.", parameterName);
+        }
+
+        if (value?.Length > 260)
+        {
+            throw new ArgumentException($"{label} cannot exceed 260 characters.", parameterName);
+        }
+    }
+
     private Task<JsonElement> PostJsonElementAsync(
         string relativePath,
         JsonObject request,
@@ -808,6 +1605,28 @@ public sealed class StudioApiClient : IDisposable
             HttpMethod.Post,
             relativePath,
             JsonContent.Create(request, StudioJson.GetTypeInfo<TRequest>()),
+            true,
+            cancellationToken);
+
+    private Task<SetupTaskActionResponse> PostEmptySetupActionAsync(
+        string relativePath,
+        CancellationToken cancellationToken) =>
+        SendJsonAsync<SetupTaskActionResponse>(
+            HttpMethod.Post,
+            relativePath,
+            null,
+            true,
+            cancellationToken);
+
+    private Task<SetupTaskActionResponse> PostSetupActionAsync<TRequest>(
+        string relativePath,
+        TRequest request,
+        JsonTypeInfo<TRequest> typeInfo,
+        CancellationToken cancellationToken) =>
+        SendJsonAsync<SetupTaskActionResponse>(
+            HttpMethod.Post,
+            relativePath,
+            JsonContent.Create(request, typeInfo),
             true,
             cancellationToken);
 
@@ -887,6 +1706,69 @@ public sealed class StudioApiClient : IDisposable
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         return document.RootElement.Clone();
     }
+
+    private async Task<JsonElement> UploadProjectAssetAsync(
+        string projectId,
+        string assetRoute,
+        Stream content,
+        string fileName,
+        string? contentType,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        if (!content.CanRead)
+        {
+            throw new ArgumentException("The selected asset stream is not readable.", nameof(content));
+        }
+
+        var safeFileName = Path.GetFileName(fileName);
+        if (string.IsNullOrWhiteSpace(safeFileName))
+        {
+            throw new ArgumentException("The selected asset must have a file name.", nameof(fileName));
+        }
+
+        using var multipart = new MultipartFormDataContent();
+        using var streamContent = new StreamContent(content);
+        streamContent.Headers.ContentType = new MediaTypeHeaderValue(
+            string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType);
+        multipart.Add(streamContent, "file", safeFileName);
+
+        using var request = await CreateRequestAsync(
+                HttpMethod.Post,
+                $"/v1/projects/{EscapeIdentifier(projectId)}/assets/{assetRoute}",
+                multipart,
+                true,
+                cancellationToken)
+            .ConfigureAwait(false);
+        using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(
+                responseStream,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        return document.RootElement.Clone();
+    }
+
+    private static string BuildQuery(params (string Name, string? Value)[] values)
+    {
+        var encoded = values
+            .Where(static value => value.Value is not null)
+            .Select(static value =>
+                $"{Uri.EscapeDataString(value.Name)}={Uri.EscapeDataString(value.Value!)}");
+        var query = string.Join('&', encoded);
+        return query.Length == 0 ? string.Empty : $"?{query}";
+    }
+
+    private static string Invariant(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static string Invariant(long value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static string Invariant(double value) => value.ToString(CultureInfo.InvariantCulture);
 
     private async Task<HttpRequestMessage> CreateRequestAsync(
         HttpMethod method,
@@ -997,6 +1879,51 @@ public sealed class StudioApiClient : IDisposable
         return value.Trim();
     }
 
+    private static string RequireShortValue(string value, string parameterName, int maximumLength)
+    {
+        var result = RequireValue(value, parameterName);
+        if (result.Length > maximumLength)
+        {
+            throw new ArgumentException($"The value cannot exceed {maximumLength} characters.", parameterName);
+        }
+
+        return result;
+    }
+
+    private static string ValidateSetupProfile(string value)
+    {
+        var profile = RequireShortValue(value, nameof(value), 20).ToLowerInvariant();
+        if (profile is not ("cpu" or "cuda" or "directml"))
+        {
+            throw new ArgumentException("Setup profile must be cpu, cuda, or directml.", nameof(value));
+        }
+
+        return profile;
+    }
+
+    private static string ValidateComfyUiFlavor(string value, bool allowAuto)
+    {
+        var flavor = RequireShortValue(value, nameof(value), 20).ToLowerInvariant();
+        if (flavor is not ("cpu" or "nvidia" or "amd") && !(allowAuto && flavor == "auto"))
+        {
+            throw new ArgumentException(
+                allowAuto
+                    ? "ComfyUI flavor must be auto, cpu, nvidia, or amd."
+                    : "ComfyUI flavor must be cpu, nvidia, or amd.",
+                nameof(value));
+        }
+
+        return flavor;
+    }
+
+    private static void ValidatePort(int port, string parameterName)
+    {
+        if (port is < 1 or > 65535)
+        {
+            throw new ArgumentOutOfRangeException(parameterName, "Port must be between 1 and 65535.");
+        }
+    }
+
     private static TimelineRenderRequest NormalizeTimelineRenderRequest(TimelineRenderRequest request)
     {
         ValidateTimelineDimension(request.Width, nameof(request.Width));
@@ -1025,13 +1952,9 @@ public sealed class StudioApiClient : IDisposable
                 nameof(request.AudioCodec));
         }
 
-        var quality = RequireValue(request.Quality, nameof(request.Quality)).ToLowerInvariant();
-        if (quality is not ("low" or "medium" or "high") &&
-            (!int.TryParse(quality, NumberStyles.None, CultureInfo.InvariantCulture, out var qualityNumber) ||
-             qualityNumber is < 1 or > 51))
+        if (request.Quality is < 1 or > 51)
         {
-            throw new ArgumentException(
-                "Timeline quality must be low, medium, high, or a number from 1 through 51.",
+            throw new ArgumentOutOfRangeException(
                 nameof(request.Quality));
         }
 
@@ -1048,7 +1971,6 @@ public sealed class StudioApiClient : IDisposable
         {
             VideoCodec = videoCodec,
             AudioCodec = audioCodec,
-            Quality = quality,
             Name = name
         };
     }
