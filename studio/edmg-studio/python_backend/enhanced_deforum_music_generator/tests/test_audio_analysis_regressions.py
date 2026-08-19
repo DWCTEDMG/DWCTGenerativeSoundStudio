@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import platform
 import numpy as np
 import pytest
 import soundfile as sf
@@ -19,6 +20,9 @@ from edmg_ai_service.audio import lightweight_audio_features
 from edmg_ai_service import asr as asr_module
 
 
+WINDOWS_LIBROSA_JIT_UNSAFE = platform.system().strip().lower() == "windows"
+
+
 def _write_test_tone(tmp_path, *, duration_s: float = 2.0, sr: int = 22050):
     t = np.linspace(0, duration_s, int(sr * duration_s), endpoint=False)
     y = 0.4 * np.sin(2 * np.pi * 220.0 * t)
@@ -27,6 +31,10 @@ def _write_test_tone(tmp_path, *, duration_s: float = 2.0, sr: int = 22050):
     return audio_path, y, sr
 
 
+@pytest.mark.skipif(
+    WINDOWS_LIBROSA_JIT_UNSAFE,
+    reason="Windows Studio routes analysis through the FFmpeg/NumPy analyzer before Librosa's native JIT.",
+)
 def test_audio_analyzer_handles_array_tempo_and_time_unit_beats(monkeypatch, tmp_path):
     audio_path, _y, sr = _write_test_tone(tmp_path)
 
@@ -44,6 +52,10 @@ def test_audio_analyzer_handles_array_tempo_and_time_unit_beats(monkeypatch, tmp
     assert features.beat_frames == librosa.time_to_frames(np.array([0.5, 1.0, 1.5]), sr=sr).tolist()
 
 
+@pytest.mark.skipif(
+    WINDOWS_LIBROSA_JIT_UNSAFE,
+    reason="Windows Studio routes analysis through the FFmpeg/NumPy analyzer before Librosa's native JIT.",
+)
 def test_lightweight_audio_features_handles_array_tempo(monkeypatch, tmp_path):
     audio_path, _y, _sr = _write_test_tone(tmp_path)
 

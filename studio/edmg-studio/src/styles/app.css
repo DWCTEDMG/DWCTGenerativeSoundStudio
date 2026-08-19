@@ -1034,9 +1034,175 @@ select:focus {
   align-items: center;
   gap: 7px;
 }
+.render-layeredSettings {
+  margin: 12px 0;
+  padding: 16px;
+  border: 1px solid rgba(255, 176, 92, 0.2);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 92% 0%, rgba(222, 111, 48, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(16, 27, 29, 0.92), rgba(8, 19, 22, 0.94));
+}
+.render-layeredHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.render-layeredKicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #ffc388;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.render-layeredHeader h3 {
+  margin: 5px 0 4px;
+  font-size: 19px;
+}
+.render-layeredHeader p {
+  max-width: 780px;
+  margin: 0;
+  color: #9fb3bc;
+  line-height: 1.45;
+}
+.render-layeredGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 14px;
+}
+.render-layeredGrid > label {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(2, 11, 14, 0.48);
+}
+.render-layeredGrid > label > span:first-child,
+.render-maskFields label > span {
+  color: #d8e8ed;
+  font-size: 11px;
+  font-weight: 800;
+}
+.render-layeredGrid > label > small {
+  color: #7f979f;
+  line-height: 1.35;
+}
+.render-layeredGrid > .render-layeredWide {
+  grid-column: span 3;
+}
+.render-layeredGrid textarea {
+  min-height: 68px;
+}
+.render-layeredToggle > span:nth-child(2),
+.render-refineToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.render-layeredDisclosure {
+  margin-top: 12px;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 11px;
+  background: rgba(2, 10, 13, 0.42);
+}
+.render-layeredDisclosure > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #dcecf1;
+  font-size: 12px;
+  font-weight: 800;
+}
+.render-layeredDisclosure > summary span {
+  margin-left: auto;
+  color: #829ba5;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.render-layeredDisclosure[open] > summary {
+  margin-bottom: 10px;
+}
+.render-maskEditor {
+  display: grid;
+  gap: 8px;
+}
+.render-maskRow {
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(5, 16, 19, 0.62);
+}
+.render-maskRow.is-active {
+  border-color: rgba(117, 207, 235, 0.3);
+}
+.render-maskSelect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  font-weight: 750;
+}
+.render-maskFields {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(100px, 1fr));
+  gap: 7px;
+  margin-top: 9px;
+}
+.render-maskFields label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.render-refineToggle {
+  margin-bottom: 8px;
+}
+.render-layeredError {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid rgba(255, 111, 91, 0.35);
+  border-radius: 8px;
+  background: rgba(83, 25, 18, 0.35);
+  color: #ffb3a7;
+  font-size: 12px;
+}
+.render-layeredFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.render-layeredFooter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
 @media (max-width: 1100px) {
   .render-controlCenterHeader,
-  .render-quickSettings {
+  .render-quickSettings,
+  .render-layeredGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .render-layeredGrid > .render-layeredWide {
+    grid-column: span 2;
+  }
+  .render-maskFields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .render-goalGrid {
@@ -1046,8 +1212,18 @@ select:focus {
 @media (max-width: 720px) {
   .render-controlCenterHeader,
   .render-goalGrid,
-  .render-quickSettings {
+  .render-quickSettings,
+  .render-layeredGrid,
+  .render-maskFields {
     grid-template-columns: 1fr;
+  }
+  .render-layeredGrid > .render-layeredWide {
+    grid-column: auto;
+  }
+  .render-layeredHeader,
+  .render-layeredFooter {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 hr {
@@ -2990,6 +3166,60 @@ th {
 .timeline-fieldGrid--compact {
   grid-template-columns: max-content minmax(0, 1fr);
   align-items: center;
+}
+.timeline-editMasterFields {
+  align-items: start;
+}
+.timeline-editMasterFields > label {
+  padding-top: 8px;
+}
+.timeline-editMasterFields > input,
+.timeline-editMasterFields > select,
+.timeline-editMasterControl,
+.timeline-editMasterControl > input,
+.timeline-editMasterControl > select {
+  min-width: 0;
+  width: 100%;
+}
+.timeline-editMasterControl {
+  display: grid;
+  gap: 4px;
+}
+.timeline-editMasterHelp {
+  color: #839aa7;
+  line-height: 1.35;
+}
+.timeline-editMasterValidation {
+  color: #ff9b88;
+  line-height: 1.35;
+}
+.timeline-editMasterPair {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid rgba(120, 174, 200, 0.16);
+  border-radius: 4px;
+  background: rgba(2, 9, 12, 0.28);
+}
+.timeline-editMasterPair strong {
+  font-size: 12px;
+}
+.timeline-editMasterSummary {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(120, 174, 200, 0.16);
+  border-radius: 4px;
+  background: rgba(2, 9, 12, 0.32);
+  line-height: 1.4;
+}
+.timeline-editMasterSummary.is-ready {
+  border-color: rgba(80, 202, 161, 0.28);
+  color: #9acdbb;
+}
+.timeline-editMasterSummary.is-invalid {
+  border-color: rgba(255, 122, 102, 0.36);
+  color: #ff9b88;
 }
 .timeline-motionPreset {
   display: grid;

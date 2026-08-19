@@ -11,6 +11,16 @@ import {
   type RenderQuickGoal,
   type RenderQuickQuality,
 } from "../components/RenderControlCenter";
+import {
+  LayeredAnimationControls,
+  type LayeredAnimationPayload,
+} from "../components/LayeredAnimationControls";
+import {
+  GENUINE_RENDER_ENGINES,
+  RenderOrchestratorIntentControls,
+  createDefaultRenderOrchestratorIntent,
+  type RenderOrchestratorIntentValue,
+} from "../components/RenderOrchestratorIntentControls";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
@@ -126,14 +136,7 @@ const UPSCALER_OPTIONS = [
   { value: "pixel_bicubic", label: "Pixel bicubic" },
 ];
 
-const REAL_CONDUCTOR_ENGINES = [
-  "internal",
-  "comfyui_still",
-  "comfyui_motion",
-  "hosted_video",
-  "deforum_export",
-  "tensorrt_standalone",
-];
+const REAL_CONDUCTOR_ENGINES = [...GENUINE_RENDER_ENGINES];
 
 function formatDurationSources(preflight: any): string {
   const sources = Array.isArray(preflight?.duration_sources) ? preflight.duration_sources : [];
@@ -142,6 +145,15 @@ function formatDurationSources(preflight: any): string {
     .slice(0, 4)
     .map((item: any) => `${String(item.source).replace(/_/g, " ")} ${Number(item.duration_s).toFixed(1)}s`)
     .join(" • ");
+}
+
+function renderAspectRatioForSize(width: number, height: number): RenderOrchestratorIntentValue["aspect_ratio"] {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return "16:9";
+  const ratio = width / height;
+  if (Math.abs(ratio - 1) < 0.08) return "1:1";
+  if (ratio < 0.8) return "9:16";
+  if (ratio > 2.05) return "21:9";
+  return "16:9";
 }
 
 export default function Render({ onNavigate, backendUrl: backendUrlProp }: RenderProps) {
@@ -164,6 +176,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [performerStatus, setPerformerStatus] = useState<string>("");
   const [planningPerformer, setPlanningPerformer] = useState(false);
   const [runningPerformer, setRunningPerformer] = useState(false);
+  const [orchestratorIntent, setOrchestratorIntent] = useState<RenderOrchestratorIntentValue>(
+    () => createDefaultRenderOrchestratorIntent(0),
+  );
 
   const [renderPreset, setRenderPreset] = useState<"fast" | "balanced" | "quality" | "ultra">((savedRenderDefaults.renderPreset as any) || "balanced");
   const [quickRenderGoal, setQuickRenderGoal] = useState<RenderQuickGoal>("auto");
@@ -224,6 +239,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"tensorrt">("auto");
   const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
+  const [internalAllowHostedFallback, setInternalAllowHostedFallback] = useState<boolean>(true);
 
   const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img"|"video_model">("frame_img2img");
   const [internalTemporalStrength, setInternalTemporalStrength] = useState<number>(0.35);
@@ -379,10 +395,12 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [animationPresets, setAnimationPresets] = useState<any[]>([]);
   const [autoPreset, setAutoPreset] = useState<string>("full_motion");
   const [autoEngine, setAutoEngine] = useState<"auto" | "internal" | "comfyui">("auto");
+  const [autoFps, setAutoFps] = useState<number>(24);
   const [autoSourceAsset, setAutoSourceAsset] = useState<string>("");
   const [autoMaskAssets, setAutoMaskAssets] = useState<string[]>([]);
   const [autoConfig, setAutoConfig] = useState<any>(null);
   const [autoBusy, setAutoBusy] = useState<boolean>(false);
+  const [layeredBusy, setLayeredBusy] = useState<boolean>(false);
 
   const [info, setInfo] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -675,7 +693,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       render_mode: internalRenderMode,
       render_tier: internalRenderTier,
       device_preference: useTensorRt ? "cuda" : internalDevicePreference,
-      allow_hosted_fallback: true,
+      allow_hosted_fallback: internalRenderMode === "diffusion" ? false : internalAllowHostedFallback,
       resume_existing_frames: useTensorRt ? false : internalResumeExisting,
     };
   };
@@ -859,9 +877,12 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
     try {
       const d = await apiPost(`/v1/projects/${projectId}/render/conductor/plan`, {
+        ...orchestratorIntent,
         variant_index: selectedVariant,
         preset: renderPreset,
-        allowed_engines: REAL_CONDUCTOR_ENGINES,
+        allowed_engines: orchestratorIntent.allowed_engines.length
+          ? orchestratorIntent.allowed_engines
+          : REAL_CONDUCTOR_ENGINES,
       });
       setConductorPlan(d?.plan || null);
       setConductorEnvironment(d?.environment || null);
@@ -1005,6 +1026,25 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   useEffect(() => {
     refreshValidate().catch(() => {});
   }, [projectId, selectedVariant, renderPreset]);
+
+  useEffect(() => {
+    const qualityTier: RenderOrchestratorIntentValue["quality_tier"] = renderPreset === "fast"
+      ? "draft"
+      : renderPreset;
+    setOrchestratorIntent((current) => ({
+      ...current,
+      variant_index: selectedVariant,
+      preset: renderPreset,
+      quality_tier: qualityTier,
+    }));
+  }, [renderPreset, selectedVariant]);
+
+  useEffect(() => {
+    const aspectRatio = renderAspectRatioForSize(renderWidth, renderHeight);
+    setOrchestratorIntent((current) => current.aspect_ratio === aspectRatio
+      ? current
+      : { ...current, aspect_ratio: aspectRatio });
+  }, [renderHeight, renderWidth]);
 
   useEffect(() => {
     refreshConductorPlan().catch(() => {});
@@ -1256,6 +1296,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         variant_index: selectedVariant,
         source_asset: autoSourceAsset || null,
         run: false,
+        fps: autoFps,
       });
       setAutoConfig(d);
       setInfo(d);
@@ -1280,6 +1321,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
           mode: "masked",
           motion: selectedAutoPreset?.motion || "full_3d",
           masks: autoMaskAssets.map((m) => ({ mask_asset: m })),
+          fps: autoFps,
         });
       } else {
         d = await apiPost(`/v1/projects/${projectId}/render/auto`, {
@@ -1288,6 +1330,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
           variant_index: selectedVariant,
           source_asset: autoSourceAsset || null,
           run: true,
+          fps: autoFps,
         });
       }
       setAutoConfig(d);
@@ -1298,6 +1341,23 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       setErr(String(e));
     } finally {
       setAutoBusy(false);
+    }
+  };
+
+  const queueLayeredAnimation = async (payload: LayeredAnimationPayload) => {
+    if (!projectId) return;
+    setErr(null);
+    setInfo(null);
+    setLayeredBusy(true);
+    try {
+      const result = await apiPost(`/v1/projects/${projectId}/render/animate_layers`, payload);
+      setInfo(result);
+      await refreshProject(projectId);
+      await refreshProjectJobs();
+    } catch (error: any) {
+      setErr(String(error));
+    } finally {
+      setLayeredBusy(false);
     }
   };
 
@@ -1591,7 +1651,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     try {
       const d = await apiPost(`/v1/projects/${projectId}/render/video/smart`, {
         variant_index: selectedVariant,
-        preset: internalRenderTier || "balanced",
+        preset: renderPreset,
         route: forceRoute,
       });
       setInfo(d);
@@ -1669,7 +1729,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/assemble_video`, { variant_index: selectedVariant });
+      const d = await apiPost(`/v1/projects/${projectId}/assemble_video`, {
+        variant_index: selectedVariant,
+        fps: internalFpsOut,
+      });
       setInfo(d);
       await refreshProject(projectId);
     } catch (e: any) {
@@ -1857,14 +1920,54 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
     ...(internalHostedVisible ? [{ value: "hosted", label: "Hosted Stability" }] : []),
     ...(tensorRtInternalVisible ? [{ value: "tensorrt", label: "TensorRT SD 1.5 keyframes" }] : []),
   ];
-  const quickRenderModels = internalModelOptions.map((model) => ({
+  const quickRenderModelCatalog = quickRenderGoal === "stills"
+    ? stillModels
+    : quickRenderGoal === "motion_ad"
+      ? comfyStillModels
+      : quickRenderGoal === "motion_svd"
+        ? svdModels
+        : internalModelOptions;
+  const quickRenderModels = quickRenderModelCatalog.map((model) => ({
     id: model.id,
     name: model.name,
     installed: installedModels[model.id] !== false,
   }));
+  const quickRenderModelId = quickRenderGoal === "stills"
+    ? selectedStillModelId
+    : quickRenderGoal === "motion_ad"
+      ? selectedMotionModelId
+      : quickRenderGoal === "motion_svd"
+        ? selectedSvdModelId
+        : internalModelId;
+  const setQuickRenderModel = (modelId: string) => {
+    if (quickRenderGoal === "stills") setSelectedStillModelId(modelId);
+    else if (quickRenderGoal === "motion_ad") setSelectedMotionModelId(modelId);
+    else if (quickRenderGoal === "motion_svd") setSelectedSvdModelId(modelId);
+    else setInternalModelId(modelId);
+  };
+  const quickOutputFps = quickRenderGoal === "motion_ad" || quickRenderGoal === "motion_svd"
+    ? motionFps
+    : internalFpsOut;
+  const setQuickOutputFps = (fps: number) => {
+    if (quickRenderGoal === "motion_ad" || quickRenderGoal === "motion_svd") setMotionFps(fps);
+    else setInternalFpsOut(fps);
+  };
+  const layeredRefinementModels = internalModelOptions
+    .filter((model) => model.kind === "diffusers")
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      installed: installedModels[model.id] !== false,
+    }));
 
   const applyQuickRenderGoal = (goal: RenderQuickGoal) => {
     setQuickRenderGoal(goal);
+    if (goal !== "edit") {
+      setOrchestratorIntent((current) => ({
+        ...current,
+        output_mode: goal === "auto" || goal === "full_video" ? "full_video" : "scene_batch",
+      }));
+    }
     if (goal === "edit") {
       onNavigate?.("timeline");
       return;
@@ -1897,6 +2000,11 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
 
   const applyQuickQuality = (quality: RenderQuickQuality) => {
     setRenderPreset(quality);
+    setOrchestratorIntent((current) => ({
+      ...current,
+      preset: quality,
+      quality_tier: quality === "fast" ? "draft" : quality,
+    }));
     setInternalRenderTier(quality === "ultra" ? "quality" : quality === "fast" ? "draft" : quality);
     const stillSettings = quality === "fast"
       ? { steps: 12, cfg: 5.5, renderFps: 2 }
@@ -1908,9 +2016,18 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
     setRenderSteps(stillSettings.steps);
     setRenderCfg(stillSettings.cfg);
     setInternalFpsRender(stillSettings.renderFps);
+    setMotionFps(quality === "fast" ? 8 : quality === "balanced" ? 12 : quality === "quality" ? 18 : 24);
+    setMaxFramesPerScene(quality === "fast" ? 120 : quality === "balanced" ? 240 : quality === "quality" ? 480 : 720);
   };
 
   const runQuickRender = () => {
+    if (quickRenderGoal === "auto") {
+      void (async () => {
+        await refreshConductorPlan();
+        await runPipeline();
+      })();
+      return;
+    }
     if (quickRenderGoal === "stills") {
       void renderScenes();
       return;
@@ -1926,9 +2043,92 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
     void runInternalVideo();
   };
 
+  const quickRenderDisabled = quickRenderGoal === "edit"
+    ? false
+    : !variantCount
+      || (quickRenderGoal === "full_video" && internalTensorRtBlocked)
+      || (quickRenderGoal === "stills" && !selectedStillModel)
+      || (quickRenderGoal === "motion_ad" && (!selectedMotionModel || caps?.animatediff?.available === false))
+      || (quickRenderGoal === "motion_svd" && (!selectedSvdModel || caps?.svd?.available === false));
+  const quickRunLabel = quickRenderGoal === "auto"
+    ? "Choose route + queue"
+    : quickRenderGoal === "stills"
+      ? "Render still scenes"
+      : quickRenderGoal === "motion_ad"
+        ? "Queue AnimateDiff scenes"
+        : quickRenderGoal === "motion_svd"
+          ? "Queue SVD scenes"
+          : quickRenderGoal === "edit"
+            ? "Open Timeline editor"
+            : "Queue full-motion video";
+
   return (
     <div>
       <h1>Render</h1>
+      <RenderControlCenter
+        goal={quickRenderGoal}
+        onGoalChange={applyQuickRenderGoal}
+        quality={renderPreset}
+        onQualityChange={applyQuickQuality}
+        route={internalRenderMode}
+        onRouteChange={(route) => setInternalRenderMode(route as "auto" | "diffusion" | "hosted" | "tensorrt")}
+        routeOptions={renderRouteOptions}
+        modelId={quickRenderModelId}
+        onModelChange={setQuickRenderModel}
+        models={quickRenderModels}
+        outputFps={quickOutputFps}
+        onOutputFpsChange={setQuickOutputFps}
+        width={renderWidth}
+        height={renderHeight}
+        onResolutionChange={(width, height) => {
+          setRenderWidth(width);
+          setRenderHeight(height);
+          setOrchestratorIntent((current) => ({
+            ...current,
+            aspect_ratio: renderAspectRatioForSize(width, height),
+          }));
+        }}
+        timelineCamera={internalVideoApplyTimelineCamera}
+        onTimelineCameraChange={setInternalVideoApplyTimelineCamera}
+        onRun={runQuickRender}
+        runDisabled={quickRenderDisabled}
+        runLabel={quickRunLabel}
+        onOpenAllSettings={() => {
+          setAdvancedControlsOpen(true);
+          window.setTimeout(() => document.getElementById("render-all-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+        }}
+        onOpenModels={() => onNavigate?.("models")}
+      />
+      <div style={{ marginTop: 14 }}>
+        <RenderOrchestratorIntentControls
+          value={orchestratorIntent}
+          disabled={!variantCount}
+          onChange={(nextIntent) => {
+            const nextVariant = variantCount
+              ? Math.min(Math.max(0, nextIntent.variant_index), variantCount - 1)
+              : Math.max(0, nextIntent.variant_index);
+            const normalizedIntent = { ...nextIntent, variant_index: nextVariant };
+            setOrchestratorIntent(normalizedIntent);
+            if (nextVariant !== selectedVariant) setSelectedVariant(nextVariant);
+            if (nextIntent.preset !== renderPreset) setRenderPreset(nextIntent.preset);
+          }}
+        />
+        <div
+          className="row"
+          style={{ justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 10 }}
+        >
+          <div className="small" style={{ maxWidth: 760 }}>
+            These choices are kept as the current render intent. Quick Auto and the button here both plan with this exact intent before choosing a genuine render route.
+          </div>
+          <button
+            type="button"
+            disabled={!variantCount}
+            onClick={() => refreshConductorPlan().catch(() => {})}
+          >
+            Replan with this intent
+          </button>
+        </div>
+      </div>
       <div className="grid2">
         <div className="card">
           <div style={{ fontWeight: 800, marginBottom: 10 }}>Project</div>
@@ -2089,6 +2289,18 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                   <option value="comfyui">ComfyUI</option>
                 </select>
               </div>
+              <div style={{ flex: 1, minWidth: 130 }}>
+                <div className="small">Output FPS</div>
+                <input
+                  aria-label="Auto-render output FPS"
+                  type="number"
+                  min={1}
+                  max={60}
+                  step={1}
+                  value={autoFps}
+                  onChange={(event) => setAutoFps(Math.max(1, Math.min(60, Number(event.target.value) || 1)))}
+                />
+              </div>
             </div>
             {selectedAutoPreset ? (
               <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
@@ -2230,8 +2442,20 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
             <summary style={{ cursor: "pointer", fontWeight: 800 }}>Advanced routing & controls</summary>
             <div style={{ marginTop: 10 }}>
               <div className="small" style={{ marginBottom: 10 }}>
-                Force stills vs motion, tune FPS/frames, debug nodes, or run manual steps.
+                Every specialist option remains here: object animation, genuine render routing, model/video controls,
+                compositing, workflows, enhancement, diagnostics, and manual queue actions.
               </div>
+              <LayeredAnimationControls
+                sourceOptions={projectAssets.refs}
+                maskOptions={(Array.isArray(maskAssets) ? maskAssets : []).map(String)}
+                modelOptions={layeredRefinementModels}
+                defaultSource={autoSourceAsset}
+                defaultMotion={String(selectedAutoPreset?.motion || "full_3d")}
+                busy={layeredBusy}
+                disabled={!projectId}
+                onQueue={(payload) => void queueLayeredAnimation(payload)}
+                onOpenModels={() => onNavigate?.("models")}
+              />
               <div className="card" style={{ marginTop: 10 }}>
                 <div style={{ fontWeight: 900, marginBottom: 8 }}>Internal renderer (no ComfyUI)</div>
                 <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
@@ -2293,9 +2517,22 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                       <option value="quality">Quality</option>
                     </select>
                   </div>
+                  <label className="row small" style={{ gap: 6, alignItems: "center", minWidth: 250 }}>
+                    <input
+                      aria-label="Allow hosted fallback"
+                      type="checkbox"
+                      checked={internalRenderMode === "diffusion" ? false : internalAllowHostedFallback}
+                      disabled={internalRenderMode === "diffusion" || internalRenderMode === "tensorrt"}
+                      onChange={(event) => setInternalAllowHostedFallback(event.target.checked)}
+                    />
+                    Allow configured hosted fallback
+                  </label>
                 </div>
                 <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
                   Tip: install internal models in Models first. Auto tiering adapts the internal renderer for laptops, Apple Silicon, CPU-only systems, higher-end GPUs, and the TensorRT CUDA keyframe path.
+                </div>
+                <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                  Explicit Local diffusion never leaves this machine. In Auto mode, hosted fallback is used only when this switch is on and a real provider is configured.
                 </div>
                 <div className="small" style={{ marginTop: 6, color: "var(--accent-soft)" }}>
                   Auto mode uses installed internal models or a configured hosted renderer. Studio will not substitute a synthetic proxy render.
@@ -3944,36 +4181,6 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
         </div>
       </div>
 
-      <RenderControlCenter
-        goal={quickRenderGoal}
-        onGoalChange={applyQuickRenderGoal}
-        quality={renderPreset}
-        onQualityChange={applyQuickQuality}
-        route={internalRenderMode}
-        onRouteChange={(route) => setInternalRenderMode(route as "auto" | "diffusion" | "hosted" | "tensorrt")}
-        routeOptions={renderRouteOptions}
-        modelId={internalModelId}
-        onModelChange={setInternalModelId}
-        models={quickRenderModels}
-        outputFps={internalFpsOut}
-        onOutputFpsChange={setInternalFpsOut}
-        width={renderWidth}
-        height={renderHeight}
-        onResolutionChange={(width, height) => {
-          setRenderWidth(width);
-          setRenderHeight(height);
-        }}
-        timelineCamera={internalVideoApplyTimelineCamera}
-        onTimelineCameraChange={setInternalVideoApplyTimelineCamera}
-        onRun={runQuickRender}
-        runDisabled={!variantCount || internalTensorRtBlocked}
-        runLabel={quickRenderGoal === "stills" ? "Render still scenes" : "Queue this render"}
-        onOpenAllSettings={() => {
-          setAdvancedControlsOpen(true);
-          window.setTimeout(() => document.getElementById("render-all-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
-        }}
-        onOpenModels={() => onNavigate?.("models")}
-      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiGet } from "../components/api";
+import { apiGet, isRequestAbortError } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { useStudioPageLayout } from "../components/studioLayout";
@@ -13,8 +13,27 @@ export default function Dashboard({ backendUrl, config }: PageProps) {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    apiGet("/health").then(setHealth).catch((e) => setErr(String(e)));
-    apiGet("/v1/edmg/status").then(setEdmg).catch(() => {});
+    const controller = new AbortController();
+    setErr(null);
+
+    void apiGet("/health", { signal: controller.signal, timeoutMs: 10_000 })
+      .then((value) => {
+        if (controller.signal.aborted) return;
+        setHealth(value);
+        setErr(null);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || isRequestAbortError(error)) return;
+        setErr(String(error));
+      });
+
+    void apiGet("/v1/edmg/status", { signal: controller.signal, timeoutMs: 10_000 })
+      .then((value) => {
+        if (!controller.signal.aborted) setEdmg(value);
+      })
+      .catch(() => {});
+
+    return () => controller.abort();
   }, [backendUrl]);
 
   const panelDefinitions = useMemo(

@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import Render from "../pages/Render";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
@@ -245,6 +245,15 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
       job: { id: "internal-trt-1", type: "internal_video", status: "queued" },
       preflight: { mode: "tensorrt" },
     },
+    "POST /v1/projects/p1/pipeline/run*": {
+      ok: true,
+      mode: "internal",
+      job: { id: "quick-auto-1", type: "internal_video", status: "queued" },
+    },
+    "POST /v1/projects/p1/render/stills/scenes": {
+      ok: true,
+      job: { id: "quick-stills-1", type: "render_stills", status: "queued" },
+    },
     "/v1/projects/p1/render/performer/plan*": { ok: true, performer_plan: null },
     "POST /v1/projects/p1/render/performer/plan": {
       ok: true,
@@ -300,6 +309,111 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
 };
 
 describe("Render page", () => {
+  it("puts goal-aware quick controls first and routes Auto master through the real pipeline", async () => {
+    const fetchMock = installRenderMocks();
+    renderWithStudio(<Render />);
+
+    const heading = await screen.findByRole("heading", { name: "Choose the result first. Fine-tune only what matters." });
+    const projectLabel = await screen.findByText("Project", { selector: ".card > div" });
+    expect(heading.compareDocumentPosition(projectLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await screen.findByText("Orchestrator · best real route")).toBeTruthy();
+    expect(screen.queryByText("Renderer", { selector: "span" })).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Choose route + queue" }));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => (
+        String(url).includes("/v1/projects/p1/pipeline/run")
+        && String(init?.method || "GET").toUpperCase() === "POST"
+      ))).toBe(true);
+    });
+  }, 10000);
+
+  it("shows only goal-relevant models and keeps explicit local diffusion local", async () => {
+    const fetchMock = installRenderMocks();
+    renderWithStudio(<Render />);
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Full-motion video/ }));
+    const quickControls = screen.getByRole("heading", {
+      name: "Choose the result first. Fine-tune only what matters.",
+    }).closest("section")!;
+    const localOption = await within(quickControls).findByRole("option", { name: "Local diffusion" });
+    fireEvent.change(localOption.closest("select")!, { target: { value: "diffusion" } });
+
+    await waitFor(() => {
+      const preflightBodies = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/v1/projects/p1/render/internal/preflight"))
+        .map(([, init]) => String(init?.body || ""));
+      expect(preflightBodies.some((body) => (
+        body.includes('"render_mode":"diffusion"')
+        && body.includes('"allow_hosted_fallback":false')
+      ))).toBe(true);
+    });
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Still scenes/ }));
+    expect(await screen.findByText("Still model")).toBeTruthy();
+    expect(screen.queryByText("Renderer", { selector: "span" })).toBeNull();
+    expect(screen.queryByLabelText("Output frame rate")).toBeNull();
+  }, 10000);
+
+  it("exposes and submits the complete genuine-engine Orchestrator intent", async () => {
+    const fetchMock = installRenderMocks();
+    renderWithStudio(<Render />);
+
+    expect(await screen.findByRole("heading", { name: "Tell the Studio what matters for this render" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Deliverable"), { target: { value: "preview" } });
+    fireEvent.change(screen.getByLabelText("Continuity priority"), { target: { value: "0.9" } });
+    fireEvent.change(screen.getByLabelText("Speed priority"), { target: { value: "0.2" } });
+    fireEvent.change(screen.getByLabelText("Style lock strength"), { target: { value: "0.95" } });
+
+    fireEvent.click(screen.getByText(/Engine routing and fallback/));
+    fireEvent.click(screen.getByLabelText("Allow Hosted video"));
+    fireEvent.change(screen.getByLabelText("Fallback policy"), { target: { value: "strict" } });
+
+    fireEvent.click(screen.getByText(/Section overrides/));
+    fireEvent.click(screen.getByRole("button", { name: "Add section override" }));
+    fireEvent.change(screen.getByLabelText("Section 1 scene ID"), { target: { value: "scene-1" } });
+    fireEvent.change(screen.getByLabelText("Section 1 start time"), { target: { value: "1.25" } });
+    fireEvent.change(screen.getByLabelText("Section 1 end time"), { target: { value: "4.5" } });
+    fireEvent.change(screen.getByLabelText("Section 1 creative goal"), { target: { value: "Hold the hero silhouette" } });
+    fireEvent.change(screen.getByLabelText("Section 1 notes"), { target: { value: "Preserve face\nCut on beat" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Replan with this intent" }));
+
+    await waitFor(() => {
+      const conductorCalls = fetchMock.mock.calls.filter(([url, init]) => (
+        String(url).includes("/render/conductor/plan")
+        && String(init?.method || "GET").toUpperCase() === "POST"
+      ));
+      const request = JSON.parse(String(conductorCalls.at(-1)?.[1]?.body || "{}"));
+      expect(request).toMatchObject({
+        variant_index: 0,
+        preset: "balanced",
+        aspect_ratio: "16:9",
+        output_mode: "preview",
+        quality_tier: "balanced",
+        continuity_priority: 0.9,
+        speed_priority: 0.2,
+        style_lock_strength: 0.95,
+        fallback_policy: "strict",
+        sections: [{
+          scene_id: "scene-1",
+          start_s: 1.25,
+          end_s: 4.5,
+          creative_goal: "Hold the hero silhouette",
+          notes: ["Preserve face", "Cut on beat"],
+        }],
+      });
+      expect(request.allowed_engines).toEqual([
+        "internal",
+        "comfyui_still",
+        "comfyui_motion",
+        "deforum_export",
+        "tensorrt_standalone",
+      ]);
+      expect(request.allowed_engines).not.toContain("proxy");
+    });
+  }, 10000);
+
   it("plans and queues the performer workflow with an automatic genuine provider", async () => {
     const fetchMock = installRenderMocks();
     renderWithStudio(<Render />);

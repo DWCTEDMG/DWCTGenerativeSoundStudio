@@ -4,6 +4,43 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Setup from "../pages/Setup";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
+function installStrictModeAbortFetchMock() {
+  const callCounts = new Map<string, number>();
+  const payloads: Record<string, unknown> = {
+    "/v1/setup/status": {
+      ollama: { ok: false, model_present: false, skipped: true },
+      comfyui: { ok: true },
+      ffmpeg: { ok: true },
+      backend_bundle: { ok: true },
+      sevenzip: { ok: true },
+      ai_config: { label: "Rule-based fallback", ollama_required: false, model_required: false },
+    },
+    "/v1/models/catalog": { packs: [], catalog: [], user: [] },
+    "/v1/setup/tasks": { tasks: [] },
+  };
+  const abortOnce = new Set(["/v1/setup/status", "/v1/models/catalog"]);
+  const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    const path = url.pathname;
+    const callCount = (callCounts.get(path) ?? 0) + 1;
+    callCounts.set(path, callCount);
+    if (abortOnce.has(path) && callCount === 1) {
+      return new Promise<Response>((_resolve, reject) => {
+        const rejectAbort = () => reject(new DOMException("signal is aborted without reason", "AbortError"));
+        if (init?.signal?.aborted) rejectAbort();
+        else init?.signal?.addEventListener("abort", rejectAbort, { once: true });
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => payloads[path],
+    } as Response);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { callCounts, fetchMock };
+}
+
 describe("Setup page", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -46,6 +83,24 @@ describe("Setup page", () => {
     expect(statusCalls).toHaveLength(2);
     paths = fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname);
     expect(paths.filter((path) => path === "/v1/models/catalog")).toHaveLength(2);
+  });
+
+  it("restarts canceled StrictMode loads without showing a setup error", async () => {
+    installEdmgBridge();
+    const { callCounts } = installStrictModeAbortFetchMock();
+
+    renderWithStudio(
+      <React.StrictMode>
+        <Setup />
+      </React.StrictMode>,
+    );
+
+    expect(await screen.findByText(/Active AI path:/)).toBeTruthy();
+    await waitFor(() => {
+      expect(callCounts.get("/v1/setup/status")).toBe(2);
+      expect(callCounts.get("/v1/models/catalog")).toBe(2);
+    });
+    expect(screen.queryByText(/signal is aborted without reason/i)).toBeNull();
   });
 
   it("shows the active AI path and Studio Home controls", async () => {

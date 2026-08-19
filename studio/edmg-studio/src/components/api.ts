@@ -11,6 +11,16 @@ export type ApiRequestOptions = {
   timeoutMs?: number;
 };
 
+export function isRequestAbortError(error: unknown): boolean {
+  const candidate = error as { name?: unknown; message?: unknown } | null;
+  const name = String(candidate?.name ?? "").trim();
+  const message = String(candidate?.message ?? error ?? "").trim().toLowerCase();
+  return name === "AbortError"
+    || message === "signal is aborted without reason"
+    || message === "the operation was aborted"
+    || message === "this operation was aborted";
+}
+
 export function setBackendAuthTokenForSession(value: string): string {
   backendAuthToken = String(value || "").trim();
   backendAuthTokenLoaded = true;

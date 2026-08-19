@@ -89,6 +89,10 @@ describe("Timeline page", () => {
     // Sync to renderer saves the timeline then navigates to the Render page.
     fireEvent.click(syncButtons[0]);
     await waitFor(() => expect(onNavigate).toHaveBeenCalledWith("render"));
+
+    fireEvent.click(screen.getByRole("tab", { name: /Media/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Render Queue" }));
+    expect(onNavigate).toHaveBeenLastCalledWith("queue");
   });
 
   it("provides DAW-style grid jumps and loop locator controls", async () => {
@@ -464,5 +468,164 @@ describe("Timeline page", () => {
     expect(strengthSchedule.value).toBe("0:(0.45)");
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect((screen.getByLabelText("Strength schedule") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("queues edited masters with full schema settings and valid codec pairs", async () => {
+    installEdmgBridge();
+    const renderRequests: any[] = [];
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Export Contract" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Export Contract",
+          meta: {
+            audio: { duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120 } },
+            timeline: {
+              duration_s: 8,
+              tracks: [
+                {
+                  id: "track_video",
+                  name: "Video Edit",
+                  type: "video",
+                  clips: [
+                    {
+                      id: "video_1",
+                      start_s: 0,
+                      end_s: 8,
+                      data: {
+                        source_path: "outputs/videos/source.mp4",
+                        source_in_s: 0,
+                        source_out_s: 8,
+                        speed: 1,
+                        volume: 1,
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+      "POST /v1/projects/p1/timeline": (_path: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        return { ok: true, timeline: body.timeline || {} };
+      },
+      "POST /v1/projects/p1/timeline/render": (_path: string, init?: RequestInit) => {
+        renderRequests.push(init?.body ? JSON.parse(String(init.body)) : {});
+        return { ok: true, job: { id: `timeline-job-${renderRequests.length}` } };
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Media/ }));
+    const outputName = await screen.findByLabelText("Edited master output name") as HTMLInputElement;
+    fireEvent.change(outputName, { target: { value: "  Final: Cut?  " } });
+    fireEvent.blur(outputName);
+    expect(outputName.value).toBe("Final_ Cut_");
+
+    fireEvent.change(screen.getByLabelText("Output size preset"), { target: { value: "4320x7680" } });
+    expect((screen.getByLabelText("Output width") as HTMLInputElement).value).toBe("4320");
+    expect((screen.getByLabelText("Output height") as HTMLInputElement).value).toBe("7680");
+
+    fireEvent.change(screen.getByLabelText("Output FPS"), { target: { value: "119.88" } });
+    expect((screen.getByLabelText("Frame-rate preset") as HTMLSelectElement).value).toBe("custom");
+
+    fireEvent.change(screen.getByLabelText("Edited master video codec"), { target: { value: "prores" } });
+    expect(screen.getByText("PCM 16-bit")).toBeTruthy();
+    expect((screen.getByLabelText("Edited master CRF") as HTMLInputElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Render edited master" }));
+    await waitFor(() => expect(renderRequests).toHaveLength(1));
+    expect(renderRequests[0]).toMatchObject({
+      name: "Final_ Cut_",
+      width: 4320,
+      height: 7680,
+      fps: 119.88,
+      video_codec: "prores",
+      audio_codec: "pcm_s16le",
+    });
+    expect(renderRequests[0]).not.toHaveProperty("quality");
+
+    fireEvent.change(screen.getByLabelText("Edited master video codec"), { target: { value: "hevc" } });
+    expect(screen.getByText("AAC 192 kbps")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Edited master quality preset"), { target: { value: "low" } });
+    fireEvent.change(screen.getByLabelText("Edited master CRF"), { target: { value: "31" } });
+    fireEvent.click(screen.getByRole("button", { name: "Render edited master" }));
+    await waitFor(() => expect(renderRequests).toHaveLength(2));
+    expect(renderRequests[1]).toMatchObject({
+      video_codec: "hevc",
+      audio_codec: "aac",
+      quality: 31,
+    });
+  });
+
+  it("validates edited-master dimensions, FPS, quality, and name inline", async () => {
+    installEdmgBridge();
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Validation Test" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Validation Test",
+          meta: {
+            audio: { duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120 } },
+            timeline: {
+              duration_s: 8,
+              tracks: [
+                {
+                  id: "track_video",
+                  name: "Video Edit",
+                  type: "video",
+                  clips: [{ id: "video_1", start_s: 0, end_s: 8, data: { source_path: "outputs/videos/source.mp4" } }],
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+    fireEvent.click(await screen.findByRole("tab", { name: /Media/ }));
+    const renderButton = await screen.findByRole("button", { name: "Render edited master" }) as HTMLButtonElement;
+    const width = screen.getByLabelText("Output width") as HTMLInputElement;
+    const height = screen.getByLabelText("Output height") as HTMLInputElement;
+    const fps = screen.getByLabelText("Output FPS") as HTMLInputElement;
+    const quality = screen.getByLabelText("Edited master CRF") as HTMLInputElement;
+    const name = screen.getByLabelText("Edited master output name") as HTMLInputElement;
+
+    fireEvent.change(width, { target: { value: "1919" } });
+    expect((await screen.findAllByText("Width must be even for video encoding.")).length).toBeGreaterThan(0);
+    expect(renderButton.disabled).toBe(true);
+    fireEvent.change(width, { target: { value: "7680" } });
+
+    fireEvent.change(height, { target: { value: "7681" } });
+    expect((await screen.findAllByText("Height must be between 256 and 7680 pixels.")).length).toBeGreaterThan(0);
+    fireEvent.change(height, { target: { value: "7680" } });
+
+    fireEvent.change(fps, { target: { value: "121" } });
+    expect((await screen.findAllByText("FPS must be between 1 and 120. Decimal frame rates are supported.")).length).toBeGreaterThan(0);
+    fireEvent.change(fps, { target: { value: "120" } });
+
+    fireEvent.change(quality, { target: { value: "52" } });
+    expect((await screen.findAllByText("CRF must be a whole number between 1 and 51.")).length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText("Edited master video codec"), { target: { value: "prores" } });
+    expect(screen.queryByText("CRF must be a whole number between 1 and 51.")).toBeNull();
+    expect(renderButton.disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText("Edited master video codec"), { target: { value: "h264" } });
+    fireEvent.change(quality, { target: { value: "51" } });
+
+    fireEvent.change(name, { target: { value: "..." } });
+    fireEvent.blur(name);
+    expect((await screen.findAllByText("Enter a filename-safe output name.")).length).toBeGreaterThan(0);
+    expect(renderButton.disabled).toBe(true);
+
+    fireEvent.change(name, { target: { value: "portrait_8k_master" } });
+    expect(renderButton.disabled).toBe(false);
   });
 });

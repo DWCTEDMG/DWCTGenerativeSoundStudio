@@ -174,25 +174,90 @@ def test_diffusion_refine_invokes_img2img(tmp_path, monkeypatch):
     assert frame0.getpixel((10, 10)) == (255, 0, 0)
 
 
-def test_diffusion_refine_without_model_falls_back(tmp_path):
+def test_diffusion_refine_without_model_fails_instead_of_falling_back(tmp_path):
+    from edmg_studio_backend.errors import UserFacingError
+
     src = tmp_path / "src.png"
     _img(256, 144).save(src)
-    res = la.render_layered_animation(
-        ffmpeg_path="ffmpeg",
-        source_image_path=src,
-        out_dir=tmp_path / "out_norefine",
-        mode="parallax",
-        motion_schedule={"translation_x": "0:(0), 12:(30)"},
-        fps=6,
-        duration_s=1.0,
-        width=256,
-        height=144,
-        diffusion_refine=True,
-        refine_model_dir=None,  # no model -> graceful compositing-only
+    with pytest.raises(UserFacingError) as exc_info:
+        la.render_layered_animation(
+            ffmpeg_path="ffmpeg",
+            source_image_path=src,
+            out_dir=tmp_path / "out_norefine",
+            mode="parallax",
+            motion_schedule={"translation_x": "0:(0), 12:(30)"},
+            fps=6,
+            duration_s=1.0,
+            width=256,
+            height=144,
+            diffusion_refine=True,
+            refine_model_dir=None,
+        )
+    assert exc_info.value.code == "REFINEMENT_MODEL_NOT_INSTALLED"
+
+
+def test_diffusion_refine_runtime_failure_is_user_facing(tmp_path, monkeypatch):
+    from edmg_studio_backend.errors import UserFacingError
+
+    src = tmp_path / "src.png"
+    _img(256, 144).save(src)
+    model_dir = tmp_path / "fake_model"
+    model_dir.mkdir()
+    monkeypatch.setattr(iv, "_device_auto", lambda _preference: "cpu")
+    monkeypatch.setattr(
+        iv,
+        "_try_load_pipelines",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("runtime unavailable")),
     )
-    assert res["ok"] is True
-    assert res["diffusion_refined"] is False
-    assert res["refined_frames"] == 0
+
+    with pytest.raises(UserFacingError) as exc_info:
+        la.render_layered_animation(
+            ffmpeg_path="ffmpeg",
+            source_image_path=src,
+            out_dir=tmp_path / "out_runtime_failure",
+            mode="parallax",
+            motion_schedule={},
+            fps=6,
+            duration_s=1.0,
+            width=256,
+            height=144,
+            diffusion_refine=True,
+            refine_model_dir=model_dir,
+        )
+    assert exc_info.value.code == "REFINEMENT_RUNTIME_FAILED"
+
+
+def test_diffusion_refine_frame_failure_is_user_facing(tmp_path, monkeypatch):
+    from edmg_studio_backend.errors import UserFacingError
+
+    src = tmp_path / "src.png"
+    _img(256, 144).save(src)
+    model_dir = tmp_path / "fake_model"
+    model_dir.mkdir()
+    monkeypatch.setattr(iv, "_device_auto", lambda _preference: "cpu")
+    monkeypatch.setattr(iv, "_try_load_pipelines", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(iv, "_encode_prompt", lambda _pipes, prompt: prompt)
+    monkeypatch.setattr(
+        iv,
+        "_generate_img2img",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("frame failed")),
+    )
+
+    with pytest.raises(UserFacingError) as exc_info:
+        la.render_layered_animation(
+            ffmpeg_path="ffmpeg",
+            source_image_path=src,
+            out_dir=tmp_path / "out_frame_failure",
+            mode="parallax",
+            motion_schedule={},
+            fps=6,
+            duration_s=1.0,
+            width=256,
+            height=144,
+            diffusion_refine=True,
+            refine_model_dir=model_dir,
+        )
+    assert exc_info.value.code == "REFINEMENT_FRAME_FAILED"
 
 
 def test_render_layered_animation_segment(tmp_path):

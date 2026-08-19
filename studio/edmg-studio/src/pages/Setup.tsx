@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { apiGet, apiPost } from "../components/api";
+import { apiGet, apiPost, isRequestAbortError } from "../components/api";
 import { getDesktopPlatformKind, type DesktopPlatformKind } from "../components/desktopArtifacts";
 import { useAdaptivePolling } from "../hooks/useAdaptivePolling";
 
@@ -25,6 +25,11 @@ type StorageFieldConfig = {
   key: keyof StorageDraft;
   label: string;
   placeholder: string;
+};
+
+type InFlightRequest = {
+  promise: Promise<void>;
+  signal?: AbortSignal;
 };
 
 function normalizePlatformKind(rawPlatform: unknown): DesktopPlatformKind {
@@ -86,13 +91,14 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   const [busy, setBusy] = useState<string>("");
   const [err, setErr] = useState<string>("");
   const [statusLoading, setStatusLoading] = useState(false);
-  const statusRequestRef = useRef<Promise<void> | null>(null);
-  const catalogRequestRef = useRef<Promise<void> | null>(null);
+  const statusRequestRef = useRef<InFlightRequest | null>(null);
+  const catalogRequestRef = useRef<InFlightRequest | null>(null);
   const previousTaskStatesRef = useRef<string | null>(null);
   const previousTaskActiveRef = useRef(false);
 
   const loadStatus = useCallback((force = false, signal?: AbortSignal) => {
-    if (statusRequestRef.current) return statusRequestRef.current;
+    const currentRequest = statusRequestRef.current;
+    if (currentRequest && !currentRequest.signal?.aborted) return currentRequest.promise;
     setStatusLoading(true);
     const path = force ? "/v1/setup/status?refresh=true" : "/v1/setup/status";
     const request = apiGet(path, { signal, timeoutMs: 30_000 })
@@ -101,23 +107,28 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
         if (Array.isArray(payload?.tasks)) setTasks(payload.tasks);
       })
       .finally(() => {
-        statusRequestRef.current = null;
-        setStatusLoading(false);
+        if (statusRequestRef.current?.promise === request) {
+          statusRequestRef.current = null;
+          setStatusLoading(false);
+        }
       });
-    statusRequestRef.current = request;
+    statusRequestRef.current = { promise: request, signal };
     return request;
   }, []);
 
   const loadModelsCatalog = useCallback((signal?: AbortSignal) => {
-    if (catalogRequestRef.current) return catalogRequestRef.current;
+    const currentRequest = catalogRequestRef.current;
+    if (currentRequest && !currentRequest.signal?.aborted) return currentRequest.promise;
     const request = apiGet("/v1/models/catalog", { signal, timeoutMs: 30_000 })
       .then((payload) => {
         setModelsCatalog(payload);
       })
       .finally(() => {
-        catalogRequestRef.current = null;
+        if (catalogRequestRef.current?.promise === request) {
+          catalogRequestRef.current = null;
+        }
       });
-    catalogRequestRef.current = request;
+    catalogRequestRef.current = { promise: request, signal };
     return request;
   }, []);
 
@@ -184,7 +195,9 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
       loadModelsCatalog(controller.signal),
       loadStudioPaths(),
     ]).catch((error: any) => {
-      if (!controller.signal.aborted) setErr(String(error?.message ?? error));
+      if (!controller.signal.aborted && !isRequestAbortError(error)) {
+        setErr(String(error?.message ?? error));
+      }
     });
     return () => controller.abort();
   }, [loadModelsCatalog, loadStatus, loadStudioPaths]);

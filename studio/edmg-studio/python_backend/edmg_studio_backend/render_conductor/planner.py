@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 import uuid
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from ..schemas import (
     ProjectSnapshot,
     ProjectVisualDNA,
     RenderIntent,
+    RenderIntentSection,
     RenderPlan,
     RenderSectionPlan,
     RenderStep,
@@ -193,6 +195,30 @@ def _hero_frame(scene: dict[str, Any]) -> float:
     return 0.25
 
 
+def _apply_section_override(
+    scene: dict[str, Any],
+    override: RenderIntentSection | None,
+) -> tuple[dict[str, Any], bool]:
+    """Build the scene context used for planning without mutating the storyboard."""
+    effective_scene = dict(scene)
+    timing_overridden = False
+    if override is None:
+        return effective_scene, timing_overridden
+
+    start_s = float(override.start_s)
+    end_s = float(override.end_s)
+    if math.isfinite(start_s) and math.isfinite(end_s) and end_s > start_s:
+        effective_scene["start_s"] = start_s
+        effective_scene["end_s"] = end_s
+        timing_overridden = True
+
+    creative_goal = str(override.creative_goal or "").strip()
+    if creative_goal:
+        effective_scene["creative_goal"] = creative_goal
+
+    return effective_scene, timing_overridden
+
+
 def _engine_bias_from_dna(
     dna: ProjectVisualDNA | None,
     engine: str,
@@ -232,9 +258,10 @@ def _engine_score(
     dna: ProjectVisualDNA | None,
     engine_info: dict[str, Any],
     scene: dict[str, Any],
+    speed_priority: float | None = None,
     environment: dict[str, Any] | None = None,
 ) -> float:
-    speed = float(intent.speed_priority)
+    speed = float(intent.speed_priority if speed_priority is None else speed_priority)
     style_lock = float(intent.style_lock_strength)
     quality_bonus = (float(_quality_multiplier(intent)) - 1.0) * 0.12
     has_reference = bool(scene.get("reference_asset") or scene.get("source_asset"))
@@ -358,7 +385,11 @@ def _section_steps(
             id=f"{scene_id}-prepare",
             kind="prepare_assets",
             adapter="system",
-            inputs={"scene_id": scene_id, "duration_s": duration_s},
+            inputs={
+                "scene_id": scene_id,
+                "duration_s": duration_s,
+                "aspect_ratio": intent.aspect_ratio,
+            },
             outputs={"asset_bundle": f"scene:{scene_id}:assets"},
             notes=["Resolve audio-reactive context, overlays, and references before engine routing."],
         ),
@@ -366,7 +397,12 @@ def _section_steps(
             id=f"{scene_id}-prompt",
             kind="build_prompt",
             adapter="system",
-            inputs={"scene_prompt": scene.get("prompt"), "dna_hints": prompt_hints},
+            inputs={
+                "scene_prompt": scene.get("prompt"),
+                "creative_goal": scene.get("creative_goal"),
+                "dna_hints": prompt_hints,
+                "aspect_ratio": intent.aspect_ratio,
+            },
             outputs={"prompt_bundle": f"scene:{scene_id}:prompt"},
             notes=["Blend project DNA into the prompt bundle without mutating the saved storyboard."],
         ),
@@ -377,7 +413,11 @@ def _section_steps(
                 id=f"{scene_id}-still",
                 kind="render_still",
                 adapter=engine,
-                inputs={"scene_id": scene_id, "duration_s": duration_s},
+                inputs={
+                    "scene_id": scene_id,
+                    "duration_s": duration_s,
+                    "aspect_ratio": intent.aspect_ratio,
+                },
                 outputs={"anchor_frames": f"scene:{scene_id}:anchors"},
                 notes=["Use still anchors when the scene benefits from reference-driven hero framing."],
             )
@@ -398,7 +438,11 @@ def _section_steps(
                 id=f"{scene_id}-motion",
                 kind="render_motion",
                 adapter=engine,
-                inputs={"scene_id": scene_id, "duration_s": duration_s},
+                inputs={
+                    "scene_id": scene_id,
+                    "duration_s": duration_s,
+                    "aspect_ratio": intent.aspect_ratio,
+                },
                 outputs={"clip": f"scene:{scene_id}:clip"},
                 notes=["Scene routes through the selected motion-capable engine in advisory mode."],
             )
@@ -477,13 +521,20 @@ def build_advisory_render_plan(
     for index, scene in enumerate(scenes):
         scene_id = _scene_id(scene, index)
         override = section_lookup.get(scene_id)
-        duration_s = max(0.5, float(scene.get("end_s") or 0.0) - float(scene.get("start_s") or 0.0))
-        energy = _scene_energy(scene, snapshot_obj)
-        motion_complexity = _motion_complexity(scene, energy)
-        continuity_priority = _continuity_priority(scene, intent_obj, dna)
+        effective_scene, timing_overridden = _apply_section_override(scene, override)
+        start_s = float(effective_scene.get("start_s") or 0.0)
+        end_s = float(effective_scene.get("end_s") or 0.0)
+        duration_s = max(0.5, end_s - start_s)
+        music_midpoint_s = (start_s + end_s) / 2.0
+        energy = _scene_energy(effective_scene, snapshot_obj)
+        motion_complexity = _motion_complexity(effective_scene, energy)
+        continuity_priority = _continuity_priority(effective_scene, intent_obj, dna)
         if override and override.continuity_priority is not None:
             continuity_priority = _clamp_unit(override.continuity_priority, continuity_priority)
-        hero_frame = _hero_frame(scene)
+        speed_priority = float(intent_obj.speed_priority)
+        if override and override.speed_priority is not None:
+            speed_priority = _clamp_unit(override.speed_priority, speed_priority)
+        hero_frame = _hero_frame(effective_scene)
 
         chosen_engine: EngineKind | None = None
         chosen_score = -1.0
@@ -499,7 +550,8 @@ def build_advisory_render_plan(
                 intent=intent_obj,
                 dna=dna,
                 engine_info=engines.get(engine, {"available": False}),
-                scene=scene,
+                scene=effective_scene,
+                speed_priority=speed_priority,
                 environment=environment,
             )
             if score > chosen_score:
@@ -528,7 +580,7 @@ def build_advisory_render_plan(
         if override and override.creative_goal:
             rationale_parts.append(f"creative goal: {override.creative_goal}")
         steps = _section_steps(
-            scene={**scene, "id": scene_id},
+            scene={**effective_scene, "id": scene_id},
             engine=chosen_engine,
             continuity_priority=continuity_priority,
             intent=intent_obj,
@@ -540,6 +592,19 @@ def build_advisory_render_plan(
             continuity_priority=continuity_priority,
             style_lock=float(intent_obj.style_lock_strength),
         )
+        section_notes = [
+            f"energy={energy:.2f}",
+            f"motion_complexity={motion_complexity:.2f}",
+            f"continuity_priority={continuity_priority:.2f}",
+            f"speed_priority={speed_priority:.2f}",
+            f"duration_s={duration_s:.3f}",
+            f"music_midpoint_s={music_midpoint_s:.3f}",
+        ]
+        if timing_overridden:
+            section_notes.append(f"intent_timing={start_s:.3f}-{end_s:.3f}")
+        if override:
+            section_notes.extend(note.strip() for note in override.notes if note.strip())
+
         plans.append(
             RenderSectionPlan(
                 scene_id=scene_id,
@@ -549,20 +614,28 @@ def build_advisory_render_plan(
                 estimated_seconds=round(float(estimated_seconds), 1),
                 continuity_risk=round(float(continuity_risk), 3),
                 steps=steps,
-                notes=[
-                    f"energy={energy:.2f}",
-                    f"motion_complexity={motion_complexity:.2f}",
-                    f"continuity_priority={continuity_priority:.2f}",
-                ],
+                notes=section_notes,
             )
         )
-        fallback = _fallback_engine(chosen_engine, engines, intent_obj)
+        fallback = None
+        if intent_obj.fallback_policy != "strict":
+            fallback = _fallback_engine(chosen_engine, engines, intent_obj)
         if fallback is not None:
+            if intent_obj.fallback_policy == "manual":
+                fallback_notes = (
+                    f"Manual approval is required before rerouting this scene to {fallback}; "
+                    "the conductor will not switch engines automatically."
+                )
+            else:
+                fallback_notes = (
+                    f"Automatically reroute this scene to {fallback} if the recommended adapter "
+                    "is unavailable when the plan is executed."
+                )
             fallbacks.append(
                 FallbackBranch(
                     trigger=f"{scene_id}:{chosen_engine}:unavailable",
                     reroute_to=fallback,
-                    notes=f"Fallback to {fallback} if the recommended adapter is unavailable when the plan is executed.",
+                    notes=fallback_notes,
                 )
             )
         engine_counts[chosen_engine] = engine_counts.get(chosen_engine, 0) + 1
@@ -570,6 +643,8 @@ def build_advisory_render_plan(
     engine_summary = ", ".join(f"{engine} x{count}" for engine, count in sorted(engine_counts.items()))
     diagnostics = [
         "advisory_only=true",
+        f"fallback_policy={intent_obj.fallback_policy}",
+        f"aspect_ratio={intent_obj.aspect_ratio}",
         f"allowed_engines={','.join(intent_obj.allowed_engines)}",
         f"available_engines={','.join(engine for engine, info in engines.items() if info.get('available'))}",
         f"music_graph_schema={music_graph.get('schemaVersion') or 'unknown'}",

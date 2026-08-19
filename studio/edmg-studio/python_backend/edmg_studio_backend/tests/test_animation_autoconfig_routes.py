@@ -299,6 +299,45 @@ def test_animate_layers_parallax_launches_job(tmp_path, monkeypatch):
         assert data["job"]["payload"]["motion_schedule"]  # AI-built motion schedule
 
 
+def test_animate_layers_rejects_odd_dimensions_before_queue(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    ref = _upload_ref_image(store, proj)
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/animate_layers",
+            json={"source_asset": ref, "width": 769, "height": 432},
+        )
+
+    assert resp.status_code == 422
+    assert jobs.list_for_project(proj.id) == []
+
+
+def test_animate_layers_requires_refinement_model_before_queue(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    _patch(monkeypatch, store, jobs)
+    ref = _upload_ref_image(store, proj)
+    monkeypatch.setattr(backend_app, "_hardware_profile", lambda: {"device_preference": "cpu"})
+    monkeypatch.setattr(
+        backend_app,
+        "_resolve_installed_model_path",
+        lambda _model_id, *, materialize_remote: None,
+    )
+    with TestClient(backend_app.app) as client:
+        resp = client.post(
+            f"/v1/projects/{proj.id}/render/animate_layers",
+            json={
+                "source_asset": ref,
+                "diffusion_refine": True,
+                "model_id": "missing_internal_model",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "REFINEMENT_MODEL_NOT_INSTALLED"
+    assert jobs.list_for_project(proj.id) == []
+
+
 def test_animate_layers_masked_requires_mask(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     _patch(monkeypatch, store, jobs)

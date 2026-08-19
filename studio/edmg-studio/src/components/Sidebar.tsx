@@ -31,7 +31,7 @@ export default function Sidebar({
     navGroups.flatMap((group) => group.items).find((item) => item.page === page) || null;
 
   return (
-    <div className="sidebar">
+    <nav className="sidebar" aria-label="Studio screens and tools">
       <div className="sidebar-brandBlock">
         <div className="sidebar-logoShell">
           <img
@@ -53,11 +53,11 @@ export default function Sidebar({
         type="button"
         className="secondary sidebar-commandButton"
         onClick={onOpenCommandPalette}
-        aria-label="Search Studio screens and actions"
+        aria-label="Search Studio screens and tools"
       >
         <Search size={15} aria-hidden="true" />
         <span>Search Studio</span>
-        <kbd>Ctrl K</kbd>
+        <kbd>Ctrl/⌘ K</kbd>
       </button>
 
       <div className="sidebar-focusCard">
@@ -90,10 +90,12 @@ export default function Sidebar({
                 {group.items.map((item) => (
                   <button
                     key={item.page}
+                    type="button"
                     onClick={() => onNavigate(item.page)}
                     onMouseEnter={() => preloadNavigationIntent(item.page)}
                     onFocus={() => preloadNavigationIntent(item.page)}
                     className={`sidebar-navButton${page === item.page ? " is-active" : ""}`}
+                    aria-current={page === item.page ? "page" : undefined}
                   >
                     <span className="sidebar-navCopy">
                       <span className="sidebar-navText">{item.label}</span>
@@ -112,6 +114,6 @@ export default function Sidebar({
         <span className="badge">Ollama 11434</span>
         <span className="badge">ComfyUI 8188</span>
       </div>
-    </div>
+    </nav>
   );
 }

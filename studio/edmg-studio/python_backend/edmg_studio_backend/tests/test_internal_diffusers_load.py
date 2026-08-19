@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -139,6 +140,88 @@ def test_reraise_snapshot_load_error_wraps_git_lfs_message(tmp_path: Path) -> No
             tmp_path,
         )
     assert exc.value.code == "MODEL_SNAPSHOT_LFS_POINTER"
+
+
+def test_diffusers_runtime_loads_only_selected_sd15_pipeline_family(monkeypatch) -> None:
+    requested: list[str] = []
+    torch = SimpleNamespace(float16="float16", float32="float32")
+
+    class FakeDiffusers:
+        def __getattr__(self, name: str):
+            requested.append(name)
+            if name.startswith("StableDiffusion3") or name.startswith("StableDiffusionXL"):
+                raise RuntimeError(f"unrelated optional pipeline {name} is unavailable")
+            return type(name, (), {})
+
+    diffusers = FakeDiffusers()
+
+    def _import_module(name: str):
+        if name == "torch":
+            return torch
+        if name == "diffusers":
+            return diffusers
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(iv.importlib, "import_module", _import_module)
+
+    loaded_torch, txt2img, img2img, inpaint = iv._load_diffusers_runtime("sd15")
+
+    assert loaded_torch is torch
+    assert [txt2img.__name__, img2img.__name__, inpaint.__name__] == [
+        "StableDiffusionPipeline",
+        "StableDiffusionImg2ImgPipeline",
+        "StableDiffusionInpaintPipeline",
+    ]
+    assert requested == [
+        "StableDiffusionPipeline",
+        "StableDiffusionImg2ImgPipeline",
+        "StableDiffusionInpaintPipeline",
+    ]
+
+
+def test_diffusers_runtime_reports_exact_selected_pipeline_import_failure(monkeypatch) -> None:
+    torch = SimpleNamespace(float16="float16", float32="float32")
+
+    class BrokenDiffusers:
+        def __getattr__(self, name: str):
+            if name == "StableDiffusionImg2ImgPipeline":
+                raise RuntimeError("optional image processor import failed")
+            return type(name, (), {})
+
+    def _import_module(name: str):
+        if name == "torch":
+            return torch
+        if name == "diffusers":
+            return BrokenDiffusers()
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(iv.importlib, "import_module", _import_module)
+
+    with pytest.raises(iv.UserFacingError) as exc:
+        iv._load_diffusers_runtime("sd15")
+
+    assert exc.value.code == "INTERNAL_DEPS"
+    assert str(exc.value) == "Internal SD 1.5 pipeline is unavailable"
+    assert "StableDiffusionImg2ImgPipeline" in exc.value.hint
+    assert "RuntimeError: optional image processor import failed" in exc.value.hint
+    assert isinstance(exc.value.__cause__, RuntimeError)
+
+
+def test_diffusers_runtime_reports_exact_torch_import_failure(monkeypatch) -> None:
+    def _import_module(name: str):
+        if name == "torch":
+            raise OSError("required runtime DLL could not be loaded")
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(iv.importlib, "import_module", _import_module)
+
+    with pytest.raises(iv.UserFacingError) as exc:
+        iv._load_diffusers_runtime("sd15")
+
+    assert exc.value.code == "INTERNAL_DEPS"
+    assert str(exc.value) == "Internal diffusion runtime could not load Torch"
+    assert "OSError: required runtime DLL could not be loaded" in exc.value.hint
+    assert isinstance(exc.value.__cause__, OSError)
 
 
 def test_missing_diffusers_components_reports_vae(tmp_path, monkeypatch) -> None:

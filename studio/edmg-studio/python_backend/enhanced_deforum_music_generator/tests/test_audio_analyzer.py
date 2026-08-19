@@ -1,5 +1,15 @@
+import platform
+
+import pytest
+
 from enhanced_deforum_music_generator.config.config_system import AudioConfig
 from enhanced_deforum_music_generator.core.audio_analyzer import AudioAnalyzer
+
+
+pytestmark = pytest.mark.skipif(
+    platform.system().strip().lower() == "windows",
+    reason="Windows Studio uses the FFmpeg/NumPy analyzer because Librosa's native JIT can terminate the process.",
+)
 
 
 def test_audio_analyzer_runs_on_committed_test_audio_file(test_audio_file):

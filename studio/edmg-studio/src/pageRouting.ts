@@ -270,6 +270,10 @@ export function getPageLoadingDetails(page: Page): { label: string; detail: stri
   return { label: PAGE_LABELS[page], detail: PAGE_LOADING_DETAILS[page] };
 }
 
+export function getPageDocumentTitle(page: Page): string {
+  return `${PAGE_LABELS[page]} | EDMG Studio`;
+}
+
 export function getPagesToPreload(page: Page): Page[] {
   return PRELOAD_BY_PAGE[page];
 }

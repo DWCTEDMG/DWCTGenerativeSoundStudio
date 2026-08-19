@@ -41,13 +41,16 @@ export function StudioCommandPalette({
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const shouldRestoreFocusRef = useRef(true);
 
   const items = useMemo<PaletteItem[]>(
     () =>
       getStudioNavigationGroups().flatMap((group) =>
         group.items.map((item) => ({ ...item, groupLabel: group.label })),
       ),
-    [open],
+    [],
   );
   const results = useMemo(() => {
     const normalized = normalizeSearch(query);
@@ -60,10 +63,17 @@ export function StudioCommandPalette({
 
   useEffect(() => {
     if (!open) return;
+    previouslyFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    shouldRestoreFocusRef.current = true;
     setQuery("");
     setActiveIndex(0);
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      if (shouldRestoreFocusRef.current) previouslyFocusedRef.current?.focus();
+      previouslyFocusedRef.current = null;
+    };
   }, [open]);
 
   useEffect(() => {
@@ -73,19 +83,46 @@ export function StudioCommandPalette({
   if (!open) return null;
 
   const choose = (page: Page) => {
+    shouldRestoreFocusRef.current = false;
     onNavigate(page);
     onClose();
+  };
+
+  const keepFocusInDialog = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        'input:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    ).filter((element) => element.getAttribute("aria-hidden") !== "true");
+    if (!focusable.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
   };
 
   return (
     <div className="studio-commandBackdrop" role="presentation" onMouseDown={onClose}>
       <div
+        ref={dialogRef}
         className="studio-commandPalette"
         role="dialog"
         aria-modal="true"
-        aria-label="Search Studio"
+        aria-label="Search Studio screens and tools"
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
+          keepFocusInDialog(event);
+          if (event.defaultPrevented) return;
           if (event.key === "Escape") {
             event.preventDefault();
             onClose();
@@ -110,7 +147,7 @@ export function StudioCommandPalette({
               setQuery(event.target.value);
               setActiveIndex(0);
             }}
-            aria-label="Search Studio screens and capabilities"
+            aria-label="Search Studio screens and tools"
             placeholder="Find timeline editing, render settings, models, outputs..."
           />
           <button className="secondary studio-commandClose" type="button" onClick={onClose} aria-label="Close Studio search">
@@ -120,14 +157,13 @@ export function StudioCommandPalette({
         <div className="studio-commandHint">
           Search by what you want to do. Use ↑ ↓ to choose and Enter to open.
         </div>
-        <div className="studio-commandResults" role="listbox" aria-label="Studio screens">
+        <div className="studio-commandResults" aria-label="Studio screens and tools">
           {results.length ? (
             results.map((item, index) => (
               <button
                 key={item.page}
                 type="button"
-                role="option"
-                aria-selected={index === activeIndex}
+                aria-current={item.page === activePage ? "page" : undefined}
                 className={`studio-commandResult${index === activeIndex ? " is-active" : ""}`}
                 onMouseEnter={() => {
                   setActiveIndex(index);

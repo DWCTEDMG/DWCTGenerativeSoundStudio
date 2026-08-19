@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Models from "../pages/Models";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
@@ -19,6 +19,35 @@ const catalog = {
   cloud: {},
   storage_mode: "local_cache",
 };
+
+function installStrictModeAbortFetchMock() {
+  const callCounts = new Map<string, number>();
+  const payloads: Record<string, unknown> = {
+    "/v1/models/catalog": catalog,
+    "/v1/models/tasks": { tasks: [] },
+    "/v1/settings/render_providers": {},
+  };
+  const abortOnce = new Set(["/v1/models/catalog", "/v1/settings/render_providers"]);
+  const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input instanceof Request ? input.url : input)).pathname;
+    const callCount = (callCounts.get(path) ?? 0) + 1;
+    callCounts.set(path, callCount);
+    if (abortOnce.has(path) && callCount === 1) {
+      return new Promise<Response>((_resolve, reject) => {
+        const rejectAbort = () => reject(new DOMException("signal is aborted without reason", "AbortError"));
+        if (init?.signal?.aborted) rejectAbort();
+        else init?.signal?.addEventListener("abort", rejectAbort, { once: true });
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => payloads[path],
+    } as Response);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { callCounts, fetchMock };
+}
 
 const readyLegacyTensorRt = {
   legacy: {
@@ -95,6 +124,24 @@ describe("Models page polling", () => {
     expect(paths.filter((path) => path === "/v1/models/catalog")).toHaveLength(1);
     expect(paths.filter((path) => path === "/v1/settings/render_providers")).toHaveLength(1);
     expect(paths.filter((path) => path === "/v1/models/tasks")).toHaveLength(1);
+  });
+
+  it("restarts canceled StrictMode loads without showing an abort as an error", async () => {
+    vi.useRealTimers();
+    const { callCounts } = installStrictModeAbortFetchMock();
+
+    renderWithStudio(
+      <React.StrictMode>
+        <Models backendUrl="http://127.0.0.1:7863" config={{}} />
+      </React.StrictMode>,
+    );
+
+    expect(await screen.findByText("local + cache", { selector: "b" })).toBeTruthy();
+    await waitFor(() => {
+      expect(callCounts.get("/v1/models/catalog")).toBe(2);
+      expect(callCounts.get("/v1/settings/render_providers")).toBe(2);
+    });
+    expect(screen.queryByText(/signal is aborted without reason/i)).toBeNull();
   });
 
   it("shows stage and progress in the default basic UI mode", async () => {

@@ -44,7 +44,7 @@ def main() -> int:
         env["EDMG_UV_BIN"] = str(uv)
         print(f"[launcher] frozen uv profile: {profile}")
         return int(
-            subprocess.run(command, cwd=STUDIO_ROOT, env=env, check=False).returncode
+            subprocess.run(command, cwd=BACKEND_ROOT, env=env, check=False).returncode
         )
     except ToolchainError as exc:
         print(f"EDMG Studio toolchain setup failed: {exc}", file=sys.stderr)

@@ -121,6 +121,30 @@ export function RenderControlCenter({
   const selectedGoal = GOALS.find((option) => option.id === goal) || GOALS[0];
   const selectedModel = models.find((model) => model.id === modelId);
   const selectedRoute = routeOptions.find((option) => option.value === route);
+  const showQuality = goal !== "edit";
+  const showRenderer = goal === "full_video";
+  const showModel = goal === "full_video" || goal === "motion_ad" || goal === "motion_svd" || goal === "stills";
+  const showOutputFps = goal === "full_video" || goal === "motion_ad" || goal === "motion_svd";
+  const showResolution = showModel;
+  const showTimelineCamera = goal === "full_video";
+  const modelLabel = goal === "motion_ad"
+    ? "AnimateDiff base model"
+    : goal === "motion_svd"
+      ? "SVD model"
+      : goal === "stills"
+        ? "Still model"
+        : "Keyframe model";
+  const statusLabel = goal === "auto"
+    ? "Orchestrator · best real route"
+    : goal === "motion_ad"
+      ? "ComfyUI · AnimateDiff"
+      : goal === "motion_svd"
+        ? "ComfyUI · SVD"
+        : goal === "stills"
+          ? "Still-image workflow"
+          : goal === "edit"
+            ? "Timeline · non-destructive edit"
+            : selectedRoute?.label || route;
 
   return (
     <section className="render-controlCenter" aria-labelledby="render-control-center-title">
@@ -135,7 +159,7 @@ export function RenderControlCenter({
         </div>
         <div className="render-controlCenterStatus">
           <span>Current route</span>
-          <strong>{selectedRoute?.label || route}</strong>
+          <strong>{statusLabel}</strong>
           <small>Proxy substitution is off. Renders use an installed model or a configured provider.</small>
         </div>
       </div>
@@ -162,8 +186,16 @@ export function RenderControlCenter({
         })}
       </div>
 
+      {goal === "edit" ? (
+        <div className="render-quickSettings" role="status">
+          <div className="small">
+            Open Timeline to place completed renders on video lanes, split and trim clips, change speed, audio,
+            and fades, then export a new master without changing the source files.
+          </div>
+        </div>
+      ) : (
       <div className="render-quickSettings">
-        <label>
+        {showQuality ? <label>
           <span>Quality</span>
           <select value={quality} onChange={(event) => onQualityChange(event.target.value as RenderQuickQuality)}>
             <option value="fast">Fast draft</option>
@@ -172,8 +204,8 @@ export function RenderControlCenter({
             <option value="ultra">Ultra / final</option>
           </select>
           <small>Adjusts the main preset, internal tier, steps, and sampling pace.</small>
-        </label>
-        <label>
+        </label> : null}
+        {showRenderer ? <label>
           <span>Renderer</span>
           <select value={route} onChange={(event) => onRouteChange(event.target.value)}>
             {routeOptions.map((option) => (
@@ -181,9 +213,9 @@ export function RenderControlCenter({
             ))}
           </select>
           <small>Only real local or configured hosted routes appear here.</small>
-        </label>
-        <label>
-          <span>Keyframe model</span>
+        </label> : null}
+        {showModel ? <label>
+          <span>{modelLabel}</span>
           <select value={modelId} onChange={(event) => onModelChange(event.target.value)}>
             <option value="auto">Auto from installed models</option>
             {models.map((model) => (
@@ -193,15 +225,21 @@ export function RenderControlCenter({
             ))}
           </select>
           <small>{selectedModel ? (selectedModel.installed ? "Installed and ready." : "Install this model before rendering.") : "Hardware-aware automatic choice."}</small>
-        </label>
-        <label>
+        </label> : null}
+        {showOutputFps ? <label>
           <span>Output frame rate</span>
-          <select value={outputFps} onChange={(event) => onOutputFpsChange(Number(event.target.value))}>
-            {[12, 15, 24, 25, 30, 48, 50, 60].map((fps) => <option key={fps} value={fps}>{fps} fps</option>)}
-          </select>
+          <input
+            aria-label="Output frame rate"
+            type="number"
+            min={1}
+            max={60}
+            step={1}
+            value={outputFps}
+            onChange={(event) => onOutputFpsChange(Math.max(1, Math.min(60, Number(event.target.value) || 1)))}
+          />
           <small>Final delivery rate; internal generation can stay lower.</small>
-        </label>
-        <label>
+        </label> : null}
+        {showResolution ? <label>
           <span>Still / keyframe size</span>
           <select
             value={`${width}x${height}`}
@@ -215,15 +253,15 @@ export function RenderControlCenter({
             <option value="1280x720">1280 × 720 · HD</option>
             <option value="1920x1080">1920 × 1080 · Full HD</option>
             <option value="1024x1024">1024 × 1024 · square</option>
-            <option value="1080x1350">1080 × 1350 · portrait</option>
-            <option value="1080x1920">1080 × 1920 · vertical</option>
+            <option value="864x1080">864 × 1080 · portrait</option>
+            <option value="576x1024">576 × 1024 · vertical</option>
             {![
-              "768x432", "1024x576", "1280x720", "1920x1080", "1024x1024", "1080x1350", "1080x1920",
+              "768x432", "1024x576", "1280x720", "1920x1080", "1024x1024", "864x1080", "576x1024",
             ].includes(`${width}x${height}`) ? <option value={`${width}x${height}`}>{width} × {height} · custom</option> : null}
           </select>
           <small>Used by still workflows and generated video keyframes.</small>
-        </label>
-        <label className="render-quickToggle">
+        </label> : null}
+        {showTimelineCamera ? <label className="render-quickToggle">
           <span>Timeline motion</span>
           <span className="render-switchRow">
             <input
@@ -234,15 +272,19 @@ export function RenderControlCenter({
             Apply Timeline camera after model generation
           </span>
           <small>Keeps zoom, pan, depth, pitch, yaw, roll, and rotation authored in Timeline.</small>
-        </label>
+        </label> : null}
       </div>
+      )}
 
       <div className="render-controlCenterFooter">
         <div className="render-controlCenterSummary">
           <SlidersHorizontal size={17} aria-hidden="true" />
           <span>
-            <strong>{selectedGoal.label}</strong> · {quality} · {outputFps} fps · {width}×{height}
-            {timelineCamera ? " · Timeline motion on" : " · Timeline motion off"}
+            <strong>{selectedGoal.label}</strong>
+            {showQuality ? ` · ${quality}` : ""}
+            {showOutputFps ? ` · ${outputFps} fps` : ""}
+            {showResolution ? ` · ${width}×${height}` : ""}
+            {showTimelineCamera ? (timelineCamera ? " · Timeline motion on" : " · Timeline motion off") : ""}
           </span>
         </div>
         <div className="render-controlCenterActions">

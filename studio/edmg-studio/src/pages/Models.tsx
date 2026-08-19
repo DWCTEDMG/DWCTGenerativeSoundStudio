@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiGet, apiPost } from "../components/api";
+import { apiGet, apiPost, isRequestAbortError } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
@@ -38,6 +38,11 @@ type CatalogPayload = {
   storage_mode?: string;
   model_cache?: string | null;
   tensorrt_migration?: TensorRtMigrationStatus;
+};
+
+type InFlightRequest = {
+  promise: Promise<void>;
+  signal?: AbortSignal;
 };
 
 type TensorRtEngineFileStatus = {
@@ -580,8 +585,8 @@ export default function Models(props: PageProps) {
   const [renderProviders, setRenderProviders] = useState<any>(null);
   const [err, setErr] = useState<string>("");
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const catalogRequestRef = useRef<Promise<void> | null>(null);
-  const providersRequestRef = useRef<Promise<void> | null>(null);
+  const catalogRequestRef = useRef<InFlightRequest | null>(null);
+  const providersRequestRef = useRef<InFlightRequest | null>(null);
   const previousTaskStatesRef = useRef<string | null>(null);
 
   const [civitaiUrl, setCivitaiUrl] = useState("");
@@ -597,30 +602,36 @@ export default function Models(props: PageProps) {
   const [hubError, setHubError] = useState<string>("");
 
   const loadCatalog = useCallback((signal?: AbortSignal) => {
-    if (catalogRequestRef.current) return catalogRequestRef.current;
+    const currentRequest = catalogRequestRef.current;
+    if (currentRequest && !currentRequest.signal?.aborted) return currentRequest.promise;
     setCatalogLoading(true);
     const request = apiGet("/v1/models/catalog", { signal, timeoutMs: 30_000 })
       .then((payload) => {
         setData(payload as CatalogPayload);
       })
       .finally(() => {
-        catalogRequestRef.current = null;
-        setCatalogLoading(false);
+        if (catalogRequestRef.current?.promise === request) {
+          catalogRequestRef.current = null;
+          setCatalogLoading(false);
+        }
       });
-    catalogRequestRef.current = request;
+    catalogRequestRef.current = { promise: request, signal };
     return request;
   }, []);
 
   const loadRenderProviders = useCallback((signal?: AbortSignal) => {
-    if (providersRequestRef.current) return providersRequestRef.current;
+    const currentRequest = providersRequestRef.current;
+    if (currentRequest && !currentRequest.signal?.aborted) return currentRequest.promise;
     const request = apiGet("/v1/settings/render_providers", { signal, timeoutMs: 15_000 })
       .then((payload) => {
         setRenderProviders(payload);
       })
       .finally(() => {
-        providersRequestRef.current = null;
+        if (providersRequestRef.current?.promise === request) {
+          providersRequestRef.current = null;
+        }
       });
-    providersRequestRef.current = request;
+    providersRequestRef.current = { promise: request, signal };
     return request;
   }, []);
 
@@ -693,7 +704,9 @@ export default function Models(props: PageProps) {
       loadCatalog(controller.signal),
       loadRenderProviders(controller.signal),
     ]).catch((error: any) => {
-      if (!controller.signal.aborted) setErr(String(error?.message ?? error));
+      if (!controller.signal.aborted && !isRequestAbortError(error)) {
+        setErr(String(error?.message ?? error));
+      }
     });
     return () => controller.abort();
   }, [loadCatalog, loadRenderProviders]);

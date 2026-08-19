@@ -316,11 +316,10 @@ def render_layered_animation(
 ) -> dict[str, Any]:
     """Render an object/layer animation to MP4.
 
-    Base compositing needs no model. When ``diffusion_refine`` is set and a
-    ``refine_model_dir`` resolves to an installed diffusers model, each composited
-    frame is passed through img2img at ``refine_denoise`` to clean seams, fill
-    disocclusion gaps generatively, and let ``refine_prompt`` restyle the moving
-    objects. If the model can't load, it degrades gracefully to compositing-only.
+    Base compositing needs no model. When ``diffusion_refine`` is set, every
+    composited frame must pass through the requested img2img model. A missing
+    model or refinement runtime is reported as a user-facing failure instead of
+    silently returning a compositor-only result.
     """
     _require_pillow()
     src = Image.open(source_image_path).convert("RGB")
@@ -339,27 +338,37 @@ def render_layered_animation(
     # Optional diffusion refinement (reuses the internal engine's pipelines).
     pipes = None
     refine_active = False
-    if diffusion_refine and refine_model_dir is not None:
+    pe = ne = None
+    if diffusion_refine:
+        if refine_model_dir is None:
+            raise UserFacingError(
+                "Diffusion refinement model is not installed",
+                hint="Install or select a downloaded internal image model in Models, then retry the layered animation.",
+                code="REFINEMENT_MODEL_NOT_INSTALLED",
+                status_code=400,
+            )
         try:
             device = iv._device_auto(refine_device)
             pipes = iv._try_load_pipelines(Path(refine_model_dir), device=device)
+            pe = iv._encode_prompt(pipes, refine_prompt or "cinematic")
+            ne = iv._encode_prompt(pipes, refine_negative or "")
             refine_active = True
             if log_fn:
                 log_fn(f"Diffusion refine enabled (model={Path(refine_model_dir).name}, device={device})")
+        except UserFacingError:
+            raise
         except Exception as exc:  # pragma: no cover - depends on runtime model
-            if log_fn:
-                log_fn(f"Diffusion refine unavailable ({exc}); compositing only")
-    elif diffusion_refine and refine_model_dir is None and log_fn:
-        log_fn("Diffusion refine requested but no model installed; compositing only")
+            raise UserFacingError(
+                "Diffusion refinement could not start",
+                hint="Check that the selected model supports img2img and that its selected runtime is installed, then retry.",
+                code="REFINEMENT_RUNTIME_FAILED",
+                status_code=500,
+            ) from exc
 
     frames_dir = out_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
     total = max(1, int(round(float(duration_s) * int(fps))))
     refined_frames = 0
-    pe = ne = None
-    if refine_active:
-        pe = iv._encode_prompt(pipes, refine_prompt or "cinematic")
-        ne = iv._encode_prompt(pipes, refine_negative or "")
 
     for fi in range(total):
         if cancel_check_fn:
@@ -382,9 +391,15 @@ def render_layered_animation(
                     strength=max(0.05, min(0.95, float(refine_denoise))),
                 ).convert("RGB")
                 refined_frames += 1
+            except UserFacingError:
+                raise
             except Exception as exc:  # pragma: no cover - depends on runtime model
-                if log_fn:
-                    log_fn(f"Refine failed on frame {fi} ({exc}); using composite")
+                raise UserFacingError(
+                    f"Diffusion refinement failed on frame {fi + 1}",
+                    hint="The layered composite was not returned as a refined render. Check the model/runtime and retry, or turn refinement off for compositor-only output.",
+                    code="REFINEMENT_FRAME_FAILED",
+                    status_code=500,
+                ) from exc
         frame.save(frames_dir / f"frame_{fi:06d}.png")
         if progress_fn and (fi % max(1, total // 20 or 1) == 0):
             progress_fn("frames", fi + 1, total, f"{'Refined' if refine_active else 'Composited'} frame {fi + 1}/{total}")

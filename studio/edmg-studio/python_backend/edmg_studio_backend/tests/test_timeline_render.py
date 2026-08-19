@@ -72,6 +72,32 @@ def _video_file(project_dir: Path, name: str = "clip.mp4") -> Path:
     return source
 
 
+def test_outputs_include_nested_layered_animation_for_timeline_media_library(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ProjectStore(tmp_path / "data")
+    project = store.create("Nested Layered Output")
+    nested_video = (
+        store.project_dir(project.id)
+        / "outputs"
+        / "videos"
+        / "layered_job-123"
+        / "parallax_animation.mp4"
+    )
+    nested_video.parent.mkdir(parents=True, exist_ok=True)
+    nested_video.write_bytes(b"real-route-placeholder")
+    monkeypatch.setattr(backend_app, "store", store)
+
+    response = backend_app.list_outputs(project.id)
+
+    assert any(
+        str(item["path"]).replace("\\", "/")
+        == "outputs/videos/layered_job-123/parallax_animation.mp4"
+        for item in response["videos"]
+    )
+
+
 @pytest.mark.parametrize(
     "source",
     [

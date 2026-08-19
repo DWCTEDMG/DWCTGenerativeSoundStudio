@@ -317,6 +317,13 @@ class LayeredAnimateRequest(BaseModel):
     refine_cfg: float = Field(default=7.0, ge=1.0, le=20.0)
     seed: int | None = None
 
+    @field_validator("width", "height")
+    @classmethod
+    def dimensions_must_be_even(cls, value: int) -> int:
+        if value % 2:
+            raise ValueError("layered animation dimensions must be even")
+        return value
+
 
 class MusicGraphCorrectionsRequest(BaseModel):
     sections: list[dict[str, Any]] | None = None

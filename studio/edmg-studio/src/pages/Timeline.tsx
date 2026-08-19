@@ -77,6 +77,8 @@ type TimelineDrag =
 type DockSection = "orchestrator" | "inspector" | "media" | "diffusion" | "curves";
 type TimelineDensity = "compact" | "comfortable";
 type TimelineTimebase = "bars" | "time";
+type TimelineEditTool = "select" | "blade";
+type TimelineVideoCodec = "h264" | "hevc" | "prores";
 
 type MotionPreset = {
   id: string;
@@ -88,6 +90,36 @@ type MotionPreset = {
 const TIMELINE_MIN_ZOOM = 4;
 const TIMELINE_MAX_ZOOM = 360;
 const TIMELINE_MIN_RANGE_S = 0.1;
+
+const TIMELINE_RENDER_RESOLUTIONS = [
+  { value: "1280x720", label: "HD landscape · 1280 × 720" },
+  { value: "1920x1080", label: "Full HD landscape · 1920 × 1080" },
+  { value: "3840x2160", label: "4K UHD landscape · 3840 × 2160" },
+  { value: "7680x4320", label: "8K UHD landscape · 7680 × 4320" },
+  { value: "1080x1920", label: "Full HD portrait · 1080 × 1920" },
+  { value: "2160x3840", label: "4K portrait · 2160 × 3840" },
+  { value: "4320x7680", label: "8K portrait · 4320 × 7680" },
+] as const;
+
+const TIMELINE_RENDER_FPS_PRESETS = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120] as const;
+
+function sanitizeTimelineRenderNameForEditing(value: string): string {
+  return String(value || "")
+    .replace(/[^\p{L}\p{N} _.-]/gu, "_")
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+}
+
+function finalizeTimelineRenderName(value: string): string {
+  return sanitizeTimelineRenderNameForEditing(value).trim().replace(/^[. ]+|[. ]+$/g, "");
+}
+
+function timelineRenderDimensionError(label: string, value: number): string {
+  if (!Number.isFinite(value) || !Number.isInteger(value)) return `${label} must be a whole number.`;
+  if (value < 256 || value > 7680) return `${label} must be between 256 and 7680 pixels.`;
+  if (value % 2 !== 0) return `${label} must be even for video encoding.`;
+  return "";
+}
 
 const MOTION_NEUTRAL_DATA: AnyDict = {
   zoom_start: 1,
@@ -654,6 +686,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const [locatorInS, setLocatorInS] = useState<number>(0);
   const [locatorOutS, setLocatorOutS] = useState<number>(5);
   const [lockedLaneIds, setLockedLaneIds] = useState<string[]>([]);
+  const [editTool, setEditTool] = useState<TimelineEditTool>("select");
+  const [rippleEnabled, setRippleEnabled] = useState<boolean>(false);
 
   const [selected, setSelected] = useState<Selected>(null);
 
@@ -677,10 +711,13 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const [selectedMediaDuration, setSelectedMediaDuration] = useState(5);
   const [mediaRenderBusy, setMediaRenderBusy] = useState(false);
   const [mediaRenderStatus, setMediaRenderStatus] = useState("");
+  const [editOutputName, setEditOutputName] = useState("edited-master");
   const [editWidth, setEditWidth] = useState(1920);
   const [editHeight, setEditHeight] = useState(1080);
   const [editFps, setEditFps] = useState(24);
-  const [editVideoCodec, setEditVideoCodec] = useState("h264");
+  const [editVideoCodec, setEditVideoCodec] = useState<TimelineVideoCodec>("h264");
+  const [editQuality, setEditQuality] = useState(18);
+  const editOutputProjectRef = useRef("");
   const [installedPreviewModels, setInstalledPreviewModels] = useState<Array<{ id: string; name: string }>>([]);
   const [conductorPlan, setConductorPlan] = useState<AnyDict | null>(null);
 
@@ -777,6 +814,12 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const d = await apiGet(`/v1/projects/${pid}`);
     setProject(d?.project || null);
     const p = d?.project || {};
+    if (editOutputProjectRef.current !== pid) {
+      editOutputProjectRef.current = pid;
+      setEditOutputName(
+        finalizeTimelineRenderName(`${String(p?.name || "studio")}_edit`) || "edited-master",
+      );
+    }
     const tl = ensureTimelineShape(
       p?.meta?.timeline || {},
       (p?.meta?.last_plan?.variants || [])[selectedVariant] || null,
@@ -947,6 +990,40 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     ? timeline.camera.keyframes
     : [];
 
+  const editAudioCodec = editVideoCodec === "prores" ? "pcm_s16le" : "aac";
+  const editOutputSafeName = finalizeTimelineRenderName(editOutputName);
+  const editWidthError = timelineRenderDimensionError("Width", editWidth);
+  const editHeightError = timelineRenderDimensionError("Height", editHeight);
+  const editFpsError =
+    !Number.isFinite(editFps) || editFps < 1 || editFps > 120
+      ? "FPS must be between 1 and 120. Decimal frame rates are supported."
+      : "";
+  const editQualityError = editVideoCodec !== "prores"
+    && (!Number.isFinite(editQuality) || !Number.isInteger(editQuality) || editQuality < 1 || editQuality > 51)
+      ? "CRF must be a whole number between 1 and 51."
+      : "";
+  const editNameError = editOutputSafeName ? "" : "Enter a filename-safe output name.";
+  const editMasterValidationMessages = [
+    editNameError,
+    editWidthError,
+    editHeightError,
+    editFpsError,
+    editQualityError,
+  ].filter(Boolean);
+  const editMasterSettingsValid = editMasterValidationMessages.length === 0;
+  const editResolutionPreset = TIMELINE_RENDER_RESOLUTIONS.some(
+    (preset) => preset.value === `${editWidth}x${editHeight}`,
+  )
+    ? `${editWidth}x${editHeight}`
+    : "custom";
+  const editFpsPreset = TIMELINE_RENDER_FPS_PRESETS.includes(
+    editFps as (typeof TIMELINE_RENDER_FPS_PRESETS)[number],
+  )
+    ? String(editFps)
+    : "custom";
+  const editQualityPreset =
+    editQuality === 18 ? "high" : editQuality === 23 ? "medium" : editQuality === 28 ? "low" : "custom";
+
   const laneIdForTrack = (track: Track, trackIdx: number) =>
     `track:${String(track.id || trackIdx)}`;
   const isLaneLocked = (laneId: string) => lockedLaneIds.includes(laneId);
@@ -1050,6 +1127,20 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const cl = tr?.clips?.[clipIdx];
       if (!cl) return;
       if (isLaneLocked(laneIdForTrack(tr, trackIdx))) return;
+      if (editTool === "blade") {
+        if (mode !== "move") return;
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const clipDuration = Math.max(TIMELINE_MIN_RANGE_S, cl.end_s - cl.start_s);
+        const fraction = rect.width > 0
+          ? clamp((e.clientX - rect.left) / rect.width, 0, 1)
+          : 0.5;
+        const rawCut = cl.start_s + clipDuration * fraction;
+        const cut = snapEnabled && !e.altKey ? _snap(rawCut) : rawCut;
+        seekTo(cut);
+        setSelected({ kind: "track", trackIdx, clipIdx });
+        splitTrackClipAt(trackIdx, clipIdx, cut);
+        return;
+      }
       (e.currentTarget as any).setPointerCapture?.(e.pointerId);
       dragRef.current = {
         kind: "track",
@@ -1460,6 +1551,11 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const renderEditedTimeline = async () => {
     if (!projectId) return;
+    if (!editMasterSettingsValid) {
+      setDockSection("media");
+      setErr(`Fix the edited-master settings: ${editMasterValidationMessages.join(" ")}`);
+      return;
+    }
     const videoClips = tracks
       .filter((track) => String(track.type).toLowerCase() === "video")
       .flatMap((track) => track.clips || []);
@@ -1474,15 +1570,16 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const saved = await apiPost(`/v1/projects/${projectId}/timeline`, { timeline: timelineRef.current });
       replaceTimelineState(saved?.timeline || timelineRef.current, false);
       setMediaRenderStatus("Queueing the non-destructive video edit…");
-      const response = await apiPost(`/v1/projects/${projectId}/timeline/render`, {
+      const renderRequest: AnyDict = {
         width: editWidth,
         height: editHeight,
         fps: editFps,
         video_codec: editVideoCodec,
-        audio_codec: editVideoCodec === "prores" ? "pcm_s16le" : "aac",
-        quality: "high",
-        name: `${String(project?.name || "studio").replace(/[^a-z0-9_-]+/gi, "_")}_edit`,
-      });
+        audio_codec: editAudioCodec,
+        name: editOutputSafeName,
+      };
+      if (editVideoCodec !== "prores") renderRequest.quality = editQuality;
+      const response = await apiPost(`/v1/projects/${projectId}/timeline/render`, renderRequest);
       setMediaRenderStatus(
         response?.job?.id
           ? `Edit queued as ${response.job.id}. Track progress in Render Queue.`
@@ -1627,6 +1724,44 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const _minLen = TIMELINE_MIN_RANGE_S;
 
+  const splitTrackClipAt = (trackIdx: number, clipIdx: number, cutTime: number) => {
+    const currentTimeline = timelineRef.current;
+    const currentTracks: Track[] = Array.isArray(currentTimeline.tracks) ? currentTimeline.tracks : [];
+    const tr = currentTracks[trackIdx];
+    const cl = tr?.clips?.[clipIdx];
+    if (!tr || !cl) return false;
+    if (isLaneLocked(laneIdForTrack(tr, trackIdx))) return false;
+    const tSplit = clamp(cutTime, 0, durationS);
+    if (!(cl.start_s + _minLen < tSplit && tSplit < cl.end_s - _minLen)) return false;
+
+    let leftData = cl.data || {};
+    let rightData = cl.data || {};
+    if (String(tr.type || "").toLowerCase() === "video") {
+      const speed = clamp(Number(cl.data?.speed ?? 1), 0.25, 4);
+      const sourceIn = Math.max(0, Number(cl.data?.source_in_s ?? 0));
+      const sourceSplit = sourceIn + (tSplit - cl.start_s) * speed;
+      leftData = { ...(cl.data || {}), source_out_s: sourceSplit };
+      rightData = { ...(cl.data || {}), source_in_s: sourceSplit };
+    }
+
+    const left = { ...cl, end_s: tSplit, data: leftData };
+    const right = {
+      ...cl,
+      id: `${String(tr.type)}_${Date.now()}`,
+      start_s: tSplit,
+      data: rightData,
+    };
+    const nextTracks = currentTracks.map((track, index) => {
+      if (index !== trackIdx) return track;
+      const nextClips = (track.clips || []).flatMap((clip, indexInTrack) =>
+        indexInTrack === clipIdx ? [left, right] : [clip],
+      );
+      return { ...track, clips: nextClips };
+    });
+    commitTimeline({ ...currentTimeline, tracks: nextTracks }, "split_clip");
+    return true;
+  };
+
   const duplicateSelection = () => {
     if (!selected) return;
     if (selected.kind === "track") {
@@ -1676,35 +1811,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (!selected) return;
     const tSplit = clamp(playheadS, 0, durationS);
     if (selected.kind === "track") {
-      const tr = tracks[selected.trackIdx];
-      const cl = tr?.clips?.[selected.clipIdx];
-      if (!tr || !cl) return;
-      if (isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
-      if (!(cl.start_s + _minLen < tSplit && tSplit < cl.end_s - _minLen)) return;
-      let leftData = cl.data || {};
-      let rightData = cl.data || {};
-      if (String(tr.type || "").toLowerCase() === "video") {
-        const speed = clamp(Number(cl.data?.speed ?? 1), 0.25, 4);
-        const sourceIn = Math.max(0, Number(cl.data?.source_in_s ?? 0));
-        const sourceSplit = sourceIn + (tSplit - cl.start_s) * speed;
-        leftData = { ...(cl.data || {}), source_out_s: sourceSplit };
-        rightData = { ...(cl.data || {}), source_in_s: sourceSplit };
-      }
-      const left = { ...cl, end_s: tSplit, data: leftData };
-      const right = {
-        ...cl,
-        id: `${String(tr.type)}_${Date.now()}`,
-        start_s: tSplit,
-        data: rightData,
-      };
-      const nextTracks = tracks.map((t, i) => {
-        if (i !== selected.trackIdx) return t;
-        const nextClips = (t.clips || []).flatMap((c, j) =>
-          j === selected.clipIdx ? [left, right] : [c],
-        );
-        return { ...t, clips: nextClips };
-      });
-      commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "split_clip");
+      splitTrackClipAt(selected.trackIdx, selected.clipIdx, tSplit);
       return;
     }
     if (selected.kind === "overlay") {
@@ -3609,27 +3716,178 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           <div className="small">Real FFmpeg export from the saved Video Edit decisions. Source files stay untouched.</div>
         </div>
       </div>
-      <div className="timeline-fieldGrid timeline-fieldGrid--compact">
-        <label className="small">Width</label>
-        <input type="number" min={256} max={7680} step={2} value={editWidth} onChange={(e) => setEditWidth(Number(e.target.value))} />
-        <label className="small">Height</label>
-        <input type="number" min={256} max={4320} step={2} value={editHeight} onChange={(e) => setEditHeight(Number(e.target.value))} />
-        <label className="small">FPS</label>
-        <select value={editFps} onChange={(e) => setEditFps(Number(e.target.value))}>
-          {[23.976, 24, 25, 29.97, 30, 50, 60].map((value) => <option key={value} value={value}>{value}</option>)}
+      <div className="timeline-fieldGrid timeline-fieldGrid--compact timeline-editMasterFields">
+        <label className="small" htmlFor="timeline-edit-output-name">Output name</label>
+        <div className="timeline-editMasterControl">
+          <input
+            id="timeline-edit-output-name"
+            aria-label="Edited master output name"
+            aria-invalid={Boolean(editNameError)}
+            maxLength={80}
+            value={editOutputName}
+            onChange={(event) => setEditOutputName(sanitizeTimelineRenderNameForEditing(event.target.value))}
+            onBlur={() => setEditOutputName(editOutputSafeName)}
+          />
+          <div className="small timeline-editMasterHelp">
+            {editOutputSafeName || "edited-master"}{editVideoCodec === "prores" ? ".mov" : ".mp4"} · unsafe filename characters become underscores
+          </div>
+          {editNameError ? <div className="small timeline-editMasterValidation" role="alert">{editNameError}</div> : null}
+        </div>
+
+        <label className="small" htmlFor="timeline-edit-resolution-preset">Size preset</label>
+        <select
+          id="timeline-edit-resolution-preset"
+          aria-label="Output size preset"
+          value={editResolutionPreset}
+          onChange={(event) => {
+            if (event.target.value === "custom") return;
+            const [width, height] = event.target.value.split("x").map(Number);
+            setEditWidth(width);
+            setEditHeight(height);
+          }}
+        >
+          {TIMELINE_RENDER_RESOLUTIONS.map((preset) => (
+            <option key={preset.value} value={preset.value}>{preset.label}</option>
+          ))}
+          <option value="custom">Custom dimensions</option>
         </select>
-        <label className="small">Codec</label>
-        <select value={editVideoCodec} onChange={(e) => setEditVideoCodec(e.target.value)}>
+
+        <label className="small" htmlFor="timeline-edit-width">Width</label>
+        <div className="timeline-editMasterControl">
+          <input
+            id="timeline-edit-width"
+            aria-label="Output width"
+            aria-invalid={Boolean(editWidthError)}
+            type="number"
+            min={256}
+            max={7680}
+            step={2}
+            value={editWidth}
+            onChange={(event) => setEditWidth(Number(event.target.value))}
+          />
+          {editWidthError ? <div className="small timeline-editMasterValidation" role="alert">{editWidthError}</div> : null}
+        </div>
+
+        <label className="small" htmlFor="timeline-edit-height">Height</label>
+        <div className="timeline-editMasterControl">
+          <input
+            id="timeline-edit-height"
+            aria-label="Output height"
+            aria-invalid={Boolean(editHeightError)}
+            type="number"
+            min={256}
+            max={7680}
+            step={2}
+            value={editHeight}
+            onChange={(event) => setEditHeight(Number(event.target.value))}
+          />
+          {editHeightError ? <div className="small timeline-editMasterValidation" role="alert">{editHeightError}</div> : null}
+        </div>
+
+        <label className="small" htmlFor="timeline-edit-fps-preset">Frame-rate preset</label>
+        <select
+          id="timeline-edit-fps-preset"
+          aria-label="Frame-rate preset"
+          value={editFpsPreset}
+          onChange={(event) => {
+            if (event.target.value !== "custom") setEditFps(Number(event.target.value));
+          }}
+        >
+          {TIMELINE_RENDER_FPS_PRESETS.map((value) => <option key={value} value={value}>{value} fps</option>)}
+          <option value="custom">Custom FPS</option>
+        </select>
+
+        <label className="small" htmlFor="timeline-edit-fps">FPS</label>
+        <div className="timeline-editMasterControl">
+          <input
+            id="timeline-edit-fps"
+            aria-label="Output FPS"
+            aria-invalid={Boolean(editFpsError)}
+            type="number"
+            min={1}
+            max={120}
+            step={0.001}
+            value={editFps}
+            onChange={(event) => setEditFps(Number(event.target.value))}
+          />
+          {editFpsError ? <div className="small timeline-editMasterValidation" role="alert">{editFpsError}</div> : null}
+        </div>
+
+        <label className="small" htmlFor="timeline-edit-codec">Video codec</label>
+        <select
+          id="timeline-edit-codec"
+          aria-label="Edited master video codec"
+          value={editVideoCodec}
+          onChange={(event) => setEditVideoCodec(event.target.value as TimelineVideoCodec)}
+        >
           <option value="h264">H.264 delivery</option>
           <option value="hevc">H.265 / HEVC</option>
           <option value="prores">ProRes editing master</option>
         </select>
+
+        <label className="small">Audio codec</label>
+        <div className="timeline-editMasterPair" aria-label="Edited master audio codec">
+          <strong>{editAudioCodec === "pcm_s16le" ? "PCM 16-bit" : "AAC 192 kbps"}</strong>
+          <span className="small">Paired automatically with {editVideoCodec === "prores" ? "ProRes" : editVideoCodec === "hevc" ? "HEVC" : "H.264"}</span>
+        </div>
+
+        <label className="small" htmlFor="timeline-edit-quality-preset">Quality preset</label>
+        <select
+          id="timeline-edit-quality-preset"
+          aria-label="Edited master quality preset"
+          value={editQualityPreset}
+          disabled={editVideoCodec === "prores"}
+          onChange={(event) => {
+            const values: Record<string, number> = { high: 18, medium: 23, low: 28 };
+            if (values[event.target.value]) setEditQuality(values[event.target.value]);
+          }}
+        >
+          <option value="high">High · CRF 18</option>
+          <option value="medium">Medium · CRF 23</option>
+          <option value="low">Smaller file · CRF 28</option>
+          <option value="custom">Custom CRF</option>
+        </select>
+
+        <label className="small" htmlFor="timeline-edit-quality">CRF</label>
+        <div className="timeline-editMasterControl">
+          <input
+            id="timeline-edit-quality"
+            aria-label="Edited master CRF"
+            aria-invalid={Boolean(editQualityError)}
+            type="number"
+            min={1}
+            max={51}
+            step={1}
+            value={editQuality}
+            disabled={editVideoCodec === "prores"}
+            onChange={(event) => setEditQuality(Number(event.target.value))}
+          />
+          <div className="small timeline-editMasterHelp">
+            {editVideoCodec === "prores" ? "ProRes uses its editing-master profile; CRF does not apply." : "1 is highest quality; 51 is smallest. Presets remain editable."}
+          </div>
+          {editQualityError ? <div className="small timeline-editMasterValidation" role="alert">{editQualityError}</div> : null}
+        </div>
+      </div>
+      <div
+        id="timeline-edit-validation-summary"
+        className={`small timeline-editMasterSummary${editMasterSettingsValid ? " is-ready" : " is-invalid"}`}
+        aria-live="polite"
+      >
+        {editMasterSettingsValid
+          ? `${editWidth} × ${editHeight} · ${editFps} fps · ${editVideoCodec === "prores" ? "ProRes + PCM" : `${editVideoCodec.toUpperCase()} + AAC`} · ${editVideoCodec === "prores" ? "editing-master profile" : `CRF ${editQuality}`}`
+          : editMasterValidationMessages.join(" ")}
       </div>
       <div className="timeline-inlineActions">
-        <button className="primary" type="button" disabled={!projectId || mediaRenderBusy} onClick={() => void renderEditedTimeline()}>
+        <button
+          className="primary"
+          type="button"
+          aria-describedby="timeline-edit-validation-summary"
+          disabled={!projectId || mediaRenderBusy || !editMasterSettingsValid}
+          onClick={() => void renderEditedTimeline()}
+        >
           {mediaRenderBusy ? "Queueing edit…" : "Render edited master"}
         </button>
-        <button className="secondary" type="button" onClick={() => onNavigate?.("renderQueue")}>
+        <button className="secondary" type="button" onClick={() => onNavigate?.("queue")}>
           Render Queue
         </button>
       </div>

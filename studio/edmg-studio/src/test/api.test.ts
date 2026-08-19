@@ -6,6 +6,7 @@ import {
   ensureBrowserBridge,
   getBackendUrl,
   getBackendUrlAsync,
+  isRequestAbortError,
   setBackendAuthTokenForSession,
 } from "../components/api";
 
@@ -138,6 +139,13 @@ describe("backend URL resolution", () => {
 
     await expect(request).rejects.toMatchObject({ name: "AbortError" });
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit).signal?.aborted).toBe(true);
+  });
+
+  it("recognizes Chromium's reasonless abort without hiding real failures", () => {
+    expect(isRequestAbortError(new DOMException("signal is aborted without reason", "AbortError"))).toBe(true);
+    expect(isRequestAbortError(new Error("signal is aborted without reason"))).toBe(true);
+    expect(isRequestAbortError(new Error("Studio backend request timed out after 10000 ms"))).toBe(false);
+    expect(isRequestAbortError(new Error("Failed to fetch"))).toBe(false);
   });
 
   it("builds encoded project file URLs from validated backend and project paths", () => {

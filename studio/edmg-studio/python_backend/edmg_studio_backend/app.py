@@ -106,6 +106,7 @@ from .services.ffmpeg import (
     prepare_timeline_render_plan,
     render_timeline_edited_master,
 )
+from .services.safe_audio_analysis import SafeAudioAnalysisError, analyze_audio_ffmpeg_numpy
 from .services.internal_video import (
     InternalVideoSettings,
     _scene_keyframe_times,
@@ -4329,6 +4330,30 @@ def _normalize_curve(values: Any) -> list[float]:
 
 
 def _collect_audio_analysis_features(audio_path: Path) -> dict[str, Any]:
+    # Do not import the enhanced analyzer on Windows. A native access violation
+    # in librosa's numba/llvmlite stack terminates the backend process and
+    # cannot be handled by a Python try/except block.
+    if platform.system().strip().lower() == "windows":
+        try:
+            return analyze_audio_ffmpeg_numpy(
+                audio_path,
+                ffmpeg_path=settings.ffmpeg_path,
+                source="windows_safe_path",
+            )
+        except Exception as exc:
+            logger.exception("Windows-safe FFmpeg audio feature analysis failed")
+            return {
+                "error": "Audio feature analysis failed",
+                "analysis_backend": "ffmpeg_numpy",
+                "analysis_source": "windows_safe_path",
+                "analysis_diagnostics": {
+                    "backend": "ffmpeg_numpy",
+                    "source": "windows_safe_path",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            }
+
     try:
         from enhanced_deforum_music_generator.core.audio_analyzer import AudioAnalyzer  # type: ignore
         from enhanced_deforum_music_generator.config.config_system import AudioConfig  # type: ignore
@@ -4346,12 +4371,41 @@ def _collect_audio_analysis_features(audio_path: Path) -> dict[str, Any]:
             "spectral_centroid": [float(x) for x in (getattr(af, "spectral_centroid", []) or [])],
             "spectral_rolloff": [float(x) for x in (getattr(af, "spectral_rolloff", []) or [])],
             "rms_energy": _normalize_curve(getattr(af, "rms_energy", []) or []),
+            "analysis_backend": "enhanced_audio_analyzer",
+            "analysis_source": "primary",
+            "analysis_diagnostics": {
+                "backend": "enhanced_audio_analyzer",
+                "source": "primary",
+            },
         }
-    except Exception:
+    except Exception as enhanced_exc:
+        logger.warning(
+            "Enhanced audio feature analysis failed; using the FFmpeg/NumPy safe fallback",
+            exc_info=True,
+        )
+        try:
+            return analyze_audio_ffmpeg_numpy(
+                audio_path,
+                ffmpeg_path=settings.ffmpeg_path,
+                source="enhanced_analyzer_fallback",
+            )
+        except SafeAudioAnalysisError:
+            logger.warning("FFmpeg/NumPy audio fallback failed; trying the legacy lightweight analyzer", exc_info=True)
+        except Exception:
+            logger.warning("Unexpected FFmpeg/NumPy audio fallback failure; trying the legacy lightweight analyzer", exc_info=True)
+
         try:
             from edmg_ai_service.audio import lightweight_audio_features  # type: ignore
 
-            return lightweight_audio_features(str(audio_path))
+            result = dict(lightweight_audio_features(str(audio_path)) or {})
+            result["analysis_backend"] = "lightweight_audio_features"
+            result["analysis_source"] = "legacy_fallback"
+            result["analysis_diagnostics"] = {
+                "backend": "lightweight_audio_features",
+                "source": "legacy_fallback",
+                "enhanced_error_type": type(enhanced_exc).__name__,
+            }
+            return result
         except Exception:
             logger.exception("Audio feature analysis failed")
             return {"error": "Audio feature analysis failed"}
@@ -11827,6 +11881,37 @@ def _run_timeline_render(project_id: str, job_id: str, payload: dict[str, Any]) 
     }
 
 
+def _resolve_layered_refinement(
+    payload: dict[str, Any],
+) -> tuple[Path, str, str]:
+    """Resolve the required downloaded model/device for a refined layer render."""
+    hw = _hardware_profile()
+    device_pref = str(payload.get("device_preference") or "auto")
+    refine_device = device_pref if device_pref != "auto" else str(hw.get("device_preference") or "auto")
+    model_id = str(payload.get("model_id") or "auto")
+    if model_id in ("auto", "auto_internal"):
+        tier_plan = _build_internal_render_plan(hw)
+        model_id = str(tier_plan.get("preferred_internal_model") or "hf_sd15_internal")
+
+    try:
+        model_dir = _resolve_installed_model_path(model_id, materialize_remote=False)
+    except Exception as exc:
+        raise UserFacingError(
+            "Diffusion refinement model could not be resolved",
+            hint="Open Models, verify the selected internal image model, then retry the layered animation.",
+            code="REFINEMENT_MODEL_RESOLUTION_FAILED",
+            status_code=500,
+        ) from exc
+    if model_dir is None or not model_dir.exists():
+        raise UserFacingError(
+            f"Diffusion refinement model '{model_id}' is not installed",
+            hint="Install the selected internal image model in Models, or turn refinement off for compositor-only output.",
+            code="REFINEMENT_MODEL_NOT_INSTALLED",
+            status_code=400,
+        )
+    return model_dir, refine_device, model_id
+
+
 def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Worker: render an object/layer animation (parallax / masked / segment)."""
     proj = store.get(project_id)
@@ -11898,25 +11983,14 @@ def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]
         jobs.update_progress(project_id, job_id, stage=stage, current=current, total=total, message=message)
 
     # Optional diffusion-refinement: resolve an installed internal model (auto-pick
-    # by hardware tier) and run img2img over each composited frame on the available
-    # device (CUDA when the backend host has a GPU, else CPU). Degrades gracefully.
+    # by hardware tier) and run img2img over every composited frame. Refinement is
+    # an explicit contract: missing models/runtimes fail instead of downgrading.
     refine = bool(payload.get("diffusion_refine"))
     refine_model_dir: Path | None = None
     refine_device = "auto"
     if refine:
-        hw = _hardware_profile()
-        device_pref = str(payload.get("device_preference") or "auto")
-        refine_device = device_pref if device_pref != "auto" else str(hw.get("device_preference") or "auto")
-        model_id = str(payload.get("model_id") or "auto")
-        if model_id in ("auto", "auto_internal"):
-            tier_plan = _build_internal_render_plan(hw)
-            model_id = str(tier_plan.get("preferred_internal_model") or "hf_sd15_internal")
-        try:
-            refine_model_dir = models.resolve_installed_path(model_id, materialize_remote=True)
-        except Exception:
-            refine_model_dir = None
-        if refine_model_dir is None:
-            _log(f"Diffusion refine requested but model '{model_id}' is not installed; compositing only.")
+        refine_model_dir, refine_device, model_id = _resolve_layered_refinement(payload)
+        _log(f"Diffusion refinement requires model '{model_id}' on device '{refine_device}'.")
 
     out_dir = pdir / "outputs" / "videos" / f"layered_{job_id}"
     res = layeranim.render_layered_animation(
@@ -12058,6 +12132,14 @@ def render_animate_layers(project_id: str, req: LayeredAnimateRequest):
             hint="Add a mask asset, or use parallax/segment modes.",
             code="MASK_REQUIRED",
             status_code=400,
+        )
+
+    if req.diffusion_refine:
+        _resolve_layered_refinement(
+            {
+                "model_id": req.model_id,
+                "device_preference": req.device_preference,
+            }
         )
 
     profile = str(req.motion or "full_3d")
@@ -12981,9 +13063,17 @@ def list_outputs(project_id: str):
     for p in sorted((pdir / "outputs" / "images").glob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
         if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
             imgs.append(_file_entry(p))
-    for p in sorted((pdir / "outputs" / "videos").glob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
-        if p.suffix.lower() not in UNREAL_RETURN_VIDEO_EXTENSIONS:
-            continue
+    # Render workers may group supporting frames and the final clip under a
+    # job-specific directory (for example layered_<job-id>/parallax_animation.mp4).
+    # Return those completed videos too so Timeline's media library can edit
+    # every genuine Studio output, not only files placed at the directory root.
+    video_root = pdir / "outputs" / "videos"
+    video_files = [
+        path
+        for path in video_root.rglob("*")
+        if path.is_file() and path.suffix.lower() in UNREAL_RETURN_VIDEO_EXTENSIONS
+    ]
+    for p in sorted(video_files, key=lambda x: x.stat().st_mtime, reverse=True):
         entry = _file_entry(p)
         name = p.name
         metadata_kind = str((entry.get("metadata") or {}).get("kind") or "")

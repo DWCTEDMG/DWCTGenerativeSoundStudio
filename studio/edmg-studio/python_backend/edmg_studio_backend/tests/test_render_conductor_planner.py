@@ -198,3 +198,165 @@ def test_advisory_render_plan_selects_available_tensorrt_runtime():
 
     assert plan.sections[0].engine == "tensorrt_standalone"
     assert all(branch.reroute_to != "proxy" for branch in plan.fallback_branches)
+
+
+def test_section_override_updates_timing_music_context_creative_goal_and_notes():
+    snapshot = ProjectSnapshot(
+        project_id="proj-overrides",
+        analysis={
+            "duration_s": 12.0,
+            "sections": [
+                {"start_s": 0.0, "end_s": 4.0, "energy": 0.15},
+                {"start_s": 4.0, "end_s": 12.0, "energy": 0.9},
+            ],
+        },
+        plan={
+            "variants": [
+                {
+                    "scenes": [
+                        {
+                            "id": "scene-override",
+                            "start_s": 0.0,
+                            "end_s": 2.0,
+                            "prompt": "calm establishing frame",
+                        }
+                    ]
+                }
+            ]
+        },
+    )
+    intent = RenderIntent(
+        project_id="proj-overrides",
+        aspect_ratio="9:16",
+        allowed_engines=["internal"],
+        sections=[
+            {
+                "scene_id": "scene-override",
+                "start_s": 6.0,
+                "end_s": 10.0,
+                "creative_goal": "hero performer reaches the chorus peak",
+                "notes": ["Protect the cymbal cut", "Keep the approved color grade"],
+            }
+        ],
+    )
+
+    plan = build_advisory_render_plan(
+        intent,
+        snapshot,
+        environment={"engines": {"internal": {"available": True}}},
+    )
+
+    section = plan.sections[0]
+    prepare_step = next(step for step in section.steps if step.kind == "prepare_assets")
+    prompt_step = next(step for step in section.steps if step.kind == "build_prompt")
+    motion_step = next(step for step in section.steps if step.kind == "render_motion")
+    assert section.estimated_seconds == 440.0
+    assert prepare_step.inputs["duration_s"] == 4.0
+    assert prepare_step.inputs["aspect_ratio"] == "9:16"
+    assert prompt_step.inputs["scene_prompt"] == "calm establishing frame"
+    assert prompt_step.inputs["creative_goal"] == "hero performer reaches the chorus peak"
+    assert motion_step.inputs["aspect_ratio"] == "9:16"
+    assert "hero performer reaches the chorus peak" in section.rationale
+    assert "energy=0.90" in section.notes
+    assert "music_midpoint_s=8.000" in section.notes
+    assert "intent_timing=6.000-10.000" in section.notes
+    assert "Protect the cymbal cut" in section.notes
+    assert "Keep the approved color grade" in section.notes
+    assert "aspect_ratio=9:16" in plan.diagnostics
+
+
+def test_section_speed_priority_changes_only_the_matched_scene_engine_score():
+    snapshot = ProjectSnapshot(
+        project_id="proj-speed",
+        analysis={
+            "duration_s": 12.0,
+            "sections": [{"start_s": 0.0, "end_s": 12.0, "energy": 0.2}],
+        },
+        plan={
+            "variants": [
+                {
+                    "scenes": [
+                        {"id": "scene-global", "start_s": 0.0, "end_s": 5.0, "prompt": "steady wide frame"},
+                        {"id": "scene-fast", "start_s": 5.0, "end_s": 10.0, "prompt": "steady wide frame"},
+                    ]
+                }
+            ]
+        },
+    )
+    intent = RenderIntent(
+        project_id="proj-speed",
+        continuity_priority=0.0,
+        speed_priority=0.0,
+        style_lock_strength=0.0,
+        allowed_engines=["internal", "hosted_video"],
+        sections=[{"scene_id": "scene-fast", "speed_priority": 1.0}],
+    )
+    environment = {
+        "engines": {
+            "internal": {"available": True},
+            "hosted_video": {"available": True},
+        }
+    }
+
+    plan = build_advisory_render_plan(intent, snapshot, environment=environment)
+
+    assert plan.sections[0].engine == "internal"
+    assert "speed_priority=0.00" in plan.sections[0].notes
+    assert plan.sections[1].engine == "hosted_video"
+    assert "speed_priority=1.00" in plan.sections[1].notes
+
+
+@pytest.mark.parametrize(
+    ("fallback_policy", "expected_branch_count", "note_fragment"),
+    [
+        ("strict", 0, None),
+        ("manual", 1, "Manual approval is required"),
+        ("auto", 1, "Automatically reroute"),
+    ],
+)
+def test_fallback_policy_controls_advisory_recommendations(
+    fallback_policy: str,
+    expected_branch_count: int,
+    note_fragment: str | None,
+):
+    snapshot = ProjectSnapshot(
+        project_id=f"proj-fallback-{fallback_policy}",
+        plan={
+            "variants": [
+                {
+                    "scenes": [
+                        {
+                            "id": "scene-1",
+                            "start_s": 0.0,
+                            "end_s": 3.0,
+                            "prompt": "hold the same subject",
+                        }
+                    ]
+                }
+            ]
+        },
+    )
+    intent = RenderIntent(
+        project_id=snapshot.project_id,
+        fallback_policy=fallback_policy,
+        allowed_engines=["internal", "comfyui_motion"],
+    )
+
+    plan = build_advisory_render_plan(
+        intent,
+        snapshot,
+        environment={
+            "engines": {
+                "internal": {"available": True},
+                "comfyui_motion": {"available": True},
+                "proxy": {"available": True},
+            }
+        },
+    )
+
+    assert plan.advisory_only is True
+    assert len(plan.fallback_branches) == expected_branch_count
+    assert f"fallback_policy={fallback_policy}" in plan.diagnostics
+    if note_fragment is not None:
+        assert note_fragment in plan.fallback_branches[0].notes
+        assert plan.fallback_branches[0].reroute_to != "proxy"

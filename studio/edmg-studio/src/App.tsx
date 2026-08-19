@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import { StudioCommandPalette } from "./components/StudioCommandPalette";
 import {
@@ -6,6 +6,7 @@ import {
   apiGet,
   getBackendUrl,
   getBackendUrlAsync,
+  isRequestAbortError,
   normalizeBackendUrl,
 } from "./components/api";
 
@@ -15,6 +16,7 @@ import Setup from "./pages/Setup";
 import { isStudioForgeEnabled } from "./features";
 import {
   getPageLoadingDetails,
+  getPageDocumentTitle,
   isPage,
   preloadLikelyNextPages,
   type Page,
@@ -69,6 +71,62 @@ export default function App() {
   const [backendConfigError, setBackendConfigError] = useState<string>("");
   const [setupChecked, setSetupChecked] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [skipLinkFocused, setSkipLinkFocused] = useState(false);
+  const mainRef = useRef<HTMLElement | null>(null);
+  const shouldFocusMainRef = useRef(false);
+  const currentPageRef = useRef(page);
+
+  const focusMainContent = useCallback(() => {
+    window.setTimeout(() => mainRef.current?.focus({ preventScroll: true }), 0);
+  }, []);
+
+  const navigateToPage = useCallback((nextPage: Page, historyMode: "push" | "replace" = "push") => {
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      const currentUrlPage = url.searchParams.get("page");
+      url.searchParams.set("page", nextPage);
+      if (historyMode === "replace") {
+        window.history.replaceState({ edmgStudioPage: nextPage }, "", url);
+      } else if (currentUrlPage !== nextPage) {
+        window.history.pushState({ edmgStudioPage: nextPage }, "", url);
+      }
+    }
+    shouldFocusMainRef.current = true;
+    if (currentPageRef.current === nextPage) {
+      shouldFocusMainRef.current = false;
+      focusMainContent();
+    } else {
+      currentPageRef.current = nextPage;
+      setPage(nextPage);
+    }
+    setCommandPaletteOpen(false);
+  }, [focusMainContent]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleHistoryNavigation = () => {
+      const nextPage = getInitialPage();
+      shouldFocusMainRef.current = true;
+      setCommandPaletteOpen(false);
+      if (currentPageRef.current === nextPage) {
+        shouldFocusMainRef.current = false;
+        focusMainContent();
+      } else {
+        currentPageRef.current = nextPage;
+        setPage(nextPage);
+      }
+    };
+    window.addEventListener("popstate", handleHistoryNavigation);
+    return () => window.removeEventListener("popstate", handleHistoryNavigation);
+  }, [focusMainContent]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.title = getPageDocumentTitle(page);
+    if (!shouldFocusMainRef.current) return;
+    shouldFocusMainRef.current = false;
+    focusMainContent();
+  }, [focusMainContent, page]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -118,15 +176,32 @@ export default function App() {
 
   useEffect(() => {
     if (!backendUrl) return;
-    apiGet("/v1/config")
-      .then((nextConfig) => {
-        setConfig(nextConfig);
-        setBackendConfigError("");
-      })
-      .catch((error: any) => {
-        setConfig(null);
-        setBackendConfigError(String(error?.message ?? error));
-      });
+    const controller = new AbortController();
+    let retryTimer: number | null = null;
+    let retryDelayMs = 750;
+
+    const loadConfig = () => {
+      void apiGet("/v1/config", { signal: controller.signal, timeoutMs: 10_000 })
+        .then((nextConfig) => {
+          if (controller.signal.aborted) return;
+          setConfig(nextConfig);
+          setBackendConfigError("");
+        })
+        .catch((error: any) => {
+          if (controller.signal.aborted || isRequestAbortError(error)) return;
+          setConfig(null);
+          setBackendConfigError(String(error?.message ?? error));
+          const delay = retryDelayMs;
+          retryDelayMs = Math.min(retryDelayMs * 2, 5_000);
+          retryTimer = window.setTimeout(loadConfig, delay);
+        });
+    };
+
+    loadConfig();
+    return () => {
+      controller.abort();
+      if (retryTimer != null) window.clearTimeout(retryTimer);
+    };
   }, [backendUrl]);
 
   useEffect(() => {
@@ -141,11 +216,11 @@ export default function App() {
         const ollamaOk = !!s?.ollama?.ok;
         const modelOk = !modelRequired || !!s?.ollama?.model_present;
         const need = !(backendBundleOk && ffmpegOk && (!ollamaRequired || (ollamaOk && modelOk)));
-        if (need && !forcedPage) setPage("setup" as any);
+        if (need && !forcedPage) navigateToPage("setup", "replace");
         setSetupChecked(true);
       })
       .catch(() => setSetupChecked(true));
-  }, [backendUrl, forcedPage, setupChecked]);
+  }, [backendUrl, forcedPage, navigateToPage, setupChecked]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -174,16 +249,47 @@ export default function App() {
 
   const commonProps = useMemo(() => ({ backendUrl, config }), [backendUrl, config]);
 
+  const skipToMain = (
+    <a
+      href="#studio-main-content"
+      onClick={(event) => {
+        event.preventDefault();
+        focusMainContent();
+      }}
+      onFocus={() => setSkipLinkFocused(true)}
+      onBlur={() => setSkipLinkFocused(false)}
+      style={{
+        position: "absolute",
+        zIndex: 10000,
+        top: skipLinkFocused ? 8 : -10000,
+        left: skipLinkFocused ? 8 : -10000,
+        padding: "8px 12px",
+        borderRadius: 8,
+        background: "var(--panel, #151820)",
+        color: "var(--text, #fff)",
+      }}
+    >
+      Skip to main content
+    </a>
+  );
+
   if (!backendUrl) {
     return (
       <div className="app-shell">
-        <Sidebar page={page} onNavigate={setPage} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
-        <div className="main">
+        {skipToMain}
+        <Sidebar page={page} onNavigate={navigateToPage} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
+        <main id="studio-main-content" ref={mainRef} tabIndex={-1} className="main">
           <div className="card">
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Connecting to Studio backend</div>
             <div className="small">Resolving the active backend target before loading workspace screens.</div>
           </div>
-        </div>
+        </main>
+        <StudioCommandPalette
+          open={commandPaletteOpen}
+          activePage={page}
+          onClose={() => setCommandPaletteOpen(false)}
+          onNavigate={navigateToPage}
+        />
       </div>
     );
   }
@@ -191,24 +297,24 @@ export default function App() {
   let content: React.ReactNode = null;
   if (page === "dashboard") content = <Dashboard {...commonProps} />;
   if (page === "projects") content = <Projects {...commonProps} />;
-  if (page === "workspace") content = <Workspace {...commonProps} onNavigate={setPage as any} />;
-  if (page === "timeline") content = <Timeline {...commonProps} onNavigate={setPage as any} />;
-  if (page === "render") content = <Render {...commonProps} onNavigate={setPage as any} />;
-  if (page === "queue") content = <RenderQueue {...commonProps} onNavigate={setPage as any} />;
-  if (page === "review") content = <Review {...commonProps} onNavigate={setPage as any} />;
-  if (page === "outputs") content = <Outputs {...commonProps} onNavigate={setPage as any} />;
+  if (page === "workspace") content = <Workspace {...commonProps} onNavigate={navigateToPage as any} />;
+  if (page === "timeline") content = <Timeline {...commonProps} onNavigate={navigateToPage as any} />;
+  if (page === "render") content = <Render {...commonProps} onNavigate={navigateToPage as any} />;
+  if (page === "queue") content = <RenderQueue {...commonProps} onNavigate={navigateToPage as any} />;
+  if (page === "review") content = <Review {...commonProps} onNavigate={navigateToPage as any} />;
+  if (page === "outputs") content = <Outputs {...commonProps} onNavigate={navigateToPage as any} />;
   if (page === "cloud") content = <Cloud {...commonProps} />;
   if (page === "settings") content = <Settings {...commonProps} />;
-  if (page === "setup") content = <Setup onNavigate={setPage as any} />;
+  if (page === "setup") content = <Setup onNavigate={navigateToPage as any} />;
   if (page === "models") content = <Models {...commonProps} />;
   if (page === "directorLab")
-    content = <EdmgDirector {...commonProps} onNavigate={setPage as any} />;
+    content = <EdmgDirector {...commonProps} onNavigate={navigateToPage as any} />;
   if (page === "plannerLab")
-    content = <AiPlannerLab {...commonProps} onNavigate={setPage as any} />;
+    content = <AiPlannerLab {...commonProps} onNavigate={navigateToPage as any} />;
   if (page === "reactiveLab")
-    content = <ReactiveLab {...commonProps} onNavigate={setPage as any} />;
+    content = <ReactiveLab {...commonProps} onNavigate={navigateToPage as any} />;
   if (page === "studioForge" && isStudioForgeEnabled())
-    content = <StudioForge {...commonProps} onNavigate={setPage as any} />;
+    content = <StudioForge {...commonProps} onNavigate={navigateToPage as any} />;
   if (page === "studioForge" && !isStudioForgeEnabled())
     content = <Dashboard {...commonProps} />;
 
@@ -216,8 +322,9 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar page={page} onNavigate={setPage} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
-      <div className={mainClassName}>
+      {skipToMain}
+      <Sidebar page={page} onNavigate={navigateToPage} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
+      <main id="studio-main-content" ref={mainRef} tabIndex={-1} className={mainClassName}>
         {backendConfigError ? (
           <div className="card" style={{ marginBottom: 14, borderColor: "var(--warning, #b58900)" }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Backend connection needs attention</div>
@@ -232,12 +339,12 @@ export default function App() {
         <Suspense fallback={<PageLoadingFallback page={page} />}>
           {content}
         </Suspense>
-      </div>
+      </main>
       <StudioCommandPalette
         open={commandPaletteOpen}
         activePage={page}
         onClose={() => setCommandPaletteOpen(false)}
-        onNavigate={setPage}
+        onNavigate={navigateToPage}
       />
     </div>
   );

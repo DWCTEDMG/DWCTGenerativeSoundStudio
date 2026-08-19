@@ -1,9 +1,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import gc
+import hashlib
+import importlib
+import importlib.metadata
 import json
+import logging
 import math
 import re
 import threading
@@ -35,6 +38,9 @@ except Exception:  # pragma: no cover
 from .compositor import apply_timeline_layers
 from .ffmpeg import assemble_image_sequence, has_video_stream, interpolate_video_fps, mux_audio
 from .internal_video_models import generate_video_model_frames, validate_video_model_layout
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -621,29 +627,104 @@ def _reraise_snapshot_load_error(exc: Exception, model_dir: Path) -> None:
     raise exc
 
 
-def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
+_DIFFUSERS_PIPELINE_CLASS_NAMES: dict[str, tuple[str, str, str]] = {
+    "sd15": (
+        "StableDiffusionPipeline",
+        "StableDiffusionImg2ImgPipeline",
+        "StableDiffusionInpaintPipeline",
+    ),
+    "sdxl": (
+        "StableDiffusionXLPipeline",
+        "StableDiffusionXLImg2ImgPipeline",
+        "StableDiffusionXLInpaintPipeline",
+    ),
+    "sd3": (
+        "StableDiffusion3Pipeline",
+        "StableDiffusion3Img2ImgPipeline",
+        "StableDiffusion3InpaintPipeline",
+    ),
+}
+
+
+def _installed_distribution_version(distribution: str) -> str:
     try:
-        import json
-        import torch  # type: ignore
-        from diffusers import (  # type: ignore
-            StableDiffusion3InpaintPipeline,
-            StableDiffusion3Img2ImgPipeline,
-            StableDiffusion3Pipeline,
-            StableDiffusionInpaintPipeline,
-            StableDiffusionImg2ImgPipeline,
-            StableDiffusionPipeline,
-            StableDiffusionXLInpaintPipeline,
-            StableDiffusionXLImg2ImgPipeline,
-            StableDiffusionXLPipeline,
-        )
-    except Exception as e:
+        return str(importlib.metadata.version(distribution))
+    except Exception:
+        return "unknown"
+
+
+def _import_failure_detail(exc: BaseException, *, limit: int = 360) -> str:
+    message = " ".join(str(exc).split())
+    detail = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+    if len(detail) > limit:
+        return f"{detail[: limit - 3]}..."
+    return detail
+
+
+def _load_diffusers_runtime(family: str) -> tuple[Any, Any, Any, Any]:
+    """Load only the Diffusers classes required by the selected model family.
+
+    Diffusers exposes pipeline classes through lazy module attributes. Importing
+    every supported family in one statement makes an SD 1.5 render depend on
+    optional SDXL and SD3 imports too. Keep the runtime boundary family-local so
+    an unrelated optional pipeline cannot disable an otherwise valid model.
+    """
+    normalized_family = family if family in _DIFFUSERS_PIPELINE_CLASS_NAMES else "sd15"
+    family_label = {"sd15": "SD 1.5", "sdxl": "SDXL", "sd3": "SD3"}[normalized_family]
+
+    try:
+        torch = importlib.import_module("torch")
+    except Exception as exc:
+        logger.exception("Internal diffusion dependency import failed: torch")
         raise UserFacingError(
-            "Internal diffusion engine is not installed",
-            hint="Install internal deps (diffusers + torch). Then download the internal SD model in Models.",
+            "Internal diffusion runtime could not load Torch",
+            hint=(
+                f"Torch {_installed_distribution_version('torch')} failed to import: "
+                f"{_import_failure_detail(exc)}. Reinstall the selected Studio backend runtime, then retry."
+            ),
             code="INTERNAL_DEPS",
             status_code=500,
-        ) from e
+        ) from exc
 
+    try:
+        diffusers = importlib.import_module("diffusers")
+    except Exception as exc:
+        logger.exception("Internal diffusion dependency import failed: diffusers")
+        raise UserFacingError(
+            "Internal diffusion runtime could not load Diffusers",
+            hint=(
+                f"Diffusers {_installed_distribution_version('diffusers')} failed to import: "
+                f"{_import_failure_detail(exc)}. Reinstall the selected Studio backend runtime, then retry."
+            ),
+            code="INTERNAL_DEPS",
+            status_code=500,
+        ) from exc
+
+    pipeline_classes: list[Any] = []
+    for class_name in _DIFFUSERS_PIPELINE_CLASS_NAMES[normalized_family]:
+        try:
+            pipeline_classes.append(getattr(diffusers, class_name))
+        except Exception as exc:
+            logger.exception(
+                "Internal diffusion pipeline import failed for %s (%s)",
+                family_label,
+                class_name,
+            )
+            raise UserFacingError(
+                f"Internal {family_label} pipeline is unavailable",
+                hint=(
+                    f"Diffusers {_installed_distribution_version('diffusers')} could not load "
+                    f"{class_name}: {_import_failure_detail(exc)}. Reinstall or repair the selected "
+                    "Studio backend runtime, then retry this model."
+                ),
+                code="INTERNAL_DEPS",
+                status_code=500,
+            ) from exc
+
+    return torch, pipeline_classes[0], pipeline_classes[1], pipeline_classes[2]
+
+
+def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
     cache_key = (str(model_dir), device, str(role or "video"))
     cached = _PipelineCache.get(cache_key)
     if cached is not None:
@@ -652,11 +733,12 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
     # TF32 / cuDNN benchmark flags are set at app startup by _apply_cuda_startup_flags()
     # in app.py, so we don't need to re-apply them here on every pipeline load.
     family = _model_family_from_dir(model_dir)
+    torch, txt_pipeline_class, img_pipeline_class, inpaint_pipeline_class = _load_diffusers_runtime(family)
 
     torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32
 
     if family == "sd3":
-        txt = StableDiffusion3Pipeline.from_pretrained(
+        txt = txt_pipeline_class.from_pretrained(
             str(model_dir),
             **_diffusers_model_load_kwargs(model_dir, device, extra={"torch_dtype": torch_dtype}),
         )
@@ -669,7 +751,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
                 pass
         txt = txt.to(device)
 
-        img = StableDiffusion3Img2ImgPipeline(**txt.components)
+        img = img_pipeline_class(**txt.components)
         if hasattr(img, "enable_attention_slicing"):
             img.enable_attention_slicing()
         if device == "cuda" and hasattr(img, "enable_xformers_memory_efficient_attention"):
@@ -679,7 +761,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
                 pass
         img = img.to(device)
 
-        inpaint = StableDiffusion3InpaintPipeline(**txt.components)
+        inpaint = inpaint_pipeline_class(**txt.components)
         if hasattr(inpaint, "enable_attention_slicing"):
             inpaint.enable_attention_slicing()
         if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
@@ -691,7 +773,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
 
         pipes = _Pipes(txt2img=txt, img2img=img, inpaint=inpaint, device=device, family="sd3", backend="diffusers")
     elif family == "sdxl":
-        txt = StableDiffusionXLPipeline.from_pretrained(
+        txt = txt_pipeline_class.from_pretrained(
             str(model_dir),
             **_diffusers_model_load_kwargs(
                 model_dir,
@@ -712,7 +794,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
                 pass
         txt = txt.to(device)
 
-        img = StableDiffusionXLImg2ImgPipeline(**txt.components)
+        img = img_pipeline_class(**txt.components)
         if hasattr(img, "enable_attention_slicing"):
             img.enable_attention_slicing()
         if device == "cuda" and hasattr(img, "enable_xformers_memory_efficient_attention"):
@@ -722,7 +804,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
                 pass
         img = img.to(device)
 
-        inpaint = StableDiffusionXLInpaintPipeline(**txt.components)
+        inpaint = inpaint_pipeline_class(**txt.components)
         if hasattr(inpaint, "enable_attention_slicing"):
             inpaint.enable_attention_slicing()
         if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
@@ -734,7 +816,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
 
         pipes = _Pipes(txt2img=txt, img2img=img, inpaint=inpaint, device=device, family="sdxl", backend="diffusers")
     else:
-        txt = StableDiffusionPipeline.from_pretrained(
+        txt = txt_pipeline_class.from_pretrained(
             str(model_dir),
             **_diffusers_model_load_kwargs(
                 model_dir,
@@ -755,7 +837,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
                 pass
         txt = txt.to(device)
 
-        img = StableDiffusionImg2ImgPipeline(**txt.components)
+        img = img_pipeline_class(**txt.components)
         if hasattr(img, "enable_attention_slicing"):
             img.enable_attention_slicing()
         if device == "cuda" and hasattr(img, "enable_xformers_memory_efficient_attention"):
@@ -765,7 +847,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
                 pass
         img = img.to(device)
 
-        inpaint = StableDiffusionInpaintPipeline(**txt.components)
+        inpaint = inpaint_pipeline_class(**txt.components)
         if hasattr(inpaint, "enable_attention_slicing"):
             inpaint.enable_attention_slicing()
         if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):

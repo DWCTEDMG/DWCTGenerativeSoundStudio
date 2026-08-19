@@ -16,6 +16,21 @@ const __dirname = path.dirname(__filename);
 const APP_NAME = "EDMG Studio";
 const IS_DEV = !app.isPackaged;
 const IS_WINDOWS = process.platform === "win32";
+const DISABLE_HARDWARE_ACCELERATION =
+  String(process.env.EDMG_ELECTRON_DISABLE_HARDWARE_ACCELERATION ?? "0").trim() === "1";
+
+// Keep this opt-in and separate from the backend accelerator profile. Some
+// Windows driver/Chromium combinations can crash Electron's display process;
+// disabling UI acceleration must not disable CUDA/TensorRT model rendering.
+if (DISABLE_HARDWARE_ACCELERATION) {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+  app.commandLine.appendSwitch("disable-software-rasterizer");
+  app.commandLine.appendSwitch("disable-accelerated-2d-canvas");
+  app.commandLine.appendSwitch("in-process-gpu");
+}
+
 const BOOTSTRAP_CONFIG_BASENAME = "bootstrap.json";
 const BACKEND_AUTH_TOKEN_BASENAME = "backend-auth-token.bin";
 const IGNORABLE_WRITE_ERROR_CODES = new Set(["EPIPE", "ERR_STREAM_DESTROYED"]);
