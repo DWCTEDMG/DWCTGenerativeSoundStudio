@@ -187,7 +187,9 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     private ModelPresentation CreatePresentation(ModelCatalogueEntry entry, bool isUserModel)
     {
         bool accepted = _catalogue?.Accepted?.ContainsKey(entry.Id) == true;
-        bool installed = entry.Installed || _catalogue?.Installed?.ContainsKey(entry.Id) == true;
+        bool installed = entry.Installed
+                         || (_catalogue?.Installed?.TryGetValue(entry.Id, out JsonElement installedValue) == true
+                             && installedValue.ValueKind == JsonValueKind.True);
         return new ModelPresentation(entry, isUserModel, accepted, installed);
     }
 

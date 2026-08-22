@@ -13,11 +13,15 @@ public sealed partial class RenderPage : Page
 {
     private string? _projectId;
     private bool _isBusy;
+    private bool _modelGuidanceUiReady;
     private CancellationTokenSource? _pageCancellation;
+    private ModelCatalogueResponse? _modelCatalogue;
+    private ModelRenderGuidance? _modelGuidance;
 
     public RenderPage()
     {
         InitializeComponent();
+        _modelGuidanceUiReady = true;
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -47,6 +51,8 @@ public sealed partial class RenderPage : Page
                 "Render tools are ready. Results and backend diagnostics appear below.",
                 InfoBarSeverity.Informational);
         }
+
+        _ = LoadModelGuidanceAsync(_pageCancellation.Token);
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -54,6 +60,126 @@ public sealed partial class RenderPage : Page
         _pageCancellation?.Cancel();
         base.OnNavigatedFrom(e);
     }
+
+    private async Task LoadModelGuidanceAsync(CancellationToken cancellationToken)
+    {
+        ModelGuidanceProgressRing.IsActive = true;
+        ModelGuidanceProgressRing.Visibility = Visibility.Visible;
+        ModelGuidanceSummaryText.Text = "Loading the model catalogue. Manual render controls remain available.";
+
+        try
+        {
+            _modelCatalogue = await App.Services.ApiClient.GetTypedModelCatalogueAsync(cancellationToken);
+            UpdateModelGuidance();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _modelCatalogue = null;
+            _modelGuidance = null;
+            ModelGuidanceSummaryText.Text =
+                $"Model guidance is unavailable: {ex.Message} Manual render controls remain available.";
+            PrimaryModelGuidanceText.Text = "Primary model: catalogue unavailable";
+            VideoModelGuidanceText.Text = "Video model: catalogue unavailable";
+            ModelGuidanceBlockersText.Visibility = Visibility.Collapsed;
+            ApplyRecommendedPrimaryModelButton.IsEnabled = false;
+            ApplyRecommendedVideoModelButton.IsEnabled = false;
+        }
+        finally
+        {
+            ModelGuidanceProgressRing.IsActive = false;
+            ModelGuidanceProgressRing.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void UpdateModelGuidance()
+    {
+        if (!_modelGuidanceUiReady || _modelCatalogue is null)
+        {
+            return;
+        }
+
+        var configuration = new ModelRenderConfiguration(
+            ModelBox.Text.Trim(),
+            VideoModelBox.Text.Trim(),
+            Selected(ModeComboBox, "auto"),
+            Selected(DeviceComboBox, "auto"),
+            Selected(TemporalModeComboBox, "keyframes"),
+            Selected(VideoModelEngineComboBox, "auto"),
+            Selected(KeyframeRendererComboBox, "internal"),
+            KeyframeModelBox.Text.Trim());
+
+        _modelGuidance = ModelRenderGuidanceEvaluator.Evaluate(_modelCatalogue, configuration);
+        ModelGuidanceSummaryText.Text = _modelGuidance.IsReady
+            ? "The selected models are ready for this render path."
+            : "Resolve the blockers below before rendering with this model configuration.";
+        PrimaryModelGuidanceText.Text = FormatModelGuidance("Primary model", _modelGuidance.Primary);
+        VideoModelGuidanceText.Text = configuration.TemporalMode.Equals(
+            "video_model",
+            StringComparison.OrdinalIgnoreCase)
+                ? FormatModelGuidance("Video model", _modelGuidance.Video)
+                : "Video model: not required for the selected temporal mode.";
+
+        ModelGuidanceBlockersText.Text = string.Join(Environment.NewLine, _modelGuidance.Blockers.Select(
+            blocker => $"- {blocker}"));
+        ModelGuidanceBlockersText.Visibility =
+            _modelGuidance.Blockers.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        ApplyRecommendedPrimaryModelButton.IsEnabled =
+            !string.IsNullOrWhiteSpace(_modelGuidance.RecommendedPrimaryModelId);
+        ApplyRecommendedVideoModelButton.IsEnabled =
+            configuration.TemporalMode.Equals("video_model", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(_modelGuidance.RecommendedVideoModelId);
+    }
+
+    private static string FormatModelGuidance(string label, ModelRenderCandidate? candidate)
+    {
+        if (candidate is null)
+        {
+            return $"{label}: no compatible selection";
+        }
+
+        string installed = candidate.IsInstalled ? "installed" : "not installed";
+        string lane = string.IsNullOrWhiteSpace(candidate.Lane) ? "unclassified lane" : $"{candidate.Lane} lane";
+        string license = string.IsNullOrWhiteSpace(candidate.LicenseId)
+            ? string.Empty
+            : $", license {candidate.LicenseId}";
+        return $"{label}: {candidate.Name} ({candidate.ModelId}) - {installed}, {lane}{license}.";
+    }
+
+    private void ModelGuidanceSelection_Changed(object sender, SelectionChangedEventArgs e) =>
+        UpdateModelGuidance();
+
+    private void ModelGuidanceText_Changed(object sender, TextChangedEventArgs e) =>
+        UpdateModelGuidance();
+
+    private void ApplyRecommendedPrimaryModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(_modelGuidance?.RecommendedPrimaryModelId))
+        {
+            ModelBox.Text = _modelGuidance.RecommendedPrimaryModelId;
+        }
+    }
+
+    private void ApplyRecommendedVideoModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(_modelGuidance?.RecommendedVideoModelId))
+        {
+            VideoModelBox.Text = _modelGuidance.RecommendedVideoModelId;
+        }
+    }
+
+    private async void RefreshModelGuidance_Click(object sender, RoutedEventArgs e)
+    {
+        if (_pageCancellation is not null)
+        {
+            await LoadModelGuidanceAsync(_pageCancellation.Token);
+        }
+    }
+
+    private void OpenModels_Click(object sender, RoutedEventArgs e) =>
+        App.Navigate("models");
 
     private void ApplySelectedVariant()
     {
@@ -70,51 +196,198 @@ public sealed partial class RenderPage : Page
     {
         string prompt = PromptBox.Text.Trim();
         long seed = LongNumber(SeedBox, -1);
-        string? refinerModel = EmptyToNull(RefinerModelBox.Text);
-        string? sourceAsset = EmptyToNull(MotionSourceBox.Text);
-        JsonNode? parseqManifest = ParseOptionalNode(ParseqBox.Text, "Parseq manifest", JsonValueKind.Object);
-
-        var request = new JsonObject
+        var settings = new InternalVideoRenderSettings
         {
-            ["variant_index"] = Math.Max(0, App.Services.Session.SelectedVariantIndex),
-            ["fps_output"] = Number(FpsBox, 24),
-            ["fps_render"] = Math.Min(Number(FpsBox, 24), 30),
-            ["width"] = Number(WidthBox, 1280),
-            ["height"] = Number(HeightBox, 720),
-            ["steps"] = Number(StepsBox, 28),
-            ["cfg"] = Number(CfgBox, 7.0),
-            ["sampler"] = Selected(SamplerComboBox, "euler"),
-            ["seed"] = seed < 0 ? null : seed,
-            ["keyframe_interval_s"] = 1.0,
-            ["interpolation_engine"] = Selected(InterpolationComboBox, "auto"),
-            ["model_id"] = EmptyToNull(ModelBox.Text) ?? "auto",
-            ["render_mode"] = Selected(ModeComboBox, "auto"),
-            ["render_tier"] = Selected(TierComboBox, "balanced"),
-            ["device_preference"] = Selected(DeviceComboBox, "auto"),
-            ["allow_hosted_fallback"] = true,
-            ["hosted_service"] = Selected(HostedProviderComboBox, "default"),
-            ["hosted_model"] = EmptyToNull(HostedModelBox.Text),
-            ["negative_prompt"] = NegativePromptBox.Text.Trim(),
-            ["loras"] = ParseLoras(LorasBox.Text),
-            ["vae"] = EmptyToNull(VaeBox.Text),
-            ["refiner"] = refinerModel is null
-                ? null
-                : new JsonObject { ["model"] = refinerModel, ["switch_at"] = 0.8 },
-            ["temporal_mode"] = "keyframes",
-            ["temporal_strength"] = Number(TemporalConsistencyBox, 0.75),
-            ["motion_strategy"] = Number(MotionStrengthBox, 1.0) > 1.0
-                ? "storyboard_full_motion"
-                : "manual",
-            ["parseq_enabled"] = parseqManifest is not null,
-            ["parseq_manifest"] = parseqManifest,
-            ["source_asset"] = sourceAsset,
-            ["source_strength"] = Math.Clamp(Number(MotionStrengthBox, 1.0) / 5.0, 0.05, 0.95),
-            ["deforum_prompts"] = string.IsNullOrWhiteSpace(prompt)
-                ? null
-                : new JsonObject { ["0"] = prompt },
+            VariantIndex = App.Services.Session.SelectedVariantIndex,
+            OutputFps = (int)Number(FpsBox, 24),
+            RenderFps = (int)Number(RenderFpsBox, 3),
+            Width = (int)Number(WidthBox, 1280),
+            Height = (int)Number(HeightBox, 720),
+            Steps = (int)Number(StepsBox, 28),
+            Cfg = Number(CfgBox, 7.0),
+            Sampler = Selected(SamplerComboBox, "euler"),
+            Seed = seed < 0 ? null : seed,
+            KeyframeIntervalSeconds = Number(KeyframeIntervalBox, 5.0),
+            InterpolationEngine = Selected(InterpolationComboBox, "auto"),
+            ModelId = EmptyToNull(ModelBox.Text) ?? "auto",
+            RenderMode = Selected(ModeComboBox, "auto"),
+            RenderTier = Selected(TierComboBox, "balanced"),
+            DevicePreference = Selected(DeviceComboBox, "auto"),
+            AllowHostedFallback = HostedFallbackToggle.IsOn,
+            HostedService = Selected(HostedProviderComboBox, "default"),
+            HostedModel = EmptyToNull(HostedModelBox.Text),
+            HostedStylePreset = EmptyToNull(HostedStyleBox.Text),
+            NegativePrompt = NegativePromptBox.Text,
+            Loras = LorasBox.Text,
+            Vae = EmptyToNull(VaeBox.Text),
+            RefinerEnabled = EnableRefinerToggle.IsOn,
+            RefinerModelId = EmptyToNull(RefinerModelBox.Text),
+            RefinerSwitchAt = Number(RefinerSwitchBox, 0.8),
+            TemporalMode = Selected(TemporalModeComboBox, "keyframes"),
+            TemporalStrength = Number(TemporalConsistencyBox, 0.75),
+            TemporalSteps = NullableNumber(TemporalStepsBox),
+            RefineEveryNFrames = (int)Number(RefineEveryBox, 1),
+            AnchorStrength = Number(AnchorStrengthBox, 0.2),
+            PromptBlend = PromptBlendToggle.IsOn,
+            ResumeExistingFrames = ResumeFramesToggle.IsOn,
+            MotionStrategy = Selected(MotionStrategyComboBox, "manual"),
+            StoryboardShotMaxSeconds = Number(StoryboardShotMaxBox, 4.0),
+            VideoModelEngine = Selected(VideoModelEngineComboBox, "auto"),
+            VideoModelId = EmptyToNull(VideoModelBox.Text),
+            VideoModelMaxFramesPerScene = (int)Number(FramesBox, 25),
+            VideoModelMotionBucketId = (int)Number(MotionBucketBox, 127),
+            VideoModelNoiseAugStrength = Number(NoiseAugBox, 0.02),
+            VideoModelDecodeChunkSize = (int)Number(DecodeChunkBox, 8),
+            VideoModelDtype = Selected(VideoDtypeComboBox, "auto"),
+            VideoModelCpuOffload = VideoCpuOffloadToggle.IsOn,
+            VideoModelMotionScoreMode = Selected(MotionScoreModeComboBox, "auto"),
+            VideoModelManualMotionScore = (int)Number(ManualMotionScoreBox, 4),
+            VideoModelAnchorMode = Selected(VideoAnchorModeComboBox, "start"),
+            VideoModelPromptRefine = VideoPromptRefineToggle.IsOn,
+            VideoModelSceneMotion = Selected(SceneMotionComboBox, "subject"),
+            VideoModelApplyTimelineCamera = TimelineCameraToggle.IsOn,
+            VideoModelKeyframeRenderer = Selected(KeyframeRendererComboBox, "internal"),
+            VideoModelKeyframeModelId = EmptyToNull(KeyframeModelBox.Text),
+            MotionScoreSchedule = MotionScoreScheduleBox.Text,
+            NoiseAugSchedule = NoiseAugScheduleBox.Text,
+            AnchorStrengthSchedule = AnchorStrengthScheduleBox.Text,
+            ParseqEnabled = ParseqToggle.IsOn,
+            ParseqManifest = ParseqBox.Text,
+            SourceAsset = EmptyToNull(MotionSourceBox.Text),
+            SourceStrength = Number(SourceStrengthBox, 0.55),
+            DeforumPrompts = string.IsNullOrWhiteSpace(prompt)
+                ? string.Empty
+                : JsonSerializer.Serialize(new Dictionary<string, string> { ["0"] = prompt }),
+            DeforumNegativePrompts = DeforumNegativePromptsBox.Text,
+            DeforumZoom = DeforumZoomBox.Text,
+            DeforumAngle = DeforumAngleBox.Text,
+            DeforumTranslationX = DeforumTranslationXBox.Text,
+            DeforumTranslationY = DeforumTranslationYBox.Text,
+            DeforumTranslationZ = DeforumTranslationZBox.Text,
+            DeforumRotationX = DeforumRotationXBox.Text,
+            DeforumRotationY = DeforumRotationYBox.Text,
+            DeforumRotationZ = DeforumRotationZBox.Text,
+            DeforumFov = DeforumFovBox.Text,
+            DeforumStrength = DeforumStrengthBox.Text,
+            DeforumCfg = DeforumCfgBox.Text,
+            DeforumSteps = DeforumStepsBox.Text,
+            DeforumDenoise = DeforumDenoiseBox.Text,
         };
+        return InternalVideoRenderRequestBuilder.Build(settings);
+    }
 
-        return StudioPageHelpers.ToElement(request);
+    private RenderQuickSetup ResolveQuickSetup() =>
+        RenderQuickSetup.Resolve(
+            Selected(QuickGoalComboBox, "auto"),
+            Selected(QuickQualityComboBox, "balanced"),
+            Selected(QuickResolutionComboBox, "768x432"),
+            (int)Number(QuickFpsBox, 24));
+
+    private RenderQuickSetup ApplyQuickSetup()
+    {
+        RenderQuickSetup setup = ResolveQuickSetup();
+
+        string model = QuickModelBox.Text.Trim();
+        string selectedModel = string.IsNullOrWhiteSpace(model) ? "auto" : model;
+        SelectComboValue(PipelinePresetComboBox, setup.Quality);
+        SelectComboValue(PipelineModeComboBox, "auto");
+
+        if (setup.Route == "stills")
+        {
+            StillsWidthBox.Value = setup.Width;
+            StillsHeightBox.Value = setup.Height;
+            StillsStepsBox.Value = setup.Steps;
+            StillsCfgBox.Value = setup.Cfg;
+            StillsModelBox.Text = selectedModel;
+        }
+        else if (setup.Route == "motion")
+        {
+            SelectComboValue(MotionEngineComboBox, setup.VideoModelEngine);
+            MotionWidthBox.Value = setup.Width;
+            MotionHeightBox.Value = setup.Height;
+            MotionFpsBox.Value = setup.MotionFps;
+            MotionFramesBox.Value = setup.MaximumFrames;
+            MotionStepsBox.Value = setup.Steps;
+            MotionModelBox.Text = selectedModel;
+        }
+        else if (setup.Route == "internal")
+        {
+            SelectComboValue(ModeComboBox, "auto");
+            SelectComboValue(TierComboBox, setup.RenderTier);
+            SelectComboValue(TemporalModeComboBox, setup.TemporalMode);
+            SelectComboValue(VideoModelEngineComboBox, setup.VideoModelEngine);
+            WidthBox.Value = setup.Width;
+            HeightBox.Value = setup.Height;
+            FpsBox.Value = setup.OutputFps;
+            RenderFpsBox.Value = setup.RenderFps;
+            StepsBox.Value = setup.Steps;
+            CfgBox.Value = setup.Cfg;
+            ModelBox.Text = selectedModel;
+            VideoModelBox.Text = selectedModel == "auto" ? string.Empty : selectedModel;
+            MotionStrengthBox.Value = 1.5;
+        }
+
+        QuickSetupSummaryText.Text = setup.OpensTimeline
+            ? "Timeline editor · captured, imported, and rendered media"
+            : $"{QuickGoalLabel(setup.Goal)} · {setup.RenderTier} · {setup.Width} × {setup.Height} · "
+              + $"{setup.OutputFps} FPS delivery / {setup.RenderFps} FPS generation · "
+              + $"{setup.TemporalMode} · {setup.VideoModelEngine}";
+        return setup;
+    }
+
+    private void OpenAiPlanner_Click(object sender, RoutedEventArgs e) => App.Navigate("plannerLab");
+
+    private void ApplyQuickSetup_Click(object sender, RoutedEventArgs e) => ApplyQuickSetup();
+
+    private void QuickPreflight_Click(object sender, RoutedEventArgs e)
+    {
+        RenderQuickSetup setup = ResolveQuickSetup();
+        if (setup.OpensTimeline)
+        {
+            Frame.Navigate(typeof(TimelinePage));
+            return;
+        }
+
+        if (setup.Route == "pipeline")
+        {
+            ValidatePipeline_Click(sender, e);
+        }
+        else if (setup.Route == "internal")
+        {
+            Preflight_Click(sender, e);
+        }
+        else
+        {
+            ShowStatus(
+                $"{QuickGoalLabel(setup.Goal)} settings are ready. This render path validates when it starts.",
+                InfoBarSeverity.Informational);
+        }
+    }
+
+    private void QuickRender_Click(object sender, RoutedEventArgs e)
+    {
+        RenderQuickSetup setup = ResolveQuickSetup();
+        if (setup.OpensTimeline)
+        {
+            Frame.Navigate(typeof(TimelinePage));
+            return;
+        }
+
+        switch (setup.Route)
+        {
+            case "pipeline":
+                RunPipeline_Click(sender, e);
+                break;
+            case "stills":
+                RenderStills_Click(sender, e);
+                break;
+            case "motion":
+                RenderMotionScenes_Click(sender, e);
+                break;
+            default:
+                Render_Click(sender, e);
+                break;
+        }
     }
 
     private async void Preflight_Click(object sender, RoutedEventArgs e) =>
@@ -907,6 +1180,19 @@ public sealed partial class RenderPage : Page
         return JsonNode.Parse(element.GetRawText());
     }
 
+    private static JsonNode? ParseSchedule(string value, string label)
+    {
+        string schedule = value.Trim();
+        if (schedule.Length == 0)
+        {
+            return null;
+        }
+
+        return schedule.StartsWith('{')
+            ? ParseOptionalNode(schedule, label, JsonValueKind.Object)
+            : JsonValue.Create(schedule);
+    }
+
     private static JsonDocument ParseDocument(string value, string label)
     {
         try
@@ -1047,6 +1333,34 @@ public sealed partial class RenderPage : Page
             string value when !string.IsNullOrWhiteSpace(value) => value,
             _ when comboBox.SelectedValue is string value && !string.IsNullOrWhiteSpace(value) => value,
             _ => fallback,
+        };
+
+    private static void SelectComboValue(ComboBox comboBox, string value)
+    {
+        foreach (object itemValue in comboBox.Items)
+        {
+            if (itemValue is not ComboBoxItem item)
+            {
+                continue;
+            }
+
+            string candidate = item.Tag?.ToString() ?? item.Content?.ToString() ?? string.Empty;
+            if (string.Equals(candidate, value, StringComparison.OrdinalIgnoreCase))
+            {
+                comboBox.SelectedItem = item;
+                return;
+            }
+        }
+    }
+
+    private static string QuickGoalLabel(string goal) =>
+        goal switch
+        {
+            "stills" => "Still scenes",
+            "motion_ad" => "AnimateDiff motion",
+            "motion_svd" => "SVD image to video",
+            "full_video" => "Full-motion video",
+            _ => "Automatic internal",
         };
 
     private static string? EmptyToNull(string? value) =>

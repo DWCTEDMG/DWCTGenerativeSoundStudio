@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -88,5 +89,33 @@ internal static class StudioPageHelpers
                 SetControlsEnabled(child, enabled);
             }
         }
+    }
+
+    public static Task<bool> ConfirmAsync(
+        XamlRoot xamlRoot,
+        StudioActionConfirmation confirmation)
+        => ConfirmAsync(
+            xamlRoot,
+            confirmation.Title,
+            confirmation.Message,
+            confirmation.PrimaryButtonText);
+
+    public static async Task<bool> ConfirmAsync(
+        XamlRoot xamlRoot,
+        string title,
+        string message,
+        string primaryButtonText)
+    {
+        var confirmation = new ContentDialog
+        {
+            XamlRoot = xamlRoot,
+            Title = title,
+            Content = message,
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        return await confirmation.ShowAsync() == ContentDialogResult.Primary;
     }
 }

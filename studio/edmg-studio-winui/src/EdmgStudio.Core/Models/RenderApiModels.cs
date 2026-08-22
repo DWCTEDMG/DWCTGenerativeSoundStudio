@@ -867,7 +867,6 @@ public sealed record RenderConductorPlanRequest
                 "comfyui_still",
                 "comfyui_motion",
                 "hosted_video",
-                "proxy",
                 "deforum_export",
                 "tensorrt_standalone"))
             .ToArray();
@@ -925,7 +924,6 @@ public sealed record RenderConductorPromoteRequest
             "comfyui_still",
             "comfyui_motion",
             "hosted_video",
-            "proxy",
             "deforum_export",
             "tensorrt_standalone");
         QualityTier = RenderContractValidation.Choice(

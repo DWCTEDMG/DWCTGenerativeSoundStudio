@@ -71,6 +71,8 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Button x:Name="PlayPauseButton"
                         Grid.Column="0"
@@ -128,15 +130,36 @@
                     <ComboBoxItem Content="Snap: 1/2 beat" Tag="half" />
                     <ComboBoxItem Content="Snap: 1/4 beat" Tag="quarter" />
                 </ComboBox>
+                <ToggleButton x:Name="RippleToggle"
+                              Grid.Column="9"
+                              AutomationProperties.AutomationId="Timeline.Ripple"
+                              Content="Ripple"
+                              ToolTipService.ToolTip="Shift later clips on the same track after moving, trimming, quantizing, or deleting a clip."
+                              Checked="RippleToggle_Changed"
+                              Unchecked="RippleToggle_Changed" />
+                <StackPanel Grid.Column="10" Orientation="Horizontal" Spacing="4">
+                    <ToggleButton x:Name="SelectToolButton"
+                                  AutomationProperties.AutomationId="Timeline.ToolSelect"
+                                  MinWidth="72"
+                                  Content="Select"
+                                  ToolTipService.ToolTip="Select, move, and trim timeline clips."
+                                  Click="SelectToolButton_Click" />
+                    <ToggleButton x:Name="BladeToolButton"
+                                  AutomationProperties.AutomationId="Timeline.ToolBlade"
+                                  MinWidth="72"
+                                  Content="Blade"
+                                  ToolTipService.ToolTip="Split a clip by clicking the desired cut point."
+                                  Click="BladeToolButton_Click" />
+                </StackPanel>
                 <Slider x:Name="ZoomSlider"
-                        Grid.Column="9"
+                        Grid.Column="11"
                         AutomationProperties.AutomationId="Timeline.Zoom"
                         Width="108"
                         Minimum="35"
                         Maximum="320"
                         Value="100"
                         ValueChanged="ZoomSlider_ValueChanged" />
-                <Button Grid.Column="10"
+                <Button Grid.Column="12"
                         AutomationProperties.AutomationId="Timeline.Fit"
                         Content="Fit"
                         Click="FitTimeline_Click" />
@@ -475,6 +498,74 @@
                                                 Click="OverwritePlan_Click" />
                                     </Grid>
                                 </StackPanel>
+
+                                <Border Padding="12"
+                                        CornerRadius="8"
+                                        BorderThickness="1"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="AI EDIT ASSISTANT"
+                                                   FontSize="11"
+                                                   FontWeight="SemiBold"
+                                                   CharacterSpacing="90"
+                                                   Style="{StaticResource StudioSecondaryTextStyle}" />
+                                        <TextBlock Text="Describe the pacing, shot structure, or visual edit you want. The assistant creates a reviewable proposal and never changes the Timeline until you apply it."
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource StudioCaptionTextStyle}" />
+                                        <TextBox x:Name="AiEditInstructionTextBox"
+                                                 AutomationProperties.AutomationId="Timeline.AiEdit.Instruction"
+                                                 Header="Editing direction"
+                                                 PlaceholderText="Example: Build a fast intro, breathe through the verse, then cut tightly on the final drop."
+                                                 AcceptsReturn="True"
+                                                 TextWrapping="Wrap"
+                                                 MinHeight="82" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <NumberBox x:Name="AiEditMaximumScenesNumberBox"
+                                                       Grid.Column="0"
+                                                       AutomationProperties.AutomationId="Timeline.AiEdit.MaximumScenes"
+                                                       Header="Maximum scenes"
+                                                       Minimum="1"
+                                                       Maximum="64"
+                                                       Value="12"
+                                                       SpinButtonPlacementMode="Compact" />
+                                            <Button x:Name="GenerateAiEditButton"
+                                                    Grid.Column="1"
+                                                    VerticalAlignment="Bottom"
+                                                    AutomationProperties.AutomationId="Timeline.AiEdit.Generate"
+                                                    Content="Generate proposal"
+                                                    Click="GenerateAiEdit_Click" />
+                                        </Grid>
+                                        <TextBlock x:Name="AiEditProposalText"
+                                                   AutomationProperties.AutomationId="Timeline.AiEdit.Proposal"
+                                                   Text="No AI edit proposal has been generated."
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource StudioCaptionTextStyle}" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button x:Name="AppendAiEditButton"
+                                                    Grid.Column="0"
+                                                    AutomationProperties.AutomationId="Timeline.AiEdit.Append"
+                                                    Content="Append proposal"
+                                                    IsEnabled="False"
+                                                    Click="AppendAiEdit_Click" />
+                                            <Button x:Name="ReplaceWithAiEditButton"
+                                                    Grid.Column="1"
+                                                    AutomationProperties.AutomationId="Timeline.AiEdit.Replace"
+                                                    Content="Replace Timeline"
+                                                    Style="{StaticResource StudioDangerButtonStyle}"
+                                                    IsEnabled="False"
+                                                    Click="ReplaceWithAiEdit_Click" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
 
                                 <StackPanel Spacing="6">
                                     <TextBlock Text="SOURCE ASSIGNMENT"

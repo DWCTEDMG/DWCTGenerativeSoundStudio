@@ -16,7 +16,7 @@ public sealed class TimelineAutomationTests
               "tracks": [{
                 "id": "picture",
                 "type": "video",
-                "locked": true,
+                "locked": false,
                 "clips": [{
                   "id": "clip-1",
                   "start_s": 1,
@@ -41,7 +41,7 @@ public sealed class TimelineAutomationTests
         var track = result.Timeline["tracks"]![0]!.AsObject();
         var clip = track["clips"]![0]!.AsObject();
         Assert.AreEqual("keep-root", result.Timeline["revision"]!.GetValue<string>());
-        Assert.IsTrue(track["locked"]!.GetValue<bool>());
+        Assert.IsFalse(track["locked"]!.GetValue<bool>());
         Assert.AreEqual("clip", clip["vendor"]!["keep"]!.GetValue<string>());
         Assert.AreEqual("data", clip["data"]!["custom"]!["keep"]!.GetValue<string>());
         Assert.AreEqual(
@@ -164,5 +164,33 @@ public sealed class TimelineAutomationTests
             TimelineAutomation.SequenceTrack(timeline, 0, 0, -0.1));
         Assert.ThrowsExactly<InvalidOperationException>(() =>
             TimelineAutomation.SequenceTrack(timeline, 1, 0, 0));
+    }
+
+    [TestMethod]
+    public void AutomationOperations_RejectLockedTracks()
+    {
+        var timeline = JsonNode.Parse(
+            """
+            {
+              "tracks": [{
+                "id": "picture",
+                "type": "video",
+                "locked": true,
+                "clips": [{
+                  "id": "clip-1",
+                  "start_s": 0,
+                  "end_s": 4,
+                  "data": {"name": "Opening"}
+                }]
+              }]
+            }
+            """)!.AsObject();
+
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            TimelineAutomation.AssignSource(timeline, "clip-1", "source.mp4"));
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            TimelineAutomation.AddSourceClip(timeline, "source.mp4", 0, 2, 0));
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            TimelineAutomation.SequenceTrack(timeline, 0, 0, 0));
     }
 }

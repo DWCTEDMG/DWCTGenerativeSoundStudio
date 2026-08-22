@@ -24,6 +24,11 @@ public static class TimelineAutomation
         TimelineLaneDocument lane = lanes.FirstOrDefault(
             item => string.Equals(item.StableId, stableId, StringComparison.Ordinal))
             ?? throw new InvalidOperationException("The selected timeline clip no longer exists.");
+        if (!lane.IsLayer && TimelineProjection.IsTrackLocked(timeline, lane.TrackIndex))
+        {
+            throw new InvalidOperationException($"Track {lane.TrackIndex + 1} is locked.");
+        }
+
         lane.SourcePath = sourcePath.Trim();
 
         return new TimelineAutomationResult(
@@ -54,6 +59,11 @@ public static class TimelineAutomation
         }
 
         ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
+        if (TimelineProjection.IsTrackLocked(timeline, trackIndex))
+        {
+            throw new InvalidOperationException($"Track {trackIndex + 1} is locked.");
+        }
+
         string normalizedPath = sourcePath.Trim();
         string type = InferMediaType(normalizedPath);
         string name = Path.GetFileNameWithoutExtension(normalizedPath);
@@ -83,6 +93,11 @@ public static class TimelineAutomation
     {
         ArgumentNullException.ThrowIfNull(timeline);
         ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
+        if (TimelineProjection.IsTrackLocked(timeline, trackIndex))
+        {
+            throw new InvalidOperationException($"Track {trackIndex + 1} is locked.");
+        }
+
         if (!double.IsFinite(startSeconds) || startSeconds < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(startSeconds));

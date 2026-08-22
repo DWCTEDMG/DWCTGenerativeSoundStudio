@@ -521,9 +521,18 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
     private async Task RunJobActionAsync(
         string action,
-        Func<string, string, CancellationToken, Task<StudioJobActionResponse>> operation)
+        Func<string, string, CancellationToken, Task<StudioJobActionResponse>> operation,
+        StudioJobConfirmationAction? confirmationAction = null)
     {
         if (_selectedProject is null || SelectedJob is null || _isBusy)
+        {
+            return;
+        }
+
+        if (confirmationAction is StudioJobConfirmationAction requiredConsent &&
+            !await StudioPageHelpers.ConfirmAsync(
+                XamlRoot,
+                StudioJobConfirmationFactory.CreateRecoveryConsent(SelectedJob.Job, requiredConsent)))
         {
             return;
         }
@@ -863,7 +872,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     {
         if (SelectedJob?.Job.CanResume == true)
         {
-            await RunJobActionAsync("Resume", _apiClient.ResumeJobAsync);
+            await RunJobActionAsync("Resume", _apiClient.ResumeJobAsync, StudioJobConfirmationAction.Resume);
         }
         else if (SelectedJob?.Job.CanPause == true)
         {
@@ -875,7 +884,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         await RunJobActionAsync("Cancel", _apiClient.CancelJobAsync);
 
     private async void OnRetryJobClick(object sender, RoutedEventArgs e) =>
-        await RunJobActionAsync("Retry", _apiClient.RetryJobAsync);
+        await RunJobActionAsync("Retry", _apiClient.RetryJobAsync, StudioJobConfirmationAction.Retry);
 
     private async void OnViewJobLogClick(object sender, RoutedEventArgs e) =>
         await LoadSelectedJobLogAsync();

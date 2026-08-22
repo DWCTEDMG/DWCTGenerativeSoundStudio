@@ -340,12 +340,18 @@ public static class TimelineProjection
         return result;
     }
 
+    public static bool CanSplitAt(TimelineLaneDocument lane, double splitSeconds)
+    {
+        ArgumentNullException.ThrowIfNull(lane);
+        return splitSeconds > lane.StartSeconds + MinimumDurationSeconds &&
+            splitSeconds < lane.EndSeconds - MinimumDurationSeconds;
+    }
+
     public static (TimelineLaneDocument Left, TimelineLaneDocument Right) Split(
         TimelineLaneDocument lane,
         double splitSeconds)
     {
-        if (splitSeconds <= lane.StartSeconds + MinimumDurationSeconds ||
-            splitSeconds >= lane.EndSeconds - MinimumDurationSeconds)
+        if (!CanSplitAt(lane, splitSeconds))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(splitSeconds),
@@ -397,6 +403,157 @@ public static class TimelineProjection
         ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
         result.TrackIndex = trackIndex;
         return result;
+    }
+
+    public static bool IsTrackLocked(JsonObject timeline, int trackIndex)
+    {
+        ArgumentNullException.ThrowIfNull(timeline);
+        ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
+        var tracks = timeline["tracks"] as JsonArray;
+        return trackIndex < (tracks?.Count ?? 0) &&
+            tracks![trackIndex] is JsonObject track &&
+            track["locked"]?.GetValue<bool>() == true;
+    }
+
+    public static JsonObject SetTrackLocked(JsonObject timeline, int trackIndex, bool locked)
+    {
+        ArgumentNullException.ThrowIfNull(timeline);
+        ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
+        var result = timeline.DeepClone().AsObject();
+        var tracks = result["tracks"] as JsonArray ??
+            throw new ArgumentException("The timeline does not contain tracks.", nameof(timeline));
+        if (trackIndex >= tracks.Count || tracks[trackIndex] is not JsonObject track)
+        {
+            throw new ArgumentOutOfRangeException(nameof(trackIndex));
+        }
+
+        track["locked"] = locked;
+        return result;
+    }
+
+    public static JsonObject PreserveLockedTracks(JsonObject original, JsonObject proposed)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(proposed);
+        var result = proposed.DeepClone().AsObject();
+        if (original["tracks"] is not JsonArray originalTracks)
+        {
+            return result;
+        }
+
+        var proposedTracks = result["tracks"] as JsonArray ?? [];
+        result["tracks"] = proposedTracks;
+        for (var originalIndex = 0; originalIndex < originalTracks.Count; originalIndex++)
+        {
+            if (originalTracks[originalIndex] is not JsonObject originalTrack ||
+                originalTrack["locked"]?.GetValue<bool>() != true)
+            {
+                continue;
+            }
+
+            int targetIndex = FindTrackIndex(proposedTracks, originalTrack, originalIndex);
+            JsonNode preservedTrack = originalTrack.DeepClone();
+            if (targetIndex < proposedTracks.Count)
+            {
+                proposedTracks[targetIndex] = preservedTrack;
+            }
+            else
+            {
+                while (proposedTracks.Count < targetIndex)
+                {
+                    proposedTracks.Add(new JsonObject { ["clips"] = new JsonArray() });
+                }
+
+                proposedTracks.Add(preservedTrack);
+            }
+        }
+
+        return result;
+    }
+
+    public static IReadOnlyList<TimelineLaneDocument> RippleAfterEdit(
+        IEnumerable<TimelineLaneDocument> lanes,
+        TimelineLaneDocument original,
+        TimelineLaneDocument edited,
+        double timelineDurationSeconds)
+    {
+        ArgumentNullException.ThrowIfNull(lanes);
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(edited);
+        ValidateTimelineDuration(timelineDurationSeconds);
+        if (original.IsLayer || edited.IsLayer || original.TrackIndex != edited.TrackIndex)
+        {
+            return lanes.Select(lane => CloneLane(lane)).ToArray();
+        }
+
+        return Ripple(
+            lanes,
+            original,
+            edited.EndSeconds - original.EndSeconds,
+            timelineDurationSeconds);
+    }
+
+    public static IReadOnlyList<TimelineLaneDocument> RippleAfterDelete(
+        IEnumerable<TimelineLaneDocument> lanes,
+        TimelineLaneDocument deleted,
+        double timelineDurationSeconds)
+    {
+        ArgumentNullException.ThrowIfNull(lanes);
+        ArgumentNullException.ThrowIfNull(deleted);
+        ValidateTimelineDuration(timelineDurationSeconds);
+        if (deleted.IsLayer)
+        {
+            return lanes.Select(lane => CloneLane(lane)).ToArray();
+        }
+
+        return Ripple(
+            lanes,
+            deleted,
+            -(deleted.EndSeconds - deleted.StartSeconds),
+            timelineDurationSeconds);
+    }
+
+    private static IReadOnlyList<TimelineLaneDocument> Ripple(
+        IEnumerable<TimelineLaneDocument> lanes,
+        TimelineLaneDocument anchor,
+        double deltaSeconds,
+        double timelineDurationSeconds) =>
+        lanes.Select(lane =>
+        {
+            var result = CloneLane(lane);
+            if (lane.IsLayer ||
+                lane.TrackIndex != anchor.TrackIndex ||
+                lane.StableId == anchor.StableId ||
+                lane.StartSeconds < anchor.EndSeconds)
+            {
+                return result;
+            }
+
+            var duration = Math.Max(MinimumDurationSeconds, lane.EndSeconds - lane.StartSeconds);
+            result.StartSeconds = Math.Clamp(
+                lane.StartSeconds + deltaSeconds,
+                0,
+                Math.Max(0, timelineDurationSeconds - duration));
+            result.EndSeconds = result.StartSeconds + duration;
+            return result;
+        }).ToArray();
+
+    private static int FindTrackIndex(JsonArray tracks, JsonObject originalTrack, int fallbackIndex)
+    {
+        string? originalId = GetString(originalTrack["id"]);
+        if (!string.IsNullOrWhiteSpace(originalId))
+        {
+            for (var index = 0; index < tracks.Count; index++)
+            {
+                if (tracks[index] is JsonObject track &&
+                    string.Equals(GetString(track["id"]), originalId, StringComparison.Ordinal))
+                {
+                    return index;
+                }
+            }
+        }
+
+        return fallbackIndex;
     }
 
     public static IReadOnlyList<TimelineLaneDocument> OrderLanes(

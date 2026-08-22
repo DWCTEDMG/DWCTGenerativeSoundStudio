@@ -135,6 +135,90 @@ public sealed class TimelineProjectionTests
     }
 
     [TestMethod]
+    public void TrackLock_CanBeQueriedAndPersistentlyChanged()
+    {
+        var timeline = CreateVideoTimeline();
+
+        Assert.IsFalse(TimelineProjection.IsTrackLocked(timeline, 0));
+        var locked = TimelineProjection.SetTrackLocked(timeline, 0, true);
+
+        Assert.IsTrue(TimelineProjection.IsTrackLocked(locked, 0));
+        Assert.IsFalse(TimelineProjection.IsTrackLocked(timeline, 0));
+    }
+
+    [TestMethod]
+    public void PreserveLockedTracks_RestoresLockedTrackByIdAndKeepsOtherBackendChanges()
+    {
+        var original = JsonNode.Parse(
+            """
+            {"revision":"old","tracks":[
+              {"id":"locked","locked":true,"clips":[{"id":"keep","start_s":1,"end_s":3}]},
+              {"id":"open","clips":[{"id":"old","start_s":0,"end_s":1}]}
+            ]}
+            """)!.AsObject();
+        var proposed = JsonNode.Parse(
+            """
+            {"revision":"new","tracks":[
+              {"id":"open","clips":[{"id":"new","start_s":2,"end_s":4}]},
+              {"id":"locked","clips":[{"id":"replace","start_s":5,"end_s":8}]}
+            ]}
+            """)!.AsObject();
+
+        JsonObject result = TimelineProjection.PreserveLockedTracks(original, proposed);
+
+        Assert.AreEqual("new", result["revision"]!.GetValue<string>());
+        Assert.AreEqual("new", result["tracks"]![0]!["clips"]![0]!["id"]!.GetValue<string>());
+        Assert.AreEqual("keep", result["tracks"]![1]!["clips"]![0]!["id"]!.GetValue<string>());
+        Assert.IsTrue(result["tracks"]![1]!["locked"]!.GetValue<bool>());
+    }
+
+    [TestMethod]
+    public void RippleAfterDelete_ClosesGapOnlyOnSameTrack()
+    {
+        var timeline = JsonNode.Parse(
+            """
+            {"tracks":[
+              {"id":"a","clips":[
+                {"id":"one","start_s":1,"end_s":3},
+                {"id":"two","start_s":4,"end_s":6}
+              ]},
+              {"id":"b","clips":[{"id":"other","start_s":4,"end_s":6}]}
+            ]}
+            """)!.AsObject();
+        var lanes = TimelineProjection.Project(timeline);
+        var deleted = lanes.Single(lane => lane.StableId == "one");
+        var remaining = lanes.Where(lane => lane.StableId != deleted.StableId);
+
+        var rippled = TimelineProjection.RippleAfterDelete(remaining, deleted, 10);
+
+        Assert.AreEqual(2, rippled.Single(lane => lane.StableId == "two").StartSeconds);
+        Assert.AreEqual(4, rippled.Single(lane => lane.TrackIndex == 1).StartSeconds);
+    }
+
+    [TestMethod]
+    public void RippleAfterEdit_ShiftsDownstreamByEndDeltaAndKeepsBounds()
+    {
+        var timeline = JsonNode.Parse(
+            """
+            {"tracks":[{"id":"a","clips":[
+              {"id":"one","start_s":1,"end_s":3},
+              {"id":"two","start_s":4,"end_s":6},
+              {"id":"three","start_s":8,"end_s":10}
+            ]}]}
+            """)!.AsObject();
+        var lanes = TimelineProjection.Project(timeline);
+        var original = lanes[0];
+        var edited = TimelineProjection.Trim(original, 1, 5, 10);
+        var withEdited = lanes.Select(lane => lane.StableId == original.StableId ? edited : lane);
+
+        var rippled = TimelineProjection.RippleAfterEdit(withEdited, original, edited, 10);
+
+        Assert.AreEqual(6, rippled[1].StartSeconds);
+        Assert.AreEqual(8, rippled[2].StartSeconds);
+        Assert.AreEqual(10, rippled[2].EndSeconds);
+    }
+
+    [TestMethod]
     public void LegacyLayers_RebuildPreservesMetadataAndSupportsDeletion()
     {
         var timeline = JsonNode.Parse(
@@ -314,6 +398,16 @@ public sealed class TimelineProjectionTests
     }
 
     [TestMethod]
+    public void CanSplitAt_RequiresMinimumDurationOnBothSides()
+    {
+        TimelineLaneDocument lane = GetVideoLane();
+
+        Assert.IsFalse(TimelineProjection.CanSplitAt(lane, 1.05));
+        Assert.IsTrue(TimelineProjection.CanSplitAt(lane, 3));
+        Assert.IsFalse(TimelineProjection.CanSplitAt(lane, 4.95));
+    }
+
+    [TestMethod]
     public void Split_CreatesIndependentClipsAndDividesSourceRange()
     {
         var (left, right) = TimelineProjection.Split(GetVideoLane(), 3);
@@ -323,6 +417,26 @@ public sealed class TimelineProjectionTests
         Assert.AreEqual(5, left.SourceOutSeconds);
         Assert.AreEqual(5, right.SourceInSeconds);
         Assert.AreNotEqual(left.StableId, right.StableId);
+    }
+
+    [TestMethod]
+    public void Split_NonVideoLanePreservesSourceRangeAndTrack()
+    {
+        TimelineLaneDocument lane = TimelineProjection.CreateLayer("Caption", "text", 1, 5);
+        lane.SourcePath = "caption.json";
+        lane.SourceInSeconds = 0.5;
+        lane.SourceOutSeconds = 4.5;
+
+        var (left, right) = TimelineProjection.Split(lane, 3);
+
+        Assert.IsTrue(left.IsLayer);
+        Assert.IsTrue(right.IsLayer);
+        Assert.AreEqual(-1, left.TrackIndex);
+        Assert.AreEqual(-1, right.TrackIndex);
+        Assert.AreEqual(0.5, left.SourceInSeconds);
+        Assert.AreEqual(4.5, left.SourceOutSeconds);
+        Assert.AreEqual(0.5, right.SourceInSeconds);
+        Assert.AreEqual(4.5, right.SourceOutSeconds);
     }
 
     [TestMethod]

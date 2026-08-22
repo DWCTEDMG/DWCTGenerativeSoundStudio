@@ -36,6 +36,14 @@ describe("Timeline page", () => {
     expect(await screen.findByText("Timeline")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Play" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Fit all" })).toBeTruthy();
+    const selectTool = screen.getByRole("button", { name: "Select" });
+    const bladeTool = screen.getByRole("button", { name: "Blade" });
+    expect(selectTool.getAttribute("aria-pressed")).toBe("true");
+    expect(bladeTool.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(bladeTool);
+    expect(selectTool.getAttribute("aria-pressed")).toBe("false");
+    expect(bladeTool.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(selectTool);
 
     await waitFor(() => expect(document.querySelector("audio")).toBeTruthy());
     const audio = document.querySelector("audio");
@@ -278,6 +286,114 @@ describe("Timeline page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Unlock Prompts track" }));
     fireEvent.change(screen.getByLabelText("Clip length"), { target: { value: "1" } });
     expect(Number((screen.getByLabelText("Clip end") as HTMLInputElement).value)).toBe(snappedStart + 1);
+  });
+
+  it("ripples downstream clips after quantize and inspector timing edits", async () => {
+    installEdmgBridge();
+    let savedTimeline: any = null;
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Ripple Timing Test" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Ripple Timing Test",
+          meta: {
+            audio: { duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120, beat_times_s: [0, 0.5, 1, 1.5, 2, 2.5] } },
+            timeline: {
+              duration_s: 8,
+              tracks: [
+                {
+                  id: "prompts",
+                  name: "Prompts",
+                  type: "prompt",
+                  clips: [
+                    { id: "first", start_s: 0.1, end_s: 1.1, data: { prompt: "First cue" } },
+                    { id: "second", start_s: 1.1, end_s: 2.1, data: { prompt: "Second cue" } },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+      "POST /v1/projects/p1/timeline": (_path: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        savedTimeline = body.timeline;
+        return { ok: true, timeline: body.timeline || {} };
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: /First cue/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Ripple" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quantize" }));
+    fireEvent.click(screen.getByRole("tab", { name: /Inspector/ }));
+    fireEvent.change(await screen.findByLabelText("Clip end"), { target: { value: "1.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save timeline *" }));
+
+    await waitFor(() => expect(savedTimeline).toBeTruthy());
+    expect(savedTimeline.tracks[0].clips).toEqual([
+      expect.objectContaining({ id: "first", start_s: 0, end_s: 1.5 }),
+      expect.objectContaining({ id: "second", start_s: 1.5, end_s: 2.5 }),
+    ]);
+  });
+
+  it("ripples deletion through undo and redo history", async () => {
+    installEdmgBridge();
+    let savedTimeline: any = null;
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Ripple Delete Test" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Ripple Delete Test",
+          meta: {
+            audio: { duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120 } },
+            timeline: {
+              duration_s: 8,
+              tracks: [
+                {
+                  id: "prompts",
+                  name: "Prompts",
+                  type: "prompt",
+                  clips: [
+                    { id: "first", start_s: 0, end_s: 1, data: { prompt: "First cue" } },
+                    { id: "second", start_s: 1, end_s: 2, data: { prompt: "Second cue" } },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+      "POST /v1/projects/p1/timeline": (_path: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        savedTimeline = body.timeline;
+        return { ok: true, timeline: body.timeline || {} };
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: /First cue/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Ripple" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(await screen.findByRole("button", { name: /Second cue, 0:00\.0 to 0:01\.0/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByRole("button", { name: /First cue, 0:00\.0 to 0:01\.0/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /Second cue, 0:01\.0 to 0:02\.0/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save timeline *" }));
+
+    await waitFor(() => expect(savedTimeline).toBeTruthy());
+    expect(savedTimeline.tracks[0].clips).toEqual([
+      expect.objectContaining({ id: "second", start_s: 0, end_s: 1 }),
+    ]);
   });
 
   it("labels scheduled motion axes and applies multi-axis camera presets", async () => {

@@ -28,6 +28,7 @@ public sealed partial class TimelinePage : Page
     private const double MinimumPixelsPerSecond = 12;
     private const double MaximumPixelsPerSecond = 360;
     private const int HistoryLimit = 50;
+    private const string PointerToolSettingKey = "Timeline.PointerTool";
 
     private readonly DispatcherTimer _transportTimer = new()
     {
@@ -37,6 +38,7 @@ public sealed partial class TimelinePage : Page
     private readonly List<JsonObject> _undoHistory = [];
     private readonly List<JsonObject> _redoHistory = [];
     private readonly ObservableCollection<CameraKeyframeListItem> _cameraKeyframeItems = [];
+    private readonly ApplicationDataContainer? _settings;
 
     private CancellationTokenSource? _pageCancellation;
     private CancellationTokenSource? _previewCancellation;
@@ -70,19 +72,33 @@ public sealed partial class TimelinePage : Page
     private bool _isAutomationBusy;
     private bool _isDirty;
     private bool _isPlaying;
+    private bool _rippleEnabled;
     private bool _positionPointerActive;
     private bool _updatingPosition;
+    private bool _updatingPointerTool;
     private bool _syncingScroll;
     private bool _suppressSessionChange;
     private bool _suppressCameraSelectionChange;
+    private TimelinePointerTool _pointerTool;
 
     public TimelinePage()
     {
         InitializeComponent();
+        try
+        {
+            _settings = ApplicationData.Current.LocalSettings;
+        }
+        catch
+        {
+            _settings = null;
+        }
+
+        _pointerTool = LoadPointerTool();
         CameraKeyframeListView.ItemsSource = _cameraKeyframeItems;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         _transportTimer.Tick += TransportTimer_Tick;
+        ApplyPointerToolUi();
         UpdateTransportUi();
         UpdateCommandState();
     }
@@ -194,6 +210,7 @@ public sealed partial class TimelinePage : Page
         SetBusy(true);
         StopPlayback();
         CancelPreview();
+        ResetAiEditProposal();
         SourceAssetComboBox.ItemsSource = null;
         SourceAssetComboBox.SelectedItem = null;
         SelectSource(string.Empty);
@@ -302,6 +319,7 @@ public sealed partial class TimelinePage : Page
         _redoHistory.Clear();
         _isDirty = false;
         _positionSeconds = 0;
+        ResetAiEditProposal();
         ProjectText.Text = "No active project";
         DurationSummaryText.Text = message;
         TimelineTextBox.Text = string.Empty;
@@ -404,6 +422,7 @@ public sealed partial class TimelinePage : Page
     private void RenderTrackHeaders()
     {
         TrackHeadersPanel.Children.Clear();
+        JsonObject? timelineDocument = _timelineDocument;
         for (int trackIndex = 0; trackIndex < TrackCount; trackIndex++)
         {
             var panel = new Grid
@@ -415,6 +434,8 @@ public sealed partial class TimelinePage : Page
             };
             panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            panel.ColumnDefinitions.Add(new ColumnDefinition());
+            panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var title = new TextBlock
             {
@@ -429,8 +450,22 @@ public sealed partial class TimelinePage : Page
                 FontSize = 11
             };
             Grid.SetRow(detail, 1);
+            var lockButton = new Button
+            {
+                Tag = trackIndex,
+                Content = timelineDocument is not null &&
+                          TimelineProjection.IsTrackLocked(timelineDocument, trackIndex)
+                    ? "Unlock"
+                    : "Lock",
+                Padding = new Thickness(7, 2, 7, 2),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(lockButton, 1);
+            Grid.SetRowSpan(lockButton, 2);
+            lockButton.Click += TrackLockButton_Click;
             panel.Children.Add(title);
             panel.Children.Add(detail);
+            panel.Children.Add(lockButton);
             TrackHeadersPanel.Children.Add(panel);
         }
 
@@ -743,6 +778,52 @@ public sealed partial class TimelinePage : Page
             ? null
             : _cameraKeyframes.FirstOrDefault(
                 keyframe => keyframe.StableId == _selectedCameraKeyframeIdentity);
+
+    private TimelinePointerTool LoadPointerTool()
+    {
+        string? persisted = _settings?.Values[PointerToolSettingKey] as string;
+        return string.Equals(persisted, "blade", StringComparison.OrdinalIgnoreCase)
+            ? TimelinePointerTool.Blade
+            : TimelinePointerTool.Select;
+    }
+
+    private void PersistPointerTool()
+    {
+        if (_settings is null)
+        {
+            return;
+        }
+
+        _settings.Values[PointerToolSettingKey] = _pointerTool == TimelinePointerTool.Blade
+            ? "blade"
+            : "select";
+    }
+
+    private void ApplyPointerToolUi()
+    {
+        if (_updatingPointerTool)
+        {
+            return;
+        }
+
+        _updatingPointerTool = true;
+        try
+        {
+            SelectToolButton.IsChecked = _pointerTool == TimelinePointerTool.Select;
+            BladeToolButton.IsChecked = _pointerTool == TimelinePointerTool.Blade;
+        }
+        finally
+        {
+            _updatingPointerTool = false;
+        }
+    }
+
+    private void SetPointerTool(TimelinePointerTool tool)
+    {
+        _pointerTool = tool;
+        ApplyPointerToolUi();
+        PersistPointerTool();
+    }
 
     private void PopulateInspector()
     {
@@ -1107,12 +1188,37 @@ public sealed partial class TimelinePage : Page
         }
 
         TimelineLaneDocument? lane = _lanes.FirstOrDefault(item => item.StableId == stableId);
-        if (lane is null)
+        if (lane is null || IsLaneLocked(lane))
         {
+            if (lane is not null)
+            {
+                SelectLane(stableId);
+                ShowInfo("Unlock this track before editing its clips.", InfoBarSeverity.Warning);
+            }
             return;
         }
 
         SelectLane(stableId);
+        if (_pointerTool == TimelinePointerTool.Blade)
+        {
+            double splitSeconds = Math.Clamp(
+                SnapTime(e.GetCurrentPoint(TimelineCanvas).Position.X / _pixelsPerSecond),
+                lane.StartSeconds,
+                lane.EndSeconds);
+            SetPosition(splitSeconds, requestPreview: false);
+            e.Handled = true;
+            try
+            {
+                await SplitLaneAtAsync(lane, splitSeconds);
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                ShowInfo(ex.Message, InfoBarSeverity.Warning);
+            }
+
+            return;
+        }
+
         var localPoint = e.GetCurrentPoint(border);
         _dragMode = localPoint.Position.X <= 8
             ? DragMode.TrimStart
@@ -1171,6 +1277,12 @@ public sealed partial class TimelinePage : Page
                             (int)Math.Floor(current.Y / TrackHeight),
                             0,
                             Math.Max(0, TrackCount - 1));
+                        JsonObject? timelineDocument = _timelineDocument;
+                        if (timelineDocument is null ||
+                            TimelineProjection.IsTrackLocked(timelineDocument, trackIndex))
+                        {
+                            return;
+                        }
                         candidate = TimelineProjection.ReassignTrack(candidate, trackIndex);
                     }
                     break;
@@ -1218,6 +1330,14 @@ public sealed partial class TimelinePage : Page
         }
 
         ReplaceLaneByStableId(original.StableId, provisional);
+        if (_rippleEnabled && !original.IsLayer && original.TrackIndex == provisional.TrackIndex)
+        {
+            _lanes = TimelineProjection.RippleAfterEdit(
+                _lanes,
+                original,
+                provisional,
+                _durationSeconds);
+        }
         await CommitLanesAsync(
             before,
             provisional.IsLayer ? "timeline overlay edited" : "timeline clip edited",
@@ -1252,6 +1372,11 @@ public sealed partial class TimelinePage : Page
         Math.Abs(left.StartSeconds - right.StartSeconds) < 0.0001 &&
         Math.Abs(left.EndSeconds - right.EndSeconds) < 0.0001 &&
         left.TrackIndex == right.TrackIndex;
+
+    private bool IsLaneLocked(TimelineLaneDocument? lane) =>
+        lane is { IsLayer: false } &&
+        _timelineDocument is not null &&
+        TimelineProjection.IsTrackLocked(_timelineDocument, lane.TrackIndex);
 
     private void ReplaceLaneByStableId(
         string stableId,
@@ -1479,6 +1604,109 @@ public sealed partial class TimelinePage : Page
         await ApplyWorkspacePlanAsync(overwrite: true);
     }
 
+    private bool _hasAiEditProposal;
+
+    private void ResetAiEditProposal()
+    {
+        _hasAiEditProposal = false;
+        AiEditProposalText.Text = "No AI edit proposal has been generated.";
+    }
+
+    private async void GenerateAiEdit_Click(object sender, RoutedEventArgs e)
+    {
+        string instruction = AiEditInstructionTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(instruction))
+        {
+            ShowAutomationInfo("Describe the edit you want before generating a proposal.", InfoBarSeverity.Warning);
+            AiEditInstructionTextBox.Focus(FocusState.Programmatic);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_loadedProjectId))
+        {
+            ShowAutomationInfo("Load a project before generating an AI edit proposal.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        int maximumScenes = double.IsFinite(AiEditMaximumScenesNumberBox.Value)
+            ? Math.Clamp((int)AiEditMaximumScenesNumberBox.Value, 1, 64)
+            : 12;
+        _hasAiEditProposal = false;
+        AiEditProposalText.Text = "Generating a proposal...";
+        UpdateCommandState();
+
+        await RunAutomationAsync(
+            "Generating a non-destructive AI edit proposal...",
+            async token =>
+            {
+                if (_isDirty)
+                {
+                    await SaveTimelineDocumentAsync(token);
+                }
+
+                var request = new PlanRequest(
+                    _project?.Name,
+                    instruction,
+                    "timeline edit; preserve source intent; return practical shot timing and editable prompts",
+                    1,
+                    maximumScenes);
+                PlanDto plan = await App.Services.ApiClient.GeneratePlanAsync(
+                    _loadedProjectId,
+                    request,
+                    "creative",
+                    token);
+                PlanVariantDto variant = plan.Variants.FirstOrDefault()
+                    ?? throw new InvalidOperationException("The planner returned no editable variants.");
+
+                _loadedVariantIndex = 0;
+                _hasAiEditProposal = true;
+                AiEditProposalText.Text = FormatAiEditProposal(variant);
+                RefreshWorkflowPlanSummary();
+                return $"Proposal ready with {variant.SceneCount} scene{(variant.SceneCount == 1 ? string.Empty : "s")}. Review it before appending or replacing.";
+            });
+    }
+
+    private async void AppendAiEdit_Click(object sender, RoutedEventArgs e)
+    {
+        if (_hasAiEditProposal)
+        {
+            await ApplyWorkspacePlanAsync(overwrite: false);
+        }
+    }
+
+    private async void ReplaceWithAiEdit_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_hasAiEditProposal ||
+            !await ConfirmAsync(
+                "Replace Timeline with AI proposal?",
+                "Replace the current generated Timeline content with the reviewed AI edit proposal? " +
+                "Locked tracks are preserved and the replacement remains undoable until you leave this project.",
+                "Replace Timeline"))
+        {
+            return;
+        }
+
+        await ApplyWorkspacePlanAsync(overwrite: true);
+    }
+
+    private static string FormatAiEditProposal(PlanVariantDto variant)
+    {
+        var lines = new List<string>
+        {
+            $"{variant.DisplayName} · {variant.SceneCount} scenes" +
+            (variant.DurationSeconds is double duration ? $" · {duration:0.##} s" : string.Empty)
+        };
+        if (!string.IsNullOrWhiteSpace(variant.Logline))
+        {
+            lines.Add(variant.Logline!);
+        }
+
+        lines.AddRange(variant.Scenes.Select((scene, index) =>
+            $"{index + 1}. {scene.StartSeconds:0.##}–{scene.EndSeconds:0.##} s · " +
+            (string.IsNullOrWhiteSpace(scene.Prompt) ? "Editable scene" : scene.Prompt)));
+        return string.Join(Environment.NewLine, lines);
+    }
+
     private async Task ApplyWorkspacePlanAsync(bool overwrite)
     {
         if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
@@ -1508,7 +1736,9 @@ public sealed partial class TimelinePage : Page
                     throw new InvalidOperationException("The backend did not apply the Workspace plan.");
                 }
 
-                JsonObject result = ExtractTimeline(response.Timeline);
+                JsonObject result = TimelineProjection.PreserveLockedTracks(
+                    before,
+                    ExtractTimeline(response.Timeline));
                 await CommitDocumentAsync(
                     before,
                     result,
@@ -1596,6 +1826,12 @@ public sealed partial class TimelinePage : Page
         }
 
         int trackIndex = Math.Max(0, (int)Math.Round(ReadFiniteOrDefault(TrackNumberBox, 1)) - 1);
+        if (TimelineProjection.IsTrackLocked(timeline, trackIndex))
+        {
+            ShowAutomationInfo($"Track {trackIndex + 1} is locked.", InfoBarSeverity.Warning);
+            return;
+        }
+
         await RunAutomationAsync(
             "Adding source clip...",
             async token =>
@@ -1631,6 +1867,12 @@ public sealed partial class TimelinePage : Page
         }
 
         int trackIndex = Math.Max(0, (int)Math.Round(trackNumber) - 1);
+        if (TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex))
+        {
+            ShowAutomationInfo($"Track {trackIndex + 1} is locked.", InfoBarSeverity.Warning);
+            return;
+        }
+
         await RunAutomationAsync(
             "Sequencing track...",
             async token =>
@@ -1683,7 +1925,9 @@ public sealed partial class TimelinePage : Page
                     throw new InvalidOperationException("The backend did not apply the motion grammar.");
                 }
 
-                JsonObject result = ExtractTimeline(response.Timeline);
+                JsonObject result = TimelineProjection.PreserveLockedTracks(
+                    before,
+                    ExtractTimeline(response.Timeline));
                 await CommitDocumentAsync(before, result, "motion grammar", _selectedLaneId);
                 SetAutomationResult(result);
                 return $"Applied the {phrase} motion phrase from {startSeconds:0.###} s to {endSeconds:0.###} s.";
@@ -1737,6 +1981,12 @@ public sealed partial class TimelinePage : Page
 
         JsonObject before = CloneDocument(_timelineDocument);
         int trackIndex = SelectedLane is { IsLayer: false } selected ? selected.TrackIndex : 0;
+        if (TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex))
+        {
+            ShowInfo("Unlock the destination track before adding a clip.", InfoBarSeverity.Warning);
+            return;
+        }
+
         TimelineLaneDocument clip = TimelineProjection.CreateLane(
             $"Clip {_lanes.Count(lane => !lane.IsLayer) + 1}",
             "video",
@@ -1785,7 +2035,9 @@ public sealed partial class TimelinePage : Page
 
     private async void ApplyInspector_Click(object sender, RoutedEventArgs e)
     {
-        if (_timelineDocument is null || SelectedLane is not TimelineLaneDocument lane)
+        if (_timelineDocument is null ||
+            SelectedLane is not TimelineLaneDocument lane ||
+            IsLaneLocked(lane))
         {
             return;
         }
@@ -1844,9 +2096,17 @@ public sealed partial class TimelinePage : Page
         updated.FadeOutSeconds = fadeOut;
         if (!lane.IsLayer)
         {
-            updated = TimelineProjection.ReassignTrack(
-                updated,
-                Math.Max(0, (int)Math.Round(track, MidpointRounding.AwayFromZero) - 1));
+            int destinationTrack =
+                Math.Max(0, (int)Math.Round(track, MidpointRounding.AwayFromZero) - 1);
+            if (TimelineProjection.IsTrackLocked(_timelineDocument, destinationTrack))
+            {
+                ShowInfo(
+                    "Unlock the destination track before moving a clip there.",
+                    InfoBarSeverity.Warning);
+                return;
+            }
+
+            updated = TimelineProjection.ReassignTrack(updated, destinationTrack);
         }
 
         ReplaceLaneByStableId(lane.StableId, updated);
@@ -1859,6 +2119,16 @@ public sealed partial class TimelinePage : Page
                 trackLane.Type = updated.Type;
             }
         }
+        if (_rippleEnabled &&
+            !lane.IsLayer &&
+            lane.TrackIndex == updated.TrackIndex)
+        {
+            _lanes = TimelineProjection.RippleAfterEdit(
+                _lanes,
+                lane,
+                updated,
+                _durationSeconds);
+        }
 
         await CommitLanesAsync(
             before,
@@ -1866,23 +2136,43 @@ public sealed partial class TimelinePage : Page
             updated.StableId);
     }
 
+    private async Task SplitLaneAtAsync(TimelineLaneDocument lane, double splitSeconds)
+    {
+        if (_timelineDocument is null)
+        {
+            return;
+        }
+
+        JsonObject before = CloneDocument(_timelineDocument);
+        var (left, right) = TimelineProjection.Split(lane, splitSeconds);
+        var updated = _lanes.ToList();
+        int index = updated.FindIndex(item => item.StableId == lane.StableId);
+        if (index < 0)
+        {
+            return;
+        }
+
+        updated[index] = left;
+        updated.Insert(index + 1, right);
+        _lanes = updated;
+        await CommitLanesAsync(
+            before,
+            lane.IsLayer ? "timeline overlay split" : "timeline clip split",
+            right.StableId);
+    }
+
     private async void SplitClip_Click(object sender, RoutedEventArgs e)
     {
-        if (_timelineDocument is null || SelectedLane is not TimelineLaneDocument lane)
+        if (_timelineDocument is null ||
+            SelectedLane is not TimelineLaneDocument lane ||
+            IsLaneLocked(lane))
         {
             return;
         }
 
         try
         {
-            JsonObject before = CloneDocument(_timelineDocument);
-            var (left, right) = TimelineProjection.Split(lane, _positionSeconds);
-            var updated = _lanes.ToList();
-            int index = updated.FindIndex(item => item.StableId == lane.StableId);
-            updated[index] = left;
-            updated.Insert(index + 1, right);
-            _lanes = updated;
-            await CommitLanesAsync(before, "timeline clip split", right.StableId);
+            await SplitLaneAtAsync(lane, _positionSeconds);
         }
         catch (ArgumentOutOfRangeException ex)
         {
@@ -1898,7 +2188,9 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
-        if (_timelineDocument is null || SelectedLane is not TimelineLaneDocument lane)
+        if (_timelineDocument is null ||
+            SelectedLane is not TimelineLaneDocument lane ||
+            IsLaneLocked(lane))
         {
             return;
         }
@@ -1920,7 +2212,9 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
-        if (_timelineDocument is null || SelectedLane is not TimelineLaneDocument lane)
+        if (_timelineDocument is null ||
+            SelectedLane is not TimelineLaneDocument lane ||
+            IsLaneLocked(lane))
         {
             return;
         }
@@ -1937,7 +2231,9 @@ public sealed partial class TimelinePage : Page
         }
 
         JsonObject before = CloneDocument(_timelineDocument);
-        _lanes = _lanes.Where(item => item.StableId != lane.StableId).ToArray();
+        _lanes = _rippleEnabled && !lane.IsLayer
+            ? TimelineProjection.RippleAfterDelete(_lanes, lane, _durationSeconds)
+            : _lanes.Where(item => item.StableId != lane.StableId).ToArray();
         await CommitLanesAsync(before, "timeline clip deleted", selectionId: null);
     }
 
@@ -1949,7 +2245,9 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
-        if (_timelineDocument is null || SelectedLane is not TimelineLaneDocument lane)
+        if (_timelineDocument is null ||
+            SelectedLane is not TimelineLaneDocument lane ||
+            IsLaneLocked(lane))
         {
             return;
         }
@@ -1960,6 +2258,10 @@ public sealed partial class TimelinePage : Page
             _positionSeconds,
             _durationSeconds);
         ReplaceLaneByStableId(lane.StableId, moved);
+        if (_rippleEnabled && !lane.IsLayer)
+        {
+            _lanes = TimelineProjection.RippleAfterEdit(_lanes, lane, moved, _durationSeconds);
+        }
         await CommitLanesAsync(before, "timeline selection moved to playhead", moved.StableId);
     }
 
@@ -1971,7 +2273,9 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
-        if (_timelineDocument is null || SelectedLane is not TimelineLaneDocument lane)
+        if (_timelineDocument is null ||
+            SelectedLane is not TimelineLaneDocument lane ||
+            IsLaneLocked(lane))
         {
             return;
         }
@@ -1994,6 +2298,10 @@ public sealed partial class TimelinePage : Page
             end,
             _durationSeconds);
         ReplaceLaneByStableId(lane.StableId, quantized);
+        if (_rippleEnabled && !lane.IsLayer)
+        {
+            _lanes = TimelineProjection.RippleAfterEdit(_lanes, lane, quantized, _durationSeconds);
+        }
         await CommitLanesAsync(before, "timeline selection quantized", quantized.StableId);
     }
 
@@ -2073,6 +2381,7 @@ public sealed partial class TimelinePage : Page
         _updatingPosition = false;
         UpdateTransportUi();
         RenderPlayhead();
+        UpdateSplitCommandState();
         if (requestPreview)
         {
             _ = RefreshPreviewAsync(force: false);
@@ -2109,6 +2418,7 @@ public sealed partial class TimelinePage : Page
         _positionSeconds = Math.Clamp(e.NewValue, 0, _durationSeconds);
         UpdateTransportUi();
         RenderPlayhead();
+        UpdateSplitCommandState();
         if (_positionPointerActive || !_isPlaying)
         {
             _ = RefreshPreviewAsync(force: false);
@@ -2211,6 +2521,12 @@ public sealed partial class TimelinePage : Page
         SetPosition(SnapTime(point.X / _pixelsPerSecond), requestPreview: true);
     }
 
+    private void SelectToolButton_Click(object sender, RoutedEventArgs e) =>
+        SetPointerTool(TimelinePointerTool.Select);
+
+    private void BladeToolButton_Click(object sender, RoutedEventArgs e) =>
+        SetPointerTool(TimelinePointerTool.Blade);
+
     private void SnapCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_isLoaded)
@@ -2221,6 +2537,27 @@ public sealed partial class TimelinePage : Page
         RenderTimeline();
         RefreshCameraEditor();
         UpdateCommandState();
+    }
+
+    private void RippleToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        _rippleEnabled = RippleToggle.IsChecked == true;
+    }
+
+    private async void TrackLockButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_timelineDocument is null || sender is not Button { Tag: int trackIndex })
+        {
+            return;
+        }
+
+        JsonObject before = CloneDocument(_timelineDocument);
+        bool locked = !TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex);
+        _timelineDocument = TimelineProjection.SetTrackLocked(_timelineDocument, trackIndex, locked);
+        await CommitLanesAsync(
+            before,
+            locked ? "timeline track locked" : "timeline track unlocked",
+            _selectedLaneId);
     }
 
     private bool CanQuantizeToCurrentGrid() =>
@@ -2828,6 +3165,7 @@ public sealed partial class TimelinePage : Page
     {
         bool hasTimeline = _timelineDocument is not null && !_isBusy;
         bool hasLaneSelection = SelectedLane is not null && !_isBusy;
+        bool hasEditableLaneSelection = hasLaneSelection && !IsLaneLocked(SelectedLane);
         bool hasCameraSelection = SelectedCameraKeyframe is not null && !_isBusy;
         bool hasSelection = hasLaneSelection || hasCameraSelection;
         bool canRunAutomation = hasTimeline && !_isAutomationBusy;
@@ -2837,12 +3175,13 @@ public sealed partial class TimelinePage : Page
         RedoButton.IsEnabled = hasTimeline && _redoHistory.Count > 0;
         SaveButton.IsEnabled = hasTimeline;
         PlayPauseButton.IsEnabled = hasTimeline;
-        ApplyInspectorButton.IsEnabled = hasLaneSelection;
-        SplitClipButton.IsEnabled = hasLaneSelection;
-        DuplicateClipButton.IsEnabled = hasSelection;
-        DeleteClipButton.IsEnabled = hasSelection;
-        MoveClipButton.IsEnabled = hasSelection;
-        QuantizeClipButton.IsEnabled = hasSelection && CanQuantizeToCurrentGrid();
+        ApplyInspectorButton.IsEnabled = hasEditableLaneSelection;
+        DuplicateClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
+        DeleteClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
+        MoveClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
+        QuantizeClipButton.IsEnabled =
+            (hasCameraSelection || hasEditableLaneSelection) &&
+            CanQuantizeToCurrentGrid();
         AddCameraButton.IsEnabled = hasTimeline;
         CameraKeyframeListView.IsEnabled = hasTimeline;
         SetCameraEditorEnabled(hasCameraSelection);
@@ -2852,9 +3191,12 @@ public sealed partial class TimelinePage : Page
         RefreshWorkflowButton.IsEnabled = hasProject && !_isAutomationBusy;
         AppendPlanButton.IsEnabled = canRunAutomation && hasProject;
         OverwritePlanButton.IsEnabled = canRunAutomation && hasProject;
+        GenerateAiEditButton.IsEnabled = canRunAutomation && hasProject;
+        AppendAiEditButton.IsEnabled = canRunAutomation && hasProject && _hasAiEditProposal;
+        ReplaceWithAiEditButton.IsEnabled = canRunAutomation && hasProject && _hasAiEditProposal;
         SourceAssetComboBox.IsEnabled = !_isAutomationBusy;
         BrowseSourceButton.IsEnabled = !_isAutomationBusy;
-        AssignSourceButton.IsEnabled = canRunAutomation && hasLaneSelection && hasSource;
+        AssignSourceButton.IsEnabled = canRunAutomation && hasEditableLaneSelection && hasSource;
         AddSourceClipButton.IsEnabled = canRunAutomation && hasSource;
         SequenceTrackButton.IsEnabled = canRunAutomation;
         ApplyMotionButton.IsEnabled = canRunAutomation && hasProject;
@@ -2866,7 +3208,21 @@ public sealed partial class TimelinePage : Page
         OpenQueueButton.IsEnabled = !_isAutomationBusy;
         OpenPlannerButton.IsEnabled = !_isAutomationBusy;
         OpenReactiveButton.IsEnabled = !_isAutomationBusy;
+        UpdateSplitCommandState();
         RefreshRecoverySummary();
+    }
+
+    private void UpdateSplitCommandState()
+    {
+        if (SelectedLane is not TimelineLaneDocument lane ||
+            _isBusy ||
+            IsLaneLocked(lane))
+        {
+            SplitClipButton.IsEnabled = false;
+            return;
+        }
+
+        SplitClipButton.IsEnabled = TimelineProjection.CanSplitAt(lane, _positionSeconds);
     }
 
     private void SetBusy(bool busy)
@@ -2945,6 +3301,12 @@ public sealed partial class TimelinePage : Page
         Move,
         TrimStart,
         TrimEnd
+    }
+
+    private enum TimelinePointerTool
+    {
+        Select,
+        Blade
     }
 }
 

@@ -29,7 +29,27 @@ import type { PageProps } from "../types/pageProps";
 type AnyDict = Record<string, any>;
 
 type Clip = { id: string; start_s: number; end_s: number; data: AnyDict };
-type Track = { id: string; name: string; type: string; clips: Clip[] };
+type Track = { id: string; name: string; type: string; locked?: boolean; clips: Clip[] };
+
+function rippleTrackClips(
+  clips: Clip[],
+  originalClips: Clip[],
+  anchorIdx: number,
+  boundaryS: number,
+  deltaS: number,
+  durationS: number,
+): Clip[] {
+  return clips.map((clip, idx) => {
+    if (idx === anchorIdx || Number(originalClips[idx]?.start_s) < boundaryS) return clip;
+    const clipDuration = Math.max(TIMELINE_MIN_RANGE_S, Number(clip.end_s) - Number(clip.start_s));
+    const start = clamp(
+      Number(clip.start_s) + deltaS,
+      0,
+      Math.max(0, durationS - clipDuration),
+    );
+    return { ...clip, start_s: start, end_s: start + clipDuration };
+  });
+}
 
 function snapshotTimeline(timeline: AnyDict): AnyDict {
   return JSON.parse(JSON.stringify(timeline || {})) as AnyDict;
@@ -1026,8 +1046,21 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const laneIdForTrack = (track: Track, trackIdx: number) =>
     `track:${String(track.id || trackIdx)}`;
-  const isLaneLocked = (laneId: string) => lockedLaneIds.includes(laneId);
+  const isLaneLocked = (laneId: string) => {
+    if (!laneId.startsWith("track:")) return lockedLaneIds.includes(laneId);
+    return tracks.some((track, trackIdx) =>
+      laneIdForTrack(track, trackIdx) === laneId && track.locked === true);
+  };
   const toggleLaneLock = (laneId: string) => {
+    if (laneId.startsWith("track:")) {
+      const nextTracks = tracks.map((track, trackIdx) =>
+        laneIdForTrack(track, trackIdx) === laneId
+          ? { ...track, locked: !track.locked }
+          : track,
+      );
+      commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "toggle_track_lock");
+      return;
+    }
     setLockedLaneIds((current) =>
       current.includes(laneId)
         ? current.filter((id) => id !== laneId)
@@ -1333,6 +1366,31 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag || drag.kind === "playhead") return;
+    if (rippleEnabled && drag.kind === "track") {
+      const current = timelineRef.current;
+      const currentTracks = Array.isArray(current.tracks) ? current.tracks : [];
+      const originalTracks = Array.isArray(drag.historyBefore.tracks) ? drag.historyBefore.tracks : [];
+      const edited = currentTracks[drag.trackIdx]?.clips?.[drag.clipIdx];
+      const originalClips = originalTracks[drag.trackIdx]?.clips || [];
+      if (edited) {
+        const nextTracks = currentTracks.map((track, trackIdx) =>
+          trackIdx === drag.trackIdx
+            ? {
+                ...track,
+                clips: rippleTrackClips(
+                  track.clips || [],
+                  originalClips,
+                  drag.clipIdx,
+                  drag.end0,
+                  Number(edited.end_s) - drag.end0,
+                  durationS,
+                ),
+              }
+            : track,
+        );
+        replaceTimelineState({ ...current, tracks: nextTracks }, true);
+      }
+    }
     timelineHistory.push(drag.historyBefore, timelineRef.current, drag.historyLabel);
   };
 
@@ -1406,11 +1464,24 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const tr = tracks[selected.trackIdx];
       if (!tr) return;
       if (isLaneLocked(laneIdForTrack(tr, selected.trackIdx))) return;
-      const nextTracks = tracks.map((t, i) =>
-        i === selected.trackIdx
-          ? { ...t, clips: (t.clips || []).filter((_, j) => j !== selected.clipIdx) }
-          : t,
-      );
+      const deleted = tr.clips[selected.clipIdx];
+      const nextTracks = tracks.map((t, i) => {
+        if (i !== selected.trackIdx) return t;
+        const remaining = (t.clips || []).filter((_, j) => j !== selected.clipIdx);
+        if (!rippleEnabled || !deleted) return { ...t, clips: remaining };
+        const originalWithoutDeleted = (t.clips || []).filter((_, j) => j !== selected.clipIdx);
+        return {
+          ...t,
+          clips: rippleTrackClips(
+            remaining,
+            originalWithoutDeleted,
+            -1,
+            Number(deleted.end_s),
+            -(Number(deleted.end_s) - Number(deleted.start_s)),
+            durationS,
+          ),
+        };
+      });
       commitTimeline({ ...timeline, tracks: nextTracks }, "delete_clip");
       setSelected(null);
       return;
@@ -1442,9 +1513,19 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const e = clamp(s + dur, s + _minLen, durationS);
       const nextTracks = tracks.map((t, i) => {
         if (i !== selected.trackIdx) return t;
-        const nextClips = (t.clips || []).map((c, j) =>
+        let nextClips = (t.clips || []).map((c, j) =>
           j === selected.clipIdx ? { ...c, start_s: s, end_s: e } : c,
         );
+        if (rippleEnabled) {
+          nextClips = rippleTrackClips(
+            nextClips,
+            t.clips || [],
+            selected.clipIdx,
+            Number(picked.cl.end_s),
+            e - Number(picked.cl.end_s),
+            durationS,
+          );
+        }
         return { ...t, clips: nextClips };
       });
       commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "move_clip");
@@ -1862,9 +1943,20 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       const [ss, ee] = snapRange(Number(cl.start_s), Number(cl.end_s));
       const nextTracks = tracks.map((t, i) => {
         if (i !== selected.trackIdx) return t;
-        const nextClips = (t.clips || []).map((c, j) =>
+        const originalClips = t.clips || [];
+        let nextClips = originalClips.map((c, j) =>
           j === selected.clipIdx ? { ...c, start_s: ss, end_s: ee } : c,
         );
+        if (rippleEnabled) {
+          nextClips = rippleTrackClips(
+            nextClips,
+            originalClips,
+            selected.clipIdx,
+            Number(cl.end_s),
+            ee - Number(cl.end_s),
+            durationS,
+          );
+        }
         return { ...t, clips: nextClips };
       });
       commitTimeline({ ...timelineRef.current, tracks: nextTracks }, "quantize_clip");
@@ -2165,11 +2257,23 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     }
     const nextTracks = tracks.map((track, trackIdx) => {
       if (trackIdx !== selected.trackIdx) return track;
+      const originalClips = track.clips || [];
+      let nextClips = originalClips.map((clip, clipIdx) =>
+        clipIdx === selected.clipIdx ? { ...clip, start_s: start, end_s: end, data } : clip,
+      );
+      if (rippleEnabled) {
+        nextClips = rippleTrackClips(
+          nextClips,
+          originalClips,
+          selected.clipIdx,
+          Number(cl.end_s),
+          end - Number(cl.end_s),
+          durationS,
+        );
+      }
       return {
         ...track,
-        clips: (track.clips || []).map((clip, clipIdx) =>
-          clipIdx === selected.clipIdx ? { ...clip, start_s: start, end_s: end, data } : clip,
-        ),
+        clips: nextClips,
       };
     });
     commitTimeline({ ...timelineRef.current, tracks: nextTracks }, label);
@@ -2637,6 +2741,24 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               <span className="timeline-miniLabel">Editor</span>
               <div className="timeline-editorToggles">
                 <button
+                  className={`secondary timeline-toggleButton${editTool === "select" ? " is-active" : ""}`}
+                  type="button"
+                  aria-pressed={editTool === "select"}
+                  title="Select, move, and trim timeline clips."
+                  onClick={() => setEditTool("select")}
+                >
+                  Select
+                </button>
+                <button
+                  className={`secondary timeline-toggleButton${editTool === "blade" ? " is-active" : ""}`}
+                  type="button"
+                  aria-pressed={editTool === "blade"}
+                  title="Split a clip by clicking the desired cut point."
+                  onClick={() => setEditTool("blade")}
+                >
+                  Blade
+                </button>
+                <button
                   className={`secondary timeline-toggleButton${snapEnabled ? " is-active" : ""}`}
                   type="button"
                   aria-label={snapEnabled ? "Disable snap" : "Enable snap"}
@@ -2654,6 +2776,15 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
                 >
                   {timelineTimebase === "bars" ? <Music2 size={15} aria-hidden="true" /> : <Clock3 size={15} aria-hidden="true" />}
                   {timelineTimebase === "bars" ? "Bars" : "Time"}
+                </button>
+                <button
+                  className={`secondary timeline-toggleButton${rippleEnabled ? " is-active" : ""}`}
+                  type="button"
+                  aria-pressed={rippleEnabled}
+                  title="Close or create time on the edited track after moving, trimming, quantizing, or deleting a clip."
+                  onClick={() => setRippleEnabled((value) => !value)}
+                >
+                  Ripple
                 </button>
               </div>
             </div>
@@ -2728,7 +2859,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
       <div className="timeline-toolbarFooter">
         <div className="small">
-          Space play/pause · S split · D duplicate · Q quantize · L loop · ←/→ grid · Alt bypasses snap
+          Space play/pause · S split · D duplicate · Q quantize · L loop · ←/→ grid · Alt bypasses snap · Ripple shifts later clips on the same track
         </div>
         <div className="small timeline-gridSource"><Magnet size={13} aria-hidden="true" /> {snapEnabled ? "Snap on" : "Snap off"} · {quantizeStatus}</div>
       </div>
