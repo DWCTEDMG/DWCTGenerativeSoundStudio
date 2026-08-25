@@ -829,6 +829,7 @@ public sealed partial class TimelinePage : Page
     {
         TimelineLaneDocument? lane = SelectedLane;
         bool enabled = lane is not null;
+        bool videoAdjustmentsEnabled = lane is not null && IsVisualLane(lane);
         SelectedClipTitle.Text = lane?.Name ?? "No lane selected";
         SelectedClipSubtitle.Text = lane is null
             ? "Select a clip or overlay to inspect its timing and media properties."
@@ -849,6 +850,7 @@ public sealed partial class TimelinePage : Page
         MutedToggle.IsEnabled = enabled;
         FadeInNumberBox.IsEnabled = enabled;
         FadeOutNumberBox.IsEnabled = enabled;
+        VideoAdjustmentsExpander.IsEnabled = videoAdjustmentsEnabled;
 
         LaneNameTextBox.Text = lane?.Name ?? string.Empty;
         LaneTypeTextBox.Text = lane?.Type ?? string.Empty;
@@ -865,6 +867,17 @@ public sealed partial class TimelinePage : Page
         MutedToggle.IsOn = lane?.Muted ?? false;
         FadeInNumberBox.Value = lane?.FadeInSeconds ?? double.NaN;
         FadeOutNumberBox.Value = lane?.FadeOutSeconds ?? double.NaN;
+        SelectComboByTag(FitModeComboBox, lane?.FitMode ?? "contain");
+        SelectComboByTag(RotationComboBox, (lane?.RotationDegrees ?? 0).ToString(CultureInfo.InvariantCulture));
+        OpacityNumberBox.Value = lane?.Opacity ?? 1;
+        BrightnessNumberBox.Value = lane?.Brightness ?? 0;
+        ContrastNumberBox.Value = lane?.Contrast ?? 1;
+        SaturationNumberBox.Value = lane?.Saturation ?? 1;
+        FlipHorizontalToggle.IsOn = lane?.FlipHorizontal ?? false;
+        SelectComboByTag(VideoLookComboBox, "neutral");
+        VideoAdjustmentHintText.Text = videoAdjustmentsEnabled
+            ? "These nondestructive adjustments are saved with the clip and applied to the edited master."
+            : "Video adjustments are available for video clips and source-backed visual overlays.";
         TrackInspectorHintText.Text = lane?.IsLayer == true
             ? "Overlays remain in the Layers row; timing and media edits are still available."
             : "Track clips can move between numbered tracks.";
@@ -2049,9 +2062,13 @@ public sealed partial class TimelinePage : Page
             !TryReadFinite(SourceOutNumberBox, out double sourceOut) ||
             !TryReadFinite(SpeedNumberBox, out double speed) ||
             (!lane.IsLayer && !TryReadFinite(TrackNumberBox, out track)) ||
-            !TryReadFinite(VolumeNumberBox, out double volume) ||
-            !TryReadFinite(FadeInNumberBox, out double fadeIn) ||
-            !TryReadFinite(FadeOutNumberBox, out double fadeOut))
+             !TryReadFinite(VolumeNumberBox, out double volume) ||
+             !TryReadFinite(FadeInNumberBox, out double fadeIn) ||
+             !TryReadFinite(FadeOutNumberBox, out double fadeOut) ||
+             !TryReadFinite(OpacityNumberBox, out double opacity) ||
+             !TryReadFinite(BrightnessNumberBox, out double brightness) ||
+             !TryReadFinite(ContrastNumberBox, out double contrast) ||
+             !TryReadFinite(SaturationNumberBox, out double saturation))
         {
             ShowInfo("Inspector values must be finite numbers.", InfoBarSeverity.Warning);
             return;
@@ -2064,12 +2081,16 @@ public sealed partial class TimelinePage : Page
             sourceOut < 0 ||
             speed is < 0.25 or > 4 ||
             (!lane.IsLayer && track < 1) ||
-            volume is < 0 or > 2 ||
-            fadeIn < 0 ||
-            fadeOut < 0)
+             volume is < 0 or > 2 ||
+             fadeIn < 0 ||
+             fadeOut < 0 ||
+             opacity is < 0 or > 1 ||
+             brightness is < -1 or > 1 ||
+             contrast is < 0 or > 2 ||
+             saturation is < 0 or > 3)
         {
             ShowInfo(
-                "Check the clip range, track, speed, volume, source, and fade values.",
+                "Check the clip range, track, speed, volume, source, fade, and video-adjustment values.",
                 InfoBarSeverity.Warning);
             return;
         }
@@ -2094,6 +2115,22 @@ public sealed partial class TimelinePage : Page
         updated.Muted = MutedToggle.IsOn;
         updated.FadeInSeconds = fadeIn;
         updated.FadeOutSeconds = fadeOut;
+        if (IsVisualLane(updated))
+        {
+            updated.FitMode = GetSelectedTag(FitModeComboBox) ?? "contain";
+            updated.Opacity = opacity;
+            updated.Brightness = brightness;
+            updated.Contrast = contrast;
+            updated.Saturation = saturation;
+            updated.RotationDegrees = int.TryParse(
+                GetSelectedTag(RotationComboBox),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out int rotationDegrees)
+                    ? rotationDegrees
+                    : 0;
+            updated.FlipHorizontal = FlipHorizontalToggle.IsOn;
+        }
         if (!lane.IsLayer)
         {
             int destinationTrack =
@@ -2134,6 +2171,45 @@ public sealed partial class TimelinePage : Page
             before,
             updated.IsLayer ? "timeline overlay inspector edit" : "timeline clip inspector edit",
             updated.StableId);
+    }
+
+    private void ApplyVideoLook_Click(object sender, RoutedEventArgs e)
+    {
+        switch (GetSelectedTag(VideoLookComboBox) ?? "neutral")
+        {
+            case "punchy":
+                BrightnessNumberBox.Value = 0.03;
+                ContrastNumberBox.Value = 1.18;
+                SaturationNumberBox.Value = 1.25;
+                break;
+            case "soft":
+                BrightnessNumberBox.Value = 0.04;
+                ContrastNumberBox.Value = 0.9;
+                SaturationNumberBox.Value = 0.85;
+                break;
+            case "monochrome":
+                BrightnessNumberBox.Value = 0;
+                ContrastNumberBox.Value = 1.05;
+                SaturationNumberBox.Value = 0;
+                break;
+            default:
+                BrightnessNumberBox.Value = 0;
+                ContrastNumberBox.Value = 1;
+                SaturationNumberBox.Value = 1;
+                break;
+        }
+    }
+
+    private void ResetVideoAdjustments_Click(object sender, RoutedEventArgs e)
+    {
+        SelectComboByTag(FitModeComboBox, "contain");
+        SelectComboByTag(RotationComboBox, "0");
+        SelectComboByTag(VideoLookComboBox, "neutral");
+        OpacityNumberBox.Value = 1;
+        BrightnessNumberBox.Value = 0;
+        ContrastNumberBox.Value = 1;
+        SaturationNumberBox.Value = 1;
+        FlipHorizontalToggle.IsOn = false;
     }
 
     private async Task SplitLaneAtAsync(TimelineLaneDocument lane, double splitSeconds)
@@ -3266,6 +3342,30 @@ public sealed partial class TimelinePage : Page
 
     private static string? GetSelectedTag(ComboBox comboBox) =>
         (comboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+
+    private static void SelectComboByTag(ComboBox comboBox, string tag)
+    {
+        ComboBoxItem? match = comboBox.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(
+                item.Tag?.ToString(),
+                tag,
+                StringComparison.OrdinalIgnoreCase));
+        comboBox.SelectedItem = match ?? comboBox.Items.OfType<ComboBoxItem>().FirstOrDefault();
+    }
+
+    private static bool IsVisualLane(TimelineLaneDocument lane) =>
+        lane.IsLayer
+            ? IsVisualSourcePath(lane.SourcePath)
+            : lane.Type.Contains("video", StringComparison.OrdinalIgnoreCase)
+              || lane.Type.Contains("visual", StringComparison.OrdinalIgnoreCase)
+              || lane.Type.Contains("image", StringComparison.OrdinalIgnoreCase)
+              || IsVisualSourcePath(lane.SourcePath);
+
+    private static bool IsVisualSourcePath(string? sourcePath) =>
+        System.IO.Path.GetExtension(sourcePath ?? string.Empty).ToLowerInvariant() is
+            ".avi" or ".bmp" or ".jpeg" or ".jpg" or ".m4v" or ".mkv" or ".mov" or
+            ".mp4" or ".mpeg" or ".mpg" or ".png" or ".webm" or ".webp";
 
     private static string FormatClock(double seconds)
     {

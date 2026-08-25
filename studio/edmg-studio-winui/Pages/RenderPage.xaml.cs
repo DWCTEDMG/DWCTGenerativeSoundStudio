@@ -17,6 +17,7 @@ public sealed partial class RenderPage : Page
     private CancellationTokenSource? _pageCancellation;
     private ModelCatalogueResponse? _modelCatalogue;
     private ModelRenderGuidance? _modelGuidance;
+    private JsonElement? _hardwareProfile;
 
     public RenderPage()
     {
@@ -53,6 +54,7 @@ public sealed partial class RenderPage : Page
         }
 
         _ = LoadModelGuidanceAsync(_pageCancellation.Token);
+        _ = LoadHardwareCapabilitiesAsync(_pageCancellation.Token);
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -71,6 +73,7 @@ public sealed partial class RenderPage : Page
         {
             _modelCatalogue = await App.Services.ApiClient.GetTypedModelCatalogueAsync(cancellationToken);
             UpdateModelGuidance();
+            UpdateRuntimeCapabilityUi();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -86,12 +89,81 @@ public sealed partial class RenderPage : Page
             ModelGuidanceBlockersText.Visibility = Visibility.Collapsed;
             ApplyRecommendedPrimaryModelButton.IsEnabled = false;
             ApplyRecommendedVideoModelButton.IsEnabled = false;
+            UpdateRuntimeCapabilityUi();
         }
         finally
         {
             ModelGuidanceProgressRing.IsActive = false;
             ModelGuidanceProgressRing.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private async Task LoadHardwareCapabilitiesAsync(CancellationToken cancellationToken)
+    {
+        RuntimeCapabilityProgressRing.IsActive = true;
+        RuntimeCapabilityProgressRing.Visibility = Visibility.Visible;
+        RuntimeAcceleratorText.Text = "Checking backend hardware and accelerator settings...";
+
+        try
+        {
+            _hardwareProfile = await App.Services.ApiClient.GetHardwareAsync(cancellationToken);
+            UpdateRuntimeCapabilityUi();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _hardwareProfile = null;
+            RuntimeAcceleratorText.Text = $"Compute readiness is unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
+            RuntimeCudaText.Text = "CUDA status could not be loaded. Manual render controls remain available.";
+            RuntimeTensorCoreText.Text = "RTX Tensor Core hardware was not confirmed.";
+            RuntimeTensorRtText.Text = _modelCatalogue?.TensorRtMigration?.Canonical.RendererReady == true
+                ? "TensorRT SD 1.5 keyframe renderer is installed and verified."
+                : "TensorRT readiness is available from Models when the backend reconnects.";
+            RuntimeTritonText.Text = "Triton is backend-managed and has no independent render switch.";
+        }
+        finally
+        {
+            RuntimeCapabilityProgressRing.IsActive = false;
+            RuntimeCapabilityProgressRing.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void UpdateRuntimeCapabilityUi()
+    {
+        if (_hardwareProfile is not JsonElement hardware)
+        {
+            return;
+        }
+
+        try
+        {
+            RenderRuntimeCapabilities capabilities = RenderRuntimeCapabilities.Evaluate(
+                hardware,
+                _modelCatalogue);
+            RuntimeAcceleratorText.Text = capabilities.AcceleratorSummary;
+            RuntimeCudaText.Text = capabilities.CudaSummary;
+            RuntimeTensorCoreText.Text = capabilities.TensorCoreSummary;
+            RuntimeTensorRtText.Text = capabilities.TensorRtSummary;
+            RuntimeTritonText.Text = capabilities.TritonSummary;
+        }
+        catch (ArgumentException ex)
+        {
+            RuntimeAcceleratorText.Text = $"Backend hardware report could not be read: {ex.Message}";
+        }
+    }
+
+    private async void RefreshRuntimeCapabilities_Click(object sender, RoutedEventArgs e)
+    {
+        if (_pageCancellation is null)
+        {
+            return;
+        }
+
+        await Task.WhenAll(
+            LoadHardwareCapabilitiesAsync(_pageCancellation.Token),
+            LoadModelGuidanceAsync(_pageCancellation.Token));
     }
 
     private void UpdateModelGuidance()
@@ -316,6 +388,7 @@ public sealed partial class RenderPage : Page
             SelectComboValue(TierComboBox, setup.RenderTier);
             SelectComboValue(TemporalModeComboBox, setup.TemporalMode);
             SelectComboValue(VideoModelEngineComboBox, setup.VideoModelEngine);
+            SelectComboValue(MotionStrategyComboBox, setup.MotionStrategy);
             WidthBox.Value = setup.Width;
             HeightBox.Value = setup.Height;
             FpsBox.Value = setup.OutputFps;

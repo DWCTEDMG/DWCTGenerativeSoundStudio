@@ -20,6 +20,13 @@ public sealed class TimelineLaneDocument
     private bool _muted;
     private double _fadeInSeconds;
     private double _fadeOutSeconds;
+    private string _fitMode;
+    private double _opacity;
+    private double _brightness;
+    private double _contrast;
+    private double _saturation;
+    private int _rotationDegrees;
+    private bool _flipHorizontal;
 
     internal TimelineLaneDocument(
         string stableId,
@@ -38,6 +45,13 @@ public sealed class TimelineLaneDocument
         bool muted = false,
         double fadeInSeconds = 0,
         double fadeOutSeconds = 0,
+        string fitMode = "contain",
+        double opacity = 1,
+        double brightness = 0,
+        double contrast = 1,
+        double saturation = 1,
+        int rotationDegrees = 0,
+        bool flipHorizontal = false,
         IReadOnlySet<string>? presentMediaProperties = null)
     {
         StableId = stableId;
@@ -56,6 +70,13 @@ public sealed class TimelineLaneDocument
         _muted = muted;
         _fadeInSeconds = fadeInSeconds;
         _fadeOutSeconds = fadeOutSeconds;
+        _fitMode = NormalizeFitMode(fitMode);
+        _opacity = opacity;
+        _brightness = brightness;
+        _contrast = contrast;
+        _saturation = saturation;
+        _rotationDegrees = NormalizeRotation(rotationDegrees);
+        _flipHorizontal = flipHorizontal;
         PresentMediaProperties = presentMediaProperties is null
             ? new HashSet<string>(StringComparer.Ordinal)
             : new HashSet<string>(presentMediaProperties, StringComparer.Ordinal);
@@ -149,9 +170,89 @@ public sealed class TimelineLaneDocument
         }
     }
 
+    public string FitMode
+    {
+        get => _fitMode;
+        set
+        {
+            _fitMode = NormalizeFitMode(value);
+            PresentMediaProperties.Add("fit_mode");
+        }
+    }
+
+    public double Opacity
+    {
+        get => _opacity;
+        set
+        {
+            _opacity = value;
+            PresentMediaProperties.Add("opacity");
+        }
+    }
+
+    public double Brightness
+    {
+        get => _brightness;
+        set
+        {
+            _brightness = value;
+            PresentMediaProperties.Add("brightness");
+        }
+    }
+
+    public double Contrast
+    {
+        get => _contrast;
+        set
+        {
+            _contrast = value;
+            PresentMediaProperties.Add("contrast");
+        }
+    }
+
+    public double Saturation
+    {
+        get => _saturation;
+        set
+        {
+            _saturation = value;
+            PresentMediaProperties.Add("saturation");
+        }
+    }
+
+    public int RotationDegrees
+    {
+        get => _rotationDegrees;
+        set
+        {
+            _rotationDegrees = NormalizeRotation(value);
+            PresentMediaProperties.Add("rotation_deg");
+        }
+    }
+
+    public bool FlipHorizontal
+    {
+        get => _flipHorizontal;
+        set
+        {
+            _flipHorizontal = value;
+            PresentMediaProperties.Add("flip_horizontal");
+        }
+    }
+
     internal TimelineLaneOrigin Origin { get; }
     internal JsonObject Source { get; }
     internal HashSet<string> PresentMediaProperties { get; }
+
+    private static string NormalizeFitMode(string? value)
+    {
+        string normalized = string.IsNullOrWhiteSpace(value)
+            ? "contain"
+            : value.Trim().ToLowerInvariant();
+        return normalized is "contain" or "cover" or "stretch" ? normalized : "contain";
+    }
+
+    private static int NormalizeRotation(int value) => value is 90 or 180 or 270 ? value : 0;
 }
 
 public static class TimelineProjection
@@ -167,7 +268,14 @@ public static class TimelineProjection
         "volume",
         "muted",
         "fade_in_s",
-        "fade_out_s"
+        "fade_out_s",
+        "fit_mode",
+        "opacity",
+        "brightness",
+        "contrast",
+        "saturation",
+        "rotation_deg",
+        "flip_horizontal"
     ];
 
     public static IReadOnlyList<TimelineLaneDocument> Project(JsonObject timeline)
@@ -606,6 +714,13 @@ public static class TimelineProjection
                     GetMediaBoolean(clip, "muted", false),
                     GetMediaDouble(clip, "fade_in_s", 0),
                     GetMediaDouble(clip, "fade_out_s", 0),
+                    GetMediaString(clip, "fit_mode", "contain"),
+                    GetMediaDouble(clip, "opacity", 1),
+                    GetMediaDouble(clip, "brightness", 0),
+                    GetMediaDouble(clip, "contrast", 1),
+                    GetMediaDouble(clip, "saturation", 1),
+                    (int)Math.Round(GetMediaDouble(clip, "rotation_deg", 0)),
+                    GetMediaBoolean(clip, "flip_horizontal", false),
                     GetPresentMediaProperties(clip)));
             }
         }
@@ -643,6 +758,13 @@ public static class TimelineProjection
                 GetMediaBoolean(layer, "muted", false),
                 GetMediaDouble(layer, "fade_in_s", 0),
                 GetMediaDouble(layer, "fade_out_s", 0),
+                GetMediaString(layer, "fit_mode", "contain"),
+                GetMediaDouble(layer, "opacity", 1),
+                GetMediaDouble(layer, "brightness", 0),
+                GetMediaDouble(layer, "contrast", 1),
+                GetMediaDouble(layer, "saturation", 1),
+                (int)Math.Round(GetMediaDouble(layer, "rotation_deg", 0)),
+                GetMediaBoolean(layer, "flip_horizontal", false),
                 GetPresentMediaProperties(layer)));
         }
 
@@ -763,6 +885,13 @@ public static class TimelineProjection
             lane.Muted,
             lane.FadeInSeconds,
             lane.FadeOutSeconds,
+            lane.FitMode,
+            lane.Opacity,
+            lane.Brightness,
+            lane.Contrast,
+            lane.Saturation,
+            lane.RotationDegrees,
+            lane.FlipHorizontal,
             lane.PresentMediaProperties);
     }
 
@@ -844,8 +973,11 @@ public static class TimelineProjection
             : null;
     }
 
-    private static string GetMediaString(JsonObject source, string propertyName) =>
-        GetString(GetMediaNode(source, propertyName)) ?? string.Empty;
+    private static string GetMediaString(
+        JsonObject source,
+        string propertyName,
+        string fallback = "") =>
+        GetString(GetMediaNode(source, propertyName)) ?? fallback;
 
     private static double GetMediaDouble(JsonObject source, string propertyName, double fallback) =>
         GetDouble(GetMediaNode(source, propertyName), fallback);
@@ -870,6 +1002,13 @@ public static class TimelineProjection
                 "muted" => JsonValue.Create(lane.Muted),
                 "fade_in_s" => JsonValue.Create(Math.Max(0, lane.FadeInSeconds)),
                 "fade_out_s" => JsonValue.Create(Math.Max(0, lane.FadeOutSeconds)),
+                "fit_mode" => JsonValue.Create(lane.FitMode),
+                "opacity" => JsonValue.Create(Math.Clamp(lane.Opacity, 0, 1)),
+                "brightness" => JsonValue.Create(Math.Clamp(lane.Brightness, -1, 1)),
+                "contrast" => JsonValue.Create(Math.Clamp(lane.Contrast, 0, 2)),
+                "saturation" => JsonValue.Create(Math.Clamp(lane.Saturation, 0, 3)),
+                "rotation_deg" => JsonValue.Create(lane.RotationDegrees),
+                "flip_horizontal" => JsonValue.Create(lane.FlipHorizontal),
                 _ => null
             };
             if (value is null)

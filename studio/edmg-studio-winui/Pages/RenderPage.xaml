@@ -1841,18 +1841,59 @@
                 <Grid RowSpacing="10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="180" />
                     </Grid.RowDefinitions>
-                    <StackPanel Spacing="2">
+                    <Border Padding="12"
+                            CornerRadius="8"
+                            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                            AutomationProperties.AutomationId="RenderRuntimeCapabilitiesCard">
+                        <StackPanel Spacing="7">
+                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                                <TextBlock Text="Compute readiness"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center" />
+                                <ProgressRing x:Name="RuntimeCapabilityProgressRing"
+                                              Grid.Column="1"
+                                              Width="18"
+                                              Height="18"
+                                              IsActive="False"
+                                              Visibility="Collapsed" />
+                                <Button Grid.Column="2"
+                                        Content="Refresh"
+                                        Click="RefreshRuntimeCapabilities_Click"
+                                        AutomationProperties.AutomationId="RefreshRenderRuntimeCapabilitiesButton" />
+                            </Grid>
+                            <TextBlock x:Name="RuntimeAcceleratorText"
+                                       Text="Backend hardware has not been checked."
+                                       FontWeight="SemiBold"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.AutomationId="RenderRuntimeAcceleratorText" />
+                            <TextBlock x:Name="RuntimeCudaText"
+                                       Text="CUDA status is waiting for the backend."
+                                       TextWrapping="Wrap" />
+                            <TextBlock x:Name="RuntimeTensorCoreText"
+                                       Text="RTX Tensor Core status is waiting for the backend."
+                                       TextWrapping="Wrap" />
+                            <TextBlock x:Name="RuntimeTensorRtText"
+                                       Text="TensorRT status is waiting for Models."
+                                       TextWrapping="Wrap" />
+                            <TextBlock x:Name="RuntimeTritonText"
+                                       Text="Triton is backend-managed and has no independent render switch."
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                    <StackPanel Grid.Row="1" Spacing="2">
                         <TextBlock Text="Diagnostics" Style="{StaticResource SectionHeaderStyle}" />
                         <TextBlock Text="The latest backend response or actionable error."
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                     <TextBox x:Name="GlobalResultBox"
-                             Grid.Row="1"
+                             Grid.Row="2"
                              AcceptsReturn="True"
                              IsReadOnly="True"
                              FontFamily="Consolas"
@@ -1860,7 +1901,7 @@
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              AutomationProperties.AutomationId="RenderGlobalDiagnosticsBox" />
-                    <Grid Grid.Row="2">
+                    <Grid Grid.Row="3">
                         <TextBlock Text="Activity log" FontWeight="SemiBold" />
                         <Button Content="Clear"
                                 HorizontalAlignment="Right"
@@ -1868,7 +1909,7 @@
                                 AutomationProperties.AutomationId="ClearRenderLogButton" />
                     </Grid>
                     <TextBox x:Name="ActionLogBox"
-                             Grid.Row="3"
+                             Grid.Row="4"
                              AcceptsReturn="True"
                              IsReadOnly="True"
                              FontFamily="Consolas"

@@ -295,6 +295,41 @@ public sealed class TimelineProjectionTests
     }
 
     [TestMethod]
+    public void SourceBackedLayer_RebuildsVideoAdjustmentsInsideData()
+    {
+        var timeline = CreateVideoTimeline();
+        var trackLane = TimelineProjection.Project(timeline).Single();
+        var layer = TimelineProjection.CreateLayer("Artwork", "overlay", 1, 3);
+        layer.SourcePath = "outputs/images/artwork.png";
+        layer.SourceInSeconds = 0;
+        layer.SourceOutSeconds = 2;
+        layer.FitMode = "contain";
+        layer.Opacity = 0.7;
+        layer.Brightness = 0.1;
+        layer.Contrast = 1.2;
+        layer.Saturation = 0.8;
+        layer.RotationDegrees = 90;
+        layer.FlipHorizontal = true;
+
+        var rebuilt = TimelineProjection.Rebuild(timeline, [trackLane, layer]);
+        var rebuiltLayer = rebuilt["layers"]![0]!.AsObject();
+        var data = rebuiltLayer["data"]!.AsObject();
+
+        Assert.AreEqual("Artwork", rebuiltLayer["name"]!.GetValue<string>());
+        Assert.AreEqual("overlay", rebuiltLayer["type"]!.GetValue<string>());
+        Assert.AreEqual(1, rebuiltLayer["start_s"]!.GetValue<double>());
+        Assert.AreEqual(3, rebuiltLayer["end_s"]!.GetValue<double>());
+        Assert.AreEqual("outputs/images/artwork.png", data["source_path"]!.GetValue<string>());
+        Assert.AreEqual("contain", data["fit_mode"]!.GetValue<string>());
+        Assert.AreEqual(0.7, data["opacity"]!.GetValue<double>());
+        Assert.AreEqual(0.1, data["brightness"]!.GetValue<double>());
+        Assert.AreEqual(1.2, data["contrast"]!.GetValue<double>());
+        Assert.AreEqual(0.8, data["saturation"]!.GetValue<double>());
+        Assert.AreEqual(90, data["rotation_deg"]!.GetValue<int>());
+        Assert.IsTrue(data["flip_horizontal"]!.GetValue<bool>());
+    }
+
+    [TestMethod]
     public void ReassignTrack_LeavesLegacyLayerInLayerCollection()
     {
         var timeline = JsonNode.Parse(
@@ -463,6 +498,13 @@ public sealed class TimelineProjectionTests
         lane.Muted = true;
         lane.FadeInSeconds = 0.2;
         lane.FadeOutSeconds = 0.4;
+        lane.FitMode = "cover";
+        lane.Opacity = 0.8;
+        lane.Brightness = 0.1;
+        lane.Contrast = 1.25;
+        lane.Saturation = 1.5;
+        lane.RotationDegrees = 90;
+        lane.FlipHorizontal = true;
 
         var rebuilt = TimelineProjection.Rebuild(source, [lane]);
         var data = rebuilt["tracks"]![0]!["clips"]![0]!["data"]!.AsObject();
@@ -475,8 +517,38 @@ public sealed class TimelineProjectionTests
         Assert.IsTrue(data["muted"]!.GetValue<bool>());
         Assert.AreEqual(0.2, data["fade_in_s"]!.GetValue<double>());
         Assert.AreEqual(0.4, data["fade_out_s"]!.GetValue<double>());
+        Assert.AreEqual("cover", data["fit_mode"]!.GetValue<string>());
+        Assert.AreEqual(0.8, data["opacity"]!.GetValue<double>());
+        Assert.AreEqual(0.1, data["brightness"]!.GetValue<double>());
+        Assert.AreEqual(1.25, data["contrast"]!.GetValue<double>());
+        Assert.AreEqual(1.5, data["saturation"]!.GetValue<double>());
+        Assert.AreEqual(90, data["rotation_deg"]!.GetValue<int>());
+        Assert.IsTrue(data["flip_horizontal"]!.GetValue<bool>());
         Assert.AreEqual("keep-me", data["custom"]!.GetValue<string>());
         Assert.AreEqual("root-metadata", rebuilt["custom_root"]!.GetValue<string>());
+    }
+
+    [TestMethod]
+    public void Rebuild_NormalizesVideoAdjustmentBounds()
+    {
+        var source = CreateVideoTimeline();
+        var lane = TimelineProjection.Project(source).Single();
+        lane.FitMode = "unsupported";
+        lane.Opacity = 5;
+        lane.Brightness = -4;
+        lane.Contrast = 8;
+        lane.Saturation = 9;
+        lane.RotationDegrees = 45;
+
+        var rebuilt = TimelineProjection.Rebuild(source, [lane]);
+        var data = rebuilt["tracks"]![0]!["clips"]![0]!["data"]!.AsObject();
+
+        Assert.AreEqual("contain", data["fit_mode"]!.GetValue<string>());
+        Assert.AreEqual(1, data["opacity"]!.GetValue<double>());
+        Assert.AreEqual(-1, data["brightness"]!.GetValue<double>());
+        Assert.AreEqual(2, data["contrast"]!.GetValue<double>());
+        Assert.AreEqual(3, data["saturation"]!.GetValue<double>());
+        Assert.AreEqual(0, data["rotation_deg"]!.GetValue<int>());
     }
 
     [TestMethod]

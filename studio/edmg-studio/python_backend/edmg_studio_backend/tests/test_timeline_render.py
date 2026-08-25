@@ -72,6 +72,13 @@ def _video_file(project_dir: Path, name: str = "clip.mp4") -> Path:
     return source
 
 
+def _image_file(project_dir: Path, name: str = "overlay.png") -> Path:
+    source = project_dir / "outputs" / "images" / name
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"not-real-image")
+    return source
+
+
 def test_outputs_include_nested_layered_animation_for_timeline_media_library(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -190,6 +197,43 @@ def test_prepare_timeline_plan_rejects_same_track_overlap(
 
 
 @pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("fit_mode", "zoom", "fit mode"),
+        ("opacity", 1.5, "opacity"),
+        ("brightness", -2, "brightness"),
+        ("contrast", 3, "contrast"),
+        ("saturation", 4, "saturation"),
+        ("rotation_deg", 45, "rotation"),
+    ],
+)
+def test_prepare_timeline_plan_rejects_invalid_video_adjustment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    project_dir = tmp_path / "project"
+    _video_file(project_dir)
+    monkeypatch.setattr(ffmpeg_service, "has_video_stream", lambda *_args: True)
+    monkeypatch.setattr(ffmpeg_service, "has_audio_stream", lambda *_args: True)
+
+    clip = {
+        "source_path": "outputs/videos/clip.mp4",
+        "start_s": 0,
+        "end_s": 2,
+        field: value,
+    }
+    with pytest.raises(ValueError, match=message):
+        ffmpeg_service.prepare_timeline_render_plan(
+            ffmpeg_path="ffmpeg",
+            project_dir=project_dir,
+            timeline={"tracks": [{"clips": [clip]}]},
+        )
+
+
+@pytest.mark.parametrize(
     ("video_codec", "audio_codec", "suffix", "video_encoder", "pixel_format"),
     [
         ("h264", "aac", ".mp4", "libx264", "yuv420p"),
@@ -230,6 +274,13 @@ def test_timeline_command_builds_composition_and_codec_mapping(
                             "volume": 0.5,
                             "fade_in_s": 0.25,
                             "fade_out_s": 0.5,
+                            "fit_mode": "cover",
+                            "opacity": 0.75,
+                            "brightness": 0.1,
+                            "contrast": 1.2,
+                            "saturation": 0.8,
+                            "rotation_deg": 90,
+                            "flip_horizontal": True,
                         }
                     ],
                 },
@@ -266,6 +317,12 @@ def test_timeline_command_builds_composition_and_codec_mapping(
     assert "pad=1920:1080" in graph
     assert "fps=23.976" in graph
     assert "fade=t=in" in graph and "fade=t=out" in graph
+    assert "transpose=clock" in graph
+    assert "hflip" in graph
+    assert "force_original_aspect_ratio=increase" in graph
+    assert "crop=1920:1080" in graph
+    assert "eq=brightness=0.1:contrast=1.2:saturation=0.8" in graph
+    assert "format=rgba,colorchannelmixer=aa=0.75" in graph
     assert "atempo=2,atempo=2" in graph
     assert "volume=0.5" in graph
     assert "adelay=1000:all=1" in graph
@@ -275,6 +332,97 @@ def test_timeline_command_builds_composition_and_codec_mapping(
     assert command[command.index("-pix_fmt") + 1] == pixel_format
     assert command[command.index("-c:a") + 1] == audio_codec
     assert command[-1].endswith(suffix)
+
+
+def test_timeline_command_includes_winui_layers_and_loops_image_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_dir = tmp_path / "project"
+    _video_file(project_dir)
+    image = _image_file(project_dir)
+    monkeypatch.setattr(ffmpeg_service, "has_video_stream", lambda *_args: True)
+    monkeypatch.setattr(ffmpeg_service, "has_audio_stream", lambda *_args: True)
+    monkeypatch.setattr(ffmpeg_service, "ensure_ffmpeg", lambda value: value)
+
+    timeline = {
+        "tracks": [
+            {
+                "id": "main",
+                "clips": [
+                    {
+                        "source_path": "outputs/videos/clip.mp4",
+                        "start_s": 0,
+                        "end_s": 2,
+                    }
+                ],
+            }
+        ],
+        "layers": [
+            {
+                "id": "artwork",
+                "name": "Artwork overlay",
+                "type": "image",
+                "start_s": 0.5,
+                "end_s": 1.5,
+                "data": {
+                    "source_path": "outputs/images/overlay.png",
+                    "fit_mode": "contain",
+                    "opacity": 0.6,
+                    "fade_in_s": 0.25,
+                    "fade_out_s": 0.25,
+                },
+            }
+        ],
+    }
+    command, duration = ffmpeg_service.build_timeline_render_command(
+        ffmpeg_path="ffmpeg",
+        project_dir=project_dir,
+        timeline=timeline,
+        output_path=tmp_path / "master.mp4",
+        width=1280,
+        height=720,
+        fps=24,
+        video_codec="h264",
+        audio_codec="aac",
+        quality=20,
+    )
+
+    graph = command[command.index("-filter_complex") + 1]
+    image_input = command.index(str(image))
+    prepared = ffmpeg_service.prepare_timeline_render_plan(
+        ffmpeg_path="ffmpeg",
+        project_dir=project_dir,
+        timeline=timeline,
+    )
+    round_tripped = ffmpeg_service.prepare_timeline_render_plan(
+        ffmpeg_path="ffmpeg",
+        project_dir=project_dir,
+        timeline=prepared,
+    )
+
+    assert duration == 2
+    assert prepared["tracks"][1]["is_layer"] is True
+    assert prepared["tracks"][1]["clips"][0]["is_layer"] is True
+    assert round_tripped["tracks"][1]["is_layer"] is True
+    assert round_tripped["tracks"][1]["clips"][0]["is_layer"] is True
+    assert command[image_input - 5 : image_input + 1] == [
+        "-loop",
+        "1",
+        "-framerate",
+        "24",
+        "-i",
+        str(image),
+    ]
+    assert "[1:v:0]" in graph
+    assert "force_original_aspect_ratio=decrease" in graph
+    assert "pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black@0" in graph
+    assert (
+        "format=rgba,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black@0,colorchannelmixer=aa=0.6"
+    ) in graph
+    assert "fade=t=in:st=0:d=0.250000:alpha=1" in graph
+    assert "fade=t=out:st=0.750000:d=0.250000:alpha=1" in graph
+    assert "amix=inputs=2" in graph
 
 
 def test_timeline_render_cancellation_terminates_and_removes_partial(
@@ -448,7 +596,9 @@ def test_timeline_render_worker_writes_artifact_and_project_metadata(
     assert saved_job.progress["stage"] == "complete"
 
 
-def test_execute_job_dispatches_timeline_render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execute_job_dispatches_timeline_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = ProjectStore(tmp_path / "data")
     jobs = JobStore(store.projects_dir)
     project = store.create("Timeline dispatch")

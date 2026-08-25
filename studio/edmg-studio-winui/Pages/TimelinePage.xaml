@@ -363,6 +363,116 @@
                                                SpinButtonPlacementMode="Compact" />
                                 </Grid>
 
+                                <Expander x:Name="VideoAdjustmentsExpander"
+                                          Header="Video adjustments"
+                                          AutomationProperties.AutomationId="Timeline.Inspector.VideoAdjustments">
+                                    <StackPanel Padding="0,10,0,0" Spacing="10">
+                                        <TextBlock x:Name="VideoAdjustmentHintText"
+                                                   Text="These nondestructive adjustments are saved with the clip and applied to the edited master."
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource StudioCaptionTextStyle}" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ComboBox x:Name="FitModeComboBox"
+                                                      Grid.Column="0"
+                                                      Header="Frame fit"
+                                                      SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="Timeline.Inspector.FitMode">
+                                                <ComboBoxItem Content="Contain — letterbox" Tag="contain" />
+                                                <ComboBoxItem Content="Cover — crop to fill" Tag="cover" />
+                                                <ComboBoxItem Content="Stretch" Tag="stretch" />
+                                            </ComboBox>
+                                            <ComboBox x:Name="RotationComboBox"
+                                                      Grid.Column="1"
+                                                      Header="Rotation"
+                                                      SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="Timeline.Inspector.Rotation">
+                                                <ComboBoxItem Content="0°" Tag="0" />
+                                                <ComboBoxItem Content="90° clockwise" Tag="90" />
+                                                <ComboBoxItem Content="180°" Tag="180" />
+                                                <ComboBoxItem Content="270° clockwise" Tag="270" />
+                                            </ComboBox>
+                                        </Grid>
+                                        <Grid ColumnSpacing="8" RowSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <NumberBox x:Name="OpacityNumberBox"
+                                                       Grid.Row="0"
+                                                       Grid.Column="0"
+                                                       Header="Opacity"
+                                                       Minimum="0"
+                                                       Maximum="1"
+                                                       SmallChange="0.05"
+                                                       Value="1"
+                                                       SpinButtonPlacementMode="Compact"
+                                                       AutomationProperties.AutomationId="Timeline.Inspector.Opacity" />
+                                            <NumberBox x:Name="BrightnessNumberBox"
+                                                       Grid.Row="0"
+                                                       Grid.Column="1"
+                                                       Header="Brightness"
+                                                       Minimum="-1"
+                                                       Maximum="1"
+                                                       SmallChange="0.05"
+                                                       Value="0"
+                                                       SpinButtonPlacementMode="Compact"
+                                                       AutomationProperties.AutomationId="Timeline.Inspector.Brightness" />
+                                            <NumberBox x:Name="ContrastNumberBox"
+                                                       Grid.Row="1"
+                                                       Grid.Column="0"
+                                                       Header="Contrast"
+                                                       Minimum="0"
+                                                       Maximum="2"
+                                                       SmallChange="0.05"
+                                                       Value="1"
+                                                       SpinButtonPlacementMode="Compact"
+                                                       AutomationProperties.AutomationId="Timeline.Inspector.Contrast" />
+                                            <NumberBox x:Name="SaturationNumberBox"
+                                                       Grid.Row="1"
+                                                       Grid.Column="1"
+                                                       Header="Saturation"
+                                                       Minimum="0"
+                                                       Maximum="3"
+                                                       SmallChange="0.05"
+                                                       Value="1"
+                                                       SpinButtonPlacementMode="Compact"
+                                                       AutomationProperties.AutomationId="Timeline.Inspector.Saturation" />
+                                        </Grid>
+                                        <ToggleSwitch x:Name="FlipHorizontalToggle"
+                                                      Header="Mirror horizontally"
+                                                      AutomationProperties.AutomationId="Timeline.Inspector.FlipHorizontal" />
+                                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                                            <ComboBox x:Name="VideoLookComboBox"
+                                                      Header="Quick look"
+                                                      SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="Timeline.Inspector.VideoLook">
+                                                <ComboBoxItem Content="Neutral" Tag="neutral" />
+                                                <ComboBoxItem Content="Punchy" Tag="punchy" />
+                                                <ComboBoxItem Content="Soft" Tag="soft" />
+                                                <ComboBoxItem Content="Monochrome" Tag="monochrome" />
+                                            </ComboBox>
+                                            <Button Grid.Column="1"
+                                                    VerticalAlignment="Bottom"
+                                                    Content="Apply look"
+                                                    Click="ApplyVideoLook_Click"
+                                                    AutomationProperties.AutomationId="Timeline.Inspector.ApplyVideoLook" />
+                                            <Button Grid.Column="2"
+                                                    VerticalAlignment="Bottom"
+                                                    Content="Reset"
+                                                    Click="ResetVideoAdjustments_Click"
+                                                    AutomationProperties.AutomationId="Timeline.Inspector.ResetVideoAdjustments" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Expander>
+
                                 <Button x:Name="ApplyInspectorButton"
                                         AutomationProperties.AutomationId="Timeline.ApplyInspector"
                                         Style="{StaticResource StudioPrimaryButtonStyle}"

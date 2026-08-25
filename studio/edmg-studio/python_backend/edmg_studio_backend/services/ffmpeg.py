@@ -18,7 +18,9 @@ def ensure_ffmpeg(ffmpeg_path: str) -> str:
         return ffmpeg_path
     found = shutil.which(ffmpeg_path)
     if not found:
-        raise RuntimeError("FFmpeg not found. Install FFmpeg and ensure it's on PATH, or set EDMG_FFMPEG_PATH.")
+        raise RuntimeError(
+            "FFmpeg not found. Install FFmpeg and ensure it's on PATH, or set EDMG_FFMPEG_PATH."
+        )
     return found
 
 
@@ -86,9 +88,7 @@ def _rife_command_args(template: str, *, in_mp4: Path, out_mp4: Path, fps: int) 
         raise ValueError("EDMG_RIFE_CMD contains invalid quoting") from exc
     if os.name == "nt":
         parts = [
-            part[1:-1]
-            if len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}
-            else part
+            part[1:-1] if len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'} else part
             for part in parts
         ]
     if not parts:
@@ -214,7 +214,9 @@ def has_video_stream(ffmpeg_path: str, media_path: Path) -> bool | None:
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         return False
-    stream_lines = [line.strip().lower() for line in (proc.stdout or "").splitlines() if line.strip()]
+    stream_lines = [
+        line.strip().lower() for line in (proc.stdout or "").splitlines() if line.strip()
+    ]
     return any(line == "video" for line in stream_lines)
 
 
@@ -261,6 +263,13 @@ _TIMELINE_VIDEO_SUFFIXES = {
     ".mpg",
     ".webm",
 }
+_TIMELINE_IMAGE_SUFFIXES = {
+    ".bmp",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".webp",
+}
 
 
 def _timeline_clip_values(clip: dict[str, Any]) -> dict[str, Any]:
@@ -270,30 +279,31 @@ def _timeline_clip_values(clip: dict[str, Any]) -> dict[str, Any]:
 
 
 def _timeline_tracks(timeline: dict[str, Any]) -> list[dict[str, Any]]:
+    projected: list[dict[str, Any]] = []
     tracks = timeline.get("tracks")
     if isinstance(tracks, list):
-        return [track for track in tracks if isinstance(track, dict)]
+        projected.extend(track for track in tracks if isinstance(track, dict))
     layers = timeline.get("layers")
     if isinstance(layers, list):
-        return [
+        projected.extend(
             {
-                "id": str(layer.get("id") or f"legacy-{index}"),
-                "clips": (
-                    layer["clips"]
-                    if isinstance(layer.get("clips"), list)
-                    else [layer]
-                ),
+                "id": str(layer.get("id") or f"layer-{index}"),
+                "name": str(layer.get("name") or layer.get("id") or f"Layer {index + 1}"),
+                "is_layer": True,
+                "clips": (layer["clips"] if isinstance(layer.get("clips"), list) else [layer]),
             }
             for index, layer in enumerate(layers)
             if isinstance(layer, dict)
-        ]
+        )
+    if projected:
+        return projected
     clips = timeline.get("clips")
     if isinstance(clips, list):
         return [{"id": "legacy-clips", "clips": clips}]
     return []
 
 
-def _resolve_timeline_source(project_dir: Path, source_value: Any) -> tuple[str, Path]:
+def _resolve_timeline_source(project_dir: Path, source_value: Any) -> tuple[str, Path, str]:
     source = str(source_value or "").strip().replace("\\", "/")
     if not source:
         raise ValueError("Timeline clip is missing source_path")
@@ -327,10 +337,15 @@ def _resolve_timeline_source(project_dir: Path, source_value: Any) -> tuple[str,
             resolved = candidate
             break
     if resolved is None:
-        raise ValueError(f"Timeline video source does not exist: {source}")
-    if resolved.suffix.lower() not in _TIMELINE_VIDEO_SUFFIXES:
-        raise ValueError(f"Timeline source is not a supported video file: {source}")
-    return resolved.relative_to(project_root).as_posix(), resolved
+        raise ValueError(f"Timeline visual source does not exist: {source}")
+    suffix = resolved.suffix.lower()
+    if suffix in _TIMELINE_VIDEO_SUFFIXES:
+        source_kind = "video"
+    elif suffix in _TIMELINE_IMAGE_SUFFIXES:
+        source_kind = "image"
+    else:
+        raise ValueError(f"Timeline source is not a supported visual file: {source}")
+    return resolved.relative_to(project_root).as_posix(), resolved, source_kind
 
 
 def _atempo_filters(speed: float) -> list[str]:
@@ -357,14 +372,13 @@ def prepare_timeline_render_plan(
         raise ValueError("Project timeline must be an object")
     prepared_tracks: list[dict[str, Any]] = []
     try:
-        timeline_duration = float(
-            timeline.get("duration_s", timeline.get("duration", 0.0)) or 0.0
-        )
+        timeline_duration = float(timeline.get("duration_s", timeline.get("duration", 0.0)) or 0.0)
     except (TypeError, ValueError) as exc:
         raise ValueError("Timeline duration must be numeric") from exc
     if not math.isfinite(timeline_duration) or timeline_duration < 0:
         raise ValueError("Timeline duration must be a finite non-negative number")
     for track_index, track in enumerate(_timeline_tracks(timeline)):
+        is_layer = bool(track.get("is_layer", False))
         prepared_clips: list[dict[str, Any]] = []
         raw_clips = track.get("clips")
         if not isinstance(raw_clips, list):
@@ -376,7 +390,9 @@ def prepare_timeline_render_plan(
             source_value = clip.get("source_path")
             if not str(source_value or "").strip():
                 continue
-            source_relative, source_path = _resolve_timeline_source(project_dir, source_value)
+            source_relative, source_path, source_kind = _resolve_timeline_source(
+                project_dir, source_value
+            )
             if has_video_stream(ffmpeg_path, source_path) is not True:
                 raise ValueError(f"Timeline source has no video stream: {source_relative}")
             try:
@@ -410,11 +426,29 @@ def prepare_timeline_render_plan(
                 volume = float(clip.get("volume", 1.0))
                 fade_in = float(clip.get("fade_in_s", 0.0))
                 fade_out = float(clip.get("fade_out_s", 0.0))
+                opacity = float(clip.get("opacity", 1.0))
+                brightness = float(clip.get("brightness", 0.0))
+                contrast = float(clip.get("contrast", 1.0))
+                saturation = float(clip.get("saturation", 1.0))
+                rotation_degrees = float(clip.get("rotation_deg", 0))
             except (TypeError, ValueError) as exc:
                 raise ValueError(
                     f"Timeline clip {track_index + 1}.{clip_index + 1} has invalid numeric values"
                 ) from exc
-            if not all(math.isfinite(value) for value in (source_out, volume, fade_in, fade_out)):
+            if not all(
+                math.isfinite(value)
+                for value in (
+                    source_out,
+                    volume,
+                    fade_in,
+                    fade_out,
+                    opacity,
+                    brightness,
+                    contrast,
+                    saturation,
+                    rotation_degrees,
+                )
+            ):
                 raise ValueError(
                     f"Timeline clip {track_index + 1}.{clip_index + 1} numeric values must be finite"
                 )
@@ -427,10 +461,38 @@ def prepare_timeline_render_plan(
                 raise ValueError(
                     f"Timeline clip {track_index + 1}.{clip_index + 1} source range is too short"
                 )
+            fit_mode = str(clip.get("fit_mode") or "contain").strip().lower()
+            if fit_mode not in {"contain", "cover", "stretch"}:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} has an invalid fit mode"
+                )
+            if not 0.0 <= opacity <= 1.0:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} opacity must be between 0 and 1"
+                )
+            if not -1.0 <= brightness <= 1.0:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} brightness must be between -1 and 1"
+                )
+            if not 0.0 <= contrast <= 2.0:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} contrast must be between 0 and 2"
+                )
+            if not 0.0 <= saturation <= 3.0:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} saturation must be between 0 and 3"
+                )
+            rotation = int(rotation_degrees)
+            if rotation_degrees != rotation or rotation not in {0, 90, 180, 270}:
+                raise ValueError(
+                    f"Timeline clip {track_index + 1}.{clip_index + 1} rotation must be 0, 90, 180, or 270"
+                )
             prepared_clips.append(
                 {
                     "id": str(clip.get("id") or f"clip-{track_index}-{clip_index}"),
                     "source_path": source_relative,
+                    "source_kind": source_kind,
+                    "is_layer": is_layer,
                     "start_s": start,
                     "end_s": end,
                     "source_in_s": source_in,
@@ -440,7 +502,15 @@ def prepare_timeline_render_plan(
                     "muted": bool(clip.get("muted", clip.get("mute", False))),
                     "fade_in_s": max(0.0, fade_in),
                     "fade_out_s": max(0.0, fade_out),
-                    "has_audio": has_audio_stream(ffmpeg_path, source_path) is not False,
+                    "fit_mode": fit_mode,
+                    "opacity": opacity,
+                    "brightness": brightness,
+                    "contrast": contrast,
+                    "saturation": saturation,
+                    "rotation_deg": rotation,
+                    "flip_horizontal": bool(clip.get("flip_horizontal", False)),
+                    "has_audio": source_kind == "video"
+                    and has_audio_stream(ffmpeg_path, source_path) is not False,
                 }
             )
             timeline_duration = max(timeline_duration, end)
@@ -455,6 +525,7 @@ def prepare_timeline_render_plan(
             prepared_tracks.append(
                 {
                     "id": str(track.get("id") or f"track-{track_index}"),
+                    "is_layer": is_layer,
                     "clips": prepared_clips,
                 }
             )
@@ -483,11 +554,7 @@ def build_timeline_render_command(
         timeline=timeline,
     )
     duration_s = float(plan["duration_s"])
-    clips = [
-        clip
-        for track in plan["tracks"]
-        for clip in track["clips"]
-    ]
+    clips = [clip for track in plan["tracks"] for clip in track["clips"]]
 
     codec_options = {
         "h264": ("libx264", "yuv420p", ".mp4"),
@@ -506,6 +573,8 @@ def build_timeline_render_command(
 
     command = [ensure_ffmpeg(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y"]
     for clip in clips:
+        if clip["source_kind"] == "image":
+            command.extend(["-loop", "1", "-framerate", f"{fps:.8g}"])
         command.extend(["-i", str(project_dir / clip["source_path"])])
     black_input = len(clips)
     silence_input = black_input + 1
@@ -541,22 +610,65 @@ def build_timeline_render_command(
             f"trim=start={source_in:.6f}:end={source_out:.6f}",
             f"setpts=(PTS-STARTPTS)/{speed:.8g}",
             f"trim=duration={duration:.6f}",
-            f"scale={width}:{height}:force_original_aspect_ratio=decrease",
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black",
-            f"fps={fps:.8g}",
-            "setsar=1",
         ]
+        rotation = int(clip["rotation_deg"])
+        if rotation == 90:
+            video_filters.append("transpose=clock")
+        elif rotation == 180:
+            video_filters.extend(["hflip", "vflip"])
+        elif rotation == 270:
+            video_filters.append("transpose=cclock")
+        if clip["flip_horizontal"]:
+            video_filters.append("hflip")
+
+        fit_mode = str(clip["fit_mode"])
+        transparent_padding = False
+        if fit_mode == "cover":
+            video_filters.extend(
+                [
+                    f"scale={width}:{height}:force_original_aspect_ratio=increase",
+                    f"crop={width}:{height}",
+                ]
+            )
+        elif fit_mode == "stretch":
+            video_filters.append(f"scale={width}:{height}")
+        else:
+            video_filters.append(f"scale={width}:{height}:force_original_aspect_ratio=decrease")
+            if clip["is_layer"]:
+                transparent_padding = True
+            else:
+                video_filters.append(f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black")
+
+        brightness = float(clip["brightness"])
+        contrast = float(clip["contrast"])
+        saturation = float(clip["saturation"])
+        if brightness != 0.0 or contrast != 1.0 or saturation != 1.0:
+            video_filters.append(
+                f"eq=brightness={brightness:.8g}:contrast={contrast:.8g}:saturation={saturation:.8g}"
+            )
+        opacity = float(clip["opacity"])
+        if clip["is_layer"]:
+            video_filters.append("format=rgba")
+            if transparent_padding:
+                video_filters.append(f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0")
+        elif opacity < 1.0:
+            video_filters.append("format=rgba")
+        if opacity < 1.0:
+            video_filters.append(f"colorchannelmixer=aa={opacity:.8g}")
+        video_filters.extend([f"fps={fps:.8g}", "setsar=1"])
         fade_in = min(float(clip["fade_in_s"]), duration)
         fade_out = min(float(clip["fade_out_s"]), duration)
+        fade_alpha = ":alpha=1" if clip["is_layer"] else ""
         if fade_in > 0:
-            video_filters.append(f"fade=t=in:st=0:d={fade_in:.6f}")
+            video_filters.append(f"fade=t=in:st=0:d={fade_in:.6f}{fade_alpha}")
         if fade_out > 0:
-            video_filters.append(f"fade=t=out:st={duration - fade_out:.6f}:d={fade_out:.6f}")
+            video_filters.append(
+                f"fade=t=out:st={duration - fade_out:.6f}:d={fade_out:.6f}{fade_alpha}"
+            )
         video_filters.append(f"setpts=PTS+{start:.6f}/TB")
         filters.append(f"[{input_index}:v:0]{','.join(video_filters)}[vc{input_index}]")
         filters.append(
-            f"[{current_video}][vc{input_index}]"
-            f"overlay=eof_action=pass:shortest=0[vo{input_index}]"
+            f"[{current_video}][vc{input_index}]overlay=eof_action=pass:shortest=0[vo{input_index}]"
         )
         current_video = f"vo{input_index}"
 
@@ -585,8 +697,7 @@ def build_timeline_render_command(
             audio_labels.append(f"ac{input_index}")
     if len(audio_labels) == 1:
         filters.append(
-            f"[{audio_labels[0]}]atrim=duration={duration_s:.6f},"
-            "asetpts=PTS-STARTPTS[aout]"
+            f"[{audio_labels[0]}]atrim=duration={duration_s:.6f},asetpts=PTS-STARTPTS[aout]"
         )
     else:
         filters.append(
@@ -656,7 +767,9 @@ def render_timeline_edited_master(
         _, stderr = proc.communicate()
         if proc.returncode != 0:
             message = (stderr or "").strip()
-            raise RuntimeError(f"FFmpeg timeline render failed ({proc.returncode}): {message[-2000:]}")
+            raise RuntimeError(
+                f"FFmpeg timeline render failed ({proc.returncode}): {message[-2000:]}"
+            )
         if not output_path.is_file() or output_path.stat().st_size <= 0:
             raise RuntimeError("FFmpeg timeline render did not produce an output file")
         if on_progress:
@@ -692,7 +805,9 @@ def _normalize_video_duration(
     temp_mp4 = video_mp4.with_name(f"{video_mp4.stem}.durationfix{video_mp4.suffix}")
     vf_parts: list[str] = []
     if actual_duration_s < target_duration_s:
-        vf_parts.append(f"tpad=stop_mode=clone:stop_duration={max(0.0, target_duration_s - actual_duration_s):.6f}")
+        vf_parts.append(
+            f"tpad=stop_mode=clone:stop_duration={max(0.0, target_duration_s - actual_duration_s):.6f}"
+        )
     vf_parts.append(f"trim=duration={target_duration_s:.6f}")
     vf_parts.append("setpts=PTS-STARTPTS")
     cmd = [
@@ -713,13 +828,14 @@ def _normalize_video_duration(
         raise RuntimeError(f"FFmpeg duration normalization failed: {proc.stderr[:2000]}")
     temp_mp4.replace(video_mp4)
 
+
 def assemble_slideshow(
     ffmpeg_path: str,
     image_paths: list[Path],
     durations_s: list[float],
     out_mp4: Path,
     audio_path: Path | None = None,
-    fps: int = 30
+    fps: int = 30,
 ) -> None:
     """Concatenates still images with explicit per-image durations."""
     if len(image_paths) != len(durations_s):
@@ -742,19 +858,20 @@ def assemble_slideshow(
     list_file = _write_concat_manifest(out_mp4.parent, ".concat_", lines)
 
     cmd = [
-        ffmpeg, "-y",
-        "-r", str(int(fps)),
-        "-f", "concat", "-safe", "0",
-        "-i", str(list_file),
+        ffmpeg,
+        "-y",
+        "-r",
+        str(int(fps)),
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_file),
     ]
     if audio_path and audio_path.exists():
         cmd += ["-i", str(audio_path), "-shortest"]
-    cmd += [
-        "-vf", "format=yuv420p",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        str(out_mp4)
-    ]
+    cmd += ["-vf", "format=yuv420p", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out_mp4)]
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -763,13 +880,14 @@ def assemble_slideshow(
     finally:
         list_file.unlink(missing_ok=True)
 
+
 def assemble_image_sequence(
     ffmpeg_path: str,
     frames_dir: Path,
     out_mp4: Path,
     fps: int = 24,
     glob_pattern: str = "*.png",
-    audio_path: Path | None = None
+    audio_path: Path | None = None,
 ) -> None:
     """Turns a directory of frame images into an MP4.
 
@@ -795,31 +913,35 @@ def assemble_image_sequence(
         raw_out = out_mp4.with_name(f"{out_mp4.stem}.rawvideo{out_mp4.suffix}")
 
     cmd = [
-        ffmpeg, "-y",
-        "-r", str(int(fps)),
-        "-f", "concat", "-safe", "0",
-        "-i", str(list_file),
+        ffmpeg,
+        "-y",
+        "-r",
+        str(int(fps)),
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_file),
     ]
-    cmd += [
-        "-vf", "format=yuv420p",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        str(raw_out)
-    ]
+    cmd += ["-vf", "format=yuv420p", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(raw_out)]
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"FFmpeg failed: {proc.stderr[:2000]}")
         if audio_path and audio_path.exists():
-            mux_audio(ffmpeg_path=ffmpeg_path, video_mp4=raw_out, audio_path=audio_path, out_mp4=out_mp4)
+            mux_audio(
+                ffmpeg_path=ffmpeg_path, video_mp4=raw_out, audio_path=audio_path, out_mp4=out_mp4
+            )
             try:
                 raw_duration = _probe_duration_seconds(ffmpeg_path, raw_out)
                 final_video_duration = _probe_duration_seconds(ffmpeg_path, out_mp4)
                 if (
                     raw_duration is not None
                     and final_video_duration is not None
-                    and abs(final_video_duration - raw_duration) > max(0.03, (1.0 / max(1, int(fps))) + 0.005)
+                    and abs(final_video_duration - raw_duration)
+                    > max(0.03, (1.0 / max(1, int(fps))) + 0.005)
                 ):
                     _normalize_video_duration(
                         ffmpeg_path,
@@ -828,18 +950,21 @@ def assemble_image_sequence(
                         actual_duration_s=final_video_duration,
                     )
                     remux_out = out_mp4.with_name(f"{out_mp4.stem}.remux{out_mp4.suffix}")
-                    mux_audio(ffmpeg_path=ffmpeg_path, video_mp4=out_mp4, audio_path=audio_path, out_mp4=remux_out)
+                    mux_audio(
+                        ffmpeg_path=ffmpeg_path,
+                        video_mp4=out_mp4,
+                        audio_path=audio_path,
+                        out_mp4=remux_out,
+                    )
                     remux_out.replace(out_mp4)
             finally:
                 raw_out.unlink(missing_ok=True)
     finally:
         list_file.unlink(missing_ok=True)
 
+
 def concat_videos(
-    ffmpeg_path: str,
-    video_paths: list[Path],
-    out_mp4: Path,
-    audio_path: Path | None = None
+    ffmpeg_path: str, video_paths: list[Path], out_mp4: Path, audio_path: Path | None = None
 ) -> None:
     """Concatenate multiple MP4 clips (same codec/params recommended)."""
     if not video_paths:
@@ -866,7 +991,6 @@ def concat_videos(
         list_file.unlink(missing_ok=True)
 
 
-
 def _ffmpeg_filters(ffmpeg_path: str) -> str:
     ffmpeg = ensure_ffmpeg(ffmpeg_path)
     try:
@@ -877,10 +1001,12 @@ def _ffmpeg_filters(ffmpeg_path: str) -> str:
         pass
     return ""
 
+
 def ffmpeg_has_filter(ffmpeg_path: str, filter_name: str) -> bool:
     """Best-effort check whether FFmpeg build includes a given filter."""
     blob = _ffmpeg_filters(ffmpeg_path)
     return filter_name.lower() in blob.lower()
+
 
 def interpolate_video_fps(
     ffmpeg_path: str,
@@ -930,11 +1056,16 @@ def interpolate_video_fps(
 
     def _run_interpolation_filter(vf: str, *, normalize_duration: bool) -> None:
         cmd = [
-            ffmpeg, "-y",
-            "-i", str(in_mp4),
-            "-vf", vf,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
+            ffmpeg,
+            "-y",
+            "-i",
+            str(in_mp4),
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
             str(out_mp4),
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -964,10 +1095,12 @@ def interpolate_video_fps(
     use_mi = engine_l in ("auto", "minterpolate") and ffmpeg_has_filter(ffmpeg_path, "minterpolate")
     filter_attempts: list[tuple[str, bool]] = []
     if use_mi:
-        filter_attempts.append((
-            f"minterpolate=fps={fps_out}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1",
-            True,
-        ))
+        filter_attempts.append(
+            (
+                f"minterpolate=fps={fps_out}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1",
+                True,
+            )
+        )
     filter_attempts.append((f"fps={fps_out}", False))
 
     for vf, normalize_duration in filter_attempts:
@@ -981,6 +1114,7 @@ def interpolate_video_fps(
             return
 
     raise RuntimeError(f"Interpolated output is missing a video stream: {out_mp4}")
+
 
 def mux_audio(
     ffmpeg_path: str,
