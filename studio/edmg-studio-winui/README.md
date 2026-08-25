@@ -201,9 +201,54 @@ Authored Timeline data, Visual DNA, imported lab state, outputs, jobs, and rende
 This is a packaged MSIX project, but it is not a Store-submission artifact yet.
 
 - `Package.appxmanifest` currently uses a development identity and publisher placeholder. Replace both with the exact Partner Center identity and publisher values before Store packaging.
-- The production backend is a complete validated PyInstaller `onedir` payload, not a standalone executable. It belongs under the installed app's `resources\backend` directory and must pass the repository's existing release-manifest/hash gate before packaging.
+- The production backend is a complete validated PyInstaller `onedir` payload, not a standalone executable. It belongs under the installed app's `backend` directory and must pass the repository's existing release-manifest/hash gate before packaging. The top-level path avoids the MSIX-reserved `resources` tree while remaining one of the launcher's supported packaged locations.
 - Do not commit or copy the current multi-gigabyte generated backend bundle into this source directory.
 - Store signing, final product icons, installer upgrade tests, clean-machine proof, and customer-flow release validation remain separate release gates.
+
+### Store upload staging
+
+The canonical staging script can now create a Store upload artifact that contains the
+self-contained Windows App SDK runtime **and** the validated production backend:
+
+```powershell
+# Copy the example, then replace every value from Partner Center > Product management > Identity details.
+Copy-Item .\StoreIdentity.json.example .\StoreIdentity.json
+
+cd ..\edmg-studio
+pnpm run stage:winui:msix -- `
+  -StoreIdentityFile ..\edmg-studio-winui\StoreIdentity.json `
+  -IncludeProductionBackend
+```
+
+`StoreIdentity.json` is ignored by Git. Its values are deliberately not defaulted:
+the package identity name and publisher are case-sensitive Partner Center values and
+must not be guessed. With that file, staging requests `CI` output and emits an
+`.msixupload` without a separate sideload test package. The Store re-signs submitted
+MSIX/AppX packages; do not substitute a development certificate for the Partner Center
+identity.
+
+For a local, testable package, omit `-StoreIdentityFile`, retain
+`-IncludeProductionBackend`, and either use a certificate generated from
+`Package.appxmanifest` or supply the exact subject from an existing code-signing
+certificate:
+
+```powershell
+$env:EDMG_CODE_SIGN_CERT = "<40-character certificate thumbprint>"
+pnpm run stage:winui:msix -- `
+  -SideloadPublisher "CN=Publisher matching the signing certificate" `
+  -IncludeProductionBackend `
+  -RequireSigning
+```
+
+`-SideloadPublisher` changes only the effective build manifest; it does not edit the
+checked-in development manifest or claim a Partner Center identity. This signed sideload
+artifact is not eligible for Partner Center upload until rebuilt with the exact Partner
+Center identity.
+
+The WinUI package intentionally omits the backend's unused `tcl86t.dll` and `tk86t.dll`
+payloads. They are not referenced by EDMG Studio and their upstream PE metadata prevents
+Windows SignTool from signing an otherwise valid MSIX. The canonical backend bundle remains
+unchanged and is still validated before packaging.
 
 The Electron client remains the Linux and compatibility surface while packaged WinUI customer-flow
 release validation proceeds.

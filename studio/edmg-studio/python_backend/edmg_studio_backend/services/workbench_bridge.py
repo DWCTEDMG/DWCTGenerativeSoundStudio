@@ -468,6 +468,7 @@ def merge_reactive_lab_into_timeline(
     timeline["reactive_lab"] = {
         "metadata": deepcopy(metadata),
         "sections": deepcopy(sections),
+        "beat_markers": deepcopy(payload.get("beat_markers")) if isinstance(payload.get("beat_markers"), list) else [],
         "cue_events": deepcopy(cue_events),
         "repair_suggestions": deepcopy(repair_suggestions),
         "handoff_manifest": deepcopy(handoff_manifest),

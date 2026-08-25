@@ -58,6 +58,15 @@ async function validateBundle(directory, expected = null) {
 
 async function main() {
   const preparedDir = path.join(root, "electron-resources", "backend");
+  const requestedDir = process.argv[2] ? path.resolve(process.argv[2]) : null;
+  if (requestedDir) {
+    const requested = await validateBundle(requestedDir);
+    console.log(
+      `[backend-release-manifest] ${requested.acceleratorProfile} backend verified at ${requestedDir}: ` +
+        `${requested.pythonVersion}, uv ${requested.uvVersion}, lock ${requested.lockSha256}`,
+    );
+    return;
+  }
   const prepared = await validateBundle(preparedDir);
   const stagedDir = path.join(root, "release", "staged-app", "electron-resources", "backend");
   if (fs.existsSync(stagedDir)) await validateBundle(stagedDir, prepared);

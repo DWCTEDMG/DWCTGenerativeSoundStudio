@@ -54,7 +54,11 @@ class InternalVideoSettings:
     keyframe_interval_s: float = 5.0
 
     interpolation_engine: str = "auto"  # auto|minterpolate|fps|rife
-    negative_prompt: str = "blurry, low quality, watermark, text, logo"
+    negative_prompt: str = (
+        "blurry, low quality, watermark, text, logo, collage, contact sheet, "
+        "split screen, multi-panel composition, comic panels, tiled image, storyboard sheet, mosaic, "
+        "duplicate subject, multiple people, extra person, cloned subject"
+    )
     model_id: str = "hf_sd15_internal"
     loras: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     vae: str | None = None
@@ -88,7 +92,7 @@ class InternalVideoSettings:
     video_model_cpu_offload: bool = False
     video_model_motion_score_mode: str = "auto"  # auto|manual|off
     video_model_manual_motion_score: int = 4
-    video_model_anchor_mode: str = "start"  # start|end|loop
+    video_model_anchor_mode: str = "start"  # start|end|both|loop
     video_model_prompt_refine: bool = True
     video_model_scene_motion: str = "subject"  # camera|subject|scene
     video_model_apply_timeline_camera: bool = True
@@ -138,6 +142,12 @@ class _PipelineCache:
     @classmethod
     def clear(cls) -> None:
         cls._cache.clear()
+
+    @classmethod
+    def drain(cls) -> list[Any]:
+        cached = list(cls._cache.values())
+        cls._cache.clear()
+        return cached
 
 
 class _EmbedCache:
@@ -223,6 +233,47 @@ def _release_still_pipeline_memory(pipes: _Pipes | None, device: str, *, log_fn=
         log_fn("Released still-image diffusion pipelines before loading the internal video model.")
 
 
+def release_cached_internal_pipelines() -> int:
+    """Release API-process CUDA preview pipelines before spawning a render worker.
+
+    Diffusion previews run in the API process and intentionally cache their still-image
+    pipelines.  A later isolated render process cannot reclaim that VRAM itself, so move
+    cached CUDA pipelines back to CPU and discard CUDA-resident embeds/controlnets before
+    the child starts.  The return value is the number of CUDA pipeline bundles released.
+    """
+    cached = _PipelineCache.drain()
+    released = 0
+    moved: set[int] = set()
+    for pipes in cached:
+        if str(getattr(pipes, "device", "")).strip().lower() != "cuda":
+            continue
+        released += 1
+        for pipe in (
+            getattr(pipes, "txt2img", None),
+            getattr(pipes, "img2img", None),
+            getattr(pipes, "inpaint", None),
+        ):
+            if pipe is None or id(pipe) in moved or not hasattr(pipe, "to"):
+                continue
+            moved.add(id(pipe))
+            try:
+                pipe.to("cpu")
+            except Exception:
+                pass
+    _EmbedCache.clear()
+    _ControlNetCache.clear()
+    # Drop this function's final strong references before collecting CUDA/CPU
+    # allocations. This matters on 16 GB systems where the isolated worker will
+    # immediately load another offloaded video pipeline.
+    pipes = None
+    pipe = None
+    cached.clear()
+    moved.clear()
+    gc.collect()
+    _cleanup_torch_cuda("cuda")
+    return released
+
+
 def _fit_multiple_of_8(width: int, height: int, *, max_width: int, max_height: int) -> tuple[int, int]:
     width_i = max(64, int(width))
     height_i = max(64, int(height))
@@ -262,18 +313,9 @@ def _video_model_adapter_canvas(
 
 
 def _video_model_temporal_step_cap(*, engine: str, device: str) -> int | None:
-    """Return the mandatory inference-step ceiling for low-VRAM CUDA video models."""
+    """Do not trade denoising quality for VRAM; steps affect time, not peak model allocation."""
 
-    engine_l = str(engine or "").strip().lower()
-    if engine_l not in {"svd", "animatediff"} or str(device or "").strip().lower() != "cuda":
-        return None
-    vram_gb = _cuda_total_vram_gb(device)
-    if vram_gb <= 0.0:
-        return None
-    if vram_gb <= 6.5:
-        return 6 if engine_l == "svd" else 8
-    if vram_gb <= 8.5:
-        return 8 if engine_l == "svd" else 10
+    del engine, device
     return None
 
 
@@ -1969,7 +2011,39 @@ def _negative_prompt_for_frame(
     deforum_context: UnifiedDeforumRenderContext,
 ) -> str:
     prompt = resolve_prompt_frame(deforum_context.negative_prompts, frame_idx, default=str(settings.negative_prompt or ""))
-    return str(prompt or settings.negative_prompt or "")
+    resolved = str(prompt or settings.negative_prompt or "").strip()
+    layout_terms = (
+        "collage",
+        "contact sheet",
+        "split screen",
+        "multi-panel composition",
+        "comic panels",
+        "tiled image",
+        "storyboard sheet",
+        "mosaic",
+        "duplicate subject",
+        "multiple people",
+        "extra person",
+        "cloned subject",
+    )
+    lowered = resolved.lower()
+    missing = [term for term in layout_terms if term not in lowered]
+    if missing:
+        resolved = ", ".join(part for part in (resolved, *missing) if part)
+    return resolved
+
+
+def _keyframe_continuity_source(
+    previous_image: Any | None,
+    *,
+    previous_scene_index: int | None,
+    scene_index: int,
+) -> Any | None:
+    """Reset chained img2img continuity when a new authored scene begins."""
+
+    if previous_scene_index is not None and int(scene_index) != int(previous_scene_index):
+        return None
+    return previous_image
 
 
 def _motion_params_at_time(
@@ -2050,6 +2124,48 @@ def _camera_keyframe_components(point: dict[str, Any]) -> _CameraComponents:
     return _CameraComponents(**values)
 
 
+def _normalize_camera_keyframes(
+    points: list[dict[str, Any]],
+    *,
+    coalesce_within_s: float = 0.25,
+) -> list[dict[str, Any]]:
+    """Sort camera points and remove accidental sub-frame pose collisions.
+
+    Generated camera lanes sometimes put an old scene endpoint and a new scene
+    start only a few milliseconds apart. At the 2 FPS diffusion cadence those
+    points occupy the same frame and become a visible warp. Prefer the later
+    point unless either key explicitly marks an editorial cut/hold.
+    """
+
+    ordered = sorted(
+        (dict(point) for point in points if isinstance(point, dict) and "t" in point),
+        key=lambda point: float(point.get("t", 0.0)),
+    )
+    normalized: list[dict[str, Any]] = []
+    protected_easing = {"cut", "hold"}
+    for point in ordered:
+        if not normalized:
+            normalized.append(point)
+            continue
+        previous = normalized[-1]
+        gap_s = float(point.get("t", 0.0)) - float(previous.get("t", 0.0))
+        previous_easing = str(previous.get("easing") or "").strip().lower()
+        point_easing = str(point.get("easing") or "").strip().lower()
+        if (
+            gap_s >= 0.0
+            and gap_s < max(0.0, float(coalesce_within_s))
+            and previous_easing not in protected_easing
+            and point_easing not in protected_easing
+        ):
+            # Keep the earlier timestamp so the new authored pose is reached
+            # before the next render sample rather than one sample afterward.
+            point["t"] = float(previous.get("t", 0.0))
+            normalized[-1] = point
+        else:
+            normalized.append(point)
+    return normalized
+
+
 def _lerp_camera_components(a: _CameraComponents, b: _CameraComponents, w: float) -> _CameraComponents:
     iw = 1.0 - w
     return _CameraComponents(
@@ -2088,8 +2204,9 @@ def _camera_components_at_time(
         if isinstance(cam, dict):
             kfs = cam.get("keyframes")
             if isinstance(kfs, list):
-                pts = [x for x in kfs if isinstance(x, dict) and "t" in x]
-                pts.sort(key=lambda d: float(d.get("t", 0.0)))
+                pts = _normalize_camera_keyframes(
+                    [x for x in kfs if isinstance(x, dict) and "t" in x]
+                )
                 if _camera_keyframes_are_actionable(pts):
                     if t <= float(pts[0]["t"]):
                         return _camera_keyframe_components(pts[0])
@@ -2103,8 +2220,18 @@ def _camera_components_at_time(
                             a, b = pts[i], pts[i + 1]
                             break
                     ta, tb = float(a["t"]), float(b["t"])
-                    u = (t - ta) / max(1e-9, (tb - ta))
-                    w = _ease01(u)
+                    u = max(0.0, min(1.0, (t - ta) / max(1e-9, (tb - ta))))
+                    easing = str(a.get("easing") or "through").strip().lower()
+                    if easing == "cut":
+                        w = 1.0 if u >= 1.0 - 1e-9 else 0.0
+                    elif easing == "hold":
+                        w = 0.0
+                    elif easing in {"ease", "smooth", "smoothstep", "settle"}:
+                        w = _ease01(u)
+                    else:
+                        # Interior/generated samples are control points on one
+                        # camera move, not places where the dolly should stop.
+                        w = u
                     return _lerp_camera_components(
                         _camera_keyframe_components(a), _camera_keyframe_components(b), w
                     )
@@ -2417,7 +2544,10 @@ def render_internal_video_variant(
             code="TRT_ANCHOR_CUDA_REQUIRED",
             status_code=400,
         )
-    pipes = None if use_tensorrt_keyframes else _try_load_pipelines(model_dir, device=device)
+    # Load the still-image pipeline lazily. Exact-work-tag video resumes may
+    # already have every persisted storyboard anchor and should not spend RAM
+    # or several minutes reloading SD1.5 only to discard it before I2V starts.
+    pipes = None
 
     out_w, out_h = settings.width, settings.height
     fps_r = max(1, int(settings.fps_render))
@@ -2475,7 +2605,7 @@ def render_internal_video_variant(
         progress_fn("preparing", 0, total_units, f"Preparing internal render on {device}")
     emit_checkpoint(stage="preparing", status="running", force=True, message=f"Preparing internal render on {device}")
 
-    default_negative_embeds = None if use_tensorrt_keyframes else _encode_prompt(pipes, settings.negative_prompt)
+    default_negative_embeds = None
     if log_fn:
         log_fn(
             f"Render cache tag={work_tag} resume_existing_frames={'yes' if settings.resume_existing_frames else 'no'}"
@@ -2507,10 +2637,48 @@ def render_internal_video_variant(
     # Generate temporally consistent keyframes
     key_imgs: dict[float, Image.Image] = {}
     prev_key_img: Image.Image | None = None
-    prev_key_prompt: str = ""
+    prev_key_scene_index: int | None = None
+    anchor_dir = project_dir / "outputs" / "anchors_internal" / work_tag
+    anchor_dir.mkdir(parents=True, exist_ok=True)
     for i, t in enumerate(key_times):
         if cancel_check_fn:
             cancel_check_fn()
+        key_scene_index = next(
+            (
+                scene_index
+                for scene_index, scene in enumerate(scenes)
+                if isinstance(scene, dict)
+                and float(scene.get("start_s", 0.0) or 0.0) <= float(t)
+                < float(scene.get("end_s", duration_s) or duration_s)
+            ),
+            max(0, len(scenes) - 1),
+        )
+        anchor_path = anchor_dir / f"anchor_{i:03d}_t{int(round(float(t) * 1000.0)):010d}.png"
+        if settings.temporal_mode == "video_model" and settings.resume_existing_frames and anchor_path.is_file():
+            try:
+                with Image.open(anchor_path) as persisted:
+                    img = persisted.convert("RGB").copy()
+                if img.size != (int(out_w), int(out_h)):
+                    raise ValueError(
+                        f"persisted anchor has size {img.size}; expected {(int(out_w), int(out_h))}"
+                    )
+                key_imgs[t] = img
+                prev_key_img = img
+                prev_key_scene_index = key_scene_index
+                if log_fn:
+                    log_fn(f"Reusing persisted storyboard anchor {i+1}/{len(key_times)}: {anchor_path.name}")
+                if progress_fn:
+                    progress_fn("keyframes", i + 1, total_units, f"Reused keyframe {i+1}/{len(key_times)}")
+                emit_checkpoint(
+                    stage="keyframes",
+                    status="running",
+                    message=f"Reused keyframe {i+1}/{len(key_times)}",
+                )
+                continue
+            except Exception as exc:
+                if log_fn:
+                    log_fn(f"Persisted storyboard anchor {anchor_path.name} is not reusable ({exc}); regenerating it")
+
         schedule_frame = int(round(float(t) * float(fps_schedule)))
         p = _prompt_text_for_frame(
             frame_idx=schedule_frame,
@@ -2522,6 +2690,9 @@ def render_internal_video_variant(
         negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
         negative_embeds = None
         if not use_tensorrt_keyframes:
+            if pipes is None:
+                pipes = _try_load_pipelines(model_dir, device=device)
+                default_negative_embeds = _encode_prompt(pipes, settings.negative_prompt)
             negative_embeds = (
                 default_negative_embeds
                 if negative_prompt == settings.negative_prompt
@@ -2538,6 +2709,11 @@ def render_internal_video_variant(
         cfgk = float((mpk or {}).get('cfg', settings.cfg))
         stepsk = int(float((mpk or {}).get('steps', settings.steps)))
         denk = float((mpk or {}).get('denoise', (mpk or {}).get('strength', settings.temporal_strength)))
+        prev_key_img = _keyframe_continuity_source(
+            prev_key_img,
+            previous_scene_index=prev_key_scene_index,
+            scene_index=key_scene_index,
+        )
         seed_from_source = i == 0 and source_image_path is not None
         if use_tensorrt_keyframes:
             img = _generate_tensorrt_sd15_keyframe(
@@ -2594,8 +2770,9 @@ def render_internal_video_variant(
                     strength=max(0.05, min(0.95, denk)),
                 )
         key_imgs[t] = img
+        img.convert("RGB").save(anchor_path)
         prev_key_img = img
-        prev_key_prompt = p
+        prev_key_scene_index = key_scene_index
         if progress_fn:
             progress_fn("keyframes", i + 1, total_units, f"Ready keyframe {i+1}/{len(key_times)}")
         emit_checkpoint(stage="keyframes", status="running", message=f"Ready keyframe {i+1}/{len(key_times)}")
@@ -2647,6 +2824,7 @@ def render_internal_video_variant(
         sorted_scenes = _storyboard_scene_windows(scenes=source_scenes, duration_s=duration_s, settings=settings)
         max_scene_frames = max(2, int(settings.video_model_max_frames_per_scene or 25))
         fi_cursor = 0
+        previous_storyboard_source_scene: int | None = None
         if log_fn and normalize_internal_motion_strategy(settings.motion_strategy) == "storyboard_full_motion":
             log_fn(
                 f"Storyboard full motion: generated anchors with {len(sorted_scenes)} short motion shots "
@@ -2678,6 +2856,16 @@ def render_internal_video_variant(
             if start_f >= total_frames or end_f <= start_f:
                 continue
 
+            source_scene_index = int(scene.get("_storyboard_source_scene_index", scene_index) or 0)
+            authored_scene_boundary = (
+                previous_storyboard_source_scene is not None
+                and source_scene_index != previous_storyboard_source_scene
+            )
+            transition_kind = str(
+                scene.get("_storyboard_transition")
+                or ("dissolve" if authored_scene_boundary else "technical_continue")
+            )
+
             while fi_cursor < start_f and fi_cursor < total_frames:
                 t = fi_cursor / fps_r
                 a_t, b_t, w = _key_times_bracket(key_times, t)
@@ -2694,6 +2882,7 @@ def render_internal_video_variant(
                     frame_paths.append(existing)
                     fi_cursor = fi + 1
                     emit_checkpoint(stage="frames", status="running", message=f"Reusing video-model frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
+                previous_storyboard_source_scene = source_scene_index
                 continue
 
             adapter_frames = min(max_scene_frames, max(2, scene_frame_count))
@@ -2748,7 +2937,24 @@ def render_internal_video_variant(
                     lo=1.0,
                     hi=7.0,
                 )))
-                score_info = {**score_info, "motion_score": scheduled_score, "source": "parseq_schedule"}
+                local_score = _clamp_video_motion_score(
+                    score_info.get("motion_score") or settings.video_model_manual_motion_score or 4
+                )
+                # An authored score of 1-2 is a deliberate cinematic hold and
+                # stays still even under an energetic passage. Other windows
+                # blend macro story direction with their local audio energy.
+                effective_score = (
+                    scheduled_score
+                    if scheduled_score <= 2
+                    else _clamp_video_motion_score((scheduled_score * 0.45) + (local_score * 0.55))
+                )
+                score_info = {
+                    **score_info,
+                    "motion_score": effective_score,
+                    "scheduled_motion_score": scheduled_score,
+                    "local_motion_score": local_score,
+                    "source": f"parseq+{score_info.get('source') or 'local'}",
+                }
             prompt_for_model = _refine_video_model_prompt(prompt, score_info=score_info, settings=settings)
             motion_bucket_id = _video_model_motion_bucket_for_score(settings, score_info)
             seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt_for_model, motion_bucket_id, anchor_mode, work_tag)
@@ -2863,11 +3069,31 @@ def render_internal_video_variant(
                 src_i = int(round((local_i / max(1, scene_frame_count - 1)) * max(0, len(generated) - 1)))
                 t = fi / fps_r
                 fr = _finish_video_model_frame(generated[max(0, min(len(generated) - 1, src_i))], t)
+                if local_i == 0 and authored_scene_boundary and frame_paths:
+                    try:
+                        with Image.open(frame_paths[-1]) as previous_frame:
+                            fr = _blend_storyboard_scene_boundary(
+                                previous_frame.convert("RGB"),
+                                fr,
+                                transition=transition_kind,
+                            )
+                        if log_fn:
+                            log_fn(
+                                f"Authored scene boundary {source_scene_index + 1}: "
+                                f"transition={transition_kind}"
+                            )
+                    except Exception as exc:
+                        if log_fn:
+                            log_fn(
+                                f"Authored scene boundary blend was skipped ({exc}); "
+                                "continuing with the generated frame"
+                            )
                 frame_paths.append(_save_frame(fr, fi, t))
                 fi_cursor = fi + 1
                 if progress_fn:
                     progress_fn("frames", len(key_times) + fi + 1, total_units, f"Rendered video-model frame {fi+1}/{total_frames}")
                 emit_checkpoint(stage="frames", status="running", message=f"Rendered video-model frame {fi+1}/{total_frames}", frame_event="rendered", rendered_delta=1)
+            previous_storyboard_source_scene = source_scene_index
 
         while fi_cursor < total_frames:
             t = fi_cursor / fps_r
@@ -3559,7 +3785,7 @@ def _normalize_video_motion_score_mode(mode: Any) -> str:
 
 def _normalize_video_anchor_mode(mode: Any) -> str:
     mode_l = str(mode or "start").strip().lower()
-    return mode_l if mode_l in {"start", "end", "loop"} else "start"
+    return mode_l if mode_l in {"start", "end", "both", "loop"} else "start"
 
 
 def _clamp_video_motion_score(value: Any, *, default: int = 4) -> int:
@@ -3622,8 +3848,12 @@ def _timeline_energy_for_range(timeline: dict[str, Any] | None, start_s: float, 
     total = 0.0
     for section in sections:
         try:
-            sec_start = float(section.get("start_s", section.get("start", 0.0)) or 0.0)
-            sec_end = float(section.get("end_s", section.get("end", sec_start)) or sec_start)
+            sec_start = float(
+                section.get("start_s", section.get("start", section.get("startTime", 0.0))) or 0.0
+            )
+            sec_end = float(
+                section.get("end_s", section.get("end", section.get("endTime", sec_start))) or sec_start
+            )
         except Exception:
             continue
         overlap = max(0.0, min(end_s, sec_end) - max(start_s, sec_start))
@@ -3659,7 +3889,7 @@ def _timeline_event_density(timeline: dict[str, Any] | None, start_s: float, end
     count = 0
     for event in sources:
         if isinstance(event, dict):
-            raw_t = event.get("time_s", event.get("t", event.get("start_s")))
+            raw_t = event.get("time_s", event.get("time", event.get("t", event.get("start_s"))))
         else:
             raw_t = event
         try:
@@ -3690,7 +3920,14 @@ def video_model_scene_motion_score(
     source = "fallback"
     energy = 0.5
     peak = 0.5
-    if scene_energy is not None:
+    if scene_energy is not None and timeline_energy is not None:
+        energy = (scene_energy * 0.35) + (timeline_energy * 0.65)
+        peak = max(
+            scene_peak if scene_peak is not None else scene_energy,
+            timeline_peak if timeline_peak is not None else timeline_energy,
+        )
+        source = "scene+timeline"
+    elif scene_energy is not None:
         energy = scene_energy
         peak = scene_peak if scene_peak is not None else scene_energy
         source = "scene"
@@ -3774,6 +4011,37 @@ def _storyboard_shot_max_s(settings: InternalVideoSettings) -> float:
     return max(1.0, min(12.0, value))
 
 
+def _normalize_storyboard_transition(scene: dict[str, Any] | None) -> str:
+    if not isinstance(scene, dict):
+        return "dissolve"
+    raw = str(
+        scene.get("transition")
+        or scene.get("transition_cue")
+        or scene.get("transitionCue")
+        or "dissolve"
+    ).strip().lower()
+    if any(token in raw for token in ("cut", "impact", "smash")):
+        return "cut"
+    if any(token in raw for token in ("dissolve", "fade", "blend", "match", "flow")):
+        return "dissolve"
+    return "dissolve"
+
+
+def _blend_storyboard_scene_boundary(
+    previous_frame: "Image.Image",
+    current_frame: "Image.Image",
+    *,
+    transition: str,
+) -> "Image.Image":
+    current = current_frame.convert("RGB")
+    if str(transition or "").strip().lower() != "dissolve":
+        return current
+    previous = previous_frame.convert("RGB").resize(current.size, resample=Image.LANCZOS)
+    # One raw 2-FPS bridge frame becomes a restrained half-second dissolve
+    # after final interpolation without changing the movie's duration.
+    return Image.blend(previous, current, 0.5)
+
+
 def _storyboard_scene_windows(
     *,
     scenes: list[dict[str, Any]],
@@ -3822,6 +4090,11 @@ def _storyboard_scene_windows(
             shot["_storyboard_original_start_s"] = round(float(start_s), 3)
             shot["_storyboard_original_end_s"] = round(float(end_s), 3)
             shot["_storyboard_motion_strategy"] = strategy
+            shot["_storyboard_transition"] = (
+                "technical_continue"
+                if shot_index > 0
+                else ("opening" if scene_index == 0 else _normalize_storyboard_transition(scene))
+            )
             windows.append(shot)
     return windows
 
@@ -3938,7 +4211,7 @@ def describe_storyboard_motion_plan(
                 "anchor_source": anchor_source,
                 "keyframe_renderer": keyframe_renderer,
                 "scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
-                "transition": "continue scene motion" if shot_index else "start from generated visual anchor",
+                "transition": str(shot.get("_storyboard_transition") or "technical_continue"),
                 **intent,
                 "motion_score": score_info.get("motion_score"),
                 "motion_source": score_info.get("source"),
@@ -4011,6 +4284,8 @@ def _refine_video_model_prompt(
         anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
         if anchor_mode == "end":
             additions.append("Resolve into the ending anchor.")
+        elif anchor_mode == "both":
+            additions.append("Preserve the opening anchor and resolve naturally into the ending anchor.")
         elif anchor_mode == "loop":
             additions.append("Connect the opening anchor into a seamless loop.")
         else:
@@ -4165,11 +4440,11 @@ def _apply_video_anchor_frames(
     start = start_img.convert("RGB").resize(out[0].size, resample=Image.LANCZOS)
     tail_target = start if mode == "loop" else end_img.convert("RGB").resize(out[-1].size, resample=Image.LANCZOS)
 
-    if mode in {"start", "loop"}:
+    if mode in {"start", "both", "loop"}:
         for i in range(edge):
             alpha = blend_max * (1.0 - (i / max(1, edge)))
             out[i] = Image.blend(out[i], start, alpha)
-    if mode in {"end", "loop"}:
+    if mode in {"end", "both", "loop"}:
         for i in range(edge):
             idx = len(out) - 1 - i
             alpha = blend_max * (1.0 - (i / max(1, edge)))

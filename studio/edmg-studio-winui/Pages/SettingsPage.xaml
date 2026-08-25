@@ -50,6 +50,7 @@
                             <x:String>auto</x:String>
                             <x:String>local_gpu</x:String>
                             <x:String>cosmos_cloud</x:String>
+                            <x:String>azure_foundry_cloud</x:String>
                             <x:String>comfyui</x:String>
                             <x:String>firefly_cloud</x:String>
                             <x:String>imagineart_cloud</x:String>
@@ -98,6 +99,7 @@
                                 <x:String>stability_api_key</x:String>
                                 <x:String>nvidia_api_key</x:String>
                                 <x:String>nvidia_service_key</x:String>
+                                <x:String>azure_foundry_api_key</x:String>
                                 <x:String>lightning_api_key</x:String>
                                 <x:String>adobe_client_id</x:String>
                                 <x:String>adobe_client_secret</x:String>

@@ -9,7 +9,7 @@ from PIL import Image
 
 from edmg_studio_backend import app as app_module
 from edmg_studio_backend.errors import UserFacingError
-from edmg_studio_backend.schemas import TensorRTStandaloneRenderRequest
+from edmg_studio_backend.schemas import InternalVideoRenderRequest, TensorRTStandaloneRenderRequest
 from edmg_studio_backend.services import internal_video, tensorrt_standalone, tensorrt_video
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 from edmg_studio_backend.store.jobs import JobStore
@@ -58,6 +58,49 @@ def test_internal_settings_parse_video_model_timeline_camera_toggle() -> None:
 
     assert default_settings.video_model_apply_timeline_camera is True
     assert disabled_settings.video_model_apply_timeline_camera is False
+
+
+def test_storyboard_full_motion_preserves_disabled_prompt_refinement() -> None:
+    settings = app_module._internal_settings_from_payload(
+        {
+            "motion_strategy": "storyboard_full_motion",
+            "storyboard_shot_max_s": 4.8,
+            "keyframe_interval_s": 6.0,
+            "video_model_prompt_refine": False,
+        },
+        model_id="hf_sd15_internal",
+        render_tier="balanced",
+        device_preference="cuda",
+    )
+
+    resolved = app_module._apply_storyboard_full_motion_settings(
+        settings,
+        {"video_model_scene_motion": "scene"},
+    )
+
+    assert resolved.video_model_prompt_refine is False
+    assert resolved.video_model_motion_score_mode == "auto"
+    assert resolved.video_model_scene_motion == "scene"
+    assert resolved.keyframe_interval_s == 4.8
+
+
+def test_studio_resource_policy_reports_native_sdpa_on_6gb_cuda() -> None:
+    policy = app_module._studio_native_resource_policy(
+        settings_obj=InternalVideoSettings(
+            temporal_mode="video_model",
+            device_preference="cuda",
+        ),
+        hw={"backend": "cuda", "vram_gb": 6.0},
+        model_family="sd15",
+    )
+
+    assert policy["attention_policy"] == "native_sdpa_with_vae_slicing_and_small_decode_chunks"
+
+
+def test_internal_video_request_accepts_cinematic_both_anchor_mode() -> None:
+    request = InternalVideoRenderRequest(video_model_anchor_mode="both")
+
+    assert request.video_model_anchor_mode == "both"
 
 
 def test_stale_tensorrt_runtime_bundle_selection_maps_to_supported_video_bundle() -> None:
@@ -818,7 +861,7 @@ def test_video_model_scene_motion_refines_prompt_and_preflight() -> None:
     assert preflight["storyboard_motion_plan"]["shots"][0]["scene_motion"] == "scene"
 
 
-def test_svd_low_vram_memory_safety_caps_settings_and_warns() -> None:
+def test_svd_low_vram_memory_safety_preserves_steps_and_warns() -> None:
     settings = InternalVideoSettings(
         temporal_mode="video_model",
         video_model_engine="svd",
@@ -840,8 +883,9 @@ def test_svd_low_vram_memory_safety_caps_settings_and_warns() -> None:
     assert safe.video_model_cpu_offload is True
     assert safe.video_model_max_frames_per_scene == 8
     assert safe.video_model_decode_chunk_size == 1
-    assert safe.temporal_steps == 6
+    assert safe.temporal_steps == 20
     assert any("6 GB CUDA SVD safety" in warning for warning in warnings)
+    assert any("Inference steps are preserved" in warning for warning in warnings)
 
 
 def test_svd_low_vram_canvas_is_capped(monkeypatch) -> None:
@@ -860,22 +904,21 @@ def test_svd_low_vram_canvas_is_capped(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("engine", "device", "vram_gb", "expected_steps"),
+    ("engine", "device", "vram_gb"),
     [
-        ("svd", "cuda", 6.0, 6),
-        ("animatediff", "cuda", 6.0, 8),
-        ("svd", "cuda", 8.0, 8),
-        ("animatediff", "cuda", 8.0, 10),
-        ("svd", "cuda", 12.0, 15),
-        ("svd", "cpu", 0.0, 15),
+        ("svd", "cuda", 6.0),
+        ("animatediff", "cuda", 6.0),
+        ("svd", "cuda", 8.0),
+        ("animatediff", "cuda", 8.0),
+        ("svd", "cuda", 12.0),
+        ("svd", "cpu", 0.0),
     ],
 )
-def test_parseq_steps_cannot_exceed_low_vram_video_model_ceiling(
+def test_parseq_steps_are_not_reduced_by_low_vram_policy(
     monkeypatch,
     engine: str,
     device: str,
     vram_gb: float,
-    expected_steps: int,
 ) -> None:
     monkeypatch.setattr(internal_video, "_cuda_total_vram_gb", lambda _device: vram_gb)
 
@@ -888,4 +931,181 @@ def test_parseq_steps_cannot_exceed_low_vram_video_model_ceiling(
         cap,
     )
 
-    assert effective == expected_steps
+    assert cap is None
+    assert effective == 15
+
+
+def test_internal_negative_prompt_rejects_spatial_storyboard_layouts() -> None:
+    settings = InternalVideoSettings(negative_prompt="blurry, watermark")
+    context = internal_video._build_unified_deforum_context(  # noqa: SLF001 - pure prompt helper
+        scenes=[],
+        timeline=None,
+        variant=None,
+        settings=settings,
+        fps=24,
+    )
+
+    negative = internal_video._negative_prompt_for_frame(  # noqa: SLF001 - pure prompt helper
+        frame_idx=0,
+        settings=settings,
+        deforum_context=context,
+    )
+
+    assert "collage" in negative
+    assert "contact sheet" in negative
+    assert "split screen" in negative
+    assert "multi-panel composition" in negative
+    assert "storyboard sheet" in negative
+    assert "duplicate subject" in negative
+    assert "multiple people" in negative
+    assert "extra person" in negative
+    assert "cloned subject" in negative
+
+
+def test_keyframe_continuity_resets_at_authored_scene_boundary() -> None:
+    sentinel = object()
+
+    assert (
+        internal_video._keyframe_continuity_source(  # noqa: SLF001 - pure continuity helper
+            sentinel,
+            previous_scene_index=3,
+            scene_index=3,
+        )
+        is sentinel
+    )
+    assert (
+        internal_video._keyframe_continuity_source(  # noqa: SLF001 - pure continuity helper
+            sentinel,
+            previous_scene_index=3,
+            scene_index=4,
+        )
+        is None
+    )
+
+
+def test_cinematic_both_anchor_mode_blends_opening_and_ending_frames() -> None:
+    frames = [Image.new("RGB", (8, 8), (0, 0, 0)) for _ in range(8)]
+    start = Image.new("RGB", (8, 8), (255, 0, 0))
+    end = Image.new("RGB", (8, 8), (0, 0, 255))
+
+    anchored = internal_video._apply_video_anchor_frames(  # noqa: SLF001 - continuity contract
+        frames,
+        anchor_mode="both",
+        start_img=start,
+        end_img=end,
+        anchor_strength=0.2,
+    )
+
+    assert internal_video._normalize_video_anchor_mode("both") == "both"  # noqa: SLF001
+    assert anchored[0].getpixel((0, 0))[0] > 0
+    assert anchored[0].getpixel((0, 0))[2] == 0
+    assert anchored[-1].getpixel((0, 0))[2] > 0
+    assert anchored[-1].getpixel((0, 0))[0] == 0
+    assert anchored[len(anchored) // 2].getpixel((0, 0)) == (0, 0, 0)
+
+
+def test_storyboard_windows_distinguish_technical_continuity_from_authored_dissolve() -> None:
+    windows = internal_video._storyboard_scene_windows(  # noqa: SLF001 - motion-plan contract
+        scenes=[
+            {"start_s": 0.0, "end_s": 5.0, "prompt": "arrival"},
+            {
+                "start_s": 5.0,
+                "end_s": 10.0,
+                "prompt": "departure",
+                "transition_cue": "match dissolve",
+            },
+        ],
+        duration_s=10.0,
+        settings=InternalVideoSettings(
+            motion_strategy="storyboard_full_motion",
+            storyboard_shot_max_s=2.5,
+        ),
+    )
+
+    assert [window["_storyboard_transition"] for window in windows] == [
+        "opening",
+        "technical_continue",
+        "dissolve",
+        "technical_continue",
+    ]
+
+
+def test_authored_scene_dissolve_blends_without_changing_frame_size() -> None:
+    previous = Image.new("RGB", (8, 8), (255, 0, 0))
+    current = Image.new("RGB", (8, 8), (0, 0, 255))
+
+    dissolved = internal_video._blend_storyboard_scene_boundary(  # noqa: SLF001
+        previous,
+        current,
+        transition="dissolve",
+    )
+    cut = internal_video._blend_storyboard_scene_boundary(  # noqa: SLF001
+        previous,
+        current,
+        transition="cut",
+    )
+
+    assert dissolved.size == current.size
+    assert dissolved.getpixel((0, 0)) == (127, 0, 127)
+    assert cut.getpixel((0, 0)) == (0, 0, 255)
+
+
+def test_video_motion_score_reads_reactive_camel_case_sections_and_time_events() -> None:
+    score = internal_video.video_model_scene_motion_score(
+        scene={"energy": 0.2},
+        timeline={
+            "reactive_lab": {
+                "sections": [
+                    {"startTime": 0.0, "endTime": 4.0, "avgEnergy": 0.8},
+                ],
+                "beat_markers": [
+                    {"time": 0.5},
+                    {"time": 1.5},
+                    {"time": 2.5},
+                ],
+            }
+        },
+        start_s=0.0,
+        end_s=4.0,
+        duration_s=4.0,
+        settings=InternalVideoSettings(video_model_motion_score_mode="auto"),
+    )
+
+    assert score["source"] == "scene+timeline+events"
+    assert score["energy"] > 0.59
+    assert score["event_density"] > 0
+    assert score["motion_score"] >= 5
+
+
+def test_release_cached_internal_pipelines_moves_cuda_previews_to_cpu(monkeypatch) -> None:
+    class FakePipeline:
+        def __init__(self) -> None:
+            self.devices: list[str] = []
+
+        def to(self, device: str):
+            self.devices.append(device)
+            return self
+
+    shared = FakePipeline()
+    inpaint = FakePipeline()
+    pipes = SimpleNamespace(
+        txt2img=shared,
+        img2img=shared,
+        inpaint=inpaint,
+        device="cuda",
+    )
+    cleanup_devices: list[str] = []
+    monkeypatch.setattr(internal_video, "_cleanup_torch_cuda", cleanup_devices.append)
+
+    internal_video._PipelineCache.clear()  # noqa: SLF001 - cache-release contract
+    internal_video._PipelineCache.set(("preview", "cuda", "video"), pipes)  # noqa: SLF001
+    try:
+        released = internal_video.release_cached_internal_pipelines()
+    finally:
+        internal_video._PipelineCache.clear()  # noqa: SLF001
+
+    assert released == 1
+    assert shared.devices == ["cpu"]
+    assert inpaint.devices == ["cpu"]
+    assert cleanup_devices == ["cuda"]
+    assert internal_video._PipelineCache.get(("preview", "cuda", "video")) is None  # noqa: SLF001

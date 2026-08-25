@@ -9,7 +9,7 @@ import { useUiMode } from "../components/uiMode";
 import { clearRenderDefaults, readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import type { PageProps } from "../types/pageProps";
 
-type SecretName = "hf_token" | "civitai_api_key" | "openai_compat_api_key" | "stability_api_key" | "nvidia_api_key" | "adobe_client_id" | "adobe_client_secret" | "imagineart_api_key";
+type SecretName = "hf_token" | "civitai_api_key" | "openai_compat_api_key" | "stability_api_key" | "nvidia_api_key" | "adobe_client_id" | "adobe_client_secret" | "imagineart_api_key" | "azure_foundry_api_key";
 
 type StudioAiSettings = {
   mode: string;
@@ -380,6 +380,7 @@ export default function Settings(props: PageProps) {
   const [adobeClientId, setAdobeClientId] = useState<string>("");
   const [adobeClientSecret, setAdobeClientSecret] = useState<string>("");
   const [imagineartApiKey, setImagineartApiKey] = useState<string>("");
+  const [azureFoundryApiKey, setAzureFoundryApiKey] = useState<string>("");
   const [saving, setSaving] = useState<boolean>(false);
   const [savingBackend, setSavingBackend] = useState<boolean>(false);
   const [savingAi, setSavingAi] = useState<boolean>(false);
@@ -581,6 +582,7 @@ export default function Settings(props: PageProps) {
       if (name === "adobe_client_id") setAdobeClientId("");
       if (name === "adobe_client_secret") setAdobeClientSecret("");
       if (name === "imagineart_api_key") setImagineartApiKey("");
+      if (name === "azure_foundry_api_key") setAzureFoundryApiKey("");
       await refreshSecrets();
       await refreshBackendAiStatus();
       const nextProviders = await apiGet("/v1/settings/render_providers");
@@ -1744,6 +1746,18 @@ export default function Settings(props: PageProps) {
           </div>
           <button disabled={saving || !imagineartApiKey} onClick={() => saveSecret("imagineart_api_key", imagineartApiKey)}>Save</button>
           <button className="secondary" disabled={saving || !renderProviders?.imagineart?.has_api_key} onClick={() => clearSecret("imagineart_api_key")}>Clear</button>
+
+          <div>
+            <div className="small" style={{ fontWeight: 800 }}>Azure AI Foundry API key</div>
+            <div className="small" style={{ opacity: 0.8 }}>Key for your Azure AI Foundry managed-compute deployment (Cosmos3-Super hosted endpoint).</div>
+            <input
+              value={azureFoundryApiKey}
+              onChange={(e) => setAzureFoundryApiKey(e.target.value)}
+              placeholder={renderProviders?.azure_foundry?.has_api_key ? "(set) paste to replace" : "paste Azure AI Foundry API key"}
+            />
+          </div>
+          <button disabled={saving || !azureFoundryApiKey} onClick={() => saveSecret("azure_foundry_api_key", azureFoundryApiKey)}>Save</button>
+          <button className="secondary" disabled={saving || !renderProviders?.azure_foundry?.has_api_key} onClick={() => clearSecret("azure_foundry_api_key")}>Clear</button>
         </div>
       </div>
     ),
@@ -1765,7 +1779,7 @@ export default function Settings(props: PageProps) {
                 <div className="small" style={{ marginBottom: 10, padding: "6px 10px", borderRadius: 6,
                   background: videoRoute.route === "none" ? "var(--warning-bg,#fff3cd)" : "var(--success-bg,#d1fae5)",
                   color: videoRoute.route === "none" ? "var(--warning-text,#856404)" : "var(--success-text,#065f46)" }}>
-                  <b>Active route:</b> {videoRoute.route === "local_gpu" ? "🖥 Local GPU" : videoRoute.route === "cosmos_cloud" ? "☁ NVIDIA Cosmos Cloud" : "⚠ None available"}
+                  <b>Active route:</b> {videoRoute.route === "local_gpu" ? "🖥 Local GPU" : videoRoute.route === "cosmos_cloud" ? "☁ NVIDIA Cosmos Cloud" : videoRoute.route === "azure_foundry_cloud" ? "☁ Azure AI Foundry Cosmos3" : "⚠ None available"}
                   {" "}— {videoRoute.reason}
                   {videoRoute.fallback_available ? <span style={{ opacity: 0.8 }}> (Cosmos fallback available)</span> : null}
                 </div>
@@ -1782,6 +1796,7 @@ export default function Settings(props: PageProps) {
                     <option value="auto">Auto (smart routing)</option>
                     <option value="local_gpu">Always use Local GPU</option>
                     <option value="cosmos_cloud">Always use NVIDIA Cosmos Cloud</option>
+                    <option value="azure_foundry_cloud">Always use Azure AI Foundry Cosmos3</option>
                     <option value="imagineart_cloud">Always use ImagineArt Cloud</option>
                     <option value="comfyui">Always use ComfyUI</option>
                   </select>
@@ -1813,6 +1828,7 @@ export default function Settings(props: PageProps) {
               <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
                 Local GPU: {videoRoute?.local_ready ? <b style={{color:"green"}}>ready — {videoRoute?.local_detail?.device} ({videoRoute?.local_detail?.vram_gb} GB)</b> : <b style={{color:"#888"}}>not available</b>}
                 {" "}• Cosmos Cloud: {videoRoute?.cosmos_ready ? <b style={{color:"green"}}>configured</b> : <b style={{color:"#888"}}>not configured (add NVIDIA API key)</b>}
+                {" "}• Azure Foundry: {videoRoute?.azure_foundry_ready ? <b style={{color:"green"}}>configured</b> : <b style={{color:"#888"}}>not configured (add Azure AI Foundry API key)</b>}
               </div>
             </div>
 
@@ -2181,6 +2197,143 @@ export default function Settings(props: PageProps) {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* ── Azure AI Foundry Cosmos3 ─────────────────────────────────── */}
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontWeight: 800 }}>Azure AI Foundry Cosmos3 (managed compute)</div>
+              <div className="small" style={{ marginTop: 6, opacity: 0.86 }}>
+                Status: <b>{renderProviders?.azure_foundry?.configured ? "ready" : "not configured"}</b>
+                {" "}• deployment: <b>{renderProviderDraft?.azure_foundry?.deployment_name || "(not set)"}</b>
+                {" "}• resolution: <b>{renderProviderDraft?.azure_foundry?.resolution || "720_16_9"}</b>
+              </div>
+              <div className="small" style={{ marginTop: 4, opacity: 0.8 }}>{renderProviders?.azure_foundry?.note}</div>
+              <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.azure_foundry?.enabled}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), enabled: e.target.checked },
+                    }))}
+                  />
+                  Enable Azure AI Foundry Cosmos3 video generation (uses Azure AI Foundry API key above)
+                </label>
+                <div>
+                  <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Endpoint URL</div>
+                  <input
+                    value={renderProviderDraft?.azure_foundry?.endpoint_url || ""}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), endpoint_url: e.target.value },
+                    }))}
+                    placeholder="https://<your-resource>.services.ai.azure.com"
+                  />
+                  <div className="small" style={{ marginTop: 4, opacity: 0.75 }}>
+                    Base URL of your Azure AI Foundry resource (the deployment path is appended automatically).
+                  </div>
+                </div>
+                <div>
+                  <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Deployment name</div>
+                  <input
+                    value={renderProviderDraft?.azure_foundry?.deployment_name || ""}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), deployment_name: e.target.value },
+                    }))}
+                    placeholder="cosmos3-super-deployment"
+                  />
+                  <div className="small" style={{ marginTop: 4, opacity: 0.75 }}>
+                    The managed-compute deployment name from your Foundry project (Cosmos3-Super).
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Resolution</div>
+                    <select
+                      value={renderProviderDraft?.azure_foundry?.resolution || "720_16_9"}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), resolution: e.target.value },
+                      }))}
+                    >
+                      <optgroup label="720p tier">
+                        <option value="720_16_9">720p 16:9 (1280×720)</option>
+                        <option value="720_9_16">720p 9:16 (720×1280)</option>
+                        <option value="720_1_1">720p 1:1 (960×960)</option>
+                        <option value="720_4_3">720p 4:3 (1104×832)</option>
+                        <option value="720_3_4">720p 3:4 (832×1104)</option>
+                      </optgroup>
+                      <optgroup label="480p tier">
+                        <option value="480_16_9">480p 16:9 (832×480)</option>
+                        <option value="480_9_16">480p 9:16 (480×832)</option>
+                        <option value="480_1_1">480p 1:1 (640×640)</option>
+                        <option value="480_4_3">480p 4:3 (736×544)</option>
+                        <option value="480_3_4">480p 3:4 (544×736)</option>
+                      </optgroup>
+                      <optgroup label="256p tier">
+                        <option value="256_16_9">256p 16:9 (320×192)</option>
+                        <option value="256_9_16">256p 9:16 (192×320)</option>
+                        <option value="256_1_1">256p 1:1 (256×256)</option>
+                        <option value="256_4_3">256p 4:3 (320×256)</option>
+                        <option value="256_3_4">256p 3:4 (256×320)</option>
+                      </optgroup>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Frames</div>
+                    <input type="number" min={25} max={480} step={1}
+                      value={renderProviderDraft?.azure_foundry?.num_frames ?? 121}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), num_frames: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>FPS</div>
+                    <input type="number" min={1} max={60} step={1}
+                      value={renderProviderDraft?.azure_foundry?.fps ?? 24}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), fps: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Steps</div>
+                    <input type="number" min={1} max={100} step={1}
+                      value={renderProviderDraft?.azure_foundry?.steps ?? 50}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), steps: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Guidance scale</div>
+                    <input type="number" min={1} max={7} step={0.5}
+                      value={renderProviderDraft?.azure_foundry?.guidance_scale ?? 7.0}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), guidance_scale: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <div className="small" style={{ fontWeight: 800, marginBottom: 4 }}>Timeout (s)</div>
+                    <input type="number" min={60} max={1800} step={60}
+                      value={renderProviderDraft?.azure_foundry?.timeout_s ?? 600}
+                      onChange={(e) => setRenderProviderDraft((c: any) => ({
+                        ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), timeout_s: Number(e.target.value) },
+                      }))}
+                    />
+                  </div>
+                </div>
+                <label className="small" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!renderProviderDraft?.azure_foundry?.allow_auto_fallback}
+                    onChange={(e) => setRenderProviderDraft((c: any) => ({
+                      ...(c || {}), azure_foundry: { ...(c?.azure_foundry || {}), allow_auto_fallback: e.target.checked },
+                    }))}
+                  />
+                  Allow automatic fallback to Azure AI Foundry when other video routes are unavailable
+                </label>
               </div>
             </div>
 

@@ -1,0 +1,5 @@
+{
+  "identityName": "<replace-with-exact-Partner-Center-package-identity-name>",
+  "publisher": "<replace-with-exact-Partner-Center-publisher-DN>",
+  "version": "1.2.0.0"
+}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import random
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,14 @@ from typing import Any
 from ..errors import UserFacingError
 from .model_weights import diffusers_weight_load_kwargs
 
+logger = logging.getLogger(__name__)
+
 _VIDEO_PIPELINE_CACHE: dict[tuple[str, str, str, str], Any] = {}
+
+SVD_CONDITIONING_FPS = 7
+SVD_MIN_GUIDANCE_SCALE = 1.0
+SVD_MAX_GUIDANCE_SCALE = 3.0
+ANIMATEDIFF_MAX_GUIDANCE_SCALE = 7.5
 
 
 def validate_video_model_layout(engine: str, model_dir: Path) -> None:
@@ -152,7 +160,8 @@ def _raise_cuda_oom(engine: str, exc: Exception) -> None:
         f"Internal {engine} video model ran out of CUDA memory",
         hint=(
             "Studio will fit 6 GB CUDA best with CPU offload, 8-12 frames per scene, "
-            "8-10 temporal steps, and an adapter canvas near 640x360."
+            "20-25 temporal steps, and a conservative adapter canvas near 640x360. "
+            "Reduce canvas size or frames per scene before reducing denoising quality."
         ),
         code="INTERNAL_VIDEO_MODEL_CUDA_OOM",
         status_code=400,
@@ -163,9 +172,20 @@ def _normalize_frames(raw_frames: Any) -> list[Any]:
     frames = raw_frames
     if hasattr(frames, "frames"):
         frames = frames.frames
+    if frames is None:
+        return []
     if isinstance(frames, (list, tuple)) and frames and isinstance(frames[0], (list, tuple)):
         frames = frames[0]
-    return list(frames or [])
+    # Diffusers normally returns PIL output as [batch][time]. Explicit PIL
+    # output below keeps that contract, but accepting an array/tensor batch here
+    # makes the adapter fail predictably if a future pipeline changes defaults.
+    ndim = getattr(frames, "ndim", None)
+    if isinstance(ndim, int) and ndim == 5:
+        frames = frames[0]
+    try:
+        return list(frames)
+    except TypeError as exc:
+        raise RuntimeError("Internal video model returned a non-iterable frame payload.") from exc
 
 
 def _to_rgb_frames(frames: list[Any], *, width: int, height: int) -> list[Any]:
@@ -183,40 +203,51 @@ def _to_rgb_frames(frames: list[Any], *, width: int, height: int) -> list[Any]:
 
 
 def _optimize_pipeline(pipe: Any, device: str, *, cpu_offload: bool) -> Any:
-    if hasattr(pipe, "enable_attention_slicing"):
-        try:
-            pipe.enable_attention_slicing()
-        except Exception:
-            pass
+    # Diffusers on PyTorch 2.x uses AttnProcessor2_0/SDPA by default. Calling
+    # enable_attention_slicing() replaces that processor with a sliced
+    # implementation and can make video denoising dramatically slower. Keep
+    # native SDPA unless a separately installed xFormers backend is selected.
     if hasattr(pipe, "enable_vae_slicing"):
         try:
             pipe.enable_vae_slicing()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Unable to enable VAE slicing for internal video pipeline: %s", exc)
     if hasattr(pipe, "enable_vae_tiling"):
         try:
             pipe.enable_vae_tiling()
-        except Exception:
-            pass
-    if device == "cuda" and hasattr(pipe, "enable_xformers_memory_efficient_attention"):
+        except Exception as exc:
+            logger.debug("Unable to enable VAE tiling for internal video pipeline: %s", exc)
+    if (
+        device == "cuda"
+        and importlib.util.find_spec("xformers") is not None
+        and hasattr(pipe, "enable_xformers_memory_efficient_attention")
+    ):
         try:
             pipe.enable_xformers_memory_efficient_attention()
-        except Exception:
-            pass
+            logger.info("Internal video attention backend: xFormers")
+        except Exception as exc:
+            logger.warning("xFormers activation failed; retaining PyTorch SDPA: %s", exc)
+    elif device == "cuda":
+        logger.info("Internal video attention backend: PyTorch SDPA")
     if cpu_offload and hasattr(pipe, "enable_model_cpu_offload"):
         try:
             pipe.enable_model_cpu_offload()
+            logger.info("Internal video memory strategy: model CPU offload")
             return pipe
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Model CPU offload failed; trying sequential CPU offload: %s", exc)
     if cpu_offload and hasattr(pipe, "enable_sequential_cpu_offload"):
         try:
             pipe.enable_sequential_cpu_offload()
+            logger.warning(
+                "Internal video memory strategy: sequential CPU offload; this fallback can be extremely slow"
+            )
             return pipe
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Sequential CPU offload failed; moving the full pipeline to %s: %s", device, exc)
     if hasattr(pipe, "to"):
         pipe = pipe.to(device)
+        logger.info("Internal video memory strategy: full pipeline on %s", device)
     return pipe
 
 
@@ -275,7 +306,7 @@ def _load_animatediff_pipeline(
     cpu_offload: bool,
 ):
     try:
-        from diffusers import AnimateDiffPipeline, MotionAdapter  # type: ignore
+        from diffusers import AnimateDiffPipeline, DDIMScheduler, MotionAdapter  # type: ignore
     except Exception as exc:
         raise UserFacingError(
             "Internal AnimateDiff support is not installed",
@@ -305,6 +336,16 @@ def _load_animatediff_pipeline(
         pipe = AnimateDiffPipeline.from_pretrained(str(base_model_dir), **load_kwargs)
     except Exception as exc:
         _reraise_video_model_load_error(exc, base_model_dir)
+    scheduler = getattr(pipe, "scheduler", None)
+    scheduler_config = getattr(scheduler, "config", None)
+    if scheduler_config is not None:
+        pipe.scheduler = DDIMScheduler.from_config(
+            scheduler_config,
+            beta_schedule="linear",
+            timestep_spacing="linspace",
+            steps_offset=1,
+            clip_sample=False,
+        )
     pipe = _optimize_pipeline(pipe, device, cpu_offload=cpu_offload)
     _VIDEO_PIPELINE_CACHE[key] = pipe
     return pipe
@@ -370,17 +411,21 @@ def generate_video_model_frames(
             "motion_bucket_id": int(motion_bucket_id),
             "noise_aug_strength": float(noise_aug_strength),
             "decode_chunk_size": int(decode_chunk_size),
+            "output_type": "pil",
         }
         try:
-            kwargs["fps"] = int(fps)
-            kwargs["min_guidance_scale"] = max(1.0, float(cfg) * 0.65)
-            kwargs["max_guidance_scale"] = max(float(cfg), float(cfg) * 1.15)
+            # SVD's fps value is model micro-conditioning, not the render or
+            # export rate. Its guidance schedule is likewise distinct from the
+            # still-image CFG control used for storyboard anchors.
+            kwargs["fps"] = SVD_CONDITIONING_FPS
+            kwargs["min_guidance_scale"] = SVD_MIN_GUIDANCE_SCALE
+            kwargs["max_guidance_scale"] = SVD_MAX_GUIDANCE_SCALE
             result = pipe(**kwargs)
         except TypeError:
             kwargs.pop("fps", None)
             kwargs.pop("min_guidance_scale", None)
             kwargs.pop("max_guidance_scale", None)
-            kwargs["guidance_scale"] = float(cfg)
+            kwargs["guidance_scale"] = SVD_MAX_GUIDANCE_SCALE
             try:
                 result = pipe(**kwargs)
             except Exception as exc:
@@ -396,7 +441,12 @@ def generate_video_model_frames(
         frames = _normalize_frames(result)
         if not frames:
             raise RuntimeError(f"SVD returned no frames (seed={used_seed}).")
-        return _to_rgb_frames(frames, width=width, height=height)
+        rgb_frames = _to_rgb_frames(frames, width=width, height=height)
+        if len(rgb_frames) != int(num_frames):
+            raise RuntimeError(
+                f"SVD returned {len(rgb_frames)} frames; expected {int(num_frames)} (seed={used_seed})."
+            )
+        return rgb_frames
 
     if engine_l == "animatediff":
         pipe = _load_animatediff_pipeline(
@@ -412,10 +462,15 @@ def generate_video_model_frames(
                 negative_prompt=str(negative_prompt or ""),
                 num_frames=int(num_frames),
                 num_inference_steps=int(steps),
-                guidance_scale=float(cfg),
+                # Storyboard CFG schedules can legitimately run hotter for
+                # still anchors, but the v1.5-2 motion adapter degrades into
+                # oversaturated structure at those values. Preserve lower
+                # authored values while enforcing the adapter's quality ceiling.
+                guidance_scale=max(1.0, min(float(cfg), ANIMATEDIFF_MAX_GUIDANCE_SCALE)),
                 generator=generator,
                 width=int(width),
                 height=int(height),
+                output_type="pil",
             )
         except Exception as exc:
             _cleanup_cuda(device)
@@ -425,7 +480,12 @@ def generate_video_model_frames(
         frames = _normalize_frames(result)
         if not frames:
             raise RuntimeError(f"AnimateDiff returned no frames (seed={used_seed}).")
-        return _to_rgb_frames(frames, width=width, height=height)
+        rgb_frames = _to_rgb_frames(frames, width=width, height=height)
+        if len(rgb_frames) != int(num_frames):
+            raise RuntimeError(
+                f"AnimateDiff returned {len(rgb_frames)} frames; expected {int(num_frames)} (seed={used_seed})."
+            )
+        return rgb_frames
 
     raise UserFacingError(
         f"Unknown internal video model engine: {engine}",

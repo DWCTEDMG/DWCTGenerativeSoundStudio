@@ -441,7 +441,7 @@ def build_autoconfig(
         storyboard_request = {
             "video_model_engine": "auto",
             "video_model_motion_score_mode": "auto",
-            "video_model_anchor_mode": "start",
+            "video_model_anchor_mode": "both",
             "video_model_prompt_refine": True,
             "video_model_scene_motion": str(preset.scene_motion or "subject"),
             "video_model_apply_timeline_camera": True,

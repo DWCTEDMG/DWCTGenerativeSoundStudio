@@ -154,7 +154,12 @@ function Resolve-CertificateConfiguration([string]$Reference, [string]$Root) {
     }
     try {
       $now = Get-Date
-      $ekuOids = @($pfx.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId.Value })
+      $ekuOids = @(
+        $pfx.Extensions |
+          Where-Object { $_.Oid.Value -eq "2.5.29.37" } |
+          ForEach-Object { $_.EnhancedKeyUsages } |
+          ForEach-Object { $_.Value }
+      )
       if (-not $pfx.HasPrivateKey) {
         throw "The configured PFX/P12 certificate does not contain a private key."
       }
@@ -189,7 +194,12 @@ function Resolve-CertificateConfiguration([string]$Reference, [string]$Root) {
     $certificatePath = Join-Path $store.Path $thumbprint
     $certificate = Get-Item -LiteralPath $certificatePath -ErrorAction SilentlyContinue
     if (-not $certificate) { continue }
-    $ekuOids = @($certificate.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId.Value })
+    $ekuOids = @(
+      $certificate.Extensions |
+        Where-Object { $_.Oid.Value -eq "2.5.29.37" } |
+        ForEach-Object { $_.EnhancedKeyUsages } |
+        ForEach-Object { $_.Value }
+    )
     if (-not $certificate.HasPrivateKey) {
       throw "The configured code-signing certificate does not expose a private key."
     }

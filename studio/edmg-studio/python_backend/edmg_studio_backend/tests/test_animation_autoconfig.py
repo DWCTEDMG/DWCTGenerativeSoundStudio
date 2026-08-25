@@ -117,6 +117,7 @@ def test_build_autoconfig_full_motion_uses_storyboard_video_model():
     assert req["motion_strategy"] == "storyboard_full_motion"
     assert req["video_model_engine"] == "auto"
     assert req["video_model_motion_score_mode"] == "auto"
+    assert req["video_model_anchor_mode"] == "both"
     assert req["video_model_scene_motion"] == "scene"
     assert req["video_model_apply_timeline_camera"] is True
     assert req["video_model_noise_aug_strength"] >= 0.06
@@ -140,6 +141,7 @@ def test_build_autoconfig_full_motion_uses_tensorrt_storyboard_anchors_when_avai
     req = cfg.internal_request
     assert req["temporal_mode"] == "video_model"
     assert req["motion_strategy"] == "storyboard_full_motion"
+    assert req["video_model_anchor_mode"] == "both"
     assert req["video_model_keyframe_renderer"] == "tensorrt_sd15"
     assert req["video_model_keyframe_model_id"] == "local_sd15_tensorrt_bundle"
     assert any("tensorrt sd1.5 storyboard anchors" in note.lower() for note in cfg.notes)

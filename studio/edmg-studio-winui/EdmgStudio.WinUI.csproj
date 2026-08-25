@@ -21,6 +21,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Store packaging supplies this property only after the canonical backend
+      release-manifest gate has validated the immutable PyInstaller onedir tree.
+      Keeping it opt-in prevents multi-gigabyte runtime payloads from entering
+      normal developer builds.
+    -->
+    <AppxManifest Include="$(EdmgPackageManifestPath)"
+                  Condition="'$(EdmgPackageManifestPath)' != ''" />
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />
     <Content Include="Assets\Square150x150Logo.scale-200.png" />
@@ -43,7 +51,27 @@
              Link="bin\ffprobe.exe"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(EdmgPackagedBackendPath)\**\*"
+             Condition="'$(EdmgPackagedBackendPath)' != ''"
+             Exclude="$(EdmgPackagedBackendPath)\_internal\tcl86t.dll;$(EdmgPackagedBackendPath)\_internal\tk86t.dll"
+             Link="backend\%(RecursiveDir)%(Filename)%(Extension)"
+             ExcludeFromResourceIndex="true"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="ValidateEdmgPackagedBackend"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(RequireEdmgPackagedBackend)' == 'true'">
+    <Error Condition="'$(EdmgPackagedBackendPath)' == ''"
+           Text="RequireEdmgPackagedBackend=true requires EdmgPackagedBackendPath." />
+    <Error Condition="!Exists('$(EdmgPackagedBackendPath)\backend-bundle-manifest.json')"
+           Text="The packaged backend release manifest is missing." />
+    <Error Condition="!Exists('$(EdmgPackagedBackendPath)\edmg-studio-backend.exe')"
+           Text="The packaged backend executable is missing." />
+    <Error Condition="!Exists('$(EdmgPackagedBackendPath)\_internal')"
+           Text="The packaged backend onedir runtime directory is missing." />
+  </Target>
 
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />

@@ -42,6 +42,7 @@ VIDEO_GENERATION_PREFERENCES = (
     "comfyui",
     "firefly_cloud",
     "imagineart_cloud",
+    "azure_foundry_cloud",
 )
 
 DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
@@ -61,6 +62,18 @@ DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
         "fps": 24.0,
         "prompt_upsampling": True,
         "base_url": "",
+        "timeout_s": 600,
+    },
+    "azure_foundry": {
+        "enabled": False,
+        "allow_auto_fallback": True,
+        "endpoint_url": "",
+        "deployment_name": "",
+        "resolution": "720_16_9",
+        "num_frames": 121,
+        "fps": 24.0,
+        "guidance_scale": 7.0,
+        "steps": 50,
         "timeout_s": 600,
     },
     "firefly": {
@@ -150,7 +163,7 @@ class RenderSettingsStore:
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         current = self.get()
         incoming = payload if isinstance(payload, dict) else {}
-        for key in ("video", "cosmos", "firefly", "stability", "imagineart", "cuda", "directml"):
+        for key in ("video", "cosmos", "azure_foundry", "firefly", "stability", "imagineart", "cuda", "directml"):
             value = incoming.get(key)
             if isinstance(value, dict):
                 current[key].update(value)
@@ -163,6 +176,7 @@ class RenderSettingsStore:
 
         video = payload.get("video") if isinstance(payload.get("video"), dict) else {}
         cosmos = payload.get("cosmos") if isinstance(payload.get("cosmos"), dict) else {}
+        azure_foundry = payload.get("azure_foundry") if isinstance(payload.get("azure_foundry"), dict) else {}
         firefly = payload.get("firefly") if isinstance(payload.get("firefly"), dict) else {}
         stability = payload.get("stability") if isinstance(payload.get("stability"), dict) else {}
         imagineart = payload.get("imagineart") if isinstance(payload.get("imagineart"), dict) else {}
@@ -220,6 +234,30 @@ class RenderSettingsStore:
             "prompt_upsampling": bool(cosmos.get("prompt_upsampling", out["cosmos"]["prompt_upsampling"])),
             "base_url": str(cosmos.get("base_url") or "").strip(),
             "timeout_s": max(60, min(1800, int(cosmos.get("timeout_s", out["cosmos"]["timeout_s"])))),
+        }
+
+        from .cosmos_platform import _COSMOS3_SHAPES
+
+        af_resolution = str(
+            azure_foundry.get("resolution") or out["azure_foundry"]["resolution"]
+        ).strip().lower()
+        if af_resolution not in _COSMOS3_SHAPES:
+            af_resolution = out["azure_foundry"]["resolution"]
+        out["azure_foundry"] = {
+            "enabled": bool(azure_foundry.get("enabled", out["azure_foundry"]["enabled"])),
+            "allow_auto_fallback": bool(
+                azure_foundry.get("allow_auto_fallback", out["azure_foundry"]["allow_auto_fallback"])
+            ),
+            "endpoint_url": str(azure_foundry.get("endpoint_url") or "").strip(),
+            "deployment_name": str(azure_foundry.get("deployment_name") or "").strip(),
+            "resolution": af_resolution,
+            "num_frames": max(25, min(480, int(azure_foundry.get("num_frames", out["azure_foundry"]["num_frames"])))),
+            "fps": max(1.0, min(60.0, float(azure_foundry.get("fps", out["azure_foundry"]["fps"])))),
+            "guidance_scale": max(
+                1.0, min(7.0, float(azure_foundry.get("guidance_scale", out["azure_foundry"]["guidance_scale"])))
+            ),
+            "steps": max(1, min(100, int(azure_foundry.get("steps", out["azure_foundry"]["steps"])))),
+            "timeout_s": max(60, min(1800, int(azure_foundry.get("timeout_s", out["azure_foundry"]["timeout_s"])))),
         }
 
         firefly_style = str(firefly.get("style") or out["firefly"]["style"]).strip().lower()

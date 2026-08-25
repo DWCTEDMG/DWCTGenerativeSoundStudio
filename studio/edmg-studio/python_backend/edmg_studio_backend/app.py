@@ -115,6 +115,7 @@ from .services.internal_video import (
     normalize_internal_motion_strategy,
     normalize_video_model_keyframe_renderer,
     normalize_video_model_scene_motion,
+    release_cached_internal_pipelines,
     render_internal_still_image,
     render_internal_video_variant,
     render_stability_hosted_video_variant,
@@ -158,7 +159,8 @@ from .services.imagineart_platform import (
     IMAGINEART_VIDEO_STYLES,
     ImagineArtClient,
 )
-from .services.cosmos_platform import CosmosClient, COSMOS_MODELS
+from .services.cosmos_platform import CosmosClient, COSMOS_MODELS, _COSMOS3_SHAPES
+from .services.azure_foundry_platform import AzureFoundryClient
 from .services.transcription_settings import (
     PARAKEET_MODELS,
     PARAKEET_NIM_MODELS,
@@ -294,7 +296,7 @@ _apply_cuda_startup_flags()
 _ALLOWED_SECRETS: frozenset[str] = frozenset({
     "hf_token", "civitai_api_key", "openai_compat_api_key",
     "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
-    "adobe_client_id", "adobe_client_secret", "imagineart_api_key",
+    "adobe_client_id", "adobe_client_secret", "imagineart_api_key", "azure_foundry_api_key",
 })
 
 def _install_benign_connection_error_filter(loop: asyncio.AbstractEventLoop) -> None:
@@ -2628,6 +2630,7 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = render_settings.get()
     video_cfg = dict(cfg.get("video") or {})
     cosmos_cfg = dict(cfg.get("cosmos") or {})
+    azure_foundry_cfg = dict(cfg.get("azure_foundry") or {})
     firefly_cfg = dict(cfg.get("firefly") or {})
     stability_cfg = dict(cfg.get("stability") or {})
     imagineart_cfg = dict(cfg.get("imagineart") or {})
@@ -2638,6 +2641,12 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     cosmos_enabled = bool(cosmos_cfg.get("enabled", True))
     cosmos_base_url_set = bool(str(cosmos_cfg.get("base_url") or "").strip())
+    azure_foundry_enabled = bool(azure_foundry_cfg.get("enabled", True))
+    azure_foundry_configured = bool(
+        str(azure_foundry_cfg.get("endpoint_url") or "").strip()
+        and str(azure_foundry_cfg.get("deployment_name") or "").strip()
+    )
+    has_azure_foundry_key = bool(secrets.get("azure_foundry_api_key"))
     has_stability_key = bool(secrets.get("stability_api_key"))
     has_imagineart_key = bool(secrets.get("imagineart_api_key") or os.getenv("IMAGINEART_API_KEY"))
     has_adobe_client_id = bool(secrets.get("adobe_client_id") or os.getenv("ADOBE_CLIENT_ID"))
@@ -2760,6 +2769,36 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
                 )
             ),
         },
+        "azure_foundry": {
+            "provider": "azure-foundry-cosmos",
+            # Cosmos3 running as a managed-compute deployment on Azure AI Foundry —
+            # a hosted alternative to the self-hosted Cosmos NIM above. Needs an
+            # endpoint URL, a deployment name, and an API key.
+            "configured": azure_foundry_configured,
+            "enabled": azure_foundry_enabled,
+            "active": bool(azure_foundry_configured and azure_foundry_enabled and has_azure_foundry_key),
+            "has_api_key": has_azure_foundry_key,
+            "allow_auto_fallback": bool(azure_foundry_cfg.get("allow_auto_fallback", False)),
+            "endpoint_url": str(azure_foundry_cfg.get("endpoint_url") or ""),
+            "deployment_name": str(azure_foundry_cfg.get("deployment_name") or ""),
+            "resolution": str(azure_foundry_cfg.get("resolution") or "720_16_9"),
+            "num_frames": int(azure_foundry_cfg.get("num_frames") or 121),
+            "fps": float(azure_foundry_cfg.get("fps") or 24.0),
+            "guidance_scale": float(azure_foundry_cfg.get("guidance_scale") or 7.0),
+            "steps": int(azure_foundry_cfg.get("steps") or 50),
+            "timeout_s": int(azure_foundry_cfg.get("timeout_s") or 600),
+            "note": (
+                "Not configured — set an Endpoint URL and Deployment name in Settings → "
+                "Azure AI Foundry, then add an API key."
+                if not azure_foundry_configured else
+                "No API key saved — add one in Settings → Tokens → Azure Foundry API key."
+                if not has_azure_foundry_key else
+                "Azure AI Foundry configured. Requests go to {base}/managed-deployments/{name}/v1/messages.".format(
+                    base=str(azure_foundry_cfg.get("endpoint_url") or "").rstrip("/"),
+                    name=str(azure_foundry_cfg.get("deployment_name") or ""),
+                )
+            ),
+        },
         "firefly_styles": list(FIREFLY_STYLES),
         "firefly_content_classes": list(FIREFLY_CONTENT_CLASSES),
         "stability_services": list(STABILITY_SERVICES),
@@ -2795,6 +2834,21 @@ def _cosmos_client() -> CosmosClient:
     base_url = str(cosmos_cfg.get("base_url") or "").strip()
     timeout_s = float(cosmos_cfg.get("timeout_s") or 600)
     return CosmosClient(api_key=api_key, base_url=base_url, timeout_s=timeout_s)
+
+
+def _azure_foundry_client() -> AzureFoundryClient:
+    """Return a configured AzureFoundryClient for the hosted Cosmos3 managed-compute deployment."""
+    api_key = secrets.get("azure_foundry_api_key") or os.getenv("EDMG_AI_AZURE_FOUNDRY_API_KEY") or ""
+    azure_foundry_cfg = dict((render_settings.get().get("azure_foundry") or {}))
+    endpoint_url = str(azure_foundry_cfg.get("endpoint_url") or "").strip()
+    deployment_name = str(azure_foundry_cfg.get("deployment_name") or "").strip()
+    timeout_s = float(azure_foundry_cfg.get("timeout_s") or 600)
+    return AzureFoundryClient(
+        api_key=api_key,
+        endpoint_url=endpoint_url,
+        deployment_name=deployment_name,
+        timeout_s=timeout_s,
+    )
 
 
 def _firefly_client() -> FireflyClient:
@@ -7167,6 +7221,15 @@ def _run_job_in_subprocess(job) -> None:
     CPU/GIL-bound rendering out of the API process so the UI stays responsive
     and cancellation (a file-based status flag) still works.
     """
+    released_pipelines = release_cached_internal_pipelines()
+    if released_pipelines:
+        message = (
+            f"Released {released_pipelines} cached CUDA preview pipeline bundle(s) "
+            "before starting the isolated render process"
+        )
+        logger.info(message)
+        jobs.append_log(job.project_id, job.id, message)
+
     cmd = _render_worker_command(job.project_id, job.id)
     jobs.append_log(job.project_id, job.id, "Dispatching to isolated render process")
     popen_kwargs: dict[str, Any] = {"env": os.environ.copy()}
@@ -8673,6 +8736,175 @@ def render_cosmos_all_scenes(project_id: str, payload: dict[str, Any]):
     return {"ok": True, "provider": "nvidia-cosmos", "results": results, "total": len(scenes)}
 
 
+@app.post("/v1/projects/{project_id}/render/azure_foundry/scene")
+def render_azure_foundry_scene(project_id: str, payload: dict[str, Any]):
+    """Generate a single video clip for one scene using the hosted Azure AI Foundry
+    Cosmos3-Super managed-compute deployment.
+
+    Unlike /render/cosmos/scene (a self-hosted NIM), this calls a hosted Foundry
+    ``GlobalManagedCompute`` deployment with an API key — no local GPU required.
+
+    payload fields (all optional):
+      scene_index   : int   (default 0)
+      variant_index : int   (default 0)
+      seed          : int
+      steps         : int
+      guidance_scale: float
+      num_frames    : int
+      fps           : float
+      resolution    : str   e.g. "720_16_9" (see Settings → Azure Foundry Cosmos3)
+      use_keyframe  : bool  if true and variant has a rendered keyframe,
+                            passes it as the init image
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    provider_status = _render_provider_status()
+    azure_foundry_status = provider_status.get("azure_foundry") or {}
+    if not azure_foundry_status.get("configured"):
+        raise UserFacingError(
+            "Azure AI Foundry Cosmos3 is not configured.",
+            hint=(
+                "Set the Endpoint URL and Deployment name in Settings → GPU / Render Runtime → "
+                "Azure Foundry Cosmos3, then add an API key in Settings → Secrets."
+            ),
+            code="AZURE_FOUNDRY_NOT_CONFIGURED",
+            status_code=400,
+        )
+    if not azure_foundry_status.get("has_api_key"):
+        raise UserFacingError(
+            "Azure Foundry API key is not set.",
+            hint="Add the Azure Foundry API key in Settings → Secrets, then retry.",
+            code="AZURE_FOUNDRY_NO_API_KEY",
+            status_code=400,
+        )
+
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    variant_index = int((payload or {}).get("variant_index") or 0)
+    variants = plan["variants"]
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    variant = variants[variant_index]
+    scenes = variant.get("scenes") or []
+    scene_index = int((payload or {}).get("scene_index") or 0)
+    if scene_index < 0 or scene_index >= len(scenes):
+        raise HTTPException(400, f"scene_index {scene_index} out of range (0–{len(scenes)-1})")
+
+    scene = scenes[scene_index]
+    project_dir = store.project_dir(project_id)
+    azure_foundry_cfg = dict((render_settings.get().get("azure_foundry") or {}))
+    client = _azure_foundry_client()
+
+    prompt = str(scene.get("prompt") or "cinematic music video").strip()
+    negative = str(scene.get("negative_prompt") or "blurry, low quality, text, watermark, logo").strip()
+    steps = int((payload or {}).get("steps") or azure_foundry_cfg.get("steps") or 50)
+    guidance_scale = float((payload or {}).get("guidance_scale") or azure_foundry_cfg.get("guidance_scale") or 7.0)
+    num_frames = int((payload or {}).get("num_frames") or azure_foundry_cfg.get("num_frames") or 121)
+    fps = float((payload or {}).get("fps") or azure_foundry_cfg.get("fps") or 24.0)
+    seed = (payload or {}).get("seed")
+    resolution = str((payload or {}).get("resolution") or azure_foundry_cfg.get("resolution") or "720_16_9")
+    width, height = _COSMOS3_SHAPES.get(resolution, (1280, 720))
+
+    out_dir = project_dir / "azure_foundry" / f"variant_{variant_index}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"scene_{scene_index:04d}.mp4"
+
+    use_keyframe = bool((payload or {}).get("use_keyframe", False))
+    init_image = None
+    if use_keyframe:
+        kf_path = project_dir / "stills" / f"variant_{variant_index}" / f"scene_{scene_index:04d}.png"
+        if kf_path.exists():
+            try:
+                from PIL import Image as PILImage
+                init_image = PILImage.open(str(kf_path)).convert("RGB")
+            except Exception:
+                init_image = None
+
+    if init_image is not None:
+        result = client.image_to_video(
+            image=init_image,
+            out_path=out_path,
+            prompt=prompt,
+            negative_prompt=negative,
+            width=width,
+            height=height,
+            fps=fps,
+            num_frames=num_frames,
+            steps=steps,
+            guidance_scale=guidance_scale,
+            seed=int(seed) if seed is not None else None,
+        )
+    else:
+        result = client.text_to_video(
+            prompt=prompt,
+            out_path=out_path,
+            negative_prompt=negative,
+            width=width,
+            height=height,
+            fps=fps,
+            num_frames=num_frames,
+            steps=steps,
+            guidance_scale=guidance_scale,
+            seed=int(seed) if seed is not None else None,
+        )
+
+    rel = result.video_path.relative_to(project_dir).as_posix()
+    return {
+        "ok": True,
+        "provider": "azure-foundry-cosmos",
+        "video": rel,
+        "video_abs": str(result.video_path),
+        "scene_index": scene_index,
+        "model": result.model,
+        "duration_s": result.duration_s,
+        "frames": result.frames,
+        "fps": result.fps,
+        "seed": result.seed,
+    }
+
+
+@app.post("/v1/projects/{project_id}/render/azure_foundry/all_scenes")
+def render_azure_foundry_all_scenes(project_id: str, payload: dict[str, Any]):
+    """Generate an Azure Foundry Cosmos3 clip for every scene in a variant sequentially.
+
+    Same as calling /render/azure_foundry/scene for each scene index in order.
+    Returns a list of results. Failed scenes include an error key but do not
+    stop processing of remaining scenes.
+    """
+    proj = store.get(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    plan = proj.meta.get("last_plan")
+    if not plan or not (plan.get("variants") or []):
+        raise HTTPException(400, "No plan generated — run Plan first.")
+
+    variant_index = int((payload or {}).get("variant_index") or 0)
+    variants = plan["variants"]
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(400, "variant_index out of range")
+
+    scenes = (variants[variant_index].get("scenes") or [])
+    results = []
+    for idx in range(len(scenes)):
+        per_scene_payload = {**(payload or {}), "scene_index": idx, "variant_index": variant_index}
+        try:
+            r = render_azure_foundry_scene(project_id, per_scene_payload)
+            results.append(r)
+        except UserFacingError as e:
+            results.append({"ok": False, "scene_index": idx, "error": e.message, "hint": e.hint})
+        except Exception:
+            logger.exception("Azure Foundry scene render failed for scene %s", idx)
+            results.append({"ok": False, "scene_index": idx, "error": "Azure Foundry scene render failed"})
+
+    return {"ok": True, "provider": "azure-foundry-cosmos", "results": results, "total": len(scenes)}
+
+
 @app.post("/v1/projects/{project_id}/render/firefly/scenes")
 def render_firefly_scenes(project_id: str, req: RenderScenesRequest):
     """Generate one keyframe per scene using Adobe Firefly (standard or custom model)."""
@@ -9602,7 +9834,7 @@ def _internal_settings_from_payload(
     if video_motion_score_mode not in {"auto", "manual", "off"}:
         video_motion_score_mode = "auto"
     video_anchor_mode = str(payload.get("video_model_anchor_mode") or "start").strip().lower()
-    if video_anchor_mode not in {"start", "end", "loop"}:
+    if video_anchor_mode not in {"start", "end", "both", "loop"}:
         video_anchor_mode = "start"
     try:
         video_manual_motion_score = int(payload.get("video_model_manual_motion_score", 4))
@@ -9699,6 +9931,25 @@ def _internal_settings_from_payload(
         source_asset=(str(payload.get("source_asset")).strip() or None) if payload.get("source_asset") is not None else None,
         source_strength=float(payload.get("source_strength", 0.55)),
         deforum_overrides=deforum_overrides or None,
+    )
+
+
+def _apply_storyboard_full_motion_settings(
+    settings_obj: InternalVideoSettings,
+    payload: dict[str, Any],
+) -> InternalVideoSettings:
+    """Apply full-motion defaults without overriding explicit quality controls."""
+    return replace(
+        settings_obj,
+        video_model_motion_score_mode="auto",
+        video_model_scene_motion=normalize_video_model_scene_motion(
+            payload.get("video_model_scene_motion") or "scene"
+        ),
+        keyframe_interval_s=min(
+            float(settings_obj.keyframe_interval_s),
+            float(settings_obj.storyboard_shot_max_s),
+        ),
+        source_asset=None,
     )
 
 
@@ -9922,14 +10173,7 @@ def _resolve_internal_render_request(
         temporal_mode=effective_temporal_mode,
     )
     if motion_strategy == "storyboard_full_motion":
-        settings_obj = replace(
-            settings_obj,
-            video_model_motion_score_mode="auto",
-            video_model_prompt_refine=True,
-            video_model_scene_motion=normalize_video_model_scene_motion(payload.get("video_model_scene_motion") or "scene"),
-            keyframe_interval_s=min(float(settings_obj.keyframe_interval_s), float(settings_obj.storyboard_shot_max_s)),
-            source_asset=None,
-        )
+        settings_obj = _apply_storyboard_full_motion_settings(settings_obj, payload)
     tensorrt_keyframe_bundle_path: Path | None = None
     if settings_obj.temporal_mode == "video_model":
         engine, video_model_id, video_model_path = _resolve_internal_video_model_selection(
@@ -10227,25 +10471,17 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
         if engine == "svd":
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 8)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 1)
-            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 6:
-                updates["temporal_steps"] = 6
         else:
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
-            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 8:
-                updates["temporal_steps"] = 8
     elif vram_gb and vram_gb <= 8.5:
         updates["video_model_cpu_offload"] = True
         if engine == "svd":
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
-            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 8:
-                updates["temporal_steps"] = 8
         else:
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 16)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 4)
-            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 10:
-                updates["temporal_steps"] = 10
     return replace(settings_obj, **updates) if updates else settings_obj
 
 
@@ -10266,18 +10502,18 @@ def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, h
     if vram_gb and vram_gb <= 6.5:
         if engine == "svd":
             return [
-                "6 GB CUDA SVD safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps SVD adapter frames to 8, caps temporal steps to 6, uses decode chunks of 1, and renders the SVD adapter at a lower working canvas before resizing to the final video size."
+                "6 GB CUDA SVD safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps SVD adapter frames to 8, uses decode chunks of 1, and renders the SVD adapter at a lower working canvas before resizing to the final video size. Inference steps are preserved because they affect render time rather than peak model allocation."
             ]
         return [
-            "6 GB CUDA AnimateDiff safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps adapter frames to 12, caps temporal steps to 8, uses small decode chunks, and renders the adapter at a lower working canvas before resizing to the final video size."
+            "6 GB CUDA AnimateDiff safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps adapter frames to 12, uses small decode chunks, and renders the adapter at a lower working canvas before resizing to the final video size. Inference steps are preserved because they affect render time rather than peak model allocation."
         ]
     if vram_gb and vram_gb <= 8.5:
         if engine == "svd":
             return [
-                "8 GB CUDA SVD safety is active: Studio enables CPU offload, caps SVD adapter frames to 12, caps temporal steps to 8, and uses smaller decode chunks."
+                "8 GB CUDA SVD safety is active: Studio enables CPU offload, caps SVD adapter frames to 12, preserves inference steps, and uses smaller decode chunks."
             ]
         return [
-            "8 GB CUDA AnimateDiff safety is active: Studio enables CPU offload, caps adapter frames to 16, caps temporal steps to 10, and uses smaller decode chunks."
+            "8 GB CUDA AnimateDiff safety is active: Studio enables CPU offload, caps adapter frames to 16, preserves inference steps, and uses smaller decode chunks."
         ]
     return []
 
@@ -10300,15 +10536,15 @@ def _studio_native_resource_policy(
         dtype = "float16"
         if vram_gb and vram_gb <= 6.5:
             offload = "aggressive_cpu_offload"
-            attention = "sliced_attention_and_small_decode_chunks"
+            attention = "native_sdpa_with_vae_slicing_and_small_decode_chunks"
             notes.append("6 GB CUDA policy: prefer SD1.5/SDXL anchors, CPU offload, sliced decode, and short video-model shots.")
         elif vram_gb and vram_gb <= 8.5:
             offload = "balanced_cpu_offload"
-            attention = "sliced_decode"
+            attention = "native_sdpa_with_vae_slicing"
             notes.append("8 GB CUDA policy: keep video shots short, use CPU offload for SVD/AnimateDiff, and avoid stacking many adapters.")
         else:
             offload = "gpu_preferred"
-            attention = "standard_attention"
+            attention = "native_sdpa"
     elif backend == "directml":
         dtype = "float16"
         offload = "directml_safe"
@@ -10971,6 +11207,7 @@ def _recommend_video_route(project_id: str | None = None) -> dict[str, Any]:
     hw = _hardware_profile()
     provider_status = _render_provider_status(hw)
     cosmos_status = dict(provider_status.get("cosmos") or {})
+    azure_foundry_status = dict(provider_status.get("azure_foundry") or {})
     cuda_status = dict(provider_status.get("cuda") or {})
 
     # Local GPU: CUDA available + enabled
@@ -10984,6 +11221,13 @@ def _recommend_video_route(project_id: str | None = None) -> dict[str, Any]:
     # Cosmos cloud: configured API key + enabled
     cosmos_ready = bool(cosmos_status.get("active") or (
         cosmos_status.get("configured") and cosmos_status.get("enabled")
+    ))
+    # Azure Foundry Cosmos3: hosted managed-compute deployment — configured + enabled + API key.
+    # Never auto-selected (see the "auto" branch below); only used via explicit preference/route.
+    azure_foundry_ready = bool(azure_foundry_status.get("active") or (
+        azure_foundry_status.get("configured")
+        and azure_foundry_status.get("enabled")
+        and azure_foundry_status.get("has_api_key")
     ))
 
     local_detail = {
@@ -10999,6 +11243,14 @@ def _recommend_video_route(project_id: str | None = None) -> dict[str, Any]:
         "num_frames": cosmos_status.get("num_frames"),
         "fps": cosmos_status.get("fps"),
     }
+    azure_foundry_detail = {
+        "configured": azure_foundry_status.get("configured"),
+        "has_api_key": azure_foundry_status.get("has_api_key"),
+        "endpoint_url": azure_foundry_status.get("endpoint_url"),
+        "deployment_name": azure_foundry_status.get("deployment_name"),
+        "num_frames": azure_foundry_status.get("num_frames"),
+        "fps": azure_foundry_status.get("fps"),
+    }
 
     # Explicit preferences override auto logic
     if preference == "local_gpu":
@@ -11006,22 +11258,40 @@ def _recommend_video_route(project_id: str | None = None) -> dict[str, Any]:
             return {"route": "local_gpu", "reason": "Local GPU selected by preference.",
                     "preference": preference, "local_ready": local_ready,
                     "cosmos_ready": cosmos_ready, "local_detail": local_detail,
-                    "cosmos_detail": cosmos_detail}
+                    "cosmos_detail": cosmos_detail,
+                    "azure_foundry_ready": azure_foundry_ready, "azure_foundry_detail": azure_foundry_detail}
         return {"route": "none", "reason": "Local GPU selected but CUDA is not available or disabled.",
                 "preference": preference, "local_ready": False,
                 "cosmos_ready": cosmos_ready, "local_detail": local_detail,
-                "cosmos_detail": cosmos_detail}
+                "cosmos_detail": cosmos_detail,
+                "azure_foundry_ready": azure_foundry_ready, "azure_foundry_detail": azure_foundry_detail}
 
     if preference == "cosmos_cloud":
         if cosmos_ready:
             return {"route": "cosmos_cloud", "reason": "NVIDIA Cosmos selected by preference.",
                     "preference": preference, "local_ready": local_ready,
                     "cosmos_ready": cosmos_ready, "local_detail": local_detail,
-                    "cosmos_detail": cosmos_detail}
+                    "cosmos_detail": cosmos_detail,
+                    "azure_foundry_ready": azure_foundry_ready, "azure_foundry_detail": azure_foundry_detail}
         return {"route": "none", "reason": "Cosmos selected but NVIDIA API key is not configured.",
                 "preference": preference, "local_ready": local_ready,
                 "cosmos_ready": False, "local_detail": local_detail,
-                "cosmos_detail": cosmos_detail}
+                "cosmos_detail": cosmos_detail,
+                "azure_foundry_ready": azure_foundry_ready, "azure_foundry_detail": azure_foundry_detail}
+
+    if preference == "azure_foundry_cloud":
+        if azure_foundry_ready:
+            return {"route": "azure_foundry_cloud", "reason": "Azure AI Foundry Cosmos3 selected by preference.",
+                    "preference": preference, "local_ready": local_ready,
+                    "cosmos_ready": cosmos_ready, "local_detail": local_detail,
+                    "cosmos_detail": cosmos_detail,
+                    "azure_foundry_ready": azure_foundry_ready, "azure_foundry_detail": azure_foundry_detail}
+        return {"route": "none",
+                "reason": "Azure Foundry selected but it is not fully configured (endpoint, deployment name, and API key are all required).",
+                "preference": preference, "local_ready": local_ready,
+                "cosmos_ready": cosmos_ready, "local_detail": local_detail,
+                "cosmos_detail": cosmos_detail,
+                "azure_foundry_ready": False, "azure_foundry_detail": azure_foundry_detail}
 
     # auto: pick intelligently
     gpu_score = 0
@@ -11069,6 +11339,8 @@ def _recommend_video_route(project_id: str | None = None) -> dict[str, Any]:
         "fallback_route": "cosmos_cloud" if fallback_available else None,
         "local_detail": local_detail,
         "cosmos_detail": cosmos_detail,
+        "azure_foundry_ready": azure_foundry_ready,
+        "azure_foundry_detail": azure_foundry_detail,
     }
 
 
@@ -11102,11 +11374,12 @@ def set_video_route_preferences(payload: dict[str, Any]):
 
 @app.post("/v1/projects/{project_id}/render/video/smart")
 def render_video_smart(project_id: str, payload: dict[str, Any]):
-    """Route a video render to local GPU or NVIDIA Cosmos based on preference.
+    """Route a video render to local GPU, NVIDIA Cosmos, or Azure AI Foundry Cosmos3
+    based on preference.
 
     Accepts same fields as /render/cosmos/all_scenes and the internal video
     conductor. The router decides which backend to use; the caller can override
-    with explicit route='local_gpu'|'cosmos_cloud'.
+    with explicit route='local_gpu'|'cosmos_cloud'|'azure_foundry_cloud'.
     """
     proj = store.get(project_id)
     if not proj:
@@ -11114,10 +11387,13 @@ def render_video_smart(project_id: str, payload: dict[str, Any]):
 
     explicit_route = str((payload or {}).get("route") or "").strip().lower()
     recommendation = _recommend_video_route(project_id)
-    route = explicit_route if explicit_route in ("local_gpu", "cosmos_cloud") else recommendation["route"]
+    route = explicit_route if explicit_route in ("local_gpu", "cosmos_cloud", "azure_foundry_cloud") else recommendation["route"]
 
     if route == "cosmos_cloud":
         return render_cosmos_all_scenes(project_id, payload)
+
+    if route == "azure_foundry_cloud":
+        return render_azure_foundry_all_scenes(project_id, payload)
 
     if route == "local_gpu":
         # Kick off internal video render via the existing conductor flow
@@ -11128,8 +11404,9 @@ def render_video_smart(project_id: str, payload: dict[str, Any]):
     raise UserFacingError(
         "No video generation route is available.",
         hint=(
-            "Enable CUDA in Settings → GPU / Render Runtime, or add your NVIDIA API key "
-            "(same key as Nemotron) to use Cosmos cloud video generation."
+            "Enable CUDA in Settings → GPU / Render Runtime, add your NVIDIA API key "
+            "(same key as Nemotron) for Cosmos cloud, or configure Azure AI Foundry Cosmos3 "
+            "(endpoint, deployment name, and API key) in Settings."
         ),
         code="NO_VIDEO_ROUTE",
         status_code=400,

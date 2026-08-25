@@ -111,6 +111,7 @@ def test_auto_dry_run_full_motion_uses_storyboard_video_model(tmp_path, monkeypa
         assert req["temporal_mode"] == "video_model"
         assert req["motion_strategy"] == "storyboard_full_motion"
         assert req["video_model_engine"] == "auto"
+        assert req["video_model_anchor_mode"] == "both"
         assert req["video_model_scene_motion"] == "scene"
         assert req["video_model_keyframe_renderer"] == "tensorrt_sd15"
         assert req["video_model_keyframe_model_id"] == "local_sd15_tensorrt_bundle"

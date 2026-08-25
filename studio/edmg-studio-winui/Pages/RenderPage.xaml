@@ -609,6 +609,7 @@
                                                   AutomationProperties.AutomationId="RenderVideoAnchorModeComboBox">
                                             <ComboBoxItem Content="Start" Tag="start" />
                                             <ComboBoxItem Content="End" Tag="end" />
+                                            <ComboBoxItem Content="Cinematic start + end" Tag="both" />
                                             <ComboBoxItem Content="Loop" Tag="loop" />
                                         </ComboBox>
                                     </StackPanel>

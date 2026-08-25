@@ -111,6 +111,7 @@ def test_reactive_lab_merge_upserts_motion_track_and_camera_keyframes():
     payload = {
         "metadata": {"fps": 12, "renderMode": "performance-led", "scheduleStride": 2},
         "sections": [{"id": 1, "startTime": 0.0, "endTime": 8.0, "label": "lift", "avgEnergy": 0.7, "approved": True, "renderMode": "performance-led"}],
+        "beat_markers": [{"frame": 12, "time": 1.0, "intensity": 0.8}],
         "cue_events": [{"id": 1, "frame": 24, "time": 2.0, "cueType": "push", "instruction": "accent"}],
         "repair_suggestions": [{"id": 1, "sectionId": 1, "issue": "tighten", "action": "reduce shake"}],
         "schedules": {
@@ -139,6 +140,7 @@ def test_reactive_lab_merge_upserts_motion_track_and_camera_keyframes():
     assert merged["render"]["fps_output"] == 12
     assert merged["camera"]["keyframes"][0]["zoom"] == 1.0
     assert merged["camera"]["keyframes"][-1]["rotation_deg"] == 5.0
+    assert merged["reactive_lab"]["beat_markers"] == payload["beat_markers"]
     assert merged["reactive_lab"]["handoff_manifest"]["approvedSectionIds"] == [1]
 
 

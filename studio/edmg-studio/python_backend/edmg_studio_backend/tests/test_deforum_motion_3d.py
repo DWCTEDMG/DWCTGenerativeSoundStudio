@@ -146,6 +146,69 @@ def test_motion_track_clip_3d_schedule():
     assert evaluate_motion_state(10, ctx.motion).rotation_3d_y == pytest.approx(30.0)
 
 
+def test_camera_curve_keeps_velocity_through_interior_keyframe():
+    timeline = {
+        "camera": {
+            "keyframes": [
+                {"t": 0.0, "zoom": 1.0},
+                {"t": 1.0, "zoom": 1.1},
+                {"t": 2.0, "zoom": 1.2},
+            ]
+        }
+    }
+
+    before = iv._camera_components_at_time(0.99, timeline=timeline, fallback_interval_s=5.0).zoom
+    center = iv._camera_components_at_time(1.0, timeline=timeline, fallback_interval_s=5.0).zoom
+    after = iv._camera_components_at_time(1.01, timeline=timeline, fallback_interval_s=5.0).zoom
+
+    assert center - before == pytest.approx(after - center, rel=1e-4)
+    assert center - before > 0.0009
+
+
+def test_camera_normalizer_coalesces_subframe_generated_pose_collision():
+    points = [
+        {"t": 0.0, "pan_x": 0.0},
+        {"t": 5.0, "pan_x": 10.0},
+        {"t": 5.05, "pan_x": -8.0},
+    ]
+
+    normalized = iv._normalize_camera_keyframes(points)
+
+    assert len(normalized) == 2
+    assert normalized[-1]["t"] == 5.0
+    assert normalized[-1]["pan_x"] == -8.0
+
+
+def test_camera_normalizer_preserves_explicit_cut_pose():
+    points = [
+        {"t": 0.0, "pan_x": 0.0},
+        {"t": 5.0, "pan_x": 10.0, "easing": "cut"},
+        {"t": 5.05, "pan_x": -8.0, "easing": "smoothstep"},
+    ]
+
+    normalized = iv._normalize_camera_keyframes(points)
+
+    assert len(normalized) == 3
+    assert normalized[1]["easing"] == "cut"
+
+
+def test_camera_cut_switches_pose_at_exact_boundary():
+    timeline = {
+        "camera": {
+            "keyframes": [
+                {"t": 0.0, "pan_x": 1.0, "easing": "cut"},
+                {"t": 1.0, "pan_x": 9.0, "easing": "smoothstep"},
+            ]
+        }
+    }
+
+    just_before = iv._camera_components_at_time(0.999, timeline=timeline, fallback_interval_s=5.0)
+    at_cut = iv._camera_components_at_time(1.0, timeline=timeline, fallback_interval_s=5.0)
+
+    assert just_before.pan_x == pytest.approx(1.0)
+    assert at_cut.pan_x == pytest.approx(9.0)
+
+
 # ---------------------------------------------------------------------------
 # Geometry: projection + perspective transform
 # ---------------------------------------------------------------------------

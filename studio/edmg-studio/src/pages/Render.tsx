@@ -210,6 +210,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   );
   const [renderSeed, setRenderSeed] = useState<string>(String(savedRenderDefaults.stillSeed || ""));
   const [cosmosSceneIndex, setCosmosSceneIndex] = useState<number>(0);
+  const [azureFoundrySceneIndex, setAzureFoundrySceneIndex] = useState<number>(0);
   const [hiresFix, setHiresFix] = useState<HiresFixDraft>({
     enabled: Boolean(savedRenderDefaults.hiresFixEnabled ?? false),
     scale: Number(savedRenderDefaults.hiresFixScale ?? 1.5),
@@ -260,7 +261,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalVideoCpuOffload, setInternalVideoCpuOffload] = useState<boolean>(false);
   const [internalVideoMotionScoreMode, setInternalVideoMotionScoreMode] = useState<"auto"|"manual"|"off">("auto");
   const [internalVideoManualMotionScore, setInternalVideoManualMotionScore] = useState<number>(4);
-  const [internalVideoAnchorMode, setInternalVideoAnchorMode] = useState<"start"|"end"|"loop">("start");
+  const [internalVideoAnchorMode, setInternalVideoAnchorMode] = useState<"start"|"end"|"both"|"loop">("start");
   const [internalVideoPromptRefine, setInternalVideoPromptRefine] = useState<boolean>(true);
   const [internalVideoSceneMotion, setInternalVideoSceneMotion] = useState<"camera"|"subject"|"scene">("subject");
   const [internalVideoApplyTimelineCamera, setInternalVideoApplyTimelineCamera] = useState<boolean>(savedRenderDefaults.internalVideoApplyTimelineCamera ?? true);
@@ -637,6 +638,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const fireflyVisible = !!renderProviders?.firefly?.visible;
   const imagineartVisible = !!renderProviders?.imagineart?.visible;
   const cosmosReady = !!renderProviders?.cosmos?.active;
+  const azureFoundryReady = !!renderProviders?.azure_foundry?.active;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
 
@@ -1645,7 +1647,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     }
   };
 
-  const renderVideoSmart = async (forceRoute?: "local_gpu" | "cosmos_cloud") => {
+  const renderVideoSmart = async (forceRoute?: "local_gpu" | "cosmos_cloud" | "azure_foundry_cloud") => {
     setErr(null);
     setInfo(null);
     try {
@@ -1684,6 +1686,39 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setInfo(null);
     try {
       const d = await apiPost(`/v1/projects/${projectId}/render/cosmos/all_scenes`, {
+        variant_index: selectedVariant,
+        use_keyframe: useKeyframe,
+        seed: renderSeed ? Number(renderSeed) : undefined,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const renderAzureFoundryScene = async (sceneIndex: number, useKeyframe = false) => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/azure_foundry/scene`, {
+        variant_index: selectedVariant,
+        scene_index: sceneIndex,
+        use_keyframe: useKeyframe,
+        seed: renderSeed ? Number(renderSeed) : undefined,
+      });
+      setInfo(d);
+      await refreshProject(projectId);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  };
+
+  const renderAzureFoundryAll = async (useKeyframe = false) => {
+    setErr(null);
+    setInfo(null);
+    try {
+      const d = await apiPost(`/v1/projects/${projectId}/render/azure_foundry/all_scenes`, {
         variant_index: selectedVariant,
         use_keyframe: useKeyframe,
         seed: renderSeed ? Number(renderSeed) : undefined,
@@ -2996,6 +3031,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                            <select value={internalVideoAnchorMode} onChange={(e) => setInternalVideoAnchorMode(e.target.value as any)}>
                              <option value="start">Start anchor</option>
                              <option value="end">End anchor</option>
+                             <option value="both">Cinematic start + end</option>
                              <option value="loop">Loop anchor</option>
                            </select>
                          </div>
@@ -3904,6 +3940,8 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                     <b>Smart video:</b>{" "}
                     {videoRoute.route === "local_gpu"
                       ? `🖥 Local GPU — ${videoRoute.local_detail?.device || "GPU"} (${videoRoute.local_detail?.vram_gb || 0} GB)`
+                      : videoRoute.route === "azure_foundry_cloud"
+                      ? `☁ Azure AI Foundry Cosmos3 — ${videoRoute.azure_foundry_detail?.deployment_name || "cosmos3-super"}`
                       : `☁ NVIDIA Cosmos Cloud — ${videoRoute.cosmos_detail?.model || "cosmos3"}`}
                     {" "}
                     <span style={{ opacity: 0.7 }}>({videoRoute.reason})</span>
@@ -3922,6 +3960,11 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                         Force Cloud
                       </button>
                     )}
+                    {videoRoute.azure_foundry_ready && (
+                      <button className="secondary" onClick={() => renderVideoSmart("azure_foundry_cloud")} disabled={!variantCount}>
+                        Force Azure Foundry
+                      </button>
+                    )}
                     <span className="small" style={{ opacity: 0.7, alignSelf: "center" }}>
                       Change preference in Settings → GPU / Render Runtime
                     </span>
@@ -3931,7 +3974,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
               {videoRoute?.route === "none" && (
                 <div className="small" style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8,
                   background: "var(--warning-bg,#fff3cd)", color: "var(--warning-text,#856404)" }}>
-                  ⚠ No video generation route available. Enable CUDA in Settings or add your NVIDIA API key for Cosmos cloud.
+                  ⚠ No video generation route available. Enable CUDA in Settings, add your NVIDIA API key for Cosmos cloud, or configure Azure AI Foundry Cosmos3.
                 </div>
               )}
 
@@ -3974,6 +4017,46 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                         title="Generate a Cosmos video clip for just this one scene"
                       >
                         Cosmos: This scene
+                      </button>
+                    </span>
+                  </>
+                ) : null}
+                {azureFoundryReady ? (
+                  <>
+                    <button
+                      onClick={() => renderAzureFoundryAll(false)}
+                      disabled={!variantCount}
+                      title="Generate a video clip for every scene using Azure AI Foundry Cosmos3 (text→video)"
+                    >
+                      ☁ Azure Foundry: All scenes (text→video)
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() => renderAzureFoundryAll(true)}
+                      disabled={!variantCount}
+                      title="Use rendered keyframes as init images for Azure Foundry Cosmos3 image-to-video"
+                    >
+                      Azure Foundry: From keyframes (img→video)
+                    </button>
+                    <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                      <label className="small" htmlFor="azure-foundry-scene-index">Scene #</label>
+                      <input
+                        id="azure-foundry-scene-index"
+                        type="number"
+                        min={0}
+                        max={sceneCount ? sceneCount - 1 : 0}
+                        value={azureFoundrySceneIndex}
+                        onChange={(e) => setAzureFoundrySceneIndex(Math.max(0, Number(e.target.value) || 0))}
+                        disabled={!variantCount}
+                        style={{ width: 64 }}
+                      />
+                      <button
+                        className="secondary"
+                        onClick={() => renderAzureFoundryScene(azureFoundrySceneIndex, false)}
+                        disabled={!variantCount || azureFoundrySceneIndex >= sceneCount}
+                        title="Generate an Azure Foundry Cosmos3 video clip for just this one scene"
+                      >
+                        Azure Foundry: This scene
                       </button>
                     </span>
                   </>
@@ -4078,6 +4161,13 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                   NVIDIA Cosmos: <b>ready</b> • model <b>{renderProviders?.cosmos?.model}</b>
                   {" "}• {renderProviders?.cosmos?.num_frames} frames @ {renderProviders?.cosmos?.fps} fps
                   {" "}• ~{Math.round((renderProviders?.cosmos?.num_frames || 121) / (renderProviders?.cosmos?.fps || 24))}s clip per scene
+                </div>
+              )}
+              {azureFoundryReady && (
+                <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                  Azure AI Foundry Cosmos3: <b>ready</b> • deployment <b>{renderProviders?.azure_foundry?.deployment_name}</b>
+                  {" "}• {renderProviders?.azure_foundry?.num_frames} frames @ {renderProviders?.azure_foundry?.fps} fps
+                  {" "}• ~{Math.round((renderProviders?.azure_foundry?.num_frames || 121) / (renderProviders?.azure_foundry?.fps || 24))}s clip per scene
                 </div>
               )}
               {fireflyVisible && (

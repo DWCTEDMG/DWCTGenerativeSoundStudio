@@ -91,6 +91,17 @@ public sealed class InternalVideoRenderRequestBuilderTests
     }
 
     [TestMethod]
+    public void Build_AllowsCinematicStartAndEndAnchorMode()
+    {
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            VideoModelAnchorMode = "both",
+        });
+
+        Assert.AreEqual("both", request.GetProperty("video_model_anchor_mode").GetString());
+    }
+
+    [TestMethod]
     public void Build_RejectsMalformedJsonWithFieldName()
     {
         InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>

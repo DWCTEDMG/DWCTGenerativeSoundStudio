@@ -219,7 +219,7 @@ public static class InternalVideoRenderRequestBuilder
         Enum(settings.MotionStrategy, ["manual", "storyboard_full_motion"], "Motion strategy");
         Enum(settings.VideoModelDtype, ["auto", "float16", "bfloat16", "float32"], "Video model dtype");
         Enum(settings.VideoModelMotionScoreMode, ["auto", "manual", "off"], "Motion score mode");
-        Enum(settings.VideoModelAnchorMode, ["start", "end", "loop"], "Anchor mode");
+        Enum(settings.VideoModelAnchorMode, ["start", "end", "both", "loop"], "Anchor mode");
         Enum(settings.VideoModelSceneMotion, ["camera", "subject", "scene"], "Scene motion");
         Enum(settings.VideoModelKeyframeRenderer, ["internal", "tensorrt_sd15"], "Keyframe renderer");
     }
