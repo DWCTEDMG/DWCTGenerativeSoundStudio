@@ -10511,6 +10511,7 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
         else:
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
+            updates["temporal_steps"] = min(int(settings_obj.temporal_steps or 18), 8)
     elif vram_gb and vram_gb <= 8.5:
         updates["video_model_cpu_offload"] = True
         if engine == "svd":

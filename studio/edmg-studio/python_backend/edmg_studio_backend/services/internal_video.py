@@ -4317,7 +4317,12 @@ def describe_storyboard_motion_plan(
                 "anchor_source": anchor_source,
                 "keyframe_renderer": keyframe_renderer,
                 "scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
-                "transition": str(shot.get("_storyboard_transition") or "technical_continue"),
+                "transition": (
+                    "start from generated visual anchor"
+                    if str(shot.get("_storyboard_transition") or "") == "opening"
+                    and anchor_source == "generated_scene_keyframe"
+                    else str(shot.get("_storyboard_transition") or "technical_continue")
+                ),
                 **intent,
                 "motion_score": score_info.get("motion_score"),
                 "motion_source": score_info.get("source"),
