@@ -1000,6 +1000,7 @@ internal-video = [
     { name = "accelerate" },
     { name = "diffusers" },
     { name = "safetensors" },
+    { name = "sentencepiece" },
     { name = "tensorboard" },
     { name = "transformers" },
 ]
@@ -1073,6 +1074,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31" },
     { name = "safetensors", marker = "extra == 'internal-video'", specifier = ">=0.4.3,<1" },
     { name = "scipy", marker = "extra == 'core'", specifier = ">=1.10,<2" },
+    { name = "sentencepiece", marker = "extra == 'internal-video'", specifier = ">=0.2,<1" },
     { name = "soundfile", marker = "extra == 'audio'", specifier = ">=0.12,<1" },
     { name = "spacy", marker = "extra == 'core'", specifier = ">=3.5,<4" },
     { name = "tbb", marker = "sys_platform == 'win32' and extra == 'core'", specifier = ">=2021" },

@@ -5,6 +5,8 @@ import { RenderPlanPanel } from "../components/RenderPlanPanel";
 import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { OverlayStage } from "../components/OverlayStage";
 import { useUiMode } from "../components/uiMode";
+import { resolveProjectId } from "../components/projectSelection";
+import { useStudioSession } from "../components/studioSession";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
 import {
   RenderControlCenter,
@@ -41,6 +43,7 @@ type CatalogEntry = {
   supports_inpaint?: boolean;
   supports_outpaint?: boolean;
   supports_controlnet?: boolean;
+  supports_internal_video?: boolean;
   render?: {
     engine?: string;
     family?: string;
@@ -159,10 +162,10 @@ function renderAspectRatioForSize(width: number, height: number): RenderOrchestr
 export default function Render({ onNavigate, backendUrl: backendUrlProp }: RenderProps) {
   const savedRenderDefaults = readRenderDefaults();
   const { mode: uiMode } = useUiMode();
+  const { projectId, setProjectId } = useStudioSession();
   const backendUrl = backendUrlProp || getBackendUrl();
 
   const [projects, setProjects] = useState<any[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
   const [project, setProject] = useState<any>(null);
   const [visualDnaHints, setVisualDnaHints] = useState<any>(null);
 
@@ -360,6 +363,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [modelCatalog, setModelCatalog] = useState<CatalogEntry[]>([]);
   const [installedModels, setInstalledModels] = useState<Record<string, boolean>>({});
   const [projectAssets, setProjectAssets] = useState<{ refs: { path: string }[] }>({ refs: [] });
+  const [projectOutputImages, setProjectOutputImages] = useState<{ path: string }[]>([]);
   const [validate, setValidate] = useState<any>(null);
   const [internalPreflight, setInternalPreflight] = useState<any>(null);
   const [internalPolling, setInternalPolling] = useState<boolean>(true);
@@ -483,7 +487,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   );
   const internalModelOptions = useMemo(
     () => [
-      ...modelCatalog.filter((m) => m.kind === "diffusers"),
+      ...modelCatalog.filter((m) => m.kind === "diffusers" && m.supports_internal_video !== false),
       ...supportedTensorRtInternalModels,
     ],
     [modelCatalog, supportedTensorRtInternalModels]
@@ -606,6 +610,16 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   ]);
 
   useEffect(() => {
+    if (selectedStillFamily !== "flux") return;
+    setStillWorkflow("txt2img");
+    setRenderSteps((current) => Math.max(1, Math.min(4, current || 4)));
+    setRenderCfg(0);
+    setHiresFix((current) => ({ ...current, enabled: false }));
+    setRefiner((current) => ({ ...current, enabled: false }));
+    setSelectedLoras([]);
+  }, [selectedStillFamily]);
+
+  useEffect(() => {
     if (internalModelId === "auto") return;
     if (!internalModelOptions.some((m) => m.id === internalModelId)) {
       setInternalModelId("auto");
@@ -641,6 +655,15 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const azureFoundryReady = !!renderProviders?.azure_foundry?.active;
   const internalDirectmlDetected = !!hardware?.hardware?.supports_directml;
   const internalDirectmlAvailable = !!renderProviders?.directml?.enabled && internalDirectmlDetected;
+  const sourceImageOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return [...projectOutputImages, ...projectAssets.refs].filter((entry) => {
+      const path = String(entry?.path || "").trim();
+      if (!path || seen.has(path)) return false;
+      seen.add(path);
+      return true;
+    });
+  }, [projectAssets.refs, projectOutputImages]);
 
   const buildInternalPayload = () => {
     const useTensorRt = internalRenderMode === "tensorrt";
@@ -697,6 +720,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       device_preference: useTensorRt ? "cuda" : internalDevicePreference,
       allow_hosted_fallback: internalRenderMode === "diffusion" ? false : internalAllowHostedFallback,
       resume_existing_frames: useTensorRt ? false : internalResumeExisting,
+      source_asset: sourceAsset || undefined,
+      source_strength: sourceAsset ? denoiseStrength : undefined,
     };
   };
 
@@ -707,21 +732,24 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     return Number.isFinite(value) ? Math.trunc(value) : undefined;
   }, [renderSeed]);
 
-  const buildDiffusionPayload = () => ({
-    width: renderWidth,
-    height: renderHeight,
-    steps: renderSteps,
-    cfg: renderCfg,
-    sampler: renderSampler,
-    negative_prompt: renderNegativePrompt,
-    seed: parsedRenderSeed,
-    loras: selectedLoras.map((item) => ({ name: item.name, weight: item.weight })),
-  });
+  const buildDiffusionPayload = () => {
+    const isFluxSchnell = selectedStillFamily === "flux";
+    return {
+      width: renderWidth,
+      height: renderHeight,
+      steps: isFluxSchnell ? Math.max(1, Math.min(4, renderSteps || 4)) : renderSteps,
+      cfg: isFluxSchnell ? 0 : renderCfg,
+      sampler: renderSampler,
+      negative_prompt: isFluxSchnell ? "" : renderNegativePrompt,
+      seed: parsedRenderSeed,
+      loras: isFluxSchnell ? [] : selectedLoras.map((item) => ({ name: item.name, weight: item.weight })),
+    };
+  };
 
   const buildStillWorkflowPayload = () => {
     const upscaler = hiresFix.upscaler || "latent_bislerp";
     const payload: Record<string, any> = {
-      workflow_family: stillWorkflow,
+      workflow_family: selectedStillFamily === "flux" ? "txt2img" : stillWorkflow,
       ...buildDiffusionPayload(),
     };
     if (stillWorkflow === "img2img" || stillWorkflow === "inpaint" || stillWorkflow === "outpaint") {
@@ -752,7 +780,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
           end_percent: unit.end_percent,
         }));
     }
-    if (hiresFix.enabled) {
+    if (selectedStillFamily !== "flux" && hiresFix.enabled) {
       payload.hires_fix = {
         enabled: true,
         scale: Math.max(1, Number(hiresFix.scale || 1.5)),
@@ -762,7 +790,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       };
       payload.upscaler = upscaler;
     }
-    if (refiner.enabled) {
+    if (selectedStillFamily !== "flux" && refiner.enabled) {
       payload.refiner = {
         switch_at: Math.max(0, Math.min(1, Number(refiner.switch_at || 0.8))),
         ...(refiner.model ? { model: refiner.model } : {}),
@@ -796,19 +824,24 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   const refreshReferenceAssets = async (id: string) => {
     if (!id) return;
-    try {
-      const d = await apiGet(`/v1/projects/${id}/assets`);
-      setProjectAssets({ refs: Array.isArray(d?.assets?.refs) ? d.assets.refs : [] });
-    } catch {
-      setProjectAssets({ refs: [] });
-    }
+    const [assetData, outputData] = await Promise.all([
+      apiGet(`/v1/projects/${id}/assets`).catch(() => null),
+      apiGet(`/v1/projects/${id}/outputs`).catch(() => null),
+    ]);
+    setProjectAssets({ refs: Array.isArray(assetData?.assets?.refs) ? assetData.assets.refs : [] });
+    setProjectOutputImages(
+      (Array.isArray(outputData?.images) ? outputData.images : [])
+        .map((entry: any) => ({ path: String(entry?.path || entry || "").trim() }))
+        .filter((entry: { path: string }) => Boolean(entry.path)),
+    );
   };
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
     const ps = d.projects || [];
     setProjects(ps);
-    if (!projectId && ps.length) setProjectId(ps[0].id);
+    const nextProjectId = resolveProjectId(ps, projectId);
+    if (nextProjectId !== projectId) setProjectId(nextProjectId);
   };
 
   const refreshProject = async (id: string) => {
@@ -2349,15 +2382,15 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
             {autoNeedsSource ? (
               <div style={{ marginTop: 8 }}>
                 <div className="small">Source image (required)</div>
-                {projectAssets.refs.length ? (
+                {sourceImageOptions.length ? (
                   <select value={autoSourceAsset} onChange={(e) => setAutoSourceAsset(e.target.value)}>
-                    <option value="">— select an uploaded reference —</option>
-                    {projectAssets.refs.map((a) => (
-                      <option key={a.path} value={a.path}>{a.path.replace(/^assets\/refs\//, "")}</option>
+                    <option value="">— select a generated output or reference —</option>
+                    {sourceImageOptions.map((a) => (
+                      <option key={a.path} value={a.path}>{a.path.replace(/^assets[\\/]refs[\\/]/, "")}</option>
                     ))}
                   </select>
                 ) : (
-                  <div className="small" style={{ opacity: 0.8 }}>Upload an image under References (Advanced) first.</div>
+                  <div className="small" style={{ opacity: 0.8 }}>Generate an image or upload one under References (Advanced) first.</div>
                 )}
               </div>
             ) : null}
@@ -2481,7 +2514,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                 compositing, workflows, enhancement, diagnostics, and manual queue actions.
               </div>
               <LayeredAnimationControls
-                sourceOptions={projectAssets.refs}
+                sourceOptions={sourceImageOptions}
                 maskOptions={(Array.isArray(maskAssets) ? maskAssets : []).map(String)}
                 modelOptions={layeredRefinementModels}
                 defaultSource={autoSourceAsset}
@@ -2666,7 +2699,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                         Hardware: <b>{hardware?.hardware?.device_name || internalPreflight?.hardware?.device_name || internalPreflight.device}</b> • backend family <b>{hardware?.hardware?.backend_family || internalPreflight?.hardware?.backend_family || "cpu_only"}</b> • RAM <b>{Number(hardware?.hardware?.ram_gb || internalPreflight?.hardware?.ram_gb || 0).toFixed(1)} GB</b>
                       </div>
                       <div className="small" style={{ marginTop: 4 }}>
-                        Internal models: SD 1.5 <b>{internalPreflight?.installed_internal_models?.hf_sd15_internal ? "installed" : "missing"}</b> • SDXL <b>{internalPreflight?.installed_internal_models?.hf_sdxl_internal ? "installed" : "missing"}</b> • SD3.5 <b>{internalPreflight?.installed_internal_models?.hf_sd35_medium_internal ? "installed" : "missing"}</b>
+                        Internal video bases: SD 1.5 <b>{internalPreflight?.installed_internal_models?.hf_sd15_internal ? "installed" : "missing"}</b> • SDXL <b>{internalPreflight?.installed_internal_models?.hf_sdxl_internal ? "installed" : "missing"}</b> • SD3.5 <b>{internalPreflight?.installed_internal_models?.hf_sd35_medium_internal ? "installed" : "missing"}</b> • FLUX keyframes <b>{internalPreflight?.installed_internal_models?.hf_flux1_schnell_internal ? "installed" : "missing"}</b>
                       </div>
                       <div className="small" style={{ marginTop: 4 }}>
                         Internal video adapters: SVD <b>{internalPreflight?.installed_internal_video_models?.hf_svd_xt_1_1_internal ? "installed" : "missing"}</b> • AnimateDiff <b>{internalPreflight?.installed_internal_video_models?.hf_animatediff_motion_adapter_v15_2_internal ? "installed" : "missing"}</b>
@@ -2749,7 +2782,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                           {" "}• final <b>{internalPreflight.cache.final_exists ? "yes" : "no"}</b>
                         </div>
                       ) : null}
-                      {!internalHostedVisible && !internalPreflight?.installed_internal_models?.hf_sd15_internal && !internalPreflight?.installed_internal_models?.hf_sdxl_internal && !internalPreflight?.installed_internal_models?.hf_sd35_medium_internal ? (
+                      {!internalHostedVisible && !internalPreflight?.installed_internal_models?.hf_sd15_internal && !internalPreflight?.installed_internal_models?.hf_sdxl_internal && !internalPreflight?.installed_internal_models?.hf_sd35_medium_internal && !internalPreflight?.installed_internal_models?.hf_flux1_schnell_internal ? (
                         <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                           <button className="secondary" onClick={() => onNavigate?.("models")}>Open Models to install internal renderer</button>
                         </div>
@@ -2952,6 +2985,33 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                      <div className="card" style={{ marginTop: 10 }}>
                        <div style={{ fontWeight: 800, marginBottom: 8 }}>Internal video-model adapter</div>
                        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                         <div style={{ minWidth: 320, flex: 1 }}>
+                           <div className="small">Source image anchor (optional)</div>
+                           <select
+                             aria-label="Internal video source image"
+                             value={sourceAsset}
+                             onChange={(e) => setSourceAsset(e.target.value)}
+                           >
+                             <option value="">Generate anchors from scene prompts</option>
+                             {sourceImageOptions.map((asset) => (
+                               <option key={asset.path} value={asset.path}>{asset.path}</option>
+                             ))}
+                           </select>
+                         </div>
+                         {sourceAsset ? (
+                           <div style={{ minWidth: 170 }}>
+                             <div className="small">Source strength</div>
+                             <input
+                               aria-label="Internal video source strength"
+                               type="number"
+                               min={0.05}
+                               max={0.95}
+                               step={0.05}
+                               value={denoiseStrength}
+                               onChange={(e) => setDenoiseStrength(Number(e.target.value))}
+                             />
+                           </div>
+                         ) : null}
                          <div style={{ minWidth: 160 }}>
                            <div className="small">Adapter engine</div>
                             <select value={internalVideoModelEngine} onChange={(e) => selectInternalVideoModelEngine(e.target.value)}>
@@ -3469,6 +3529,11 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                 Active still engine: <b>{modelEngineLabel(selectedStillEngine, selectedStillModel?.kind)}</b> • family <b>{modelFamilyLabel(selectedStillFamily)}</b>
                 {installedModels[selectedStillModel?.id || ""] === false ? <> • <span style={{ color: "var(--warning, #b58900)" }}>not installed locally</span></> : null}
               </div>
+              {selectedStillFamily === "flux" ? (
+                <div className="small" role="status" style={{ marginTop: 8, color: "var(--warning, #b58900)" }}>
+                  FLUX.1 Schnell is a native still/keyframe renderer. Studio limits this phase-one path to text-to-image, 1–4 steps, and guidance 0. GPUs below 16 GB VRAM use sequential CPU offload; a 6 GB GPU needs substantial system memory/pagefile and will render slowly. Animate the saved image with SVD, Wan, or layered motion.
+                </div>
+              ) : null}
               <div className="card" style={{ marginTop: 10 }}>
                 <div style={{ fontWeight: 900, marginBottom: 8 }}>Generation settings</div>
                 <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -3482,11 +3547,29 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                   </div>
                   <div style={{ minWidth: 120 }}>
                     <div className="small">Steps</div>
-                    <input type="number" min={1} max={80} step={1} value={renderSteps} onChange={(e) => setRenderSteps(Number(e.target.value))} />
+                    <input
+                      type="number"
+                      min={1}
+                      max={selectedStillFamily === "flux" ? 4 : 80}
+                      step={1}
+                      value={renderSteps}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        setRenderSteps(selectedStillFamily === "flux" ? Math.max(1, Math.min(4, next || 1)) : next);
+                      }}
+                    />
                   </div>
                   <div style={{ minWidth: 120 }}>
                     <div className="small">CFG</div>
-                    <input type="number" min={1} max={20} step={0.1} value={renderCfg} onChange={(e) => setRenderCfg(Number(e.target.value))} />
+                    <input
+                      type="number"
+                      min={selectedStillFamily === "flux" ? 0 : 1}
+                      max={selectedStillFamily === "flux" ? 0 : 20}
+                      step={0.1}
+                      value={selectedStillFamily === "flux" ? 0 : renderCfg}
+                      disabled={selectedStillFamily === "flux"}
+                      onChange={(e) => setRenderCfg(Number(e.target.value))}
+                    />
                   </div>
                   <div style={{ minWidth: 180 }}>
                     <div className="small">Sampler</div>
@@ -3638,7 +3721,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                           <div className="small">Source image asset</div>
                           <select value={sourceAsset} onChange={(e) => setSourceAsset(e.target.value)}>
                             <option value="">Select project reference</option>
-                            {projectAssets.refs.map((asset) => (
+                            {sourceImageOptions.map((asset) => (
                               <option key={asset.path} value={asset.path}>{asset.path}</option>
                             ))}
                           </select>
@@ -3825,7 +3908,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                                   <div className="small">Reference image</div>
                                   <select value={unit.reference_asset} onChange={(e) => updateControlnetUnit(unit.key, { reference_asset: e.target.value })}>
                                     <option value="">Select project reference</option>
-                                    {projectAssets.refs.map((asset) => (
+                                    {sourceImageOptions.map((asset) => (
                                       <option key={asset.path} value={asset.path}>{asset.path}</option>
                                     ))}
                                   </select>

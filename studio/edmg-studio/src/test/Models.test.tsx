@@ -177,6 +177,82 @@ describe("Models page polling", () => {
     expect(screen.getByRole("progressbar", { name: "Install SDXL progress" })).toBeTruthy();
   });
 
+  it("requests cooperative cancellation for an active model install", async () => {
+    let cancellationRequested = false;
+    const runningTask = {
+      id: "flux-install-1",
+      name: "Install: FLUX.1 Schnell (Internal / Diffusers)",
+      status: "running",
+      model_id: "hf_flux1_schnell_internal",
+      stage: "downloading",
+      progress: 0.1,
+      cancel_requested: false,
+    };
+    const fetchMock = installFetchMock({
+      "/v1/models/catalog": catalog,
+      "/v1/models/tasks": () => ({
+        tasks: [{
+          ...runningTask,
+          stage: cancellationRequested ? "cancelling" : "downloading",
+          cancel_requested: cancellationRequested,
+        }],
+      }),
+      "/v1/settings/render_providers": {},
+      "POST /v1/models/tasks/cancel": () => {
+        cancellationRequested = true;
+        return {
+          task: { ...runningTask, stage: "cancelling", cancel_requested: true },
+        };
+      },
+    });
+
+    renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: `Cancel ${runningTask.name}` }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const cancelPost = fetchMock.mock.calls.find(([url, init]) => (
+      new URL(String(url)).pathname === "/v1/models/tasks/cancel"
+      && String(init?.method).toUpperCase() === "POST"
+      && String(init?.body || "").includes('"task_id":"flux-install-1"')
+    ));
+    expect(cancelPost).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancellation requested…" })).toBeTruthy();
+  });
+
+  it("shows actionable model-task failure details", async () => {
+    installFetchMock({
+      "/v1/models/catalog": catalog,
+      "/v1/models/tasks": {
+        tasks: [{
+          id: "flux-failed-1",
+          name: "Install: FLUX.1 Schnell (Internal / Diffusers)",
+          status: "failed",
+          model_id: "hf_flux1_schnell_internal",
+          stage: "failed",
+          error: "Hugging Face denied access",
+          error_hint: "Accept the gated model conditions in your Hugging Face account, then retry.",
+          error_code: "HF_AUTH_REQUIRED",
+        }],
+      },
+      "/v1/settings/render_providers": {},
+    });
+
+    renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain("Hugging Face denied access");
+    expect(screen.getByRole("alert").textContent).toContain("Accept the gated model conditions");
+    expect(screen.getByRole("alert").textContent).toContain("HF_AUTH_REQUIRED");
+  });
+
   it("starts the explicit source-preserving TensorRT verify-and-copy task", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     let importStarted = false;

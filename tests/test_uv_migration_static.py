@@ -128,6 +128,7 @@ def test_repository_uses_one_locked_python_project() -> None:
         "azure",
         "internal-video",
     } <= set(extras)
+    assert "sentencepiece>=0.2,<1" in extras["internal-video"]
     assert len(project["tool"]["uv"]["conflicts"]) == 3
 
     groups = project["dependency-groups"]

@@ -76,6 +76,20 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
           render: { render_modes: ["stills"], engine: "internal", family: "sd35" },
         },
         {
+          id: "hf_flux1_schnell_internal",
+          name: "FLUX.1 Schnell (Internal / Diffusers)",
+          kind: "diffusers",
+          engine: "internal",
+          family: "flux",
+          supports_txt2img: true,
+          supports_img2img: false,
+          supports_inpaint: false,
+          supports_outpaint: false,
+          supports_controlnet: false,
+          supports_internal_video: false,
+          render: { render_modes: ["stills", "internal_video_keyframes"], engine: "internal", family: "flux" },
+        },
+        {
           id: "local_sd15_tensorrt_bundle",
           name: "Local SD1.5 TensorRT Bundle",
           kind: "runtime_bundle",
@@ -143,6 +157,7 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
         local_lora_neon: true,
         hf_sdxl_internal: true,
         hf_sd35_medium_internal: true,
+        hf_flux1_schnell_internal: true,
         local_sd15_tensorrt_bundle: options.tensorRtInstalled ?? true,
         hf_svd_xt_1_1_tensorrt_bundle: true,
         hf_svd_xt_1_1_internal: true,
@@ -182,6 +197,10 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
       assets: {
         refs: [{ path: "assets/refs/source.png" }, { path: "assets/refs/depth.png" }],
       },
+    },
+    "/v1/projects/p1/outputs": {
+      images: [{ path: "outputs/images/flux-schnell.png" }],
+      videos: [],
     },
     "/v1/projects/p1/pipeline/validate*": { ok: true, valid: true },
     "POST /v1/projects/p1/render/conductor/plan": {
@@ -244,6 +263,10 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
       ok: true,
       job: { id: "internal-trt-1", type: "internal_video", status: "queued" },
       preflight: { mode: "tensorrt" },
+    },
+    "POST /v1/projects/p1/render/animate_layers": {
+      ok: true,
+      job: { id: "layered-1", type: "layered_animation", status: "queued" },
     },
     "POST /v1/projects/p1/pipeline/run*": {
       ok: true,
@@ -809,5 +832,96 @@ describe("Render page", () => {
     expect(await screen.findByText(/internal diffusers adapter/i)).toBeTruthy();
     expect(screen.queryByRole("option", { name: "ControlNet" })).toBeNull();
     expect(await screen.findByText(/ComfyUI workflow export is disabled/)).toBeTruthy();
+  }, 10000);
+
+  it("offers generated output images to layered motion and native SVD source controls", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    const layeredSource = await screen.findByLabelText("Source image");
+    expect(within(layeredSource).getByRole("option", { name: "outputs/images/flux-schnell.png" })).toBeTruthy();
+    fireEvent.change(layeredSource, { target: { value: "outputs/images/flux-schnell.png" } });
+    fireEvent.click(screen.getByRole("button", { name: /Queue still-image animation/i }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url, init]) => (
+        String(url).includes("/render/animate_layers") && String(init?.method || "GET").toUpperCase() === "POST"
+      ));
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body || "{}"))).toMatchObject({
+        source_asset: "outputs/images/flux-schnell.png",
+      });
+    });
+
+    const temporalModeLabel = screen.getByText("Temporal mode");
+    const temporalModeSelect = within(temporalModeLabel.parentElement!).getByRole("combobox");
+    fireEvent.change(temporalModeSelect, { target: { value: "video_model" } });
+    const internalSource = await screen.findByLabelText("Internal video source image");
+    fireEvent.change(internalSource, { target: { value: "outputs/images/flux-schnell.png" } });
+    fireEvent.click(screen.getByRole("button", { name: "Internal / Hosted" }));
+
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter(([url, init]) => (
+        String(url).includes("/render/internal/video") && String(init?.method || "GET").toUpperCase() === "POST"
+      ));
+      expect(calls.length).toBeGreaterThan(0);
+      expect(JSON.parse(String(calls.at(-1)?.[1]?.body || "{}"))).toMatchObject({
+        source_asset: "outputs/images/flux-schnell.png",
+        temporal_mode: "video_model",
+      });
+    });
+  }, 10000);
+
+  it("configures FLUX as a text-to-image keyframe model and excludes it from internal video bases", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    const stillModelSelect = await screen.findByDisplayValue(/Stable Diffusion XL Base 1\.0/);
+    fireEvent.change(stillModelSelect, { target: { value: "hf_flux1_schnell_internal" } });
+
+    expect(await screen.findByText(/FLUX\.1 Schnell is a native still\/keyframe renderer/i)).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Text-to-image" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Image-to-image" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "ControlNet" })).toBeNull();
+
+    const stepsLabel = screen.getAllByText("Steps").find((element) => element.tagName === "DIV");
+    const stepsContainer = stepsLabel?.parentElement;
+    const guidanceLabel = screen.getAllByText("CFG").find((element) => element.tagName === "DIV");
+    const guidanceContainer = guidanceLabel?.parentElement;
+    expect(stepsContainer).toBeTruthy();
+    expect(guidanceContainer).toBeTruthy();
+    await waitFor(() => expect((within(stepsContainer!).getByRole("spinbutton") as HTMLInputElement).value).toBe("4"));
+    const stepsInput = within(stepsContainer!).getByRole("spinbutton") as HTMLInputElement;
+    const guidanceInput = within(guidanceContainer!).getByRole("spinbutton") as HTMLInputElement;
+    expect(stepsInput.max).toBe("4");
+    expect(guidanceInput.value).toBe("0");
+    expect(guidanceInput.disabled).toBe(true);
+    fireEvent.change(stepsInput, { target: { value: "12" } });
+    expect(stepsInput.value).toBe("4");
+
+    const internalModelContainer = screen.getByText("Internal model").parentElement;
+    expect(internalModelContainer).toBeTruthy();
+    expect(within(internalModelContainer!).queryByRole("option", { name: /FLUX/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Enqueue still scenes" }));
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter(([url, init]) => (
+        String(url).includes("/render/stills/scenes") && String(init?.method || "GET").toUpperCase() === "POST"
+      ));
+      expect(calls.length).toBeGreaterThan(0);
+      const payload = JSON.parse(String(calls.at(-1)?.[1]?.body || "{}"));
+      expect(payload).toMatchObject({
+        model_id: "hf_flux1_schnell_internal",
+        workflow_family: "txt2img",
+        steps: 4,
+        cfg: 0,
+        negative_prompt: "",
+        loras: [],
+      });
+      expect(payload).not.toHaveProperty("hires_fix");
+      expect(payload).not.toHaveProperty("refiner");
+    });
   }, 10000);
 });

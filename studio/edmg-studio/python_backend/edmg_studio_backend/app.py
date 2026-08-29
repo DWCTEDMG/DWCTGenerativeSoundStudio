@@ -1101,6 +1101,7 @@ def _installed_internal_models_status() -> dict[str, bool]:
         "hf_sd15_internal": bool(_resolve_installed_model_path("hf_sd15_internal", materialize_remote=False)),
         "hf_sdxl_internal": bool(_resolve_installed_model_path("hf_sdxl_internal", materialize_remote=False)),
         "hf_sd35_medium_internal": bool(_resolve_installed_model_path("hf_sd35_medium_internal", materialize_remote=False)),
+        "hf_flux1_schnell_internal": bool(_resolve_installed_model_path("hf_flux1_schnell_internal", materialize_remote=False)),
     }
 
 
@@ -7501,13 +7502,20 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
         project_id=project_id,
         job_id=job_id,
         output_path=out_path,
-        payload={**payload, "width": final_width, "height": final_height, "refiner": resolved_refiner},
+        payload={
+            **payload,
+            "width": final_width,
+            "height": final_height,
+            "steps": int(result.get("effective_steps") or settings_obj.steps),
+            "cfg": float(result.get("effective_cfg") if result.get("effective_cfg") is not None else settings_obj.cfg),
+            "refiner": resolved_refiner,
+        },
         workflow_family=workflow_family,
         checkpoint=str(model_path.name),
         loras=list(settings_obj.loras),
         controlnet_units=controlnet_units,
         vae_name=settings_obj.vae,
-        backend="internal_diffusers",
+        backend=str(result.get("backend") or "internal_diffusers"),
         engine="internal",
         model_family=str(payload.get("family") or ""),
         resolved_model_asset=str(model_path),
@@ -9760,22 +9768,30 @@ def render_motion_sequencer_apply(project_id: str, req: ParseqMotionApplyRequest
 
 def _internal_model_family(model_path: Path) -> str:
     path_hint = str(model_path.name or "").lower()
+    if "flux" in path_hint:
+        return "flux"
     if "sd35" in path_hint or "sd3" in path_hint or "stable-diffusion-3" in path_hint:
         return "sd3"
     if "sdxl" in path_hint:
         return "sdxl"
+    if "sd15" in path_hint or "stable-diffusion-v1" in path_hint:
+        return "sd15"
     mi = model_path / "model_index.json"
     if mi.exists():
         try:
             data = json.loads(mi.read_text(encoding="utf-8"))
             cls = str(data.get("_class_name") or "")
+            if "Flux" in cls:
+                return "flux"
             if "StableDiffusion3" in cls:
                 return "sd3"
             if "XL" in cls or "XLPipeline" in cls:
                 return "sdxl"
+            if "StableDiffusion" in cls:
+                return "sd15"
         except Exception:
             pass
-    return "sd15"
+    return "unknown"
 
 
 SD35_INTERNAL_MIN_CUDA_VRAM_GB = 14.0
@@ -9783,10 +9799,14 @@ SD35_INTERNAL_MIN_CUDA_VRAM_GB = 14.0
 
 def _internal_model_family_for_request(model_id: str, model_path: Path) -> str:
     model_id_l = str(model_id or "").lower()
+    if "flux" in model_id_l:
+        return "flux"
     if "sd35" in model_id_l or "stable-diffusion-3" in model_id_l:
         return "sd3"
     if "sdxl" in model_id_l:
         return "sdxl"
+    if "sd15" in model_id_l or "stable-diffusion-v1" in model_id_l:
+        return "sd15"
     return _internal_model_family(model_path)
 
 
@@ -10137,6 +10157,23 @@ def _resolve_internal_render_request(
         )
 
     model_family = _internal_model_family_for_request(model_id, model_path)
+    if model_family == "flux":
+        raise UserFacingError(
+            "FLUX is a still and storyboard-keyframe model, not an internal video base model.",
+            hint=(
+                "Use FLUX.1 Schnell from Studio still rendering, then animate the saved keyframe with "
+                "SVD, Wan, or the layered animation tools. Select SDXL or SD 1.5 for frame-to-frame internal video."
+            ),
+            code="FLUX_VIDEO_BASE_UNSUPPORTED",
+            status_code=400,
+        )
+    if model_family == "unknown":
+        raise UserFacingError(
+            "Internal diffusion model family is unsupported",
+            hint="Reinstall a supported SD 1.5, SDXL, or SD3.5 internal video model.",
+            code="INTERNAL_MODEL_FAMILY_UNSUPPORTED",
+            status_code=400,
+        )
     effective_device_preference = requested_device
     if requested_device == "directml" and model_family not in {"sd15", "sdxl"}:
         raise UserFacingError(

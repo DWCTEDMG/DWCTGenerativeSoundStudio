@@ -179,6 +179,90 @@ def test_diffusers_runtime_loads_only_selected_sd15_pipeline_family(monkeypatch)
     ]
 
 
+def test_diffusers_runtime_loads_only_flux_pipeline(monkeypatch) -> None:
+    requested: list[str] = []
+    torch = SimpleNamespace(float16="float16", float32="float32", bfloat16="bfloat16")
+
+    class FakeDiffusers:
+        def __getattr__(self, name: str):
+            requested.append(name)
+            if name != "FluxPipeline":
+                raise AssertionError(f"unrelated pipeline requested: {name}")
+            return type(name, (), {})
+
+    def _import_module(name: str):
+        if name == "torch":
+            return torch
+        if name == "diffusers":
+            return FakeDiffusers()
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(iv.importlib, "import_module", _import_module)
+
+    loaded_torch, txt2img, img2img, inpaint = iv._load_diffusers_runtime("flux")
+
+    assert loaded_torch is torch
+    assert txt2img.__name__ == "FluxPipeline"
+    assert img2img is None
+    assert inpaint is None
+    assert requested == ["FluxPipeline"]
+
+
+def test_unknown_diffusers_family_never_falls_back_to_sd15() -> None:
+    with pytest.raises(iv.UserFacingError) as exc:
+        iv._load_diffusers_runtime("mystery")
+
+    assert exc.value.code == "INTERNAL_MODEL_FAMILY_UNSUPPORTED"
+
+
+def test_flux_family_detection_uses_model_index(tmp_path: Path) -> None:
+    (tmp_path / "model_index.json").write_text(
+        '{"_class_name":"FluxPipeline"}',
+        encoding="utf-8",
+    )
+
+    assert iv._model_family_from_dir(tmp_path) == "flux"
+
+
+def test_sd15_family_detection_remains_explicit(tmp_path: Path) -> None:
+    (tmp_path / "model_index.json").write_text(
+        '{"_class_name":"StableDiffusionPipeline"}',
+        encoding="utf-8",
+    )
+
+    assert iv._model_family_from_dir(tmp_path) == "sd15"
+
+
+def test_flux_txt2img_uses_schnell_contract_without_negative_prompt() -> None:
+    captured: dict[str, object] = {}
+
+    class FakePipeline:
+        def __call__(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(images=["image"])
+
+    pipes = iv._Pipes(
+        txt2img=FakePipeline(),
+        img2img=None,
+        inpaint=None,
+        device="directml",
+        family="flux",
+        backend="diffusers_sequential_offload",
+    )
+
+    image = iv._generate_txt2img(pipes, "cinematic forest", "do not pass", 768, 512, 28, 7.0, 123)
+
+    assert image == "image"
+    assert captured == {
+        "prompt": "cinematic forest",
+        "width": 768,
+        "height": 512,
+        "num_inference_steps": 4,
+        "guidance_scale": 0.0,
+        "max_sequence_length": 256,
+    }
+
+
 def test_diffusers_runtime_reports_exact_selected_pipeline_import_failure(monkeypatch) -> None:
     torch = SimpleNamespace(float16="float16", float32="float32")
 
@@ -269,3 +353,53 @@ def test_missing_diffusers_components_reports_vae(tmp_path, monkeypatch) -> None
     missing = manager.missing_diffusers_components("hf_sd15_internal")
 
     assert missing == ["vae"]
+
+
+def test_flux_snapshot_requires_all_weighted_runtime_components(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        __import__("edmg_studio_backend.services.model_manager", fromlist=["requests"]).requests,
+        "get",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    manager = ModelManager(
+        tmp_path / "data",
+        tmp_path / "models",
+        tmp_path / "external",
+        "http://127.0.0.1:8188",
+        "http://127.0.0.1:11434",
+    )
+    model_id = "hf_flux1_schnell_internal"
+    entry = {
+        "id": model_id,
+        "kind": "diffusers",
+        "family": "flux",
+        "target": {"engine": "internal", "folder": "diffusers"},
+    }
+    monkeypatch.setattr(manager, "_find_entry", lambda requested: entry if requested == model_id else None)
+    model_dir = manager._internal_models_dir("diffusers") / model_id
+    model_dir.mkdir(parents=True)
+    (model_dir / "model_index.json").write_text(
+        '{"_class_name":"FluxPipeline",'
+        '"scheduler":["diffusers","FlowMatchEulerDiscreteScheduler"],'
+        '"tokenizer":["transformers","CLIPTokenizer"],'
+        '"tokenizer_2":["transformers","T5TokenizerFast"],'
+        '"text_encoder":["transformers","CLIPTextModel"],'
+        '"text_encoder_2":["transformers","T5EncoderModel"],'
+        '"transformer":["diffusers","FluxTransformer2DModel"],'
+        '"vae":["diffusers","AutoencoderKL"]}',
+        encoding="utf-8",
+    )
+    for component, filename in (
+        ("text_encoder", "model.safetensors"),
+        ("text_encoder_2", "model.safetensors"),
+        ("transformer", "diffusion_pytorch_model.safetensors"),
+    ):
+        write_minimal_safetensors(model_dir / component / filename)
+
+    assert manager.missing_diffusers_components(model_id) == ["vae"]
+    assert manager._diffusers_snapshot_complete(model_dir) is False
+
+    write_minimal_safetensors(model_dir / "vae" / "diffusion_pytorch_model.safetensors")
+
+    assert manager.missing_diffusers_components(model_id) == []
+    assert manager._diffusers_snapshot_complete(model_dir) is True

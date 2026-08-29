@@ -308,6 +308,14 @@ def _entry_support_flags(entry: dict[str, Any]) -> dict[str, bool]:
     engine = _entry_engine(entry)
     family = _entry_family(entry)
     if kind in {"checkpoint", "diffusers"}:
+        if engine == "internal" and family == "flux":
+            return {
+                "supports_txt2img": True,
+                "supports_img2img": False,
+                "supports_inpaint": False,
+                "supports_outpaint": False,
+                "supports_controlnet": False,
+            }
         return {
             "supports_txt2img": True,
             "supports_img2img": True,
@@ -341,7 +349,11 @@ def _normalize_catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
     render_modes = [str(mode).strip() for mode in (render.get("render_modes") or []) if str(mode).strip()]
     if kind in {"checkpoint", "diffusers"} and "stills" not in render_modes:
         render_modes.append("stills")
-    if kind == "diffusers" and "internal_video" not in render_modes:
+    if (
+        kind == "diffusers"
+        and item.get("supports_internal_video", True) is not False
+        and "internal_video" not in render_modes
+    ):
         render_modes.append("internal_video")
     render["engine"] = engine
     render["family"] = family
@@ -541,6 +553,8 @@ class ModelTask:
     progress: float | None = None
     last_log: str = ""
     error: str | None = None
+    error_hint: str | None = None
+    error_code: str | None = None
     started_at: float | None = None
     ended_at: float | None = None
     model_id: str | None = None
@@ -559,6 +573,8 @@ class ModelTask:
             "progress": self.progress,
             "last_log": self.last_log,
             "error": self.error,
+            "error_hint": self.error_hint,
+            "error_code": self.error_code,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "model_id": self.model_id,
@@ -604,6 +620,8 @@ class ModelTaskManager:
                 task.stage = "interrupted"
                 task.ended_at = time.time()
                 task.error = "Studio stopped before this model operation completed."
+                task.error_hint = "Retry the model operation to resume any partial download."
+                task.error_code = "MODEL_TASK_INTERRUPTED"
                 suffix = "Interrupted by a Studio restart. Retry to resume the partial download."
                 task.last_log = f"{task.last_log.rstrip()}\n{suffix}".strip()
             self._tasks[task.id] = task
@@ -682,6 +700,8 @@ class ModelTaskManager:
                     task.status = "cancelled"
                     task.stage = "cancelled"
                     task.error = None
+                    task.error_hint = None
+                    task.error_code = None
                     suffix = "Cancelled safely. No incomplete model bundle was published."
                     task.last_log = f"{task.last_log.rstrip()}\n{suffix}".strip()
             except Exception as e:
@@ -689,6 +709,12 @@ class ModelTaskManager:
                     task.status = "failed"
                     task.stage = "failed"
                     task.error = str(e)
+                    if isinstance(e, UserFacingError):
+                        task.error_hint = e.hint
+                        task.error_code = e.code
+                    else:
+                        task.error_hint = None
+                        task.error_code = None
                     task.last_log = (task.last_log + "\n" if task.last_log else "") + f"ERROR: {e}"
             finally:
                 with self._lock:
@@ -1280,6 +1306,18 @@ class ModelManager:
             raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
         name = f"Restore local: {entry.get('name')}"
         return self.tasks.start(name, self._restore_cloud_model, entry)
+
+    def cancel_task(self, task_id: str) -> ModelTask:
+        normalized_task_id = str(task_id or "").strip()
+        task = next((item for item in self.tasks.list() if item.id == normalized_task_id), None)
+        if task is None:
+            raise UserFacingError(
+                "The model task was not found",
+                hint="Refresh Models and retry with an active model task.",
+                code="MODEL_TASK_NOT_FOUND",
+                status_code=404,
+            )
+        return self.tasks.request_cancel(task.id) or task
 
     # ---- legacy TensorRT bundle migration ----
     def legacy_tensorrt_status(self, *, include_hashes: bool = False) -> dict[str, Any]:
@@ -2154,6 +2192,12 @@ class ModelManager:
         return resolved
 
     # ---- installers ----
+    def _raise_if_task_cancelled(self, task: ModelTask, *, boundary: str) -> None:
+        if self.tasks.is_cancel_requested(task):
+            raise ModelTaskCancelled(
+                f"Cancelled at the {str(boundary or 'next safe').strip()} boundary"
+            )
+
     def _install_ollama(self, task: ModelTask, entry: dict[str, Any]) -> None:
         model = str(entry.get("ollama_model") or "")
         if not model:
@@ -2169,6 +2213,7 @@ class ModelManager:
             r.raise_for_status()
             last = ""
             for line in r.iter_lines(decode_unicode=True):
+                self._raise_if_task_cancelled(task, boundary="Ollama stream")
                 if not line:
                     continue
                 try:
@@ -2205,6 +2250,7 @@ class ModelManager:
         self.tasks.set_stage(task, "downloading", progress=0.1)
         ModelTaskManager.log(task, f"Downloading…\n{url}")
         tmp = dest.with_suffix(dest.suffix + ".tmp")
+        self._raise_if_task_cancelled(task, boundary="download start")
         resumed_bytes = 0
         try:
             if tmp.exists():
@@ -2257,6 +2303,7 @@ class ModelManager:
             )
             with open(tmp, "ab" if append else "wb") as f:
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    self._raise_if_task_cancelled(task, boundary="download chunk")
                     if not chunk:
                         continue
                     f.write(chunk)
@@ -2337,6 +2384,7 @@ class ModelManager:
     def _download_hf_snapshot(self, task: ModelTask, **kwargs: Any) -> None:
         if snapshot_download is None:
             raise RuntimeError("huggingface_hub is not installed (required for snapshot downloads)")
+        self._raise_if_task_cancelled(task, boundary="snapshot phase")
         local_dir = Path(str(kwargs.get("local_dir") or "")).expanduser()
         stop_watcher = threading.Event()
         active_profile = HFSnapshotDownloadProfile(
@@ -2420,6 +2468,7 @@ class ModelManager:
                     continue
 
         with _HF_SNAPSHOT_DOWNLOAD_LOCK:
+            self._raise_if_task_cancelled(task, boundary="snapshot queue")
             transfer_was_enabled = (
                 hf_hub_constants is not None
                 and bool(getattr(hf_hub_constants, "HF_HUB_ENABLE_HF_TRANSFER", False))
@@ -2469,6 +2518,7 @@ class ModelManager:
                 watcher.start()
                 try:
                     snapshot_download(**kwargs)
+                    self._raise_if_task_cancelled(task, boundary="snapshot phase")
                 except ValueError as exc:
                     missing_transfer = (
                         "HF_HUB_ENABLE_HF_TRANSFER=1" in str(exc)
@@ -2486,6 +2536,7 @@ class ModelManager:
                         "hf_transfer is unavailable; continuing with the standard Hugging Face downloader.",
                     )
                     snapshot_download(**kwargs)
+                    self._raise_if_task_cancelled(task, boundary="snapshot phase")
             finally:
                 stop_watcher.set()
                 if watcher is not None:

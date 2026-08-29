@@ -215,6 +215,38 @@ def built_in_catalog() -> list[dict[str, Any]]:
             },
         ),
         _entry(
+            model_id="hf_flux1_schnell_internal",
+            name="FLUX.1 Schnell (Internal / Diffusers)",
+            kind="diffusers",
+            source="hf",
+            hf_repo_id="black-forest-labs/FLUX.1-schnell",
+            target={"engine": "internal", "folder": "diffusers"},
+            license_id="Apache-2.0",
+            license_url="https://huggingface.co/black-forest-labs/FLUX.1-schnell/blob/main/LICENSE.md",
+            recommended="advanced",
+            notes=(
+                "High-quality native FLUX still and storyboard-keyframe renderer. FLUX.1 Schnell uses a "
+                "1-4 step distilled text-to-image pipeline. On GPUs below 16 GB VRAM Studio uses sequential "
+                "CPU offload; 6 GB GPUs also need substantial system memory/pagefile and render slowly. "
+                "This entry is not an internal frame-to-frame video model."
+            ),
+            family="flux",
+            author="black-forest-labs",
+            collections=["image", "flux"],
+            tags=["internal", "stills", "keyframes", "flux", "apache-2.0"],
+            hardware_targets=["discrete_gpu"],
+            supports_internal_video=False,
+            render={
+                "engine": "internal",
+                "workflow_family": "diffusers",
+                "render_modes": ["stills", "internal_video_keyframes"],
+                "preferred_for": ["quality", "keyframes", "prompt_adherence"],
+                "default_steps": 4,
+                "default_guidance": 0.0,
+                "offload_below_vram_gb": 16,
+            },
+        ),
+        _entry(
             model_id="hf_sd15_controlnet_canny_internal",
             name="ControlNet Canny SD 1.5 (Internal / Diffusers)",
             kind="controlnet",

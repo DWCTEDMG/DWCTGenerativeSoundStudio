@@ -476,6 +476,43 @@ def test_internal_request_fails_preflight_when_tensorrt_anchor_bundle_is_missing
     assert exc.value.code == "TRT_ANCHOR_BUNDLE_NOT_INSTALLED"
 
 
+def test_internal_video_request_rejects_flux_still_model(tmp_path, monkeypatch) -> None:
+    store, project = _make_render_project(tmp_path)
+    flux_path = tmp_path / "hf_flux1_schnell_internal"
+    flux_path.mkdir()
+    (flux_path / "model_index.json").write_text(
+        '{"_class_name":"FluxPipeline"}',
+        encoding="utf-8",
+    )
+
+    class FakeModels:
+        def installed_path(self, model_id: str):
+            return flux_path if model_id == "hf_flux1_schnell_internal" else None
+
+    monkeypatch.setattr(app_module, "store", store)
+    monkeypatch.setattr(app_module, "models", FakeModels())
+    monkeypatch.setattr(app_module, "_hardware_profile", lambda: {"backend": "cuda", "vram_gb": 6.0})
+    monkeypatch.setattr(
+        app_module,
+        "_build_internal_render_plan",
+        lambda *_args, **_kwargs: {
+            "preferred_internal_model": "hf_sdxl_internal",
+            "device_preference": "cuda",
+            "defaults": {},
+            "applied_tier": "draft",
+        },
+    )
+    monkeypatch.setattr(app_module, "_render_provider_status", lambda _hw: {"settings": {"directml": {}}})
+
+    with pytest.raises(UserFacingError) as exc:
+        app_module._resolve_internal_render_request(
+            project.id,
+            {"model_id": "hf_flux1_schnell_internal", "device_preference": "cuda"},
+        )
+
+    assert exc.value.code == "FLUX_VIDEO_BASE_UNSUPPORTED"
+
+
 def test_public_tensorrt_routes_reject_model_id_that_is_a_filesystem_path(tmp_path, monkeypatch) -> None:
     store, project = _make_render_project(tmp_path)
     jobs = JobStore(store.projects_dir)

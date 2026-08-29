@@ -33,6 +33,29 @@ describe("Outputs page", () => {
           : [],
         images: [
           {
+            path: "outputs/images/flux-schnell.png",
+            metadata_path: "outputs/images/flux-schnell.png.json",
+            metadata: {
+              workflow_family: "txt2img",
+              prompt: "A copper automaton tending bioluminescent orchids",
+              negative_prompt: "",
+              seed: 424242,
+              sampler: "euler",
+              steps: 4,
+              cfg_scale: 0,
+              base_model: {
+                model_id: "hf_flux1_schnell_internal",
+                engine: "internal",
+                family: "flux",
+              },
+              provenance: {
+                backend: "diffusers_sequential_offload",
+                device: "cuda",
+              },
+              output: { image: "outputs/images/flux-schnell.png", cached: false },
+            },
+          },
+          {
             path: "outputs/images/frame.png",
             metadata_path: "outputs/images/frame.png.json",
             metadata: {
@@ -194,6 +217,10 @@ describe("Outputs page", () => {
     expect((await screen.findAllByText(/Generation metadata/)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/A luminous skyline with added edge detail/)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Outpaint margins/i)).toBeTruthy();
+    expect((await screen.findAllByText(/hf_flux1_schnell_internal/i)).length).toBeGreaterThan(0);
+    const runtimeBackend = (await screen.findAllByText(/diffusers_sequential_offload/i))[0];
+    expect(runtimeBackend.parentElement?.textContent).toContain("Device CUDA");
+    expect((await screen.findAllByText(/CFG/i)).some((element) => element.textContent?.includes("0"))).toBe(true);
   }, 15000);
 
   it("retries historical proxy renders through automatic genuine routing", async () => {
@@ -234,5 +261,50 @@ describe("Outputs page", () => {
       render_mode: "auto",
       resume_existing_frames: true,
     });
+  });
+
+  it("keeps the selected FLUX project and output visible after the page remounts", async () => {
+    window.localStorage.setItem(
+      "edmg_studio_session_v1",
+      JSON.stringify({ projectId: "p2", selectedVariant: 0, lastHandoff: null }),
+    );
+    const fetchMock = installFetchMock({
+      "/v1/projects": {
+        projects: [
+          { id: "p1", name: "Older Project" },
+          { id: "p2", name: "FLUX Acceptance" },
+        ],
+      },
+      "/v1/projects/p1/outputs": { videos: [], images: [], active_internal_jobs: [], internal_render_history: [] },
+      "/v1/projects/p2/outputs": {
+        videos: [],
+        active_internal_jobs: [],
+        internal_render_history: [],
+        images: [{
+          path: "outputs/images/flux-schnell.png",
+          metadata: {
+            workflow_family: "txt2img",
+            prompt: "Persistent FLUX acceptance image",
+            seed: 424242,
+            steps: 4,
+            cfg_scale: 0,
+            base_model: { model_id: "hf_flux1_schnell_internal", engine: "internal", family: "flux" },
+            provenance: { backend: "diffusers_sequential_offload", device: "cuda" },
+          },
+        }],
+      },
+    });
+
+    const firstMount = renderWithStudio(<Outputs backendUrl="http://127.0.0.1:7863" config={null} />);
+    expect(await screen.findByText("Persistent FLUX acceptance image")).toBeTruthy();
+    firstMount.unmount();
+
+    const secondMount = renderWithStudio(<Outputs backendUrl="http://127.0.0.1:7863" config={null} />);
+    expect(await screen.findByText("Persistent FLUX acceptance image")).toBeTruthy();
+    secondMount.unmount();
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/v1/projects/p2/outputs")).length).toBeGreaterThanOrEqual(2);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/v1/projects/p1/outputs"))).toBe(false);
+    window.localStorage.removeItem("edmg_studio_session_v1");
   });
 });

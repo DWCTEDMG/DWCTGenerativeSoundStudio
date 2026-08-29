@@ -3,6 +3,8 @@ import { apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../componen
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
+import { resolveProjectId } from "../components/projectSelection";
+import { useStudioSession } from "../components/studioSession";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { JobActionButtons } from "../shared/jobs/JobActionButtons";
 import { postQueueJobAction, type QueueJobAction } from "../shared/jobs/jobActions";
@@ -21,8 +23,8 @@ type OutputsPanelId =
 
 export default function Outputs(props: PageProps) {
   const backendUrl = props.backendUrl || getBackendUrl();
+  const { projectId, setProjectId } = useStudioSession();
   const [projects, setProjects] = useState<any[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
   const [outs, setOuts] = useState<any>(null);
   const [selected, setSelected] = useState<{ type: "image" | "video"; path: string } | null>(null);
   const [info, setInfo] = useState<any>(null);
@@ -40,7 +42,8 @@ export default function Outputs(props: PageProps) {
     const d = await apiGet("/v1/projects");
     const ps = d.projects || [];
     setProjects(ps);
-    if (!projectId && ps.length) setProjectId(ps[0].id);
+    const nextProjectId = resolveProjectId(ps, projectId);
+    if (nextProjectId !== projectId) setProjectId(nextProjectId);
   };
 
   const refreshOutputs = async (pid: string) => {
@@ -67,6 +70,10 @@ export default function Outputs(props: PageProps) {
     const metadataPath = entry?.metadata_path;
     const baseModel = metadata?.base_model || {};
     const output = metadata?.output || {};
+    const provenance = metadata?.provenance || {};
+    const resolvedEngine = metadata?.engine || baseModel?.engine;
+    const resolvedFamily = metadata?.model_family || baseModel?.family;
+    const resolvedCfg = metadata?.cfg_scale ?? metadata?.cfg;
     const loras = Array.isArray(metadata?.loras) ? metadata.loras : [];
     const controlnetUnits = Array.isArray(metadata?.controlnet_units) ? metadata.controlnet_units : [];
     const outpaint = metadata?.outpaint && typeof metadata.outpaint === "object" ? metadata.outpaint : null;
@@ -89,13 +96,19 @@ export default function Outputs(props: PageProps) {
         </div>
         <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
           {metadata?.workflow_family ? <>Workflow <b>{metadata.workflow_family}</b> • </> : null}
-          {metadata?.engine ? <>Engine <b>{String(metadata.engine)}</b> • </> : null}
-          {metadata?.model_family ? <>Family <b>{String(metadata.model_family).toUpperCase()}</b> • </> : null}
+          {resolvedEngine ? <>Engine <b>{String(resolvedEngine)}</b> • </> : null}
+          {resolvedFamily ? <>Family <b>{String(resolvedFamily).toUpperCase()}</b> • </> : null}
           {baseModel?.model_id ? <>Model <b>{String(baseModel.model_id)}</b></> : baseModel?.checkpoint ? <>Model <b>{String(baseModel.checkpoint)}</b></> : null}
         </div>
         <div className="small" style={{ marginTop: 6, opacity: 0.88 }}>
-          Seed <b>{metadata?.seed ?? "auto"}</b> • Sampler <b>{metadata?.sampler || "default"}</b> • Steps <b>{metadata?.steps ?? "-"}</b> • CFG <b>{metadata?.cfg ?? "-"}</b>
+          Seed <b>{metadata?.seed ?? "auto"}</b> • Sampler <b>{metadata?.sampler || "default"}</b> • Steps <b>{metadata?.steps ?? "-"}</b> • CFG <b>{resolvedCfg ?? "-"}</b>
         </div>
+        {provenance?.backend || provenance?.device ? (
+          <div className="small" style={{ marginTop: 6, opacity: 0.88 }}>
+            Runtime <b>{String(provenance?.backend || "unknown")}</b>
+            {provenance?.device ? <> • Device <b>{String(provenance.device).toUpperCase()}</b></> : null}
+          </div>
+        ) : null}
         {prompt ? <div className="small" style={{ marginTop: 8 }}><b>Prompt:</b> {prompt}</div> : null}
         {negativePrompt ? <div className="small" style={{ marginTop: 4, opacity: 0.84 }}><b>Negative:</b> {negativePrompt}</div> : null}
         <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>

@@ -560,6 +560,11 @@ def create_models_router(*, get_models: Callable[[], Any]) -> APIRouter:
     def models_tasks() -> dict[str, Any]:
         return {"tasks": [t.__dict__ for t in get_models().tasks.list()]}
 
+    @router.post("/v1/models/tasks/cancel")
+    def models_tasks_cancel(req: dict[str, Any]) -> dict[str, Any]:
+        task = get_models().cancel_task(str(req.get("task_id") or ""))
+        return {"task": task.__dict__}
+
     @router.get("/v1/models/tensorrt/legacy-status")
     def models_tensorrt_legacy_status() -> dict[str, Any]:
         return get_models().legacy_tensorrt_status()

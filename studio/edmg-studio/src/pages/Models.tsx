@@ -515,9 +515,13 @@ function LegacyTensorRtCard({
 function ModelTaskProgress({
   tasks,
   isPolling,
+  cancellingTaskId,
+  onCancel,
 }: {
   tasks: any[];
   isPolling: boolean;
+  cancellingTaskId: string;
+  onCancel: (taskId: string) => void;
 }) {
   return (
     <section className="card" style={{ marginTop: 14 }} aria-labelledby="model-install-progress-heading">
@@ -549,12 +553,25 @@ function ModelTaskProgress({
                   </div>
                 </div>
                 {(task.status === "queued" || task.status === "running") ? (
-                  <progress
-                    aria-label={`${task.name} progress`}
-                    value={hasProgress ? Math.max(0, Math.min(1, progress)) : undefined}
-                    max={1}
-                    style={{ width: "100%", marginTop: 8 }}
-                  />
+                  <>
+                    <progress
+                      aria-label={`${task.name} progress`}
+                      value={hasProgress ? Math.max(0, Math.min(1, progress)) : undefined}
+                      max={1}
+                      style={{ width: "100%", marginTop: 8 }}
+                    />
+                    <div style={{ marginTop: 8 }}>
+                      <button
+                        className="secondary"
+                        disabled={task.cancel_requested || cancellingTaskId === String(task.id)}
+                        onClick={() => onCancel(String(task.id))}
+                      >
+                        {task.cancel_requested || cancellingTaskId === String(task.id)
+                          ? "Cancellation requested…"
+                          : `Cancel ${task.name}`}
+                      </button>
+                    </div>
+                  </>
                 ) : null}
                 {stage ? <div className="small" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>Stage: {stage}</div> : null}
                 {(bytesCompleted || bytesTotal || hasFileCounts) ? (
@@ -566,7 +583,13 @@ function ModelTaskProgress({
                     ) : null}
                   </div>
                 ) : null}
-                {task.error ? <div className="small" role="alert" style={{ marginTop: 6, color: "#ffb7b7" }}>{task.error}</div> : null}
+                {task.error ? (
+                  <div className="small" role="alert" style={{ marginTop: 6, color: "#ffb7b7" }}>
+                    <div>{task.error}</div>
+                    {task.error_hint ? <div style={{ marginTop: 4 }}>Next: {task.error_hint}</div> : null}
+                    {task.error_code ? <div style={{ marginTop: 4, opacity: 0.78 }}>Code: {task.error_code}</div> : null}
+                  </div>
+                ) : null}
               </div>
             );
           })}
@@ -594,6 +617,7 @@ export default function Models(props: PageProps) {
   const [localFolder, setLocalFolder] = useState("checkpoints");
   const [tensorRtBusy, setTensorRtBusy] = useState(false);
   const [tensorRtMessage, setTensorRtMessage] = useState("");
+  const [cancellingTaskId, setCancellingTaskId] = useState("");
 
   const [hubCollectionId, setHubCollectionId] = useState<string>(HUB_COLLECTIONS[0].id);
   const [hubQuery, setHubQuery] = useState<string>("");
@@ -791,6 +815,23 @@ export default function Models(props: PageProps) {
       await refresh();
     } catch (e: any) {
       setErr(String(e?.message ?? e));
+    }
+  }
+
+  async function cancelTask(taskId: string) {
+    setErr("");
+    setCancellingTaskId(taskId);
+    try {
+      const payload = await apiPost("/v1/models/tasks/cancel", { task_id: taskId });
+      const task = (payload as any)?.task;
+      if (task?.id) {
+        setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      }
+      pollModelTasksNow();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setCancellingTaskId("");
     }
   }
 
@@ -1014,6 +1055,7 @@ export default function Models(props: PageProps) {
           SD 1.5: <b>{internalSummary.status("sd15")}</b>
           {" "}• SDXL: <b>{internalSummary.status("sdxl")}</b>
           {" "}• SD3.5 Medium: <b>{internalSummary.status("sd35")}</b>
+          {" "}• FLUX.1 Schnell: <b>{internalSummary.status("flux")}</b>
           {" "}• Preferred: <b>{internalSummary.preferred}</b>
         </div>
         <div className="small" style={{ marginTop: 6 }}>
@@ -1038,6 +1080,12 @@ export default function Models(props: PageProps) {
           ) : null}
           {internalSummary.cloudInternal.sd35 && !internalSummary.installedInternal.sd35 && internalSummary.sd35 ? (
             <button className="secondary" onClick={() => restoreLocal(internalSummary.sd35)}>Restore SD3.5 internal</button>
+          ) : null}
+          {!internalSummary.availableInternal.flux && internalSummary.flux ? (
+            <button onClick={() => install(internalSummary.flux)}>Install FLUX.1 Schnell internal</button>
+          ) : null}
+          {internalSummary.cloudInternal.flux && !internalSummary.installedInternal.flux && internalSummary.flux ? (
+            <button className="secondary" onClick={() => restoreLocal(internalSummary.flux)}>Restore FLUX.1 Schnell internal</button>
           ) : null}
           {!internalSummary.availableInternal.svd && internalSummary.svd ? (
             <button onClick={() => install(internalSummary.svd)}>Install internal SVD motion</button>
@@ -1343,7 +1391,12 @@ export default function Models(props: PageProps) {
           <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{err || taskPollingError}</pre>
         </div>
       )}
-      <ModelTaskProgress tasks={tasks} isPolling={tasksPolling} />
+      <ModelTaskProgress
+        tasks={tasks}
+        isPolling={tasksPolling}
+        cancellingTaskId={cancellingTaskId}
+        onCancel={(taskId) => void cancelTask(taskId)}
+      />
       <StudioLayoutCustomizer
         title="Model Manager layout"
         description="Reorder or hide major model-management sections without changing install queues, runtime choices, or the catalog itself."

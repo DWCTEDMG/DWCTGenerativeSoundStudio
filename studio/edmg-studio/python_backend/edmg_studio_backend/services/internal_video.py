@@ -529,18 +529,32 @@ class _Pipes:
 
 
 def _model_family_from_dir(model_dir: Path) -> str:
-    family = "sd15"
+    family = "unknown"
     mi = model_dir / "model_index.json"
     if mi.exists():
         try:
             j = json.loads(mi.read_text(encoding="utf-8"))
             cls = str(j.get("_class_name") or "")
-            if "StableDiffusion3" in cls:
+            if "Flux" in cls:
+                family = "flux"
+            elif "StableDiffusion3" in cls:
                 family = "sd3"
             elif ("XL" in cls) or ("XLPipeline" in cls):
                 family = "sdxl"
+            elif "StableDiffusion" in cls:
+                family = "sd15"
         except Exception:
-            family = "sd15"
+            family = "unknown"
+    if family == "unknown":
+        path_hint = str(model_dir.name or "").strip().lower()
+        if "flux" in path_hint:
+            return "flux"
+        if "sd35" in path_hint or "stable-diffusion-3" in path_hint:
+            return "sd3"
+        if "sdxl" in path_hint:
+            return "sdxl"
+        if "sd15" in path_hint or "stable-diffusion-v1" in path_hint:
+            return "sd15"
     return family
 
 
@@ -586,7 +600,7 @@ def _reraise_snapshot_load_error(exc: Exception, model_dir: Path) -> None:
     raise exc
 
 
-_DIFFUSERS_PIPELINE_CLASS_NAMES: dict[str, tuple[str, str, str]] = {
+_DIFFUSERS_PIPELINE_CLASS_NAMES: dict[str, tuple[str, ...]] = {
     "sd15": (
         "StableDiffusionPipeline",
         "StableDiffusionImg2ImgPipeline",
@@ -602,6 +616,7 @@ _DIFFUSERS_PIPELINE_CLASS_NAMES: dict[str, tuple[str, str, str]] = {
         "StableDiffusion3Img2ImgPipeline",
         "StableDiffusion3InpaintPipeline",
     ),
+    "flux": ("FluxPipeline",),
 }
 
 
@@ -620,7 +635,7 @@ def _import_failure_detail(exc: BaseException, *, limit: int = 360) -> str:
     return detail
 
 
-def _load_diffusers_runtime(family: str) -> tuple[Any, Any, Any, Any]:
+def _load_diffusers_runtime(family: str) -> tuple[Any, Any, Any | None, Any | None]:
     """Load only the Diffusers classes required by the selected model family.
 
     Diffusers exposes pipeline classes through lazy module attributes. Importing
@@ -628,8 +643,18 @@ def _load_diffusers_runtime(family: str) -> tuple[Any, Any, Any, Any]:
     optional SDXL and SD3 imports too. Keep the runtime boundary family-local so
     an unrelated optional pipeline cannot disable an otherwise valid model.
     """
-    normalized_family = family if family in _DIFFUSERS_PIPELINE_CLASS_NAMES else "sd15"
-    family_label = {"sd15": "SD 1.5", "sdxl": "SDXL", "sd3": "SD3"}[normalized_family]
+    normalized_family = str(family or "").strip().lower()
+    if normalized_family not in _DIFFUSERS_PIPELINE_CLASS_NAMES:
+        raise UserFacingError(
+            "Internal diffusion model family is unsupported",
+            hint=(
+                f"Studio could not identify the Diffusers pipeline family '{normalized_family or 'unknown'}'. "
+                "Reinstall a supported SD 1.5, SDXL, SD3.5, or FLUX snapshot instead of falling back to an unrelated model."
+            ),
+            code="INTERNAL_MODEL_FAMILY_UNSUPPORTED",
+            status_code=400,
+        )
+    family_label = {"sd15": "SD 1.5", "sdxl": "SDXL", "sd3": "SD3", "flux": "FLUX"}[normalized_family]
 
     try:
         torch = importlib.import_module("torch")
@@ -680,7 +705,8 @@ def _load_diffusers_runtime(family: str) -> tuple[Any, Any, Any, Any]:
                 status_code=500,
             ) from exc
 
-    return torch, pipeline_classes[0], pipeline_classes[1], pipeline_classes[2]
+    padded = [*pipeline_classes, None, None]
+    return torch, padded[0], padded[1], padded[2]
 
 
 def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
@@ -696,7 +722,47 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
 
     torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32
 
-    if family == "sd3":
+    if family == "flux":
+        if device == "directml":
+            raise UserFacingError(
+                "FLUX is not available through DirectML",
+                hint="Use CUDA with offload, use CPU, or select SDXL/SD 1.5 for DirectML.",
+                code="DIRECTML_MODEL_UNSUPPORTED",
+                status_code=400,
+            )
+        flux_dtype = torch.float16
+        if hasattr(torch, "bfloat16") and device in {"cuda", "cpu"}:
+            flux_dtype = torch.bfloat16
+        txt = txt_pipeline_class.from_pretrained(
+            str(model_dir),
+            **_diffusers_model_load_kwargs(
+                model_dir,
+                device,
+                extra={"torch_dtype": flux_dtype, "low_cpu_mem_usage": True},
+            ),
+        )
+        backend = "diffusers"
+        if device == "cuda":
+            try:
+                vram_gb = float(torch.cuda.get_device_properties(0).total_memory) / (1024 ** 3)
+            except Exception:
+                vram_gb = 0.0
+            if vram_gb < 16.0:
+                if not hasattr(txt, "enable_sequential_cpu_offload"):
+                    raise UserFacingError(
+                        "FLUX cannot fit this GPU without sequential CPU offload",
+                        hint="Repair the Studio internal-video environment so Diffusers and Accelerate provide sequential CPU offload.",
+                        code="FLUX_OFFLOAD_UNAVAILABLE",
+                        status_code=400,
+                    )
+                txt.enable_sequential_cpu_offload()
+                backend = "diffusers_sequential_offload"
+            else:
+                txt = txt.to(device)
+        elif device == "mps":
+            txt = txt.to(device)
+        pipes = _Pipes(txt2img=txt, img2img=None, inpaint=None, device=device, family="flux", backend=backend)
+    elif family == "sd3":
         txt = txt_pipeline_class.from_pretrained(
             str(model_dir),
             **_diffusers_model_load_kwargs(model_dir, device, extra={"torch_dtype": torch_dtype}),
@@ -1181,6 +1247,22 @@ def _generate_txt2img(
 
         g = torch.Generator(device=pipes.device if pipes.device != "mps" else "cpu")
         g.manual_seed(int(seed))
+
+    if pipes.family == "flux":
+        prompt = str(prompt_embeds or "").strip() or "cinematic"
+        flux_steps = max(1, min(4, int(steps)))
+        kwargs = {
+            "prompt": prompt,
+            "width": int(width),
+            "height": int(height),
+            "num_inference_steps": flux_steps,
+            "guidance_scale": 0.0,
+            "max_sequence_length": 256,
+        }
+        if g is not None:
+            kwargs["generator"] = g
+        out = pipes.txt2img(**kwargs)
+        return out.images[0]
 
     if pipes.family != "sd15" or pipes.backend == "directml" or isinstance(prompt_embeds, str):
         prompt = str(prompt_embeds or "").strip() or "cinematic"
@@ -1672,6 +1754,28 @@ def render_internal_still_image(
     log_fn=None,
 ) -> dict[str, Any]:
     family = _model_family_from_dir(model_dir)
+    if family == "unknown":
+        raise UserFacingError(
+            "Internal diffusion model family is unsupported",
+            hint="The snapshot is not a recognized SD 1.5, SDXL, SD3.5, or FLUX Diffusers model.",
+            code="INTERNAL_MODEL_FAMILY_UNSUPPORTED",
+            status_code=400,
+        )
+    if family == "flux":
+        if workflow_family != "txt2img":
+            raise UserFacingError(
+                "FLUX.1 Schnell currently supports text-to-image only",
+                hint="Switch the Studio still workflow to text-to-image. FLUX img2img, inpaint, and ControlNet require separate native adapters.",
+                code="WORKFLOW_UNSUPPORTED",
+                status_code=400,
+            )
+        if settings.loras or settings.hires_fix or settings.refiner:
+            raise UserFacingError(
+                "This FLUX render includes unsupported refinement options",
+                hint="Disable LoRAs, hires fix, and the refiner for the phase-one native FLUX.1 Schnell path.",
+                code="FLUX_REFINEMENT_UNSUPPORTED",
+                status_code=400,
+            )
     requested_device = _device_auto(settings.device_preference)
     device = requested_device
     if requested_device == "directml" and (
@@ -1834,6 +1938,8 @@ def render_internal_still_image(
                 "family": pipes.family,
                 "backend": pipes.backend,
                 "seed": seed,
+                "effective_steps": max(1, min(4, int(settings.steps))) if pipes.family == "flux" else int(settings.steps),
+                "effective_cfg": 0.0 if pipes.family == "flux" else float(settings.cfg),
             }
         finally:
             for target, adapters in adapter_targets:

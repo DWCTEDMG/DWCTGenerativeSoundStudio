@@ -4,6 +4,7 @@ import { buildInternalModelReadiness } from "../shared/internalModelReadiness";
 const CATALOG = [
   { id: "hf_sd15_internal", name: "Stable Diffusion 1.5" },
   { id: "hf_sdxl_internal", name: "Stable Diffusion XL" },
+  { id: "hf_flux1_schnell_internal", name: "FLUX.1 Schnell" },
   { id: "hf_animatediff_motion_adapter_v15_2_internal", name: "AnimateDiff" },
 ];
 
@@ -84,5 +85,17 @@ describe("internal model readiness", () => {
 
     expect(adapterOnly.hasLocalMotionModel).toBe(false);
     expect(compatiblePair.hasLocalMotionModel).toBe(true);
+  });
+
+  it("tracks FLUX as a still/keyframe model without making it a motion adapter", () => {
+    const readiness = buildInternalModelReadiness({
+      catalog: CATALOG,
+      installed: { hf_flux1_schnell_internal: true },
+    });
+
+    expect(readiness.status("flux")).toBe("installed locally");
+    expect(readiness.preferredLocalKey).toBe("flux");
+    expect(readiness.hasLocalStillModel).toBe(true);
+    expect(readiness.hasLocalMotionModel).toBe(false);
   });
 });

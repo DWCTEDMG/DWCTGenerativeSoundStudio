@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../components/api";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
+import { resolveProjectId } from "../components/projectSelection";
+import { useStudioSession } from "../components/studioSession";
 import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
 import { useProjectJobs } from "../shared/jobs/useProjectJobs";
 import type { PageProps } from "../types/pageProps";
@@ -31,8 +33,8 @@ type VariantGroup = {
 
 export default function Review(props: PageProps) {
   const backendUrl = props.backendUrl || getBackendUrl();
+  const { projectId, setProjectId } = useStudioSession();
   const [projects, setProjects] = useState<any[]>([]);
-  const [projectId, setProjectId] = useState("");
   const [review, setReview] = useState<any>(null);
   const [continuity, setContinuity] = useState<any>(null);
   const [publishStatus, setPublishStatus] = useState<any>(null);
@@ -100,7 +102,8 @@ export default function Review(props: PageProps) {
     const data = await apiGet("/v1/projects");
     const items = data.projects || [];
     setProjects(items);
-    if (!projectId && items.length) setProjectId(items[0].id);
+    const nextProjectId = resolveProjectId(items, projectId);
+    if (nextProjectId !== projectId) setProjectId(nextProjectId);
   };
 
   const refreshReview = async (pid: string) => {
@@ -289,7 +292,7 @@ export default function Review(props: PageProps) {
                       <img src={fileUrl(artifact.path)} alt={artifact.name} style={{ width: "100%", borderRadius: 8 }} />
                     )}
                     <div className="small" style={{ marginTop: 6 }}>
-                      <b>{artifact.review_state}</b> • {artifact.engine || "engine?"} • seed {artifact.seed ?? "auto"}
+                      <b>{artifact.review_state}</b> • {artifact.engine || "engine?"} • {artifact.model_id || "model?"} • seed {artifact.seed ?? "auto"}
                     </div>
                     {artifact.content_hash ? <div className="small" style={{ opacity: 0.8 }}>{artifact.content_hash.slice(0, 16)}…</div> : null}
                   </div>

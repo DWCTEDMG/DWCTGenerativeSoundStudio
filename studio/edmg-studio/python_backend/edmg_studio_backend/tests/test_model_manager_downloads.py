@@ -5,10 +5,13 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from edmg_studio_backend.services import model_manager as model_manager_module
 from edmg_studio_backend.services.model_manager import (
     ModelManager,
     ModelTask,
+    ModelTaskCancelled,
     ModelTaskManager,
     _hf_profile_matches_path,
     _hf_snapshot_download_profile,
@@ -463,6 +466,88 @@ def test_model_tasks_dedupe_and_persist_interrupted_restart(tmp_path) -> None:
     while first.status != "done" and time.time() < deadline:
         time.sleep(0.01)
     assert first.status == "done"
+
+
+def test_model_task_cancel_is_keyed_and_finishes_cancelled(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    started = threading.Event()
+
+    def cancellable(task: ModelTask) -> None:
+        started.set()
+        while not manager.tasks.is_cancel_requested(task):
+            time.sleep(0.01)
+        raise ModelTaskCancelled("cancelled in test")
+
+    task = manager.tasks.start(
+        "Install FLUX.1 Schnell",
+        cancellable,
+        model_id="hf_flux1_schnell_internal",
+    )
+    assert started.wait(timeout=2)
+
+    cancelled = manager.cancel_task(task.id)
+    assert cancelled.id == task.id
+    assert cancelled.model_id == "hf_flux1_schnell_internal"
+    assert cancelled.cancel_requested is True
+    assert cancelled.stage == "cancelling"
+
+    deadline = time.time() + 2
+    while task.status != "cancelled" and time.time() < deadline:
+        time.sleep(0.01)
+    assert task.status == "cancelled"
+    assert task.stage == "cancelled"
+
+
+def test_hf_snapshot_checks_cancellation_before_start(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    task = ModelTask(
+        id="cancelled-flux",
+        name="Install FLUX.1 Schnell",
+        model_id="hf_flux1_schnell_internal",
+        cancel_requested=True,
+    )
+    called = False
+
+    def fake_snapshot_download(**_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(model_manager_module, "snapshot_download", fake_snapshot_download)
+
+    with pytest.raises(ModelTaskCancelled):
+        manager._download_hf_snapshot(
+            task,
+            repo_id="black-forest-labs/FLUX.1-schnell",
+            local_dir=str(tmp_path / "flux"),
+            allow_patterns=["**/*.safetensors"],
+            ignore_patterns=[],
+        )
+    assert called is False
+
+
+def test_model_task_preserves_user_facing_error_details(tmp_path) -> None:
+    tasks = ModelTaskManager(tmp_path / "tasks.json")
+
+    def fail_with_actionable_error(_task: ModelTask) -> None:
+        raise model_manager_module.UserFacingError(
+            "Hugging Face denied access",
+            hint="Accept the gated model conditions in your Hugging Face account, then retry.",
+            code="HF_AUTH_REQUIRED",
+        )
+
+    task = tasks.start(
+        "Install FLUX.1 Schnell",
+        fail_with_actionable_error,
+        model_id="hf_flux1_schnell_internal",
+    )
+    deadline = time.time() + 2
+    while task.status not in {"failed", "done"} and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert task.status == "failed"
+    assert task.error == "Hugging Face denied access"
+    assert task.error_hint == "Accept the gated model conditions in your Hugging Face account, then retry."
+    assert task.error_code == "HF_AUTH_REQUIRED"
 
 
 def test_atomic_json_write_retries_windows_sharing_violation_and_recovers_tmp(

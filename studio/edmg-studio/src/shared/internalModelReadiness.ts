@@ -1,4 +1,4 @@
-export type InternalModelKey = "sd15" | "sdxl" | "sd35" | "svd" | "animatediff";
+export type InternalModelKey = "sd15" | "sdxl" | "sd35" | "flux" | "svd" | "animatediff";
 
 export type InternalModelCatalogEntry = {
   id: string;
@@ -30,6 +30,7 @@ const INTERNAL_MODELS: Record<
   sd15: { id: "hf_sd15_internal", label: "SD 1.5", role: "still" },
   sdxl: { id: "hf_sdxl_internal", label: "SDXL", role: "still" },
   sd35: { id: "hf_sd35_medium_internal", label: "SD3.5 Medium", role: "still" },
+  flux: { id: "hf_flux1_schnell_internal", label: "FLUX.1 Schnell", role: "still" },
   svd: { id: "hf_svd_xt_1_1_internal", label: "SVD", role: "motion" },
   animatediff: {
     id: "hf_animatediff_motion_adapter_v15_2_internal",
@@ -38,7 +39,7 @@ const INTERNAL_MODELS: Record<
   },
 };
 
-const STILL_MODEL_PREFERENCE: InternalModelKey[] = ["sd35", "sdxl", "sd15"];
+const STILL_MODEL_PREFERENCE: InternalModelKey[] = ["flux", "sd35", "sdxl", "sd15"];
 
 function taskModelId(task: InternalModelTask): string {
   return String(task.model_id ?? task.modelId ?? "").trim();
