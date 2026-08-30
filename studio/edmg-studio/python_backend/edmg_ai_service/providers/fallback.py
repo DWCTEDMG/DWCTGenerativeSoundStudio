@@ -3,10 +3,9 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from typing import Optional
 
-from .base import PlanProvider
 from ..schemas import PlanRequest, PlanResponse, PlanVariant, Scene
+from .base import PlanProvider
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "has", "have", "if",
@@ -23,7 +22,9 @@ VARIANT_BLUEPRINTS = [
         "palette": ["amber haze", "midnight blue", "silver bloom"],
         "prompt_seed": "cinematic music video frame, coherent hero subject, dramatic lighting, rich texture",
         "camera": ["slow push-in", "parallax drift", "steady handheld glide", "hero close-up"],
-        "motion": ["beat-synced light pulses", "slow environmental movement", "subtle cloth motion", "rhythmic camera sway"],
+        "action": ["turns toward camera and reaches into the light", "walks through the set with clear screen direction", "raises a hand as the performance intensifies", "settles into a resolved final pose"],
+        "motion": ["measured head and hand movement", "purposeful walking with visible stride changes", "expressive gesture and cloth movement", "a controlled breath and final gaze shift"],
+        "environment_motion": ["beat-synced practical lights pulse through haze", "foreground fabric and dust drift past the lens", "hair, wardrobe edges, and hanging props react naturally", "the haze thins while the final light slowly settles"],
     },
     {
         "name": "Kinetic Geometry",
@@ -32,7 +33,9 @@ VARIANT_BLUEPRINTS = [
         "palette": ["neon magenta", "electric cyan", "graphite black"],
         "prompt_seed": "stylized performance tableau, graphic composition, energetic lighting, bold silhouettes",
         "camera": ["snap zoom", "wide tracking shot", "overhead orbit", "low-angle sweep"],
-        "motion": ["strobe-synced motion trails", "fast geometric transitions", "impact flashes", "tempo-locked movement"],
+        "action": ["steps sharply into frame on the downbeat", "crosses the stage through moving geometry", "spins beneath the overhead light grid", "drives forward and stops on the final accent"],
+        "motion": ["crisp beat-synced body movement", "fast lateral travel with readable poses", "a complete turn with controlled limb motion", "tempo-locked forward movement and a decisive stop"],
+        "environment_motion": ["strobe-synced trails and edge lights pulse", "geometric panels travel in counter-motion", "impact flashes ripple across the floor", "the light grid decelerates into a stable final pattern"],
     },
     {
         "name": "Atmospheric Drift",
@@ -41,7 +44,9 @@ VARIANT_BLUEPRINTS = [
         "palette": ["violet dusk", "deep teal", "soft gold"],
         "prompt_seed": "atmospheric music film frame, layered depth, cinematic haze, detailed environment storytelling",
         "camera": ["floating dolly", "wide reveal", "slow crane move", "locked tableau"],
-        "motion": ["ambient particle drift", "fog and light movement", "slow beat-matched transitions", "evolving environmental motion"],
+        "action": ["emerges slowly from the haze", "moves between foreground layers", "looks upward as the space opens", "comes to rest while the world continues breathing"],
+        "motion": ["subtle walking and breathing movement", "gentle body turns with continuous screen direction", "a gradual gaze and posture change", "a small final gesture and natural breathing"],
+        "environment_motion": ["ambient particles drift at different depths", "fog and reflected light travel across the set", "fabric, branches, and distant atmosphere move slowly", "soft gold light and haze continue beyond the final gesture"],
     },
 ]
 
@@ -129,6 +134,35 @@ def _section_hint(sections: list[str], index: int) -> str:
     return sections[min(index, len(sections) - 1)]
 
 
+def _subject_anchor(req: PlanRequest, motifs: list[str], keywords: list[str]) -> str:
+    focus = _scene_focus(motifs, keywords, 0)
+    title = str(req.title or "").strip()
+    title_hint = f" from {title}" if title else ""
+    return (
+        f"one recurring lead subject{title_hint}, visually associated with {focus}, "
+        "with the same face, silhouette, wardrobe, and signature prop"
+    )
+
+
+def _continuity_instruction(subject: str, scene_index: int) -> str:
+    if scene_index == 0:
+        return f"establish {subject}; keep one subject only and establish left-to-right screen direction"
+    return (
+        f"continue {subject}; preserve identity, wardrobe, palette, world, and screen direction "
+        "while advancing the action from the previous scene"
+    )
+
+
+def _transition_instruction(scene_index: int, scene_count: int, bpm: float) -> str:
+    if scene_index == 0:
+        return "opening composition with a readable starting pose"
+    if scene_index == scene_count - 1:
+        return "match-action dissolve into the resolved final image"
+    if bpm >= 125 and scene_index % 3 == 0:
+        return "motivated impact cut on the downbeat with screen direction preserved"
+    return "match-action continuation carried by the subject gesture and environment movement"
+
+
 class RuleBasedPlanner(PlanProvider):
     """Deterministic, richer built-in planner.
 
@@ -142,7 +176,7 @@ class RuleBasedPlanner(PlanProvider):
         return "rule_based"
 
     @property
-    def model(self) -> Optional[str]:
+    def model(self) -> str | None:
         return "director_lite"
 
     def plan(self, req: PlanRequest) -> PlanResponse:
@@ -162,13 +196,20 @@ class RuleBasedPlanner(PlanProvider):
             blueprint = VARIANT_BLUEPRINTS[variant_index % len(VARIANT_BLUEPRINTS)]
             palette = _palette_from_request(req, blueprint)
             variant_mood = f"{blueprint['mood']}, {base_mood}"
+            subject = _subject_anchor(req, motifs, keywords)
             scenes: list[Scene] = []
 
             for scene_index, (start_s, end_s) in enumerate(windows):
                 focus = _scene_focus(motifs, keywords, scene_index)
                 section = _section_hint(sections, scene_index)
                 camera = blueprint["camera"][scene_index % len(blueprint["camera"])]
+                action = blueprint["action"][scene_index % len(blueprint["action"])]
                 motion = blueprint["motion"][scene_index % len(blueprint["motion"])]
+                environment_motion = blueprint["environment_motion"][
+                    scene_index % len(blueprint["environment_motion"])
+                ]
+                continuity = _continuity_instruction(subject, scene_index)
+                transition = _transition_instruction(scene_index, len(windows), bpm)
                 energy = (
                     "opening tension"
                     if scene_index == 0
@@ -179,16 +220,28 @@ class RuleBasedPlanner(PlanProvider):
                 lyric_clause = f" Lyrical cue: {section[:180]}." if section else ""
                 prompt = (
                     f"{blueprint['prompt_seed']}{title_clause}, focus on {focus}, {energy}, "
-                    f"color palette {', '.join(palette[:3])}, {camera}, {motion}.{style_clause}{lyric_clause}"
+                    f"color palette {', '.join(palette[:3])}. Single subject anchor: {subject}. "
+                    f"Visible action: {action}. Camera: {camera}. Subject motion: {motion}. "
+                    f"Environment motion: {environment_motion}. Continuity: {continuity}. "
+                    f"Transition: {transition}.{style_clause}{lyric_clause}"
                 )
                 scenes.append(
                     Scene(
                         start_s=start_s,
                         end_s=end_s,
                         prompt=prompt.strip(),
-                        negative_prompt="blurry, muddy composition, flat lighting, duplicate subject, watermark, text, logo",
+                        negative_prompt=(
+                            "still frame, frozen pose, slideshow, collage, split screen, storyboard sheet, "
+                            "blurry, muddy composition, flat lighting, duplicate subject, identity drift, "
+                            "wardrobe change, broken anatomy, watermark, text, logo"
+                        ),
+                        subject=subject,
+                        action=action,
                         camera=camera,
                         motion=motion,
+                        environment_motion=environment_motion,
+                        continuity=continuity,
+                        transition=transition,
                         notes="Director Lite fallback plan",
                     )
                 )

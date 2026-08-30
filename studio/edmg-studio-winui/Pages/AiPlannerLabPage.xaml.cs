@@ -523,6 +523,13 @@ public sealed partial class AiPlannerLabPage : Page
             SceneEndNumberBox.Value = scene.EndSeconds;
             ScenePromptTextBox.Text = scene.Prompt;
             SceneNegativePromptTextBox.Text = scene.NegativePrompt ?? string.Empty;
+            SceneSubjectTextBox.Text = scene.Subject ?? string.Empty;
+            SceneActionTextBox.Text = scene.Action ?? string.Empty;
+            SceneCameraTextBox.Text = scene.Camera ?? string.Empty;
+            SceneMotionTextBox.Text = scene.Motion ?? string.Empty;
+            SceneEnvironmentMotionTextBox.Text = scene.EnvironmentMotion ?? string.Empty;
+            SceneContinuityTextBox.Text = scene.ContinuityInstruction ?? string.Empty;
+            SceneTransitionTextBox.Text = scene.Transition ?? string.Empty;
         }
         finally
         {
@@ -546,6 +553,13 @@ public sealed partial class AiPlannerLabPage : Page
             SceneEndNumberBox.Value = double.NaN;
             ScenePromptTextBox.Text = string.Empty;
             SceneNegativePromptTextBox.Text = string.Empty;
+            SceneSubjectTextBox.Text = string.Empty;
+            SceneActionTextBox.Text = string.Empty;
+            SceneCameraTextBox.Text = string.Empty;
+            SceneMotionTextBox.Text = string.Empty;
+            SceneEnvironmentMotionTextBox.Text = string.Empty;
+            SceneContinuityTextBox.Text = string.Empty;
+            SceneTransitionTextBox.Text = string.Empty;
         }
         finally
         {
@@ -567,6 +581,13 @@ public sealed partial class AiPlannerLabPage : Page
         SceneEndNumberBox.IsEnabled = canEdit;
         ScenePromptTextBox.IsEnabled = canEdit;
         SceneNegativePromptTextBox.IsEnabled = canEdit;
+        SceneSubjectTextBox.IsEnabled = canEdit;
+        SceneActionTextBox.IsEnabled = canEdit;
+        SceneCameraTextBox.IsEnabled = canEdit;
+        SceneMotionTextBox.IsEnabled = canEdit;
+        SceneEnvironmentMotionTextBox.IsEnabled = canEdit;
+        SceneContinuityTextBox.IsEnabled = canEdit;
+        SceneTransitionTextBox.IsEnabled = canEdit;
         PreviousSceneButton.IsEnabled = hasScene && _selectedSceneIndex > 0 && !_isOperationBusy;
         NextSceneButton.IsEnabled =
             hasScene &&
@@ -671,7 +692,15 @@ public sealed partial class AiPlannerLabPage : Page
                 endSeconds: end,
                 prompt: prompt,
                 negativePrompt: NullIfWhiteSpace(SceneNegativePromptTextBox.Text),
-                replaceNegativePrompt: true),
+                replaceNegativePrompt: true,
+                subject: NullIfWhiteSpace(SceneSubjectTextBox.Text),
+                action: NullIfWhiteSpace(SceneActionTextBox.Text),
+                camera: NullIfWhiteSpace(SceneCameraTextBox.Text),
+                motion: NullIfWhiteSpace(SceneMotionTextBox.Text),
+                environmentMotion: NullIfWhiteSpace(SceneEnvironmentMotionTextBox.Text),
+                continuity: NullIfWhiteSpace(SceneContinuityTextBox.Text),
+                transition: NullIfWhiteSpace(SceneTransitionTextBox.Text),
+                replaceStoryboardFields: true),
             refreshList: false);
         RefreshSceneList();
         return true;
@@ -968,6 +997,23 @@ public sealed partial class AiPlannerLabPage : Page
         public string NegativePrompt => string.IsNullOrWhiteSpace(Scene.NegativePrompt)
             ? string.Empty
             : $"Avoid: {Scene.NegativePrompt}";
+
+        public string MotionSummary
+        {
+            get
+            {
+                var parts = new[]
+                {
+                    Scene.Action,
+                    Scene.Motion,
+                    Scene.EnvironmentMotion,
+                    Scene.ContinuityInstruction,
+                };
+                return string.Join(
+                    " · ",
+                    parts.Where(value => !string.IsNullOrWhiteSpace(value)).Take(2));
+            }
+        }
 
         public string StateSummary
         {

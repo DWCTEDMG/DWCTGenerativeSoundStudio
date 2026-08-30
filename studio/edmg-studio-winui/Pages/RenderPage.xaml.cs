@@ -280,6 +280,7 @@ public sealed partial class RenderPage : Page
             Sampler = Selected(SamplerComboBox, "euler"),
             Seed = seed < 0 ? null : seed,
             KeyframeIntervalSeconds = Number(KeyframeIntervalBox, 5.0),
+            KeyframeContinuityMode = Selected(KeyframeContinuityModeComboBox, "scene"),
             InterpolationEngine = Selected(InterpolationComboBox, "auto"),
             ModelId = EmptyToNull(ModelBox.Text) ?? "auto",
             RenderMode = Selected(ModeComboBox, "auto"),
@@ -306,7 +307,7 @@ public sealed partial class RenderPage : Page
             StoryboardShotMaxSeconds = Number(StoryboardShotMaxBox, 4.0),
             VideoModelEngine = Selected(VideoModelEngineComboBox, "auto"),
             VideoModelId = EmptyToNull(VideoModelBox.Text),
-            VideoModelMaxFramesPerScene = (int)Number(FramesBox, 25),
+            VideoModelMaxFramesPerScene = (int)Number(FramesBox, 8),
             VideoModelMotionBucketId = (int)Number(MotionBucketBox, 127),
             VideoModelNoiseAugStrength = Number(NoiseAugBox, 0.02),
             VideoModelDecodeChunkSize = (int)Number(DecodeChunkBox, 8),
@@ -406,6 +407,31 @@ public sealed partial class RenderPage : Page
               + $"{setup.OutputFps} FPS delivery / {setup.RenderFps} FPS generation · "
               + $"{setup.TemporalMode} · {setup.VideoModelEngine}";
         return setup;
+    }
+
+    private void MotionStrategySelection_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || Selected(MotionStrategyComboBox, "manual") != "storyboard_full_motion")
+        {
+            return;
+        }
+
+        SelectComboValue(TemporalModeComboBox, "video_model");
+        SelectComboValue(MotionScoreModeComboBox, "auto");
+        SelectComboValue(SceneMotionComboBox, "scene");
+        SelectComboValue(KeyframeContinuityModeComboBox, "project");
+        VideoPromptRefineToggle.IsOn = true;
+        FramesBox.Value = Math.Max(8, Number(FramesBox, 8));
+        RenderFpsBox.Value = Math.Max(2, Number(RenderFpsBox, 2));
+        FpsBox.Value = Math.Max(24, Number(FpsBox, 24));
+        if (Selected(InterpolationComboBox, "auto") == "fps")
+        {
+            SelectComboValue(InterpolationComboBox, "auto");
+        }
+
+        ShowStatus(
+            "Storyboard full motion enabled short motion shots, prompt refinement, whole-scene motion, and project identity continuity.",
+            InfoBarSeverity.Informational);
     }
 
     private void OpenAiPlanner_Click(object sender, RoutedEventArgs e) => App.Navigate("plannerLab");

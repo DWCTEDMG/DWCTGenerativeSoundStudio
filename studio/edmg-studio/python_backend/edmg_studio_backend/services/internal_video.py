@@ -33,11 +33,25 @@ except Exception:  # pragma: no cover
     ImageOps = None  # type: ignore
 
 from .compositor import apply_timeline_layers
-from .ffmpeg import assemble_image_sequence, has_video_stream, interpolate_video_fps, mux_audio
+from .ffmpeg import (
+    assemble_image_sequence,
+    has_video_stream,
+    interpolate_video_fps,
+    mux_audio,
+)
 from .internal_video_models import generate_video_model_frames, validate_video_model_layout
-
+from .video_motion_quality import (
+    MIN_VIDEO_MODEL_NATIVE_FRAMES,
+    MIN_VIDEO_MODEL_OUTPUT_FRAMES,
+    analyze_motion_images,
+    analyze_motion_paths,
+    describe_video_model_frame_budget,
+    temporal_blend_frame,
+)
 
 logger = logging.getLogger(__name__)
+
+INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION = "motion-quality-v2"
 
 
 @dataclass(frozen=True)
@@ -52,6 +66,7 @@ class InternalVideoSettings:
     sampler: str = "euler"
     seed: int | None = None
     keyframe_interval_s: float = 5.0
+    keyframe_continuity_mode: str = "scene"  # scene|project
 
     interpolation_engine: str = "auto"  # auto|minterpolate|fps|rife
     negative_prompt: str = (
@@ -110,6 +125,12 @@ def normalize_internal_motion_strategy(value: Any) -> str:
     if raw in {"storyboard", "storyboard_full_motion", "full_motion_storyboard", "auto_storyboard"}:
         return "storyboard_full_motion"
     return "manual"
+
+
+def normalize_keyframe_continuity_mode(value: Any) -> str:
+    """Normalize chained keyframe continuity scope with a safe legacy default."""
+
+    return "project" if str(value or "").strip().lower() == "project" else "scene"
 
 
 def normalize_video_model_keyframe_renderer(value: Any) -> str:
@@ -405,6 +426,11 @@ def describe_internal_render_cache(
             frame_count = len(list(out_frames.glob("frame_*.png")))
         except Exception:
             frame_count = 0
+    motion_validation_passed = (
+        _cached_motion_validation_passed(meta_json)
+        if str(settings.temporal_mode or "").lower() == "video_model"
+        else None
+    )
     return {
         "work_tag": work_tag,
         "frames_dir": str(out_frames),
@@ -418,6 +444,11 @@ def describe_internal_render_cache(
         "raw_exists": raw_mp4.exists(),
         "interp_exists": interp_mp4.exists(),
         "final_exists": final_mp4.exists(),
+        "final_reusable": bool(
+            final_mp4.exists()
+            and (motion_validation_passed is None or motion_validation_passed)
+        ),
+        "motion_validation_passed": motion_validation_passed,
         "render_meta_exists": meta_json.exists(),
     }
 
@@ -432,6 +463,7 @@ def _render_signature(
     timeline: dict[str, Any] | None = None,
 ) -> str:
     payload = {
+        "renderer_algorithm_version": INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION,
         "variant_index": int(variant_index),
         "model_dir": str(model_dir),
         "fps_render": int(settings.fps_render),
@@ -443,6 +475,9 @@ def _render_signature(
         "sampler": str(settings.sampler),
         "seed": settings.seed,
         "keyframe_interval_s": float(settings.keyframe_interval_s),
+        "keyframe_continuity_mode": normalize_keyframe_continuity_mode(
+            settings.keyframe_continuity_mode
+        ),
         "interpolation_engine": str(settings.interpolation_engine),
         "model_id": str(settings.model_id),
         "loras_digest": _json_digest(list(settings.loras)),
@@ -516,6 +551,72 @@ def _media_output_is_reusable(ffmpeg_path: str, media_path: Path) -> bool:
         return False
     stream_status = has_video_stream(ffmpeg_path, media_path)
     return stream_status is not False
+
+
+def _cached_motion_validation_passed(meta_json: Path) -> bool:
+    try:
+        payload = json.loads(meta_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    validation = payload.get("motion_validation") if isinstance(payload, dict) else None
+    if not isinstance(validation, dict) or validation.get("status") != "pass":
+        return False
+    output_sequence = validation.get("output_sequence")
+    native_scenes = validation.get("native_scenes")
+    try:
+        expected_native_scene_count = int(
+            validation.get("expected_native_scene_count")
+        )
+    except (TypeError, ValueError):
+        return False
+    native_scene_keys = {
+        (item.get("scene_index"), item.get("shot_index"))
+        for item in native_scenes
+        if isinstance(item, dict)
+    } if isinstance(native_scenes, list) else set()
+    return (
+        isinstance(output_sequence, dict)
+        and output_sequence.get("status") == "pass"
+        and isinstance(native_scenes, list)
+        and expected_native_scene_count > 0
+        and len(native_scenes) == expected_native_scene_count
+        and len(native_scene_keys) == expected_native_scene_count
+        and all(isinstance(item, dict) and item.get("status") == "pass" for item in native_scenes)
+    )
+
+
+def _cached_native_motion_report(
+    meta_json: Path,
+    *,
+    scene_index: int,
+    shot_index: int,
+) -> dict[str, Any] | None:
+    """Return passing evidence only for the exact cached storyboard shot."""
+
+    try:
+        payload = json.loads(meta_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    validation = payload.get("motion_validation") if isinstance(payload, dict) else None
+    if not isinstance(validation, dict) or validation.get("status") != "pass":
+        return None
+    output_sequence = validation.get("output_sequence")
+    if not isinstance(output_sequence, dict) or output_sequence.get("status") != "pass":
+        return None
+    native_scenes = validation.get("native_scenes")
+    if not isinstance(native_scenes, list):
+        return None
+    for item in native_scenes:
+        if not isinstance(item, dict) or item.get("status") != "pass":
+            continue
+        try:
+            cached_scene_index = int(item.get("scene_index"))
+            cached_shot_index = int(item.get("shot_index"))
+        except (TypeError, ValueError):
+            continue
+        if cached_scene_index == int(scene_index) and cached_shot_index == int(shot_index):
+            return dict(item)
+    return None
 
 
 @dataclass
@@ -2144,12 +2245,32 @@ def _keyframe_continuity_source(
     *,
     previous_scene_index: int | None,
     scene_index: int,
+    keyframe_continuity_mode: str = "scene",
 ) -> Any | None:
-    """Reset chained img2img continuity when a new authored scene begins."""
+    """Select the previous image according to the requested continuity scope."""
 
-    if previous_scene_index is not None and int(scene_index) != int(previous_scene_index):
+    if (
+        normalize_keyframe_continuity_mode(keyframe_continuity_mode) == "scene"
+        and previous_scene_index is not None
+        and int(scene_index) != int(previous_scene_index)
+    ):
         return None
     return previous_image
+
+
+def _use_direct_video_model_source_anchor(
+    *,
+    keyframe_index: int,
+    source_image_path: Path | None,
+    temporal_mode: str,
+) -> bool:
+    """Keep the selected source exact for the first video-model anchor."""
+
+    return (
+        int(keyframe_index) == 0
+        and source_image_path is not None
+        and str(temporal_mode or "").strip().lower() == "video_model"
+    )
 
 
 def _motion_params_at_time(
@@ -2582,8 +2703,9 @@ def render_internal_video_variant(
 
     Image animation:
       - when ``source_image_path`` is provided (or ``settings.source_asset`` resolves),
-        the first keyframe is seeded from that image via img2img so any painting or
-        photo can be "brought to life" with motion + prompt evolution.
+        video-model renders fit it directly into the first SVD anchor. Other temporal
+        modes seed the first keyframe through img2img so a painting or photo can be
+        brought to life with motion and prompt evolution.
     """
     _require_pillow()
 
@@ -2731,13 +2853,22 @@ def render_internal_video_variant(
     if settings.resume_existing_frames and _media_output_is_reusable(ffmpeg_path, final_mp4):
         final_mtime = final_mp4.stat().st_mtime
         audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
-        if audio_ok:
+        motion_cache_ok = (
+            settings.temporal_mode != "video_model"
+            or _cached_motion_validation_passed(meta_json)
+        )
+        if audio_ok and motion_cache_ok:
             emit_checkpoint(stage="complete", status="complete", force=True, final=True, message=f"Reusing completed render {final_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": interp_mp4.exists(), "final_exists": True})
             if progress_fn:
                 progress_fn("complete", total_units, total_units, f"Reusing completed render {final_mp4.name}")
             if log_fn:
                 log_fn(f"Reusing completed render {final_mp4.name}")
             return final_mp4
+        if not motion_cache_ok and log_fn:
+            log_fn(
+                f"Ignoring cached video-model output {final_mp4.name}: "
+                "its render metadata has no passing native/output motion validation."
+            )
 
 
     # Generate temporally consistent keyframes
@@ -2794,8 +2925,14 @@ def render_internal_video_variant(
             fps=fps_schedule,
         ) or "cinematic"
         negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
+        seed_from_source = i == 0 and source_image_path is not None
+        direct_video_source = _use_direct_video_model_source_anchor(
+            keyframe_index=i,
+            source_image_path=source_image_path,
+            temporal_mode=settings.temporal_mode,
+        )
         negative_embeds = None
-        if not use_tensorrt_keyframes:
+        if not use_tensorrt_keyframes and not direct_video_source:
             if pipes is None:
                 pipes = _try_load_pipelines(model_dir, device=device)
                 default_negative_embeds = _encode_prompt(pipes, settings.negative_prompt)
@@ -2819,9 +2956,15 @@ def render_internal_video_variant(
             prev_key_img,
             previous_scene_index=prev_key_scene_index,
             scene_index=key_scene_index,
+            keyframe_continuity_mode=settings.keyframe_continuity_mode,
         )
-        seed_from_source = i == 0 and source_image_path is not None
-        if use_tensorrt_keyframes:
+        if direct_video_source:
+            img = _load_render_source_image(source_image_path, size=(out_w, out_h))
+            if log_fn:
+                log_fn(
+                    f"Using source image {Path(source_image_path).name} directly as the first video-model anchor"
+                )
+        elif use_tensorrt_keyframes:
             img = _generate_tensorrt_sd15_keyframe(
                 project_id=project_id,
                 prompt=p,
@@ -2891,6 +3034,9 @@ def render_internal_video_variant(
         return p
 
     frame_paths: list[Path] = []
+    video_model_native_motion_reports: list[dict[str, Any]] = []
+    video_model_output_motion_report: dict[str, Any] | None = None
+    video_model_expected_native_scene_count = 0
 
     if settings.temporal_mode == "video_model":
         pe = None
@@ -2928,6 +3074,7 @@ def render_internal_video_variant(
 
         source_scenes = [sc for sc in scenes if isinstance(sc, dict)] or [{"start_s": 0.0, "end_s": duration_s, "prompt": DEFAULT_RENDER_PROMPT}]
         sorted_scenes = _storyboard_scene_windows(scenes=source_scenes, duration_s=duration_s, settings=settings)
+        video_model_expected_native_scene_count = len(sorted_scenes)
         max_scene_frames = max(2, int(settings.video_model_max_frames_per_scene or 25))
         fi_cursor = 0
         previous_storyboard_source_scene: int | None = None
@@ -2982,7 +3129,23 @@ def render_internal_video_variant(
                 fi_cursor += 1
 
             scene_frame_count = max(1, end_f - start_f)
-            if settings.resume_existing_frames and all(_frame_path(out_frames, fi).exists() for fi in range(start_f, end_f)):
+            shot_index = int(scene.get("_storyboard_shot_index", 0) or 0)
+            cached_native_report = _cached_native_motion_report(
+                meta_json,
+                scene_index=source_scene_index,
+                shot_index=shot_index,
+            )
+            cached_scene_frames_complete = all(
+                _frame_path(out_frames, fi).exists() for fi in range(start_f, end_f)
+            )
+            if (
+                settings.resume_existing_frames
+                and cached_scene_frames_complete
+                and cached_native_report is not None
+            ):
+                video_model_native_motion_reports.append(
+                    {**cached_native_report, "cache_reused": True}
+                )
                 for fi in range(start_f, end_f):
                     existing = _frame_path(out_frames, fi)
                     frame_paths.append(existing)
@@ -2990,8 +3153,21 @@ def render_internal_video_variant(
                     emit_checkpoint(stage="frames", status="running", message=f"Reusing video-model frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
                 previous_storyboard_source_scene = source_scene_index
                 continue
+            if (
+                settings.resume_existing_frames
+                and cached_scene_frames_complete
+                and cached_native_report is None
+                and log_fn
+            ):
+                log_fn(
+                    f"Regenerating video-model scene {scene_index + 1}: existing frames have no "
+                    "matching passing native-motion report."
+                )
 
-            adapter_frames = min(max_scene_frames, max(2, scene_frame_count))
+            adapter_frames = min(
+                max_scene_frames,
+                max(MIN_VIDEO_MODEL_NATIVE_FRAMES, scene_frame_count),
+            )
             if engine == "svd":
                 adapter_frames = min(adapter_frames, 25)
                 cuda_vram = _cuda_total_vram_gb(device)
@@ -3005,6 +3181,27 @@ def render_internal_video_variant(
                     adapter_frames = min(adapter_frames, 12)
                 elif cuda_vram and cuda_vram <= 8.5 and not bool(settings.video_model_cpu_offload):
                     adapter_frames = min(adapter_frames, 16)
+
+            frame_budget = describe_video_model_frame_budget(
+                native_frame_count=adapter_frames,
+                output_frame_count=scene_frame_count,
+                fps=fps_r,
+            )
+            if frame_budget["status"] != "pass":
+                ratio = frame_budget.get("stretch_ratio")
+                ratio_label = f"{float(ratio):.1f}x" if ratio is not None else "unbounded"
+                raise UserFacingError(
+                    "This video-model shot does not have enough native frames for continuous motion.",
+                    hint=(
+                        f"The shot would stretch {adapter_frames} native {engine.upper()} frames across "
+                        f"{scene_frame_count} raw output frames ({ratio_label}). Use at least 8 Frames per "
+                        "scene, keep raw motion shots within a 2x stretch, and select Storyboard full motion "
+                        "for long scenes. On this 6 GB CUDA system, use 4-second shots at 2 raw FPS, then "
+                        "interpolate the finished output to 24 FPS."
+                    ),
+                    code="INSUFFICIENT_TEMPORAL_FRAME_DENSITY",
+                    status_code=400,
+                )
 
             schedule_frame = int(round(start_s * float(fps_schedule)))
             prompt = _prompt_text_for_frame(
@@ -3046,9 +3243,9 @@ def render_internal_video_variant(
                 local_score = _clamp_video_motion_score(
                     score_info.get("motion_score") or settings.video_model_manual_motion_score or 4
                 )
-                # An authored score of 1-2 is a deliberate cinematic hold and
-                # stays still even under an energetic passage. Other windows
-                # blend macro story direction with their local audio energy.
+                # An authored score of 1-2 requests restrained motion and keeps
+                # that intent even under an energetic passage. It must still
+                # pass the same temporal-motion quality gate as every shot.
                 effective_score = (
                     scheduled_score
                     if scheduled_score <= 2
@@ -3061,7 +3258,12 @@ def render_internal_video_variant(
                     "local_motion_score": local_score,
                     "source": f"parseq+{score_info.get('source') or 'local'}",
                 }
-            prompt_for_model = _refine_video_model_prompt(prompt, score_info=score_info, settings=settings)
+            prompt_for_model = _refine_video_model_prompt(
+                prompt,
+                score_info=score_info,
+                settings=settings,
+                scene=scene,
+            )
             motion_bucket_id = _video_model_motion_bucket_for_score(settings, score_info)
             seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt_for_model, motion_bucket_id, anchor_mode, work_tag)
             mp_scene = evaluate_motion_state(
@@ -3162,19 +3364,50 @@ def render_internal_video_variant(
                 end_img=end_anchor_img,
                 anchor_strength=float(shot_anchor_strength),
             )
+            native_motion_report = analyze_motion_images(generated, fps=fps_r)
+            native_motion_report = {
+                **native_motion_report,
+                "scene_index": int(source_scene_index),
+                "shot_index": shot_index,
+                "start_s": round(float(start_s), 4),
+                "end_s": round(float(end_s), 4),
+                "engine": engine,
+                "motion_score": score_info.get("motion_score"),
+                "prompt": prompt_for_model,
+            }
+            video_model_native_motion_reports.append(native_motion_report)
+            if native_motion_report["status"] != "pass":
+                raise UserFacingError(
+                    "The internal video model completed, but its native frames did not contain distributed visible motion.",
+                    hint=(
+                        f"Motion validation found {native_motion_report['perceptually_unique_frames']} perceptually "
+                        f"unique frames and {native_motion_report['meaningful_transition_count']} meaningful "
+                        "transitions. Use motion score 4 or higher, keep Prompt refine enabled, choose Animate "
+                        "subjects or Animate whole scene, and retry with Resume existing cached frames off."
+                    ),
+                    code="INSUFFICIENT_TEMPORAL_MOTION",
+                    status_code=422,
+                )
+            if log_fn:
+                log_fn(
+                    "Native motion validation passed: "
+                    f"unique={native_motion_report['perceptually_unique_frames']}/{native_motion_report['frame_count']} "
+                    f"meaningful_transitions={native_motion_report['meaningful_transition_count']} "
+                    f"frozen_ratio={native_motion_report['frozen_pair_ratio']:.3f}"
+                )
 
             for local_i, fi in enumerate(range(start_f, end_f)):
                 if cancel_check_fn:
                     cancel_check_fn()
-                existing = _frame_path(out_frames, fi)
-                if settings.resume_existing_frames and existing.exists():
-                    frame_paths.append(existing)
-                    fi_cursor = fi + 1
-                    emit_checkpoint(stage="frames", status="running", message=f"Reusing video-model frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
-                    continue
-                src_i = int(round((local_i / max(1, scene_frame_count - 1)) * max(0, len(generated) - 1)))
                 t = fi / fps_r
-                fr = _finish_video_model_frame(generated[max(0, min(len(generated) - 1, src_i))], t)
+                fr = _finish_video_model_frame(
+                    temporal_blend_frame(
+                        generated,
+                        output_index=local_i,
+                        output_frame_count=scene_frame_count,
+                    ),
+                    t,
+                )
                 if local_i == 0 and authored_scene_boundary and frame_paths:
                     try:
                         with Image.open(frame_paths[-1]) as previous_frame:
@@ -3349,6 +3582,32 @@ def render_internal_video_variant(
                 progress_fn("frames", len(key_times) + fi + 1, total_units, f"Rendered frame {fi+1}/{total_frames}")
             emit_checkpoint(stage="frames", status="running", message=f"Rendered frame {fi+1}/{total_frames}", frame_event="rendered", rendered_delta=1)
 
+    if settings.temporal_mode == "video_model":
+        video_model_output_motion_report = analyze_motion_paths(
+            frame_paths,
+            fps=fps_r,
+            minimum_frames=MIN_VIDEO_MODEL_OUTPUT_FRAMES,
+        )
+        if video_model_output_motion_report["status"] != "pass":
+            raise UserFacingError(
+                "The rendered video sequence contains prolonged still-frame holds.",
+                hint=(
+                    f"Motion validation measured a {float(video_model_output_motion_report['frozen_pair_ratio']) * 100.0:.1f}% "
+                    f"frozen transition ratio and a {float(video_model_output_motion_report['longest_static_hold_s']):.2f}-second "
+                    "longest hold. Disable Resume existing cached frames, use Storyboard full motion for long scenes, "
+                    "and retry with at least 8 native frames per short shot."
+                ),
+                code="INSUFFICIENT_TEMPORAL_MOTION",
+                status_code=422,
+            )
+        if log_fn:
+            log_fn(
+                "Output motion validation passed: "
+                f"unique={video_model_output_motion_report['perceptually_unique_frames']}/{video_model_output_motion_report['frame_count']} "
+                f"meaningful_transitions={video_model_output_motion_report['meaningful_transition_count']} "
+                f"longest_hold_s={video_model_output_motion_report['longest_static_hold_s']:.3f}"
+            )
+
     if cancel_check_fn:
         cancel_check_fn()
 
@@ -3436,6 +3695,7 @@ def render_internal_video_variant(
         else:
             final_mp4.write_bytes(interp_mp4.read_bytes())
     meta = {
+        "renderer_algorithm_version": INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION,
         "work_tag": work_tag,
         "completed_at": __import__("time").time(),
         "variant_index": int(variant.get("index", 0)),
@@ -3449,6 +3709,9 @@ def render_internal_video_variant(
             "sampler": str(settings.sampler),
             "seed": settings.seed,
             "keyframe_interval_s": float(settings.keyframe_interval_s),
+            "keyframe_continuity_mode": normalize_keyframe_continuity_mode(
+                settings.keyframe_continuity_mode
+            ),
             "interpolation_engine": str(settings.interpolation_engine),
             "temporal_mode": str(settings.temporal_mode),
             "temporal_strength": float(settings.temporal_strength),
@@ -3478,6 +3741,7 @@ def render_internal_video_variant(
             "video_model_motion_score_schedule": settings.video_model_motion_score_schedule,
             "video_model_noise_aug_schedule": settings.video_model_noise_aug_schedule,
             "anchor_strength_schedule": settings.anchor_strength_schedule,
+            "source_asset": str(settings.source_asset or ""),
             "resume_existing_frames": bool(settings.resume_existing_frames),
             "model_id": str(settings.model_id),
             "negative_prompt": str(settings.negative_prompt),
@@ -3489,6 +3753,27 @@ def render_internal_video_variant(
             "expected": int(total_frames),
             "present": len(list(out_frames.glob("frame_*.png"))),
             "dir": str(out_frames),
+        },
+        "motion_validation": {
+            "status": (
+                str(video_model_output_motion_report.get("status"))
+                if video_model_output_motion_report is not None
+                else "not_applicable"
+            ),
+            "expected_native_scene_count": video_model_expected_native_scene_count,
+            "native_scenes": video_model_native_motion_reports,
+            "output_sequence": video_model_output_motion_report,
+        },
+        "source_anchor": {
+            "mode": (
+                "direct_video_model"
+                if source_image_path is not None and settings.temporal_mode == "video_model"
+                else "keyframe_img2img"
+                if source_image_path is not None
+                else "none"
+            ),
+            "requested_asset": str(settings.source_asset or ""),
+            "resolved_path": str(source_image_path or ""),
         },
         "outputs": {
             "raw_mp4": str(raw_mp4),
@@ -3538,6 +3823,9 @@ def render_internal_video_variant(
                 "fps_render": int(settings.fps_render),
                 "fps_output": int(settings.fps_output),
                 "temporal_mode": str(settings.temporal_mode),
+                "keyframe_continuity_mode": normalize_keyframe_continuity_mode(
+                    settings.keyframe_continuity_mode
+                ),
                 "work_tag": work_tag,
             },
             source_assets=source_assets,
@@ -4232,6 +4520,36 @@ def _motion_intent_for_score(score: Any) -> dict[str, str]:
     }
 
 
+def _storyboard_scene_text(scene: dict[str, Any] | None, *keys: str) -> str:
+    if not isinstance(scene, dict):
+        return ""
+    storyboard = scene.get("storyboard") if isinstance(scene.get("storyboard"), dict) else {}
+    for key in keys:
+        value = scene.get(key)
+        if value in (None, ""):
+            value = storyboard.get(key)
+        if isinstance(value, (dict, list, tuple, set)):
+            continue
+        text = " ".join(str(value or "").split())
+        if text:
+            return text
+    return ""
+
+
+def _storyboard_shot_phase(scene: dict[str, Any] | None) -> str:
+    if not isinstance(scene, dict):
+        return "single"
+    shot_index = max(0, int(scene.get("_storyboard_shot_index", 0) or 0))
+    shot_count = max(1, int(scene.get("_storyboard_shot_count", 1) or 1))
+    if shot_count <= 1:
+        return "single"
+    if shot_index <= 0:
+        return "establish"
+    if shot_index >= shot_count - 1:
+        return "resolve"
+    return "develop"
+
+
 def _apply_video_model_timeline_camera(
     frame: "Image.Image",
     out_w: int,
@@ -4303,6 +4621,12 @@ def describe_storyboard_motion_plan(
         )
         prompt = render_prompt_from_scene(shot, fallback=DEFAULT_RENDER_PROMPT)
         intent = _motion_intent_for_score(score_info.get("motion_score"))
+        refined_prompt = _refine_video_model_prompt(
+            prompt,
+            score_info=score_info,
+            settings=settings,
+            scene=shot,
+        )
         source_scene_index = int(shot.get("_storyboard_source_scene_index", 0) or 0)
         shot_index = int(shot.get("_storyboard_shot_index", 0) or 0)
         shot_count = int(shot.get("_storyboard_shot_count", 1) or 1)
@@ -4313,7 +4637,23 @@ def describe_storyboard_motion_plan(
                 "shot_count": shot_count,
                 "start_s": round(start_s, 3),
                 "end_s": round(end_s, 3),
-                "prompt": " ".join(prompt.split())[:240],
+                "prompt": " ".join(refined_prompt.split())[:1200],
+                "shot_phase": _storyboard_shot_phase(shot),
+                "subject_anchor": _storyboard_scene_text(shot, "subject", "subject_anchor"),
+                "shot_action": _storyboard_scene_text(shot, "action", "shot_action"),
+                "authored_camera": _storyboard_scene_text(shot, "camera", "camera_move", "camera_hint"),
+                "authored_subject_motion": _storyboard_scene_text(shot, "motion", "subject_motion", "motion_hint"),
+                "authored_environment_motion": _storyboard_scene_text(
+                    shot,
+                    "environment_motion",
+                    "environmentMotion",
+                ),
+                "continuity": _storyboard_scene_text(
+                    shot,
+                    "continuity",
+                    "continuity_note",
+                    "continuityNote",
+                ),
                 "anchor_source": anchor_source,
                 "keyframe_renderer": keyframe_renderer,
                 "scene_motion": normalize_video_model_scene_motion(settings.video_model_scene_motion),
@@ -4362,6 +4702,7 @@ def _refine_video_model_prompt(
     *,
     score_info: dict[str, Any],
     settings: InternalVideoSettings,
+    scene: dict[str, Any] | None = None,
 ) -> str:
     base = " ".join(str(prompt or DEFAULT_RENDER_PROMPT).split()) or DEFAULT_RENDER_PROMPT
     additions: list[str] = []
@@ -4371,6 +4712,59 @@ def _refine_video_model_prompt(
     if mode != "off" and score is not None and "motion score" not in base.lower():
         additions.append(f"{_clamp_video_motion_score(score)} motion score.")
     if bool(settings.video_model_prompt_refine):
+        subject = _storyboard_scene_text(scene, "subject", "subject_anchor")
+        action = _storyboard_scene_text(scene, "action", "shot_action")
+        camera = _storyboard_scene_text(scene, "camera", "camera_move", "camera_hint")
+        subject_motion = _storyboard_scene_text(scene, "motion", "subject_motion", "motion_hint")
+        environment_motion = _storyboard_scene_text(
+            scene,
+            "environment_motion",
+            "environmentMotion",
+        )
+        continuity = _storyboard_scene_text(
+            scene,
+            "continuity",
+            "continuity_note",
+            "continuityNote",
+        )
+        transition = _storyboard_scene_text(
+            scene,
+            "_storyboard_transition",
+            "transition",
+            "transition_cue",
+            "transitionCue",
+        )
+        if subject:
+            additions.append(f"Keep one subject anchor: {subject}.")
+        if action:
+            additions.append(f"Visible shot action: {action}.")
+        if camera:
+            additions.append(f"Authored camera move: {camera}.")
+        if subject_motion:
+            additions.append(f"Authored subject motion: {subject_motion}.")
+        if environment_motion:
+            additions.append(f"Authored environment motion: {environment_motion}.")
+        if continuity:
+            additions.append(f"Continuity contract: {continuity}.")
+        continuity_scope = normalize_keyframe_continuity_mode(settings.keyframe_continuity_mode)
+        additions.append(
+            "Preserve the same face, silhouette, wardrobe, palette, world, and screen direction across the project."
+            if continuity_scope == "project"
+            else "Preserve the same face, silhouette, wardrobe, palette, and screen direction within this scene."
+        )
+        shot_phase = _storyboard_shot_phase(scene)
+        if shot_phase == "establish":
+            additions.append("Establish a readable starting pose, then initiate the action without a static hold.")
+        elif shot_phase == "develop":
+            additions.append("Continue the previous action and screen direction; advance pose and environment without resetting.")
+        elif shot_phase == "resolve":
+            additions.append("Complete the action arc and leave a motivated pose for the following shot.")
+        if transition == "technical_continue":
+            additions.append("This is a continuous motion window, not a new scene: avoid a visual reset or hard cut.")
+        elif transition == "dissolve":
+            additions.append("End on a compatible composition for a motivated match dissolve.")
+        elif transition == "cut":
+            additions.append("End on a decisive readable pose for the authored impact cut.")
         if score is not None:
             score_i = _clamp_video_motion_score(score)
             if score_i <= 2:
@@ -4425,6 +4819,94 @@ def describe_internal_video_model_preflight(
     checks: list[dict[str, Any]] = []
     warnings: list[str] = []
 
+    backend = str(settings.device_preference or "").strip().lower()
+    if backend in {"", "auto"}:
+        backend = str(hw.get("backend") or hw.get("device") or "cpu").lower()
+    vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
+
+    effective_native_cap = max(2, int(settings.video_model_max_frames_per_scene or 25))
+    if engine == "svd":
+        effective_native_cap = min(effective_native_cap, 25)
+        if backend == "cuda" and vram_gb and vram_gb <= 6.5:
+            effective_native_cap = min(effective_native_cap, 8)
+        elif backend == "cuda" and vram_gb and vram_gb <= 8.5 and not bool(settings.video_model_cpu_offload):
+            effective_native_cap = min(effective_native_cap, 12)
+    elif engine == "animatediff":
+        if backend == "cuda" and vram_gb and vram_gb <= 6.5:
+            effective_native_cap = min(effective_native_cap, 12)
+        elif backend == "cuda" and vram_gb and vram_gb <= 8.5 and not bool(settings.video_model_cpu_offload):
+            effective_native_cap = min(effective_native_cap, 16)
+
+    motion_frame_budgets: list[dict[str, Any]] = []
+    planned_windows = _storyboard_scene_windows(
+        scenes=scenes,
+        duration_s=duration_s,
+        settings=settings,
+    )
+    for shot_index, shot in enumerate(planned_windows):
+        start_s = max(0.0, float(shot.get("start_s", 0.0) or 0.0))
+        end_s = max(start_s, float(shot.get("end_s", duration_s) or duration_s))
+        output_frames = max(1, int(round((end_s - start_s) * max(1, int(settings.fps_render)))))
+        native_frames = min(
+            effective_native_cap,
+            max(MIN_VIDEO_MODEL_NATIVE_FRAMES, output_frames),
+        )
+        motion_frame_budgets.append(
+            {
+                **describe_video_model_frame_budget(
+                    native_frame_count=native_frames,
+                    output_frame_count=output_frames,
+                    fps=max(1, int(settings.fps_render)),
+                ),
+                "shot_index": shot_index,
+                "start_s": round(start_s, 4),
+                "end_s": round(end_s, 4),
+            }
+        )
+
+    failed_motion_budgets = [
+        budget for budget in motion_frame_budgets if budget.get("status") != "pass"
+    ]
+    if failed_motion_budgets:
+        worst = max(
+            failed_motion_budgets,
+            key=lambda item: float(item.get("stretch_ratio") or float("inf")),
+        )
+        ratio = worst.get("stretch_ratio")
+        ratio_label = f"{float(ratio):.1f}x" if ratio is not None else "unbounded"
+        warnings.append(
+            "Motion-frame density is too low: at least one shot would use "
+            f"{worst['native_frame_count']} native frame(s) for {worst['output_frame_count']} raw output "
+            f"frame(s) ({ratio_label}). Use Storyboard full motion for long scenes, at least 8 native "
+            "frames per shot, and no more than 2x temporal stretching."
+        )
+        checks.append(
+            {
+                "name": "motion_density",
+                "status": "error",
+                "failed_shots": len(failed_motion_budgets),
+            }
+        )
+    else:
+        checks.append({"name": "motion_density", "status": "ok"})
+
+    if int(settings.fps_render) < 2:
+        warnings.append(
+            "Raw video-model rendering below 2 FPS will look stepped and is not suitable for a full-motion acceptance render."
+        )
+        checks.append({"name": "raw_fps", "status": "warn", "minimum_recommended": 2})
+    else:
+        checks.append({"name": "raw_fps", "status": "ok"})
+
+    interpolation_engine = str(settings.interpolation_engine or "auto").strip().lower()
+    if interpolation_engine == "fps" and int(settings.fps_output) > int(settings.fps_render):
+        warnings.append(
+            "The FPS interpolation option duplicates frames; it raises the container frame rate but does not create motion. Use Auto, minterpolate, or configured RIFE for motion interpolation."
+        )
+        checks.append({"name": "interpolation", "status": "warn", "creates_motion": False})
+    else:
+        checks.append({"name": "interpolation", "status": "ok"})
+
     if int(settings.width) % 8 != 0 or int(settings.height) % 8 != 0:
         warnings.append(
             f"Internal video models expect dimensions divisible by 8; requested {int(settings.width)}x{int(settings.height)} may fail or force a resize."
@@ -4442,9 +4924,6 @@ def describe_internal_video_model_preflight(
     else:
         checks.append({"name": "frame_count", "status": "ok"})
 
-    backend = str(settings.device_preference or "").strip().lower()
-    if backend in {"", "auto"}:
-        backend = str(hw.get("backend") or hw.get("device") or "cpu").lower()
     dtype = str(settings.video_model_dtype or "auto").strip().lower()
     if backend == "cpu" and dtype in {"float16", "bfloat16"}:
         warnings.append("float16/bfloat16 video-model precision is a GPU setting; CPU runs should use auto or float32.")
@@ -4452,7 +4931,6 @@ def describe_internal_video_model_preflight(
     else:
         checks.append({"name": "dtype", "status": "ok"})
 
-    vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
     if backend == "cuda" and engine == "animatediff" and vram_gb and vram_gb <= 8.5 and not bool(settings.video_model_cpu_offload):
         warnings.append("AnimateDiff on low-VRAM CUDA should use CPU offload before rendering.")
         checks.append({"name": "offload", "status": "warn"})
@@ -4496,6 +4974,10 @@ def describe_internal_video_model_preflight(
         "storyboard_motion_plan": storyboard_motion_plan,
         "total_frames": int(total_frames),
         "max_frames_per_scene": int(settings.video_model_max_frames_per_scene or 25),
+        "effective_native_frame_cap": int(effective_native_cap),
+        "motion_validation_required": True,
+        "motion_frame_budgets": motion_frame_budgets,
+        "effective_interpolation_engine": interpolation_engine,
         "scene_scores": scene_scores,
         "checks": checks,
         "warnings": warnings,

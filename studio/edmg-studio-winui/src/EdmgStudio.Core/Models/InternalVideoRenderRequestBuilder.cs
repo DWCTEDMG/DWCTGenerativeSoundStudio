@@ -16,6 +16,7 @@ public sealed record InternalVideoRenderSettings
     public string Sampler { get; init; } = "euler";
     public long? Seed { get; init; }
     public double KeyframeIntervalSeconds { get; init; } = 5.0;
+    public string KeyframeContinuityMode { get; init; } = "scene";
     public string InterpolationEngine { get; init; } = "auto";
     public string ModelId { get; init; } = "auto";
     public string RenderMode { get; init; } = "auto";
@@ -43,7 +44,7 @@ public sealed record InternalVideoRenderSettings
     public double StoryboardShotMaxSeconds { get; init; } = 4.0;
     public string VideoModelEngine { get; init; } = "auto";
     public string? VideoModelId { get; init; }
-    public int VideoModelMaxFramesPerScene { get; init; } = 25;
+    public int VideoModelMaxFramesPerScene { get; init; } = 8;
     public int VideoModelMotionBucketId { get; init; } = 127;
     public double VideoModelNoiseAugStrength { get; init; } = 0.02;
     public int VideoModelDecodeChunkSize { get; init; } = 8;
@@ -103,6 +104,7 @@ public static class InternalVideoRenderRequestBuilder
             ["sampler"] = Required(settings.Sampler, "Sampler"),
             ["seed"] = settings.Seed,
             ["keyframe_interval_s"] = settings.KeyframeIntervalSeconds,
+            ["keyframe_continuity_mode"] = settings.KeyframeContinuityMode,
             ["interpolation_engine"] = settings.InterpolationEngine,
             ["model_id"] = tensorRt ? TensorRtBundle : Required(settings.ModelId, "Model"),
             ["render_mode"] = settings.RenderMode,
@@ -198,7 +200,7 @@ public static class InternalVideoRenderRequestBuilder
         Range(settings.RefineEveryNFrames, 1, 30, "Refine every N frames");
         Range(settings.AnchorStrength, 0.0, 1.0, "Anchor strength");
         Range(settings.StoryboardShotMaxSeconds, 1.0, 12.0, "Storyboard shot maximum");
-        Range(settings.VideoModelMaxFramesPerScene, 2, 96, "Video model frames per scene");
+        Range(settings.VideoModelMaxFramesPerScene, 8, 96, "Video model frames per scene");
         Range(settings.VideoModelMotionBucketId, 1, 255, "Video model motion bucket");
         Range(settings.VideoModelNoiseAugStrength, 0.0, 1.0, "Video model noise augmentation");
         Range(settings.VideoModelDecodeChunkSize, 1, 64, "Video model decode chunk size");
@@ -212,6 +214,7 @@ public static class InternalVideoRenderRequestBuilder
         Enum(settings.RenderMode, ["auto", "diffusion", "hosted", "tensorrt"], "Render mode");
         Enum(settings.RenderTier, ["auto", "draft", "balanced", "quality"], "Render tier");
         Enum(settings.TemporalMode, ["off", "keyframes", "frame_img2img", "video_model"], "Temporal mode");
+        Enum(settings.KeyframeContinuityMode, ["scene", "project"], "Keyframe continuity mode");
         Enum(settings.InterpolationEngine, ["auto", "minterpolate", "fps", "rife"], "Interpolation engine");
         Enum(settings.HostedService, ["default", "core", "ultra", "sd3"], "Hosted service");
         Enum(settings.DevicePreference, ["auto", "cpu", "cuda", "mps", "directml"], "Device preference");

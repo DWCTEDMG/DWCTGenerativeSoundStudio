@@ -113,6 +113,7 @@ from .services.internal_video import (
     describe_internal_render_cache,
     describe_internal_video_model_preflight,
     normalize_internal_motion_strategy,
+    normalize_keyframe_continuity_mode,
     normalize_video_model_keyframe_renderer,
     normalize_video_model_scene_motion,
     release_cached_internal_pipelines,
@@ -1969,6 +1970,7 @@ def _mutate_internal_job_artifacts(project_id: str, job: Any, *, clear_cached_fr
 _RESOLVED_INTERNAL_VIDEO_PAYLOAD_KEYS = (
     "temporal_mode",
     "temporal_steps",
+    "keyframe_continuity_mode",
     "video_model_engine",
     "video_model_id",
     "video_model_max_frames_per_scene",
@@ -6010,6 +6012,17 @@ def _scene_energy_from_analysis(index: int, total: int, analysis: dict[str, Any]
     return max(0.0, min(1.0, 0.3 + (index / max(1, total - 1)) * 0.45 if total > 1 else 0.5))
 
 
+def _first_scene_text(scene: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        raw_value = scene.get(key)
+        if isinstance(raw_value, (dict, list, tuple, set)):
+            continue
+        value = str(raw_value or "").strip()
+        if value:
+            return " ".join(value.split())
+    return ""
+
+
 def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
     plan_out = deepcopy(plan if isinstance(plan, dict) else {})
     variants = list(plan_out.get("variants") or [])
@@ -6038,6 +6051,26 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
         "quiet reframing around the subject with soft side drift",
         "negative-space composition with a restrained lateral glide",
     ]
+    high_energy_actions = [
+        "the lead crosses the frame and completes a decisive gesture on the beat",
+        "the lead turns, advances, and interacts with a foreground prop through distinct poses",
+        "the lead drives forward while wardrobe and nearby objects react to the movement",
+    ]
+    mid_energy_actions = [
+        "the lead walks or turns through the set with readable pose progression",
+        "the lead changes gaze and hand position while continuing in one screen direction",
+        "the lead interacts with the environment instead of holding a static pose",
+    ]
+    low_energy_actions = [
+        "the lead breathes, shifts weight, and slowly changes gaze",
+        "the lead makes one restrained gesture while maintaining a natural living pose",
+        "the lead moves gently through foreground depth without freezing",
+    ]
+    environment_cues = [
+        "fabric, hair, haze, and practical light continue moving at different depths",
+        "foreground particles and background atmosphere travel naturally through the shot",
+        "props, reflections, and edge light react visibly to the subject and music",
+    ]
     staging_cues = [
         "use foreground depth and moving light to keep the frame alive",
         "let the environment change the camera lane so the section does not repeat the last one",
@@ -6062,6 +6095,17 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
         variant = dict(raw_variant)
         scenes = list(variant.get("scenes") or [])
         total = max(1, len(scenes))
+        variant_motifs = [
+            str(item or "").strip()
+            for item in list(variant.get("visual_motifs") or [])
+            if str(item or "").strip()
+        ]
+        default_subject = (
+            f"one recurring lead subject associated with {variant_motifs[0]}, with the same recognizable "
+            "face, silhouette, wardrobe, and signature prop"
+            if variant_motifs
+            else "one recurring lead subject with the same recognizable face, silhouette, wardrobe, and signature prop"
+        )
         next_scenes: list[dict[str, Any]] = []
         for scene_index, raw_scene in enumerate(scenes):
             if not isinstance(raw_scene, dict):
@@ -6069,29 +6113,56 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
             scene = dict(raw_scene)
             role = scene_roles[min(len(scene_roles) - 1, int(round((scene_index / max(1, total - 1)) * (len(scene_roles) - 1))))]
             energy = _scene_energy_from_analysis(scene_index, total, analysis if isinstance(analysis, dict) else {})
-            motion = (
+            camera_fallback = (
                 high_energy_moves[(scene_index + variant_index) % len(high_energy_moves)]
                 if energy >= 0.72
                 else mid_energy_moves[(scene_index + variant_index) % len(mid_energy_moves)]
                 if energy >= 0.44
                 else low_energy_moves[(scene_index + variant_index) % len(low_energy_moves)]
             )
+            action_fallback = (
+                high_energy_actions[(scene_index + variant_index) % len(high_energy_actions)]
+                if energy >= 0.72
+                else mid_energy_actions[(scene_index + variant_index) % len(mid_energy_actions)]
+                if energy >= 0.44
+                else low_energy_actions[(scene_index + variant_index) % len(low_energy_actions)]
+            )
             staging = staging_cues[(scene_index + variant_index) % len(staging_cues)]
             cue_index = min(len(transcript_sentences) - 1, scene_index) if transcript_sentences else -1
             narrative_cue = transcript_sentences[cue_index] if cue_index >= 0 else ""
             motif_window = list(dict.fromkeys([*tags[scene_index:scene_index + 2], *tags[: max(0, 2 - len(tags[scene_index:scene_index + 2]))]]))[:2]
             palette_note = motif_window[0] if motif_window else palette_defaults[(scene_index + variant_index) % len(palette_defaults)]
-            continuity = (
-                "continuity: lock the lead subject, palette, and world before introducing stronger motion changes."
+            subject = _first_scene_text(scene, "subject", "subject_anchor") or default_subject
+            camera = _first_scene_text(scene, "camera", "camera_hint") or camera_fallback
+            action = _first_scene_text(scene, "action", "shot_action") or action_fallback
+            subject_motion = _first_scene_text(scene, "motion", "motion_hint") or action
+            environment_motion = (
+                _first_scene_text(scene, "environment_motion", "environmentMotion")
+                or environment_cues[(scene_index + variant_index) % len(environment_cues)]
+            )
+            continuity = _first_scene_text(scene, "continuity_note", "continuityNote", "continuity") or (
+                f"establish {subject}; keep exactly one lead subject and a consistent screen direction"
                 if scene_index == 0
-                else f"continuity: retain the lead silhouette and {palette_note} palette from scene {scene_index}, but change the camera lane or staging pressure."
+                else (
+                    f"continue {subject}; preserve identity, wardrobe, {palette_note} palette, world, and "
+                    "screen direction from the preceding scene while the action advances"
+                )
+            )
+            transition = (
+                _first_scene_text(scene, "transition", "transition_cue", "transitionCue")
+                or transition_cues[(scene_index + variant_index) % len(transition_cues)]
             )
             additions = [
                 f"section role {role}.",
-                f"camera move {motion}.",
+                f"single subject anchor: {subject}.",
+                f"visible action: {action}.",
+                f"camera move: {camera}.",
+                f"subject motion: {subject_motion}.",
+                f"environment motion: {environment_motion}.",
                 f"staging {staging}.",
                 f"palette emphasis {palette_note}.",
-                continuity,
+                f"continuity: {continuity}.",
+                f"transition: {transition}.",
             ]
             if motif_window:
                 additions.append(f"scene motifs {', '.join(motif_window)}.")
@@ -6099,10 +6170,47 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
                 additions.append(f"narrative cue {narrative_cue}.")
 
             prompt = render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
-            scene["prompt"] = " ".join([prompt, *additions]).strip()
+            enriched_prompt = " ".join([prompt, *additions]).strip()
+            scene["prompt"] = enriched_prompt
+            scene["prompt_pack"] = enriched_prompt
+            scene["subject"] = subject
+            scene["action"] = action
+            scene["camera"] = camera
+            scene["motion"] = subject_motion
+            scene["environment_motion"] = environment_motion
+            if not isinstance(scene.get("continuity"), (dict, list)):
+                scene["continuity"] = continuity
+            scene["continuity_note"] = continuity
+            scene["camera_hint"] = camera
+            scene["motion_hint"] = subject_motion
+            scene["storyboard"] = {
+                "subject_anchor": subject,
+                "shot_action": action,
+                "camera_move": camera,
+                "subject_motion": subject_motion,
+                "environment_motion": environment_motion,
+                "continuity": continuity,
+                "transition": transition,
+            }
+            negative_prompt = str(scene.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT).strip()
+            continuity_negatives = (
+                "still frame",
+                "frozen pose",
+                "slideshow",
+                "collage",
+                "storyboard sheet",
+                "duplicate subject",
+                "identity drift",
+                "wardrobe change",
+            )
+            negative_lower = negative_prompt.lower()
+            missing_negatives = [term for term in continuity_negatives if term not in negative_lower]
+            scene["negative_prompt"] = ", ".join(
+                part for part in (negative_prompt, *missing_negatives) if part
+            )
             if not str(scene.get("name") or "").strip() or re.fullmatch(r"scene\s*\d+", str(scene.get("name") or "").strip(), re.IGNORECASE):
                 scene["name"] = role.title()
-            scene["transition"] = str(scene.get("transition") or transition_cues[(scene_index + variant_index) % len(transition_cues)])
+            scene["transition"] = transition
             next_scenes.append(scene)
         variant["scenes"] = next_scenes
         variants[variant_index] = variant
@@ -8486,7 +8594,8 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
 
     _log(
         f"Internal render: fps_render={settings_obj.fps_render} fps_output={settings_obj.fps_output} "
-        f"keyframe_interval_s={settings_obj.keyframe_interval_s} temporal_mode={settings_obj.temporal_mode}"
+        f"keyframe_interval_s={settings_obj.keyframe_interval_s} temporal_mode={settings_obj.temporal_mode} "
+        f"keyframe_continuity_mode={normalize_keyframe_continuity_mode(settings_obj.keyframe_continuity_mode)}"
     )
     if settings_obj.temporal_mode == "video_model":
         _log(
@@ -8547,6 +8656,9 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         "fps_render": settings_obj.fps_render,
         "fps_output": settings_obj.fps_output,
         "temporal_mode": settings_obj.temporal_mode,
+        "keyframe_continuity_mode": normalize_keyframe_continuity_mode(
+            settings_obj.keyframe_continuity_mode
+        ),
         "video_model_engine": settings_obj.video_model_engine,
         "video_model_id": settings_obj.video_model_id,
         "video_model_scene_motion": normalize_video_model_scene_motion(settings_obj.video_model_scene_motion),
@@ -9911,6 +10023,9 @@ def _internal_settings_from_payload(
         sampler=str(payload.get("sampler", "euler")),
         seed=(int(payload["seed"]) if payload.get("seed") is not None else None),
         keyframe_interval_s=float(payload.get("keyframe_interval_s", 5.0)),
+        keyframe_continuity_mode=normalize_keyframe_continuity_mode(
+            payload.get("keyframe_continuity_mode")
+        ),
         interpolation_engine=str(payload.get("interpolation_engine", "auto")),
         negative_prompt=str(payload.get("negative_prompt", "blurry, low quality, watermark, text, logo")),
         model_id=model_id,
@@ -9962,14 +10077,22 @@ def _apply_storyboard_full_motion_settings(
     return replace(
         settings_obj,
         video_model_motion_score_mode="auto",
+        video_model_max_frames_per_scene=max(
+            8,
+            int(settings_obj.video_model_max_frames_per_scene or 8),
+        ),
         video_model_scene_motion=normalize_video_model_scene_motion(
             payload.get("video_model_scene_motion") or "scene"
+        ),
+        keyframe_continuity_mode=normalize_keyframe_continuity_mode(
+            payload.get("keyframe_continuity_mode")
+            if "keyframe_continuity_mode" in payload
+            else "project"
         ),
         keyframe_interval_s=min(
             float(settings_obj.keyframe_interval_s),
             float(settings_obj.storyboard_shot_max_s),
         ),
-        source_asset=None,
     )
 
 
@@ -10520,6 +10643,8 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
         else:
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 16)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 4)
+            if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 10:
+                updates["temporal_steps"] = 10
     return replace(settings_obj, **updates) if updates else settings_obj
 
 
@@ -10990,6 +11115,9 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "width": settings_obj.width,
             "height": settings_obj.height,
             "keyframe_interval_s": settings_obj.keyframe_interval_s,
+            "keyframe_continuity_mode": normalize_keyframe_continuity_mode(
+                settings_obj.keyframe_continuity_mode
+            ),
             "temporal_mode": settings_obj.temporal_mode,
             "video_model_engine": settings_obj.video_model_engine,
             "video_model_id": settings_obj.video_model_id,

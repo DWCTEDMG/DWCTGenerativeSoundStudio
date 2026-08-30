@@ -65,6 +65,7 @@ type CatalogEntry = {
 
 type InternalVideoModelEngine = "auto" | "svd" | "animatediff";
 type ExplicitInternalVideoModelEngine = Exclude<InternalVideoModelEngine, "auto">;
+type KeyframeContinuityMode = "scene" | "project";
 
 const CANONICAL_INTERNAL_VIDEO_MODEL_IDS: Record<ExplicitInternalVideoModelEngine, string> = {
   svd: "hf_svd_xt_1_1_internal",
@@ -74,6 +75,10 @@ const CANONICAL_INTERNAL_VIDEO_MODEL_IDS: Record<ExplicitInternalVideoModelEngin
 function normalizeInternalVideoModelEngine(value: unknown): InternalVideoModelEngine {
   const engine = String(value || "auto").trim().toLowerCase();
   return engine === "svd" || engine === "animatediff" ? engine : "auto";
+}
+
+function normalizeKeyframeContinuityMode(value: unknown): KeyframeContinuityMode {
+  return String(value || "scene").trim().toLowerCase() === "project" ? "project" : "scene";
 }
 
 function declaredInternalVideoModelEngine(model: CatalogEntry | null | undefined): ExplicitInternalVideoModelEngine | null {
@@ -269,6 +274,12 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalVideoSceneMotion, setInternalVideoSceneMotion] = useState<"camera"|"subject"|"scene">("subject");
   const [internalVideoApplyTimelineCamera, setInternalVideoApplyTimelineCamera] = useState<boolean>(savedRenderDefaults.internalVideoApplyTimelineCamera ?? true);
   const [internalVideoKeyframeRenderer, setInternalVideoKeyframeRenderer] = useState<"internal"|"tensorrt_sd15">("internal");
+  const [keyframeContinuityMode, setKeyframeContinuityMode] = useState<KeyframeContinuityMode>(() => (
+    normalizeKeyframeContinuityMode(
+      savedRenderDefaults.keyframeContinuityMode
+      ?? (savedRenderDefaults.internalMotionStrategy === "storyboard_full_motion" ? "project" : "scene"),
+    )
+  ));
 
   const [timeline, setTimeline] = useState<any>({ layers: [], camera: { keyframes: [] } });
   const [timelineDirty, setTimelineDirty] = useState<boolean>(false);
@@ -713,6 +724,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       video_model_keyframe_model_id: internalVideoKeyframeRenderer === "tensorrt_sd15"
         ? (tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle")
         : undefined,
+      keyframe_continuity_mode: keyframeContinuityMode,
       parseq_enabled: motionSequencerEnabled,
       model_id: useTensorRt ? tensorRtModelId : internalModelId,
       render_mode: internalRenderMode,
@@ -1039,9 +1051,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       refinerSteps: refiner.steps,
       internalMotionStrategy,
       internalStoryboardShotMaxS: internalStoryboardShotMax,
+      keyframeContinuityMode,
       internalVideoApplyTimelineCamera,
     });
-  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed, hiresFix, refiner, internalMotionStrategy, internalStoryboardShotMax, internalVideoApplyTimelineCamera]);
+  }, [renderWidth, renderHeight, renderSteps, renderCfg, renderSampler, renderNegativePrompt, renderSeed, hiresFix, refiner, internalMotionStrategy, internalStoryboardShotMax, keyframeContinuityMode, internalVideoApplyTimelineCamera]);
 
   useEffect(() => {
     if (!loraToAdd && loraModels.length) setLoraToAdd(loraModels[0].id);
@@ -1213,6 +1226,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalVideoSceneMotion,
     internalVideoApplyTimelineCamera,
     internalVideoKeyframeRenderer,
+    keyframeContinuityMode,
     motionSequencerEnabled,
     tensorRtInternalModel,
   ]);
@@ -1522,6 +1536,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (p.video_model_scene_motion) setInternalVideoSceneMotion(String(p.video_model_scene_motion) as any);
     if (p.video_model_apply_timeline_camera != null) setInternalVideoApplyTimelineCamera(Boolean(p.video_model_apply_timeline_camera));
     if (p.video_model_keyframe_renderer) setInternalVideoKeyframeRenderer(String(p.video_model_keyframe_renderer) as any);
+    if (p.keyframe_continuity_mode) setKeyframeContinuityMode(normalizeKeyframeContinuityMode(p.keyframe_continuity_mode));
   };
 
   const addSelectedLora = () => {
@@ -2028,6 +2043,19 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
       installed: installedModels[model.id] !== false,
     }));
 
+  const enableStoryboardFullMotion = () => {
+    setInternalMotionStrategy("storyboard_full_motion");
+    setInternalTemporalMode("video_model");
+    setInternalVideoMotionScoreMode("auto");
+    setInternalVideoPromptRefine(true);
+    setInternalVideoSceneMotion("scene");
+    setKeyframeContinuityMode("project");
+    setInternalVideoMaxFrames((current) => Math.max(8, current));
+    setInternalFpsRender((current) => Math.max(2, current));
+    setInternalFpsOut((current) => Math.max(24, current));
+    setInternalInterp((current) => current === "fps" ? "auto" : current);
+  };
+
   const applyQuickRenderGoal = (goal: RenderQuickGoal) => {
     setQuickRenderGoal(goal);
     if (goal !== "edit") {
@@ -2047,19 +2075,18 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
     }
     if (goal === "motion_ad") {
       setRenderMode("motion_ad");
-      setInternalMotionStrategy("storyboard_full_motion");
+      enableStoryboardFullMotion();
       selectInternalVideoModelEngine("animatediff");
       return;
     }
     if (goal === "motion_svd") {
       setRenderMode("motion_svd");
-      setInternalMotionStrategy("storyboard_full_motion");
+      enableStoryboardFullMotion();
       selectInternalVideoModelEngine("svd");
       return;
     }
     if (goal === "full_video") {
-      setInternalMotionStrategy("storyboard_full_motion");
-      setInternalTemporalMode("video_model");
+      enableStoryboardFullMotion();
       setRenderMode("motion_svd");
       return;
     }
@@ -2733,6 +2760,9 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                           {" "}• scene <b>{internalPreflight?.internal_video_model_preflight?.scene_motion || internalPreflight?.settings?.video_model_scene_motion || internalVideoSceneMotion}</b>
                           {" "}• Timeline camera <b>{(internalPreflight?.settings?.video_model_apply_timeline_camera ?? internalVideoApplyTimelineCamera) ? "on" : "off"}</b>
                           {" "}• keyframes <b>{internalPreflight?.internal_video_model_preflight?.keyframe_renderer || internalPreflight?.settings?.video_model_keyframe_renderer || internalVideoKeyframeRenderer}</b>
+                          {" "}• continuity <b>{normalizeKeyframeContinuityMode(internalPreflight?.settings?.keyframe_continuity_mode || keyframeContinuityMode) === "project" ? "project identity lock" : "scene resets"}</b>
+                          {" "}• native cap <b>{internalPreflight?.internal_video_model_preflight?.effective_native_frame_cap ?? internalVideoMaxFrames}</b>
+                          {" "}• motion gate <b>{Array.isArray(internalPreflight?.internal_video_model_preflight?.motion_frame_budgets) && internalPreflight.internal_video_model_preflight.motion_frame_budgets.every((item: any) => item?.status === "pass") ? "ready" : "blocked"}</b>
                         </div>
                       ) : null}
                       {internalPreflight?.internal_video_model_preflight?.storyboard_motion_plan ? (
@@ -2919,12 +2949,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                        <select value={internalMotionStrategy} onChange={(e) => {
                          const next = e.target.value as "manual"|"storyboard_full_motion";
                          setInternalMotionStrategy(next);
-                         if (next === "storyboard_full_motion") {
-                           setInternalTemporalMode("video_model");
-                           setInternalVideoMotionScoreMode("auto");
-                           setInternalVideoPromptRefine(true);
-                           setInternalVideoSceneMotion("scene");
-                         }
+                         if (next === "storyboard_full_motion") enableStoryboardFullMotion();
                        }}>
                          <option value="manual">Manual temporal controls</option>
                          <option value="storyboard_full_motion">Storyboard full motion</option>
@@ -3038,11 +3063,25 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                             <option value="tensorrt_sd15">TensorRT SD1.5 keyframes{tensorRtInternalInstalled ? "" : " (not installed)"}</option>
                           </select>
                         </div>
-                        <div style={{ minWidth: 170 }}>
-                          <div className="small">Frames per scene</div>
-                           <input type="number" value={internalVideoMaxFrames} min={2} max={96}
-                             onChange={(e) => setInternalVideoMaxFrames(Number(e.target.value))} />
-                         </div>
+                        <label style={{ minWidth: 230 }} title="Choose whether each authored scene starts from a fresh keyframe or carries the previous keyframe forward to protect subject identity across the whole movie.">
+                          <div className="small">Keyframe continuity</div>
+                          <select
+                            aria-label="Keyframe continuity"
+                            value={keyframeContinuityMode}
+                            onChange={(event) => setKeyframeContinuityMode(normalizeKeyframeContinuityMode(event.target.value))}
+                          >
+                            <option value="scene">Scene resets</option>
+                            <option value="project">Project-wide identity lock</option>
+                          </select>
+                        </label>
+                          <div style={{ minWidth: 170 }}>
+                            <div className="small">Frames per scene</div>
+                            <input type="number" value={internalVideoMaxFrames} min={8} max={96}
+                              onChange={(e) => setInternalVideoMaxFrames(Number(e.target.value))} />
+                            <div className="small" style={{ marginTop: 3, opacity: 0.78 }}>
+                              Minimum 8 for verified motion. Long scenes need Storyboard full motion.
+                            </div>
+                          </div>
                          <div style={{ minWidth: 170 }}>
                            <div className="small">SVD motion bucket</div>
                            <input type="number" value={internalVideoMotionBucket} min={1} max={255}
@@ -3118,7 +3157,10 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                           </label>
                        </div>
                        <div className="small" style={{ marginTop: 8, opacity: 0.82 }}>
-                         SVD animates from generated keyframes. Timeline camera motion is layered over those frames when enabled; turn it off if model-generated camera movement feels doubled. TensorRT SD1.5 can generate fast storyboard anchors for SVD. AnimateDiff follows scene text directly; TensorRT anchors only guide start/end/loop blending and do not replace the SD1.5 Diffusers base.
+                         SVD animates from keyframes. When you select a source image, Studio uses that fitted image directly as the first video-model anchor; Storyboard full motion keeps it selected instead of discarding it. Timeline camera motion is layered over generated frames when enabled; turn it off if model-generated camera movement feels doubled. TensorRT SD1.5 can generate later storyboard anchors for SVD. AnimateDiff follows scene text directly; TensorRT anchors only guide start/end/loop blending and do not replace the SD1.5 Diffusers base.
+                       </div>
+                       <div className="small" style={{ marginTop: 6, opacity: 0.82 }}>
+                         Keyframe continuity: <b>{keyframeContinuityMode === "project" ? "Project-wide identity lock" : "Scene resets"}</b>. Project-wide mode carries the preceding anchor across scene boundaries for stronger subject identity; scene resets allow a clean visual break between authored scenes.
                        </div>
                      </div>
                    ) : null}

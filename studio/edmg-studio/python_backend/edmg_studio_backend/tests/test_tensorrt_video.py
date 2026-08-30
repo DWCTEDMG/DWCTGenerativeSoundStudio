@@ -81,6 +81,8 @@ def test_storyboard_full_motion_preserves_disabled_prompt_refinement() -> None:
     assert resolved.video_model_prompt_refine is False
     assert resolved.video_model_motion_score_mode == "auto"
     assert resolved.video_model_scene_motion == "scene"
+    assert resolved.keyframe_continuity_mode == "project"
+    assert resolved.video_model_max_frames_per_scene >= 8
     assert resolved.keyframe_interval_s == 4.8
 
 
@@ -101,6 +103,45 @@ def test_internal_video_request_accepts_cinematic_both_anchor_mode() -> None:
     request = InternalVideoRenderRequest(video_model_anchor_mode="both")
 
     assert request.video_model_anchor_mode == "both"
+
+
+def test_internal_video_request_validates_keyframe_continuity_mode() -> None:
+    assert InternalVideoRenderRequest().keyframe_continuity_mode == "scene"
+    assert (
+        InternalVideoRenderRequest(keyframe_continuity_mode="project").keyframe_continuity_mode
+        == "project"
+    )
+
+    with pytest.raises(ValueError):
+        InternalVideoRenderRequest(keyframe_continuity_mode="sequence")  # type: ignore[arg-type]
+
+
+def test_internal_settings_parse_keyframe_continuity_mode() -> None:
+    default_settings = app_module._internal_settings_from_payload(
+        {}, model_id="hf_sd15_internal", render_tier="balanced", device_preference="cuda"
+    )
+    project_settings = app_module._internal_settings_from_payload(
+        {"keyframe_continuity_mode": "project"},
+        model_id="hf_sd15_internal",
+        render_tier="balanced",
+        device_preference="cuda",
+    )
+    invalid_settings = app_module._internal_settings_from_payload(
+        {"keyframe_continuity_mode": "sequence"},
+        model_id="hf_sd15_internal",
+        render_tier="balanced",
+        device_preference="cuda",
+    )
+
+    assert default_settings.keyframe_continuity_mode == "scene"
+    assert project_settings.keyframe_continuity_mode == "project"
+    assert invalid_settings.keyframe_continuity_mode == "scene"
+
+    resolved_payload = app_module._persist_resolved_internal_video_payload(
+        {"keyframe_continuity_mode": "scene"},
+        {"mode": "diffusion", "settings": {"keyframe_continuity_mode": "project"}},
+    )
+    assert resolved_payload["keyframe_continuity_mode"] == "project"
 
 
 def test_stale_tensorrt_runtime_bundle_selection_maps_to_supported_video_bundle() -> None:
@@ -999,7 +1040,7 @@ def test_internal_negative_prompt_rejects_spatial_storyboard_layouts() -> None:
     assert "cloned subject" in negative
 
 
-def test_keyframe_continuity_resets_at_authored_scene_boundary() -> None:
+def test_keyframe_continuity_scope_controls_authored_scene_boundary_reset() -> None:
     sentinel = object()
 
     assert (
@@ -1018,6 +1059,36 @@ def test_keyframe_continuity_resets_at_authored_scene_boundary() -> None:
         )
         is None
     )
+    assert (
+        internal_video._keyframe_continuity_source(  # noqa: SLF001 - pure continuity helper
+            sentinel,
+            previous_scene_index=3,
+            scene_index=4,
+            keyframe_continuity_mode="project",
+        )
+        is sentinel
+    )
+
+
+def test_keyframe_continuity_mode_changes_render_cache_signature(tmp_path: Path) -> None:
+    common = {
+        "variant_index": 0,
+        "model_dir": tmp_path / "model",
+        "variant": {"prompts": {"0": "cinematic guitarist"}},
+        "scenes": [{"start_s": 0.0, "end_s": 5.0, "prompt": "cinematic guitarist"}],
+        "timeline": None,
+    }
+
+    scene_tag = internal_video._build_work_tag(  # noqa: SLF001 - deterministic cache contract
+        **common,
+        settings=InternalVideoSettings(keyframe_continuity_mode="scene"),
+    )
+    project_tag = internal_video._build_work_tag(  # noqa: SLF001 - deterministic cache contract
+        **common,
+        settings=InternalVideoSettings(keyframe_continuity_mode="project"),
+    )
+
+    assert scene_tag != project_tag
 
 
 def test_cinematic_both_anchor_mode_blends_opening_and_ending_frames() -> None:

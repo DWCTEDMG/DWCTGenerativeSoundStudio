@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional
 
 import requests
 
+from ..schemas import PlanRequest, PlanResponse, PlanVariant
 from .base import PlanProvider
 from .fallback import RuleBasedPlanner
-from ..schemas import PlanRequest, PlanResponse, PlanVariant
-
+from .storyboard_contract import storyboard_system_prompt
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def _extract_json(text: str) -> Optional[dict]:
+def _extract_json(text: str) -> dict | None:
     try:
         return json.loads(text)
     except Exception:
@@ -49,15 +48,11 @@ class OpenAICompatPlanner(PlanProvider):
         return "openai_compat"
 
     @property
-    def model(self) -> Optional[str]:
+    def model(self) -> str | None:
         return self._model
 
     def plan(self, req: PlanRequest) -> PlanResponse:
-        system = (
-            "You are EDMG Director. Return STRICT JSON only. "
-            "Schema: {variants: [{name, logline, mood, visual_motifs:[...], color_palette:[...], "
-            "scenes:[{start_s,end_s,prompt,negative_prompt,camera,motion,notes}]}]}"
-        )
+        system = storyboard_system_prompt()
 
         ctx = {
             "title": req.title,

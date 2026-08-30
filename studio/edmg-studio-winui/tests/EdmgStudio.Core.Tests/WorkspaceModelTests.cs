@@ -62,6 +62,13 @@ public sealed class WorkspaceModelTests
                 EndSeconds = 6,
                 Prompt = "Tracking shot",
                 NegativePrompt = "flicker",
+                Subject = "same copper automaton",
+                Action = "turns and reaches",
+                Camera = "left-to-right track",
+                Motion = "head and hand movement",
+                EnvironmentMotion = "orchids and rain move",
+                ContinuityNote = "preserve blue eye and screen direction",
+                Transition = "match action",
                 AdditionalData = new Dictionary<string, JsonElement>
                 {
                     ["continuity"] = metadata.RootElement.GetProperty("continuity"),
@@ -76,8 +83,50 @@ public sealed class WorkspaceModelTests
         Assert.AreEqual(6D, clone.EndSeconds);
         Assert.AreEqual("Tracking shot", clone.Prompt);
         Assert.AreEqual("flicker", clone.NegativePrompt);
+        Assert.AreEqual("same copper automaton", clone.Subject);
+        Assert.AreEqual("turns and reaches", clone.Action);
+        Assert.AreEqual("left-to-right track", clone.Camera);
+        Assert.AreEqual("head and hand movement", clone.Motion);
+        Assert.AreEqual("orchids and rain move", clone.EnvironmentMotion);
+        Assert.AreEqual("preserve blue eye and screen direction", clone.ContinuityNote);
+        Assert.AreEqual("match action", clone.Transition);
         Assert.AreEqual("performer", clone.AdditionalData!["continuity"].GetProperty("subject").GetString());
         Assert.AreEqual(0.92D, clone.AdditionalData["score"].GetDouble());
+    }
+
+    [TestMethod]
+    public void CloneScene_ReplacesEditableStoryboardContractTogether()
+    {
+        var source = new PlanSceneDto
+        {
+            Prompt = "Original",
+            Subject = "old subject",
+            Action = "old action",
+            Camera = "old camera",
+            Motion = "old motion",
+            EnvironmentMotion = "old environment",
+            ContinuityNote = "old continuity",
+            Transition = "old transition",
+        };
+
+        PlanSceneDto clone = WorkspaceModelHelpers.CloneScene(
+            source,
+            subject: "same copper automaton",
+            action: "raises its hand",
+            camera: "measured tracking move",
+            motion: "head and hand movement",
+            environmentMotion: "orchids sway",
+            continuity: "preserve the blue eye",
+            transition: "match action",
+            replaceStoryboardFields: true);
+
+        Assert.AreEqual("same copper automaton", clone.Subject);
+        Assert.AreEqual("raises its hand", clone.Action);
+        Assert.AreEqual("measured tracking move", clone.Camera);
+        Assert.AreEqual("head and hand movement", clone.Motion);
+        Assert.AreEqual("orchids sway", clone.EnvironmentMotion);
+        Assert.AreEqual("preserve the blue eye", clone.ContinuityNote);
+        Assert.AreEqual("match action", clone.Transition);
     }
 
     [TestMethod]

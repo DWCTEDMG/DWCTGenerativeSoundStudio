@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional
 
 import requests
 
+from ..schemas import PlanRequest, PlanResponse, PlanVariant
 from .base import PlanProvider
 from .fallback import RuleBasedPlanner
-from ..schemas import PlanRequest, PlanResponse, PlanVariant
-
+from .storyboard_contract import storyboard_system_prompt
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def _extract_json(text: str) -> Optional[dict]:
+def _extract_json(text: str) -> dict | None:
     # Try entire response
     try:
         return json.loads(text)
@@ -43,15 +42,11 @@ class OllamaPlanner(PlanProvider):
         return "ollama"
 
     @property
-    def model(self) -> Optional[str]:
+    def model(self) -> str | None:
         return self._model
 
     def plan(self, req: PlanRequest) -> PlanResponse:
-        system = (
-            "You are EDMG Director. Return STRICT JSON only. "
-            "Schema: {variants: [{name, logline, mood, visual_motifs:[...], color_palette:[...], "
-            "scenes:[{start_s,end_s,prompt,negative_prompt,camera,motion,notes}]}]}"
-        )
+        system = storyboard_system_prompt()
 
         ctx = {
             "title": req.title,
@@ -70,7 +65,9 @@ class OllamaPlanner(PlanProvider):
             + json.dumps(ctx, ensure_ascii=False)
             + "\n\n"
             "Produce EDMG variants. Ensure scene times cover [0,duration_s] when duration_s is provided. "
-            "Keep prompts vivid and filmable. If lyrics exist, align scenes to themes/sections."
+            "Keep prompts vivid and filmable, with an explicit subject identity, visible action, "
+            "environment movement, camera move, continuity rule, and transition for every scene. "
+            "If lyrics exist, align scenes to themes and musical sections."
         )
 
         try:

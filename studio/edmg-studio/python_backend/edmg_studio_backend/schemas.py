@@ -188,6 +188,7 @@ class InternalVideoRenderRequest(BaseModel):
     sampler: str = "euler"
     seed: int | None = None
     keyframe_interval_s: float = Field(default=5.0, ge=0.5, le=60.0)
+    keyframe_continuity_mode: Literal["scene", "project"] = "scene"
 
     interpolation_engine: Literal["auto","minterpolate","fps","rife"] = "auto"
     model_id: str = "auto"

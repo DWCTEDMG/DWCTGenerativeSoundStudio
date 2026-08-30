@@ -429,8 +429,11 @@
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Spacing="4">
                                         <TextBlock Text="Video-model max frames / scene" Style="{StaticResource FieldLabelStyle}" />
-                                        <NumberBox x:Name="FramesBox" Value="25" Minimum="2" Maximum="96"
+                                        <NumberBox x:Name="FramesBox" Value="8" Minimum="8" Maximum="96"
                                                    AutomationProperties.AutomationId="RenderFramesBox" />
+                                        <TextBlock Text="Eight native frames is the minimum for verified motion. Use Storyboard full motion for longer scenes."
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   TextWrapping="Wrap" />
                                     </StackPanel>
                                     <StackPanel Grid.Row="1" Spacing="4">
                                         <TextBlock Text="Motion strength" Style="{StaticResource FieldLabelStyle}" />
@@ -522,6 +525,7 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
                                     <StackPanel Spacing="4">
                                         <TextBlock Text="Keyframe interval (seconds)" Style="{StaticResource FieldLabelStyle}" />
@@ -546,6 +550,7 @@
                                     <StackPanel Grid.Row="2" Spacing="4">
                                         <TextBlock Text="Motion strategy" Style="{StaticResource FieldLabelStyle}" />
                                         <ComboBox x:Name="MotionStrategyComboBox" SelectedIndex="0"
+                                                  SelectionChanged="MotionStrategySelection_Changed"
                                                   AutomationProperties.AutomationId="RenderMotionStrategyComboBox">
                                             <ComboBoxItem Content="Manual" Tag="manual" />
                                             <ComboBoxItem Content="Storyboard full motion" Tag="storyboard_full_motion" />
@@ -556,9 +561,21 @@
                                         <NumberBox x:Name="StoryboardShotMaxBox" Value="4" Minimum="1" Maximum="12" SmallChange="0.5"
                                                    AutomationProperties.AutomationId="RenderStoryboardShotMaxBox" />
                                     </StackPanel>
-                                    <ToggleSwitch x:Name="PromptBlendToggle" Grid.Row="3" Header="Blend prompts between anchors" IsOn="True"
+                                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Spacing="4">
+                                        <TextBlock Text="Keyframe continuity" Style="{StaticResource FieldLabelStyle}" />
+                                        <ComboBox x:Name="KeyframeContinuityModeComboBox"
+                                                  SelectedIndex="0"
+                                                  AutomationProperties.AutomationId="RenderKeyframeContinuityModeComboBox">
+                                            <ComboBoxItem Content="Scene — reset continuity at each scene" Tag="scene" />
+                                            <ComboBoxItem Content="Project-wide identity lock" Tag="project" />
+                                        </ComboBox>
+                                        <TextBlock Text="Project continuity carries the preceding keyframe into each new scene to reduce subject and identity drift. Scene continuity starts each authored scene independently."
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="PromptBlendToggle" Grid.Row="4" Header="Blend prompts between anchors" IsOn="True"
                                                   AutomationProperties.AutomationId="RenderPromptBlendToggle" />
-                                    <ToggleSwitch x:Name="ResumeFramesToggle" Grid.Row="3" Grid.Column="1" Header="Resume existing frames" IsOn="True"
+                                    <ToggleSwitch x:Name="ResumeFramesToggle" Grid.Row="4" Grid.Column="1" Header="Resume existing frames" IsOn="True"
                                                   AutomationProperties.AutomationId="RenderResumeFramesToggle" />
                                 </Grid>
                             </Expander>

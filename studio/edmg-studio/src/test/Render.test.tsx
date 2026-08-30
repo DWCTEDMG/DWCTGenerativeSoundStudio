@@ -579,6 +579,7 @@ describe("Render page", () => {
           temporal_mode: "video_model",
           video_model_engine: "svd",
           video_model_id: "hf_animatediff_motion_adapter_v15_2_internal",
+          keyframe_continuity_mode: "project",
         },
       }],
     });
@@ -595,6 +596,7 @@ describe("Render page", () => {
     await waitFor(() => {
       expect(engineSelect.value).toBe("svd");
       expect(modelSelect.value).toBe("hf_svd_xt_1_1_internal");
+      expect((screen.getByLabelText("Keyframe continuity") as HTMLSelectElement).value).toBe("project");
     });
     expect(Array.from(modelSelect.options, (option) => option.value)).not.toContain("hf_animatediff_motion_adapter_v15_2_internal");
 
@@ -647,6 +649,49 @@ describe("Render page", () => {
     });
   }, 10000);
 
+  it("serializes project-wide keyframe identity continuity for internal video", async () => {
+    const fetchMock = installRenderMocks();
+
+    renderWithStudio(<Render />);
+
+    const temporalOption = await screen.findByRole("option", { name: "Internal video model (SVD / AnimateDiff)" });
+    const temporalSelect = temporalOption.closest("select");
+    expect(temporalSelect).toBeTruthy();
+    fireEvent.change(temporalSelect!, { target: { value: "video_model" } });
+
+    const continuitySelect = await screen.findByLabelText("Keyframe continuity") as HTMLSelectElement;
+    expect(continuitySelect.value).toBe("scene");
+    expect(within(continuitySelect).getByRole("option", { name: "Scene resets" })).toBeTruthy();
+    expect(within(continuitySelect).getByRole("option", { name: "Project-wide identity lock" })).toBeTruthy();
+
+    fireEvent.change(continuitySelect, { target: { value: "project" } });
+    expect(continuitySelect.value).toBe("project");
+    expect(await screen.findByText(/Project-wide mode carries the preceding anchor/i)).toBeTruthy();
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => {
+          if (!String(url).includes("/v1/projects/p1/render/internal/preflight")) return false;
+          return String(init?.body || "").includes('"keyframe_continuity_mode":"project"');
+        }),
+      ).toBe(true);
+    });
+
+    const renderButton = await screen.findByRole("button", { name: "Internal / Hosted" });
+    await waitFor(() => expect((renderButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(renderButton);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => (
+          String(url).includes("/v1/projects/p1/render/internal/video")
+          && String(init?.method || "GET").toUpperCase() === "POST"
+          && String(init?.body || "").includes('"keyframe_continuity_mode":"project"')
+        )),
+      ).toBe(true);
+    });
+  }, 10000);
+
   it("sends storyboard full motion strategy with generated-anchor video mode", async () => {
     const fetchMock = installRenderMocks();
 
@@ -659,6 +704,7 @@ describe("Render page", () => {
 
     expect(await screen.findByText(/generate scene keyframe anchors/i)).toBeTruthy();
     expect(await screen.findByDisplayValue("Internal video model (SVD / AnimateDiff)")).toBeTruthy();
+    expect((await screen.findByLabelText("Keyframe continuity") as HTMLSelectElement).value).toBe("project");
 
     await waitFor(() => {
       expect(
@@ -671,6 +717,7 @@ describe("Render page", () => {
             && body.includes('"video_model_motion_score_mode":"auto"')
             && body.includes('"video_model_scene_motion":"scene"')
             && body.includes('"video_model_prompt_refine":true')
+            && body.includes('"keyframe_continuity_mode":"project"')
             && body.includes('"video_model_apply_timeline_camera":true');
         }),
       ).toBe(true);

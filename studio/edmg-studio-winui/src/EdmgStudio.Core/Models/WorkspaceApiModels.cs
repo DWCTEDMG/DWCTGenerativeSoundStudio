@@ -472,7 +472,15 @@ public static class WorkspaceModelHelpers
         double? endSeconds = null,
         string? prompt = null,
         string? negativePrompt = null,
-        bool replaceNegativePrompt = false)
+        bool replaceNegativePrompt = false,
+        string? subject = null,
+        string? action = null,
+        string? camera = null,
+        string? motion = null,
+        string? environmentMotion = null,
+        string? continuity = null,
+        string? transition = null,
+        bool replaceStoryboardFields = false)
     {
         ArgumentNullException.ThrowIfNull(scene);
         return new PlanSceneDto
@@ -481,6 +489,13 @@ public static class WorkspaceModelHelpers
             EndSeconds = endSeconds ?? scene.EndSeconds,
             Prompt = prompt ?? scene.Prompt,
             NegativePrompt = replaceNegativePrompt ? negativePrompt : scene.NegativePrompt,
+            Subject = replaceStoryboardFields ? subject : scene.Subject,
+            Action = replaceStoryboardFields ? action : scene.Action,
+            Camera = replaceStoryboardFields ? camera : scene.Camera,
+            Motion = replaceStoryboardFields ? motion : scene.Motion,
+            EnvironmentMotion = replaceStoryboardFields ? environmentMotion : scene.EnvironmentMotion,
+            ContinuityNote = replaceStoryboardFields ? continuity : scene.ContinuityNote,
+            Transition = replaceStoryboardFields ? transition : scene.Transition,
             AdditionalData = CloneAdditionalData(scene.AdditionalData),
         };
     }

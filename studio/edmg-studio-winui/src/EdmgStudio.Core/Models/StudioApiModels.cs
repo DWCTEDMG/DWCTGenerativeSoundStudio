@@ -247,6 +247,44 @@ public sealed class PlanSceneDto
     [JsonPropertyName("negative_prompt")]
     public string? NegativePrompt { get; init; }
 
+    [JsonPropertyName("subject")]
+    public string? Subject { get; init; }
+
+    [JsonPropertyName("action")]
+    public string? Action { get; init; }
+
+    [JsonPropertyName("camera")]
+    public string? Camera { get; init; }
+
+    [JsonPropertyName("motion")]
+    public string? Motion { get; init; }
+
+    [JsonPropertyName("environment_motion")]
+    public string? EnvironmentMotion { get; init; }
+
+    [JsonPropertyName("continuity_note")]
+    public string? ContinuityNote { get; init; }
+
+    [JsonIgnore]
+    public string? ContinuityInstruction
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(ContinuityNote))
+            {
+                return ContinuityNote;
+            }
+
+            return AdditionalData?.TryGetValue("continuity", out JsonElement value) == true
+                && value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null;
+        }
+    }
+
+    [JsonPropertyName("transition")]
+    public string? Transition { get; init; }
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }

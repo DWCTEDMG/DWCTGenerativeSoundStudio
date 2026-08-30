@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class PlanRequest(BaseModel):
@@ -27,8 +28,13 @@ class Scene(BaseModel):
     end_s: float
     prompt: str
     negative_prompt: str | None = None
+    subject: str | None = None
+    action: str | None = None
     camera: str | None = None
     motion: str | None = None
+    environment_motion: str | None = None
+    continuity: str | None = None
+    transition: str | None = None
     notes: str | None = None
 
 

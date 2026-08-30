@@ -102,6 +102,18 @@ public sealed class InternalVideoRenderRequestBuilderTests
     }
 
     [TestMethod]
+    public void Build_SerializesProjectKeyframeContinuityMode()
+    {
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            KeyframeContinuityMode = "project",
+        });
+
+        Assert.AreEqual("project", request.GetProperty("keyframe_continuity_mode").GetString());
+        Assert.AreEqual(8, request.GetProperty("video_model_max_frames_per_scene").GetInt32());
+    }
+
+    [TestMethod]
     public void Build_RejectsMalformedJsonWithFieldName()
     {
         InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
@@ -135,5 +147,29 @@ public sealed class InternalVideoRenderRequestBuilderTests
 
         StringAssert.Contains(enumException.Message, "Render mode must be one of");
         StringAssert.Contains(rangeException.Message, "Output FPS must be between 1 and 60");
+    }
+
+    [TestMethod]
+    public void Build_RejectsUnknownKeyframeContinuityMode()
+    {
+        InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+            {
+                KeyframeContinuityMode = "sequence",
+            }));
+
+        StringAssert.Contains(exception.Message, "Keyframe continuity mode must be one of: scene, project");
+    }
+
+    [TestMethod]
+    public void Build_RejectsFewerThanEightVideoModelFrames()
+    {
+        InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+            {
+                VideoModelMaxFramesPerScene = 7,
+            }));
+
+        StringAssert.Contains(exception.Message, "Video model frames per scene must be between 8 and 96");
     }
 }

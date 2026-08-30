@@ -340,6 +340,12 @@
                                                             TextTrimming="CharacterEllipsis"
                                                             TextWrapping="Wrap" />
                                                         <TextBlock
+                                                            MaxLines="2"
+                                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                            Text="{Binding MotionSummary}"
+                                                            TextTrimming="CharacterEllipsis"
+                                                            TextWrapping="Wrap" />
+                                                        <TextBlock
                                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                             Text="{Binding StateSummary}" />
                                                     </StackPanel>
@@ -419,6 +425,62 @@
                                                             Height="76"
                                                             TextChanged="ScenePromptTextBox_TextChanged"
                                                             TextWrapping="Wrap" />
+
+                                                        <Expander
+                                                            Header="Motion storyboard and continuity"
+                                                            IsExpanded="True">
+                                                            <StackPanel Padding="0,10,0,0" Spacing="10">
+                                                                <TextBox
+                                                                    x:Name="SceneSubjectTextBox"
+                                                                    Header="Subject identity anchor"
+                                                                    PlaceholderText="Face, silhouette, wardrobe, and signature prop to preserve"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
+                                                                <TextBox
+                                                                    x:Name="SceneActionTextBox"
+                                                                    Header="Visible shot action"
+                                                                    PlaceholderText="What the subject visibly does through progressive poses"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
+                                                                <Grid ColumnSpacing="10">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBox
+                                                                        x:Name="SceneCameraTextBox"
+                                                                        Header="Camera move"
+                                                                        PlaceholderText="Camera motion only"
+                                                                        TextChanged="ScenePromptTextBox_TextChanged"
+                                                                        TextWrapping="Wrap" />
+                                                                    <TextBox
+                                                                        x:Name="SceneMotionTextBox"
+                                                                        Grid.Column="1"
+                                                                        Header="Subject motion"
+                                                                        PlaceholderText="Body, object, cloth, or prop movement"
+                                                                        TextChanged="ScenePromptTextBox_TextChanged"
+                                                                        TextWrapping="Wrap" />
+                                                                </Grid>
+                                                                <TextBox
+                                                                    x:Name="SceneEnvironmentMotionTextBox"
+                                                                    Header="Environment motion"
+                                                                    PlaceholderText="Atmosphere, particles, water, light, fabric, or background movement"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
+                                                                <TextBox
+                                                                    x:Name="SceneContinuityTextBox"
+                                                                    Header="Continuity contract"
+                                                                    PlaceholderText="Identity, wardrobe, palette, world, and screen direction to carry forward"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
+                                                                <TextBox
+                                                                    x:Name="SceneTransitionTextBox"
+                                                                    Header="Transition"
+                                                                    PlaceholderText="Match action, dissolve, or motivated impact cut"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
+                                                            </StackPanel>
+                                                        </Expander>
 
                                                         <Grid ColumnSpacing="8" RowSpacing="8">
                                                             <Grid.ColumnDefinitions>
