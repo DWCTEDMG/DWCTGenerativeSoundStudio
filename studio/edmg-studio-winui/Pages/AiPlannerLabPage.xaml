@@ -430,10 +430,47 @@
                                                             Header="Motion storyboard and continuity"
                                                             IsExpanded="True">
                                                             <StackPanel Padding="0,10,0,0" Spacing="10">
+                                                                <Grid ColumnSpacing="10">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBox
+                                                                        x:Name="SceneSettingTextBox"
+                                                                        Header="Setting and geography"
+                                                                        PlaceholderText="Location, layout, landmarks, and spatial relationships to preserve"
+                                                                        TextChanged="ScenePromptTextBox_TextChanged"
+                                                                        TextWrapping="Wrap" />
+                                                                    <TextBox
+                                                                        x:Name="SceneShotTypeTextBox"
+                                                                        Grid.Column="1"
+                                                                        Header="Shot type and composition"
+                                                                        PlaceholderText="Framing, angle, lens feel, and subject placement"
+                                                                        TextChanged="ScenePromptTextBox_TextChanged"
+                                                                        TextWrapping="Wrap" />
+                                                                </Grid>
+                                                                <TextBox
+                                                                    x:Name="SceneCharacterLockTextBox"
+                                                                    Header="Character lock"
+                                                                    PlaceholderText="Immutable identity, face, silhouette, wardrobe, and signature props"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
+                                                                <TextBox
+                                                                    x:Name="SceneStyleLockTextBox"
+                                                                    Header="Style lock"
+                                                                    PlaceholderText="Immutable palette, texture, lighting language, and rendering style"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
+                                                                <TextBox
+                                                                    x:Name="SceneStartStateTextBox"
+                                                                    Header="Start state (first frame)"
+                                                                    PlaceholderText="Opening pose, object placement, screen direction, and camera position"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
                                                                 <TextBox
                                                                     x:Name="SceneSubjectTextBox"
-                                                                    Header="Subject identity anchor"
-                                                                    PlaceholderText="Face, silhouette, wardrobe, and signature prop to preserve"
+                                                                    Header="Subject in this shot"
+                                                                    PlaceholderText="Who or what is visible in this scene"
                                                                     TextChanged="ScenePromptTextBox_TextChanged"
                                                                     TextWrapping="Wrap" />
                                                                 <TextBox
@@ -465,6 +502,12 @@
                                                                     x:Name="SceneEnvironmentMotionTextBox"
                                                                     Header="Environment motion"
                                                                     PlaceholderText="Atmosphere, particles, water, light, fabric, or background movement"
+                                                                    TextChanged="ScenePromptTextBox_TextChanged"
+                                                                    TextWrapping="Wrap" />
+                                                                <TextBox
+                                                                    x:Name="SceneEndStateTextBox"
+                                                                    Header="End state (last frame)"
+                                                                    PlaceholderText="Final pose, object placement, screen direction, and camera position for the next scene"
                                                                     TextChanged="ScenePromptTextBox_TextChanged"
                                                                     TextWrapping="Wrap" />
                                                                 <TextBox

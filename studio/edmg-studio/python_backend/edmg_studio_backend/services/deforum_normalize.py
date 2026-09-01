@@ -21,8 +21,15 @@ class UnifiedDeforumRenderContext:
 DEFAULT_RENDER_PROMPT = "Cinematic image sequence with a coherent subject and controlled atmosphere."
 DEFAULT_NEGATIVE_PROMPT = "blurry, low quality, watermark, text, logo"
 
+# Stable Diffusion 1.x and the CLIP branch used by FLUX accept 77 tokens, including
+# special tokens.  Fifty-six concise English words leave practical headroom for BPE
+# splits while still carrying subject, action, motion, framing, world, and style.
+# The complete authored storyboard remains in ``prompt_pack`` and structured fields.
+CLIP_SAFE_RENDER_PROMPT_MAX_WORDS = 56
+
 
 _SCENE_PROMPT_FIELDS: tuple[str, ...] = (
+    "render_prompt",
     "prompt_pack",
     "prompt",
     "text",
@@ -54,6 +61,197 @@ def _clean_text(value: Any) -> str:
     return " ".join(str(value).replace("\r", " ").replace("\n", " ").split()).strip()
 
 
+def _scene_contract_text(scene: dict[str, Any], *fields: str) -> str:
+    storyboard = scene.get("storyboard") if isinstance(scene.get("storyboard"), dict) else {}
+    for source in (scene, storyboard):
+        for field in fields:
+            text = _clean_text(source.get(field))
+            if text:
+                return text
+    return ""
+
+
+def prompt_excerpt(value: Any, *, max_words: int) -> str:
+    """Return a deterministic, sentence-safe prompt excerpt.
+
+    Studio keeps the complete authored storyboard contract in project metadata. Model-facing
+    prompts use bounded excerpts so essential identity and continuity clauses are not displaced
+    by later prose when CLIP/T5 tokenizers apply their own hard limits.
+    """
+
+    text = _clean_text(value).strip(" ,;:.-")
+    if not text:
+        return ""
+    words = text.split()
+    if len(words) <= max(1, int(max_words)):
+        return text
+    excerpt = words[: max(1, int(max_words))]
+    trailing_connectors = {
+        "a",
+        "an",
+        "and",
+        "for",
+        "from",
+        "in",
+        "into",
+        "of",
+        "on",
+        "or",
+        "the",
+        "this",
+        "to",
+        "with",
+    }
+    while len(excerpt) > 1 and excerpt[-1].strip(" ,;:.-").lower() in trailing_connectors:
+        excerpt.pop()
+    return " ".join(excerpt).rstrip(" ,;:.-")
+
+
+def limit_prompt_words(value: Any, *, max_words: int) -> str:
+    text = _clean_text(value)
+    words = text.split()
+    limit = max(1, int(max_words))
+    if len(words) <= limit:
+        return text
+    return " ".join(words[:limit]).rstrip(" ,;:.-") + "."
+
+
+def _model_visual_phrase(
+    value: Any,
+    *,
+    max_words: int,
+    concrete_core: bool = False,
+) -> str:
+    """Return natural image-language instead of procedural storyboard prose."""
+
+    text = _clean_text(value).strip(" ,;:.-")
+    if not text:
+        return ""
+    if concrete_core:
+        lowered = text.lower()
+        cut_markers = (
+            ";",
+            " as one geographically continuous",
+            " with stable spatial relationships",
+            " consistent medium",
+            " identical face",
+        )
+        cut_at = len(text)
+        for marker in cut_markers:
+            marker_at = lowered.find(marker)
+            if marker_at > 0:
+                cut_at = min(cut_at, marker_at)
+        concrete = text[:cut_at].strip(" ,;:.-")
+        if len(concrete.split()) >= 2:
+            text = concrete
+    # CLIP tokenizers split punctuation-heavy compounds into several tokens.
+    text = text.replace("-", " ")
+    return prompt_excerpt(text, max_words=max_words)
+
+
+def operational_render_prompt_from_scene(
+    scene: dict[str, Any],
+    *,
+    fallback: str = DEFAULT_RENDER_PROMPT,
+    max_words: int = CLIP_SAFE_RENDER_PROMPT_MAX_WORDS,
+    include_states: bool = False,
+) -> str:
+    """Build the concise prompt actually sent to local diffusion models.
+
+    The order is deliberate: a concrete subject and persistent props, visible action, authored
+    motion, framing, world, and visual style all fit inside the practical CLIP window. Procedural
+    labels such as ``Character lock:`` are excluded because they consume tokens without describing
+    pixels. The full prompt pack and exact boundary states remain untouched for storyboard review,
+    export, continuity enforcement, and provenance.
+    """
+
+    if not isinstance(scene, dict):
+        return limit_prompt_words(fallback, max_words=max_words)
+
+    character_lock = _scene_contract_text(
+        scene,
+        "character_lock",
+        "characterLock",
+        "subject",
+        "subject_anchor",
+    )
+    action = _scene_contract_text(scene, "action", "shot_action")
+    style_lock = _scene_contract_text(
+        scene,
+        "style_lock",
+        "styleLock",
+        "visual_lock",
+        "visualLock",
+    )
+    setting = _scene_contract_text(
+        scene,
+        "setting",
+        "location",
+        "location_hint",
+        "locationHint",
+    )
+    shot_type = _scene_contract_text(scene, "shot_type", "shotType", "composition")
+    camera = _scene_contract_text(scene, "camera", "camera_move", "camera_hint")
+    subject_motion = _scene_contract_text(scene, "motion", "subject_motion", "motion_hint")
+    environment_motion = _scene_contract_text(
+        scene,
+        "environment_motion",
+        "environmentMotion",
+    )
+    start_state = _scene_contract_text(scene, "start_state", "startState", "opening_state")
+    end_state = _scene_contract_text(scene, "end_state", "endState", "closing_state")
+    continuity = _scene_contract_text(
+        scene,
+        "continuity_note",
+        "continuityNote",
+        "continuity",
+    )
+
+    clauses: list[str] = []
+
+    def append_clause(value: Any, *, word_limit: int, concrete_core: bool = False) -> None:
+        phrase = _model_visual_phrase(
+            value,
+            max_words=word_limit,
+            concrete_core=concrete_core,
+        )
+        if not phrase:
+            return
+        normalized = phrase.casefold()
+        if any(existing.rstrip(".").casefold() == normalized for existing in clauses):
+            return
+        clauses.append(f"{phrase.rstrip('. ')}.")
+
+    append_clause(character_lock, word_limit=12, concrete_core=True)
+    if character_lock:
+        clauses.append("Single prominent subject, same identity and props.")
+    append_clause(action, word_limit=9)
+    append_clause(subject_motion, word_limit=5)
+    append_clause(environment_motion, word_limit=5)
+    append_clause(shot_type, word_limit=4)
+    append_clause(camera, word_limit=4)
+    append_clause(setting, word_limit=6, concrete_core=True)
+    append_clause(style_lock, word_limit=8, concrete_core=True)
+
+    if include_states:
+        start_excerpt = _model_visual_phrase(start_state, max_words=7, concrete_core=True)
+        end_excerpt = _model_visual_phrase(end_state, max_words=7, concrete_core=True)
+        if start_excerpt:
+            clauses.append(f"Begin with {start_excerpt}.")
+        if end_excerpt:
+            clauses.append(f"Resolve with {end_excerpt}.")
+
+    if include_states:
+        continuity_excerpt = _model_visual_phrase(continuity, max_words=6, concrete_core=True)
+        if continuity_excerpt:
+            clauses.append(f"{continuity_excerpt}.")
+
+    if not clauses:
+        source = _clean_text(scene.get("prompt") or scene.get("prompt_pack") or fallback)
+        return limit_prompt_words(source or fallback, max_words=max_words)
+    return limit_prompt_words(" ".join(clauses), max_words=max_words)
+
+
 def _is_generic_render_prompt(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
     if not normalized:
@@ -74,6 +272,10 @@ def render_prompt_from_scene(scene: dict[str, Any], *, fallback: str = DEFAULT_R
     """Return the strongest render prompt carried by a Studio scene payload."""
     if not isinstance(scene, dict):
         return fallback
+
+    operational = _clean_text(scene.get("render_prompt"))
+    if operational:
+        return operational
 
     primary: list[str] = []
     for field in _SCENE_PROMPT_FIELDS:
@@ -156,7 +358,19 @@ def _scene_prompt_pairs(scenes: list[dict[str, Any]], fps: int) -> list[tuple[in
     for scene in scenes:
         if not isinstance(scene, dict):
             continue
-        pairs.append((_frame_at_time(scene.get("start_s", 0.0), fps), render_prompt_from_scene(scene, fallback="")))
+        # Scene-derived prompts ultimately feed local CLIP-conditioned image models.
+        # Rebuild them from the structured storyboard contract here as a final model
+        # boundary so legacy projects cannot leak a stale or overlong render_prompt
+        # into keyframe generation. Explicit Timeline, variant, and request-level
+        # Deforum prompt tracks still retain their documented override precedence.
+        fallback = render_prompt_from_scene(scene, fallback="")
+        prompt = operational_render_prompt_from_scene(
+            scene,
+            fallback=fallback,
+            max_words=CLIP_SAFE_RENDER_PROMPT_MAX_WORDS,
+            include_states=False,
+        )
+        pairs.append((_frame_at_time(scene.get("start_s", 0.0), fps), prompt))
     return normalize_prompt_map(pairs)
 
 

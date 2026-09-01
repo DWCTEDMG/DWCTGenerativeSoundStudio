@@ -62,6 +62,12 @@ public sealed class WorkspaceModelTests
                 EndSeconds = 6,
                 Prompt = "Tracking shot",
                 NegativePrompt = "flicker",
+                Setting = "flooded conservatory with a broken east window",
+                ShotType = "medium-wide low-angle composition",
+                CharacterLock = "copper automaton with one blue glass eye and a red scarf",
+                StyleLock = "oxidized oil-paint texture with amber and teal lighting",
+                StartState = "automaton faces right beside the east window, left hand lowered",
+                EndState = "automaton still faces right, left hand touching the window latch",
                 Subject = "same copper automaton",
                 Action = "turns and reaches",
                 Camera = "left-to-right track",
@@ -83,6 +89,12 @@ public sealed class WorkspaceModelTests
         Assert.AreEqual(6D, clone.EndSeconds);
         Assert.AreEqual("Tracking shot", clone.Prompt);
         Assert.AreEqual("flicker", clone.NegativePrompt);
+        Assert.AreEqual("flooded conservatory with a broken east window", clone.Setting);
+        Assert.AreEqual("medium-wide low-angle composition", clone.ShotType);
+        Assert.AreEqual("copper automaton with one blue glass eye and a red scarf", clone.CharacterLock);
+        Assert.AreEqual("oxidized oil-paint texture with amber and teal lighting", clone.StyleLock);
+        Assert.AreEqual("automaton faces right beside the east window, left hand lowered", clone.StartState);
+        Assert.AreEqual("automaton still faces right, left hand touching the window latch", clone.EndState);
         Assert.AreEqual("same copper automaton", clone.Subject);
         Assert.AreEqual("turns and reaches", clone.Action);
         Assert.AreEqual("left-to-right track", clone.Camera);
@@ -100,6 +112,12 @@ public sealed class WorkspaceModelTests
         var source = new PlanSceneDto
         {
             Prompt = "Original",
+            Setting = "old setting",
+            ShotType = "old shot type",
+            CharacterLock = "old character lock",
+            StyleLock = "old style lock",
+            StartState = "old start state",
+            EndState = "old end state",
             Subject = "old subject",
             Action = "old action",
             Camera = "old camera",
@@ -111,6 +129,12 @@ public sealed class WorkspaceModelTests
 
         PlanSceneDto clone = WorkspaceModelHelpers.CloneScene(
             source,
+            setting: "flooded conservatory",
+            shotType: "medium-wide low angle",
+            characterLock: "copper automaton with one blue eye",
+            styleLock: "amber-teal oxidized oil paint",
+            startState: "left hand lowered beside the window",
+            endState: "left hand touching the latch",
             subject: "same copper automaton",
             action: "raises its hand",
             camera: "measured tracking move",
@@ -120,6 +144,12 @@ public sealed class WorkspaceModelTests
             transition: "match action",
             replaceStoryboardFields: true);
 
+        Assert.AreEqual("flooded conservatory", clone.Setting);
+        Assert.AreEqual("medium-wide low angle", clone.ShotType);
+        Assert.AreEqual("copper automaton with one blue eye", clone.CharacterLock);
+        Assert.AreEqual("amber-teal oxidized oil paint", clone.StyleLock);
+        Assert.AreEqual("left hand lowered beside the window", clone.StartState);
+        Assert.AreEqual("left hand touching the latch", clone.EndState);
         Assert.AreEqual("same copper automaton", clone.Subject);
         Assert.AreEqual("raises its hand", clone.Action);
         Assert.AreEqual("measured tracking move", clone.Camera);
@@ -127,6 +157,124 @@ public sealed class WorkspaceModelTests
         Assert.AreEqual("orchids sway", clone.EnvironmentMotion);
         Assert.AreEqual("preserve the blue eye", clone.ContinuityNote);
         Assert.AreEqual("match action", clone.Transition);
+    }
+
+    [TestMethod]
+    public void PlanSceneDto_RoundTripsContinuityFieldsWithCanonicalJsonNames()
+    {
+        var plan = new PlanDto
+        {
+            Variants =
+            [
+                new PlanVariantDto
+                {
+                    Scenes =
+                    [
+                        new PlanSceneDto
+                        {
+                            Prompt = "A continuous reach toward the window latch",
+                            Setting = "flooded conservatory",
+                            ShotType = "medium-wide low angle",
+                            CharacterLock = "copper automaton with one blue eye",
+                            StyleLock = "amber-teal oxidized oil paint",
+                            StartState = "left hand lowered beside the window",
+                            EndState = "left hand touching the latch",
+                        },
+                    ],
+                },
+            ],
+        };
+
+        string json = JsonSerializer.Serialize(plan, StudioJson.GetTypeInfo<PlanDto>());
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement sceneJson = document.RootElement
+            .GetProperty("variants")[0]
+            .GetProperty("scenes")[0];
+        Assert.AreEqual("flooded conservatory", sceneJson.GetProperty("setting").GetString());
+        Assert.AreEqual("medium-wide low angle", sceneJson.GetProperty("shot_type").GetString());
+        Assert.AreEqual("copper automaton with one blue eye", sceneJson.GetProperty("character_lock").GetString());
+        Assert.AreEqual("amber-teal oxidized oil paint", sceneJson.GetProperty("style_lock").GetString());
+        Assert.AreEqual("left hand lowered beside the window", sceneJson.GetProperty("start_state").GetString());
+        Assert.AreEqual("left hand touching the latch", sceneJson.GetProperty("end_state").GetString());
+
+        PlanDto? roundTripped = JsonSerializer.Deserialize(json, StudioJson.GetTypeInfo<PlanDto>());
+        PlanSceneDto roundTrippedScene = roundTripped!.Variants[0].Scenes[0];
+        Assert.AreEqual(plan.Variants[0].Scenes[0].Setting, roundTrippedScene.Setting);
+        Assert.AreEqual(plan.Variants[0].Scenes[0].ShotType, roundTrippedScene.ShotType);
+        Assert.AreEqual(plan.Variants[0].Scenes[0].CharacterLock, roundTrippedScene.CharacterLock);
+        Assert.AreEqual(plan.Variants[0].Scenes[0].StyleLock, roundTrippedScene.StyleLock);
+        Assert.AreEqual(plan.Variants[0].Scenes[0].StartState, roundTrippedScene.StartState);
+        Assert.AreEqual(plan.Variants[0].Scenes[0].EndState, roundTrippedScene.EndState);
+    }
+
+    [TestMethod]
+    public void NormalizeStoryboardContinuity_LocksIdentityStyleAndExactBoundaryState()
+    {
+        PlanSceneDto[] scenes =
+        [
+            new PlanSceneDto
+            {
+                Prompt = "The automaton crosses the flooded conservatory.",
+                CharacterLock = "copper automaton with one blue eye",
+                StyleLock = "amber-teal oxidized oil paint",
+                StartState = "automaton enters from screen left",
+                EndState = "automaton reaches the center window facing screen right",
+            },
+            new PlanSceneDto
+            {
+                Prompt = "The automaton reaches toward the latch.",
+                CharacterLock = "conflicting replacement character",
+                StyleLock = "conflicting replacement style",
+                StartState = "conflicting reset pose",
+                EndState = "automaton touches the latch while facing screen right",
+            },
+        ];
+
+        IReadOnlyList<PlanSceneDto> normalized =
+            WorkspaceModelHelpers.NormalizeStoryboardContinuity(scenes);
+
+        Assert.AreEqual(scenes[0].CharacterLock, normalized[1].CharacterLock);
+        Assert.AreEqual(scenes[0].StyleLock, normalized[1].StyleLock);
+        Assert.AreEqual(normalized[0].EndState, normalized[1].StartState);
+        Assert.AreEqual(scenes[1].EndState, normalized[1].EndState);
+    }
+
+    [TestMethod]
+    public void NormalizeStoryboardContinuity_PropagatesLockEditedFromAnyScene()
+    {
+        PlanSceneDto[] scenes =
+        [
+            new PlanSceneDto
+            {
+                Prompt = "Character lock: original automaton. Style lock: original nocturnal style. Start state: original automaton enters from screen left. End state: original automaton reaches frame center.",
+                CharacterLock = "original automaton",
+                StyleLock = "original nocturnal style",
+                StartState = "automaton enters from screen left",
+                EndState = "original automaton reaches frame center",
+            },
+            new PlanSceneDto
+            {
+                CharacterLock = "edited automaton carrying the white orchid",
+                StyleLock = "edited copper and moonlit-blue realism",
+                StartState = "stale reset pose",
+                EndState = "automaton reaches the west exit",
+            },
+        ];
+
+        IReadOnlyList<PlanSceneDto> normalized =
+            WorkspaceModelHelpers.NormalizeStoryboardContinuity(
+                scenes,
+                scenes[1].CharacterLock,
+                scenes[1].StyleLock);
+
+        Assert.IsTrue(normalized.All(scene => scene.CharacterLock == scenes[1].CharacterLock));
+        Assert.IsTrue(normalized.All(scene => scene.StyleLock == scenes[1].StyleLock));
+        Assert.AreEqual(normalized[0].EndState, normalized[1].StartState);
+        Assert.IsFalse(normalized[0].Prompt.Contains("original automaton", StringComparison.Ordinal));
+        Assert.IsFalse(normalized[0].Prompt.Contains("original nocturnal style", StringComparison.Ordinal));
+        Assert.IsTrue(normalized[0].Prompt.Contains(scenes[1].CharacterLock!, StringComparison.Ordinal));
+        Assert.IsTrue(normalized[0].Prompt.Contains(scenes[1].StyleLock!, StringComparison.Ordinal));
+        Assert.IsTrue(normalized[0].EndState!.Contains(scenes[1].CharacterLock!, StringComparison.Ordinal));
     }
 
     [TestMethod]

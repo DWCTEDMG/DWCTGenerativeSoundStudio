@@ -28,6 +28,12 @@ class Scene(BaseModel):
     end_s: float
     prompt: str
     negative_prompt: str | None = None
+    setting: str | None = None
+    shot_type: str | None = None
+    character_lock: str | None = None
+    style_lock: str | None = None
+    start_state: str | None = None
+    end_state: str | None = None
     subject: str | None = None
     action: str | None = None
     camera: str | None = None

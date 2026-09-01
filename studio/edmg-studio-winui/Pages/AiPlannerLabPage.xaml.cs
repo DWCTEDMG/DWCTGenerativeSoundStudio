@@ -523,6 +523,12 @@ public sealed partial class AiPlannerLabPage : Page
             SceneEndNumberBox.Value = scene.EndSeconds;
             ScenePromptTextBox.Text = scene.Prompt;
             SceneNegativePromptTextBox.Text = scene.NegativePrompt ?? string.Empty;
+            SceneSettingTextBox.Text = scene.Setting ?? string.Empty;
+            SceneShotTypeTextBox.Text = scene.ShotType ?? string.Empty;
+            SceneCharacterLockTextBox.Text = scene.CharacterLock ?? string.Empty;
+            SceneStyleLockTextBox.Text = scene.StyleLock ?? string.Empty;
+            SceneStartStateTextBox.Text = scene.StartState ?? string.Empty;
+            SceneEndStateTextBox.Text = scene.EndState ?? string.Empty;
             SceneSubjectTextBox.Text = scene.Subject ?? string.Empty;
             SceneActionTextBox.Text = scene.Action ?? string.Empty;
             SceneCameraTextBox.Text = scene.Camera ?? string.Empty;
@@ -553,6 +559,12 @@ public sealed partial class AiPlannerLabPage : Page
             SceneEndNumberBox.Value = double.NaN;
             ScenePromptTextBox.Text = string.Empty;
             SceneNegativePromptTextBox.Text = string.Empty;
+            SceneSettingTextBox.Text = string.Empty;
+            SceneShotTypeTextBox.Text = string.Empty;
+            SceneCharacterLockTextBox.Text = string.Empty;
+            SceneStyleLockTextBox.Text = string.Empty;
+            SceneStartStateTextBox.Text = string.Empty;
+            SceneEndStateTextBox.Text = string.Empty;
             SceneSubjectTextBox.Text = string.Empty;
             SceneActionTextBox.Text = string.Empty;
             SceneCameraTextBox.Text = string.Empty;
@@ -581,6 +593,12 @@ public sealed partial class AiPlannerLabPage : Page
         SceneEndNumberBox.IsEnabled = canEdit;
         ScenePromptTextBox.IsEnabled = canEdit;
         SceneNegativePromptTextBox.IsEnabled = canEdit;
+        SceneSettingTextBox.IsEnabled = canEdit;
+        SceneShotTypeTextBox.IsEnabled = canEdit;
+        SceneCharacterLockTextBox.IsEnabled = canEdit;
+        SceneStyleLockTextBox.IsEnabled = canEdit;
+        SceneStartStateTextBox.IsEnabled = canEdit;
+        SceneEndStateTextBox.IsEnabled = canEdit;
         SceneSubjectTextBox.IsEnabled = canEdit;
         SceneActionTextBox.IsEnabled = canEdit;
         SceneCameraTextBox.IsEnabled = canEdit;
@@ -693,6 +711,12 @@ public sealed partial class AiPlannerLabPage : Page
                 prompt: prompt,
                 negativePrompt: NullIfWhiteSpace(SceneNegativePromptTextBox.Text),
                 replaceNegativePrompt: true,
+                setting: NullIfWhiteSpace(SceneSettingTextBox.Text),
+                shotType: NullIfWhiteSpace(SceneShotTypeTextBox.Text),
+                characterLock: NullIfWhiteSpace(SceneCharacterLockTextBox.Text),
+                styleLock: NullIfWhiteSpace(SceneStyleLockTextBox.Text),
+                startState: NullIfWhiteSpace(SceneStartStateTextBox.Text),
+                endState: NullIfWhiteSpace(SceneEndStateTextBox.Text),
                 subject: NullIfWhiteSpace(SceneSubjectTextBox.Text),
                 action: NullIfWhiteSpace(SceneActionTextBox.Text),
                 camera: NullIfWhiteSpace(SceneCameraTextBox.Text),
@@ -715,6 +739,12 @@ public sealed partial class AiPlannerLabPage : Page
         }
 
         variant.Scenes[_selectedSceneIndex] = replacement;
+        var normalizedScenes = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
+            variant.Scenes,
+            replacement.CharacterLock,
+            replacement.StyleLock);
+        variant.Scenes.Clear();
+        variant.Scenes.AddRange(normalizedScenes);
         _isVariantDirty = true;
         SynchronizeRawPlan();
         if (refreshList)
@@ -766,7 +796,10 @@ public sealed partial class AiPlannerLabPage : Page
             return;
         }
 
-        var reordered = WorkspaceModelHelpers.MoveScene(variant.Scenes, _selectedSceneIndex, offset);
+        var normalizedCurrentScenes = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
+            variant.Scenes);
+        var reordered = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
+            WorkspaceModelHelpers.MoveScene(normalizedCurrentScenes, _selectedSceneIndex, offset));
         variant.Scenes.Clear();
         variant.Scenes.AddRange(reordered);
         _selectedSceneIndex = Math.Clamp(targetIndex, 0, variant.Scenes.Count - 1);

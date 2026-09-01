@@ -110,6 +110,19 @@ function sceneDurationSeconds(scene: any, fallback = 5) {
   return Math.max(0.2, end - start || fallback);
 }
 
+function storyboardSceneField(scene: any, aliases: string[]) {
+  const sources = [scene, scene?.storyboard, scene?.prompt_pack, scene?.promptPack].filter(
+    (source) => source && typeof source === "object",
+  );
+  for (const source of sources) {
+    for (const alias of aliases) {
+      const value = source?.[alias];
+      if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+    }
+  }
+  return "";
+}
+
 function resequenceStoryboardScenes(scenes: any[]) {
   let cursor = 0;
   return scenes.map((scene, index) => {
@@ -1417,8 +1430,19 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
 
           <div className="workspace-storyboardGrid">
             {variantScenes.length ? (
-              variantScenes.map((scene: any, index: number) => (
-                <article key={scene.id || index} className="card workspace-storyboardCard">
+              variantScenes.map((scene: any, index: number) => {
+                const setting = storyboardSceneField(scene, ["setting", "location", "location_hint", "locationHint"]);
+                const shotType = storyboardSceneField(scene, ["shot_type", "shotType", "composition"]);
+                const characterLock = storyboardSceneField(scene, ["character_lock", "characterLock"]);
+                const styleLock = storyboardSceneField(scene, ["style_lock", "styleLock", "visual_lock", "visualLock"]);
+                const startState = storyboardSceneField(scene, ["start_state", "startState", "first_frame", "firstFrame"]);
+                const endState = storyboardSceneField(scene, ["end_state", "endState", "last_frame", "lastFrame"]);
+                const action = storyboardSceneField(scene, ["action", "continuous_action", "continuousAction"]);
+                const camera = storyboardSceneField(scene, ["camera", "camera_path", "cameraPath", "movement"]);
+                const subjectMotion = storyboardSceneField(scene, ["motion", "subject_motion", "subjectMotion"]);
+                const environmentMotion = storyboardSceneField(scene, ["environment_motion", "environmentMotion"]);
+                const continuityNote = storyboardSceneField(scene, ["continuity_note", "continuityNote"]);
+                return <article key={scene.id || index} className="card workspace-storyboardCard">
                   <div className="workspace-storyboardCardHead">
                     <div>
                       <div className="workspace-storyboardIndex">Scene {index + 1}</div>
@@ -1437,14 +1461,25 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
                     </button>
                   </div>
                   <div className="workspace-storyboardPrompt">{scene.prompt || "No prompt yet."}</div>
+                  {setting ? <div className="workspace-storyboardNote"><strong>Setting:</strong> {setting}</div> : null}
+                  {shotType ? <div className="workspace-storyboardNote"><strong>Shot type:</strong> {shotType}</div> : null}
+                  {characterLock ? <div className="workspace-storyboardNote"><strong>Character lock:</strong> {characterLock}</div> : null}
+                  {styleLock ? <div className="workspace-storyboardNote"><strong>Style lock:</strong> {styleLock}</div> : null}
+                  {startState ? <div className="workspace-storyboardNote"><strong>Start state:</strong> {startState}</div> : null}
+                  {action ? <div className="workspace-storyboardNote"><strong>Continuous action:</strong> {action}</div> : null}
+                  {camera ? <div className="workspace-storyboardNote"><strong>Camera path:</strong> {camera}</div> : null}
+                  {subjectMotion ? <div className="workspace-storyboardNote"><strong>Subject motion:</strong> {subjectMotion}</div> : null}
+                  {environmentMotion ? <div className="workspace-storyboardNote"><strong>Environment motion:</strong> {environmentMotion}</div> : null}
+                  {endState ? <div className="workspace-storyboardNote"><strong>End state:</strong> {endState}</div> : null}
+                  {continuityNote ? <div className="workspace-storyboardNote"><strong>Continuity:</strong> {continuityNote}</div> : null}
                   {scene.negative_prompt ? (
                     <div className="workspace-storyboardNote"><strong>Negative:</strong> {scene.negative_prompt}</div>
                   ) : null}
                   {scene.transition ? (
                     <div className="workspace-storyboardNote"><strong>Transition:</strong> {scene.transition}</div>
                   ) : null}
-                </article>
-              ))
+                </article>;
+              })
             ) : (
               <div className="card workspace-storyboardEmpty">
                 <div className="workspace-sectionTitle">No storyboard saved yet</div>

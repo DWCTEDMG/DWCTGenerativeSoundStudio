@@ -247,6 +247,24 @@ public sealed class PlanSceneDto
     [JsonPropertyName("negative_prompt")]
     public string? NegativePrompt { get; init; }
 
+    [JsonPropertyName("setting")]
+    public string? Setting { get; init; }
+
+    [JsonPropertyName("shot_type")]
+    public string? ShotType { get; init; }
+
+    [JsonPropertyName("character_lock")]
+    public string? CharacterLock { get; init; }
+
+    [JsonPropertyName("style_lock")]
+    public string? StyleLock { get; init; }
+
+    [JsonPropertyName("start_state")]
+    public string? StartState { get; init; }
+
+    [JsonPropertyName("end_state")]
+    public string? EndState { get; init; }
+
     [JsonPropertyName("subject")]
     public string? Subject { get; init; }
 

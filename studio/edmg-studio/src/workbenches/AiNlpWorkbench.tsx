@@ -88,7 +88,17 @@ type PromptScene = {
   text: string;
   negativePrompt: string;
   rationale: string;
+  setting: string;
   shotType: string;
+  characterLock: string;
+  styleLock: string;
+  startState: string;
+  endState: string;
+  subject: string;
+  action: string;
+  camera: string;
+  motion: string;
+  environmentMotion: string;
   transitionCue: string;
   continuityNote: string;
   approved: boolean;
@@ -103,9 +113,16 @@ type ScenePlanItem = {
   startTime: string;
   endTime: string;
   sectionLabel: string;
+  setting: string;
   shotType: string;
   movement: string;
   locationHint: string;
+  characterLock: string;
+  styleLock: string;
+  startState: string;
+  endState: string;
+  action: string;
+  environmentMotion: string;
   transitionCue: string;
   continuityNote: string;
   approved: boolean;
@@ -535,11 +552,38 @@ function buildCreativeDirection(analysis: AnalysisResult, style: PromptStyle, su
 }
 
 function buildNegativePrompt(seed: string, target: PromptTarget): string {
-  const base = ['muddy details', 'low contrast', 'unmotivated camera move', 'flat lighting', 'cheap-looking CG'];
+  const base = [
+    'muddy details',
+    'low contrast',
+    'unmotivated camera move',
+    'flat lighting',
+    'cheap-looking CG',
+    'character identity drift',
+    'wardrobe drift',
+    'style drift',
+    'location jump',
+    'landmark drift',
+    'camera teleport',
+    'discontinuous action',
+    'conflicting camera moves',
+  ];
   if (target === 'deforum') base.push('flicker', 'warped anatomy', 'temporal instability');
   if (target === 'runway') base.push('awkward body motion', 'stiff performance');
   if (seed.trim()) base.push(seed.trim());
   return base.join(', ');
+}
+
+function sceneField(scene: any, aliases: string[]): string {
+  const sources = [scene, scene?.storyboard, scene?.prompt_pack, scene?.promptPack].filter(
+    (source) => source && typeof source === 'object',
+  );
+  for (const source of sources) {
+    for (const alias of aliases) {
+      const value = source?.[alias];
+      if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+    }
+  }
+  return '';
 }
 
 function scoreScene(segment: SentimentSegment, detail: PromptDetail): SceneScore {
@@ -554,8 +598,99 @@ function buildVariants(baseText: string): PromptVariant[] {
   return [
     { mode: 'safe', text: `${baseText}, preserve subject clarity, keep continuity conservative, reduce visual noise` },
     { mode: 'bold', text: `${baseText}, push contrast, increase motion intensity, stronger transition punctuation` },
-    { mode: 'weird', text: `${baseText}, allow surreal texture collisions, dreamlike continuity leaks, stranger image logic` },
+    { mode: 'weird', text: `${baseText}, allow surreal texture collisions and stranger image logic inside the locked character, style, geography, and boundary states` },
   ];
+}
+
+function replacePlannerContractValue(text: string, previous: string, next: string): string {
+  if (!previous || previous === next || !text.includes(previous)) return text;
+  return text.split(previous).join(next);
+}
+
+function normalizePlannerContinuity(scenes: PromptScene[]): PromptScene[] {
+  if (!scenes.length) return [];
+
+  // A locked scene is the user's strongest continuity decision. If regeneration
+  // mixes locked and fresh scenes, keep the earliest locked identity/style as the
+  // sequence-wide contract; otherwise retain the first scene's established locks.
+  const contractAnchor = scenes.find((scene) => scene.locked) ?? scenes[0];
+  const sharedCharacterLock = contractAnchor.characterLock || scenes[0].characterLock;
+  const sharedStyleLock = contractAnchor.styleLock || scenes[0].styleLock;
+  let previousEndState = '';
+
+  return scenes.map((scene, index) => {
+    const characterLock = sharedCharacterLock || scene.characterLock;
+    const styleLock = sharedStyleLock || scene.styleLock;
+    const startStateSource = index > 0 && previousEndState ? previousEndState : scene.startState;
+    const startState = replacePlannerContractValue(
+      startStateSource,
+      scene.characterLock,
+      characterLock,
+    );
+    const endState = replacePlannerContractValue(
+      scene.endState,
+      scene.characterLock,
+      characterLock,
+    );
+    const subject =
+      !scene.subject || scene.subject === scene.characterLock
+        ? characterLock
+        : replacePlannerContractValue(scene.subject, scene.characterLock, characterLock);
+    const motion = replacePlannerContractValue(scene.motion, scene.characterLock, characterLock);
+    const continuityNote = replacePlannerContractValue(
+      scene.continuityNote,
+      scene.characterLock,
+      characterLock,
+    );
+
+    let text = scene.text;
+    text = replacePlannerContractValue(text, scene.characterLock, characterLock);
+    text = replacePlannerContractValue(text, scene.styleLock, styleLock);
+    text = replacePlannerContractValue(text, scene.startState, startState);
+    text = replacePlannerContractValue(text, scene.endState, endState);
+
+    const normalized: PromptScene = {
+      ...scene,
+      text,
+      characterLock,
+      styleLock,
+      startState,
+      endState,
+      subject,
+      motion,
+      continuityNote,
+      variants: buildVariants(text),
+    };
+    previousEndState = endState;
+    return normalized;
+  });
+}
+
+function synchronizePlannerScenePlan(
+  scenePlan: ScenePlanItem[],
+  scenes: PromptScene[],
+): ScenePlanItem[] {
+  const scenesById = new Map(scenes.map((scene) => [scene.id, scene]));
+  return scenePlan.map((item, index) => {
+    const scene = scenesById.get(item.id) ?? scenes[index];
+    if (!scene) return item;
+    return {
+      ...item,
+      setting: scene.setting,
+      shotType: scene.shotType,
+      movement: scene.camera,
+      locationHint: scene.setting,
+      characterLock: scene.characterLock,
+      styleLock: scene.styleLock,
+      startState: scene.startState,
+      endState: scene.endState,
+      action: scene.action,
+      environmentMotion: scene.environmentMotion,
+      transitionCue: scene.transitionCue,
+      continuityNote: scene.continuityNote,
+      approved: scene.approved,
+    };
+  });
 }
 
 function choosePlannerShotType(preset: typeof STYLE_PRESETS[PromptStyle], index: number, energy: number): string {
@@ -583,7 +718,7 @@ function choosePlannerMovement(direction: CreativeDirection, index: number, ener
 
 function choosePlannerTransitionCue(index: number, total: number, energy: number): string {
   if (index === total - 1) return 'resolve into a held afterglow frame or a final drift-out with clean motion settle';
-  if (energy > 0.78) return 'cut on impact, then reset the camera axis with a new lateral shove into the next beat';
+  if (energy > 0.78) return 'cut on the completed impact pose, preserve screen direction, and begin the next beat from that exact boundary state';
   if (energy > 0.56) return 'bridge through motion continuity and let the subject or light source travel across frame into the next beat';
   return 'bleed through atmosphere, reflection, or a gentle pan continuation before the next section arrives';
 }
@@ -646,6 +781,11 @@ function buildOrchestrationPlan(args: {
   const finishCycle = unique(direction.finishLanguage.filter(Boolean));
   const editCycle = unique(direction.editLanguage.filter(Boolean));
   const phaseLabels = ['opening tableau', 'first lift', 'world expansion', 'pressure turn', 'release peak', 'resolution image'];
+  const characterLock = `${subjectFocus.trim() || 'magnetic lead performer'}; preserve the same identity, face, wardrobe, silhouette, and defining features in every scene`;
+  const setting = `${imageryPool.slice(0, 2).join(' connected to ') || 'a minimal stage space'} as one continuous screen world; preserve landmark positions, depth layers, and screen geography`;
+  const styleLock = `${style} visual language; ${finishCycle[0] ?? preset.finish[0]}; ${direction.lightingLanguage[0]}; ${paletteCycle.join(', ') || 'neutral steel palette'}; aspect ratio ${aspectRatio}; preserve the same medium, texture, lens family, and color treatment`;
+  const boundaryPositions = ['frame center', 'frame right', 'frame center', 'frame left'];
+  let previousEndState = '';
 
   const scenes: PromptScene[] = selectedSegments.map((segment, index) => {
     const imagery = Array.from({ length: Math.min(3, Math.max(1, imageryPool.length)) }, (_, offset) => {
@@ -667,10 +807,24 @@ function buildOrchestrationPlan(args: {
         : segment.energy > 0.5
         ? ['clear subject silhouette against moving texture', 'parallax depth through environmental layers', 'controlled movement from one edge of frame to the other'][index % 3]
         : ['negative space holding around the subject', 'slow environmental drift in the background', 'quiet reveal from shadow into the frame'][index % 3];
+    const action =
+      segment.energy > 0.76
+        ? ['crosses the frame in one uninterrupted stride while driving the performance forward', 'turns through the light and completes one decisive full-body gesture', 'surges from foreground to midground without breaking the action'][index % 3]
+        : segment.energy > 0.5
+        ? ['moves steadily through the frame while completing one clear performance gesture', 'steps into the light and follows through with one continuous reach', 'travels across the set in a single readable action'][index % 3]
+        : ['breathes, turns toward the light, and completes one restrained gesture', 'shifts weight and slowly raises their gaze in one unbroken action', 'emerges from shadow with one continuous measured step'][index % 3];
+    const subjectMotion = `${characterLock} ${action}; motion remains anatomically coherent and follows the established screen direction`;
+    const environmentMotion = `${imagery[0] ?? 'background atmosphere'} drifts continuously while ${imagery[1] ?? 'light and depth layers'} produce restrained parallax without changing the landmark layout`;
+    const startState =
+      previousEndState ||
+      `${characterLock} begins at frame left facing screen right, body at rest before the first action; the camera begins on a stable ${shotType}; the setting landmarks match the locked geography`;
+    const endPosition = boundaryPositions[index % boundaryPositions.length];
+    const screenDirection = endPosition === 'frame left' ? 'screen left' : 'screen right';
+    const endState = `${characterLock} ends at ${endPosition} facing ${screenDirection}, completing the action with a readable final pose; the camera completes ${movement} without teleporting; setting landmarks remain in their locked positions`;
     const continuityNote =
       index === 0
-        ? 'lock the lead subject, palette, and spatial world before introducing stronger motion changes'
-        : `carry the lead silhouette and ${paletteLead} palette from scene ${index}, but change the camera lane, composition pressure, or environment texture so the section does not repeat`;
+        ? 'lock the character, visual style, and spatial world; the next scene must begin from this scene’s end state verbatim'
+        : `begin from scene ${index}'s end state verbatim, preserve the character and style locks, then change only the camera lane, composition pressure, or environment motion`;
     const transitionCue = choosePlannerTransitionCue(index, selectedSegments.length, segment.energy);
     const hookReference =
       index === 0
@@ -679,15 +833,27 @@ function buildOrchestrationPlan(args: {
         ? `Land the sequence back on ${analysis.hookLine}.`
         : '';
     const text = [
-      `${shotType}, ${movement}, ${subjectFocus || 'magnetic lead performer'} staged as a ${phase} around ${imagery.join(', ') || 'a controlled visual world'}, with ${compositionCue}.`,
-      `${lighting}, ${finish}, editing energy guided by ${editLanguage}, palette emphasis on ${paletteLead}${paletteSupport && paletteSupport !== paletteLead ? ` with ${paletteSupport} support` : ''}, theme focus ${theme}, and camera behavior that favors coherent lateral travel over repetitive zooming.`,
+      `Setting: ${setting}.`,
+      `Shot and composition: ${shotType}; ${phase}; ${compositionCue}.`,
+      `Character lock: ${characterLock}.`,
+      `Style lock: ${styleLock}.`,
+      `Start state: ${startState}.`,
+      `Continuous action: ${action}.`,
+      `Camera path: ${movement}; use one compatible move with no reset or teleport.`,
+      `Subject motion: ${subjectMotion}.`,
+      `Environment motion: ${environmentMotion}.`,
+      `End state: ${endState}.`,
+      `${lighting}, ${finish}, editing energy guided by ${editLanguage}, palette emphasis on ${paletteLead}${paletteSupport && paletteSupport !== paletteLead ? ` with ${paletteSupport} support` : ''}, theme focus ${theme}.`,
       `Segment ${segment.segment} plays as ${segment.sentiment} with ${segment.energyLabel} energy; ${detailText}; ${platformHint}; aspect ratio ${aspectRatio}.`,
       creativeBrief || 'Keep the sequence emotionally legible and visually escalating.',
-      continuityNote,
+      `Continuity: ${continuityNote}.`,
+      `Transition: ${transitionCue}.`,
       hookReference,
     ]
       .filter(Boolean)
       .join(' ');
+
+    previousEndState = endState;
 
     return {
       id: index + 1,
@@ -695,8 +861,18 @@ function buildOrchestrationPlan(args: {
       segment: segment.segment,
       text,
       negativePrompt,
-      rationale: `Uses ${imagery[0] ?? 'primary imagery'} to express ${segment.sentiment} while the ${movement} camera move and ${compositionCue} keep the section distinct from adjacent beats.`,
+      rationale: `Uses ${imagery[0] ?? 'primary imagery'} to express ${segment.sentiment} while one continuous action and the ${movement} camera path preserve a filmable boundary handoff.`,
+      setting,
       shotType,
+      characterLock,
+      styleLock,
+      startState,
+      endState,
+      subject: characterLock,
+      action,
+      camera: movement,
+      motion: subjectMotion,
+      environmentMotion,
       transitionCue,
       continuityNote,
       approved: false,
@@ -712,11 +888,18 @@ function buildOrchestrationPlan(args: {
     startTime: formatClock(selectedSegments[index].startSeconds),
     endTime: formatClock(selectedSegments[index].endSeconds),
     sectionLabel: selectedSegments[index].sentiment,
+    setting: scene.setting,
     shotType: scene.shotType,
-    movement: choosePlannerMovement(direction, index, selectedSegments[index].energy),
-    locationHint: imageryPool[index % Math.max(1, imageryPool.length)] ?? 'minimal stage space',
+    movement: scene.camera,
+    locationHint: scene.setting,
+    characterLock: scene.characterLock,
+    styleLock: scene.styleLock,
+    startState: scene.startState,
+    endState: scene.endState,
+    action: scene.action,
+    environmentMotion: scene.environmentMotion,
     transitionCue: scene.transitionCue,
-    continuityNote: index === 0 ? 'lock character, palette, and environment for recall' : `carry forward ${paletteCycle[index % Math.max(1, paletteCycle.length)] ?? 'the lead palette'} and the subject silhouette`,
+    continuityNote: scene.continuityNote,
     approved: false,
   }));
 
@@ -754,6 +937,7 @@ function buildOrchestrationPlan(args: {
     repairPasses,
     approvalChecklist: [
       'Approve only scenes that preserve subject clarity and palette discipline.',
+      'Verify every scene starts from the prior scene end state verbatim before approving the sequence.',
       'Reject scenes whose motion contradicts the song energy curve.',
       'Use rerender suggestions before manual rewriting when a scene is structurally correct but aesthetically weak.',
       'Use repair passes only on failed sections instead of rerendering the full sequence.',
@@ -1039,6 +1223,17 @@ function buildPlannerPlanFromStudioProject(args: {
 
   if (!canonicalScenes.length) return seedPlan;
 
+  const firstCanonicalScene = canonicalScenes[0];
+  const firstSeedScene = seedPlan.scenes[0];
+  const sharedCharacterLock =
+    sceneField(firstCanonicalScene, ['character_lock', 'characterLock']) ||
+    firstSeedScene?.characterLock ||
+    `${settings.subjectFocus.trim() || 'magnetic lead performer'}; preserve the same identity, face, wardrobe, silhouette, and defining features in every scene`;
+  const sharedStyleLock =
+    sceneField(firstCanonicalScene, ['style_lock', 'styleLock', 'visual_lock', 'visualLock']) ||
+    firstSeedScene?.styleLock ||
+    `${settings.promptStyle} visual language; preserve the same medium, texture, lens family, color treatment, and ${settings.aspectRatio} frame`;
+  let previousEndState = '';
   const studioScenes = canonicalScenes.map((scene: any, index: number) => {
     const baseScene = seedPlan.scenes[index] || seedPlan.scenes[seedPlan.scenes.length - 1];
     const matchingSegment =
@@ -1052,22 +1247,88 @@ function buildPlannerPlanFromStudioProject(args: {
         energyLabel: humanizeEnergy((analysis.energyCurve[index] ?? 0.5) as number),
       };
     const promptText = String(scene?.prompt || baseScene?.text || '').trim() || 'Cinematic image sequence with a coherent subject and controlled atmosphere.';
+    const setting =
+      sceneField(scene, ['setting', 'location', 'location_hint', 'locationHint']) ||
+      baseScene?.setting ||
+      `${analysis.visualImagery.slice(0, 2).map((item) => item.element).join(' connected to ') || 'a shared project environment'}; preserve landmark positions and screen geography`;
+    const shotType =
+      sceneField(scene, ['shot_type', 'shotType', 'composition']) ||
+      baseScene?.shotType ||
+      STYLE_PRESETS[settings.promptStyle].shotTypes[index % STYLE_PRESETS[settings.promptStyle].shotTypes.length];
+    const camera =
+      sceneField(scene, ['camera', 'camera_path', 'cameraPath', 'movement']) ||
+      baseScene?.camera ||
+      seedPlan.direction.cameraLanguage[index % seedPlan.direction.cameraLanguage.length];
+    const action =
+      sceneField(scene, ['action', 'continuous_action', 'continuousAction']) ||
+      baseScene?.action ||
+      'completes one readable action without a pose reset';
+    const subjectMotion =
+      sceneField(scene, ['motion', 'subject_motion', 'subjectMotion']) ||
+      baseScene?.motion ||
+      `${sharedCharacterLock} ${action}; preserve coherent anatomy and screen direction`;
+    const environmentMotion =
+      sceneField(scene, ['environment_motion', 'environmentMotion']) ||
+      baseScene?.environmentMotion ||
+      'background atmosphere and depth layers move continuously without changing the landmark layout';
+    const explicitStartState = sceneField(scene, ['start_state', 'startState', 'first_frame', 'firstFrame']);
+    const startState =
+      previousEndState ||
+      explicitStartState ||
+      baseScene?.startState ||
+      `${sharedCharacterLock} begins in a stable readable pose; the camera and setting match the locked opening geography`;
+    const endState =
+      sceneField(scene, ['end_state', 'endState', 'last_frame', 'lastFrame']) ||
+      baseScene?.endState ||
+      `${sharedCharacterLock} completes ${action}; the final pose, camera position, landmarks, and screen direction remain readable for the next scene`;
+    const transitionCue = String(scene?.transition || baseScene?.transitionCue || 'bridge into the next beat with motion continuity');
+    const continuityNote =
+      sceneField(scene, ['continuity_note', 'continuityNote']) ||
+      baseScene?.continuityNote ||
+      (index === 0 ? 'establish the locked character, style, and spatial world first' : `begin from scene ${index}'s end state verbatim`);
+    const structuredPromptText = /\bstart state\s*:/i.test(promptText) && /\bend state\s*:/i.test(promptText)
+      ? promptText
+      : [
+          promptText,
+          `Setting: ${setting}.`,
+          `Shot and composition: ${shotType}.`,
+          `Character lock: ${sharedCharacterLock}.`,
+          `Style lock: ${sharedStyleLock}.`,
+          `Start state: ${startState}.`,
+          `Continuous action: ${action}.`,
+          `Camera path: ${camera}.`,
+          `Subject motion: ${subjectMotion}.`,
+          `Environment motion: ${environmentMotion}.`,
+          `End state: ${endState}.`,
+          `Transition: ${transitionCue}.`,
+        ].join(' ');
+    previousEndState = endState;
     return {
       ...baseScene,
       id: index + 1,
       title: String(scene?.name || baseScene?.title || `Scene ${index + 1}`),
       segment: matchingSegment.segment,
-      text: promptText,
+      text: structuredPromptText,
       negativePrompt: String(scene?.negative_prompt || baseScene?.negativePrompt || buildNegativePrompt(settings.negativePromptSeed, settings.target)),
       rationale: baseScene?.rationale || `Carries the shared Studio creative direction into the planner for scene ${index + 1}.`,
-      shotType: baseScene?.shotType || STYLE_PRESETS[settings.promptStyle].shotTypes[index % STYLE_PRESETS[settings.promptStyle].shotTypes.length],
-      transitionCue: String(scene?.transition || baseScene?.transitionCue || 'bridge into the next beat with motion continuity'),
-      continuityNote: baseScene?.continuityNote || (index === 0 ? 'establish the shared Studio visual world first' : `retain palette and subject continuity from scene ${index}`),
+      setting,
+      shotType,
+      characterLock: sharedCharacterLock,
+      styleLock: sharedStyleLock,
+      startState,
+      endState,
+      subject: sceneField(scene, ['subject']) || baseScene?.subject || sharedCharacterLock,
+      action,
+      camera,
+      motion: subjectMotion,
+      environmentMotion,
+      transitionCue,
+      continuityNote,
       approved: Boolean(baseScene?.approved),
       locked: Boolean(baseScene?.locked),
       status: baseScene?.status || 'draft',
       score: scoreScene(matchingSegment, settings.promptDetail),
-      variants: buildVariants(promptText),
+      variants: buildVariants(structuredPromptText),
     } satisfies PromptScene;
   });
 
@@ -1079,9 +1340,16 @@ function buildPlannerPlanFromStudioProject(args: {
       startTime: formatClock(Number(scene?.start_s ?? index * 5)),
       endTime: formatClock(Number(scene?.end_s ?? index * 5 + 5)),
       sectionLabel: analysis.sentimentProgression[index]?.sentiment || String(scene?.name || `scene ${index + 1}`),
+      setting: studioScenes[index]?.setting,
       shotType: studioScenes[index]?.shotType || STYLE_PRESETS[settings.promptStyle].shotTypes[index % STYLE_PRESETS[settings.promptStyle].shotTypes.length],
-      movement: seedPlan.scenePlan[index]?.movement || seedPlan.direction.cameraLanguage[index % seedPlan.direction.cameraLanguage.length],
-      locationHint: analysis.visualImagery[index % Math.max(1, analysis.visualImagery.length)]?.element || 'shared project environment',
+      movement: studioScenes[index]?.camera || seedPlan.scenePlan[index]?.movement || seedPlan.direction.cameraLanguage[index % seedPlan.direction.cameraLanguage.length],
+      locationHint: studioScenes[index]?.setting,
+      characterLock: studioScenes[index]?.characterLock,
+      styleLock: studioScenes[index]?.styleLock,
+      startState: studioScenes[index]?.startState,
+      endState: studioScenes[index]?.endState,
+      action: studioScenes[index]?.action,
+      environmentMotion: studioScenes[index]?.environmentMotion,
       transitionCue: studioScenes[index]?.transitionCue || seedPlan.scenePlan[index]?.transitionCue || 'bridge into the next beat',
       continuityNote: studioScenes[index]?.continuityNote || seedPlan.scenePlan[index]?.continuityNote || 'retain subject continuity',
       approved: studioScenes[index]?.approved || false,
@@ -1350,22 +1618,12 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
             }
           : scene;
       });
+      const normalizedScenes = normalizePlannerContinuity(nextScenes);
       return {
         ...rebuiltPlan,
-        scenes: nextScenes,
-        scenePlan: rebuiltPlan.scenePlan.map((scene) => {
-          const locked = lockedScenes.get(scene.id);
-          return locked
-            ? {
-                ...scene,
-                shotType: locked.shotType,
-                transitionCue: locked.transitionCue,
-                continuityNote: locked.continuityNote,
-                approved: locked.approved,
-              }
-            : scene;
-        }),
-        renderManifest: buildRenderManifest(nextScenes, target, aspectRatio),
+        scenes: normalizedScenes,
+        scenePlan: synchronizePlannerScenePlan(rebuiltPlan.scenePlan, normalizedScenes),
+        renderManifest: buildRenderManifest(normalizedScenes, target, aspectRatio),
       };
     });
     setActiveSection('prompts');
@@ -1538,6 +1796,16 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
           title: scene.title,
           prompt: scene.text,
           negativePrompt: scene.negativePrompt,
+          setting: scene.setting,
+          shotType: scene.shotType,
+          characterLock: scene.characterLock,
+          styleLock: scene.styleLock,
+          startState: scene.startState,
+          endState: scene.endState,
+          action: scene.action,
+          camera: scene.camera,
+          motion: scene.motion,
+          environmentMotion: scene.environmentMotion,
           transitionCue: scene.transitionCue,
           continuityNote: scene.continuityNote,
           score: scene.score,
@@ -1607,6 +1875,16 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
         scene.text,
         `Negative: ${scene.negativePrompt}`,
         `Rationale: ${scene.rationale}`,
+        `Setting: ${scene.setting}`,
+        `Shot type: ${scene.shotType}`,
+        `Character lock: ${scene.characterLock}`,
+        `Style lock: ${scene.styleLock}`,
+        `Start state: ${scene.startState}`,
+        `Continuous action: ${scene.action}`,
+        `Camera path: ${scene.camera}`,
+        `Subject motion: ${scene.motion}`,
+        `Environment motion: ${scene.environmentMotion}`,
+        `End state: ${scene.endState}`,
         `Transition cue: ${scene.transitionCue}`,
         `Continuity note: ${scene.continuityNote}`,
         `Approved: ${scene.approved ? 'yes' : 'no'}`,
@@ -1621,9 +1899,9 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
   const exportSceneCsv = (): void => {
     if (!plan) return;
     const rows = [
-      ['id', 'start_time', 'end_time', 'section', 'shot_type', 'movement', 'location_hint', 'transition_cue', 'continuity_note', 'approved'].join(','),
+      ['id', 'start_time', 'end_time', 'section', 'setting', 'shot_type', 'movement', 'character_lock', 'style_lock', 'start_state', 'end_state', 'action', 'environment_motion', 'transition_cue', 'continuity_note', 'approved'].join(','),
       ...plan.scenePlan.map((scene) =>
-        [scene.id, scene.startTime, scene.endTime, scene.sectionLabel, scene.shotType, scene.movement, scene.locationHint, scene.transitionCue, scene.continuityNote, scene.approved ? 'yes' : 'no']
+        [scene.id, scene.startTime, scene.endTime, scene.sectionLabel, scene.setting, scene.shotType, scene.movement, scene.characterLock, scene.styleLock, scene.startState, scene.endState, scene.action, scene.environmentMotion, scene.transitionCue, scene.continuityNote, scene.approved ? 'yes' : 'no']
           .map((value) => `"${String(value).replace(/"/g, '""')}"`)
           .join(',')
       ),
@@ -1878,11 +2156,26 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => void copyPrompt(scene.id, `${scene.text}\nNegative: ${scene.negativePrompt}`)} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700"><Copy size={14} />{copiedId === scene.id ? 'Copied' : 'Copy'}</button>
-                      <button onClick={() => toggleSceneApproval(scene.id)} className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium ${scene.approved ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}><CheckCircle2 size={14} />{scene.approved ? 'Approved' : 'Approve'}</button><button onClick={() => toggleSceneLock(scene.id)} className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-medium text-slate-700">{scene.locked ? <Lock size={14} /> : <LockOpen size={14} />}{scene.locked ? 'Locked' : 'Unlock'}</button>
+                      <button onClick={() => toggleSceneApproval(scene.id)} className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium ${scene.approved ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}><CheckCircle2 size={14} />{scene.approved ? 'Approved' : 'Approve'}</button><button onClick={() => toggleSceneLock(scene.id)} className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-medium text-slate-700">{scene.locked ? <Lock size={14} /> : <LockOpen size={14} />}{scene.locked ? 'Locked' : 'Lock'}</button>
                     </div>
                   </div>
                   <div className="mb-3 flex flex-wrap items-center gap-2 text-xs"><span className={`rounded-full px-2 py-1 font-medium ${scene.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : scene.status === 'needs-repair' ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-700'}`}>{scene.status}</span><span className="rounded-full bg-blue-50 px-2 py-1 font-medium text-blue-700">score {Math.round(scene.score.overall * 100)}%</span><span className="rounded-full bg-violet-50 px-2 py-1 font-medium text-violet-700">variant {selectedVariantMode}</span></div><div className="mb-3 text-sm leading-6 text-slate-700">{scene.text}</div>
                   <div className="mb-3 rounded-2xl bg-slate-50 p-3 text-sm text-slate-600"><strong>Negative:</strong> {scene.negativePrompt}</div><div className="mb-3 rounded-2xl bg-violet-50 p-3 text-sm text-violet-900"><strong>{selectedVariantMode} variant:</strong> {scene.variants.find((variant) => variant.mode === selectedVariantMode)?.text}</div>
+                  <div className="mb-3 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-slate-700">
+                    <div className="mb-2 font-semibold text-blue-900">Storyboard continuity contract</div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <div><strong>Setting:</strong> {scene.setting}</div>
+                      <div><strong>Shot type:</strong> {scene.shotType}</div>
+                      <div><strong>Character lock:</strong> {scene.characterLock}</div>
+                      <div><strong>Style lock:</strong> {scene.styleLock}</div>
+                      <div><strong>Start state:</strong> {scene.startState}</div>
+                      <div><strong>End state:</strong> {scene.endState}</div>
+                      <div><strong>Continuous action:</strong> {scene.action}</div>
+                      <div><strong>Camera path:</strong> {scene.camera}</div>
+                      <div><strong>Subject motion:</strong> {scene.motion}</div>
+                      <div><strong>Environment motion:</strong> {scene.environmentMotion}</div>
+                    </div>
+                  </div>
                   <div className="mb-3 grid grid-cols-2 gap-2 text-xs text-slate-600 md:grid-cols-4"><div className="rounded-xl bg-slate-50 p-2"><div className="font-medium">Prompt</div>{Math.round(scene.score.promptStrength * 100)}%</div><div className="rounded-xl bg-slate-50 p-2"><div className="font-medium">Continuity</div>{Math.round(scene.score.continuity * 100)}%</div><div className="rounded-xl bg-slate-50 p-2"><div className="font-medium">Execution</div>{Math.round(scene.score.executionReadiness * 100)}%</div><div className="rounded-xl bg-slate-50 p-2"><div className="font-medium">Overall</div>{Math.round(scene.score.overall * 100)}%</div></div><div className="mb-3 flex flex-wrap gap-2"><button onClick={() => applyRerenderSuggestion(scene.id)} disabled={scene.locked} className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 disabled:opacity-50">Apply rerender note</button><button onClick={() => applyRepairPass(scene.id)} disabled={scene.locked} className="rounded-xl border border-orange-300 px-3 py-2 text-xs font-medium text-orange-700 disabled:opacity-50">Apply repair pass</button><button onClick={() => markSceneNeedsRepair(scene.id)} className="rounded-xl border border-orange-300 px-3 py-2 text-xs font-medium text-orange-700">Mark needs repair</button></div><div className="grid gap-3 text-sm md:grid-cols-2">
                     <div className="rounded-2xl bg-slate-50 p-3"><div className="font-medium text-slate-800">Rationale</div><div className="mt-1 text-slate-600">{scene.rationale}</div></div>
                     <div className="rounded-2xl bg-slate-50 p-3"><div className="font-medium text-slate-800">Transition cue</div><div className="mt-1 text-slate-600">{scene.transitionCue}</div></div>
@@ -1901,8 +2194,8 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
             <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><LayoutGrid className="text-emerald-600" size={20} />Scene plan</div>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead><tr className="text-left text-slate-500"><th className="px-3 py-3 font-medium">Time</th><th className="px-3 py-3 font-medium">Section</th><th className="px-3 py-3 font-medium">Shot</th><th className="px-3 py-3 font-medium">Transition</th><th className="px-3 py-3 font-medium">Approved</th></tr></thead>
-                <tbody className="divide-y divide-slate-100">{plan.scenePlan.map((scene) => <tr key={scene.id}><td className="px-3 py-3 text-slate-600">{scene.startTime}–{scene.endTime}</td><td className="px-3 py-3 text-slate-700">{scene.sectionLabel}</td><td className="px-3 py-3 text-slate-700">{scene.shotType}</td><td className="px-3 py-3 text-slate-700">{scene.transitionCue}</td><td className="px-3 py-3 text-slate-700">{scene.approved ? 'yes' : 'no'}</td></tr>)}</tbody>
+                <thead><tr className="text-left text-slate-500"><th className="px-3 py-3 font-medium">Time</th><th className="px-3 py-3 font-medium">Section</th><th className="px-3 py-3 font-medium">Setting</th><th className="px-3 py-3 font-medium">Shot</th><th className="px-3 py-3 font-medium">Transition</th><th className="px-3 py-3 font-medium">Approved</th></tr></thead>
+                <tbody className="divide-y divide-slate-100">{plan.scenePlan.map((scene) => <tr key={scene.id}><td className="px-3 py-3 text-slate-600">{scene.startTime}–{scene.endTime}</td><td className="px-3 py-3 text-slate-700">{scene.sectionLabel}</td><td className="px-3 py-3 text-slate-700">{scene.setting}</td><td className="px-3 py-3 text-slate-700">{scene.shotType}</td><td className="px-3 py-3 text-slate-700">{scene.transitionCue}</td><td className="px-3 py-3 text-slate-700">{scene.approved ? 'yes' : 'no'}</td></tr>)}</tbody>
               </table>
             </div>
           </div>
@@ -1920,6 +2213,16 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
                     <div className="rounded-full bg-slate-200 px-2 py-1 text-xs">{scene.approved ? 'approved' : scene.status}</div>
                   </div>
                   <div className="mt-3">{scene.text}</div>
+                  <div className="mt-3 grid gap-2 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600 md:grid-cols-2">
+                    <div><strong>Setting:</strong> {scene.setting}</div>
+                    <div><strong>Character lock:</strong> {scene.characterLock}</div>
+                    <div><strong>Style lock:</strong> {scene.styleLock}</div>
+                    <div><strong>Continuous action:</strong> {scene.action}</div>
+                    <div><strong>Start state:</strong> {scene.startState}</div>
+                    <div><strong>End state:</strong> {scene.endState}</div>
+                    <div><strong>Camera path:</strong> {scene.camera}</div>
+                    <div><strong>Environment motion:</strong> {scene.environmentMotion}</div>
+                  </div>
                   <div className="mt-3 text-slate-600"><strong>Transition:</strong> {scene.transitionCue}</div>
                 </div>
               ))}

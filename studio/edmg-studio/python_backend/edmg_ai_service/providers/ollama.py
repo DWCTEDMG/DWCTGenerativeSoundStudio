@@ -65,8 +65,10 @@ class OllamaPlanner(PlanProvider):
             + json.dumps(ctx, ensure_ascii=False)
             + "\n\n"
             "Produce EDMG variants. Ensure scene times cover [0,duration_s] when duration_s is provided. "
-            "Keep prompts vivid and filmable, with an explicit subject identity, visible action, "
-            "environment movement, camera move, continuity rule, and transition for every scene. "
+            "Keep prompts vivid and filmable. For every scene, provide setting, shot_type, the same "
+            "verbatim character_lock and style_lock, start_state, end_state, subject, visible action, "
+            "environment movement, one camera move, continuity rule, and transition. Make each scene "
+            "after the first use the preceding scene's end_state verbatim as its start_state. "
             "If lyrics exist, align scenes to themes and musical sections."
         )
 

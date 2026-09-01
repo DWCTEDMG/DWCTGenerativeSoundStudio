@@ -86,6 +86,24 @@ def test_storyboard_full_motion_preserves_disabled_prompt_refinement() -> None:
     assert resolved.keyframe_interval_s == 4.8
 
 
+def test_storyboard_full_motion_preserves_explicit_motion_score_mode() -> None:
+    settings = app_module._internal_settings_from_payload(
+        {
+            "motion_strategy": "storyboard_full_motion",
+            "video_model_motion_score_mode": "manual",
+            "video_model_manual_motion_score": 5,
+        },
+        model_id="hf_sd15_internal",
+        render_tier="draft",
+        device_preference="cuda",
+    )
+
+    resolved = app_module._apply_storyboard_full_motion_settings(settings, {})
+
+    assert resolved.video_model_motion_score_mode == "manual"
+    assert resolved.video_model_manual_motion_score == 5
+
+
 def test_studio_resource_policy_reports_native_sdpa_on_6gb_cuda() -> None:
     policy = app_module._studio_native_resource_policy(
         settings_obj=InternalVideoSettings(
@@ -926,6 +944,7 @@ def test_video_model_scene_motion_refines_prompt_and_preflight() -> None:
     )
     assert "whole scene" in refined
     assert "visible objects themselves move" in refined
+    assert len(refined.split()) <= internal_video.CLIP_SAFE_RENDER_PROMPT_MAX_WORDS
 
     preflight = internal_video.describe_internal_video_model_preflight(
         scenes=[{"start_s": 0, "end_s": 2, "prompt": "cinematic figure in an old town"}],

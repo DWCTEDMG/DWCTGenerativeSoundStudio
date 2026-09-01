@@ -34,8 +34,40 @@ describe("Workspace page", () => {
                 {
                   name: "Variant 1",
                   scenes: [
-                    { name: "Neon arrival", start_s: 0, end_s: 12, prompt: "Neon streets with rain reflections and kinetic camera drift." },
-                    { name: "Skyline lift", start_s: 12, end_s: 24, prompt: "Dawn skyline bloom with silhouettes and stronger motion parallax." },
+                    {
+                      name: "Neon arrival",
+                      start_s: 0,
+                      end_s: 12,
+                      prompt: "Neon streets with rain reflections and kinetic camera drift.",
+                      setting: "Rain-soaked transit plaza",
+                      shot_type: "wide tracking profile",
+                      character_lock: "Same lead performer in a charcoal coat",
+                      style_lock: "Nocturnal 35mm realism with cyan and amber practicals",
+                      start_state: "Performer waits at frame left facing screen right",
+                      end_state: "Performer reaches frame center facing screen right",
+                      action: "Performer crosses the plaza in one continuous walk",
+                      camera: "Measured lateral tracking move",
+                      motion: "Natural left-to-right walk with coherent anatomy",
+                      environment_motion: "Rain falls while neon reflections move across the pavement",
+                      continuity_note: "Preserve landmarks, wardrobe, palette, and screen direction",
+                      transition: "Continue the walk into the next scene",
+                    },
+                    {
+                      name: "Skyline lift",
+                      start_s: 12,
+                      end_s: 24,
+                      prompt: "Dawn skyline bloom with silhouettes and stronger motion parallax.",
+                      setting: "Rain-soaked transit plaza",
+                      shot_type: "hero medium tracking shot",
+                      character_lock: "Same lead performer in a charcoal coat",
+                      style_lock: "Nocturnal 35mm realism with cyan and amber practicals",
+                      start_state: "Performer reaches frame center facing screen right",
+                      end_state: "Performer settles at frame right facing screen right",
+                      action: "Performer completes one uninterrupted turn toward the skyline",
+                      camera: "Continue laterally into a restrained push",
+                      environment_motion: "Rain and skyline haze maintain continuous motion",
+                      transition: "Resolve on the skyline glow",
+                    },
                   ],
                 },
               ],
@@ -86,6 +118,15 @@ describe("Workspace page", () => {
     expect(await screen.findByRole("button", { name: "Timeline patch" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "LLM contract" })).toBeTruthy();
     expect(await screen.findByText(/Transcript anchor/i)).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Storyboard/i }));
+    expect((await screen.findAllByText("Rain-soaked transit plaza")).length).toBe(2);
+    expect(await screen.findByText("wide tracking profile")).toBeTruthy();
+    expect((await screen.findAllByText("Same lead performer in a charcoal coat")).length).toBe(2);
+    expect((await screen.findAllByText("Nocturnal 35mm realism with cyan and amber practicals")).length).toBe(2);
+    expect(await screen.findByText("Performer waits at frame left facing screen right")).toBeTruthy();
+    expect((await screen.findAllByText("Performer reaches frame center facing screen right")).length).toBe(2);
+    expect(await screen.findByText("Rain falls while neon reflections move across the pavement")).toBeTruthy();
 
     fireEvent.click(await screen.findByRole("tab", { name: /Reactive Lab/i }));
     expect(await screen.findByText("Reactive Lab + Renderer Handoff")).toBeTruthy();

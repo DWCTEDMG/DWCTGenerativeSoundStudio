@@ -123,10 +123,12 @@ from .services.internal_video import (
     render_internal_diffusion_preview_segment,
 )
 from .services.deforum_normalize import (
+    CLIP_SAFE_RENDER_PROMPT_MAX_WORDS,
     DEFAULT_NEGATIVE_PROMPT,
     DEFAULT_RENDER_PROMPT,
     build_deforum_render_context,
     negative_prompt_from_scene,
+    operational_render_prompt_from_scene,
     render_prompt_from_scene,
 )
 from .services.deforum_prompt_timeline import resolve_prompt_frame
@@ -1555,6 +1557,12 @@ def _build_generation_metadata(
         "scene_index": int(payload.get("scene_index", 0)),
         "workflow_family": str(workflow_family or "txt2img"),
         "prompt": str(payload.get("prompt") or ""),
+        "source_prompt": str(payload.get("source_prompt") or payload.get("prompt") or ""),
+        "storyboard_contract": (
+            dict(payload.get("storyboard"))
+            if isinstance(payload.get("storyboard"), dict)
+            else None
+        ),
         "negative_prompt": str(payload.get("negative_prompt") or ""),
         "seed": int(payload.get("seed") or 0),
         "steps": int(payload.get("steps") or 0),
@@ -6013,13 +6021,25 @@ def _scene_energy_from_analysis(index: int, total: int, analysis: dict[str, Any]
 
 
 def _first_scene_text(scene: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        raw_value = scene.get(key)
-        if isinstance(raw_value, (dict, list, tuple, set)):
+    storyboard = scene.get("storyboard") if isinstance(scene.get("storyboard"), dict) else {}
+    for source in (scene, storyboard):
+        for key in keys:
+            raw_value = source.get(key)
+            if isinstance(raw_value, (dict, list, tuple, set)):
+                continue
+            value = str(raw_value or "").strip()
+            if value:
+                return " ".join(value.split())
+    return ""
+
+
+def _first_variant_scene_text(scenes: list[Any], *keys: str) -> str:
+    for scene in scenes:
+        if not isinstance(scene, dict):
             continue
-        value = str(raw_value or "").strip()
+        value = _first_scene_text(scene, *keys)
         if value:
-            return " ".join(value.split())
+            return value
     return ""
 
 
@@ -6039,7 +6059,7 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
     high_energy_moves = [
         "cross-frame tracking push with the subject moving left-to-right",
         "decisive lateral sweep through foreground depth",
-        "parallax-heavy drive that resets the camera axis on impact",
+        "parallax-heavy drive that preserves the camera axis through the impact",
     ]
     mid_energy_moves = [
         "measured dolly with lateral travel",
@@ -6088,6 +6108,14 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
         "let atmosphere and edge light carry the cut forward",
         "reset composition pressure on the next downbeat",
     ]
+    shot_type_defaults = [
+        "wide establishing composition",
+        "moving medium shot with foreground depth",
+        "profile close-up with readable action",
+        "low-angle movement frame",
+        "overhead geography reveal",
+        "hero resolution composition",
+    ]
 
     for variant_index, raw_variant in enumerate(variants):
         if not isinstance(raw_variant, dict):
@@ -6106,6 +6134,46 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
             if variant_motifs
             else "one recurring lead subject with the same recognizable face, silhouette, wardrobe, and signature prop"
         )
+        character_lock = (
+            _first_variant_scene_text(
+                scenes,
+                "character_lock",
+                "characterLock",
+                "subject",
+                "subject_anchor",
+            )
+            or default_subject
+        )
+        raw_palette = [
+            str(item or "").strip()
+            for item in list(variant.get("color_palette") or [])
+            if str(item or "").strip()
+        ]
+        style_parts = [str(variant.get("mood") or "").strip()]
+        if raw_palette:
+            style_parts.append(f"{', '.join(raw_palette[:4])} palette")
+        style_prefix = "; ".join(part for part in style_parts if part)
+        style_lock = (
+            _first_variant_scene_text(scenes, "style_lock", "styleLock", "visual_lock", "visualLock")
+            or " ".join(
+                part
+                for part in (
+                    f"{style_prefix};" if style_prefix else "",
+                    "consistent medium, texture, lighting logic, lens family, contrast, and aspect ratio",
+                )
+                if part
+            )
+        )
+        setting_anchor = (
+            _first_variant_scene_text(scenes, "setting", "location", "location_hint", "locationHint")
+            or (
+                f"one geographically continuous cinematic world organized around {variant_motifs[0]}, "
+                "with stable landmark placement and screen axis"
+                if variant_motifs
+                else "one geographically continuous cinematic world with stable landmark placement and screen axis"
+            )
+        )
+        previous_end_state = ""
         next_scenes: list[dict[str, Any]] = []
         for scene_index, raw_scene in enumerate(scenes):
             if not isinstance(raw_scene, dict):
@@ -6132,7 +6200,15 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
             narrative_cue = transcript_sentences[cue_index] if cue_index >= 0 else ""
             motif_window = list(dict.fromkeys([*tags[scene_index:scene_index + 2], *tags[: max(0, 2 - len(tags[scene_index:scene_index + 2]))]]))[:2]
             palette_note = motif_window[0] if motif_window else palette_defaults[(scene_index + variant_index) % len(palette_defaults)]
-            subject = _first_scene_text(scene, "subject", "subject_anchor") or default_subject
+            subject = _first_scene_text(scene, "subject", "subject_anchor") or character_lock
+            setting = (
+                _first_scene_text(scene, "setting", "location", "location_hint", "locationHint")
+                or setting_anchor
+            )
+            shot_type = (
+                _first_scene_text(scene, "shot_type", "shotType", "composition")
+                or shot_type_defaults[(scene_index + variant_index) % len(shot_type_defaults)]
+            )
             camera = _first_scene_text(scene, "camera", "camera_hint") or camera_fallback
             action = _first_scene_text(scene, "action", "shot_action") or action_fallback
             subject_motion = _first_scene_text(scene, "motion", "motion_hint") or action
@@ -6141,10 +6217,10 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
                 or environment_cues[(scene_index + variant_index) % len(environment_cues)]
             )
             continuity = _first_scene_text(scene, "continuity_note", "continuityNote", "continuity") or (
-                f"establish {subject}; keep exactly one lead subject and a consistent screen direction"
+                f"establish {character_lock}; keep exactly one lead subject and a consistent screen direction"
                 if scene_index == 0
                 else (
-                    f"continue {subject}; preserve identity, wardrobe, {palette_note} palette, world, and "
+                    f"continue {character_lock}; preserve identity, wardrobe, {palette_note} palette, world, and "
                     "screen direction from the preceding scene while the action advances"
                 )
             )
@@ -6152,28 +6228,66 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
                 _first_scene_text(scene, "transition", "transition_cue", "transitionCue")
                 or transition_cues[(scene_index + variant_index) % len(transition_cues)]
             )
-            additions = [
-                f"section role {role}.",
-                f"single subject anchor: {subject}.",
-                f"visible action: {action}.",
-                f"camera move: {camera}.",
-                f"subject motion: {subject_motion}.",
-                f"environment motion: {environment_motion}.",
-                f"staging {staging}.",
-                f"palette emphasis {palette_note}.",
-                f"continuity: {continuity}.",
-                f"transition: {transition}.",
-            ]
-            if motif_window:
+            authored_start_state = _first_scene_text(scene, "start_state", "startState", "opening_state")
+            start_state = previous_end_state or authored_start_state or (
+                f"{character_lock} begins in a readable pose inside {setting}, oriented left-to-right; "
+                f"the {shot_type} camera is settled before the action begins"
+            )
+            end_state = _first_scene_text(scene, "end_state", "endState", "closing_state") or (
+                f"{character_lock} completes {action} inside {setting} in a readable handoff pose; "
+                f"identity, wardrobe, landmark placement, left-to-right screen direction, and the {camera} camera axis remain stable"
+            )
+            previous_end_state = end_state
+            prompt = str(
+                scene.get("prompt")
+                or scene.get("prompt_pack")
+                or render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
+            ).strip()
+            prompt_lower = prompt.lower()
+            additions: list[str] = []
+            structured_additions = (
+                (("setting:",), f"setting: {setting}."),
+                (("shot composition:", "shot type:"), f"shot composition: {shot_type}."),
+                (("visible action:", "continuous action:"), f"visible action: {action}."),
+                (("subject motion:",), f"subject motion: {subject_motion}."),
+                (("environment motion:",), f"environment motion: {environment_motion}."),
+                (("camera path:", "camera move:"), f"camera path: {camera}."),
+                (("character lock:",), f"character lock: {character_lock}."),
+                (("style lock:",), f"style lock: {style_lock}."),
+                (("start state:",), f"start state: {start_state}."),
+                (("end state:",), f"end state: {end_state}."),
+                (("continuity:",), f"continuity: {continuity}."),
+                (("transition:",), f"transition: {transition}."),
+            )
+            for markers, addition in structured_additions:
+                if not any(marker in prompt_lower for marker in markers):
+                    additions.append(addition)
+            for marker, addition in (
+                ("section role ", f"section role {role}."),
+                ("staging ", f"staging {staging}."),
+                ("palette emphasis ", f"palette emphasis {palette_note}."),
+            ):
+                if marker not in prompt_lower:
+                    additions.append(addition)
+            if motif_window and "scene motifs " not in prompt_lower:
                 additions.append(f"scene motifs {', '.join(motif_window)}.")
-            if narrative_cue and narrative_cue.lower() not in str(scene.get('prompt') or '').lower():
+            if (
+                narrative_cue
+                and "narrative cue " not in prompt_lower
+                and narrative_cue.lower() not in prompt_lower
+            ):
                 additions.append(f"narrative cue {narrative_cue}.")
 
-            prompt = render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
             enriched_prompt = " ".join([prompt, *additions]).strip()
             scene["prompt"] = enriched_prompt
             scene["prompt_pack"] = enriched_prompt
             scene["subject"] = subject
+            scene["setting"] = setting
+            scene["shot_type"] = shot_type
+            scene["character_lock"] = character_lock
+            scene["style_lock"] = style_lock
+            scene["start_state"] = start_state
+            scene["end_state"] = end_state
             scene["action"] = action
             scene["camera"] = camera
             scene["motion"] = subject_motion
@@ -6185,6 +6299,12 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
             scene["motion_hint"] = subject_motion
             scene["storyboard"] = {
                 "subject_anchor": subject,
+                "setting": setting,
+                "shot_type": shot_type,
+                "character_lock": character_lock,
+                "style_lock": style_lock,
+                "start_state": start_state,
+                "end_state": end_state,
                 "shot_action": action,
                 "camera_move": camera,
                 "subject_motion": subject_motion,
@@ -6192,6 +6312,14 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
                 "continuity": continuity,
                 "transition": transition,
             }
+            scene["render_prompt"] = operational_render_prompt_from_scene(
+                scene,
+                fallback=enriched_prompt,
+                max_words=CLIP_SAFE_RENDER_PROMPT_MAX_WORDS,
+                include_states=False,
+            )
+            if authored_start_state and authored_start_state != start_state:
+                scene["storyboard"]["authored_start_state"] = authored_start_state
             negative_prompt = str(scene.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT).strip()
             continuity_negatives = (
                 "still frame",
@@ -6202,6 +6330,12 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
                 "duplicate subject",
                 "identity drift",
                 "wardrobe change",
+                "style drift",
+                "location jump",
+                "landmark drift",
+                "camera teleport",
+                "discontinuous action",
+                "conflicting camera moves",
             )
             negative_lower = negative_prompt.lower()
             missing_negatives = [term for term in continuity_negatives if term not in negative_lower]
@@ -6244,7 +6378,12 @@ def _normalize_plan_scene_list(
         scene = dict(raw_scene)
         scene["start_s"] = start_s
         scene["end_s"] = end_s
-        scene["prompt"] = render_prompt_from_scene(raw_scene, fallback=DEFAULT_RENDER_PROMPT)
+        authored_prompt = str(
+            raw_scene.get("prompt")
+            or raw_scene.get("prompt_pack")
+            or render_prompt_from_scene(raw_scene, fallback=DEFAULT_RENDER_PROMPT)
+        ).strip()
+        scene["prompt"] = authored_prompt or DEFAULT_RENDER_PROMPT
         scene["negative_prompt"] = negative_prompt_from_scene(raw_scene, fallback=DEFAULT_NEGATIVE_PROMPT)
         normalized.append(scene)
 
@@ -6795,8 +6934,8 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
             requested_max_scenes=req.max_scenes,
             duration_s_hint=duration_hint,
         )
-        plan = _enrich_normalized_plan(plan, analysis if isinstance(analysis, dict) else {})
         plan = apply_core_style_direction(plan, req.style_prefs)
+        plan = _enrich_normalized_plan(plan, analysis if isinstance(analysis, dict) else {})
 
     proj.meta["last_plan"] = plan
     store.save(proj)
@@ -6859,6 +6998,10 @@ def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
         requested_max_scenes=max([len((item or {}).get("scenes") or []) for item in variants] or [1]),
         duration_s_hint=_project_duration_hint_s(proj, updated_variant, updated_variant["scenes"]) or plan.get("duration_s"),
     )
+    normalized_plan = _enrich_normalized_plan(
+        normalized_plan,
+        proj.meta.get("analysis") if isinstance(proj.meta.get("analysis"), dict) else {},
+    )
     proj.meta["last_plan"] = normalized_plan
 
     planner_lab = proj.meta.get("last_planner_lab")
@@ -6868,7 +7011,18 @@ def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
             planner_variants = planner_plan.get("variants") if isinstance(planner_plan.get("variants"), list) else []
             if 0 <= variant_index < len(planner_variants) and isinstance(planner_variants[variant_index], dict):
                 planner_variant = dict(planner_variants[variant_index])
-                planner_variant["scenes"] = deepcopy(updated_variant["scenes"])
+                normalized_variants = (
+                    normalized_plan.get("variants")
+                    if isinstance(normalized_plan.get("variants"), list)
+                    else []
+                )
+                normalized_variant = (
+                    normalized_variants[variant_index]
+                    if 0 <= variant_index < len(normalized_variants)
+                    and isinstance(normalized_variants[variant_index], dict)
+                    else updated_variant
+                )
+                planner_variant["scenes"] = deepcopy(normalized_variant.get("scenes") or [])
                 planner_variants[variant_index] = planner_variant
                 planner_lab["plan"] = {**planner_plan, "variants": planner_variants}
 
@@ -6903,6 +7057,10 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
     normalized_plan = apply_core_style_direction(
         normalized_plan,
         str((req.settings or {}).get("promptStyle") or ""),
+    )
+    normalized_plan = _enrich_normalized_plan(
+        normalized_plan,
+        proj.meta.get("analysis") if isinstance(proj.meta.get("analysis"), dict) else {},
     )
     proj.meta["last_plan"] = normalized_plan
     proj.meta["last_planner_lab"] = {
@@ -9577,7 +9735,13 @@ def render_scenes(project_id: str, req: RenderScenesRequest):
             "variant_index": req.variant_index,
             "scene_index": idx,
             "model_id": req.model_id,
-            "prompt": sc.get("prompt") or "",
+            "prompt": render_prompt_from_scene(sc, fallback=""),
+            "source_prompt": sc.get("prompt") or sc.get("prompt_pack") or "",
+            "storyboard": (
+                dict(sc.get("storyboard"))
+                if isinstance(sc.get("storyboard"), dict)
+                else None
+            ),
             "negative_prompt": req.negative_prompt,
             "seed": seed,
             "width": req.width,
@@ -10076,7 +10240,6 @@ def _apply_storyboard_full_motion_settings(
     """Apply full-motion defaults without overriding explicit quality controls."""
     return replace(
         settings_obj,
-        video_model_motion_score_mode="auto",
         video_model_max_frames_per_scene=max(
             8,
             int(settings_obj.video_model_max_frames_per_scene or 8),

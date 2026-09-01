@@ -473,6 +473,12 @@ public static class WorkspaceModelHelpers
         string? prompt = null,
         string? negativePrompt = null,
         bool replaceNegativePrompt = false,
+        string? setting = null,
+        string? shotType = null,
+        string? characterLock = null,
+        string? styleLock = null,
+        string? startState = null,
+        string? endState = null,
         string? subject = null,
         string? action = null,
         string? camera = null,
@@ -489,6 +495,12 @@ public static class WorkspaceModelHelpers
             EndSeconds = endSeconds ?? scene.EndSeconds,
             Prompt = prompt ?? scene.Prompt,
             NegativePrompt = replaceNegativePrompt ? negativePrompt : scene.NegativePrompt,
+            Setting = replaceStoryboardFields ? setting : scene.Setting,
+            ShotType = replaceStoryboardFields ? shotType : scene.ShotType,
+            CharacterLock = replaceStoryboardFields ? characterLock : scene.CharacterLock,
+            StyleLock = replaceStoryboardFields ? styleLock : scene.StyleLock,
+            StartState = replaceStoryboardFields ? startState : scene.StartState,
+            EndState = replaceStoryboardFields ? endState : scene.EndState,
             Subject = replaceStoryboardFields ? subject : scene.Subject,
             Action = replaceStoryboardFields ? action : scene.Action,
             Camera = replaceStoryboardFields ? camera : scene.Camera,
@@ -498,6 +510,92 @@ public static class WorkspaceModelHelpers
             Transition = replaceStoryboardFields ? transition : scene.Transition,
             AdditionalData = CloneAdditionalData(scene.AdditionalData),
         };
+    }
+
+    public static IReadOnlyList<PlanSceneDto> NormalizeStoryboardContinuity(
+        IReadOnlyList<PlanSceneDto> scenes,
+        string? characterLockOverride = null,
+        string? styleLockOverride = null)
+    {
+        ArgumentNullException.ThrowIfNull(scenes);
+        string? characterLock = !string.IsNullOrWhiteSpace(characterLockOverride)
+            ? characterLockOverride
+            : scenes
+                .Select(scene => scene.CharacterLock)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        string? styleLock = !string.IsNullOrWhiteSpace(styleLockOverride)
+            ? styleLockOverride
+            : scenes
+                .Select(scene => scene.StyleLock)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        string? previousEndState = null;
+        var normalized = new List<PlanSceneDto>(scenes.Count);
+
+        foreach (PlanSceneDto scene in scenes)
+        {
+            string? startStateSource = string.IsNullOrWhiteSpace(previousEndState)
+                ? scene.StartState
+                : previousEndState;
+            string? startState = ReplaceStoryboardContractValue(
+                startStateSource,
+                scene.CharacterLock,
+                characterLock);
+            string? endState = ReplaceStoryboardContractValue(
+                scene.EndState,
+                scene.CharacterLock,
+                characterLock);
+            string prompt = scene.Prompt;
+            prompt = ReplaceStoryboardContractValue(prompt, scene.CharacterLock, characterLock) ?? string.Empty;
+            prompt = ReplaceStoryboardContractValue(prompt, scene.StyleLock, styleLock) ?? string.Empty;
+            prompt = ReplaceStoryboardContractValue(prompt, scene.StartState, startState) ?? string.Empty;
+            prompt = ReplaceStoryboardContractValue(prompt, scene.EndState, endState) ?? string.Empty;
+            PlanSceneDto clone = CloneScene(
+                scene,
+                prompt: prompt,
+                setting: scene.Setting,
+                shotType: scene.ShotType,
+                characterLock: characterLock,
+                styleLock: styleLock,
+                startState: startState,
+                endState: endState,
+                subject: ReplaceStoryboardContractValue(
+                    scene.Subject,
+                    scene.CharacterLock,
+                    characterLock),
+                action: scene.Action,
+                camera: scene.Camera,
+                motion: ReplaceStoryboardContractValue(
+                    scene.Motion,
+                    scene.CharacterLock,
+                    characterLock),
+                environmentMotion: scene.EnvironmentMotion,
+                continuity: ReplaceStoryboardContractValue(
+                    scene.ContinuityInstruction,
+                    scene.CharacterLock,
+                    characterLock),
+                transition: scene.Transition,
+                replaceStoryboardFields: true);
+            normalized.Add(clone);
+            previousEndState = clone.EndState;
+        }
+
+        return normalized;
+    }
+
+    private static string? ReplaceStoryboardContractValue(
+        string? source,
+        string? previous,
+        string? next)
+    {
+        if (string.IsNullOrEmpty(source) ||
+            string.IsNullOrWhiteSpace(previous) ||
+            string.IsNullOrWhiteSpace(next) ||
+            string.Equals(previous, next, StringComparison.Ordinal))
+        {
+            return source;
+        }
+
+        return source.Replace(previous, next, StringComparison.Ordinal);
     }
 
     public static bool IsSceneApproved(PlanSceneDto scene) =>

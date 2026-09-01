@@ -88,6 +88,19 @@ def _combine_text_parts(parts: list[Any]) -> str:
     return "\n".join(lines)
 
 
+def _mapping_text(mapping: dict[str, Any] | None, *keys: str) -> str:
+    if not isinstance(mapping, dict):
+        return ""
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, (dict, list, tuple, set)):
+            continue
+        text = " ".join(str(value or "").split())
+        if text:
+            return text
+    return ""
+
+
 def planner_lab_to_project_analysis(raw_analysis: dict[str, Any] | None) -> dict[str, Any]:
     analysis = raw_analysis if isinstance(raw_analysis, dict) else {}
     basic = analysis.get("basicInfo") if isinstance(analysis.get("basicInfo"), dict) else {}
@@ -181,6 +194,36 @@ def planner_lab_to_canonical_plan(
     raw_scenes = plan.get("scenes") if isinstance(plan.get("scenes"), list) else []
     scenes: list[dict[str, Any]] = []
     total = len(raw_scenes)
+    direction = plan.get("direction") if isinstance(plan.get("direction"), dict) else {}
+    first_scene = next((item for item in raw_scenes if isinstance(item, dict)), {})
+    variant_character_lock = (
+        _mapping_text(
+            first_scene,
+            "characterLock",
+            "character_lock",
+            "subject",
+            "subjectAnchor",
+            "subject_anchor",
+        )
+        or _mapping_text(direction, "characterLock", "character_lock", "subject", "subjectAnchor")
+        or "one recurring lead subject with unchanged identity, wardrobe, silhouette, and signature props"
+    )
+    variant_style_lock = (
+        _mapping_text(
+            first_scene,
+            "styleLock",
+            "style_lock",
+            "visualLock",
+            "visual_lock",
+        )
+        or _mapping_text(direction, "styleLock", "style_lock", "visualLock", "visual_lock")
+        or (
+            f"{_mapping_text(settings, 'promptStyle')} finish with consistent medium, palette, texture, lighting, and lens family"
+            if _mapping_text(settings, "promptStyle")
+            else "consistent medium, palette, texture, lighting logic, lens family, contrast, and aspect ratio"
+        )
+    )
+    previous_end_state = ""
     for index, raw_scene in enumerate(raw_scenes):
         if not isinstance(raw_scene, dict):
             continue
@@ -190,26 +233,110 @@ def planner_lab_to_canonical_plan(
         end_s = _parse_clock(timing.get("endTime"))
         if end_s <= start_s:
             start_s, end_s = _fallback_scene_timing(len(scenes), max(1, total), duration_s or float(total))
-        scenes.append(
-            {
-                "id": scene_id,
-                "name": str(raw_scene.get("title") or raw_scene.get("name") or f"Scene {scene_id}").strip(),
-                "start_s": start_s,
-                "end_s": end_s,
-                "prompt": str(raw_scene.get("text") or raw_scene.get("prompt") or "").strip(),
-                "negative_prompt": str(raw_scene.get("negativePrompt") or raw_scene.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT).strip(),
-                "approved": bool(raw_scene.get("approved")),
-                "locked": bool(raw_scene.get("locked")),
-                "status": str(raw_scene.get("status") or "draft"),
-                "rationale": str(raw_scene.get("rationale") or "").strip(),
-                "shot_type": str(raw_scene.get("shotType") or timing.get("shotType") or "").strip(),
-                "transition_cue": str(raw_scene.get("transitionCue") or timing.get("transitionCue") or "").strip(),
-                "continuity_note": str(raw_scene.get("continuityNote") or timing.get("continuityNote") or "").strip(),
-                "segment": _coerce_int(raw_scene.get("segment")),
-                "score": deepcopy(raw_scene.get("score")) if isinstance(raw_scene.get("score"), dict) else {},
-                "prompt_variants": deepcopy(raw_scene.get("variants")) if isinstance(raw_scene.get("variants"), list) else [],
-            }
+        prompt = _mapping_text(raw_scene, "text", "prompt")
+        setting = (
+            _mapping_text(raw_scene, "setting", "location", "locationHint", "location_hint")
+            or _mapping_text(timing, "locationHint", "location_hint", "location")
+            or "the established project world with stable geography and landmark placement"
         )
+        shot_type = (
+            _mapping_text(raw_scene, "shotType", "shot_type", "composition")
+            or _mapping_text(timing, "shotType", "shot_type")
+            or "cinematic movement composition"
+        )
+        camera = (
+            _mapping_text(raw_scene, "camera", "cameraMove", "camera_move", "cameraHint", "camera_hint")
+            or _mapping_text(timing, "movement", "camera", "cameraMove", "camera_move")
+            or "one smooth camera path that follows the action"
+        )
+        authored_character_lock = _mapping_text(
+            raw_scene,
+            "characterLock",
+            "character_lock",
+            "subject",
+            "subjectAnchor",
+            "subject_anchor",
+        )
+        authored_style_lock = _mapping_text(
+            raw_scene,
+            "styleLock",
+            "style_lock",
+            "visualLock",
+            "visual_lock",
+        )
+        character_lock = variant_character_lock
+        style_lock = variant_style_lock
+        action = _mapping_text(raw_scene, "action", "shotAction", "shot_action") or prompt
+        subject_motion = _mapping_text(
+            raw_scene,
+            "motion",
+            "subjectMotion",
+            "subject_motion",
+            "motionHint",
+            "motion_hint",
+        ) or action
+        environment_motion = _mapping_text(
+            raw_scene,
+            "environmentMotion",
+            "environment_motion",
+        ) or "foreground texture, practical light, and background atmosphere move continuously"
+        authored_start_state = _mapping_text(raw_scene, "startState", "start_state", "openingState", "opening_state")
+        start_state = previous_end_state or authored_start_state or (
+            f"{character_lock} begins in a readable pose inside {setting}; the camera and screen axis are established"
+        )
+        end_state = _mapping_text(raw_scene, "endState", "end_state", "closingState", "closing_state") or (
+            f"{character_lock} completes {action} inside {setting} in a readable handoff pose with identity, "
+            "landmark placement, and screen direction preserved"
+        )
+        previous_end_state = end_state
+        transition = _mapping_text(raw_scene, "transition", "transitionCue", "transition_cue") or _mapping_text(
+            timing,
+            "transition",
+            "transitionCue",
+            "transition_cue",
+        )
+        continuity = _mapping_text(raw_scene, "continuity", "continuityNote", "continuity_note") or _mapping_text(
+            timing,
+            "continuity",
+            "continuityNote",
+            "continuity_note",
+        )
+        scene = {
+            "id": scene_id,
+            "name": str(raw_scene.get("title") or raw_scene.get("name") or f"Scene {scene_id}").strip(),
+            "start_s": start_s,
+            "end_s": end_s,
+            "prompt": prompt,
+            "negative_prompt": str(raw_scene.get("negativePrompt") or raw_scene.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT).strip(),
+            "approved": bool(raw_scene.get("approved")),
+            "locked": bool(raw_scene.get("locked")),
+            "status": str(raw_scene.get("status") or "draft"),
+            "rationale": str(raw_scene.get("rationale") or "").strip(),
+            "setting": setting,
+            "shot_type": shot_type,
+            "character_lock": character_lock,
+            "style_lock": style_lock,
+            "start_state": start_state,
+            "end_state": end_state,
+            "subject": character_lock,
+            "action": action,
+            "camera": camera,
+            "motion": subject_motion,
+            "environment_motion": environment_motion,
+            "transition": transition,
+            "transition_cue": transition,
+            "continuity_note": continuity,
+            "segment": _coerce_int(raw_scene.get("segment")),
+            "score": deepcopy(raw_scene.get("score")) if isinstance(raw_scene.get("score"), dict) else {},
+            "prompt_variants": deepcopy(raw_scene.get("variants")) if isinstance(raw_scene.get("variants"), list) else [],
+        }
+        if authored_start_state and authored_start_state != start_state:
+            scene["authored_start_state"] = authored_start_state
+        if authored_character_lock and authored_character_lock != character_lock:
+            scene["authored_character_lock"] = authored_character_lock
+        if authored_style_lock and authored_style_lock != style_lock:
+            scene["authored_style_lock"] = authored_style_lock
+        scenes.append(scene)
 
     title = str(plan.get("executiveSummary") or basic.get("fileName") or "Planner Lab Import").strip()
     variant_name = str(settings.get("promptStyle") or "planner-lab").strip() or "planner-lab"

@@ -17,9 +17,13 @@ from typing import Any
 from ..errors import UserFacingError
 from .deforum_motion import DeforumMotionScheduleBundle, evaluate_motion_state
 from .deforum_normalize import (
+    CLIP_SAFE_RENDER_PROMPT_MAX_WORDS,
     DEFAULT_RENDER_PROMPT,
     UnifiedDeforumRenderContext,
     build_deforum_render_context,
+    limit_prompt_words,
+    operational_render_prompt_from_scene,
+    prompt_excerpt,
     render_prompt_from_scene,
 )
 from .deforum_prompt_timeline import resolve_prompt_frame
@@ -51,7 +55,7 @@ from .video_motion_quality import (
 
 logger = logging.getLogger(__name__)
 
-INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION = "motion-quality-v2"
+INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION = "storyboard-continuity-v3"
 
 
 @dataclass(frozen=True)
@@ -3078,6 +3082,7 @@ def render_internal_video_variant(
         max_scene_frames = max(2, int(settings.video_model_max_frames_per_scene or 25))
         fi_cursor = 0
         previous_storyboard_source_scene: int | None = None
+        previous_video_model_frame: Image.Image | None = None
         if log_fn and normalize_internal_motion_strategy(settings.motion_strategy) == "storyboard_full_motion":
             log_fn(
                 f"Storyboard full motion: generated anchors with {len(sorted_scenes)} short motion shots "
@@ -3151,6 +3156,11 @@ def render_internal_video_variant(
                     frame_paths.append(existing)
                     fi_cursor = fi + 1
                     emit_checkpoint(stage="frames", status="running", message=f"Reusing video-model frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
+                try:
+                    with Image.open(_frame_path(out_frames, end_f - 1)) as cached_last_frame:
+                        previous_video_model_frame = cached_last_frame.convert("RGB").copy()
+                except Exception:
+                    previous_video_model_frame = None
                 previous_storyboard_source_scene = source_scene_index
                 continue
             if (
@@ -3222,6 +3232,23 @@ def render_internal_video_variant(
                 width=out_w,
                 height=out_h,
             )
+            continuity_scope = normalize_keyframe_continuity_mode(
+                settings.keyframe_continuity_mode
+            )
+            continuity_anchor_source = "generated_keyframe"
+            if previous_video_model_frame is not None and (
+                transition_kind == "technical_continue" or continuity_scope == "project"
+            ):
+                start_anchor_img = previous_video_model_frame.convert("RGB").resize(
+                    start_anchor_img.size,
+                    resample=Image.LANCZOS,
+                )
+                continuity_anchor_source = "previous_native_motion_frame"
+                if log_fn:
+                    log_fn(
+                        "Reusing the preceding native motion frame as this shot's continuity anchor "
+                        f"(transition={transition_kind}, scope={continuity_scope})."
+                    )
             anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
             init_img = end_anchor_img if anchor_mode == "end" else start_anchor_img
             score_info = video_model_scene_motion_score(
@@ -3364,6 +3391,7 @@ def render_internal_video_variant(
                 end_img=end_anchor_img,
                 anchor_strength=float(shot_anchor_strength),
             )
+            previous_video_model_frame = generated[-1].convert("RGB").copy()
             native_motion_report = analyze_motion_images(generated, fps=fps_r)
             native_motion_report = {
                 **native_motion_report,
@@ -3374,6 +3402,7 @@ def render_internal_video_variant(
                 "engine": engine,
                 "motion_score": score_info.get("motion_score"),
                 "prompt": prompt_for_model,
+                "continuity_anchor_source": continuity_anchor_source,
             }
             video_model_native_motion_reports.append(native_motion_report)
             if native_motion_report["status"] != "pass":
@@ -4524,15 +4553,14 @@ def _storyboard_scene_text(scene: dict[str, Any] | None, *keys: str) -> str:
     if not isinstance(scene, dict):
         return ""
     storyboard = scene.get("storyboard") if isinstance(scene.get("storyboard"), dict) else {}
-    for key in keys:
-        value = scene.get(key)
-        if value in (None, ""):
-            value = storyboard.get(key)
-        if isinstance(value, (dict, list, tuple, set)):
-            continue
-        text = " ".join(str(value or "").split())
-        if text:
-            return text
+    for source in (scene, storyboard):
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, (dict, list, tuple, set)):
+                continue
+            text = " ".join(str(value or "").split())
+            if text:
+                return text
     return ""
 
 
@@ -4639,7 +4667,47 @@ def describe_storyboard_motion_plan(
                 "end_s": round(end_s, 3),
                 "prompt": " ".join(refined_prompt.split())[:1200],
                 "shot_phase": _storyboard_shot_phase(shot),
-                "subject_anchor": _storyboard_scene_text(shot, "subject", "subject_anchor"),
+                "setting": _storyboard_scene_text(
+                    shot,
+                    "setting",
+                    "location",
+                    "location_hint",
+                    "locationHint",
+                ),
+                "shot_type": _storyboard_scene_text(shot, "shot_type", "shotType", "composition"),
+                "character_lock": _storyboard_scene_text(
+                    shot,
+                    "character_lock",
+                    "characterLock",
+                    "subject",
+                    "subject_anchor",
+                ),
+                "style_lock": _storyboard_scene_text(
+                    shot,
+                    "style_lock",
+                    "styleLock",
+                    "visual_lock",
+                    "visualLock",
+                ),
+                "start_state": _storyboard_scene_text(
+                    shot,
+                    "start_state",
+                    "startState",
+                    "opening_state",
+                ),
+                "end_state": _storyboard_scene_text(
+                    shot,
+                    "end_state",
+                    "endState",
+                    "closing_state",
+                ),
+                "subject_anchor": _storyboard_scene_text(
+                    shot,
+                    "character_lock",
+                    "characterLock",
+                    "subject",
+                    "subject_anchor",
+                ),
                 "shot_action": _storyboard_scene_text(shot, "action", "shot_action"),
                 "authored_camera": _storyboard_scene_text(shot, "camera", "camera_move", "camera_hint"),
                 "authored_subject_motion": _storyboard_scene_text(shot, "motion", "subject_motion", "motion_hint"),
@@ -4704,100 +4772,63 @@ def _refine_video_model_prompt(
     settings: InternalVideoSettings,
     scene: dict[str, Any] | None = None,
 ) -> str:
-    base = " ".join(str(prompt or DEFAULT_RENDER_PROMPT).split()) or DEFAULT_RENDER_PROMPT
-    additions: list[str] = []
+    fallback = prompt or DEFAULT_RENDER_PROMPT
+    if not bool(settings.video_model_prompt_refine):
+        return limit_prompt_words(
+            fallback,
+            max_words=CLIP_SAFE_RENDER_PROMPT_MAX_WORDS,
+        )
+
+    # SVD conditions on the generated image, while AnimateDiff uses SD1.5 CLIP text.
+    # Keep one truthful prompt contract for both: concrete subject/action/motion first,
+    # within the 77-token CLIP window. Exact start/end states and transitions remain in
+    # the structured storyboard motion plan and are enforced through anchor reuse.
+    refined_scene = dict(scene) if isinstance(scene, dict) else {"character_lock": fallback}
     score = score_info.get("motion_score")
-    mode = _normalize_video_motion_score_mode(settings.video_model_motion_score_mode)
+    score_i = _clamp_video_motion_score(score or settings.video_model_manual_motion_score or 4)
     scene_motion = normalize_video_model_scene_motion(settings.video_model_scene_motion)
-    if mode != "off" and score is not None and "motion score" not in base.lower():
-        additions.append(f"{_clamp_video_motion_score(score)} motion score.")
-    if bool(settings.video_model_prompt_refine):
-        subject = _storyboard_scene_text(scene, "subject", "subject_anchor")
-        action = _storyboard_scene_text(scene, "action", "shot_action")
-        camera = _storyboard_scene_text(scene, "camera", "camera_move", "camera_hint")
-        subject_motion = _storyboard_scene_text(scene, "motion", "subject_motion", "motion_hint")
-        environment_motion = _storyboard_scene_text(
-            scene,
-            "environment_motion",
-            "environmentMotion",
-        )
-        continuity = _storyboard_scene_text(
-            scene,
-            "continuity",
-            "continuity_note",
-            "continuityNote",
-        )
-        transition = _storyboard_scene_text(
-            scene,
-            "_storyboard_transition",
-            "transition",
-            "transition_cue",
-            "transitionCue",
-        )
-        if subject:
-            additions.append(f"Keep one subject anchor: {subject}.")
-        if action:
-            additions.append(f"Visible shot action: {action}.")
-        if camera:
-            additions.append(f"Authored camera move: {camera}.")
-        if subject_motion:
-            additions.append(f"Authored subject motion: {subject_motion}.")
-        if environment_motion:
-            additions.append(f"Authored environment motion: {environment_motion}.")
-        if continuity:
-            additions.append(f"Continuity contract: {continuity}.")
-        continuity_scope = normalize_keyframe_continuity_mode(settings.keyframe_continuity_mode)
-        additions.append(
-            "Preserve the same face, silhouette, wardrobe, palette, world, and screen direction across the project."
-            if continuity_scope == "project"
-            else "Preserve the same face, silhouette, wardrobe, palette, and screen direction within this scene."
-        )
-        shot_phase = _storyboard_shot_phase(scene)
-        if shot_phase == "establish":
-            additions.append("Establish a readable starting pose, then initiate the action without a static hold.")
-        elif shot_phase == "develop":
-            additions.append("Continue the previous action and screen direction; advance pose and environment without resetting.")
-        elif shot_phase == "resolve":
-            additions.append("Complete the action arc and leave a motivated pose for the following shot.")
-        if transition == "technical_continue":
-            additions.append("This is a continuous motion window, not a new scene: avoid a visual reset or hard cut.")
-        elif transition == "dissolve":
-            additions.append("End on a compatible composition for a motivated match dissolve.")
-        elif transition == "cut":
-            additions.append("End on a decisive readable pose for the authored impact cut.")
-        if score is not None:
-            score_i = _clamp_video_motion_score(score)
-            if score_i <= 2:
-                additions.append("Slow restrained subject motion with subtle pose changes.")
-            elif score_i >= 6:
-                additions.append("Energetic music-reactive subject motion with clear pose and object transitions.")
-            else:
-                additions.append("Controlled music-reactive subject motion with visible changes between frames.")
-        if scene_motion == "camera":
-            additions.append("Camera motion is primary with only gentle atmosphere movement.")
-        elif scene_motion == "scene":
-            additions.append(
-                "Animate the whole scene: foreground subject changes pose, clothing or hair moves, props shift, "
-                "lights flicker, particles, water, smoke, dust, trees, and background atmosphere move naturally."
+    if not isinstance(scene, dict) and not _storyboard_scene_text(refined_scene, "action", "shot_action"):
+        refined_scene["action"] = (
+            "slow restrained movement"
+            if score_i <= 2
+            else (
+                "energetic music reactive movement"
+                if score_i >= 6
+                else "controlled music reactive movement"
             )
-            additions.append("Camera motion is secondary; the visible objects themselves move through the shot.")
-        else:
-            additions.append(
-                "Animate visible subjects and foreground objects: walking, turning, gesturing, breathing, "
-                "cloth or hair sway, and reactive environmental motion."
+        )
+    if not _storyboard_scene_text(refined_scene, "motion", "subject_motion", "motion_hint"):
+        refined_scene["motion"] = (
+            "whole scene changes with motion"
+            if scene_motion == "scene"
+            else (
+                "subtle breathing and pose changes"
+                if score_i <= 2
+                else (
+                    "energetic pose and object changes"
+                    if score_i >= 6
+                    else "visible controlled pose changes"
+                )
             )
-        anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
-        if anchor_mode == "end":
-            additions.append("Resolve into the ending anchor.")
-        elif anchor_mode == "both":
-            additions.append("Preserve the opening anchor and resolve naturally into the ending anchor.")
-        elif anchor_mode == "loop":
-            additions.append("Connect the opening anchor into a seamless loop.")
-        else:
-            additions.append("Preserve the opening anchor.")
-    if not additions:
-        return base
-    return f"{base.rstrip('. ')}. {' '.join(additions)}"
+        )
+    if not _storyboard_scene_text(refined_scene, "environment_motion", "environmentMotion"):
+        refined_scene["environment_motion"] = (
+            "gentle atmosphere movement"
+            if scene_motion == "camera"
+            else (
+                "visible objects themselves move naturally"
+                if scene_motion == "scene"
+                else "foreground objects and atmosphere move visibly"
+            )
+        )
+    if scene_motion == "camera" and not _storyboard_scene_text(refined_scene, "camera", "camera_move", "camera_hint"):
+        refined_scene["camera"] = "camera motion is primary"
+    return operational_render_prompt_from_scene(
+        refined_scene,
+        fallback=fallback,
+        max_words=CLIP_SAFE_RENDER_PROMPT_MAX_WORDS,
+        include_states=False,
+    )
 
 
 def describe_internal_video_model_preflight(

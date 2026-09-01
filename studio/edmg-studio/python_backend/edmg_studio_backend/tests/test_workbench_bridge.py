@@ -65,6 +65,13 @@ def test_planner_lab_conversion_builds_renderer_ready_analysis_and_plan():
                 "approved": True,
                 "status": "approved",
                 "shotType": "wide",
+                "characterLock": "the same lead with a silver coat and triangular pendant",
+                "styleLock": "graphic neon finish with magenta and cyan practical light",
+                "startState": "the lead waits under the east arch facing left-to-right",
+                "endState": "the lead reaches the center sign facing left-to-right with one hand raised",
+                "action": "walks from the east arch to the center sign and raises one hand",
+                "subjectMotion": "continuous walking, arm lift, and cloth movement",
+                "environmentMotion": "rain and sign reflections move across the street",
                 "transitionCue": "lift on downbeat",
                 "continuityNote": "keep the same lead silhouette",
             },
@@ -75,11 +82,27 @@ def test_planner_lab_conversion_builds_renderer_ready_analysis_and_plan():
                 "negativePrompt": "muddy details",
                 "approved": False,
                 "status": "draft",
+                "characterLock": "a conflicting replacement lead",
+                "styleLock": "a conflicting replacement visual style",
+                "startState": "a conflicting reset at the west edge",
+                "endState": "the lead stops under the west tower facing left-to-right",
             },
         ],
         "scenePlan": [
-            {"id": 1, "startTime": "00:00", "endTime": "00:24"},
-            {"id": 2, "startTime": "00:24", "endTime": "00:48"},
+            {
+                "id": 1,
+                "startTime": "00:00",
+                "endTime": "00:24",
+                "movement": "one smooth left-to-right tracking path",
+                "locationHint": "the east side of one rain-soaked neon plaza",
+            },
+            {
+                "id": 2,
+                "startTime": "00:24",
+                "endTime": "00:48",
+                "movement": "the tracking path continues and eases to a stop",
+                "locationHint": "the west side of the same rain-soaked neon plaza",
+            },
         ],
     }
 
@@ -99,6 +122,17 @@ def test_planner_lab_conversion_builds_renderer_ready_analysis_and_plan():
     assert variant["scenes"][0]["prompt"] == "Neon skyline with slow forward glide."
     assert variant["scenes"][0]["negative_prompt"] == "muddy details"
     assert variant["scenes"][0]["approved"] is True
+    first, second = variant["scenes"]
+    assert first["setting"] == "the east side of one rain-soaked neon plaza"
+    assert first["camera"] == "one smooth left-to-right tracking path"
+    assert first["motion"] == "continuous walking, arm lift, and cloth movement"
+    assert first["environment_motion"] == "rain and sign reflections move across the street"
+    assert second["character_lock"] == first["character_lock"]
+    assert second["style_lock"] == first["style_lock"]
+    assert second["start_state"] == first["end_state"]
+    assert second["authored_start_state"] == "a conflicting reset at the west edge"
+    assert second["authored_character_lock"] == "a conflicting replacement lead"
+    assert second["authored_style_lock"] == "a conflicting replacement visual style"
 
 
 def test_reactive_lab_merge_upserts_motion_track_and_camera_keyframes():
