@@ -24,8 +24,16 @@ internal static class StudioAppearanceService
     {
         get
         {
-            string? value = ApplicationData.Current.LocalSettings.Values[ThemeSettingKey] as string;
-            return value is not null && Palettes.ContainsKey(value) ? value.ToLowerInvariant() : "studio";
+            try
+            {
+                string? value = ApplicationData.Current.LocalSettings.Values[ThemeSettingKey] as string;
+                return value is not null && Palettes.ContainsKey(value) ? value.ToLowerInvariant() : "studio";
+            }
+            catch (Exception exception)
+            {
+                CrashLogger.Write("Unable to read the saved Studio theme; using the default theme.", exception);
+                return "studio";
+            }
         }
     }
 
@@ -40,7 +48,14 @@ internal static class StudioAppearanceService
 
         if (persist)
         {
-            ApplicationData.Current.LocalSettings.Values[ThemeSettingKey] = themeId.ToLowerInvariant();
+            try
+            {
+                ApplicationData.Current.LocalSettings.Values[ThemeSettingKey] = themeId.ToLowerInvariant();
+            }
+            catch (Exception exception)
+            {
+                CrashLogger.Write("Unable to persist the Studio theme; continuing for this session.", exception);
+            }
         }
 
         ResourceDictionary? studioResources = Application.Current.Resources.MergedDictionaries
@@ -75,8 +90,6 @@ internal static class StudioAppearanceService
         SetGradient(darkResources, "StudioContentScrimBrush", palette.Background);
         SetGradient(darkResources, "StudioWorkspaceScrimBrush", palette.Background);
 
-        // All four canonical Studio palettes are dark. High Contrast remains authoritative and
-        // uses the separate HighContrast resource dictionary without any palette overrides.
         if (!new AccessibilitySettings().HighContrast)
         {
             root.RequestedTheme = ElementTheme.Dark;
