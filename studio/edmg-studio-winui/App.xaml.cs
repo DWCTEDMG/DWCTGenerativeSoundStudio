@@ -9,9 +9,20 @@ public partial class App : Application
 
     public App()
     {
-        InitializeComponent();
-        Services = AppServices.Create();
         UnhandledException += OnUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        try
+        {
+            InitializeComponent();
+            Services = AppServices.Create();
+        }
+        catch (Exception exception)
+        {
+            CrashLogger.Write("Fatal failure while constructing the WinUI application.", exception);
+            throw;
+        }
     }
 
     public static AppServices Services { get; private set; } = null!;
@@ -20,15 +31,34 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
-        MainWindowInstance = _window;
-        _window.Activate();
+        try
+        {
+            _window = new MainWindow();
+            MainWindowInstance = _window;
+            _window.Activate();
+        }
+        catch (Exception exception)
+        {
+            CrashLogger.Write("Fatal failure while launching the main WinUI window.", exception);
+            throw;
+        }
     }
 
     public static void Navigate(string destination) => Shell?.NavigateTo(destination);
 
     private static void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
     {
+        CrashLogger.Write("Unhandled WinUI exception.", e.Exception);
         System.Diagnostics.Debug.WriteLine($"Unhandled WinUI exception: {e.Exception}");
+    }
+
+    private static void OnDomainUnhandledException(object? sender, System.UnhandledExceptionEventArgs e)
+    {
+        CrashLogger.Write($"Unhandled AppDomain exception. IsTerminating={e.IsTerminating}.", e.ExceptionObject as Exception);
+    }
+
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        CrashLogger.Write("Unobserved task exception.", e.Exception);
     }
 }
