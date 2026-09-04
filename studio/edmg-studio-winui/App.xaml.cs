@@ -1,3 +1,5 @@
+using System.Net.Http;
+using System.Net.Sockets;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 
@@ -50,6 +52,35 @@ public partial class App : Application
     {
         CrashLogger.Write("Unhandled WinUI exception.", e.Exception);
         System.Diagnostics.Debug.WriteLine($"Unhandled WinUI exception: {e.Exception}");
+
+        // A temporarily unavailable local backend must never take down the shell.
+        // SetupPage uses async event handlers, so a connection-refused exception can
+        // otherwise reach WinUI's top-level handler before the backend finishes starting.
+        if (IsExpectedLocalBackendConnectionFailure(e.Exception))
+        {
+            e.Handled = true;
+            CrashLogger.Write("Handled local backend connection failure; keeping WinUI running.", e.Exception);
+        }
+    }
+
+    private static bool IsExpectedLocalBackendConnectionFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is SocketException socketException &&
+                socketException.SocketErrorCode == SocketError.ConnectionRefused)
+            {
+                return true;
+            }
+
+            if (current is HttpRequestException &&
+                current.Message.Contains("127.0.0.1:7863", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void OnDomainUnhandledException(object? sender, System.UnhandledExceptionEventArgs e)
