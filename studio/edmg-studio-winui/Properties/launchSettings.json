@@ -2,9 +2,6 @@
   "profiles": {
     "EdmgStudio.WinUI (Package)": {
       "commandName": "MsixPackage"
-    },
-    "EdmgStudio.WinUI (Unpackaged)": {
-      "commandName": "Project"
     }
   }
 }
