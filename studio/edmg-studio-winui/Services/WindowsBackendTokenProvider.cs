@@ -8,6 +8,10 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
     private const string VaultResource = "EDMG Studio Backend";
     private const string VaultUser = "BackendAuthToken";
     private readonly IBackendTokenProvider _fallback;
+    private readonly SemaphoreSlim _vaultGate = new(1, 1);
+
+    private bool _vaultChecked;
+    private string? _cachedVaultToken;
 
     public WindowsBackendTokenProvider(IBackendTokenProvider fallback)
     {
@@ -22,15 +26,42 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
             return environmentToken;
         }
 
+        if (_vaultChecked)
+        {
+            return _cachedVaultToken;
+        }
+
+        await _vaultGate.WaitAsync(cancellationToken);
         try
         {
-            var credential = new PasswordVault().Retrieve(VaultResource, VaultUser);
-            credential.RetrievePassword();
-            return string.IsNullOrWhiteSpace(credential.Password) ? null : credential.Password;
+            if (_vaultChecked)
+            {
+                return _cachedVaultToken;
+            }
+
+            try
+            {
+                var credential = new PasswordVault().Retrieve(VaultResource, VaultUser);
+                credential.RetrievePassword();
+                _cachedVaultToken = string.IsNullOrWhiteSpace(credential.Password)
+                    ? null
+                    : credential.Password;
+            }
+            catch
+            {
+                // A missing credential is normal for a local backend that does not
+                // require authentication. Cache that result so every HTTP request
+                // does not repeatedly ask PasswordVault and trigger a first-chance
+                // COMException in the Visual Studio debugger.
+                _cachedVaultToken = null;
+            }
+
+            _vaultChecked = true;
+            return _cachedVaultToken;
         }
-        catch
+        finally
         {
-            return null;
+            _vaultGate.Release();
         }
     }
 
