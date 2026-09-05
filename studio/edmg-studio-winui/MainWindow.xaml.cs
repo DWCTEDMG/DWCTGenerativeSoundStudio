@@ -15,7 +15,7 @@ public sealed partial class MainWindow : Window
 
     private bool _closing;
     private bool _closeCompleted;
-    private readonly ApplicationDataContainer _settings = ApplicationData.Current.LocalSettings;
+    private readonly ApplicationDataContainer? _settings;
 
     private const string WindowXKey = "MainWindow.X";
     private const string WindowYKey = "MainWindow.Y";
@@ -26,13 +26,20 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _settings = TryGetLocalSettings();
         StudioAppearanceService.ApplySavedTheme(RootFrame);
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        AppWindow.SetIcon("Assets/AppIcon.ico");
+        TrySetWindowIcon();
         AppWindow.Title = "EDMG Studio";
+
         var hwnd = Win32Interop.GetWindowFromWindowId(AppWindow.Id);
-        var scale = GetDpiForWindow(hwnd) / 96.0;
+        var scale = hwnd != IntPtr.Zero ? GetDpiForWindow(hwnd) / 96.0 : 1.0;
+        if (scale <= 0)
+        {
+            scale = 1.0;
+        }
+
         RestoreWindowPlacement(scale);
         RootFrame.Navigate(typeof(MainPage));
         AppWindow.Changed += OnAppWindowChanged;
@@ -40,6 +47,35 @@ public sealed partial class MainWindow : Window
     }
 
     public nint WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+    private static ApplicationDataContainer? TryGetLocalSettings()
+    {
+        try
+        {
+            return ApplicationData.Current.LocalSettings;
+        }
+        catch (Exception exception)
+        {
+            CrashLogger.Write("LocalSettings unavailable; continuing without persisted window settings.", exception);
+            return null;
+        }
+    }
+
+    private void TrySetWindowIcon()
+    {
+        try
+        {
+            string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
+            if (File.Exists(iconPath))
+            {
+                AppWindow.SetIcon(iconPath);
+            }
+        }
+        catch (Exception exception)
+        {
+            CrashLogger.Write("Unable to set the AppWindow icon.", exception);
+        }
+    }
 
     private void RestoreWindowPlacement(double scale)
     {
@@ -62,7 +98,7 @@ public sealed partial class MainWindow : Window
         y = Math.Clamp(y, workArea.Y, workArea.Y + workArea.Height - height);
 
         AppWindow.MoveAndResize(new RectInt32(x, y, width, height));
-        if (_settings.Values[WindowMaximizedKey] is true &&
+        if (ReadBool(WindowMaximizedKey) is true &&
             AppWindow.Presenter is OverlappedPresenter presenter)
         {
             presenter.Maximize();
@@ -76,7 +112,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        _settings.Values[WindowMaximizedKey] = presenter.State == OverlappedPresenterState.Maximized;
+        WriteSetting(WindowMaximizedKey, presenter.State == OverlappedPresenterState.Maximized);
         if (presenter.State != OverlappedPresenterState.Restored ||
             (!args.DidPositionChange && !args.DidSizeChange))
         {
@@ -88,18 +124,69 @@ public sealed partial class MainWindow : Window
 
     private void SaveNormalWindowPlacement(AppWindow window)
     {
-        _settings.Values[WindowXKey] = window.Position.X;
-        _settings.Values[WindowYKey] = window.Position.Y;
-        _settings.Values[WindowWidthKey] = window.Size.Width;
-        _settings.Values[WindowHeightKey] = window.Size.Height;
+        WriteSetting(WindowXKey, window.Position.X);
+        WriteSetting(WindowYKey, window.Position.Y);
+        WriteSetting(WindowWidthKey, window.Size.Width);
+        WriteSetting(WindowHeightKey, window.Size.Height);
     }
 
-    private int? ReadInt(string key) => _settings.Values[key] switch
+    private int? ReadInt(string key)
     {
-        int value => value,
-        long value when value is >= int.MinValue and <= int.MaxValue => (int)value,
-        _ => null,
-    };
+        if (_settings is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _settings.Values[key] switch
+            {
+                int value => value,
+                long value when value is >= int.MinValue and <= int.MaxValue => (int)value,
+                _ => null,
+            };
+        }
+        catch (Exception exception)
+        {
+            CrashLogger.Write($"Unable to read window setting '{key}'.", exception);
+            return null;
+        }
+    }
+
+    private bool? ReadBool(string key)
+    {
+        if (_settings is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _settings.Values[key] is bool value ? value : null;
+        }
+        catch (Exception exception)
+        {
+            CrashLogger.Write($"Unable to read window setting '{key}'.", exception);
+            return null;
+        }
+    }
+
+    private void WriteSetting(string key, object value)
+    {
+        if (_settings is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _settings.Values[key] = value;
+        }
+        catch (Exception exception)
+        {
+            CrashLogger.Write($"Unable to write window setting '{key}'.", exception);
+        }
+    }
 
     private async void OnClosing(AppWindow sender, AppWindowClosingEventArgs args)
     {
@@ -117,7 +204,7 @@ public sealed partial class MainWindow : Window
         _closing = true;
         if (sender.Presenter is OverlappedPresenter presenter)
         {
-            _settings.Values[WindowMaximizedKey] = presenter.State == OverlappedPresenterState.Maximized;
+            WriteSetting(WindowMaximizedKey, presenter.State == OverlappedPresenterState.Maximized);
             if (presenter.State == OverlappedPresenterState.Restored)
             {
                 SaveNormalWindowPlacement(sender);
@@ -130,7 +217,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            System.Diagnostics.Debug.WriteLine($"Application shutdown completed with errors: {exception}");
+            CrashLogger.Write("Application shutdown completed with errors.", exception);
         }
         finally
         {

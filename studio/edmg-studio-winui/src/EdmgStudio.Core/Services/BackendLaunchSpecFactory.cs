@@ -5,6 +5,7 @@ namespace EdmgStudio.Core.Services;
 public sealed class BackendLaunchSpecFactory
 {
     private static readonly string[] CapabilityExtras = ["core", "audio", "asr", "internal-video", "aws"];
+    private const string RequiredUvVersion = "0.11.28";
 
     private readonly BackendConfiguration _configuration;
     private readonly string? _installationLocatorPath;
@@ -69,11 +70,7 @@ public sealed class BackendLaunchSpecFactory
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceDirectory);
         var profile = BackendConfiguration.NormalizeAcceleratorProfile(_configuration.AcceleratorProfile);
-        var uv = Environment.GetEnvironmentVariable("EDMG_UV_BIN")?.Trim();
-        if (string.IsNullOrWhiteSpace(uv))
-        {
-            uv = "uv";
-        }
+        var uv = ResolveUvExecutable();
 
         var arguments = new List<string>
         {
@@ -124,6 +121,36 @@ public sealed class BackendLaunchSpecFactory
             port,
             profile,
             includeSourceSettings: false);
+    }
+
+    private static string ResolveUvExecutable()
+    {
+        var explicitUv = Environment.GetEnvironmentVariable("EDMG_UV_BIN")?.Trim();
+        if (!string.IsNullOrWhiteSpace(explicitUv))
+        {
+            return explicitUv;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (!string.IsNullOrWhiteSpace(localAppData))
+            {
+                var managedUv = Path.Combine(
+                    localAppData,
+                    "EDMG Studio",
+                    "toolchain",
+                    "uv",
+                    RequiredUvVersion,
+                    "uv.exe");
+                if (File.Exists(managedUv))
+                {
+                    return managedUv;
+                }
+            }
+        }
+
+        return "uv";
     }
 
     private BackendLaunchSpec CreateSpec(

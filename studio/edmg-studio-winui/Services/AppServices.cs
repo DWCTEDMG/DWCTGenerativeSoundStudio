@@ -15,17 +15,20 @@ public sealed class AppServices : IAsyncDisposable
         BackendConfiguration configuration,
         BackendSupervisor backendSupervisor,
         StudioApiClient apiClient,
+        StudioProjectMediaClient projectMediaClient,
         StudioSessionService session)
     {
         Configuration = configuration;
         BackendSupervisor = backendSupervisor;
         ApiClient = apiClient;
+        ProjectMediaClient = projectMediaClient;
         Session = session;
     }
 
     public BackendConfiguration Configuration { get; }
     public BackendSupervisor BackendSupervisor { get; }
     public StudioApiClient ApiClient { get; }
+    public StudioProjectMediaClient ProjectMediaClient { get; }
     public StudioSessionService Session { get; }
 
     internal bool TryTrackPreviewSession(PreviewRendererSession session)
@@ -88,7 +91,8 @@ public sealed class AppServices : IAsyncDisposable
 
         var supervisor = new BackendSupervisor(configuration);
         var apiClient = new StudioApiClient(supervisor, tokenProvider);
-        return new AppServices(configuration, supervisor, apiClient, new StudioSessionService());
+        var projectMediaClient = new StudioProjectMediaClient(apiClient, new StudioApiSignedMediaUrlResolver(apiClient));
+        return new AppServices(configuration, supervisor, apiClient, projectMediaClient, new StudioSessionService());
     }
 
     public async ValueTask DisposeAsync()
@@ -137,6 +141,15 @@ public sealed class AppServices : IAsyncDisposable
         try
         {
             await BackendSupervisor.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
+        try
+        {
+            ProjectMediaClient.Dispose();
         }
         catch (Exception exception)
         {
