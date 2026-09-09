@@ -95,6 +95,7 @@
         </SelectorBar>
 
         <ScrollViewer
+            x:Name="OverviewScrollViewer"
             Grid.Row="3"
             HorizontalScrollBarVisibility="Disabled"
             VerticalScrollBarVisibility="Auto">
@@ -913,36 +914,6 @@
                     </Border>
                 </StackPanel>
 
-                <StackPanel x:Name="PlannerPanel" Visibility="Collapsed" Spacing="16">
-                    <Border Style="{StaticResource WorkspaceCardStyle}">
-                        <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="AI Planner Lab" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="The full planner runs inside the active Workspace project. Its saved storyboard, scene locks, and planner handoff remain on the same session used by Director, Timeline, and Render."
-                                TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Border>
-                    <Frame
-                        x:Name="WorkspacePlannerFrame"
-                        AutomationProperties.AutomationId="Workspace.Planner.Frame" />
-                </StackPanel>
-
-                <StackPanel x:Name="ReactivePanel" Visibility="Collapsed" Spacing="16">
-                    <Border Style="{StaticResource WorkspaceCardStyle}">
-                        <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Reactive Lab" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="Reactive scheduling runs inside the active Workspace project. Motion curves, cue events, and camera data apply to the same project timeline that Director and Render consume."
-                                TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Border>
-                    <Frame
-                        x:Name="WorkspaceReactiveFrame"
-                        AutomationProperties.AutomationId="Workspace.Reactive.Frame" />
-                </StackPanel>
-
                 <VisualStateManager.VisualStateGroups>
                     <VisualStateGroup x:Name="WorkspaceWidthStates">
                         <VisualState x:Name="WideWorkspace">
@@ -973,5 +944,14 @@
                 </VisualStateManager.VisualStateGroups>
             </Grid>
         </ScrollViewer>
+        <!-- Labs own their scrolling. Bounded frames keep lists virtualized and editors visible. -->
+        <Grid x:Name="PlannerPanel" Grid.Row="3" Visibility="Collapsed">
+            <Frame x:Name="WorkspacePlannerFrame"
+                   AutomationProperties.AutomationId="Workspace.Planner.Frame" />
+        </Grid>
+        <Grid x:Name="ReactivePanel" Grid.Row="3" Visibility="Collapsed">
+            <Frame x:Name="WorkspaceReactiveFrame"
+                   AutomationProperties.AutomationId="Workspace.Reactive.Frame" />
+        </Grid>
     </Grid>
 </Page>

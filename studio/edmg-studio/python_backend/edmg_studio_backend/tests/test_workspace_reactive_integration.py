@@ -265,7 +265,7 @@ def test_schedule_apply_uses_reactive_review_and_rejects_previous_schedule(works
             "expected_revision": expected_revision, "schedule_revision": schedule_revision,
         })
         assert response.status_code == 409, response.text
-        assert response.json()["detail"]["code"] == code
+        assert response.json()["error"]["code"] == code
         assert store.get(project.id).meta == before
 
     applied = _post(workspace, "/schedule/apply", {
@@ -299,7 +299,7 @@ def test_alternate_schedule_keeps_legacy_source_revision_guard(workspace):
         "schedule_revision": alternate["schedule_revision"],
     })
     assert response.status_code == 409, response.text
-    assert response.json()["detail"]["code"] == "SCHEDULE_SOURCE_STALE"
+    assert response.json()["error"]["code"] == "SCHEDULE_SOURCE_STALE"
     assert store.get(project.id).meta == before
     regenerated = _post(workspace, "/schedule/regenerate", {"variant_index": 1})
     assert _workflow(workspace)["draft"]["variant_index"] == 1

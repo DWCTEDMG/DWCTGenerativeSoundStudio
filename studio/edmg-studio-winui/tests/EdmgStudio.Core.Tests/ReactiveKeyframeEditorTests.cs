@@ -33,6 +33,37 @@ public sealed class ReactiveKeyframeEditorTests
     }
 
     [TestMethod]
+    [DataRow(0.01)]
+    [DataRow(20.01)]
+    [DataRow(100.0)]
+    public void RefinementAcceptsSharedZoomRangeAndSerializesExactValue(double zoom)
+    {
+        using var source = JsonDocument.Parse("""{"id":"key-a","strength":0.4,"zoom":1}""");
+        var editor = new ReactiveKeyframeEditor(source.RootElement);
+
+        Assert.IsTrue(editor.Refine(0.7, zoom));
+        Assert.AreEqual(zoom, editor.ToJson().GetProperty("zoom").GetDouble());
+        Assert.IsFalse(editor.Refine(0.7, zoom));
+    }
+
+    [TestMethod]
+    public void InvalidZoomRejectsRefinementWithoutChangingAnyField()
+    {
+        using var source = JsonDocument.Parse("""{"id":"key-a","strength":0.4,"zoom":1}""");
+        var editor = new ReactiveKeyframeEditor(source.RootElement);
+        var original = editor.ToJson().GetRawText();
+
+        double[] invalidZooms = [Math.BitDecrement(0.01), Math.BitIncrement(100),
+            0, double.NaN, double.NegativeInfinity, double.PositiveInfinity];
+        foreach (var zoom in invalidZooms)
+        {
+            var error = Assert.Throws<ArgumentOutOfRangeException>(() => editor.Refine(0.7, zoom));
+            Assert.AreEqual("zoom", error.ParamName);
+            Assert.AreEqual(original, editor.ToJson().GetRawText());
+        }
+    }
+
+    [TestMethod]
     public void WorkspaceMetadataWithoutCustomPresetsHasUsableDefaults()
     {
         var metadata = JsonSerializer.Deserialize("""{"source":"workspace","fps":30,"selected_variant_index":0}""", StudioJsonContext.Default.ReactiveLabMetadata)!;

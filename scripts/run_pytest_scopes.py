@@ -3,12 +3,19 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = REPO_ROOT / "studio" / "edmg-studio" / "python_backend"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from edmg_studio_backend.uv_toolchain import normalize_accelerator_profile  # noqa: E402
+
+
 DEFAULT_TEMP_ROOT = REPO_ROOT / ".pytest-runtime"
 UV_VERSION = "0.11.28"
 UV_PROJECT_FLAGS = [
@@ -16,14 +23,6 @@ UV_PROJECT_FLAGS = [
     str(BACKEND_ROOT),
     "--frozen",
     "--no-sync",
-    "--extra",
-    "cpu",
-    "--extra",
-    "core",
-    "--extra",
-    "audio",
-    "--group",
-    "test",
 ]
 
 
@@ -55,12 +54,26 @@ def _resolve_uv() -> str:
     return uv
 
 
-def _uv_pytest_command(uv: str, *pytest_args: str) -> list[str]:
-    return [uv, "run", *UV_PROJECT_FLAGS, "python", "-m", "pytest", *pytest_args]
+def _test_dependency_flags(profile: str) -> list[str]:
+    return [
+        "--extra",
+        profile,
+        "--extra",
+        "core",
+        "--extra",
+        "audio",
+        "--group",
+        "test",
+    ]
 
 
-def _isolated_environment(root: Path) -> dict[str, str]:
-    env = dict(os.environ)
+def _uv_pytest_command(uv: str, *pytest_args: str, profile: str) -> list[str]:
+    args = [uv, "run", *UV_PROJECT_FLAGS, *_test_dependency_flags(profile)]
+    return [*args, "python", "-m", "pytest", *pytest_args]
+
+
+def _isolated_environment(root: Path, base: dict[str, str]) -> dict[str, str]:
+    env = dict(base)
     paths = {
         "EDMG_STUDIO_HOME": root / "studio-home",
         "EDMG_STUDIO_DATA_DIR": root / "studio-home" / "data",
@@ -84,8 +97,14 @@ def _isolated_environment(root: Path) -> dict[str, str]:
 
 
 def main() -> int:
-    uv = _resolve_uv()
     toolchain_env = dict(os.environ)
+    # Reject invalid selections before running uv or creating test directories.
+    # CUDA includes the pinned TensorRT dependencies in the shared project lock.
+    profile = normalize_accelerator_profile(
+        toolchain_env.get("EDMG_BACKEND_ACCELERATOR_PROFILE", "cpu")
+    )
+    toolchain_env["EDMG_BACKEND_ACCELERATOR_PROFILE"] = profile
+    uv = _resolve_uv()
     lock_rc = run_step(
         "validate uv lock", BACKEND_ROOT, [uv, "lock", "--check"], env=toolchain_env
     )
@@ -98,14 +117,10 @@ def main() -> int:
             uv,
             "sync",
             "--frozen",
-            "--extra",
-            "cpu",
-            "--extra",
-            "core",
-            "--extra",
-            "audio",
-            "--group",
-            "test",
+            # Keep installed ASR, renderer and other optional capabilities.
+            # Test preparation must not prune the desktop runtime environment.
+            "--inexact",
+            *_test_dependency_flags(profile),
         ],
         env=toolchain_env,
     )
@@ -124,7 +139,7 @@ def main() -> int:
         ignore_cleanup_errors=True,
     ) as raw_root:
         isolated_root = Path(raw_root)
-        env = _isolated_environment(isolated_root)
+        env = _isolated_environment(isolated_root, toolchain_env)
         steps = [
             (
                 "repo-level tests",
@@ -138,6 +153,7 @@ def main() -> int:
                     str(isolated_root / "pytest-repo"),
                     "-p",
                     "no:cacheprovider",
+                    profile=profile,
                 ),
             ),
             (
@@ -151,6 +167,7 @@ def main() -> int:
                     str(isolated_root / "pytest-backend"),
                     "-p",
                     "no:cacheprovider",
+                    profile=profile,
                 ),
             ),
         ]

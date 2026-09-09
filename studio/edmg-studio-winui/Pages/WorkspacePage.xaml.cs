@@ -1873,6 +1873,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private void SetWorkspaceMode(bool isStoryboard, bool isPlanner, bool isReactive)
     {
+        OverviewScrollViewer.Visibility = isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
         OverviewPanel.Visibility = isStoryboard || isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
         StoryboardPanel.Visibility = isStoryboard ? Visibility.Visible : Visibility.Collapsed;
         PlannerPanel.Visibility = isPlanner ? Visibility.Visible : Visibility.Collapsed;
