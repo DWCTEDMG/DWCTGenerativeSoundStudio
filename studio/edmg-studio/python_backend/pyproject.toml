@@ -41,6 +41,7 @@ cuda = [
   "torchvision==0.26.0",
   "torchaudio==2.11.0",
   "torch-tensorrt==2.11.0",
+  "nvidia-cublas-cu12>=12,<13; sys_platform == 'win32'",
   "cuda-python==13.0.3",
   "tensorrt==10.15.1.29",
   "tensorrt-cu13==10.15.1.29",

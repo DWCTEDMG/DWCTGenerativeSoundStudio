@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules, copy_metadata
 
 here = Path(os.getcwd()).resolve()
 if str(here) not in sys.path:
@@ -124,6 +124,7 @@ if nltk_data_dir.exists():
 binaries = []
 if os.name == "nt":
     binaries += collect_windows_support_binaries()
+    binaries += safe_collect(collect_dynamic_libs, "nvidia.cublas")
 
 a = Analysis(
     [str(here / "backend_entry.py")],

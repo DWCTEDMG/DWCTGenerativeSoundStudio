@@ -460,6 +460,15 @@ class StemModulationUpdateRequest(BaseModel):
     scale: float | None = Field(default=None, ge=0.0, le=3.0)
 
 
+class CreativeDirectionSceneOverride(BaseModel):
+    index: int = Field(ge=0)
+    name: str | None = Field(default=None, max_length=160)
+    prompt: str | None = Field(default=None, max_length=4000)
+    camera_hint: str | None = Field(default=None, max_length=1000)
+    motion_hint: str | None = Field(default=None, max_length=1000)
+    director_mode: DirectorMode | None = None
+
+
 class CreativeDirectionApplyRequest(BaseModel):
     variant_index: int = 0
     preset: CreativePreset = "cinematic"
@@ -467,6 +476,7 @@ class CreativeDirectionApplyRequest(BaseModel):
     sensitivity: float = Field(default=1.0, ge=0.1, le=3.0)
     overwrite_tracks: bool = True
     overwrite_camera: bool = False
+    scene_overrides: list[CreativeDirectionSceneOverride] = Field(default_factory=list, max_length=1000)
 
 
 class PlannerLabImportRequest(BaseModel):

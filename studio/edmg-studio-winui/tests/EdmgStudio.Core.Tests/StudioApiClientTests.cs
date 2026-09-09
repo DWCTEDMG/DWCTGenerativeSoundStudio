@@ -10,6 +10,42 @@ namespace EdmgStudio.Core.Tests;
 public sealed class StudioApiClientTests
 {
     [TestMethod]
+    public async Task CreativeDirection_UsesExactQueryAndSerializesSceneOverrides()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, token) =>
+        {
+            captured.Add(new CapturedRequest(request.Method, request.RequestUri!,
+                request.Headers.Authorization?.ToString(), request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(token)));
+            const string direction = """{"ready":true,"preset":"ambient","director_mode":"lyric","sensitivity":1.5,"status":"Ready","scenes":[{"index":0,"name":"Intro","start_s":0,"end_s":8,"prompt":"Neon rain","camera_hint":"Push in","motion_hint":"Drift","director_mode":"lyric"}]}""";
+            return request.Method == HttpMethod.Get
+                ? JsonResponse("{\"ok\":true,\"creative_direction\":" + direction + "}")
+                : JsonResponse("{\"ok\":true,\"timeline\":{},\"creative_direction\":" + direction + "}");
+        }));
+        using var client = new StudioApiClient(new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("token"), httpClient);
+
+        CreativeDirectionResponse loaded = await client.GetCreativeDirectionAsync("p /1", 2, "ambient", "lyric", 1.5);
+        CreativeDirectionApplyResponse applied = await client.ApplyCreativeDirectionAsync("p /1",
+            new CreativeDirectionApplyRequest(2, "ambient", "lyric", 1.5, true, false,
+                [new CreativeDirectionSceneOverride(0, "Edited intro", "Ocean glow", "Orbit", "Pulse", "abstract")]));
+
+        Assert.IsTrue(loaded.CreativeDirection.Ready);
+        Assert.AreEqual("Edited intro", JsonDocument.Parse(captured[1].Body).RootElement
+            .GetProperty("scene_overrides")[0].GetProperty("name").GetString());
+        Assert.AreEqual("/v1/projects/p%20%2F1/creative_direction", captured[0].Uri.AbsolutePath);
+        Assert.AreEqual("?variant_index=2&preset=ambient&director_mode=lyric&sensitivity=1.5", captured[0].Uri.Query);
+        Assert.AreEqual("/v1/projects/p%20%2F1/creative_direction/apply_timeline_patch", captured[1].Uri.AbsolutePath);
+        using JsonDocument applyBody = JsonDocument.Parse(captured[1].Body);
+        Assert.IsTrue(applyBody.RootElement.GetProperty("overwrite_tracks").GetBoolean());
+        Assert.IsFalse(applyBody.RootElement.GetProperty("overwrite_camera").GetBoolean());
+        Assert.AreEqual("abstract", applyBody.RootElement.GetProperty("scene_overrides")[0]
+            .GetProperty("director_mode").GetString());
+        Assert.AreEqual("lyric", applied.CreativeDirection.Scenes[0].DirectorMode);
+    }
+
+    [TestMethod]
     public void DirectorGenerationRequest_UsesSharedWorkspacePolicyFields()
     {
         string json = JsonSerializer.Serialize(

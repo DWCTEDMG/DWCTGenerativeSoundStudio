@@ -64,6 +64,24 @@ def test_sync_frozen_project_can_force_a_reinstall(monkeypatch):
 
     assert commands[0] == [Path("uv"), "lock", "--check"]
     assert commands[1][-1] == "--reinstall"
+    assert "--inexact" not in commands[1]
+
+
+def test_source_status_allows_installed_optional_packages(monkeypatch):
+    commands: list[list[object]] = []
+    monkeypatch.setattr(uv_toolchain, "is_packaged_backend", lambda: False)
+    monkeypatch.setattr(uv_toolchain, "resolve_uv", lambda **_kwargs: Path("uv"))
+    monkeypatch.setattr(uv_toolchain, "toolchain_environment", lambda **_kwargs: {})
+    monkeypatch.setattr(uv_toolchain, "backend_root", lambda: Path("backend"))
+    monkeypatch.setattr(uv_toolchain, "lock_sha256", lambda: "a" * 64)
+    monkeypatch.setattr(uv_toolchain, "_installed_version", lambda _name: "test")
+    monkeypatch.setattr(uv_toolchain, "run_checked", lambda args, **_kwargs: commands.append(list(args)))
+
+    status = uv_toolchain.toolchain_status(profile="cpu")
+
+    assert status["ok"] is True
+    sync_check = next(command for command in commands if "sync" in command)
+    assert sync_check[-2:] == ["--check", "--inexact"]
 
 
 def test_packaged_status_uses_build_manifest_without_requiring_uv(monkeypatch):

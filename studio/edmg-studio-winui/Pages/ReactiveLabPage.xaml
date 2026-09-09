@@ -259,7 +259,7 @@
                                 <NumberBox x:Name="KeyframeStrengthNumberBox" Header="Motion strength" Minimum="0" Maximum="1" SmallChange="0.05"
                                            SpinButtonPlacementMode="Compact" ValueChanged="KeyframeValue_Changed"
                                            AutomationProperties.AutomationId="Reactive.Workspace.Strength" />
-                                <NumberBox x:Name="KeyframeZoomNumberBox" Grid.Column="1" Header="Camera zoom" Minimum="0.001" Maximum="20" SmallChange="0.05"
+                                <NumberBox x:Name="KeyframeZoomNumberBox" Grid.Column="1" Header="Camera zoom" Minimum="0.01" Maximum="100" SmallChange="0.05"
                                            SpinButtonPlacementMode="Compact" ValueChanged="KeyframeValue_Changed"
                                            AutomationProperties.AutomationId="Reactive.Workspace.Zoom" />
                             </Grid>

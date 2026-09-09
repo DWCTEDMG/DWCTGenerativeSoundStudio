@@ -27,6 +27,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private MusicGraphResponse? _musicGraph;
     private LiveCuesResponse? _liveCues;
     private LiveAssetsResponse? _liveAssets;
+    private CreativeDirectionResponse? _creativeDirection;
     private PlanDto? _generatedPlan;
     private string? _pendingAudioPath;
     private string? _pendingReferencePath;
@@ -60,6 +61,8 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     public ObservableCollection<WorkspaceStoryboardItem> StoryboardItems { get; } = [];
 
     public ObservableCollection<WorkspaceDirectionSceneItem> WorkflowSceneItems { get; } = [];
+
+    public ObservableCollection<WorkspaceCreativeDirectionSceneItem> CreativeDirectionSceneItems { get; } = [];
 
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
@@ -688,8 +691,15 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             token => App.Services.ApiClient.GetProjectLiveAssetsAsync(projectId, token),
             warnings,
             cancellationToken);
+        Task<CreativeDirectionResponse?> creativeDirectionTask = LoadOptionalAsync(
+            "creative direction",
+            token => App.Services.ApiClient.GetCreativeDirectionAsync(
+                projectId, _session.SelectedVariantIndex, GetComboTag(CreativePresetComboBox, "cinematic"),
+                GetComboTag(CreativeDirectorModeComboBox, "narrative"), CreativeSensitivityNumberBox.Value, token),
+            warnings,
+            cancellationToken);
 
-        await Task.WhenAll(assetsTask, healthTask, relinkTask, musicTask, cuesTask, liveAssetsTask);
+        await Task.WhenAll(assetsTask, healthTask, relinkTask, musicTask, cuesTask, liveAssetsTask, creativeDirectionTask);
         if (loadVersion != _loadVersion || _session.ActiveProjectId != projectId)
         {
             return;
@@ -701,6 +711,8 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _musicGraph = await musicTask;
         _liveCues = await cuesTask;
         _liveAssets = await liveAssetsTask;
+        _creativeDirection = await creativeDirectionTask;
+        PopulateCreativeDirection();
         PopulateOptionalWorkspaceData();
 
         if (warnings.Count > 0)
@@ -710,6 +722,55 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                 $"Could not refresh {string.Join(", ", warnings)}. Core project editing remains available.",
                 InfoBarSeverity.Warning);
         }
+    }
+
+    private void PopulateCreativeDirection()
+    {
+        CreativeDirectionSceneItems.Clear();
+        if (_creativeDirection?.CreativeDirection is not { } direction)
+        {
+            CreativeDirectionText.Text = "Creative direction is not available. Run analysis and generate a plan first.";
+            return;
+        }
+        CreativeDirectionText.Text = direction.Status;
+        SelectComboTag(CreativePresetComboBox, direction.Preset);
+        SelectComboTag(CreativeDirectorModeComboBox, direction.DirectorMode);
+        CreativeSensitivityNumberBox.Value = direction.Sensitivity;
+        foreach (CreativeDirectionSceneDto scene in direction.Scenes)
+        {
+            CreativeDirectionSceneItems.Add(new WorkspaceCreativeDirectionSceneItem(scene));
+        }
+    }
+
+    private async void RefreshCreativeDirectionButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetActiveProjectId(out string projectId)) return;
+        await RunBusyAsync("Refreshing creative direction", async token =>
+        {
+            _creativeDirection = await App.Services.ApiClient.GetCreativeDirectionAsync(
+                projectId, _session.SelectedVariantIndex, GetComboTag(CreativePresetComboBox, "cinematic"),
+                GetComboTag(CreativeDirectorModeComboBox, "narrative"), CreativeSensitivityNumberBox.Value, token);
+            PopulateCreativeDirection();
+        });
+    }
+
+    private async void ApplyCreativeDirectionButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits()) return;
+        await RunBusyAsync("Applying creative direction to timeline", async token =>
+        {
+            var request = new CreativeDirectionApplyRequest(
+                _session.SelectedVariantIndex, GetComboTag(CreativePresetComboBox, "cinematic"),
+                GetComboTag(CreativeDirectorModeComboBox, "narrative"), CreativeSensitivityNumberBox.Value,
+                CreativeOverwriteTracksCheckBox.IsChecked == true, CreativeOverwriteCameraCheckBox.IsChecked == true,
+                CreativeDirectionSceneItems.Select(item => item.ToOverride()).ToList());
+            CreativeDirectionApplyResponse response = await App.Services.ApiClient.ApplyCreativeDirectionAsync(projectId, request, token);
+            _creativeDirection = new CreativeDirectionResponse { Ok = response.Ok, CreativeDirection = response.CreativeDirection };
+            await RefreshProjectSnapshotAsync(projectId, token);
+            PopulateCreativeDirection();
+            SetLastOperationJson(response);
+            ShowStatus("Creative direction applied", "The edited scene direction is now available on the project timeline.", InfoBarSeverity.Success);
+        });
     }
 
     private static async Task<T?> LoadOptionalAsync<T>(
@@ -1873,6 +1934,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private void SetWorkspaceMode(bool isStoryboard, bool isPlanner, bool isReactive)
     {
+        OverviewScrollViewer.Visibility = isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
         OverviewPanel.Visibility = isStoryboard || isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
         StoryboardPanel.Visibility = isStoryboard ? Visibility.Visible : Visibility.Collapsed;
         PlannerPanel.Visibility = isPlanner ? Visibility.Visible : Visibility.Collapsed;
@@ -1888,6 +1950,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _musicGraph = null;
         _liveCues = null;
         _liveAssets = null;
+        _creativeDirection = null;
         _generatedPlan = null;
         _directorDocument = null;
         _directorProjectId = null;
@@ -1903,6 +1966,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _workflowStatus = "not_prepared";
         _workflowRevision = 0;
         WorkflowSceneItems.Clear();
+        CreativeDirectionSceneItems.Clear();
         WorkflowThemeTextBox.Text = string.Empty;
         WorkflowStyleTextBox.Text = string.Empty;
         WorkflowThemeTextBox.IsEnabled = false;
@@ -1931,6 +1995,16 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         WorkspaceDirectorReadinessText.Text = message;
         WorkspaceDirectorStatusText.Text = message;
         UpdateDirectorWorkspaceAvailability();
+    }
+
+    private static string GetComboTag(ComboBox comboBox, string fallback) =>
+        comboBox.SelectedItem is ComboBoxItem { Tag: string value } ? value : fallback;
+
+    private static void SelectComboTag(ComboBox comboBox, string value)
+    {
+        comboBox.SelectedItem = comboBox.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, value, StringComparison.OrdinalIgnoreCase))
+            ?? comboBox.Items.FirstOrDefault();
     }
 
     private void NavigateTo(string destination)

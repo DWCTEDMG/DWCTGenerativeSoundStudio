@@ -93,7 +93,8 @@ def create_project_intelligence_router(deps: ProjectIntelligenceDependencies) ->
         value = project(project_id)
         payload = deps.build_creative_direction(value, variant_index=int(req.variant_index or 0),
                                                 preset=str(req.preset or "cinematic"), sensitivity=float(req.sensitivity or 1.0),
-                                                director_mode=req.director_mode)
+                                                director_mode=req.director_mode,
+                                                scene_overrides=[item.model_dump(exclude_none=True) for item in req.scene_overrides])
         patch = payload.get("timeline_patch", {}).get("timeline") if isinstance(payload.get("timeline_patch"), dict) else {}
         if not isinstance(patch, dict) or not patch:
             raise HTTPException(400, "Creative direction timeline patch is unavailable")
@@ -104,7 +105,9 @@ def create_project_intelligence_router(deps: ProjectIntelligenceDependencies) ->
         value.meta["last_creative_direction"] = {
             "variant_index": int(req.variant_index or 0), "preset": str(payload.get("preset") or req.preset or "cinematic"),
             "director_mode": str(payload.get("director_mode") or req.director_mode or "narrative"),
-            "sensitivity": float(req.sensitivity or 1.0), "applied_at": time.time(),
+            "sensitivity": float(req.sensitivity or 1.0),
+            "scene_overrides": [item.model_dump(exclude_none=True) for item in req.scene_overrides],
+            "applied_at": time.time(),
         }
         deps.get_store().save(value)
         return {"ok": True, "timeline": merged, "creative_direction": payload}

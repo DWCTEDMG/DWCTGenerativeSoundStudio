@@ -28,8 +28,8 @@ public sealed class ReactiveKeyframeEditor
         if (!IsEditable) throw new InvalidOperationException("This keyframe is locked.");
         if (!double.IsFinite(strength) || strength is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(strength), "Strength must be between 0 and 1.");
-        if (!double.IsFinite(zoom) || zoom <= 0 || zoom > 20)
-            throw new ArgumentOutOfRangeException(nameof(zoom), "Zoom must be greater than 0 and at most 20.");
+        if (!double.IsFinite(zoom) || zoom is < 0.01 or > 100)
+            throw new ArgumentOutOfRangeException(nameof(zoom), "Zoom must be between 0.01 and 100.");
         if (Strength == strength && Zoom == zoom) return false;
         _source["strength"] = strength;
         _source["zoom"] = zoom;

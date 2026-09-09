@@ -9,6 +9,92 @@ public sealed class WorkspaceAssetPathDto
     public string Path { get; init; } = string.Empty;
 }
 
+public sealed class CreativeDirectionResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("creative_direction")]
+    public CreativeDirectionDto CreativeDirection { get; init; } = new();
+}
+
+public sealed class CreativeDirectionDto
+{
+    [JsonPropertyName("ready")]
+    public bool Ready { get; init; }
+
+    [JsonPropertyName("preset")]
+    public string Preset { get; init; } = "cinematic";
+
+    [JsonPropertyName("director_mode")]
+    public string DirectorMode { get; init; } = "narrative";
+
+    [JsonPropertyName("sensitivity")]
+    public double Sensitivity { get; init; } = 1;
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("scenes")]
+    public List<CreativeDirectionSceneDto> Scenes { get; init; } = [];
+}
+
+public sealed class CreativeDirectionSceneDto
+{
+    [JsonPropertyName("index")]
+    public int Index { get; init; }
+
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = string.Empty;
+
+    [JsonPropertyName("start_s")]
+    public double StartSeconds { get; init; }
+
+    [JsonPropertyName("end_s")]
+    public double EndSeconds { get; init; }
+
+    [JsonPropertyName("prompt")]
+    public string Prompt { get; init; } = string.Empty;
+
+    [JsonPropertyName("camera_hint")]
+    public string CameraHint { get; init; } = string.Empty;
+
+    [JsonPropertyName("motion_hint")]
+    public string MotionHint { get; init; } = string.Empty;
+
+    [JsonPropertyName("director_mode")]
+    public string DirectorMode { get; init; } = "narrative";
+}
+
+public sealed record CreativeDirectionSceneOverride(
+    [property: JsonPropertyName("index")] int Index,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("prompt")] string Prompt,
+    [property: JsonPropertyName("camera_hint")] string CameraHint,
+    [property: JsonPropertyName("motion_hint")] string MotionHint,
+    [property: JsonPropertyName("director_mode")] string DirectorMode);
+
+public sealed record CreativeDirectionApplyRequest(
+    [property: JsonPropertyName("variant_index")] int VariantIndex,
+    [property: JsonPropertyName("preset")] string Preset,
+    [property: JsonPropertyName("director_mode")] string DirectorMode,
+    [property: JsonPropertyName("sensitivity")] double Sensitivity,
+    [property: JsonPropertyName("overwrite_tracks")] bool OverwriteTracks,
+    [property: JsonPropertyName("overwrite_camera")] bool OverwriteCamera,
+    [property: JsonPropertyName("scene_overrides")] IReadOnlyList<CreativeDirectionSceneOverride> SceneOverrides);
+
+public sealed class CreativeDirectionApplyResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("timeline")]
+    public JsonElement Timeline { get; init; }
+
+    [JsonPropertyName("creative_direction")]
+    public CreativeDirectionDto CreativeDirection { get; init; } = new();
+}
+
 public sealed class WorkspaceAssetGroupsDto
 {
     [JsonPropertyName("audio")]

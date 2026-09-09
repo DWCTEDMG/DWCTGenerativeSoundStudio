@@ -4089,6 +4089,7 @@ def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirect
         preset=str(req.preset or "cinematic"),
         sensitivity=float(req.sensitivity or 1.0),
         director_mode=req.director_mode,
+        scene_overrides=[item.model_dump(exclude_none=True) for item in req.scene_overrides],
     )
     patch_timeline = (
         payload.get("timeline_patch", {}).get("timeline")
@@ -4111,6 +4112,7 @@ def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirect
         "preset": str(payload.get("preset") or req.preset or "cinematic"),
         "director_mode": str(payload.get("director_mode") or req.director_mode or "narrative"),
         "sensitivity": float(req.sensitivity or 1.0),
+        "scene_overrides": [item.model_dump(exclude_none=True) for item in req.scene_overrides],
         "applied_at": time.time(),
     }
     store.save(proj)
@@ -4291,6 +4293,28 @@ def _normalize_transcript_payload(raw: Any) -> dict[str, Any]:
     duration_s = _pick_raw_number(raw, ["duration_s", "duration"])
     duration_after_vad_s = _pick_raw_number(raw, ["duration_after_vad_s"])
     word_count = int(raw.get("word_count") or len(text.split()))
+    provenance: dict[str, Any] = {}
+    for key in ("provider", "device", "compute_type", "requested_device", "device_fallback_note", "source_audio_path"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            provenance[key] = value.strip()
+    if isinstance(raw.get("device_fallback_used"), bool):
+        provenance["device_fallback_used"] = raw["device_fallback_used"]
+    separation = raw.get("vocal_separation")
+    if isinstance(separation, dict):
+        safe_separation: dict[str, Any] = {}
+        for key in ("source", "model", "requested_audio_path", "audio_path", "fallback_audio_path", "error"):
+            value = separation.get(key)
+            if isinstance(value, str):
+                safe_separation[key] = value
+        for key in ("enabled", "available", "cached"):
+            if isinstance(separation.get(key), bool):
+                safe_separation[key] = separation[key]
+        provenance["vocal_separation"] = safe_separation
+    note = str(raw.get("note") or "").strip()
+    fallback_note = provenance.get("device_fallback_note", "")
+    if fallback_note and fallback_note not in note:
+        note = " ".join(part for part in (note, fallback_note) if part)
     return {
         "text": text,
         "segments": segments,
@@ -4302,7 +4326,8 @@ def _normalize_transcript_payload(raw: Any) -> dict[str, Any]:
         "model_size": str(raw.get("model_size") or "small"),
         "source": str(raw.get("source") or "transcribe"),
         **({"error": str(raw.get("error"))} if raw.get("error") else {}),
-        **({"note": str(raw.get("note"))} if raw.get("note") else {}),
+        **({"note": note} if note else {}),
+        **provenance,
     }
 
 
@@ -4366,7 +4391,11 @@ def _analysis_summary_text(transcript: dict[str, Any], text: str, segments: list
         if error:
             return _analysis_audio_only_status("Transcription failed.")
         return _analysis_audio_only_status("No transcript is available for this track yet.")
-    return " ".join(candidates[:3]).strip()
+    summary = " ".join(candidates[:3]).strip()
+    fallback_note = str((transcript or {}).get("device_fallback_note") or "").strip()
+    if fallback_note:
+        summary = f"{summary} {fallback_note}"
+    return summary
 
 
 def _derive_longform_analysis_sections(
@@ -5393,10 +5422,16 @@ def _build_creative_direction_payload(
     preset: str,
     sensitivity: float,
     director_mode: str | None = None,
+    scene_overrides: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     mode = normalize_director_mode(director_mode or preset)
     mode_profile = director_mode_profile(mode)
     reactive_preset = reactive_preset_for_mode(mode)
+    overrides_by_index = {
+        int(item["index"]): item
+        for item in (scene_overrides or [])
+        if isinstance(item, dict) and isinstance(item.get("index"), int)
+    }
     analysis_raw = (proj.meta.get("analysis") or {}) if hasattr(proj, "meta") else {}
     analysis = analysis_raw if isinstance(analysis_raw, dict) else {}
     plan_raw = (proj.meta.get("last_plan") or {}) if hasattr(proj, "meta") else {}
@@ -5457,7 +5492,11 @@ def _build_creative_direction_payload(
 
     packed_scenes: list[dict[str, Any]] = []
     for index, scene in enumerate(source_scenes):
-        name = str(scene.get("name") or f"Scene {index + 1}")
+        scene_override = overrides_by_index.get(index, {})
+        scene_mode = normalize_director_mode(scene_override.get("director_mode"), fallback=mode)
+        scene_mode_profile = director_mode_profile(scene_mode)
+        scene_reactive_preset = reactive_preset_for_mode(scene_mode)
+        name = str(scene_override.get("name") or scene.get("name") or f"Scene {index + 1}").strip()
         start_s = float(scene.get("start_s") or index * 5.0)
         end_s = float(scene.get("end_s") or (start_s + 5.0))
         if scene_source == "analysis_fallback" and isinstance(scene.get("reactive_params"), dict):
@@ -5470,13 +5509,15 @@ def _build_creative_direction_payload(
                 "source": "analysis",
             }
             params = {key: float(value) for key, value in dict(scene.get("reactive_params") or {}).items() if isinstance(value, (int, float))}
+            if scene_override.get("director_mode"):
+                params = _compute_reactive_params(metrics, scene_reactive_preset, sensitivity)
             transcript_cue = str(scene.get("transcript_cue") or "").strip() if has_transcript else ""
             energy_label = str(scene.get("energy_label") or _creative_energy_label(float(metrics["energy"])))
             camera_hint = str(scene.get("camera_hint") or _creative_camera_hint(float(metrics["energy"])))
             motion_hint = str(scene.get("motion_hint") or _creative_motion_hint(params))
         else:
             metrics = _scene_metrics_from_curve(index, len(source_scenes) or 1, scene, overall, duration_s, energy_curve)
-            params = _compute_reactive_params(metrics, reactive_preset, sensitivity)
+            params = _compute_reactive_params(metrics, scene_reactive_preset, sensitivity)
             cue_index = (
                 min(len(transcript_sentences) - 1, int((index / max(1, len(source_scenes) - 1)) * len(transcript_sentences)))
                 if transcript_sentences and has_transcript else -1
@@ -5485,13 +5526,22 @@ def _build_creative_direction_payload(
             energy_label = _creative_energy_label(float(metrics["energy"]))
             camera_hint = _creative_camera_hint(float(metrics["energy"]))
             motion_hint = _creative_motion_hint(params)
-        prompt = flavor_prompt(render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT), mode)
-        camera_bias = str(mode_profile.get("camera_bias") or "").strip()
-        if camera_bias and camera_bias.casefold() not in camera_hint.casefold():
-            camera_hint = f"{camera_hint} {camera_bias}".strip()
-        motion_bias = str(mode_profile.get("motion_bias") or "").strip()
-        if motion_bias and motion_bias.casefold() not in motion_hint.casefold():
-            motion_hint = f"{motion_hint} ({motion_bias})"
+        prompt_override = str(scene_override.get("prompt") or "").strip()
+        prompt = prompt_override or flavor_prompt(render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT), scene_mode)
+        camera_override = str(scene_override.get("camera_hint") or "").strip()
+        if camera_override:
+            camera_hint = camera_override
+        else:
+            camera_bias = str(scene_mode_profile.get("camera_bias") or "").strip()
+            if camera_bias and camera_bias.casefold() not in camera_hint.casefold():
+                camera_hint = f"{camera_hint} {camera_bias}".strip()
+        motion_override = str(scene_override.get("motion_hint") or "").strip()
+        if motion_override:
+            motion_hint = motion_override
+        else:
+            motion_bias = str(scene_mode_profile.get("motion_bias") or "").strip()
+            if motion_bias and motion_bias.casefold() not in motion_hint.casefold():
+                motion_hint = f"{motion_hint} ({motion_bias})"
         scene_tokens = _analysis_top_keywords(" ".join([name, prompt, transcript_cue]), limit=5)
         scene_motifs = list(
             dict.fromkeys(
@@ -5526,7 +5576,7 @@ def _build_creative_direction_payload(
         prompt_pack = " ".join(
             [
                 prompt,
-                f"Director mode: {mode_profile.get('label') or mode}.",
+                f"Director mode: {scene_mode_profile.get('label') or scene_mode}.",
                 f"Energy profile: {energy_label}.",
                 camera_hint,
                 f"Motion recipe: {motion_hint}",
@@ -5553,7 +5603,7 @@ def _build_creative_direction_payload(
                 "prompt_pack": prompt_pack,
                 "reactive_params": params,
                 "scene_source": scene_source,
-                "director_mode": mode,
+                "director_mode": scene_mode,
             }
         )
 

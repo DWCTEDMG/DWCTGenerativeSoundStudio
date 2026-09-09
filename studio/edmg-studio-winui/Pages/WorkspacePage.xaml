@@ -95,6 +95,7 @@
         </SelectorBar>
 
         <ScrollViewer
+            x:Name="OverviewScrollViewer"
             Grid.Row="3"
             HorizontalScrollBarVisibility="Disabled"
             VerticalScrollBarVisibility="Auto">
@@ -695,6 +696,64 @@
                                 <StackPanel Spacing="10">
                                     <TextBlock FontWeight="SemiBold" Text="Creative direction" />
                                     <TextBlock x:Name="CreativeDirectionText" Text="No creative direction metadata." TextWrapping="Wrap" />
+                                    <Grid ColumnSpacing="8" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="CreativePresetComboBox" Header="Motion preset" SelectedIndex="0">
+                                            <ComboBoxItem Content="Cinematic" Tag="cinematic" />
+                                            <ComboBoxItem Content="Psychedelic" Tag="psychedelic" />
+                                            <ComboBoxItem Content="Ambient" Tag="ambient" />
+                                            <ComboBoxItem Content="Narrative" Tag="narrative" />
+                                            <ComboBoxItem Content="Performance" Tag="performance" />
+                                            <ComboBoxItem Content="Abstract" Tag="abstract" />
+                                            <ComboBoxItem Content="Lyric" Tag="lyric" />
+                                            <ComboBoxItem Content="Product" Tag="product" />
+                                        </ComboBox>
+                                        <ComboBox x:Name="CreativeDirectorModeComboBox" Grid.Column="1" Header="Director mode" SelectedIndex="0">
+                                            <ComboBoxItem Content="Narrative" Tag="narrative" />
+                                            <ComboBoxItem Content="Performance" Tag="performance" />
+                                            <ComboBoxItem Content="Abstract" Tag="abstract" />
+                                            <ComboBoxItem Content="Lyric" Tag="lyric" />
+                                            <ComboBoxItem Content="Product" Tag="product" />
+                                            <ComboBoxItem Content="Ambient" Tag="ambient" />
+                                        </ComboBox>
+                                        <NumberBox x:Name="CreativeSensitivityNumberBox" Grid.Column="2" Header="Sensitivity" Minimum="0.1" Maximum="3" SmallChange="0.1" Value="1" />
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <CheckBox x:Name="CreativeOverwriteTracksCheckBox" Content="Replace direction tracks" />
+                                        <CheckBox x:Name="CreativeOverwriteCameraCheckBox" Content="Replace camera track" />
+                                        <Button Click="RefreshCreativeDirectionButton_Click" Content="Refresh direction" />
+                                        <Button Click="ApplyCreativeDirectionButton_Click" Content="Apply to timeline" Style="{StaticResource AccentButtonStyle}" />
+                                    </StackPanel>
+                                    <ListView x:Name="CreativeDirectionScenesList" ItemsSource="{x:Bind CreativeDirectionSceneItems}" MaxHeight="540" SelectionMode="None">
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="local:WorkspaceCreativeDirectionSceneItem">
+                                                <Border Margin="0,0,0,8" Padding="12" BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" CornerRadius="6">
+                                                    <StackPanel Spacing="8">
+                                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind Timing}" />
+                                                        <Grid ColumnSpacing="8">
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                            <TextBox Header="Scene name" Text="{x:Bind Name, Mode=TwoWay}" />
+                                                            <ComboBox Grid.Column="1" Header="Director mode" SelectedValue="{x:Bind DirectorMode, Mode=TwoWay}" SelectedValuePath="Tag">
+                                                                <ComboBoxItem Content="Narrative" Tag="narrative" /><ComboBoxItem Content="Performance" Tag="performance" />
+                                                                <ComboBoxItem Content="Abstract" Tag="abstract" /><ComboBoxItem Content="Lyric" Tag="lyric" />
+                                                                <ComboBoxItem Content="Product" Tag="product" /><ComboBoxItem Content="Ambient" Tag="ambient" />
+                                                            </ComboBox>
+                                                        </Grid>
+                                                        <TextBox Header="Prompt" Text="{x:Bind Prompt, Mode=TwoWay}" TextWrapping="Wrap" AcceptsReturn="True" />
+                                                        <Grid ColumnSpacing="8">
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                            <TextBox Header="Camera direction" Text="{x:Bind CameraHint, Mode=TwoWay}" TextWrapping="Wrap" />
+                                                            <TextBox Grid.Column="1" Header="Motion direction" Text="{x:Bind MotionHint, Mode=TwoWay}" TextWrapping="Wrap" />
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
                                     <TextBlock FontWeight="SemiBold" Text="Visual DNA" />
                                     <TextBlock x:Name="VisualDnaText" Text="No Visual DNA metadata." TextWrapping="Wrap" />
                                     <TextBlock FontWeight="SemiBold" Text="Timeline preview" />
@@ -913,36 +972,6 @@
                     </Border>
                 </StackPanel>
 
-                <StackPanel x:Name="PlannerPanel" Visibility="Collapsed" Spacing="16">
-                    <Border Style="{StaticResource WorkspaceCardStyle}">
-                        <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="AI Planner Lab" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="The full planner runs inside the active Workspace project. Its saved storyboard, scene locks, and planner handoff remain on the same session used by Director, Timeline, and Render."
-                                TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Border>
-                    <Frame
-                        x:Name="WorkspacePlannerFrame"
-                        AutomationProperties.AutomationId="Workspace.Planner.Frame" />
-                </StackPanel>
-
-                <StackPanel x:Name="ReactivePanel" Visibility="Collapsed" Spacing="16">
-                    <Border Style="{StaticResource WorkspaceCardStyle}">
-                        <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Reactive Lab" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="Reactive scheduling runs inside the active Workspace project. Motion curves, cue events, and camera data apply to the same project timeline that Director and Render consume."
-                                TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Border>
-                    <Frame
-                        x:Name="WorkspaceReactiveFrame"
-                        AutomationProperties.AutomationId="Workspace.Reactive.Frame" />
-                </StackPanel>
-
                 <VisualStateManager.VisualStateGroups>
                     <VisualStateGroup x:Name="WorkspaceWidthStates">
                         <VisualState x:Name="WideWorkspace">
@@ -973,5 +1002,13 @@
                 </VisualStateManager.VisualStateGroups>
             </Grid>
         </ScrollViewer>
+        <Grid x:Name="PlannerPanel" Grid.Row="3" Visibility="Collapsed">
+            <Frame x:Name="WorkspacePlannerFrame"
+                   AutomationProperties.AutomationId="Workspace.Planner.Frame" />
+        </Grid>
+        <Grid x:Name="ReactivePanel" Grid.Row="3" Visibility="Collapsed">
+            <Frame x:Name="WorkspaceReactiveFrame"
+                   AutomationProperties.AutomationId="Workspace.Reactive.Frame" />
+        </Grid>
     </Grid>
 </Page>

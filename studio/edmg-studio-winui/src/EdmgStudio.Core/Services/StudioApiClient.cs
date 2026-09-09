@@ -330,6 +330,38 @@ public sealed class StudioApiClient : IDisposable
         CancellationToken cancellationToken = default) =>
         ApplyPlanToTimelineAsync(projectId, variantIndex, overwrite, null, cancellationToken);
 
+    public Task<CreativeDirectionResponse> GetCreativeDirectionAsync(
+        string projectId,
+        int variantIndex,
+        string preset,
+        string directorMode,
+        double sensitivity,
+        CancellationToken cancellationToken = default)
+    {
+        if (!double.IsFinite(sensitivity) || sensitivity is < 0.1 or > 3)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sensitivity), "Sensitivity must be between 0.1 and 3.");
+        }
+        string query = $"variant_index={variantIndex}&preset={Uri.EscapeDataString(preset)}" +
+            $"&director_mode={Uri.EscapeDataString(directorMode)}&sensitivity={sensitivity.ToString(CultureInfo.InvariantCulture)}";
+        return SendJsonAsync<CreativeDirectionResponse>(HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/creative_direction?{query}", null, true, cancellationToken);
+    }
+
+    public Task<CreativeDirectionApplyResponse> ApplyCreativeDirectionAsync(
+        string projectId,
+        CreativeDirectionApplyRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!double.IsFinite(request.Sensitivity) || request.Sensitivity is < 0.1 or > 3)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Sensitivity must be between 0.1 and 3.");
+        }
+        return PostJsonAsync<CreativeDirectionApplyRequest, CreativeDirectionApplyResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/creative_direction/apply_timeline_patch", request, cancellationToken);
+    }
+
     public Task<ApplyMotionGrammarResponse> ApplyMotionGrammarAsync(
         string projectId,
         IReadOnlyList<MotionPhraseRequest> phrases,

@@ -5,6 +5,22 @@ type PreviewTab = "prompt-pack" | "timeline" | "deforum" | "contract";
 
 type DirectorMode = "narrative" | "performance" | "abstract" | "lyric" | "product" | "ambient";
 
+type SceneProposal = {
+  index: number;
+  name: string;
+  start_s: number;
+  end_s: number;
+  duration_s: number;
+  energy: number;
+  energy_label: string;
+  prompt: string;
+  transcript_cue: string;
+  camera_hint: string;
+  motion_hint: string;
+  prompt_pack: string;
+  director_mode?: DirectorMode;
+};
+
 const DIRECTOR_MODES: Array<{ id: DirectorMode; label: string }> = [
   { id: "narrative", label: "Narrative" },
   { id: "performance", label: "Performance" },
@@ -66,20 +82,7 @@ type CreativeDirectionResponse = {
     energy_label: string;
     band: string;
   }>;
-  scenes: Array<{
-    index: number;
-    name: string;
-    start_s: number;
-    end_s: number;
-    duration_s: number;
-    energy: number;
-    energy_label: string;
-    prompt: string;
-    transcript_cue: string;
-    camera_hint: string;
-    motion_hint: string;
-    prompt_pack: string;
-  }>;
+  scenes: SceneProposal[];
   timeline_patch?: any;
   deforum_preview?: any;
   llm_contract?: any;
@@ -148,6 +151,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
   const [copyStatus, setCopyStatus] = useState<string>("");
   const [applyStatus, setApplyStatus] = useState<string>("");
   const [payload, setPayload] = useState<CreativeDirectionResponse | null>(null);
+  const [draftScenes, setDraftScenes] = useState<SceneProposal[]>([]);
   const [status, setStatus] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [preview, setPreview] = useState<PreviewTab>("prompt-pack");
@@ -158,6 +162,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
     async function load() {
       if (!projectId) {
         setPayload(null);
+        setDraftScenes([]);
         setCopyStatus("");
         setApplyStatus("");
         setStatus("Select a project to load creative direction guidance.");
@@ -166,6 +171,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
       }
 
       setPayload(null);
+      setDraftScenes([]);
       setCopyStatus("");
       setApplyStatus("");
       setLoading(true);
@@ -177,11 +183,13 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
         if (!cancelled) {
           const nextPayload = result?.creative_direction || null;
           setPayload(nextPayload);
+          setDraftScenes(Array.isArray(nextPayload?.scenes) ? nextPayload.scenes : []);
           setStatus(String(nextPayload?.status || ""));
         }
       } catch (error: any) {
         if (!cancelled) {
           setPayload(null);
+          setDraftScenes([]);
           setStatus(`Creative direction unavailable: ${String(error)}`);
         }
       } finally {
@@ -249,12 +257,26 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
         sensitivity,
         overwrite_tracks: true,
         overwrite_camera: false,
+        scene_overrides: draftScenes.map((scene) => ({
+          index: scene.index,
+          name: scene.name,
+          prompt: scene.prompt,
+          camera_hint: scene.camera_hint,
+          motion_hint: scene.motion_hint,
+          director_mode: scene.director_mode || directorMode,
+        })),
       });
       setApplyStatus("Direction patch applied to timeline.");
       if (!compact) onNavigate?.("timeline");
     } catch (error: any) {
       setApplyStatus(`Apply failed: ${String(error)}`);
     }
+  };
+
+  const updateDraftScene = (index: number, updates: Partial<SceneProposal>) => {
+    setDraftScenes((current) => current.map((scene) => (
+      scene.index === index ? { ...scene, ...updates } : scene
+    )));
   };
 
   return (
@@ -387,7 +409,7 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
         <div className="card">
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ fontWeight: 900 }}>Scene prompt pack</div>
-            <div className="badge">{payload?.scenes?.length || 0} scenes</div>
+            <div className="badge">{draftScenes.length} editable scenes</div>
           </div>
 
           {payload?.motifs?.length ? (
@@ -409,23 +431,51 @@ export function CreativeDirectionPanel(props: CreativeDirectionPanelProps) {
           ) : null}
 
           <div className="insight-sceneList" style={{ marginTop: 12 }}>
-            {payload?.scenes?.length ? payload.scenes.map((scene) => (
-              <div key={`${scene.index}-${scene.name}`} className="insight-scene-card">
+            {draftScenes.length ? draftScenes.map((scene) => (
+              <div key={scene.index} className="insight-scene-card">
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                   <div>
-                    <div style={{ fontWeight: 800 }}>{scene.index + 1}. {scene.name}</div>
+                    <label className="small" htmlFor={`scene-name-${scene.index}`}>Scene {scene.index + 1} name</label>
+                    <input
+                      id={`scene-name-${scene.index}`}
+                      value={scene.name}
+                      onChange={(event) => updateDraftScene(scene.index, { name: event.target.value })}
+                    />
                     <div className="small">{formatSeconds(scene.start_s)} - {formatSeconds(scene.end_s)} • {scene.energy_label}</div>
                   </div>
                   <div className="badge">{Math.round(scene.energy * 100)}% energy</div>
                 </div>
-                <div style={{ marginTop: 8 }}><strong>Base prompt:</strong> {scene.prompt}</div>
+                <label className="small" htmlFor={`scene-mode-${scene.index}`}>Scene mode</label>
+                <select
+                  id={`scene-mode-${scene.index}`}
+                  value={scene.director_mode || directorMode}
+                  onChange={(event) => updateDraftScene(scene.index, { director_mode: event.target.value as DirectorMode })}
+                >
+                  {DIRECTOR_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
+                </select>
+                <label className="small" htmlFor={`scene-prompt-${scene.index}`}>Base prompt</label>
+                <textarea
+                  id={`scene-prompt-${scene.index}`}
+                  value={scene.prompt}
+                  onChange={(event) => updateDraftScene(scene.index, { prompt: event.target.value })}
+                />
                 {usableTranscriptCue(scene.transcript_cue) ? (
                   <div className="small" style={{ marginTop: 6 }}><strong>Transcript cue:</strong> {usableTranscriptCue(scene.transcript_cue)}</div>
                 ) : (
                   <div className="small" style={{ marginTop: 6 }}><strong>Audio cue:</strong> This section is being driven by energy, continuity, and motion design rather than a transcript line.</div>
                 )}
-                <div className="small" style={{ marginTop: 6 }}><strong>Camera:</strong> {scene.camera_hint}</div>
-                <div className="small" style={{ marginTop: 6 }}><strong>Motion:</strong> {scene.motion_hint}</div>
+                <label className="small" htmlFor={`scene-camera-${scene.index}`}>Camera direction</label>
+                <input
+                  id={`scene-camera-${scene.index}`}
+                  value={scene.camera_hint}
+                  onChange={(event) => updateDraftScene(scene.index, { camera_hint: event.target.value })}
+                />
+                <label className="small" htmlFor={`scene-motion-${scene.index}`}>Motion direction</label>
+                <input
+                  id={`scene-motion-${scene.index}`}
+                  value={scene.motion_hint}
+                  onChange={(event) => updateDraftScene(scene.index, { motion_hint: event.target.value })}
+                />
               </div>
             )) : (
               <div className="small" style={{ marginTop: 10 }}>

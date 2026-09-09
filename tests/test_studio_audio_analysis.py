@@ -96,6 +96,56 @@ def test_analyze_audio_builds_rich_longform_payload(tmp_path, monkeypatch):
     assert payload["narrative_analysis"]["segment_count"] == 3
 
 
+def test_creative_direction_scene_overrides_update_payload_and_timeline(tmp_path):
+    store, _jobs, proj = _make_project(tmp_path)
+    proj.meta["analysis"] = {
+        "duration_s": 10.0,
+        "features": {"duration_s": 10.0, "energy": [0.25, 0.75]},
+    }
+    proj.meta["last_plan"] = {
+        "variants": [
+            {
+                "scenes": [
+                    {
+                        "name": "Original scene",
+                        "start_s": 0.0,
+                        "end_s": 10.0,
+                        "prompt": "original prompt",
+                    }
+                ]
+            }
+        ]
+    }
+    store.save(proj)
+
+    payload = studio_app._build_creative_direction_payload(
+        proj,
+        0,
+        "cinematic",
+        1.0,
+        scene_overrides=[
+            {
+                "index": 0,
+                "name": "Final chorus",
+                "prompt": "custom prism skyline",
+                "camera_hint": "Orbit the performer.",
+                "motion_hint": "Pulse on every downbeat.",
+                "director_mode": "performance",
+            }
+        ],
+    )
+
+    scene = payload["scenes"][0]
+    assert scene["name"] == "Final chorus"
+    assert scene["prompt"] == "custom prism skyline"
+    assert scene["camera_hint"] == "Orbit the performer."
+    assert scene["motion_hint"] == "Pulse on every downbeat."
+    assert scene["director_mode"] == "performance"
+    prompt_clip = payload["timeline_patch"]["timeline"]["tracks"][0]["clips"][0]
+    assert "custom prism skyline" in prompt_clip["data"]["prompt"]
+    assert "Orbit the performer." in prompt_clip["data"]["prompt"]
+
+
 def test_analyze_audio_surfaces_no_speech_after_vad_status(tmp_path, monkeypatch):
     store, jobs, proj = _make_project(tmp_path)
     monkeypatch.setattr(studio_app, "store", store)
@@ -145,6 +195,47 @@ def test_analyze_audio_surfaces_no_speech_after_vad_status(tmp_path, monkeypatch
     assert saved_proj is not None
     payload = studio_app._build_creative_direction_payload(saved_proj, 0, "cinematic", 1.0)
     assert payload["transcript_summary"].startswith("No speech detected after VAD.")
+
+
+def test_transcript_normalization_preserves_safe_runtime_provenance_and_is_idempotent():
+    raw = {
+        "text": "A clear vocal line.",
+        "provider": "faster_whisper",
+        "device": "cpu",
+        "compute_type": "int8",
+        "requested_device": "cuda",
+        "device_fallback_used": True,
+        "device_fallback_note": "CUDA ASR unavailable; used CPU.",
+        "source_audio_path": "separated/vocals.wav",
+        "vocal_separation": {
+            "enabled": True,
+            "available": False,
+            "source": "demucs",
+            "error": "model unavailable",
+            "unsafe": {"ignored": True},
+        },
+        "unsafe": {"secret": "ignored"},
+    }
+
+    normalized = studio_app._normalize_transcript_payload(raw)
+    repeated = studio_app._normalize_transcript_payload(normalized)
+
+    assert repeated == normalized
+    assert normalized["provider"] == "faster_whisper"
+    assert normalized["device"] == "cpu"
+    assert normalized["requested_device"] == "cuda"
+    assert normalized["device_fallback_used"] is True
+    assert normalized["note"] == "CUDA ASR unavailable; used CPU."
+    assert normalized["vocal_separation"] == {
+        "source": "demucs",
+        "error": "model unavailable",
+        "enabled": True,
+        "available": False,
+    }
+    assert "unsafe" not in normalized
+    assert studio_app._analysis_summary_text(normalized, normalized["text"], []) == (
+        "A clear vocal line. CUDA ASR unavailable; used CPU."
+    )
 
 
 def test_analyze_audio_failure_preserves_previous_analysis_and_plan(tmp_path, monkeypatch):

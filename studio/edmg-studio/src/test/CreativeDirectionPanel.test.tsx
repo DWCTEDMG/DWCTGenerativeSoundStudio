@@ -123,6 +123,12 @@ describe("CreativeDirectionPanel", () => {
         expect(body.variant_index).toBe(0);
         expect(body.overwrite_tracks).toBe(true);
         expect(body.director_mode).toBe("narrative");
+        expect(body.scene_overrides[0]).toMatchObject({
+          index: 0,
+          name: "Edited hero scene",
+          prompt: "edited visual world",
+          director_mode: "ambient",
+        });
         return { ok: true, timeline: { tracks: [], layers: [], camera: { keyframes: [] } } };
       },
     });
@@ -138,6 +144,9 @@ describe("CreativeDirectionPanel", () => {
     );
 
     expect((await screen.findAllByText(/Variant one scene/)).length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText("Scene 1 name"), { target: { value: "Edited hero scene" } });
+    fireEvent.change(screen.getByLabelText("Base prompt"), { target: { value: "edited visual world" } });
+    fireEvent.change(screen.getByLabelText("Scene mode"), { target: { value: "ambient" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply direction to timeline" }));
 
     await waitFor(() => expect(applyCalls).toBe(1));
