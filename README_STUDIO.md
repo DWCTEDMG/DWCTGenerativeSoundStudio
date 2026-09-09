@@ -29,30 +29,55 @@ and runtime data that the in-app Setup page uses.
 The Studio backend install/build path now targets EDMG Core as part of the same backend bundle, the packaged Studio app bundles FFmpeg for the internal renderer, and Ollama plus ComfyUI remain external tools.
 The packaged Windows installer is now configured as an assisted installer so the app install location can be chosen explicitly, while `Studio Home` remains the separate root for heavy runtime data on `D:\` or another drive.
 
+The primary Windows customer artifact is `EDMG-Studio-<version>-windows-x64-Setup.exe`. It installs a
+signed, self-contained WinUI MSIX so package identity remains available for activation, Credential
+Locker, and Windows integrations. Electron installers are compatibility artifacts, not the default
+Windows release.
+
 ## Quick start (dev)
 
 1. Start Studio backend
-- `cd studio/edmg-studio/python_backend`
-- create venv with Python `>=3.10,<3.14`, `pip install -e ".[studio_bundle]"`
-- run `edmg-studio-backend serve --host 127.0.0.1 --port 7863`
+
+```powershell
+uv lock --project studio\edmg-studio\python_backend --check
+uv sync --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio
+uv run --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio `
+  python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
+```
+
+Python 3.12 and uv 0.11.28 are pinned repository inputs. Select one accelerator extra (`cpu`,
+`directml`, or `cuda`) when synchronizing a different backend profile.
 
 2. Start Studio UI
 
 Windows packaged app (from `studio/edmg-studio-winui`):
 
-- use the WinUI `BuildAndRun.ps1` workflow with `EdmgStudio.WinUI.csproj`; it builds x64,
-  registers the package, and launches it through `winapp run --debug-output`
+- open `EdmgStudio.WinUI.slnx` in Visual Studio, select `Release` and `x64`, set
+  `EdmgStudio.WinUI` as the startup project, select the `EdmgStudio.WinUI (Package)` profile,
+  and press F5 or Ctrl+F5
+- from PowerShell, the equivalent source launch is `dotnet run --project .\EdmgStudio.WinUI.csproj
+  --launch-profile "EdmgStudio.WinUI (Package)" -p:Platform=x64`
 - never run the generated packaged executable directly
-- if Developer Mode, .NET, or `winapp` is missing, install the prerequisite through
-  the supported WinUI setup workflow before retrying; do not switch to an unpackaged build
+- retain `Package.appxmanifest`; package identity is part of the supported runtime contract
 
 Linux/compatibility client:
 
 - `cd studio/edmg-studio`
-- `npm install`
-- `npm run dev`
+- `corepack enable`
+- `pnpm install`
+- `pnpm run dev`
 
-The backend talks to local Ollama directly by default, so a separate AI service is not required for the normal Studio flow.
+The backend runs planning in-process, so a separate AI service is not required. The selected provider
+may be NVIDIA-hosted, another OpenAI-compatible endpoint, local Ollama, or the built-in rule-based
+planner.
+
+## Managed model readiness
+
+The backend implements managed adapters for Qwen3-VL 8B/30B GGUF, Whisper large-v3-turbo,
+LTX-2.5 Distilled, and HunyuanVideo-1.5. Installing weights does not make a model ready: use the
+Models page smoke-test action and require backend Level-5 real-inference qualification. Readiness is
+invalidated when package files, dependencies, runner configuration, hardware, or the selected device
+changes. See [`studio/edmg-studio/python_backend/README.md`](studio/edmg-studio/python_backend/README.md#managed-model-runtimes).
 
 ## Secondary surfaces
 

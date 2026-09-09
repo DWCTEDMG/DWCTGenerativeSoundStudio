@@ -25,10 +25,11 @@ cmake --build build --config Release -j
 
 ## Run
 
-Start the Studio backend from `studio/edmg-studio/python_backend/`:
+Start the Studio backend from the repository root with the pinned Python 3.12/uv environment:
 
 ```bash
-python3 -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
+uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio \
+  python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
 
 Then run the client on Linux/macOS:

@@ -5,6 +5,11 @@ license: openrail
 # Documentation
 
 - [Root repo overview](../README.md)
+- [Studio entrypoint](../README_STUDIO.md)
+- [Native WinUI client](../studio/edmg-studio-winui/README.md)
+- [Windows Setup.exe packaging](../studio/edmg-studio/packaging/windows/README.md)
+- [Backend and managed model runtimes](../studio/edmg-studio/python_backend/README.md)
+- [Linux and compatibility client](../studio/edmg-studio/README.md)
 - [Studio repo map](STUDIO_REPO_MAP.md)
 - [Testing quickstart](TESTING_QUICKSTART.md)
 - [Studio release runbook](STUDIO_RELEASE_RUNBOOK.md)

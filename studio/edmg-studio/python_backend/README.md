@@ -15,7 +15,8 @@ overrides.
 
 ## Docker (backend only)
 
-This Docker path runs the FastAPI backend only. The Electron desktop shell still runs natively on the host.
+This Docker path runs the FastAPI backend only. The WinUI Windows client or Electron/React
+compatibility client still runs natively on the host.
 
 Build from `studio/edmg-studio/python_backend`:
 
@@ -64,11 +65,28 @@ From the repo root:
 - `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --group test python -m pytest` runs repo-level tests only
 - `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py` runs repo-level tests, then backend-local tests
 
-## Managed video runtimes
+## Managed model runtimes
 
 Managed model installation and runtime readiness are separate. Models become ready only after
 the Models page runtime smoke test completes a real inference and writes a receipt matching the
 current package, dependencies, runner configuration, and selected GPU.
+
+Runtime status is available through `GET /v1/runtimes` and
+`GET /v1/runtimes/{model_id}/readiness`; supported real-inference qualification runs through
+`POST /v1/runtimes/{model_id}/smoke-test`. The four states are `not_installed`,
+`installed_runtime_unavailable`, `runtime_degraded`, and `runtime_ready`.
+
+| Package ID | Runtime adapter |
+| --- | --- |
+| `hf_qwen3_vl_8b_gguf_director` | Qwen3-VL 8B GGUF through managed llama.cpp server |
+| `hf_qwen3_vl_30b_gguf_director` | Qwen3-VL 30B GGUF through managed llama.cpp server |
+| `hf_whisper_large_v3_turbo_internal` | Transformers Whisper large-v3-turbo |
+| `hf_ltx_25_distilled_internal` | LTX-2.5 Distilled through isolated `ltx-pipelines==1.3.0` |
+| `hf_hunyuan_video15_internal` | Official HunyuanVideo-1.5 through WSL2/external Linux |
+
+Qwen requires an exact GGUF/projector pair and a compatible `llama-server.exe`. Whisper supports
+CPU or an explicitly selected `cuda:N`; Qwen supports CPU or explicit CUDA isolation. The video
+runtimes have the additional requirements below.
 
 ### LTX-2.5
 

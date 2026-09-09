@@ -2,7 +2,8 @@
 
 `edmgctl` is the first Go support-plane addition for EDMG Studio.
 
-It does not replace any Python ML/audio logic or the Electron/React UI. It
+It does not replace any Python ML/audio logic, the primary WinUI client, or the
+Electron/React compatibility UI. It
 wraps the existing Studio release and diagnostics surface with a small,
 cross-platform CLI that can:
 
@@ -112,9 +113,9 @@ It can also export one portable support bundle zip containing:
 - the current artifact manifest with hashes
 - release-proof pointers and a small bundle README
 
-So the current Python backend, Electron main process, React UI, and packaging
-scripts remain the source of truth. Go is only the orchestration/diagnostic
-surface.
+So the current Python backend, WinUI client, Electron/React compatibility client,
+and packaging scripts remain the source of truth. Go is only the
+orchestration/diagnostic surface.
 
 ## Cross-platform notes
 

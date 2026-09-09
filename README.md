@@ -23,6 +23,25 @@ analysis, AI/provider integration, CUDA/TensorRT inference, rendering, jobs,
 outputs, and model lifecycle stay in
 `studio/edmg-studio/python_backend/`; WinUI does not duplicate those engines.
 
+## Managed model runtimes
+
+The backend includes executable adapters for five managed packages:
+
+| Model | Runtime path | Qualification requirement |
+| --- | --- | --- |
+| Qwen3-VL 8B GGUF | Managed `llama-server.exe` subprocess | Matching GGUF + projector and real multimodal inference |
+| Qwen3-VL 30B GGUF | Managed `llama-server.exe` subprocess | Matching GGUF + projector and real multimodal inference |
+| Whisper large-v3-turbo | In-process Transformers ASR | Real generated-audio transcription |
+| LTX-2.5 Distilled | Isolated `ltx-pipelines==1.3.0` Python runtime | CUDA and real video inference |
+| HunyuanVideo-1.5 | Official runtime through WSL2 or external Linux | CUDA, companion assets, and real video inference |
+
+Installation is not readiness. Studio reports `runtime_ready` only after a Level-5 smoke test completes
+real inference and writes a `runtime-validation.json` receipt matching the installed package,
+dependencies, runner, hardware, and selected device. Until then the Models pages show the package as
+not installed, runtime unavailable, or degraded. See the
+[backend runtime guide](./studio/edmg-studio/python_backend/README.md#managed-model-runtimes) for API,
+configuration, and opt-in real-model test details.
+
 The legacy standalone web UI prototypes have been retired from the active product
 surface. Their planning and audio-reactive workflows now live inside Studio
 workbenches such as:
@@ -187,7 +206,9 @@ lock-update policy.
 For Studio release operations, use:
 
 - [README_STUDIO.md](./README_STUDIO.md)
+- [studio/edmg-studio-winui/README.md](./studio/edmg-studio-winui/README.md)
 - [studio/edmg-studio/README.md](./studio/edmg-studio/README.md)
+- [studio/edmg-studio/packaging/windows/README.md](./studio/edmg-studio/packaging/windows/README.md)
 - [RELEASE.md](./RELEASE.md)
 - [docs/STUDIO_RELEASE_RUNBOOK.md](./docs/STUDIO_RELEASE_RUNBOOK.md)
 

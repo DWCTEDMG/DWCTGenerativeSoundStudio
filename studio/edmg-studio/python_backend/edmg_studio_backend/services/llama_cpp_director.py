@@ -133,11 +133,14 @@ class LlamaCppDirectorBackend:
         command = [
             str(self.executable), "-m", str(self.model_path), "--mmproj", str(self.projector_path),
             "--ctx-size", str(self.context_length), "--host", "127.0.0.1", "--port", str(port),
-            "--split-mode", "none", "--n-gpu-layers", "0" if self.device == "cpu" else self.gpu_layers,
+            "--parallel", "1", "--batch-size", "128", "--ubatch-size", "32",
+            "--flash-attn", "off", "--cache-ram", "0", "--split-mode", "none",
+            "--n-gpu-layers", "0" if self.device == "cpu" else self.gpu_layers,
         ]
         if self.device != "cpu":
             self._process_env = self._cuda_environment()
-            command.extend(["--device", "CUDA0", "--main-gpu", "0"])
+            self._process_env["GGML_CUDA_DISABLE_GRAPHS"] = "1"
+            command.extend(["--device", "CUDA0", "--main-gpu", "0", "--no-mmproj-offload"])
         else:
             self._process_env = os.environ.copy()
             command.append("--no-mmproj-offload")

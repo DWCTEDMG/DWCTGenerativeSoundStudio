@@ -1,8 +1,9 @@
 # EDMG Studio (Compatibility Electron Shell)
 
-This shell is retained for compatibility, but the canonical desktop product is now:
+This older shell is retained for compatibility. The canonical Studio surfaces are:
 
-- `studio/edmg-studio`
+- `studio/edmg-studio-winui/` for the primary packaged Windows client
+- `studio/edmg-studio/` for the shared backend and maintained Linux/compatibility client
 
 Use the root launcher (`RUN_ME.bat` / `./run_me.sh`) or see [`README_STUDIO.md`](../../README_STUDIO.md) for the current product entrypoint.
 
@@ -24,8 +25,8 @@ From the repo root:
 
 ```bash
 cd desktop/electron
-npm install
-npm run start
+corepack pnpm install
+corepack pnpm run start
 ```
 
 ### Python selection
@@ -47,4 +48,5 @@ set EDMG_API_PORT=7862
 
 - The UI loads JSONEditor from `node_modules`, so it works offline.
 - The backend defaults to 720p @ 30fps in the template.
-- This is not the release-authoritative Studio path. Prefer `studio/edmg-studio`.
+- This is not a release-authoritative Studio path. Prefer `studio/edmg-studio-winui` on Windows or
+  the maintained client under `studio/edmg-studio` on Linux.

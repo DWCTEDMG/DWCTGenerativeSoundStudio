@@ -52,8 +52,9 @@ To build only this primary artifact from `studio/edmg-studio`:
 pnpm run dist:win
 ```
 
-The CUDA backend exceeds NSIS's 4 GiB archive limit, so `dist:win:cuda` uses
-the Inno Setup external-payload installer automatically:
+The commands below are compatibility packaging lanes; they do not replace the primary WinUI-only
+`dist:win` artifact. The CUDA backend exceeds NSIS's 4 GiB archive limit, so `dist:win:cuda` uses
+an Inno Setup external-payload installer automatically:
 
 ```powershell
 cd studio/edmg-studio
@@ -227,9 +228,12 @@ hardware. Source-only or unsigned structural validation does not satisfy them.
 
 ## Runtime defaults
 
-- AI defaults to **local Ollama** (no separate AI server required)
-  - `EDMG_AI_MODE=local`
-  - `EDMG_AI_PROVIDER=ollama`
+- AI planning runs in-process by default; a separate AI service is not required.
+- The selected provider defaults to `nemotron_cloud`. Local Ollama, another OpenAI-compatible
+  endpoint, and the built-in rule-based planner remain explicit alternatives.
+- Managed model installation is separate from runtime readiness. Qwen3-VL GGUF, Whisper,
+  LTX-2.5, and HunyuanVideo-1.5 remain fail-closed until a real Level-5 smoke test qualifies the
+  current package, runtime, hardware, and device.
 
 If you prefer a remote AI service:
 

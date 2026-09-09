@@ -1,9 +1,14 @@
-# EDMG Studio (v1.2.0)
+# EDMG Studio backend and compatibility client (v1.2.0)
 
-A desktop-style "studio" application:
+This directory contains the authoritative **FastAPI** backend and the maintained
+**Electron/React** client used on Linux and for compatibility. The primary packaged Windows frontend
+is the native WinUI 3 client in [`../edmg-studio-winui`](../edmg-studio-winui/README.md). Both clients
+use the same backend, project format, Studio Home, and model/runtime state.
 
-- **Electron** shell + **React** UI
-- Local **FastAPI** backend for projects, assets, planning, rendering, and outputs
+The shared Studio stack includes:
+
+- Local **FastAPI** backend for projects, assets, planning, rendering, outputs, and managed runtimes
+- **Electron** shell + **React** UI for Linux, browser development, and compatibility
 - Bundled **EDMG Director** MCP sidecar for ChatGPT connector workflows and Studio-native directing handoff
 - Integrates with:
   - **Studio internal renderer** as the default built-in render path
@@ -109,6 +114,10 @@ pnpm run dev
 `corepack enable` is only needed once per machine if `pnpm` is not already on `PATH`. The package
 manager version is pinned via `packageManager` in `package.json`.
 
+On Windows, use the WinUI package profile for the primary desktop experience. `pnpm run dev` starts
+the Electron compatibility client; for browser-only UI work use
+`pnpm exec vite --host 127.0.0.1 --port 5173 --strictPort`.
+
 To repoint the desktop/dev frontend at a different backend target without hand-editing the bootstrap
 files, run one of these from `studio/edmg-studio/`:
 
@@ -135,13 +144,33 @@ token.
 
 - Canonical shipped desktop version: `studio/edmg-studio/package.json#version`
 - Release staging copies that version into `studio/edmg-studio/release/staged-app/package.json`
-- Canonical Windows release installers identify the version, `windows-x64` target, and immutable
-  `cpu`, `directml`, or `cuda` backend profile; build them only through the repository `dist:win:*`
-  scripts. A raw Electron Builder invocation deliberately emits an `unqualified` filename and is
-  not a release package.
+- The primary Windows artifact is the WinUI `Setup.exe` built by `pnpm run dist:win`. Explicit
+  `dist:win:cpu`, `dist:win:directml`, and `dist:win:cuda` scripts produce Electron or oversized
+  compatibility lanes. A raw Electron Builder invocation deliberately emits an `unqualified`
+  filename and is not a release package.
 - Linux desktop artifacts identify the version, `linux-x64` target, and immutable profile and are
   built as `AppImage` packages through `pnpm run dist:linux` or `pnpm run dist:linux:cuda`.
 - Use `pnpm run check:release-metadata` after staging if you want a direct version-propagation check
+
+## Managed model runtimes
+
+The Models pages consume backend-authoritative status from `GET /v1/runtimes`, expose readiness
+details, and run supported smoke tests through `POST /v1/runtimes/{model_id}/smoke-test`.
+
+| Managed package | Adapter | Readiness boundary |
+| --- | --- | --- |
+| Qwen3-VL 8B GGUF | `llama-server.exe` | Real multimodal Director response |
+| Qwen3-VL 30B GGUF | `llama-server.exe` | Real multimodal Director response |
+| Whisper large-v3-turbo | Transformers | Real generated-audio transcription |
+| LTX-2.5 Distilled | Isolated official `ltx-pipelines==1.3.0` | Real CUDA video inference |
+| HunyuanVideo-1.5 | Official WSL2/external Linux runtime | Real CUDA video inference |
+
+An installed package is not automatically usable. Only a matching Level-5
+`runtime-validation.json` receipt yields `runtime_ready`; package, dependency, runner, hardware, or
+device changes invalidate it. Models not installed and qualified on the current machine remain
+fail-closed even though their adapters are implemented. See
+[`python_backend/README.md`](./python_backend/README.md#managed-model-runtimes) for detailed setup and
+the opt-in real-model qualification test.
 
 ## Setup Wizard (no command line)
 

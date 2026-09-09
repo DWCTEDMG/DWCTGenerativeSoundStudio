@@ -17,6 +17,8 @@ The primary native workflow is implemented:
 - Render Queue progress, pause/resume/cancel/retry actions, logs, and event diagnostics.
 - Authenticated Outputs browsing/downloads and Review notes, traits, locks, and decisions.
 - Model catalogue, license acceptance, install/restore/remove, promotion lanes, and packs.
+- Backend-authoritative managed-runtime states, Level-5 qualification details, and supported
+  real-inference smoke-test actions for Qwen3-VL GGUF, Whisper, LTX-2.5, and HunyuanVideo-1.5.
 - Settings for render routing, transcription, secret status, Foundry context, hardware, readiness, and metrics.
 - Setup Wizard with runtime readiness, storage locations, safe cache fallback reporting, backend connection details, and Credential Locker token storage.
 - Source, packaged, external, and healthy-source-attachment backend modes.
@@ -55,6 +57,20 @@ Existing edmg_studio_backend (FastAPI / Python 3.12)
 The native client does not duplicate the AI, audio-analysis, render, model, or project-storage
 engines. It communicates with the backend over bearer-authenticated localhost HTTP and uses the
 same project format as the compatibility client.
+
+### Managed model readiness
+
+The Models page distinguishes package installation from runtime readiness. Its four states are
+`not_installed`, `installed_runtime_unavailable`, `runtime_degraded`, and `runtime_ready`. Only a
+successful Level-5 real-inference smoke test produces `runtime_ready`; the backend fingerprints the
+package, dependencies, runner, hardware, and selected device in `runtime-validation.json`.
+
+The implemented adapters cover Qwen3-VL 8B and 30B GGUF through llama.cpp, Transformers Whisper
+large-v3-turbo, LTX-2.5 Distilled through an isolated official Python runtime, and
+HunyuanVideo-1.5 through WSL2 or an external Linux runtime. Adapter support is not proof of local
+availability: missing weights, dependencies, companion assets, CUDA hardware, or a matching receipt
+remain visible and fail closed. Detailed runtime setup and opt-in real-package testing are documented
+in [`../edmg-studio/python_backend/README.md`](../edmg-studio/python_backend/README.md#managed-model-runtimes).
 
 ### Native Direct3D preview pipeline
 
@@ -154,6 +170,10 @@ The focused backend data-freshness tests live in the existing Python test suite 
 ## Run with package identity
 
 The default development route retains package identity so Credential Locker, MSIX behavior, and Windows integrations are exercised:
+
+In Visual Studio, open `EdmgStudio.WinUI.slnx`, select `Release` and `x64`, set
+`EdmgStudio.WinUI` as the startup project, choose the `EdmgStudio.WinUI (Package)` launch profile,
+then press F5 or Ctrl+F5.
 
 ```powershell
 dotnet run --project .\EdmgStudio.WinUI.csproj `

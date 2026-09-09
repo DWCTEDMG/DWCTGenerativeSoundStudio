@@ -1,7 +1,8 @@
 IMPORTANT: this file describes a legacy standalone/full-bundle workflow, not the current canonical product path for this repository.
 
 For the current repo:
-- Primary desktop product: `studio/edmg-studio/`
+- Primary packaged Windows frontend: `studio/edmg-studio-winui/`
+- Shared FastAPI backend and Linux/compatibility Electron frontend: `studio/edmg-studio/`
 - Canonical launchers: `RUN_ME.bat` or `./run_me.sh`
 - Canonical release docs: `README_STUDIO.md`, `RELEASE.md`, `docs/STUDIO_RELEASE_RUNBOOK.md`
 - Canonical repo map: `docs/STUDIO_REPO_MAP.md`
