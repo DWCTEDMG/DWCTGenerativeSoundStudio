@@ -7,6 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 from edmg_studio_backend import app as backend
 from edmg_studio_backend.services.model_load_coordinator import model_load_lock
@@ -109,7 +110,10 @@ def test_manual_tick_uses_isolated_director_dispatch(state, monkeypatch):
     calls = []
     monkeypatch.setattr(backend, "_run_job_in_subprocess", lambda job: calls.append(job.id))
     monkeypatch.setattr(backend, "_execute_job", lambda job: pytest.fail("Director ran inside API"))
-    backend.tick_worker()
+    with TestClient(backend.app) as client:
+        response = client.post("/v1/jobs/tick")
+
+    assert response.status_code == 200
     assert calls == [queued.id]
 
 

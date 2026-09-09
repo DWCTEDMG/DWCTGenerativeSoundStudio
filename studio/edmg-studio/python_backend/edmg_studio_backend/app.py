@@ -16,7 +16,6 @@ import logging
 import shutil
 import subprocess
 import sys
-import threading
 import wave
 from copy import deepcopy
 from dataclasses import replace
@@ -52,7 +51,7 @@ except Exception:
 
 from .config import Settings
 from .schemas import (
-    HealthResponse, ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
+    ProjectCreateRequest, PlanRequest, ApplyPlanRequest,
     RenderScenesRequest, RenderMotionRequest, AssembleVideoRequest, InternalVideoRenderRequest,
     CreativeDirectionApplyRequest, PlannerLabImportRequest, ReactiveLabApplyRequest, ExportDeforumRequest, ExportUnrealBridgeRequest,
     ImportUnrealBridgeReturnRequest,
@@ -75,7 +74,33 @@ from .store.projects import ProjectStore
 from .version import STUDIO_VERSION
 from .store.jobs import JobStore
 from .store.artifacts import write_artifact_manifest
-from .api import create_models_router, create_project_router, create_system_router
+from .api import (
+    CloudRouterDependencies,
+    JobRouterDependencies,
+    ProviderRouterDependencies,
+    RenderRouterDependencies,
+    ProjectCodexDependencies,
+    ProjectIntelligenceDependencies,
+    ProjectMediaDependencies,
+    ProjectOutputDependencies,
+    ProjectWorkbenchDependencies,
+    SetupRouterDependencies,
+    SystemSettingsDependencies,
+    create_jobs_router,
+    create_cloud_router,
+    create_models_router,
+    create_project_router,
+    create_provider_router,
+    create_render_router,
+    create_project_codex_router,
+    create_project_intelligence_router,
+    create_project_media_router,
+    create_project_output_router,
+    create_project_workbench_router,
+    create_setup_router,
+    create_system_router,
+    create_system_settings_router,
+)
 from .domain.director_modes import (
     director_mode_profile,
     flavor_prompt,
@@ -236,7 +261,6 @@ from .services.setup_wizard import (
 from .services.system_readiness import assess_system_readiness
 from .services.baseline_metrics import collect_baseline_metrics
 from .services.project_health import assess_project_health, collect_project_bundle, suggest_relinks
-from .uv_toolchain import ToolchainError
 
 logger = logging.getLogger(__name__)
 settings = Settings()
@@ -717,19 +741,6 @@ def _duration_mismatch_warning(duration_sources: list[dict[str, Any]]) -> str | 
 def _resolved_project_duration_s(proj: Any, variant: dict[str, Any], scenes: list[dict[str, Any]]) -> float:
     duration = _project_duration_hint_s(proj, variant, scenes)
     return float(duration or 60.0)
-
-@app.get("/health", response_model=HealthResponse)
-def health():
-    return HealthResponse(ok=True)
-
-
-@app.get("/v1/security/status")
-def backend_security_status(request: Request):
-    return backend_security.public_status(
-        request_scheme=request.url.scheme,
-        request_server_host=(request.scope.get("server") or (None,))[0],
-    )
-
 
 def _request_payload(model: Any) -> dict[str, Any]:
     dump = getattr(model, "model_dump", None)
@@ -2638,17 +2649,6 @@ def _render_profiles_for_hardware(hw: dict[str, Any] | None = None) -> dict[str,
     return {"ok": True, "recommended_profile": recommended_profile, "profiles": profiles, "hardware": hw}
 
 
-@app.get("/v1/settings/render_profiles")
-def render_profiles():
-    return _render_profiles_for_hardware()
-
-
-@app.get("/v1/hardware")
-def hardware():
-    hw = _hardware_profile()
-    return {"ok": True, "hardware": hw, "render_tier_plan": _build_internal_render_plan(hw, requested_tier="auto")}
-
-
 def _system_readiness_report() -> dict[str, Any]:
     """Shared Studio readiness report used by Settings and Setup."""
     return assess_system_readiness(
@@ -2918,22 +2918,6 @@ def _hosted_firefly_ready(payload: dict[str, Any] | None = None) -> bool:
     return bool(provider.get("allow_auto_fallback")) and bool(payload.get("allow_firefly_fallback", True))
 
 
-@app.get("/v1/settings/render_providers")
-def get_render_providers():
-    return _render_provider_status()
-
-
-@app.post("/v1/settings/render_providers")
-def set_render_providers(payload: dict[str, Any]):
-    saved = render_settings.update(payload)
-    _hardware_profile_invalidate()  # CUDA enabled/disabled affects hardware profile
-    return {
-        "ok": True,
-        "settings": saved,
-        "status": _render_provider_status(),
-    }
-
-
 def _transcription_status() -> dict[str, Any]:
     cfg = transcription_settings.get()
     deps = transcription_dependency_status()
@@ -2976,27 +2960,6 @@ def _transcription_status() -> dict[str, Any]:
     }
 
 
-@app.get("/v1/settings/transcription")
-def get_transcription_settings():
-    return _transcription_status()
-
-
-@app.post("/v1/settings/transcription")
-def set_transcription_settings(payload: dict[str, Any]):
-    saved = transcription_settings.update(payload)
-    return {
-        "ok": True,
-        "settings": saved,
-        "status": _transcription_status(),
-    }
-
-
-@app.get("/v1/codex/status")
-def get_codex_status():
-    return codex_sdk_status()
-
-
-@app.post("/v1/projects/{project_id}/codex/render-review")
 def codex_render_review(project_id: str, payload: dict[str, Any]):
     proj = store.get(project_id)
     if not proj:
@@ -3014,6 +2977,12 @@ def codex_render_review(project_id: str, payload: dict[str, Any]):
     )
 
 
+app.include_router(create_project_codex_router(ProjectCodexDependencies(
+    get_store=lambda: store,
+    run_render_review=lambda **kwargs: run_codex_render_review_task(**kwargs),
+)))
+
+
 def _nvidia_prompt_model_family(model: str | None) -> str:
     raw = str(model or "").strip().lower()
     if "diffusiongemma" in raw or "diffusion-gemma" in raw:
@@ -3023,8 +2992,7 @@ def _nvidia_prompt_model_family(model: str | None) -> str:
     return "custom"
 
 
-@app.get("/v1/config")
-def get_config():
+def _config_payload():
     provider_status = _render_provider_status()
     transcription_status = _transcription_status()
     try:
@@ -3101,8 +3069,7 @@ def get_config():
     }
 
 
-@app.get("/v1/settings/secrets/status")
-def secrets_status():
+def _secrets_status_payload():
     """Return whether optional tokens are configured (never returns the values)."""
     st = secrets.status()
     hf_auth = describe_hf_auth(secrets_store=secrets)
@@ -3124,33 +3091,6 @@ def secrets_status():
         "has_nvidia_api_key": st.has_nvidia_api_key,
         "note": st.note,
     }
-
-
-@app.post("/v1/settings/secrets/set")
-def secrets_set(payload: dict[str, Any]):
-    name = str((payload or {}).get("name") or "").strip().lower()
-    value = str((payload or {}).get("value") or "")
-    if name not in _ALLOWED_SECRETS:
-        raise UserFacingError(
-            "Unknown secret",
-            hint=f"Supported: {', '.join(sorted(_ALLOWED_SECRETS))}",
-        )
-    if not value:
-        raise UserFacingError("Missing value", hint="Paste the token/key value, then click Save.")
-    secrets.set(name, value)
-    return {"ok": True}
-
-
-@app.post("/v1/settings/secrets/clear")
-def secrets_clear(payload: dict[str, Any]):
-    name = str((payload or {}).get("name") or "").strip().lower()
-    if name not in _ALLOWED_SECRETS:
-        raise UserFacingError(
-            "Unknown secret",
-            hint=f"Supported: {', '.join(sorted(_ALLOWED_SECRETS))}",
-        )
-    secrets.delete(name)
-    return {"ok": True}
 
 
 def _setup_ai_config() -> dict[str, Any]:
@@ -3412,314 +3352,9 @@ def _compute_setup_status(*, include_optional: bool = False) -> dict[str, Any]:
         }
 
 
-_SETUP_STATUS_CACHE_TTL_S = 30.0
-_setup_status_cache_lock = threading.Lock()
-_setup_status_cache: dict[bool, tuple[float, dict[str, Any]]] = {}
-
-
-def _clear_setup_status_cache() -> None:
-    with _setup_status_cache_lock:
-        _setup_status_cache.clear()
-
-
-@app.get("/v1/setup/status")
-def setup_status(refresh: bool = False, include_optional: bool = False):
-    """Return cached setup diagnostics plus the current lightweight task list."""
-    now = time.monotonic()
-    cache_key = bool(include_optional)
-    cached = False
-    with _setup_status_cache_lock:
-        entry = _setup_status_cache.get(cache_key)
-        if not refresh and entry and now - entry[0] < _SETUP_STATUS_CACHE_TTL_S:
-            checked_at, payload = entry
-            result = deepcopy(payload)
-            cached = True
-        else:
-            result = _compute_setup_status(include_optional=include_optional)
-            checked_at = time.monotonic()
-            _setup_status_cache[cache_key] = (checked_at, deepcopy(result))
-
-    result["tasks"] = [task.to_dict() for task in setup_tasks.list()[:10]]
-    result["status_cache"] = {
-        "cached": cached,
-        "age_seconds": round(max(0.0, time.monotonic() - checked_at), 3),
-        "ttl_seconds": _SETUP_STATUS_CACHE_TTL_S,
-    }
-    return result
-
-
-@app.get("/v1/setup/tasks")
-def setup_task_list():
-    """Lightweight progress endpoint; never runs external dependency probes."""
-    tasks = [task.to_dict() for task in setup_tasks.list()[:10]]
-    return {
-        "ok": True,
-        "active": any(task["status"] in ("queued", "running") for task in tasks),
-        "tasks": tasks,
-    }
-
-
-@app.post("/v1/setup/tasks/{task_id}/cancel")
-def setup_task_cancel(task_id: str):
-    task = setup_tasks.cancel(task_id)
-    if task is None:
-        raise HTTPException(404, f"Setup task not found: {task_id}")
-    return {"ok": True, "task": task.to_dict()}
-
-
-@app.post("/v1/setup/ollama/install_managed")
-def setup_ollama_install_managed():
-    dest = settings.external_dir / "_installers"
-    url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
-    task = setup_tasks.start(
-        "install_managed_ollama",
-        download_and_install_ollama,
-        dest,
-        settings.external_dir,
-        settings.models_dir,
-        url,
-    )
-    return {"ok": True, "task": task.to_dict()}
-
-
-@app.post("/v1/setup/ollama/download_and_run")
-def setup_ollama_download_and_run():
-    return setup_ollama_install_managed()
-
-
-@app.post("/v1/setup/ollama/start_managed")
-def setup_ollama_start_managed():
-    url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
-    task = setup_tasks.start(
-        "start_managed_ollama",
-        ollama_managed.start,
-        settings.external_dir,
-        settings.models_dir,
-        url,
-    )
-    return {"ok": True, "task": task.to_dict()}
-
-
-@app.post("/v1/setup/ollama/pull")
-def setup_ollama_pull(payload: dict[str, Any]):
-    import os
-
-    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
-    url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
-    task = setup_tasks.start(f"pull_model:{model}", pull_ollama_model, url, model)
-    return {"ok": True, "task": task.to_dict()}
-
-@app.post("/v1/setup/7zip/install")
-def setup_7zip_install():
-    """Download the portable 7-Zip CLI (required for extracting some .7z archives)."""
-    task = setup_tasks.start("install_7zip", download_and_install_7zip, settings.external_dir, settings.data_dir)
-    return {"ok": True, "task": task.to_dict()}
-
-@app.post("/v1/setup/backend/install")
-def setup_backend_install(payload: dict[str, Any]):
-    try:
-        profile = resolve_setup_accelerator_profile(payload)
-    except ToolchainError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    status = check_backend_bundle(accelerator_profile=profile, check_sync=False)
-    if status.get("immutable"):
-        detail = str(
-            status.get("hint")
-            or "This packaged backend is self-contained; install another application build to change profiles."
-        )
-        raise HTTPException(status_code=409, detail=detail)
-
-    task = setup_tasks.start(
-        f"sync_backend_profile:{profile}",
-        install_backend_bundle,
-        accelerator_profile=profile,
-    )
-    return {"ok": True, "task": task.to_dict()}
-
-@app.post("/v1/setup/full/install")
-def setup_full_install(payload: dict[str, Any]):
-    """Run one-click setup around one locked backend accelerator profile."""
-    import os
-
-    try:
-        profile = resolve_setup_accelerator_profile(payload)
-    except ToolchainError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    toolchain = check_backend_bundle(accelerator_profile=profile, check_sync=False)
-    if toolchain.get("immutable") and not toolchain.get("ok"):
-        raise HTTPException(
-            status_code=409,
-            detail=str(toolchain.get("hint") or "The packaged backend profile does not match this setup request."),
-        )
-
-    comfy_flavor = {"cpu": "cpu", "directml": "amd", "cuda": "nvidia"}[profile]
-    port = int((payload or {}).get("comfy_port") or 8188)
-    model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen3:8b")
-    ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
-    ai_config = _setup_ai_config()
-
-    def _run(task):
-        # 1) Source checkouts sync from uv.lock; packaged backends are immutable.
-        SetupTaskManager.check_canceled(task, "Full setup canceled.")
-        install_backend_bundle(task, accelerator_profile=profile)
-
-        # 2) Ensure 7-Zip for .7z extraction
-        SetupTaskManager.check_canceled(task, "Full setup canceled.")
-        try:
-            _find_7z_exe(settings.external_dir, settings.data_dir)
-        except Exception:
-            download_and_install_7zip(task, settings.external_dir, settings.data_dir)
-
-        # 3) Ollama install/model only when the active AI path actually uses Ollama.
-        SetupTaskManager.check_canceled(task, "Full setup canceled.")
-        if ai_config.get("ollama_required"):
-            ollama_status = check_ollama(ollama_url, model)
-            if not ollama_status.get("ok"):
-                try:
-                    ollama_managed.start(task, settings.external_dir, settings.models_dir, ollama_url)
-                except Exception:
-                    dest = settings.external_dir / "_installers"
-                    download_and_install_ollama(task, dest, settings.external_dir, settings.models_dir, ollama_url)
-                    ollama_managed.start(task, settings.external_dir, settings.models_dir, ollama_url)
-            else:
-                SetupTaskManager.log(task, "Ollama is already reachable.")
-
-            ollama_status = check_ollama(ollama_url, model)
-            if not ollama_status.get("model_present"):
-                pull_ollama_model(task, ollama_url, model)
-            else:
-                SetupTaskManager.log(task, f"Ollama model {model} is already present.")
-        else:
-            SetupTaskManager.log(
-                task,
-                f"Skipping Ollama install because Studio AI is configured for {ai_config.get('label')}.",
-            )
-
-        # 4) ComfyUI Portable install + start
-        SetupTaskManager.check_canceled(task, "Full setup canceled.")
-        if not comfy_portable_installed(settings.external_dir, settings.data_dir):
-            download_and_extract_portable(
-                task,
-                settings.external_dir,
-                comfy_flavor,
-                settings.data_dir,
-                settings.models_dir,
-            )
-        else:
-            SetupTaskManager.log(task, "ComfyUI Portable is already installed.")
-
-        comfy_ready = False
-        try:
-            diag = comfy_pool.diagnose({})
-            comfy_ready = bool(diag.get("compatible") or diag.get("busy_compatible"))
-        except Exception:
-            comfy_ready = False
-
-        if comfy_ready:
-            SetupTaskManager.log(task, "ComfyUI is already reachable.")
-        else:
-            comfy_portable.start(
-                task,
-                settings.external_dir,
-                comfy_flavor,
-                "127.0.0.1",
-                port,
-                settings.data_dir,
-                settings.models_dir,
-            )
-
-    task = setup_tasks.start(f"full_setup:{profile}:{ai_config.get('provider')}", _run)
-    return {"ok": True, "task": task.to_dict()}
-
-
-@app.post("/v1/setup/comfyui/portable/install")
-def setup_comfyui_portable_install(payload: dict[str, Any]):
-    flavor = (payload or {}).get("flavor") or "cpu"
-    task = setup_tasks.start(
-        f"install_comfyui_portable:{flavor}",
-        download_and_extract_portable,
-        settings.external_dir,
-        flavor,
-        settings.data_dir,
-        settings.models_dir,
-    )
-    return {"ok": True, "task": task.to_dict()}
-
-
-@app.post("/v1/setup/comfyui/portable/start")
-def setup_comfyui_portable_start(payload: dict[str, Any]):
-    raw_flavor = str((payload or {}).get("flavor") or "auto").strip().lower()
-    if raw_flavor == "auto":
-        hw = _hardware_profile()
-        cuda_cfg = dict((render_settings.get().get("cuda") or {}))
-        if str(hw.get("backend") or "cpu").lower() == "cuda" and bool(cuda_cfg.get("enabled", True)):
-            raw_flavor = "nvidia"
-        else:
-            raw_flavor = "cpu"
-    flavor = raw_flavor
-    port = int((payload or {}).get("port") or 8188)
-    task = setup_tasks.start(
-        f"start_comfyui_portable:{flavor}",
-        comfy_portable.start,
-        settings.external_dir,
-        flavor,
-        "127.0.0.1",
-        port,
-        settings.data_dir,
-        settings.models_dir,
-    )
-    return {"ok": True, "task": task.to_dict()}
-
-
-@app.post("/v1/setup/comfyui/portable/stop")
-def setup_comfyui_portable_stop():
-    comfy_portable.stop()
-    return {"ok": True}
-
-
-@app.post("/v1/setup/edmg/install")
-def setup_edmg_install(payload: dict[str, Any]):
-    mode = str((payload or {}).get("mode") or "standard").strip().lower() or "standard"
-    backend = str((payload or {}).get("backend") or "cpu").strip().lower() or "cpu"
-    task = setup_tasks.start(f"install_edmg_core:{mode}:{backend}", edmg_install_core, settings.data_dir, mode=mode, backend=backend)
-    return {"ok": True, "task": task.to_dict()}
-
-
-@app.get("/v1/ai/status")
-def ai_status():
-    return {"ok": True, "ai": ai.status(), "ai_config": _setup_ai_config()}
-
-@app.get("/v1/worker/status")
-def worker_status():
-    if worker is None:
-        return {"ok": True, "running": False}
-    st = worker.status()
-    return {"ok": True, **st.__dict__}
-
-@app.get("/v1/comfyui/nodes")
-def comfyui_nodes():
-    return {"ok": True, "nodes": comfy_pool.snapshot()}
-
-
-@app.get("/v1/comfyui/object_info")
-def comfyui_object_info():
-    try:
-        primary = settings.resolved_comfyui_urls()[0]
-        return comfy.get_object_info(primary)
-    except Exception as exc:
-        logger.exception("ComfyUI node discovery failed")
-        raise HTTPException(502, "ComfyUI node discovery failed") from exc
-
-@app.get("/v1/comfyui/capabilities")
-def comfyui_capabilities():
-    try:
-        primary = settings.resolved_comfyui_urls()[0]
-        obj = comfy.get_object_info(primary)
-    except Exception as exc:
-        logger.exception("ComfyUI queue discovery failed")
-        raise HTTPException(502, "ComfyUI queue discovery failed") from exc
+def _comfyui_capabilities_payload():
+    primary = settings.resolved_comfyui_urls()[0]
+    obj = comfy.get_object_info(primary)
 
     ad_ok, ad_missing = comfy.has_nodes(obj, ["ADE_AnimateDiffLoaderGen1", "ADE_StandardStaticContextOptions"])
     svd_ok, svd_missing = comfy.has_nodes(obj, ["SVDSimpleImg2Vid"])
@@ -3737,27 +3372,85 @@ def comfyui_capabilities():
         "detected_checkpoints": detected_checkpoints,
     }
 
-@app.get("/v1/edmg/status")
-def edmg_status():
-    return core_status()
 
-@app.post("/v1/edmg/verify")
-def edmg_verify():
-    return edmg_selfcheck()
+app.include_router(
+    create_system_settings_router(
+        SystemSettingsDependencies(
+            security_status=lambda scheme, host: backend_security.public_status(
+                request_scheme=scheme, request_server_host=host
+            ),
+            render_profiles=lambda: _render_profiles_for_hardware(),
+            hardware=lambda: _hardware_profile(),
+            render_plan=lambda hw: _build_internal_render_plan(hw, requested_tier="auto"),
+            render_provider_status=lambda: _render_provider_status(),
+            update_render_settings=lambda payload: render_settings.update(payload),
+            invalidate_hardware=lambda: _hardware_profile_invalidate(),
+            transcription_status=lambda: _transcription_status(),
+            update_transcription_settings=lambda payload: transcription_settings.update(payload),
+            config_payload=lambda: _config_payload(),
+            secrets_status_payload=lambda: _secrets_status_payload(),
+            set_secret=lambda name, value: secrets.set(name, value),
+            clear_secret=lambda name: secrets.delete(name),
+            allowed_secrets=_ALLOWED_SECRETS,
+            codex_status=lambda: codex_sdk_status(),
+        )
+    )
+)
 
-@app.get("/v1/edmg/deforum_template")
-def edmg_template():
-    try:
-        return edmg_deforum_template()
-    except Exception:
-        # Not fatal; return minimal template so UI doesn't crash
-        return {"note": "EDMG Core not installed or template unavailable."}
+_setup_router = create_setup_router(
+    SetupRouterDependencies(
+        settings=settings,
+        tasks=setup_tasks,
+        compute_status=lambda **kwargs: _compute_setup_status(**kwargs),
+        resolve_profile=lambda payload: resolve_setup_accelerator_profile(payload),
+        check_backend=lambda **kwargs: check_backend_bundle(**kwargs),
+        install_backend=lambda *args, **kwargs: install_backend_bundle(*args, **kwargs),
+        install_ollama=lambda *args, **kwargs: download_and_install_ollama(*args, **kwargs),
+        start_ollama=lambda *args, **kwargs: ollama_managed.start(*args, **kwargs),
+        pull_ollama=lambda *args, **kwargs: pull_ollama_model(*args, **kwargs),
+        install_7zip=lambda *args, **kwargs: download_and_install_7zip(*args, **kwargs),
+        find_7zip=lambda *args, **kwargs: _find_7z_exe(*args, **kwargs),
+        check_ollama=lambda *args, **kwargs: check_ollama(*args, **kwargs),
+        ai_config=lambda: _setup_ai_config(),
+        comfy_installed=lambda *args, **kwargs: comfy_portable_installed(*args, **kwargs),
+        install_comfy=lambda *args, **kwargs: download_and_extract_portable(*args, **kwargs),
+        start_comfy=lambda *args, **kwargs: comfy_portable.start(*args, **kwargs),
+        stop_comfy=lambda: comfy_portable.stop(),
+        comfy_diagnose=lambda payload: comfy_pool.diagnose(payload),
+        hardware=lambda: _hardware_profile(),
+        cuda_enabled=lambda: bool((render_settings.get().get("cuda") or {}).get("enabled", True)),
+        install_edmg=lambda *args, **kwargs: edmg_install_core(*args, **kwargs),
+        check_canceled=lambda task, message: SetupTaskManager.check_canceled(task, message),
+        task_log=lambda task, message: SetupTaskManager.log(task, message),
+    )
+)
+app.include_router(_setup_router)
+# Compatibility names remain callable for tests and embedders; route ownership
+# and endpoint function definitions stay in api.setup.
+_clear_setup_status_cache = _setup_router.clear_status_cache  # type: ignore[attr-defined]
+setup_status = next(route.endpoint for route in _setup_router.routes if route.path == "/v1/setup/status")
+setup_task_list = next(route.endpoint for route in _setup_router.routes if route.path == "/v1/setup/tasks")
+
+app.include_router(
+    create_provider_router(
+        ProviderRouterDependencies(
+            ai_status=lambda: ai.status(),
+            ai_config=lambda: _setup_ai_config(),
+            get_worker=lambda: worker,
+            comfy_nodes=lambda: comfy_pool.snapshot(),
+            comfy_object_info=lambda: comfy.get_object_info(settings.resolved_comfyui_urls()[0]),
+            comfy_capabilities=lambda: _comfyui_capabilities_payload(),
+            edmg_status=lambda: core_status(),
+            edmg_verify=lambda: edmg_selfcheck(),
+            edmg_template=lambda: edmg_deforum_template(),
+        )
+    )
+)
 
 # Core project list/create/get/health/timeline/autosave/recovery routes are registered
 # via create_project_router() after _project_response_payload is defined.
 
 
-@app.get("/v1/projects/{project_id}/visual_dna")
 def get_project_visual_dna(project_id: str):
     proj = store.get(project_id)
     if not proj:
@@ -3778,7 +3471,6 @@ def get_project_visual_dna(project_id: str):
     }
 
 
-@app.get("/v1/projects/{project_id}/health/relink")
 def get_project_relink_suggestions(project_id: str):
     proj = store.get(project_id)
     if not proj:
@@ -3786,7 +3478,6 @@ def get_project_relink_suggestions(project_id: str):
     return suggest_relinks(store.project_dir(project_id), proj.meta)
 
 
-@app.post("/v1/projects/{project_id}/health/collect")
 def post_collect_project(project_id: str):
     proj = store.get(project_id)
     if not proj:
@@ -3796,7 +3487,6 @@ def post_collect_project(project_id: str):
     return collect_project_bundle(pdir, dest)
 
 
-@app.post("/v1/projects/{project_id}/visual_dna/feedback")
 def post_project_visual_dna_feedback(project_id: str, req: VisualDNAFeedbackRequest):
     proj = store.get(project_id)
     if not proj:
@@ -3811,7 +3501,6 @@ def post_project_visual_dna_feedback(project_id: str, req: VisualDNAFeedbackRequ
     }
 
 
-@app.post("/v1/projects/{project_id}/visual_dna/update")
 def post_project_visual_dna_update(project_id: str, req: VisualDNAUpdateRequest):
     proj = store.get(project_id)
     if not proj:
@@ -3862,8 +3551,6 @@ def _validate_preview_timeline(project_dir: Path, timeline: dict) -> None:
         raise HTTPException(400, str(exc)) from exc
 
 
-@app.head("/v1/projects/{project_id}/preview/frame", include_in_schema=False)
-@app.get("/v1/projects/{project_id}/preview/frame")
 def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, force: int = 0):
     """Render a low-res cached preview frame for timeline scrubbing (no diffusion)."""
     _validate_preview_request("frame", {"t": t, "w": w, "h": h})
@@ -3897,8 +3584,6 @@ def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, f
     
 
     return FileResponse(str(out), media_type="image/png")
-@app.head("/v1/projects/{project_id}/preview/segment", include_in_schema=False)
-@app.get("/v1/projects/{project_id}/preview/segment")
 def preview_segment(
     project_id: str,
     start_s: float = 0.0,
@@ -4000,8 +3685,6 @@ def preview_segment(
 
 
 
-@app.head("/v1/projects/{project_id}/preview/diffusion_segment", include_in_schema=False)
-@app.get("/v1/projects/{project_id}/preview/diffusion_segment")
 def preview_diffusion_segment(
     project_id: str,
     start_s: float = 0.0,
@@ -4117,7 +3800,6 @@ def preview_diffusion_segment(
 
 
 if HAS_MULTIPART:
-    @app.post("/v1/projects/{project_id}/assets/audio")
     async def upload_audio(project_id: str, file: UploadFile = File(...)):
         proj = store.get(project_id)
         if not proj:
@@ -4142,13 +3824,10 @@ if HAS_MULTIPART:
         store.set_audio(project_id, name, size)
         return {"ok": True, "path": str(out)}
 else:
-    @app.post("/v1/projects/{project_id}/assets/audio")
     async def upload_audio(project_id: str):
         _require_multipart()
 
 
-@app.head("/v1/projects/{project_id}/audio", include_in_schema=False)
-@app.get("/v1/projects/{project_id}/audio")
 def get_project_audio(project_id: str):
     """Serve the project's primary uploaded audio file (Timeline playback)."""
     proj = store.get(project_id)
@@ -4171,7 +3850,6 @@ def get_project_audio(project_id: str):
     return FileResponse(str(audio_path), media_type=mt or "application/octet-stream")
 
 if HAS_MULTIPART:
-    @app.post("/v1/projects/{project_id}/assets/overlay")
     async def upload_overlay_asset(project_id: str, file: UploadFile = File(...)):
         proj = store.get(project_id)
         if not proj:
@@ -4187,13 +3865,11 @@ if HAS_MULTIPART:
         store.save(proj)
         return {"ok": True, "asset": name, "path": str(out)}
 else:
-    @app.post("/v1/projects/{project_id}/assets/overlay")
     async def upload_overlay_asset(project_id: str):
         _require_multipart()
 
 
 if HAS_MULTIPART:
-    @app.post("/v1/projects/{project_id}/assets/mask")
     async def upload_mask_asset(project_id: str, file: UploadFile = File(...)):
         proj = store.get(project_id)
         if not proj:
@@ -4209,7 +3885,6 @@ if HAS_MULTIPART:
         store.save(proj)
         return {"ok": True, "asset": name, "path": str(out)}
 else:
-    @app.post("/v1/projects/{project_id}/assets/mask")
     async def upload_mask_asset(project_id: str):
         _require_multipart()
 
@@ -4280,7 +3955,6 @@ def _prepare_transcription_audio(audio_path: Path, project_dir: Path, asr_cfg: d
     return vocals_path, metadata
 
 
-@app.post("/v1/projects/{project_id}/analyze_audio")
 def analyze_audio(project_id: str):
     proj = store.get(project_id)
     if not proj:
@@ -4363,12 +4037,23 @@ def analyze_audio(project_id: str):
     return {"ok": True, "analysis": analysis, "direction_prepared": not proj.meta.get("director_workflow_error")}
 
 
-@app.get("/v1/director_modes")
+app.include_router(create_project_media_router(ProjectMediaDependencies(
+    preview_frame=lambda *args: preview_frame(*args),
+    preview_segment=lambda *args: preview_segment(*args),
+    preview_diffusion_segment=lambda *args: preview_diffusion_segment(*args),
+    upload_audio=lambda *args: upload_audio(*args),
+    get_audio=lambda project_id: get_project_audio(project_id),
+    upload_overlay=lambda *args: upload_overlay_asset(*args),
+    upload_mask=lambda *args: upload_mask_asset(*args),
+    analyze_audio=lambda project_id: analyze_audio(project_id),
+    multipart_available=HAS_MULTIPART,
+)))
+
+
 def get_director_modes():
     return {"ok": True, "modes": list_director_modes()}
 
 
-@app.get("/v1/projects/{project_id}/creative_direction")
 def get_creative_direction(
     project_id: str,
     variant_index: int = 0,
@@ -4389,7 +4074,6 @@ def get_creative_direction(
     return {"ok": True, "creative_direction": payload}
 
 
-@app.post("/v1/projects/{project_id}/creative_direction/apply_timeline_patch")
 def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirectionApplyRequest):
     proj = store.get(project_id)
     if not proj:
@@ -4427,6 +4111,18 @@ def apply_creative_direction_timeline_patch(project_id: str, req: CreativeDirect
     }
     store.save(proj)
     return {"ok": True, "timeline": merged, "creative_direction": payload}
+
+
+app.include_router(create_project_intelligence_router(ProjectIntelligenceDependencies(
+    get_store=lambda: store,
+    load_visual_dna=lambda project: _load_project_visual_dna(project),
+    save_visual_dna=lambda project, dna: _save_project_visual_dna(project, dna),
+    suggest_relinks=lambda project_dir, meta: suggest_relinks(project_dir, meta),
+    collect_project_bundle=lambda project_dir, destination: collect_project_bundle(project_dir, destination),
+    list_director_modes=lambda: list_director_modes(),
+    build_creative_direction=lambda project, **kwargs: _build_creative_direction_payload(project, **kwargs),
+    merge_creative_timeline_patch=lambda base, patch, **kwargs: _merge_creative_timeline_patch(base, patch, **kwargs),
+)))
 
 
 def _analysis_transcript_text(analysis: dict[str, Any]) -> str:
@@ -6981,7 +6677,6 @@ def _apply_plan_to_project_timeline(proj: Any, *, variant_index: int, overwrite:
     return timeline
 
 
-@app.post("/v1/projects/{project_id}/plan")
 def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
     proj = store.get(project_id)
     if not proj:
@@ -7054,13 +6749,11 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
     return plan
 
 
-@app.post("/v1/projects/{project_id}/analyze_and_plan")
 def analyze_and_build_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
     analyze_audio(project_id)
     return generate_plan(project_id, req, mode)
 
 
-@app.post("/v1/projects/{project_id}/timeline/apply_plan")
 def apply_plan_to_timeline(project_id: str, req: ApplyPlanRequest):
     proj = store.get(project_id)
     if not proj:
@@ -7074,7 +6767,6 @@ def apply_plan_to_timeline(project_id: str, req: ApplyPlanRequest):
     return {"ok": True, "timeline": timeline, "variant_index": int(req.variant_index or 0)}
 
 
-@app.post("/v1/projects/{project_id}/plan/variant")
 def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
     proj = store.get(project_id)
     if not proj:
@@ -7153,7 +6845,6 @@ def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
     return {"ok": True, "plan": normalized_plan, "variant_index": variant_index}
 
 
-@app.post("/v1/projects/{project_id}/planner_lab/import")
 def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
     proj = store.get(project_id)
     if not proj:
@@ -7220,7 +6911,6 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
     }
 
 
-@app.post("/v1/projects/{project_id}/reactive_lab/apply")
 def apply_reactive_lab(project_id: str, req: ReactiveLabApplyRequest):
     proj = store.get(project_id)
     if not proj:
@@ -7259,182 +6949,15 @@ def apply_reactive_lab(project_id: str, req: ReactiveLabApplyRequest):
     }
 
 
-@app.get("/v1/jobs")
-def list_jobs():
-    return {"jobs": [j.__dict__ for j in jobs.list_all()]}
+app.include_router(create_project_workbench_router(ProjectWorkbenchDependencies(
+    plan=lambda *args: generate_plan(*args),
+    analyze_and_plan=lambda *args: analyze_and_build_plan(*args),
+    apply_plan=lambda *args: apply_plan_to_timeline(*args),
+    update_variant=lambda *args: update_plan_variant(*args),
+    import_planner_lab=lambda *args: import_planner_lab(*args),
+    apply_reactive_lab=lambda *args: apply_reactive_lab(*args),
+)))
 
-@app.get("/v1/projects/{project_id}/jobs")
-def list_project_jobs(project_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    return {"jobs": [j.__dict__ for j in jobs.list_for_project(project_id)]}
-
-
-@app.get("/v1/projects/{project_id}/jobs/{job_id}")
-def get_project_job(project_id: str, job_id: str, tail_lines: int = 80):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    job = jobs.get(project_id, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    return _job_detail_payload(project_id, job, tail_lines=tail_lines)
-
-@app.post("/v1/projects/{project_id}/jobs/{job_id}/cancel")
-def cancel_job(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    job = jobs.cancel(project_id, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    if job.status != "canceled":
-        raise HTTPException(409, {"code": "JOB_ALREADY_TERMINAL", "message": "The completed job could not be canceled.", "status": job.status})
-    return {"ok": True, "job": job.__dict__}
-
-
-@app.post("/v1/projects/{project_id}/jobs/{job_id}/pause")
-def pause_job(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    current = jobs.get(project_id, job_id)
-    if not current:
-        raise HTTPException(404, "Job not found")
-    if current.status != "queued":
-        raise HTTPException(409, "Only queued jobs can be paused")
-    job = jobs.pause(project_id, job_id)
-    if not job or job.status != "paused":
-        raise HTTPException(409, "Job could not be paused because its state changed")
-    return {"ok": True, "job": job.__dict__}
-
-
-@app.post("/v1/projects/{project_id}/jobs/{job_id}/resume")
-def resume_job(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    current = jobs.get(project_id, job_id)
-    if not current:
-        raise HTTPException(404, "Job not found")
-    if current.status != "paused":
-        raise HTTPException(409, "Only paused jobs can be resumed")
-    job = jobs.resume(project_id, job_id)
-    if not job or job.status != "queued":
-        raise HTTPException(409, "Job could not be resumed because its state changed")
-    return {"ok": True, "job": job.__dict__}
-
-
-@app.post("/v1/projects/{project_id}/jobs/{job_id}/retry")
-def retry_job(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    source_job = jobs.get(project_id, job_id)
-    if not source_job:
-        raise HTTPException(404, "Job not found")
-    if source_job.status not in ("succeeded", "failed", "canceled"):
-        raise HTTPException(409, "Only completed, failed, or canceled jobs can be retried")
-    legacy_selection_note: str | None = None
-    retry_payload: dict[str, Any] | None = None
-    if source_job.type == "internal_video":
-        retry_payload, legacy_selection_note = _repair_legacy_internal_video_selection(
-            deepcopy(source_job.payload or {})
-        )
-        preflight = _internal_render_preflight_data(project_id, retry_payload)
-        retry_payload = _persist_resolved_internal_video_payload(retry_payload, preflight)
-    job = jobs.retry(project_id, job_id, payload=retry_payload)
-    if not job:
-        raise HTTPException(409, "Job could not be retried because its state changed")
-    if legacy_selection_note:
-        jobs.append_log(project_id, job.id, legacy_selection_note)
-    return {"ok": True, "job": job.__dict__}
-
-
-@app.post("/v1/projects/{project_id}/jobs/{job_id}/resume_from_checkpoint")
-def resume_internal_job(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    source_job = jobs.get(project_id, job_id)
-    if not source_job:
-        raise HTTPException(404, "Job not found")
-    if source_job.type != "internal_video":
-        raise HTTPException(400, "Resume from checkpoint is only available for internal render jobs")
-    if source_job.status in ("queued", "paused", "running"):
-        raise HTTPException(409, "Job is still active. Resume or cancel it before resuming from checkpoint.")
-    return _enqueue_internal_job_from_source(project_id, source_job, resume_existing_frames=True, queue_action="resume_from_checkpoint")
-
-
-@app.post("/v1/projects/{project_id}/jobs/{job_id}/restart_clean")
-def restart_internal_job_clean(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    source_job = jobs.get(project_id, job_id)
-    if not source_job:
-        raise HTTPException(404, "Job not found")
-    if source_job.type != "internal_video":
-        raise HTTPException(400, "Clean restart is only available for internal render jobs")
-    if source_job.status in ("queued", "paused", "running"):
-        raise HTTPException(409, "Job is still active. Resume or cancel it before starting a clean restart.")
-    return _enqueue_internal_job_from_source(project_id, source_job, resume_existing_frames=False, queue_action="restart_clean")
-
-
-@app.post("/v1/projects/{project_id}/jobs/{job_id}/clear_cached_frames")
-def clear_project_job_cached_frames(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    job = jobs.get(project_id, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    return _mutate_internal_job_artifacts(project_id, job, clear_cached_frames=True, drop_checkpoint=False)
-
-
-@app.post("/v1/projects/{project_id}/jobs/{job_id}/drop_checkpoint")
-def drop_project_job_checkpoint(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    job = jobs.get(project_id, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    return _mutate_internal_job_artifacts(project_id, job, clear_cached_frames=False, drop_checkpoint=True)
-
-
-@app.get("/v1/projects/{project_id}/jobs/{job_id}/log")
-def get_job_log(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    lp = jobs.log_path(project_id, job_id)
-    if not lp.exists():
-        return {"ok": True, "log": ""}
-    return {"ok": True, "log": lp.read_text(encoding="utf-8", errors="ignore")}
-
-
-@app.get("/v1/projects/{project_id}/jobs/{job_id}/events")
-def get_job_events(project_id: str, job_id: str):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    job = jobs.get(project_id, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    return {"ok": True, "events": jobs.list_events(project_id, job_id)}
-
-
-@app.post("/v1/jobs/tick")
-def tick_worker():
-    """Manual single-step worker tick (useful for debugging)."""
-    job = jobs.claim_next_queued()
-    if not job:
-        return {"ok": True, "note": "no queued jobs"}
-    _dispatch_job(job)
-    latest = jobs.get(job.project_id, job.id) or job
-    return {"ok": True, "job": latest.__dict__}
 
 def _run_assemble_variant(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     req = AssembleVideoRequest(**(payload or {}))
@@ -9122,940 +8645,31 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
     }
 
 
-@app.post("/v1/projects/{project_id}/render/cosmos/scene")
-def render_cosmos_scene(project_id: str, payload: dict[str, Any]):
-    """Generate a single video clip for one scene using NVIDIA Cosmos.
+_render_router = create_render_router(RenderRouterDependencies(resolve=lambda name: globals()[name]))
+app.include_router(_render_router)
+for _render_route in _render_router.routes:
+    globals().setdefault(_render_route.endpoint.__name__, _render_route.endpoint)
 
-    Uses your existing NVIDIA API key (same as Nemotron Ultra).
-    Returns a base path-relative video path once the clip is saved.
 
-    payload fields (all optional):
-      scene_index   : int   (default 0)
-      variant_index : int   (default 0)
-      model         : str   "text2world" | "video2world" | "cosmos3"
-      seed          : int
-      steps         : int
-      guidance_scale: float
-      num_frames    : int
-      fps           : float
-      use_keyframe  : bool  if true and variant has a rendered keyframe,
-                            passes it as the init image for video2world
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
 
-    provider_status = _render_provider_status()
-    cosmos_status = provider_status.get("cosmos") or {}
-    if not cosmos_status.get("configured"):
-        raise UserFacingError(
-            "Cosmos NIM is not configured.",
-            hint=(
-                "Cosmos video generation runs on a self-hosted NVIDIA NIM (there is no hosted Cosmos "
-                "video endpoint). Start a Cosmos NIM on a CUDA GPU and set its URL in "
-                "Settings → GPU / Render Runtime → Cosmos (Base URL), e.g. http://127.0.0.1:8000."
-            ),
-            code="COSMOS_NOT_CONFIGURED",
-            status_code=400,
-        )
 
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
 
-    variant_index = int((payload or {}).get("variant_index") or 0)
-    variants = plan["variants"]
-    if variant_index < 0 or variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
 
-    variant = variants[variant_index]
-    scenes = variant.get("scenes") or []
-    scene_index = int((payload or {}).get("scene_index") or 0)
-    if scene_index < 0 or scene_index >= len(scenes):
-        raise HTTPException(400, f"scene_index {scene_index} out of range (0–{len(scenes)-1})")
 
-    scene = scenes[scene_index]
-    project_dir = store.project_dir(project_id)
-    cosmos_cfg = dict((render_settings.get().get("cosmos") or {}))
-    client = _cosmos_client()
 
-    prompt = str(scene.get("prompt") or "cinematic music video").strip()
-    negative = str(scene.get("negative_prompt") or "blurry, low quality, text, watermark, logo").strip()
-    model = str((payload or {}).get("model") or cosmos_cfg.get("model") or "cosmos3")
-    steps = int((payload or {}).get("steps") or cosmos_cfg.get("steps") or 50)
-    guidance_scale = float((payload or {}).get("guidance_scale") or cosmos_cfg.get("guidance_scale") or 7.5)
-    num_frames = int((payload or {}).get("num_frames") or cosmos_cfg.get("num_frames") or 121)
-    fps = float((payload or {}).get("fps") or cosmos_cfg.get("fps") or 24.0)
-    seed = (payload or {}).get("seed")
-    prompt_upsampling = bool(cosmos_cfg.get("prompt_upsampling", True))
 
-    out_dir = project_dir / "cosmos" / f"variant_{variant_index}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"scene_{scene_index:04d}.mp4"
 
-    use_keyframe = bool((payload or {}).get("use_keyframe", False))
-    init_image = None
-    if use_keyframe or model in ("video2world",):
-        kf_path = project_dir / "stills" / f"variant_{variant_index}" / f"scene_{scene_index:04d}.png"
-        if kf_path.exists():
-            try:
-                from PIL import Image as PILImage
-                init_image = PILImage.open(str(kf_path)).convert("RGB")
-            except Exception:
-                init_image = None
 
-    hw = _hardware_profile()
-    width = int(hw.get("preferred_width") or 1280)
-    height = int(hw.get("preferred_height") or 704)
 
-    if init_image is not None and model in ("video2world", "cosmos3"):
-        result = client.image_to_video(
-            image=init_image,
-            out_path=out_path,
-            prompt=prompt,
-            negative_prompt=negative,
-            width=width,
-            height=height,
-            fps=fps,
-            num_frames=num_frames,
-            steps=steps,
-            guidance_scale=guidance_scale,
-            seed=int(seed) if seed is not None else None,
-            model=model,
-        )
-    else:
-        result = client.text_to_video(
-            prompt=prompt,
-            out_path=out_path,
-            negative_prompt=negative,
-            width=width,
-            height=height,
-            fps=fps,
-            num_frames=num_frames,
-            steps=steps,
-            guidance_scale=guidance_scale,
-            seed=int(seed) if seed is not None else None,
-            prompt_upsampling=prompt_upsampling,
-            model=model,
-        )
 
-    rel = result.video_path.relative_to(project_dir).as_posix()
-    return {
-        "ok": True,
-        "provider": "nvidia-cosmos",
-        "video": rel,
-        "video_abs": str(result.video_path),
-        "scene_index": scene_index,
-        "model": result.model,
-        "duration_s": result.duration_s,
-        "frames": result.frames,
-        "fps": result.fps,
-        "seed": result.seed,
-    }
 
 
-@app.post("/v1/projects/{project_id}/render/cosmos/all_scenes")
-def render_cosmos_all_scenes(project_id: str, payload: dict[str, Any]):
-    """Generate a Cosmos clip for every scene in a variant sequentially.
 
-    Same as calling /render/cosmos/scene for each scene index in order.
-    Returns a list of results. Failed scenes include an error key but do not
-    stop processing of remaining scenes.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
 
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
 
-    variant_index = int((payload or {}).get("variant_index") or 0)
-    variants = plan["variants"]
-    if variant_index < 0 or variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
 
-    scenes = (variants[variant_index].get("scenes") or [])
-    results = []
-    for idx in range(len(scenes)):
-        per_scene_payload = {**(payload or {}), "scene_index": idx, "variant_index": variant_index}
-        try:
-            r = render_cosmos_scene(project_id, per_scene_payload)
-            results.append(r)
-        except UserFacingError as e:
-            results.append({"ok": False, "scene_index": idx, "error": e.message, "hint": e.hint})
-        except Exception:
-            logger.exception("Cosmos scene render failed for scene %s", idx)
-            results.append({"ok": False, "scene_index": idx, "error": "Cosmos scene render failed"})
 
-    return {"ok": True, "provider": "nvidia-cosmos", "results": results, "total": len(scenes)}
 
-
-@app.post("/v1/projects/{project_id}/render/azure_foundry/scene")
-def render_azure_foundry_scene(project_id: str, payload: dict[str, Any]):
-    """Generate a single video clip for one scene using the hosted Azure AI Foundry
-    Cosmos3-Super managed-compute deployment.
-
-    Unlike /render/cosmos/scene (a self-hosted NIM), this calls a hosted Foundry
-    ``GlobalManagedCompute`` deployment with an API key — no local GPU required.
-
-    payload fields (all optional):
-      scene_index   : int   (default 0)
-      variant_index : int   (default 0)
-      seed          : int
-      steps         : int
-      guidance_scale: float
-      num_frames    : int
-      fps           : float
-      resolution    : str   e.g. "720_16_9" (see Settings → Azure Foundry Cosmos3)
-      use_keyframe  : bool  if true and variant has a rendered keyframe,
-                            passes it as the init image
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    provider_status = _render_provider_status()
-    azure_foundry_status = provider_status.get("azure_foundry") or {}
-    if not azure_foundry_status.get("configured"):
-        raise UserFacingError(
-            "Azure AI Foundry Cosmos3 is not configured.",
-            hint=(
-                "Set the Endpoint URL and Deployment name in Settings → GPU / Render Runtime → "
-                "Azure Foundry Cosmos3, then add an API key in Settings → Secrets."
-            ),
-            code="AZURE_FOUNDRY_NOT_CONFIGURED",
-            status_code=400,
-        )
-    if not azure_foundry_status.get("has_api_key"):
-        raise UserFacingError(
-            "Azure Foundry API key is not set.",
-            hint="Add the Azure Foundry API key in Settings → Secrets, then retry.",
-            code="AZURE_FOUNDRY_NO_API_KEY",
-            status_code=400,
-        )
-
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
-
-    variant_index = int((payload or {}).get("variant_index") or 0)
-    variants = plan["variants"]
-    if variant_index < 0 or variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    variant = variants[variant_index]
-    scenes = variant.get("scenes") or []
-    scene_index = int((payload or {}).get("scene_index") or 0)
-    if scene_index < 0 or scene_index >= len(scenes):
-        raise HTTPException(400, f"scene_index {scene_index} out of range (0–{len(scenes)-1})")
-
-    scene = scenes[scene_index]
-    project_dir = store.project_dir(project_id)
-    azure_foundry_cfg = dict((render_settings.get().get("azure_foundry") or {}))
-    client = _azure_foundry_client()
-
-    prompt = str(scene.get("prompt") or "cinematic music video").strip()
-    negative = str(scene.get("negative_prompt") or "blurry, low quality, text, watermark, logo").strip()
-    steps = int((payload or {}).get("steps") or azure_foundry_cfg.get("steps") or 50)
-    guidance_scale = float((payload or {}).get("guidance_scale") or azure_foundry_cfg.get("guidance_scale") or 7.0)
-    num_frames = int((payload or {}).get("num_frames") or azure_foundry_cfg.get("num_frames") or 121)
-    fps = float((payload or {}).get("fps") or azure_foundry_cfg.get("fps") or 24.0)
-    seed = (payload or {}).get("seed")
-    resolution = str((payload or {}).get("resolution") or azure_foundry_cfg.get("resolution") or "720_16_9")
-    width, height = _COSMOS3_SHAPES.get(resolution, (1280, 720))
-
-    out_dir = project_dir / "azure_foundry" / f"variant_{variant_index}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"scene_{scene_index:04d}.mp4"
-
-    use_keyframe = bool((payload or {}).get("use_keyframe", False))
-    init_image = None
-    if use_keyframe:
-        kf_path = project_dir / "stills" / f"variant_{variant_index}" / f"scene_{scene_index:04d}.png"
-        if kf_path.exists():
-            try:
-                from PIL import Image as PILImage
-                init_image = PILImage.open(str(kf_path)).convert("RGB")
-            except Exception:
-                init_image = None
-
-    if init_image is not None:
-        result = client.image_to_video(
-            image=init_image,
-            out_path=out_path,
-            prompt=prompt,
-            negative_prompt=negative,
-            width=width,
-            height=height,
-            fps=fps,
-            num_frames=num_frames,
-            steps=steps,
-            guidance_scale=guidance_scale,
-            seed=int(seed) if seed is not None else None,
-        )
-    else:
-        result = client.text_to_video(
-            prompt=prompt,
-            out_path=out_path,
-            negative_prompt=negative,
-            width=width,
-            height=height,
-            fps=fps,
-            num_frames=num_frames,
-            steps=steps,
-            guidance_scale=guidance_scale,
-            seed=int(seed) if seed is not None else None,
-        )
-
-    rel = result.video_path.relative_to(project_dir).as_posix()
-    return {
-        "ok": True,
-        "provider": "azure-foundry-cosmos",
-        "video": rel,
-        "video_abs": str(result.video_path),
-        "scene_index": scene_index,
-        "model": result.model,
-        "duration_s": result.duration_s,
-        "frames": result.frames,
-        "fps": result.fps,
-        "seed": result.seed,
-    }
-
-
-@app.post("/v1/projects/{project_id}/render/azure_foundry/all_scenes")
-def render_azure_foundry_all_scenes(project_id: str, payload: dict[str, Any]):
-    """Generate an Azure Foundry Cosmos3 clip for every scene in a variant sequentially.
-
-    Same as calling /render/azure_foundry/scene for each scene index in order.
-    Returns a list of results. Failed scenes include an error key but do not
-    stop processing of remaining scenes.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
-
-    variant_index = int((payload or {}).get("variant_index") or 0)
-    variants = plan["variants"]
-    if variant_index < 0 or variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    scenes = (variants[variant_index].get("scenes") or [])
-    results = []
-    for idx in range(len(scenes)):
-        per_scene_payload = {**(payload or {}), "scene_index": idx, "variant_index": variant_index}
-        try:
-            r = render_azure_foundry_scene(project_id, per_scene_payload)
-            results.append(r)
-        except UserFacingError as e:
-            results.append({"ok": False, "scene_index": idx, "error": e.message, "hint": e.hint})
-        except Exception:
-            logger.exception("Azure Foundry scene render failed for scene %s", idx)
-            results.append({"ok": False, "scene_index": idx, "error": "Azure Foundry scene render failed"})
-
-    return {"ok": True, "provider": "azure-foundry-cosmos", "results": results, "total": len(scenes)}
-
-
-@app.post("/v1/projects/{project_id}/render/firefly/scenes")
-def render_firefly_scenes(project_id: str, req: RenderScenesRequest):
-    """Generate one keyframe per scene using Adobe Firefly (standard or custom model)."""
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
-
-    variants = plan["variants"]
-    if req.variant_index < 0 or req.variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    provider_status = _render_provider_status()
-    firefly_status = provider_status.get("firefly") or {}
-    if not firefly_status.get("configured"):
-        raise UserFacingError(
-            "Adobe Firefly credentials not configured.",
-            hint="Open Settings → Adobe Firefly, save your Client ID and Client Secret, then retry.",
-            code="FIREFLY_NOT_CONFIGURED",
-            status_code=400,
-        )
-
-    firefly_cfg = dict((render_settings.get().get("firefly") or {}))
-    client = _firefly_client()
-    variant = variants[req.variant_index]
-    scenes = variant.get("scenes") or []
-    if not scenes:
-        raise HTTPException(400, "Selected variant has no scenes.")
-
-    width = int(req.width or proj.meta.get("width") or 768)
-    height = int(req.height or proj.meta.get("height") or 432)
-    results = []
-    project_dir = store.project_dir(project_id)
-    stills_dir = project_dir / "stills" / f"variant_{req.variant_index}"
-    stills_dir.mkdir(parents=True, exist_ok=True)
-
-    for idx, scene in enumerate(scenes):
-        prompt = str(scene.get("prompt") or "cinematic music video still").strip()
-        negative = str(scene.get("negative_prompt") or req.negative_prompt or "").strip()
-        seed = req.seed if req.seed is not None else None
-        custom_model_id = str(req.model_id or firefly_cfg.get("custom_model_id") or "").strip() or None
-
-        try:
-            result = client.generate_image(
-                prompt=prompt,
-                width=width,
-                height=height,
-                negative_prompt=negative,
-                seed=seed,
-                style=str(firefly_cfg.get("style") or "none"),
-                content_class=str(firefly_cfg.get("content_class") or "photo"),
-                custom_model_id=custom_model_id,
-                timeout_s=180.0,
-            )
-            out_path = stills_dir / f"scene_{idx:04d}.png"
-            result.image.save(str(out_path), format="PNG")
-            rel = out_path.relative_to(project_dir).as_posix()
-            results.append({
-                "scene_index": idx,
-                "path": rel,
-                "seed": result.seed,
-                "generation_id": result.generation_id,
-                "custom_model_id": result.custom_model_id,
-                "ok": True,
-            })
-        except UserFacingError:
-            raise
-        except Exception:
-            logger.exception("Firefly scene render failed for scene %s", idx)
-            results.append({"scene_index": idx, "ok": False, "error": "Firefly scene render failed"})
-
-    return {"ok": True, "provider": "adobe-firefly", "results": results, "width": width, "height": height}
-
-
-@app.post("/v1/projects/{project_id}/render/firefly/video")
-def render_firefly_video(project_id: str, payload: dict[str, Any]):
-    """Generate native Firefly video clips (text-to-video) for a plan variant.
-
-    For each scene in the selected variant, submits a Firefly Video job and
-    saves the returned MP4 under clips/variant_N/. Pass ``scene_index`` to
-    render a single scene instead of the whole variant.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
-
-    payload = payload or {}
-    variants = plan["variants"]
-    variant_index = int(payload.get("variant_index") or 0)
-    if variant_index < 0 or variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    provider_status = _render_provider_status()
-    firefly_status = provider_status.get("firefly") or {}
-    if not firefly_status.get("configured"):
-        raise UserFacingError(
-            "Adobe Firefly credentials not configured.",
-            hint="Open Settings → Adobe Firefly, save your Client ID and Client Secret, then retry.",
-            code="FIREFLY_NOT_CONFIGURED",
-            status_code=400,
-        )
-
-    firefly_cfg = dict((render_settings.get().get("firefly") or {}))
-    client = _firefly_client()
-    scenes = variants[variant_index].get("scenes") or []
-    if not scenes:
-        raise HTTPException(400, "Selected variant has no scenes.")
-
-    width = int(payload.get("width") or proj.meta.get("width") or 1280)
-    height = int(payload.get("height") or proj.meta.get("height") or 720)
-    duration_s = float(payload.get("duration_s") or firefly_cfg.get("video_duration_s") or 5)
-    custom_model_id = str(payload.get("model_id") or firefly_cfg.get("custom_model_id") or "").strip() or None
-    seed = payload.get("seed")
-    seed = int(seed) if seed is not None else None
-
-    requested_scene = payload.get("scene_index")
-    scene_indices = (
-        [int(requested_scene)]
-        if requested_scene is not None
-        else list(range(len(scenes)))
-    )
-
-    project_dir = store.project_dir(project_id)
-    clips_dir = project_dir / "clips" / f"variant_{variant_index}"
-    clips_dir.mkdir(parents=True, exist_ok=True)
-
-    results = []
-    for idx in scene_indices:
-        if idx < 0 or idx >= len(scenes):
-            results.append({"scene_index": idx, "ok": False, "error": "scene_index out of range"})
-            continue
-        scene = scenes[idx]
-        prompt = str(scene.get("prompt") or "cinematic music video clip").strip()
-        negative = str(scene.get("negative_prompt") or payload.get("negative_prompt") or "").strip()
-        try:
-            result = client.generate_video(
-                prompt=prompt,
-                width=width,
-                height=height,
-                duration_s=duration_s,
-                negative_prompt=negative,
-                seed=seed,
-                custom_model_id=custom_model_id,
-            )
-            out_path = clips_dir / f"scene_{idx:04d}.mp4"
-            out_path.write_bytes(result.video_bytes)
-            rel = out_path.relative_to(project_dir).as_posix()
-            results.append({
-                "scene_index": idx,
-                "path": rel,
-                "seed": result.seed,
-                "generation_id": result.generation_id,
-                "duration_s": result.duration_s,
-                "ok": True,
-            })
-        except UserFacingError:
-            raise
-        except Exception:
-            logger.exception("Firefly video render failed for scene %s", idx)
-            results.append({"scene_index": idx, "ok": False, "error": "Firefly video render failed"})
-
-    return {
-        "ok": True,
-        "provider": "adobe-firefly",
-        "kind": "video",
-        "results": results,
-        "width": width,
-        "height": height,
-    }
-
-
-@app.post("/v1/projects/{project_id}/render/firefly/assemble")
-def render_firefly_assemble(project_id: str, payload: dict[str, Any]):
-    """Assemble Firefly-generated scene stills into a final MP4 video.
-
-    Reads the PNGs from stills/variant_N/ that were produced by
-    /render/firefly/scenes, assigns each scene's duration from the plan,
-    and calls FFmpeg slideshow assembly + optional audio mux.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
-
-    variant_index = int((payload or {}).get("variant_index") or 0)
-    variants = plan["variants"]
-    if variant_index < 0 or variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    variant = variants[variant_index]
-    scenes = variant.get("scenes") or []
-    if not scenes:
-        raise HTTPException(400, "No scenes in selected variant.")
-
-    project_dir = store.project_dir(project_id)
-    stills_dir = project_dir / "stills" / f"variant_{variant_index}"
-    imgs: list[Path] = []
-    durations: list[float] = []
-    for idx, scene in enumerate(scenes):
-        img_path = stills_dir / f"scene_{idx:04d}.png"
-        if img_path.exists():
-            imgs.append(img_path)
-            start = float(scene.get("start_s") or 0.0)
-            end = float(scene.get("end_s") or (start + 4.0))
-            durations.append(max(0.5, end - start))
-        else:
-            raise UserFacingError(
-                f"Scene {idx} still not found at {img_path.name}.",
-                hint="Run 'Render with Firefly' first to generate keyframes for all scenes.",
-                code="FIREFLY_STILL_MISSING",
-                status_code=400,
-            )
-
-    if not imgs:
-        raise HTTPException(400, "No Firefly stills found for this variant.")
-
-    out_path = project_dir / "output" / f"firefly_v{variant_index}.mp4"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    assemble_slideshow(
-        ffmpeg_path=settings.ffmpeg_path,
-        image_paths=imgs,
-        durations_s=durations,
-        out_mp4=out_path,
-        fps=int((payload or {}).get("fps") or 24),
-    )
-
-    audio_path = _project_audio_path(proj)
-    fallback_audio = project_dir / "audio.wav"
-    if audio_path is not None or fallback_audio.exists():
-        resolved_audio = audio_path or fallback_audio
-        muxed = out_path.with_name(out_path.stem + "_muxed.mp4")
-        try:
-            mux_audio(settings.ffmpeg_path, video_mp4=out_path, audio_path=resolved_audio, out_mp4=muxed)
-            out_path = muxed
-        except Exception:
-            logger.warning("Firefly audio mux failed", exc_info=True)
-
-    rel = out_path.relative_to(project_dir).as_posix()
-    return {"ok": True, "provider": "adobe-firefly", "video": rel, "video_abs": str(out_path)}
-
-
-@app.post("/v1/projects/{project_id}/render/imagineart/scenes")
-def render_imagineart_scenes(project_id: str, req: RenderScenesRequest):
-    """Generate one keyframe per scene using ImagineArt hosted image generation."""
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
-
-    variants = plan["variants"]
-    if req.variant_index < 0 or req.variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    provider_status = _render_provider_status()
-    imagineart_status = provider_status.get("imagineart") or {}
-    if not imagineart_status.get("configured"):
-        raise UserFacingError(
-            "ImagineArt API key not configured.",
-            hint="Open Settings → Tokens, save your ImagineArt API key, then retry.",
-            code="IMAGINEART_NOT_CONFIGURED",
-            status_code=400,
-        )
-    if not imagineart_status.get("enabled"):
-        raise UserFacingError(
-            "ImagineArt provider is disabled.",
-            hint="Open Settings → GPU / Render Runtime → ImagineArt and enable the provider.",
-            code="IMAGINEART_DISABLED",
-            status_code=400,
-        )
-
-    imagineart_cfg = dict((render_settings.get().get("imagineart") or {}))
-    client = _imagineart_client()
-    variant = variants[req.variant_index]
-    scenes = variant.get("scenes") or []
-    if not scenes:
-        raise HTTPException(400, "Selected variant has no scenes.")
-
-    width = int(req.width or proj.meta.get("width") or 768)
-    height = int(req.height or proj.meta.get("height") or 432)
-    results = []
-    project_dir = store.project_dir(project_id)
-    stills_dir = project_dir / "stills" / f"variant_{req.variant_index}"
-    stills_dir.mkdir(parents=True, exist_ok=True)
-
-    for idx, scene in enumerate(scenes):
-        prompt = str(scene.get("prompt") or "cinematic music video still").strip()
-        seed = req.seed if req.seed is not None else None
-        try:
-            result = client.generate_image(
-                prompt=prompt,
-                width=width,
-                height=height,
-                style=str(imagineart_cfg.get("image_style") or "imagine-turbo"),
-                seed=seed,
-                timeout_s=float(imagineart_cfg.get("timeout_s") or 180),
-            )
-            out_path = stills_dir / f"scene_{idx:04d}.png"
-            result.image.save(str(out_path), format="PNG")
-            rel = out_path.relative_to(project_dir).as_posix()
-            results.append({
-                "scene_index": idx,
-                "path": rel,
-                "seed": result.seed,
-                "model": result.model,
-                "ok": True,
-            })
-        except UserFacingError:
-            raise
-        except Exception:
-            logger.exception("ImagineArt scene render failed for scene %s", idx)
-            results.append({"scene_index": idx, "ok": False, "error": "ImagineArt scene render failed"})
-
-    return {"ok": True, "provider": "imagineart", "results": results, "width": width, "height": height}
-
-
-@app.post("/v1/projects/{project_id}/render/imagineart/video")
-def render_imagineart_video(project_id: str, payload: dict[str, Any]):
-    """Generate native ImagineArt video clips for plan scenes (text-to-video or image-to-video)."""
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
-
-    payload = payload or {}
-    variants = plan["variants"]
-    variant_index = int(payload.get("variant_index") or 0)
-    if variant_index < 0 or variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    provider_status = _render_provider_status()
-    imagineart_status = provider_status.get("imagineart") or {}
-    if not imagineart_status.get("configured"):
-        raise UserFacingError(
-            "ImagineArt API key not configured.",
-            hint="Open Settings → Tokens, save your ImagineArt API key, then retry.",
-            code="IMAGINEART_NOT_CONFIGURED",
-            status_code=400,
-        )
-
-    imagineart_cfg = dict((render_settings.get().get("imagineart") or {}))
-    client = _imagineart_client()
-    variant = variants[variant_index]
-    scenes = variant.get("scenes") or []
-    if not scenes:
-        raise HTTPException(400, "No scenes in selected variant.")
-
-    scene_index = payload.get("scene_index")
-    scene_indices = [int(scene_index)] if scene_index is not None else list(range(len(scenes)))
-    use_keyframe = bool(payload.get("use_keyframe", False))
-    video_style = str(payload.get("video_style") or imagineart_cfg.get("video_style") or "kling-1.0-pro")
-    timeout_s = float(payload.get("timeout_s") or imagineart_cfg.get("timeout_s") or 600)
-
-    project_dir = store.project_dir(project_id)
-    clips_dir = project_dir / "clips" / f"variant_{variant_index}"
-    clips_dir.mkdir(parents=True, exist_ok=True)
-    stills_dir = project_dir / "stills" / f"variant_{variant_index}"
-    results = []
-
-    for idx in scene_indices:
-        if idx < 0 or idx >= len(scenes):
-            continue
-        scene = scenes[idx]
-        prompt = str(scene.get("prompt") or "cinematic music video clip").strip()
-        init_image = None
-        if use_keyframe:
-            still_path = stills_dir / f"scene_{idx:04d}.png"
-            if still_path.exists():
-                from PIL import Image
-
-                init_image = Image.open(still_path).convert("RGB")
-
-        try:
-            result = client.generate_video(
-                prompt=prompt,
-                style=video_style,
-                init_image=init_image,
-                timeout_s=timeout_s,
-                poll_interval_s=5.0,
-            )
-            out_path = clips_dir / f"scene_{idx:04d}.mp4"
-            out_path.write_bytes(result.video_bytes)
-            rel = out_path.relative_to(project_dir).as_posix()
-            results.append({
-                "scene_index": idx,
-                "path": rel,
-                "generation_id": result.generation_id,
-                "model": result.model,
-                "ok": True,
-            })
-        except UserFacingError:
-            raise
-        except Exception:
-            logger.exception("ImagineArt video render failed for scene %s", idx)
-            results.append({"scene_index": idx, "ok": False, "error": "ImagineArt video render failed"})
-
-    return {
-        "ok": True,
-        "provider": "imagineart",
-        "results": results,
-        "variant_index": variant_index,
-    }
-
-
-@app.post("/v1/projects/{project_id}/render/imagineart/assemble")
-def render_imagineart_assemble(project_id: str, payload: dict[str, Any]):
-    """Assemble ImagineArt-generated scene stills into a final MP4 video."""
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated — run Plan first.")
-
-    variant_index = int((payload or {}).get("variant_index") or 0)
-    variants = plan["variants"]
-    if variant_index < 0 or variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    variant = variants[variant_index]
-    scenes = variant.get("scenes") or []
-    if not scenes:
-        raise HTTPException(400, "No scenes in selected variant.")
-
-    project_dir = store.project_dir(project_id)
-    stills_dir = project_dir / "stills" / f"variant_{variant_index}"
-    imgs: list[Path] = []
-    durations: list[float] = []
-    for idx, scene in enumerate(scenes):
-        img_path = stills_dir / f"scene_{idx:04d}.png"
-        if img_path.exists():
-            imgs.append(img_path)
-            start = float(scene.get("start_s") or 0.0)
-            end = float(scene.get("end_s") or (start + 4.0))
-            durations.append(max(0.5, end - start))
-        else:
-            raise UserFacingError(
-                f"Scene {idx} still not found at {img_path.name}.",
-                hint="Run 'Render with ImagineArt' first to generate keyframes for all scenes.",
-                code="IMAGINEART_STILL_MISSING",
-                status_code=400,
-            )
-
-    if not imgs:
-        raise HTTPException(400, "No ImagineArt stills found for this variant.")
-
-    out_path = project_dir / "output" / f"imagineart_v{variant_index}.mp4"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    assemble_slideshow(
-        ffmpeg_path=settings.ffmpeg_path,
-        image_paths=imgs,
-        durations_s=durations,
-        out_mp4=out_path,
-        fps=int((payload or {}).get("fps") or 24),
-    )
-
-    audio_path = _project_audio_path(proj)
-    fallback_audio = project_dir / "audio.wav"
-    if audio_path is not None or fallback_audio.exists():
-        resolved_audio = audio_path or fallback_audio
-        muxed = out_path.with_name(out_path.stem + "_muxed.mp4")
-        try:
-            mux_audio(settings.ffmpeg_path, video_mp4=out_path, audio_path=resolved_audio, out_mp4=muxed)
-            out_path = muxed
-        except Exception:
-            logger.warning("ImagineArt audio mux failed", exc_info=True)
-
-    rel = out_path.relative_to(project_dir).as_posix()
-    return {"ok": True, "provider": "imagineart", "video": rel, "video_abs": str(out_path)}
-
-
-@app.post("/v1/projects/{project_id}/render/stills/scenes")
-@app.post("/v1/projects/{project_id}/render/comfyui/scenes")
-def render_scenes(project_id: str, req: RenderScenesRequest):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
-
-    variants = plan["variants"]
-    if req.variant_index < 0 or req.variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    variant = variants[req.variant_index]
-    scenes = variant.get("scenes") or []
-    if not scenes:
-        raise HTTPException(400, "Selected variant has no scenes")
-
-    created = []
-    resolved_loras = _normalize_render_loras(getattr(req, "loras", []))
-    raw_controlnet_units = _request_payload(req).get("controlnet_units") if isinstance(_request_payload(req).get("controlnet_units"), list) else list(getattr(req, "controlnet_units", []))
-    if req.workflow_family == "controlnet" and not raw_controlnet_units and req.controlnet_model and req.reference_asset:
-        raw_controlnet_units = [
-            {
-                "model": req.controlnet_model,
-                "reference_asset": req.reference_asset,
-                "conditioning_mode": req.conditioning_mode,
-                "strength": req.controlnet_strength,
-            }
-        ]
-
-    selection = _resolve_still_scene_selection(
-        model_id=req.model_id,
-        checkpoint=req.checkpoint,
-        workflow_family=req.workflow_family,
-        controlnet_model=req.controlnet_model,
-        reference_asset=req.reference_asset,
-        conditioning_mode=req.conditioning_mode,
-        controlnet_units=raw_controlnet_units,
-    )
-    controlnet_units = _normalize_controlnet_units(
-        raw_controlnet_units,
-        engine=str(selection.get("engine") or "comfyui"),
-        family=selection.get("family"),
-    )
-    if str(selection.get("workflow_family") or "") == "controlnet" and not controlnet_units:
-        raise UserFacingError(
-            "No compatible ControlNet units were selected",
-            hint="Attach one or more compatible ControlNet units before running the still render.",
-            code="CONTROLNET_MISSING",
-            status_code=400,
-        )
-    vae_name = (
-        _resolve_optional_comfy_asset_name(req.vae, folder="vae", allowed_kinds={"vae"})
-        if str(selection.get("engine") or "comfyui") == "comfyui"
-        else (str(req.vae or "").strip() or None)
-    )
-    model_tag = _safe_name_tag(req.model_id or selection.get("checkpoint") or "default")
-    workflow_tag = _safe_name_tag(selection.get("workflow_family") or "txt2img")
-    ref_tag = _safe_name_tag(req.source_asset or req.reference_asset or "noref")
-    for idx, sc in enumerate(scenes):
-        # Deterministic output path for caching
-        out_dir = store.project_dir(project_id) / "outputs" / "images"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        seed = int(req.seed) + idx if req.seed is not None else _stable_seed(project_id, req.variant_index, idx)
-        out_path = out_dir / f"v{req.variant_index:02d}_scene{idx:03d}_{workflow_tag}_{model_tag}_{ref_tag}_seed{seed}.png"
-        p = {
-            "variant_index": req.variant_index,
-            "scene_index": idx,
-            "model_id": req.model_id,
-            "prompt": render_prompt_from_scene(sc, fallback=""),
-            "source_prompt": sc.get("prompt") or sc.get("prompt_pack") or "",
-            "storyboard": (
-                dict(sc.get("storyboard"))
-                if isinstance(sc.get("storyboard"), dict)
-                else None
-            ),
-            "negative_prompt": req.negative_prompt,
-            "seed": seed,
-            "width": req.width,
-            "height": req.height,
-            "steps": req.steps,
-            "cfg": req.cfg,
-            "sampler": req.sampler,
-            "checkpoint": selection.get("checkpoint"),
-            "workflow_family": selection.get("workflow_family"),
-            "source_asset": req.source_asset,
-            "reference_asset": req.reference_asset,
-            "inpaint_mask": req.inpaint_mask,
-            "outpaint": _request_payload(req.outpaint) if req.outpaint else None,
-            "conditioning_mode": selection.get("conditioning_mode"),
-            "controlnet_model": req.controlnet_model,
-            "controlnet_name": selection.get("controlnet_name"),
-            "controlnet_strength": req.controlnet_strength,
-            "controlnet_units": controlnet_units,
-            "engine": selection.get("engine"),
-            "family": selection.get("family"),
-            "model_path": str(selection.get("model_path")) if selection.get("model_path") else None,
-            "loras": resolved_loras,
-            "vae": vae_name,
-            "denoise_strength": req.denoise_strength,
-            "hires_fix": _request_payload(req.hires_fix) if req.hires_fix else None,
-            "refiner": _request_payload(req.refiner) if req.refiner else None,
-            "upscaler": req.upscaler,
-            "out_path": str(out_path),
-        }
-        job_type = "internal_still_scene" if str(selection.get("engine") or "comfyui") == "internal" else "comfyui_scene"
-        job = jobs.create(project_id, job_type, p)
-        created.append(job.__dict__)
-
-    proj.meta.setdefault("jobs", []).extend(created)
-    store.save(proj)
-
-    return {"ok": True, "enqueued": len(created), "jobs": created}
 
 
 
@@ -10119,29 +8733,6 @@ def _resolved_tensorrt_execution_payload(payload: dict[str, Any]) -> dict[str, A
     return execution_payload
 
 
-@app.post("/v1/projects/{project_id}/render/tensorrt-standalone")
-def render_tensorrt_standalone(project_id: str, req: TensorRTStandaloneRenderRequest):
-    """Enqueue a standalone TensorRT image render job."""
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
-
-    payload = _server_resolved_tensorrt_payload(req)
-    job = jobs.create(project_id, "tensorrt_standalone", payload)
-    job.progress = {
-        "stage": "queued",
-        "current": 0,
-        "total": 1,
-        "percent": 0.0,
-        "message": f"Queued TensorRT standalone render for model {payload['model_id']}",
-    }
-    jobs.save(job)
-    proj.meta.setdefault("jobs", []).append(job.__dict__)
-    store.save(proj)
-    return {"ok": True, "job": job.__dict__}
 
 
 def _enqueue_internal_video_job(
@@ -10175,146 +8766,16 @@ def _enqueue_internal_video_job(
     return job, preflight
 
 
-@app.post("/v1/projects/{project_id}/render/tensorrt-deforum", deprecated=True)
-def render_tensorrt_deforum(project_id: str, req: TensorRTStandaloneRenderRequest):
-    """Compatibility route for the canonical TensorRT keyframe-video renderer.
-
-    The former implementation generated simulated noise frames after merely
-    deserializing an engine.  Release builds must never present that as model
-    inference, so this route now performs the same server-side preflight and
-    queues the canonical internal TensorRT video path.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    payload = _server_resolved_tensorrt_payload(req)
-    payload["render_mode"] = "tensorrt"
-    payload["compatibility_source"] = "tensorrt-deforum"
-    job, preflight = _enqueue_internal_video_job(
-        project_id,
-        proj,
-        payload,
-        job_type="tensorrt_deforum",
-        queued_message=f"Queued canonical TensorRT compatibility render for model {payload['model_id']}",
-    )
-    return {
-        "ok": True,
-        "job": job.__dict__,
-        "preflight": _public_render_preflight(preflight),
-        "compatibility": {
-            "route": "tensorrt-deforum",
-            "execution_mode": "canonical_tensorrt_keyframe_video",
-            "legacy_deforum_schedule_applied": False,
-        },
-    }
 
 
 
-@app.post("/v1/projects/{project_id}/render/tensorrt-standalone/preview")
-def render_tensorrt_standalone_preview(project_id: str, req: TensorRTStandaloneRenderRequest):
-    """Synchronously run a low-latency preview render."""
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    from .services import tensorrt_standalone
-    # Run the generation synchronously in the request thread
-    try:
-        payload = _resolved_tensorrt_execution_payload(_server_resolved_tensorrt_payload(req))
-        # Override steps for fast preview
-        payload["steps"] = min(payload.get("steps", 8), 8)
-        
-        # We need a custom run_preview in tensorrt_standalone
-        result = tensorrt_standalone.run_preview(project_id, payload)
-        return {"ok": True, "image": result["image"], "engine_used": result["engine_used"]}
-    except UserFacingError:
-        raise
-    except Exception as exc:
-        logger.exception("TensorRT preview render failed")
-        raise HTTPException(500, "TensorRT preview render failed") from exc
 
 
 
-@app.post("/v1/projects/{project_id}/render/internal/video")
-def render_internal_video(project_id: str, req: InternalVideoRenderRequest):
-    """Enqueue a full internal render job (CPU-safe baseline)."""
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    job, preflight = _enqueue_internal_video_job(
-        project_id,
-        proj,
-        _request_payload(req),
-    )
-    return {
-        "ok": True,
-        "job": job.__dict__,
-        "preflight": _public_render_preflight(preflight),
-    }
 
 
-@app.get("/v1/projects/{project_id}/render/motion_sequencer")
-def render_motion_sequencer(project_id: str, variant_index: int = 0, fps: int = 24):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    variant, scenes = _project_variant_for_render(proj, int(variant_index or 0))
-    duration_s = _resolved_project_duration_s(proj, variant, scenes)
-    analysis = proj.meta.get("analysis") if isinstance(proj.meta.get("analysis"), dict) else {}
-    generated = parseq_adapter.build_parseq_manifest(
-        variant=variant,
-        analysis=analysis,
-        fps=max(1, min(60, int(fps or variant.get("fps") or 24))),
-        duration_s=duration_s,
-    )
-    active = _active_parseq_manifest(proj)
-    manifest = active or generated
-    parsed = parseq_adapter.parseq_manifest_to_internal_overrides(manifest)
-    recipe_graph = parseq_adapter.build_render_recipe_graph(
-        manifest=manifest,
-        internal_request=(proj.meta.get("last_internal_render") if isinstance(proj.meta.get("last_internal_render"), dict) else {}),
-    )
-    return {
-        "ok": True,
-        "variant_index": int(variant_index or 0),
-        "active": active,
-        "generated": generated,
-        "summary": parsed.get("summary"),
-        "overrides": parsed.get("overrides"),
-        "recipe_graph": recipe_graph,
-    }
 
 
-@app.post("/v1/projects/{project_id}/render/motion_sequencer/apply")
-def render_motion_sequencer_apply(project_id: str, req: ParseqMotionApplyRequest):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    variant, scenes = _project_variant_for_render(proj, int(req.variant_index or 0))
-    duration_s = _resolved_project_duration_s(proj, variant, scenes)
-    analysis = proj.meta.get("analysis") if isinstance(proj.meta.get("analysis"), dict) else {}
-    manifest = req.manifest if isinstance(req.manifest, dict) else parseq_adapter.build_parseq_manifest(
-        variant=variant,
-        analysis=analysis,
-        fps=int(req.fps or variant.get("fps") or 24),
-        duration_s=duration_s,
-    )
-    parsed = parseq_adapter.parseq_manifest_to_internal_overrides(manifest)
-    recipe_graph = parseq_adapter.build_render_recipe_graph(manifest=manifest, internal_request={})
-    if req.activate:
-        proj.meta["active_parseq_manifest"] = manifest
-        proj.meta["render_recipe_graph"] = recipe_graph
-        store.save(proj)
-    return {
-        "ok": True,
-        "active": bool(req.activate),
-        "manifest": manifest,
-        "summary": parsed.get("summary"),
-        "overrides": parsed.get("overrides"),
-        "recipe_graph": recipe_graph,
-    }
 
 
 
@@ -11647,100 +10108,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
     }
 
 
-@app.post("/v1/projects/{project_id}/render/internal/preflight")
-def render_internal_preflight(project_id: str, req: InternalVideoRenderRequest):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    payload, _parseq = _apply_active_parseq_motion(proj, _request_payload(req))
-    return _public_render_preflight(_internal_render_preflight_data(project_id, payload))
 
-@app.post("/v1/projects/{project_id}/render/comfyui/motion_scenes")
-def render_motion_scenes(project_id: str, req: RenderMotionRequest):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
-
-    variants = plan["variants"]
-    if req.variant_index < 0 or req.variant_index >= len(variants):
-        raise HTTPException(400, "variant_index out of range")
-
-    variant = variants[req.variant_index]
-    scenes = variant.get("scenes") or []
-    if not scenes:
-        raise HTTPException(400, "Selected variant has no scenes")
-
-    created = []
-    resolved_loras = _normalize_render_loras(getattr(req, "loras", []))
-    vae_name = _resolve_optional_comfy_asset_name(req.vae, folder="vae", allowed_kinds={"vae"})
-    motion_selection = _resolve_comfy_motion_selection(
-        model_id=req.model_id,
-        checkpoint=req.checkpoint,
-        svd_model_id=req.svd_model_id,
-        svd_checkpoint=req.svd_checkpoint,
-    )
-    checkpoint = str(motion_selection.get("checkpoint") or settings.comfyui_checkpoint)
-    svd_checkpoint = str(motion_selection.get("svd_checkpoint") or req.svd_checkpoint or "svd_xt.safetensors")
-    model_tag = _safe_name_tag(req.model_id or checkpoint)
-    svd_tag = _safe_name_tag(req.svd_model_id or svd_checkpoint or "svd")
-    for idx, sc in enumerate(scenes):
-        start = float(sc.get("start_s", idx * 5))
-        end = float(sc.get("end_s", start + 5))
-        duration_s = max(0.5, end - start)
-        frames = max(1, int(round(duration_s * req.fps)))
-        frames = min(frames, int(req.max_frames_per_scene))
-
-        # Practical caps for SVD (most setups use 14 or 25 frames)
-        if req.engine == "svd":
-            frames = min(frames, 25)
-
-        seed = int(req.seed) + idx if req.seed is not None else _stable_seed(project_id, req.variant_index, idx)
-        pdir = store.project_dir(project_id)
-        frames_dir = pdir / "outputs" / "frames" / f"v{req.variant_index:02d}" / f"scene{idx:03d}" / f"{req.engine}_{model_tag}_{svd_tag}_seed{seed}"
-        out_clip = pdir / "outputs" / "clips" / f"v{req.variant_index:02d}_scene{idx:03d}_{req.engine}_{model_tag}_{svd_tag}_seed{seed}.mp4"
-        p = {
-            "variant_index": req.variant_index,
-            "scene_index": idx,
-            "model_id": req.model_id,
-            "svd_model_id": req.svd_model_id,
-            "prompt": sc.get("prompt") or "",
-            "negative_prompt": req.negative_prompt,
-            "seed": seed,
-            "width": req.width,
-            "height": req.height,
-            "steps": req.steps,
-            "cfg": req.cfg,
-            "sampler": req.sampler,
-            "checkpoint": checkpoint,
-            "fps": req.fps,
-            "frames": frames,
-            "engine": req.engine,
-            "frames_dir": str(frames_dir),
-            "out_clip": str(out_clip),
-            "loras": resolved_loras,
-            "vae": vae_name,
-            "motion_model_name": req.motion_model_name,
-            "context_length": req.context_length,
-            "context_overlap": req.context_overlap,
-            "beta_schedule": req.beta_schedule,
-            "svd_checkpoint": svd_checkpoint,
-            "svd_num_steps": req.svd_num_steps,
-            "svd_motion_bucket_id": req.svd_motion_bucket_id,
-            "svd_fps_id": req.svd_fps_id,
-            "svd_cond_aug": req.svd_cond_aug,
-            "svd_decoding_t": req.svd_decoding_t,
-            "device": req.device,
-        }
-        job = jobs.create(project_id, "comfyui_motion_scene", p)
-        created.append(job.__dict__)
-
-    proj.meta.setdefault("jobs", []).extend(created)
-    store.save(proj)
-
-    return {"ok": True, "enqueued": len(created), "jobs": created}
 
 
 def _preset_defaults(preset: str) -> dict[str, Any]:
@@ -12009,73 +10377,10 @@ def _recommend_video_route(project_id: str | None = None) -> dict[str, Any]:
     }
 
 
-@app.get("/v1/render/route")
-def get_video_route():
-    """Return the current recommended video generation route (GPU vs Cloud)."""
-    return {"ok": True, **_recommend_video_route()}
 
 
-@app.post("/v1/render/route/preferences")
-def set_video_route_preferences(payload: dict[str, Any]):
-    """Save video generation preference (auto / local_gpu / cosmos_cloud / comfyui)."""
-    preference = str((payload or {}).get("preference") or "auto").strip().lower()
-    if preference not in VIDEO_GENERATION_PREFERENCES:
-        raise UserFacingError(
-            f"Unknown preference '{preference}'.",
-            hint=f"Choose one of: {', '.join(VIDEO_GENERATION_PREFERENCES)}",
-            code="INVALID_VIDEO_PREFERENCE",
-            status_code=400,
-        )
-    auto_prefer_gpu = bool((payload or {}).get("auto_prefer_gpu", True))
-    cosmos_fallback = bool((payload or {}).get("cosmos_fallback", True))
-    saved = render_settings.update({"video": {
-        "preference": preference,
-        "auto_prefer_gpu": auto_prefer_gpu,
-        "cosmos_fallback": cosmos_fallback,
-    }})
-    _hardware_profile_invalidate()
-    return {"ok": True, "video": saved.get("video"), "route": _recommend_video_route()}
 
 
-@app.post("/v1/projects/{project_id}/render/video/smart")
-def render_video_smart(project_id: str, payload: dict[str, Any]):
-    """Route a video render to local GPU, NVIDIA Cosmos, or Azure AI Foundry Cosmos3
-    based on preference.
-
-    Accepts same fields as /render/cosmos/all_scenes and the internal video
-    conductor. The router decides which backend to use; the caller can override
-    with explicit route='local_gpu'|'cosmos_cloud'|'azure_foundry_cloud'.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    explicit_route = str((payload or {}).get("route") or "").strip().lower()
-    recommendation = _recommend_video_route(project_id)
-    route = explicit_route if explicit_route in ("local_gpu", "cosmos_cloud", "azure_foundry_cloud") else recommendation["route"]
-
-    if route == "cosmos_cloud":
-        return render_cosmos_all_scenes(project_id, payload)
-
-    if route == "azure_foundry_cloud":
-        return render_azure_foundry_all_scenes(project_id, payload)
-
-    if route == "local_gpu":
-        # Kick off internal video render via the existing conductor flow
-        variant_index = int((payload or {}).get("variant_index") or 0)
-        preset = str((payload or {}).get("preset") or "balanced")
-        return run_pipeline(project_id, variant_index=variant_index, preset=preset, mode="auto", engine="auto")
-
-    raise UserFacingError(
-        "No video generation route is available.",
-        hint=(
-            "Enable CUDA in Settings → GPU / Render Runtime, add your NVIDIA API key "
-            "(same key as Nemotron) for Cosmos cloud, or configure Azure AI Foundry Cosmos3 "
-            "(endpoint, deployment name, and API key) in Settings."
-        ),
-        code="NO_VIDEO_ROUTE",
-        status_code=400,
-    )
 
 
 def _recommend_pipeline(project_id: str, preset: str, mode: str = "auto", engine: str = "auto") -> dict[str, Any]:
@@ -12140,163 +10445,14 @@ def _recommend_pipeline(project_id: str, preset: str, mode: str = "auto", engine
     return {"mode": "stills", "engine": None, "reason": "No motion-capable nodes detected; falling back to stills.", "diagnostics": diagnostics}
 
 
-@app.get("/v1/projects/{project_id}/pipeline/validate")
-def validate_pipeline(project_id: str, variant_index: int = 0, preset: str = "balanced", mode: str = "auto", engine: str = "auto"):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
-    rec = _recommend_pipeline(project_id, preset=preset, mode=mode, engine=engine)
-    return {"ok": True, "recommended": rec, "hardware": _hardware_profile()}
 
 
-@app.post("/v1/projects/{project_id}/render/conductor/plan")
-def render_conductor_plan(project_id: str, req: RenderConductorPlanRequest):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
-
-    visual_dna = _load_project_visual_dna(proj)
-    intent = _build_render_conductor_intent(project_id, proj, req)
-    snapshot = _build_project_snapshot(proj, dna=visual_dna)
-    environment = _build_render_conductor_environment()
-    meta = proj.meta if isinstance(proj.meta, dict) else {}
-    audio_meta = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-    analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-    environment["director_mode"] = normalize_director_mode(meta.get("director_mode") or meta.get("creative_direction_mode"))
-    environment["music_graph"] = music_graph_from_analysis(
-        analysis,
-        audio_filename=str(audio_meta.get("filename") or "") or None,
-        duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
-    )
-    try:
-        advisory_plan = build_advisory_render_plan(intent, snapshot, environment=environment)
-    except NoRealRenderRouteError as exc:
-        diagnostics = "; ".join(exc.diagnostics)
-        raise UserFacingError(
-            "No requested real render route is currently available.",
-            hint=diagnostics or "Install a supported local model or configure a hosted provider, then retry.",
-            code="NO_RENDER_ROUTE",
-            status_code=409,
-        ) from exc
-    plan_payload = advisory_plan.model_dump(mode="json")
-    proj.meta["last_conductor_plan"] = plan_payload
-    proj.meta["last_conductor_intent"] = intent.model_dump(mode="json")
-    store.save(proj)
-    return {
-        "ok": True,
-        "intent": intent.model_dump(mode="json"),
-        "plan": plan_payload,
-        "environment": environment,
-        "visual_dna_hints": build_visual_dna_prompt_hints(visual_dna),
-    }
 
 
-@app.post("/v1/projects/{project_id}/render/conductor/promote")
-def render_conductor_promote(project_id: str, req: RenderConductorPromoteRequest):
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    stored = proj.meta.get("last_conductor_plan") if isinstance(proj.meta.get("last_conductor_plan"), dict) else None
-    if not stored:
-        raise HTTPException(400, "No conductor plan available. Generate an advisory plan first.")
-    if req.plan_id and str(stored.get("plan_id") or "") != str(req.plan_id):
-        raise HTTPException(400, "Conductor plan_id does not match the saved plan")
-
-    updated_plan, promoted = promote_proxy_sections(
-        stored,
-        scene_ids=list(req.scene_ids or []),
-        target_engine=req.target_engine,
-        quality_tier=str(req.quality_tier or "quality"),
-        reason=req.reason,
-    )
-    plan_payload = updated_plan.model_dump(mode="json")
-    promotions = list(proj.meta.get("conductor_promotions") or []) if isinstance(proj.meta.get("conductor_promotions"), list) else []
-    promotions.append(
-        {
-            "at": time.time(),
-            "plan_id": plan_payload.get("plan_id"),
-            "scene_ids": promoted,
-            "target_engine": req.target_engine,
-            "quality_tier": req.quality_tier,
-            "reason": req.reason,
-        }
-    )
-    proj.meta["last_conductor_plan"] = plan_payload
-    proj.meta["conductor_promotions"] = promotions[-20:]
-    store.save(proj)
-    return {
-        "ok": True,
-        "plan": plan_payload,
-        "promoted_scene_ids": promoted,
-        "promotions": promotions[-5:],
-    }
 
 
-@app.get("/v1/projects/{project_id}/render/performer/plan")
-def get_render_performer_plan(project_id: str, variant_index: int = 0) -> dict[str, Any]:
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    stored = proj.meta.get("last_performer_plan") if isinstance(proj.meta.get("last_performer_plan"), dict) else None
-    if not stored:
-        return {"ok": True, "performer_plan": None, "stored": False}
-    if int(stored.get("variant_index") or 0) != int(variant_index):
-        return {"ok": True, "performer_plan": None, "stored": False, "variant_index": variant_index}
-    return {"ok": True, "performer_plan": stored, "stored": True}
 
 
-@app.post("/v1/projects/{project_id}/render/performer/plan")
-def render_performer_plan(project_id: str, req: PerformerWorkflowPlanRequest) -> dict[str, Any]:
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
-    variants = plan.get("variants") if isinstance(plan.get("variants"), list) else []
-    vi = int(req.variant_index or 0)
-    if vi < 0 or vi >= len(variants):
-        raise HTTPException(400, "Invalid variant_index")
-    variant = variants[vi] if isinstance(variants[vi], dict) else {}
-    scenes = [scene for scene in list(variant.get("scenes") or []) if isinstance(scene, dict)]
-    meta = proj.meta if isinstance(proj.meta, dict) else {}
-    audio_meta = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-    analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-    music_graph = music_graph_from_analysis(
-        analysis,
-        audio_filename=str(audio_meta.get("filename") or "") or None,
-        duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
-    )
-    environment = _build_render_conductor_environment()
-    performer_engines = environment.setdefault("engines", {})
-    performer_hosted = dict(performer_engines.get("hosted_video") or {})
-    performer_hosted["available"] = _performer_high_end_available()
-    performer_hosted["capability"] = "audio_driven_performance_video"
-    performer_engines["hosted_video"] = performer_hosted
-    performer_plan = build_performer_workflow_plan(
-        project_id=project_id,
-        variant_index=vi,
-        scenes=scenes,
-        music_graph=music_graph,
-        director_mode=normalize_director_mode(meta.get("director_mode") or meta.get("creative_direction_mode")),
-        environment=environment,
-        scene_ids=list(req.scene_ids or []),
-        model_id=str(req.model_id or "wan_s2v_14b"),
-    )
-    proj.meta["last_performer_plan"] = performer_plan
-    store.save(proj)
-    return {
-        "ok": True,
-        "performer_plan": performer_plan,
-        "music_graph": music_graph,
-        "environment": environment,
-    }
 
 
 def _performer_high_end_available() -> bool:
@@ -12317,30 +10473,8 @@ def _run_performer_video(project_id: str, job_id: str, payload: dict[str, Any]) 
     )
 
 
-@app.post("/v1/projects/{project_id}/render/performer/run")
-def render_performer_run(project_id: str, req: PerformerWorkflowRunRequest) -> dict[str, Any]:
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    stored = proj.meta.get("last_performer_plan") if isinstance(proj.meta.get("last_performer_plan"), dict) else None
-    if not stored:
-        raise HTTPException(400, "No performer plan available. Plan the performer lane first.")
-    if int(stored.get("variant_index") or 0) != int(req.variant_index):
-        raise HTTPException(400, "Performer plan does not match the selected variant")
-    if req.plan_id and str(stored.get("plan_id") or "") != str(req.plan_id):
-        raise HTTPException(400, "Performer plan_id does not match the saved plan")
-    if not list(stored.get("tasks") or []):
-        raise HTTPException(400, "Performer plan has no render tasks")
-
-    raise UserFacingError(
-        "No real Wan S2V performer adapter is available in this build.",
-        hint="Install and configure a supported Wan S2V adapter before starting a performer render.",
-        code="PERFORMER_ADAPTER_UNAVAILABLE",
-        status_code=409,
-    )
 
 
-@app.get("/v1/projects/{project_id}/unreal/preview")
 def get_unreal_bridge_preview(project_id: str, variant_index: int = 0):
     proj = store.get(project_id)
     if not proj:
@@ -12366,158 +10500,6 @@ def get_unreal_bridge_preview(project_id: str, variant_index: int = 0):
     return {"ok": True, "preview": preview.model_dump(mode="json")}
 
 
-@app.post("/v1/projects/{project_id}/pipeline/run")
-def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balanced", mode: str = "auto", engine: str = "auto"):
-    """Enqueue an end-to-end pipeline: render (auto stills/motion) -> assemble final MP4.
-
-    This endpoint is designed for one-click UX. It keeps full functionality internally.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
-
-    mode_l = (mode or "auto").lower().strip()
-    if mode_l == "internal":
-        preset_l = str(preset or "balanced").lower().strip()
-        requested_tier = "draft" if preset_l == "fast" else ("quality" if preset_l in ("quality", "ultra") else "auto")
-        hw = _hardware_profile()
-        provider_status = _render_provider_status(hw)
-        tier_plan = _build_internal_render_plan(hw, requested_tier=requested_tier)
-        tier_defaults = dict(tier_plan.get("defaults") or {})
-        device_preference = str(tier_plan.get("device_preference") or "auto")
-        if device_preference == "directml" and not bool((provider_status.get("directml") or {}).get("enabled", True)):
-            device_preference = "cpu"
-        internal_req = InternalVideoRenderRequest(
-            variant_index=variant_index,
-            fps_output=int(tier_defaults.get("fps_output", 24)),
-            fps_render=int(tier_defaults.get("fps_render", 2)),
-            width=int(tier_defaults.get("width", 768)),
-            height=int(tier_defaults.get("height", 432)),
-            steps=int(tier_defaults.get("steps", 15)),
-            cfg=float(tier_defaults.get("cfg", 7.0)),
-            keyframe_interval_s=float(tier_defaults.get("keyframe_interval_s", 5.0)),
-            interpolation_engine=str(tier_defaults.get("interpolation_engine", os.getenv("EDMG_INTERPOLATION_ENGINE", "auto"))),
-            model_id=os.getenv("EDMG_INTERNAL_MODEL_ID", "auto"),
-            render_mode="auto",
-            render_tier=str(tier_plan.get("applied_tier") or requested_tier),
-            device_preference=device_preference,
-            temporal_mode=str(tier_defaults.get("temporal_mode", "frame_img2img")),
-            temporal_steps=int(tier_defaults.get("temporal_steps", 12)),
-            refine_every_n_frames=int(tier_defaults.get("refine_every_n_frames", 1)),
-            anchor_strength=float(tier_defaults.get("anchor_strength", 0.20)),
-            prompt_blend=bool(tier_defaults.get("prompt_blend", True)),
-        )
-        res = render_internal_video(project_id, internal_req)
-        return {"ok": True, "mode": str(res.get("preflight", {}).get("mode") or "internal"), "job": res.get("job"), "preflight": res.get("preflight")}
-
-    defaults = _preset_defaults(preset)
-    rec = _recommend_pipeline(project_id, preset=preset, mode=mode, engine=engine)
-    if rec.get("mode") == "none":
-        raise UserFacingError(
-            "No render route is available.",
-            hint=str(rec.get("reason") or "Install a supported local model or configure a hosted provider."),
-            code="NO_RENDER_ROUTE",
-            status_code=400,
-        )
-
-    if rec["mode"] in ("internal", "hosted"):
-        hw = _hardware_profile()
-        provider_status = _render_provider_status(hw)
-        tier_plan = dict(rec.get("tier_plan") or _build_internal_render_plan(hw, requested_tier=("draft" if preset == "fast" else ("quality" if preset in ("quality", "ultra") else "auto"))))
-        tier_defaults = dict(tier_plan.get("defaults") or {})
-        device_preference = str(tier_plan.get("device_preference") or "auto")
-        if device_preference == "directml" and not bool((provider_status.get("directml") or {}).get("enabled", True)):
-            device_preference = "cpu"
-        internal_req = InternalVideoRenderRequest(
-            variant_index=variant_index,
-            fps_output=int(tier_defaults.get("fps_output", 24)),
-            fps_render=int(tier_defaults.get("fps_render", 2)),
-            width=int(tier_defaults.get("width", defaults["stills"]["width"])),
-            height=int(tier_defaults.get("height", defaults["stills"]["height"])),
-            steps=int(tier_defaults.get("steps", defaults["stills"]["steps"])),
-            cfg=float(tier_defaults.get("cfg", defaults["stills"]["cfg"])),
-            keyframe_interval_s=float(tier_defaults.get("keyframe_interval_s", os.getenv("EDMG_INTERNAL_KEYFRAME_INTERVAL_S", "5.0"))),
-            interpolation_engine=str(tier_defaults.get("interpolation_engine", os.getenv("EDMG_INTERPOLATION_ENGINE", "auto"))),
-            model_id=str(rec.get("model_id") or os.getenv("EDMG_INTERNAL_MODEL_ID", "auto")),
-            render_mode=("hosted" if rec["mode"] == "hosted" else "auto"),
-            render_tier=str(tier_plan.get("applied_tier") or "auto"),
-            device_preference=device_preference,
-            temporal_mode=str(tier_defaults.get("temporal_mode", "frame_img2img")),
-            temporal_steps=int(tier_defaults.get("temporal_steps", 12)),
-            refine_every_n_frames=int(tier_defaults.get("refine_every_n_frames", 1)),
-            anchor_strength=float(tier_defaults.get("anchor_strength", 0.20)),
-            prompt_blend=bool(tier_defaults.get("prompt_blend", True)),
-            allow_hosted_fallback=True,
-        )
-        res = render_internal_video(project_id, internal_req)
-        effective_mode = str(res.get("preflight", {}).get("mode") or rec["mode"])
-        selected = dict(rec)
-        if effective_mode == "diffusion":
-            selected["mode"] = "internal"
-            selected["engine"] = "diffusion"
-            selected["model_id"] = str(res.get("preflight", {}).get("model_id") or selected.get("model_id") or "auto")
-        elif effective_mode == "hosted":
-            selected["mode"] = effective_mode
-        return {
-            "ok": True,
-            "preset": preset,
-            "selected": selected,
-            "render_mode": effective_mode,
-            "job": res.get("job"),
-            "preflight": res.get("preflight"),
-        }
-
-    if rec["mode"] == "stills":
-        req = RenderScenesRequest(
-            variant_index=variant_index,
-            negative_prompt="(low quality, worst quality)",
-            width=int(defaults["stills"]["width"]),
-            height=int(defaults["stills"]["height"]),
-            steps=int(defaults["stills"]["steps"]),
-            cfg=float(defaults["stills"]["cfg"]),
-            sampler=str(defaults["stills"]["sampler"]),
-        )
-        enq = render_scenes(project_id, req)
-        assemble_fps = 24
-    else:
-        eng = rec["engine"] or "animatediff"
-        req = RenderMotionRequest(
-            variant_index=variant_index,
-            negative_prompt="(low quality, worst quality)",
-            width=int(defaults["stills"]["width"]),
-            height=int(defaults["stills"]["height"]),
-            steps=int(defaults["stills"]["steps"]),
-            cfg=float(defaults["stills"]["cfg"]),
-            sampler=str(defaults["stills"]["sampler"]),
-            fps=int(defaults["motion"]["fps"]),
-            max_frames_per_scene=int(defaults["motion"]["max_frames"]),
-            engine=eng,
-            motion_model_name="mm_sd_v15_v2.ckpt",
-            context_length=16,
-            context_overlap=4,
-            beta_schedule="autoselect",
-            svd_checkpoint="svd_xt.safetensors",
-            svd_num_steps=25,
-            svd_motion_bucket_id=127,
-            svd_fps_id=6,
-            svd_cond_aug=0.02,
-            svd_decoding_t=14,
-            device="cuda",
-        )
-        enq = render_motion_scenes(project_id, req)
-        assemble_fps = int(defaults["motion"]["fps"])
-
-    assemble_job = jobs.create(project_id, "assemble_variant", {"variant_index": variant_index, "fps": assemble_fps})
-    return {
-        "ok": True,
-        "preset": preset,
-        "selected": rec,
-        "render_enqueued": enq.get("enqueued"),
-        "assemble_job": assemble_job.__dict__,
-    }
 
 
 def _comfyui_available_quick() -> bool:
@@ -12530,154 +10512,8 @@ def _comfyui_available_quick() -> bool:
         return False
 
 
-@app.get("/v1/render/animation_presets")
-def animation_presets():
-    """List the one-click animation presets (quality + motion intensity buttons)."""
-    return {"ok": True, "presets": autoconfig.list_presets()}
 
 
-@app.post("/v1/projects/{project_id}/render/auto")
-def render_auto(project_id: str, req: AutoAnimateRequest):
-    """AI auto-configure render settings for a chosen animation preset, then
-    optionally launch the full workflow on the internal renderer or ComfyUI.
-
-    Manual configuration endpoints (``/render/internal/video``,
-    ``/render/comfyui/motion_scenes``, etc.) remain available unchanged; this is
-    an additive "push a button and the AI sets everything, then renders" layer.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-    plan = proj.meta.get("last_plan")
-    if not plan or not (plan.get("variants") or []):
-        raise HTTPException(400, "No plan generated")
-    variants = plan["variants"]
-    vi = int(req.variant_index)
-    if vi < 0 or vi >= len(variants):
-        raise HTTPException(400, "Invalid variant_index")
-    variant = variants[vi]
-    scenes = variant.get("scenes") or []
-
-    preset = autoconfig.resolve_preset(req.preset)
-    if preset is None:
-        raise UserFacingError(
-            f"Unknown animation preset '{req.preset}'",
-            hint="Call GET /v1/render/animation_presets for the available preset ids.",
-            code="UNKNOWN_PRESET",
-            status_code=400,
-        )
-
-    duration_s = _resolved_project_duration_s(proj, variant, scenes)
-    fps = int(req.fps or variant.get("fps") or 24)
-
-    hw = _hardware_profile()
-    provider_status = _render_provider_status(hw)
-    requested_tier = preset.quality if preset.quality in ("draft", "balanced", "quality") else "auto"
-    tier_plan = _build_internal_render_plan(hw, requested_tier=requested_tier, duration_s=duration_s)
-    tier_defaults = dict(tier_plan.get("defaults") or {})
-    device_preference = str(tier_plan.get("device_preference") or "auto")
-    if device_preference == "directml" and not bool((provider_status.get("directml") or {}).get("enabled", True)):
-        device_preference = "cpu"
-
-    requested_engine = str(req.engine or "auto").lower().strip()
-    comfy_probe_performed = requested_engine == "comfyui" or (
-        requested_engine == "auto" and str(preset.engine_hint or "auto").lower().strip() == "comfyui"
-    )
-    comfy_ok = _comfyui_available_quick() if comfy_probe_performed else False
-    cfg = autoconfig.build_autoconfig(
-        preset,
-        engine=req.engine,
-        tier_defaults=tier_defaults,
-        applied_tier=str(tier_plan.get("applied_tier") or "auto"),
-        preferred_model=str(tier_plan.get("preferred_internal_model") or "auto"),
-        device_preference=device_preference,
-        duration_s=duration_s,
-        fps=fps,
-        variant_index=vi,
-        source_asset=req.source_asset,
-        comfyui_available=comfy_ok,
-        tensorrt_sd15_available=_tensorrt_sd15_bundle_available(),
-    )
-
-    result: dict[str, Any] = {
-        "ok": True,
-        "config": cfg.to_public(),
-        "engine": cfg.engine,
-        "hardware": hw,
-        "tier_plan": tier_plan,
-        "comfyui_available": comfy_ok,
-        "comfyui_probe_performed": comfy_probe_performed,
-        "launched": False,
-    }
-    if not req.run:
-        return result
-
-    # Object/layer animation presets (parallax / segment / background) run on the
-    # model-free layered renderer. Masked / ComfyUI-regional presets need masks,
-    # so they return the config and point at /render/animate_layers.
-    if preset.is_layered:
-        if preset.requires_masks or cfg.engine == "comfyui":
-            result["notes"] = list(result["config"].get("notes") or []) + [
-                "This preset animates masked objects; call POST /render/animate_layers with masks."
-            ]
-            return result
-        if not req.source_asset:
-            result["notes"] = list(result["config"].get("notes") or []) + [
-                "Object animation needs a source image; pass source_asset."
-            ]
-            return result
-        lr = cfg.layered_request or {}
-        layered_req = LayeredAnimateRequest(
-            source_asset=req.source_asset,
-            mode=cfg.animation_mode,
-            motion=cfg.motion_profile,
-            fps=int(lr.get("fps", req.fps or 24)),
-            duration_s=float(lr.get("duration_s", 5.0)),
-            width=int(lr.get("width", 768)),
-            height=int(lr.get("height", 432)),
-        )
-        res = render_animate_layers(project_id, layered_req)
-        result.update(
-            {
-                "launched": True,
-                "engine": "internal",
-                "animation_mode": cfg.animation_mode,
-                "job": res.get("job"),
-            }
-        )
-        return result
-
-    if cfg.engine == "comfyui" and cfg.comfyui_request is not None:
-        motion_payload = {
-            k: v for k, v in cfg.comfyui_request.items() if k in RenderMotionRequest.model_fields
-        }
-        enq = render_motion_scenes(project_id, RenderMotionRequest(**motion_payload))
-        assemble_job = jobs.create(
-            project_id, "assemble_variant", {"variant_index": vi, "fps": int(cfg.comfyui_request.get("fps", 24))}
-        )
-        result.update(
-            {
-                "launched": True,
-                "render_enqueued": enq.get("enqueued"),
-                "jobs": enq.get("jobs"),
-                "assemble_job": assemble_job.__dict__,
-            }
-        )
-        return result
-
-    internal_payload = {
-        k: v for k, v in cfg.internal_request.items() if k in InternalVideoRenderRequest.model_fields
-    }
-    res = render_internal_video(project_id, InternalVideoRenderRequest(**internal_payload))
-    result.update(
-        {
-            "launched": True,
-            "engine": "internal",
-            "job": res.get("job"),
-            "preflight": res.get("preflight"),
-        }
-    )
-    return result
 
 
 def _run_timeline_render(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -13050,82 +10886,8 @@ def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]
     return {**res, "video": video_rel}
 
 
-@app.post("/v1/projects/{project_id}/render/animate_layers")
-def render_animate_layers(project_id: str, req: LayeredAnimateRequest):
-    """Animate individual objects/regions within an image (parallax / masked / segment).
-
-    Model-free compositing path; runs without a diffusion model or GPU.
-    """
-    proj = store.get(project_id)
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    source_path = _resolve_project_reference_path(project_id, req.source_asset)
-    if source_path is None:
-        raise UserFacingError(
-            "Source image not found",
-            hint="Upload an image under Render → References, then pass its path as source_asset.",
-            code="ASSET_MISSING",
-            status_code=400,
-        )
-    if req.mode == "masked" and not req.masks:
-        raise UserFacingError(
-            "Masked mode requires at least one mask",
-            hint="Add a mask asset, or use parallax/segment modes.",
-            code="MASK_REQUIRED",
-            status_code=400,
-        )
-
-    if req.diffusion_refine:
-        _resolve_layered_refinement(
-            {
-                "model_id": req.model_id,
-                "device_preference": req.device_preference,
-            }
-        )
-
-    profile = str(req.motion or "full_3d")
-    schedule = autoconfig.build_motion_schedule(profile, duration_s=req.duration_s, fps=req.fps)
-    payload = {
-        "source_asset": req.source_asset,
-        "mode": req.mode,
-        "motion_profile": profile,
-        "motion_schedule": schedule,
-        "bands": int(req.bands),
-        "masks": [m.model_dump() for m in req.masks],
-        "subject_motion": float(req.subject_motion),
-        "background_motion": float(req.background_motion),
-        "fps": int(req.fps),
-        "duration_s": float(req.duration_s),
-        "width": int(req.width),
-        "height": int(req.height),
-        "include_audio": bool(req.include_audio),
-        "diffusion_refine": bool(req.diffusion_refine),
-        "model_id": str(req.model_id or "auto"),
-        "device_preference": str(req.device_preference or "auto"),
-        "refine_prompt": req.refine_prompt,
-        "refine_negative": req.refine_negative,
-        "refine_denoise": float(req.refine_denoise),
-        "refine_steps": int(req.refine_steps),
-        "refine_cfg": float(req.refine_cfg),
-        "seed": req.seed,
-    }
-    job = jobs.create(project_id, "layered_animation", payload)
-    job.progress = {
-        "stage": "queued",
-        "current": 0,
-        "total": max(1, int(req.duration_s * req.fps) + 1),
-        "percent": 0.0,
-        "message": f"Queued {req.mode} object animation",
-    }
-    jobs.save(job)
-    if isinstance(proj.meta, dict):
-        proj.meta.setdefault("jobs", []).append(job.__dict__)
-        store.save(proj)
-    return {"ok": True, "job": job.__dict__, "animation_mode": req.mode, "motion_schedule": schedule}
 
 
-@app.get("/v1/projects/{project_id}/assets")
 def list_assets(project_id: str):
     proj = store.get(project_id)
     if not proj:
@@ -13146,7 +10908,6 @@ def list_assets(project_id: str):
 
 
 if HAS_MULTIPART:
-    @app.post("/v1/projects/{project_id}/assets/refs")
     async def upload_ref(project_id: str, file: UploadFile = File(...)):
         proj = store.get(project_id)
         if not proj:
@@ -13162,12 +10923,10 @@ if HAS_MULTIPART:
         store.save(proj)
         return {"ok": True, "path": str(out)}
 else:
-    @app.post("/v1/projects/{project_id}/assets/refs")
     async def upload_ref(project_id: str):
         _require_multipart()
 
 
-@app.get("/v1/projects/{project_id}/export/comfyui_workflows")
 def export_comfyui_workflows(
     project_id: str,
     variant_index: int = 0,
@@ -13487,7 +11246,6 @@ def export_comfyui_workflows(
     store.save(proj)
     return {"ok": True, "files": out_files}
 
-@app.post("/v1/projects/{project_id}/assemble_video")
 def assemble_video(project_id: str, req: AssembleVideoRequest):
     proj = store.get(project_id)
     if not proj:
@@ -13663,7 +11421,6 @@ def _build_unreal_return_metadata(
         "captured_at": time.time(),
     }
 
-@app.post("/v1/projects/{project_id}/export/deforum")
 def export_deforum(project_id: str, req: ExportDeforumRequest):
     proj = store.get(project_id)
     if not proj:
@@ -13748,7 +11505,6 @@ def export_deforum(project_id: str, req: ExportDeforumRequest):
     return {"ok": True, "path": rel}
 
 
-@app.post("/v1/projects/{project_id}/export/unreal")
 def export_unreal_bridge_bundle(project_id: str, req: ExportUnrealBridgeRequest):
     proj = store.get(project_id)
     if not proj:
@@ -13832,7 +11588,6 @@ def export_unreal_bridge_bundle(project_id: str, req: ExportUnrealBridgeRequest)
     }
 
 
-@app.post("/v1/projects/{project_id}/import/unreal")
 def import_unreal_bridge_return(project_id: str, req: ImportUnrealBridgeReturnRequest):
     proj = store.get(project_id)
     if not proj:
@@ -13937,7 +11692,6 @@ def import_unreal_bridge_return(project_id: str, req: ImportUnrealBridgeReturnRe
     }
 
 
-@app.post("/v1/projects/{project_id}/unreal/import-plan")
 def build_unreal_bridge_import_plan(project_id: str, req: BuildUnrealImportPlanRequest):
     proj = store.get(project_id)
     if not proj:
@@ -13971,7 +11725,6 @@ def build_unreal_bridge_import_plan(project_id: str, req: BuildUnrealImportPlanR
         "plan": plan.to_dict(),
     }
 
-@app.get("/v1/projects/{project_id}/outputs")
 def list_outputs(project_id: str):
     proj = store.get(project_id)
     if not proj:
@@ -14134,8 +11887,6 @@ def list_outputs(project_id: str):
         "active_internal_jobs": active_internal_jobs,
     }
 
-@app.head("/v1/projects/{project_id}/file", include_in_schema=False)
-@app.get("/v1/projects/{project_id}/file")
 def get_file(project_id: str, path: str):
     proj = store.get(project_id)
     if not proj:
@@ -14149,7 +11900,22 @@ def get_file(project_id: str, path: str):
         raise HTTPException(404, "File not found")
     return FileResponse(str(fp))
 
-@app.post("/v1/cloud/aws/test")
+
+app.include_router(create_project_output_router(ProjectOutputDependencies(
+    list_assets=lambda project_id: list_assets(project_id),
+    upload_ref=lambda *args: upload_ref(*args),
+    export_comfyui_workflows=lambda *args: export_comfyui_workflows(*args),
+    assemble_video=lambda project_id, request: assemble_video(project_id, request),
+    export_deforum=lambda project_id, request: export_deforum(project_id, request),
+    unreal_preview=lambda project_id, variant_index: get_unreal_bridge_preview(project_id, variant_index),
+    export_unreal=lambda project_id, request: export_unreal_bridge_bundle(project_id, request),
+    import_unreal=lambda project_id, request: import_unreal_bridge_return(project_id, request),
+    unreal_import_plan=lambda project_id, request: build_unreal_bridge_import_plan(project_id, request),
+    list_outputs=lambda project_id: list_outputs(project_id),
+    get_file=lambda project_id, path: get_file(project_id, path),
+    multipart_available=HAS_MULTIPART,
+)))
+
 def cloud_aws_test(req: CloudAwsTestRequest):
     try:
         res = aws_integration.test_credentials(bucket=req.bucket, prefix=req.prefix)
@@ -14158,7 +11924,6 @@ def cloud_aws_test(req: CloudAwsTestRequest):
         logger.exception("AWS credential test failed")
         raise HTTPException(status_code=501, detail="AWS credential test failed") from exc
 
-@app.post("/v1/cloud/aws/bundle")
 def cloud_aws_bundle(req: CloudAwsBundleRequest):
     data_dir = settings.data_dir
     out_zip = data_dir / "edmg_studio_bundle.zip"
@@ -14177,7 +11942,6 @@ def cloud_aws_bundle(req: CloudAwsBundleRequest):
             result["upload_error"] = "AWS bundle upload failed"
     return result
 
-@app.post("/v1/cloud/azure/test")
 def cloud_azure_test(req: CloudAzureTestRequest):
     try:
         return azure_integration.test_credentials(container=req.container, prefix=req.prefix)
@@ -14186,7 +11950,6 @@ def cloud_azure_test(req: CloudAzureTestRequest):
         raise HTTPException(status_code=501, detail="Azure credential test failed") from exc
 
 
-@app.get("/v1/cloud/hf/status")
 def cloud_hf_status():
     try:
         return hf_bucket_integration.describe_status(
@@ -14198,7 +11961,6 @@ def cloud_hf_status():
         raise HTTPException(status_code=501, detail="Hugging Face bucket status check failed") from exc
 
 
-@app.post("/v1/cloud/hf/test")
 def cloud_hf_test(req: CloudHfBucketTestRequest):
     try:
         return hf_bucket_integration.test_credentials(
@@ -14227,7 +11989,6 @@ def _hf_settings_payload() -> dict[str, Any]:
     }
 
 
-@app.get("/v1/cloud/hf/settings")
 def cloud_hf_settings_get():
     try:
         return _hf_settings_payload()
@@ -14236,7 +11997,6 @@ def cloud_hf_settings_get():
         raise HTTPException(status_code=501, detail="Hugging Face bucket settings are unavailable") from exc
 
 
-@app.post("/v1/cloud/hf/settings")
 def cloud_hf_settings_set(req: CloudHfBucketSettingsRequest):
     try:
         model_cache_settings.update(req.model_dump(exclude_none=True))
@@ -14260,7 +12020,6 @@ def _resolve_lightning_bundle_output_dir(output_dir: str | None) -> Path:
     return resolved
 
 
-@app.post("/v1/cloud/lightning/bundle")
 def cloud_lightning_bundle(req: CloudLightningBundleRequest):
     try:
         output_dir = _resolve_lightning_bundle_output_dir(req.output_dir)
@@ -14270,6 +12029,35 @@ def cloud_lightning_bundle(req: CloudLightningBundleRequest):
             raise exc
         logger.exception("Lightning bundle generation failed")
         raise HTTPException(500, "Lightning bundle generation failed") from exc
+
+
+app.include_router(create_cloud_router(CloudRouterDependencies(
+    aws_test=lambda request: cloud_aws_test(request),
+    aws_bundle=lambda request: cloud_aws_bundle(request),
+    azure_test=lambda request: cloud_azure_test(request),
+    hf_status=lambda: cloud_hf_status(),
+    hf_test=lambda request: cloud_hf_test(request),
+    hf_settings_get=lambda: cloud_hf_settings_get(),
+    hf_settings_set=lambda request: cloud_hf_settings_set(request),
+    lightning_bundle=lambda request: cloud_lightning_bundle(request),
+)))
+
+
+app.include_router(
+    create_jobs_router(
+        JobRouterDependencies(
+            get_store=lambda: store,
+            get_jobs=lambda: jobs,
+            job_detail_payload=lambda *args, **kwargs: _job_detail_payload(*args, **kwargs),
+            repair_legacy_selection=lambda payload: _repair_legacy_internal_video_selection(payload),
+            internal_render_preflight=lambda project_id, payload: _internal_render_preflight_data(project_id, payload),
+            persist_resolved_payload=lambda payload, preflight: _persist_resolved_internal_video_payload(payload, preflight),
+            enqueue_from_source=lambda *args, **kwargs: _enqueue_internal_job_from_source(*args, **kwargs),
+            mutate_artifacts=lambda *args, **kwargs: _mutate_internal_job_artifacts(*args, **kwargs),
+            dispatch_job=lambda job: _dispatch_job(job),
+        )
+    )
+)
 
 # ------------------------------
 # Model Manager (GUI) — routes live in api/routers.create_models_router

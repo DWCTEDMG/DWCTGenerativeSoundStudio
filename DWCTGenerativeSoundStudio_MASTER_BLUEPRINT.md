@@ -39,7 +39,7 @@ This is deliberately not a rewrite. It is a staged conversion of the current mod
 ### Immediate constraints
 
 - ~~The default-branch Studio workflow is red~~ — FFmpeg CI provisioning addressed (WP-01); re-verify on current Actions.
-- `app.py` remains large, but System readiness and Project durability routes are extracted to `api/routers.py` (WP-09 started).
+- `app.py` retains shared render workers and helpers, while all FastAPI endpoint ownership is delegated to cohesive `api/` routers (WP-09 complete).
 - ~~The current JSON job store is not a durable queue~~ — SQLite `JobStore` with leases/events/idempotency is in place (WP-05); JSON mirrors remain for compatibility.
 - Timeline undo/redo and crash recovery foundations landed (WP-06 / WP-10 partial); full command coverage for move/trim/split still incomplete.
 - The model catalog mixes recommended, fallback, optional, and community entries without a sufficiently strong promotion policy, pinned provenance, or hardware benchmark evidence.
@@ -1340,7 +1340,7 @@ These form the dependency-critical queue for the integration captain. They are n
 | WP-06 / P1-05 | Done | Autosave journal + Timeline recovery UI |
 | WP-07 / P1-03 | Done | `.mp4.artifact.json` on internal render completion |
 | WP-08 / P1-06 | Done | Project Health is the reference generated-contract domain: FastAPI response models feed `openapi-typescript`, committed output is consumed through compatibility aliases, and `check:tooling` rejects schema drift |
-| WP-09 / P2-01 | Partial | System + Project durability + **Models** routers extracted to `api/routers.py` |
+| WP-09 / P2-01 | Done | All HTTP endpoint definitions extracted from `app.py`; route inventory, ownership, OpenAPI, render, Conductor, and Performer contracts verified 2026-09-09 |
 | WP-10 / P2-02 | Partial | Command stack + Timeline Undo/Redo for delete/move/trim (UI drag + backend helpers); split/property coverage still open |
 | WP-11 / P2-04 | Done | Shared `ProjectJobsPanel` + `useProjectJobs` on Render Queue and Review; job events in log viewer |
 | WP-12 / P3-01 | Partial | Music Graph v1 adapter enriched (stems, semantics, lyrics/ASR); consumed by Director payload, Conductor diagnostics/routing, Workspace Understand panel, and timeline section markers |
@@ -1366,7 +1366,7 @@ Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`
 6. **WP-06 / P1-05:** add autosave journal, recovery selection, and forced-crash integration test.
 7. **WP-07 / P1-03:** add artifact manifest writer to the canonical internal render path.
 8. **WP-08 / P1-06:** generate typed API contracts for one extracted domain as the pattern.
-9. **WP-09 / P2-01:** extract the System and Project routers from `app.py`; verify behavior parity.
+9. **WP-09 / P2-01 — Done (verified 2026-09-09):** all HTTP endpoint functions are owned by cohesive `api/` routers; AST ownership, route inventory, OpenAPI, and focused render/Conductor/Performer parity tests pass.
 10. **WP-10 / P2-02:** introduce timeline commands for split, move, trim, delete, and property change with undo/redo.
 11. **WP-11 / P2-04:** unify render/analysis job status, retry, cancel, logs, and recovery UX.
 12. **WP-12 / P3-01:** formalize Music Graph v1 around existing analysis outputs with a compatibility adapter.
