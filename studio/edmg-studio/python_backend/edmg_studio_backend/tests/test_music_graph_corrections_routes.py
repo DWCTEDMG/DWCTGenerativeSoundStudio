@@ -51,6 +51,12 @@ def test_patch_music_graph_corrections_updates_graph_and_invalidates_plans(tmp_p
     assert body["music_graph"]["tempo"]["bpm"] == 128.0
     assert body["invalidation"]["changed"]
     assert "last_conductor_plan" in body["invalidation"]["invalidated"]
+    corrected_revision = body["music_graph"]["graphRevision"]
+
+    graph_response = test_client.get(f"/v1/projects/{proj.id}/music_graph").json()["music_graph"]
+    cues_response = test_client.get(f"/v1/projects/{proj.id}/live_cues").json()["music_graph"]
+    assert graph_response["graphRevision"] == corrected_revision
+    assert cues_response["graphRevision"] == corrected_revision
 
     saved = store.get(proj.id)
     assert saved is not None

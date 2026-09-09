@@ -1406,7 +1406,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         _load_project_visual_dna = deps.resolve("_load_project_visual_dna")
         build_advisory_render_plan = deps.resolve("build_advisory_render_plan")
         build_visual_dna_prompt_hints = deps.resolve("build_visual_dna_prompt_hints")
-        music_graph_from_analysis = deps.resolve("music_graph_from_analysis")
+        project_music_graph = deps.resolve("_project_music_graph")
         normalize_director_mode = deps.resolve("normalize_director_mode")
         store = deps.resolve("store")
         proj = store.get(project_id)
@@ -1421,14 +1421,8 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         snapshot = _build_project_snapshot(proj, dna=visual_dna)
         environment = _build_render_conductor_environment()
         meta = proj.meta if isinstance(proj.meta, dict) else {}
-        audio_meta = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
         environment["director_mode"] = normalize_director_mode(meta.get("director_mode") or meta.get("creative_direction_mode"))
-        environment["music_graph"] = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio_meta.get("filename") or "") or None,
-            duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
-        )
+        environment["music_graph"] = project_music_graph(proj)
         try:
             advisory_plan = build_advisory_render_plan(intent, snapshot, environment=environment)
         except NoRealRenderRouteError as exc:
@@ -1511,7 +1505,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         _build_render_conductor_environment = deps.resolve("_build_render_conductor_environment")
         _performer_high_end_available = deps.resolve("_performer_high_end_available")
         build_performer_workflow_plan = deps.resolve("build_performer_workflow_plan")
-        music_graph_from_analysis = deps.resolve("music_graph_from_analysis")
+        project_music_graph = deps.resolve("_project_music_graph")
         normalize_director_mode = deps.resolve("normalize_director_mode")
         store = deps.resolve("store")
         proj = store.get(project_id)
@@ -1527,13 +1521,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         variant = variants[vi] if isinstance(variants[vi], dict) else {}
         scenes = [scene for scene in list(variant.get("scenes") or []) if isinstance(scene, dict)]
         meta = proj.meta if isinstance(proj.meta, dict) else {}
-        audio_meta = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-        music_graph = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio_meta.get("filename") or "") or None,
-            duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
-        )
+        music_graph = project_music_graph(proj)
         environment = _build_render_conductor_environment()
         performer_engines = environment.setdefault("engines", {})
         performer_hosted = dict(performer_engines.get("hosted_video") or {})

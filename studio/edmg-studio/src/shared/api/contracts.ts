@@ -65,6 +65,12 @@ export type MusicGraphSection = {
 
 export type MusicGraphV1 = {
   schemaVersion: "1.0" | string;
+  graphRevision?: string;
+  provenance?: {
+    adapterVersion?: string;
+    sourceFingerprint?: string;
+    storage?: string;
+  };
   source?: { filename?: string | null; kind?: string };
   timebase?: { sampleRate?: number; durationSeconds?: number; fpsHint?: number };
   tempo?: { bpm?: number; confidence?: number };

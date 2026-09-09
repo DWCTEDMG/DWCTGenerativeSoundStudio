@@ -11,6 +11,8 @@ import { apiPatch } from "../components/api";
 
 const sampleGraph: MusicGraphV1 = {
   schemaVersion: "1.0",
+  graphRevision: "1234567890abcdef",
+  provenance: { adapterVersion: "1", storage: "persistent_project_cache" },
   tempo: { bpm: 128, confidence: 0.9 },
   sections: [{ start: 0, end: 8, label: "intro", energy: 0.42, confidence: 0.8 }],
   stems: [{ kind: "drums" }, { kind: "vocals" }],
@@ -41,6 +43,8 @@ describe("UnderstandPanel", () => {
     expect(screen.getByText(/hello world/i)).toBeTruthy();
     expect(screen.getByText("drums")).toBeTruthy();
     expect(screen.getByText("128 BPM")).toBeTruthy();
+    expect(screen.getByText(/Revision:/i).textContent).toContain("1234567890ab");
+    expect(screen.getByText(/Revision:/i).textContent).toContain("persistent_project_cache");
   });
 
   it("saves editable corrections through the patch route", async () => {

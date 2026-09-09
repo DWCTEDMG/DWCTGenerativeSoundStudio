@@ -14,7 +14,7 @@ from ..domain.editor_commands import execute as execute_editor_command
 from ..domain.live_assets import compile_live_assets, sample_bounded_modulation
 from ..domain.live_cues import compile_live_cues
 from ..domain.motion_grammar import apply_motion_phrases_to_timeline
-from ..domain.music_graph import music_graph_from_analysis
+from ..domain.music_graph import music_graph_for_project
 from ..domain.render_plan_v1 import enrich_render_plan
 from ..domain.stem_modulation import mute_lane, normalize_modulation_matrix, scale_lane
 from ..domain.template_packages import export_template_package, import_template_package
@@ -84,6 +84,9 @@ def create_project_router(
     def store() -> ProjectStore:
         return get_store()
 
+    def project_music_graph(proj: Any) -> dict[str, Any]:
+        return music_graph_for_project(store().project_dir(proj.id), proj.meta)
+
     router = APIRouter(tags=["projects"], route_class=RevisionRoute)
 
     @router.get("/v1/projects")
@@ -115,14 +118,7 @@ def create_project_router(
         proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        meta = dict(proj.meta or {})
-        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-        graph = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio.get("filename") or "") or None,
-            duration_s=float(audio.get("duration_s") or 0) or None,
-        )
+        graph = project_music_graph(proj)
         return {"ok": True, "music_graph": graph}
 
     @router.patch("/v1/projects/{project_id}/music_graph/corrections")
@@ -144,13 +140,7 @@ def create_project_router(
             raise HTTPException(400, "No corrections supplied")
         proj.meta = meta
         store().save(proj)
-        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-        graph = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio.get("filename") or "") or None,
-            duration_s=float(audio.get("duration_s") or 0) or None,
-        )
+        graph = project_music_graph(proj)
         return {"ok": True, "music_graph": graph, "invalidation": invalidation}
 
     @router.get("/v1/projects/{project_id}/live_assets")
@@ -159,13 +149,7 @@ def create_project_router(
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
-        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-        graph = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio.get("filename") or "") or None,
-            duration_s=float(audio.get("duration_s") or 0) or None,
-        )
+        graph = project_music_graph(proj)
         review = collect_variant_review(store().project_dir(project_id), meta)
         assets = compile_live_assets(
             variant_review=review,
@@ -180,13 +164,7 @@ def create_project_router(
         if not proj:
             raise HTTPException(404, "Project not found")
         meta = dict(proj.meta or {})
-        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-        graph = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio.get("filename") or "") or None,
-            duration_s=float(audio.get("duration_s") or 0) or None,
-        )
+        graph = project_music_graph(proj)
         review = collect_variant_review(store().project_dir(project_id), meta)
         assets = compile_live_assets(
             variant_review=review,
@@ -205,14 +183,7 @@ def create_project_router(
         proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        meta = dict(proj.meta or {})
-        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-        graph = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio.get("filename") or "") or None,
-            duration_s=float(audio.get("duration_s") or 0) or None,
-        )
+        graph = project_music_graph(proj)
         cues = compile_live_cues(graph)
         return {"ok": True, "live_cues": cues, "music_graph": graph}
 
@@ -221,14 +192,7 @@ def create_project_router(
         proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        meta = dict(proj.meta or {})
-        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-        graph = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio.get("filename") or "") or None,
-            duration_s=float(audio.get("duration_s") or 0) or None,
-        )
+        graph = project_music_graph(proj)
         cues = compile_live_cues(graph)
         status = start_live_publish(
             project_id,
@@ -260,14 +224,7 @@ def create_project_router(
         proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        meta = dict(proj.meta or {})
-        audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
-        analysis = meta.get("analysis") if isinstance(meta.get("analysis"), dict) else {}
-        graph = music_graph_from_analysis(
-            analysis,
-            audio_filename=str(audio.get("filename") or "") or None,
-            duration_s=float(audio.get("duration_s") or 0) or None,
-        )
+        graph = project_music_graph(proj)
         cues = compile_live_cues(graph)
         if req.adapter == "unreal":
             payload = export_unreal_adapter(

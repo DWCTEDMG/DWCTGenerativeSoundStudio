@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-import time
+import hashlib
+import json
+import logging
+import os
+import uuid
+from pathlib import Path
 from typing import Any
 
 
 MUSIC_GRAPH_SCHEMA_VERSION = "1.0"
+MUSIC_GRAPH_ADAPTER_VERSION = "1"
+MUSIC_GRAPH_CACHE_FILENAME = "music_graph_v1.json"
+logger = logging.getLogger(__name__)
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -150,7 +158,24 @@ def _analysis_runs(analysis: dict[str, Any]) -> list[dict[str, Any]]:
                 "sources": ["legacy_analysis_meta"],
             }
         ]
-    return [{"run_id": "compat", "completed_at": time.time(), "sources": ["compatibility_adapter"]}]
+    return [{"run_id": "compat", "completed_at": None, "sources": ["compatibility_adapter"]}]
+
+
+def music_graph_source_fingerprint(
+    analysis: dict[str, Any] | None,
+    *,
+    audio_filename: str | None = None,
+    duration_s: float | None = None,
+) -> str:
+    payload = {
+        "adapter_version": MUSIC_GRAPH_ADAPTER_VERSION,
+        "schema_version": MUSIC_GRAPH_SCHEMA_VERSION,
+        "analysis": analysis or {},
+        "audio_filename": audio_filename,
+        "duration_s": duration_s,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def music_graph_from_analysis(
@@ -161,6 +186,11 @@ def music_graph_from_analysis(
 ) -> dict[str, Any]:
     """Compatibility adapter: map existing analysis meta into Music Graph v1 shape."""
     analysis = dict(analysis or {})
+    source_fingerprint = music_graph_source_fingerprint(
+        analysis,
+        audio_filename=audio_filename,
+        duration_s=duration_s,
+    )
     features = dict(analysis.get("features") or {})
     beats_raw = analysis.get("beats") or features.get("beats") or features.get("beat_times") or []
     sections_raw = analysis.get("sections") or features.get("sections") or []
@@ -212,6 +242,12 @@ def music_graph_from_analysis(
 
     graph: dict[str, Any] = {
         "schemaVersion": MUSIC_GRAPH_SCHEMA_VERSION,
+        "graphRevision": source_fingerprint,
+        "provenance": {
+            "adapterVersion": MUSIC_GRAPH_ADAPTER_VERSION,
+            "sourceFingerprint": source_fingerprint,
+            "storage": "derived_in_memory",
+        },
         "source": {"filename": audio_filename, "kind": "project_audio"},
         "timebase": {"sampleRate": int(features.get("sample_rate") or 44100), "durationSeconds": duration},
         "tempo": {"bpm": bpm, "confidence": _as_float(features.get("bpm_confidence"), 0.5 if bpm else 0.0)},
@@ -233,6 +269,53 @@ def music_graph_from_analysis(
         graph["lyrics"] = lyrics
     if semantics_tags:
         graph["semantics"] = {"tags": semantics_tags}
+    return graph
+
+
+def music_graph_for_project(project_dir: Path, meta: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the deterministic project Music Graph, materializing its derived cache when needed."""
+    project_meta = meta if isinstance(meta, dict) else {}
+    audio = project_meta.get("audio") if isinstance(project_meta.get("audio"), dict) else {}
+    analysis = project_meta.get("analysis") if isinstance(project_meta.get("analysis"), dict) else {}
+    audio_filename = str(audio.get("filename") or "") or None
+    duration_s = _as_float(audio.get("duration_s") or analysis.get("duration_s")) or None
+    fingerprint = music_graph_source_fingerprint(
+        analysis,
+        audio_filename=audio_filename,
+        duration_s=duration_s,
+    )
+    cache_path = Path(project_dir) / "analysis" / MUSIC_GRAPH_CACHE_FILENAME
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError, OSError):
+        cached = None
+    if isinstance(cached, dict) and cached.get("graphRevision") == fingerprint:
+        return cached
+
+    graph = music_graph_from_analysis(
+        analysis,
+        audio_filename=audio_filename,
+        duration_s=duration_s,
+    )
+    temporary = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        graph["provenance"]["storage"] = "persistent_project_cache"
+        temporary.write_text(
+            json.dumps(graph, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
+            encoding="utf-8",
+        )
+        os.replace(temporary, cache_path)
+    except OSError as exc:
+        graph["provenance"]["storage"] = "derived_in_memory"
+        logger.warning("Could not persist Music Graph cache at %s: %s", cache_path, exc)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("Could not remove temporary Music Graph cache at %s: %s", temporary, exc)
     return graph
 
 

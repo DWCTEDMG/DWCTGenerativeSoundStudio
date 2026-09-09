@@ -120,6 +120,9 @@ def _resolve_variant(snapshot: ProjectSnapshot, variant_index: int) -> dict[str,
 
 def _music_graph(snapshot: ProjectSnapshot) -> dict[str, Any]:
     analysis = snapshot.analysis if isinstance(snapshot.analysis, dict) else {}
+    cached = analysis.get("_music_graph")
+    if isinstance(cached, dict):
+        return cached
     audio = analysis.get("audio") if isinstance(analysis.get("audio"), dict) else {}
     return music_graph_from_analysis(
         analysis,
@@ -648,6 +651,7 @@ def build_advisory_render_plan(
         f"allowed_engines={','.join(intent_obj.allowed_engines)}",
         f"available_engines={','.join(engine for engine, info in engines.items() if info.get('available'))}",
         f"music_graph_schema={music_graph.get('schemaVersion') or 'unknown'}",
+        f"music_graph_revision={music_graph.get('graphRevision') or 'unknown'}",
         f"music_graph_sections={len(music_graph.get('sections') or [])}",
         f"music_graph_beats={len(music_graph.get('beats') or [])}",
     ]

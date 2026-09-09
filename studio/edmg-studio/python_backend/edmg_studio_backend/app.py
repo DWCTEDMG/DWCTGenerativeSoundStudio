@@ -237,7 +237,7 @@ from .render_conductor.planner import (
     build_advisory_render_plan,
     promote_proxy_sections,
 )
-from .domain.music_graph import music_graph_from_analysis
+from .domain.music_graph import music_graph_for_project
 from .domain.performer_workflow import build_performer_workflow_plan
 from .services.setup_wizard import (
     SetupTaskManager,
@@ -279,6 +279,10 @@ settings.ollama_models_dir.mkdir(parents=True, exist_ok=True)
 
 store = ProjectStore(settings.data_dir)
 jobs = JobStore(store.projects_dir)
+
+
+def _project_music_graph(proj: Any) -> dict[str, Any]:
+    return music_graph_for_project(store.project_dir(str(proj.id)), proj.meta)
 
 # Multi-node ComfyUI pool (supports EDMG_COMFYUI_URLS)
 comfy_pool = ComfyUINodePool(settings.load_comfyui_nodes(), default_max_inflight=settings.comfyui_node_concurrency)
@@ -5413,12 +5417,7 @@ def _build_creative_direction_payload(
     waveform = list(overall.get("waveform") or [])
     duration_s = float(overall.get("duration_s") or 0.0)
     saved_sections = list(analysis.get("sections") or []) if isinstance(analysis, dict) and isinstance(analysis.get("sections"), list) else []
-    audio_meta = (proj.meta.get("audio") or {}) if hasattr(proj, "meta") and isinstance(proj.meta, dict) else {}
-    music_graph = music_graph_from_analysis(
-        analysis if isinstance(analysis, dict) else {},
-        audio_filename=str(audio_meta.get("filename") or "") or None,
-        duration_s=float(audio_meta.get("duration_s") or analysis.get("duration_s") or 0) or None,
-    )
+    music_graph = _project_music_graph(proj)
     if not saved_sections:
         graph_sections = list(music_graph.get("sections") or [])
         if graph_sections:
@@ -6541,10 +6540,12 @@ def _build_render_conductor_environment() -> dict[str, Any]:
 
 def _build_project_snapshot(proj: Any, *, dna: Any | None = None) -> ProjectSnapshot:
     visual_dna = dna or _load_project_visual_dna(proj)
+    analysis = dict((proj.meta.get("analysis") or {}) if isinstance(proj.meta, dict) else {})
+    analysis["_music_graph"] = _project_music_graph(proj)
     return ProjectSnapshot(
         project_id=str(proj.id),
         project_name=str(getattr(proj, "name", "") or "") or None,
-        analysis=(proj.meta.get("analysis") or {}) if isinstance(proj.meta, dict) else {},
+        analysis=analysis,
         plan=(proj.meta.get("last_plan") or {}) if isinstance(proj.meta, dict) else {},
         timeline=(proj.meta.get("timeline") or {}) if isinstance(proj.meta, dict) else {},
         visual_dna=visual_dna,

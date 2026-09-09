@@ -174,6 +174,9 @@ export default function UnderstandPanel({
       <div className="small" style={{ opacity: 0.85, marginBottom: 8 }}>
         Canonical analysis consumed by Director, Conductor, live cues, and timeline markers.
         {musicGraph.source?.filename ? <> Source: <code>{musicGraph.source.filename}</code>.</> : null}
+        {musicGraph.graphRevision ? (
+          <> Revision: <code>{musicGraph.graphRevision.slice(0, 12)}</code> ({musicGraph.provenance?.storage || "derived"}).</>
+        ) : null}
       </div>
       {notice ? <div className="small" style={{ marginBottom: 8, color: "#6a6" }}>{notice}</div> : null}
       {error ? <div className="small" style={{ marginBottom: 8, color: "#c44" }}>{error}</div> : null}

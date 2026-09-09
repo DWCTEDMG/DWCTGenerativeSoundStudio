@@ -130,6 +130,14 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
         assert applied_payload["visual_dna"]["learning_state"]["sources"]["reactive_imports"] == 1
         assert "push-in dynamics" in applied_payload["visual_dna"]["identity"]["camera_language"]
 
+        graph = client.get(f"/v1/projects/{proj.id}/music_graph")
+        graph.raise_for_status()
+        graph_revision = graph.json()["music_graph"]["graphRevision"]
+
+        directed = client.get(f"/v1/projects/{proj.id}/creative_direction")
+        directed.raise_for_status()
+        assert directed.json()["creative_direction"]["music_graph"]["graphRevision"] == graph_revision
+
         planned = client.post(
             f"/v1/projects/{proj.id}/render/conductor/plan",
             json={"variant_index": 0, "preset": "balanced"},
@@ -139,6 +147,7 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
         assert planned_payload["plan"]["advisory_only"] is True
         assert len(planned_payload["plan"]["sections"]) == 2
         assert planned_payload["environment"]["diagnostics"] == ["stubbed-environment"]
+        assert f"music_graph_revision={graph_revision}" in planned_payload["plan"]["diagnostics"]
         assert "continuity-heavy" not in planned_payload["plan"]["summary"]  # summary stays generic
         assert planned_payload["visual_dna_hints"]["confidence"] > 0.0
 
