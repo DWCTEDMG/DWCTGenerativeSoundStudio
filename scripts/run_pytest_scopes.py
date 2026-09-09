@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import subprocess
@@ -16,8 +17,6 @@ UV_PROJECT_FLAGS = [
     str(BACKEND_ROOT),
     "--frozen",
     "--no-sync",
-    "--extra",
-    "cpu",
     "--extra",
     "core",
     "--extra",
@@ -55,8 +54,8 @@ def _resolve_uv() -> str:
     return uv
 
 
-def _uv_pytest_command(uv: str, *pytest_args: str) -> list[str]:
-    return [uv, "run", *UV_PROJECT_FLAGS, "python", "-m", "pytest", *pytest_args]
+def _uv_pytest_command(uv: str, *pytest_args: str, profile: str = "cpu") -> list[str]:
+    return [uv, "run", *UV_PROJECT_FLAGS, "--extra", profile, "python", "-m", "pytest", *pytest_args]
 
 
 def _isolated_environment(root: Path) -> dict[str, str]:
@@ -83,9 +82,22 @@ def _isolated_environment(root: Path) -> dict[str, str]:
     return env
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run isolated repository and backend tests.")
+    parser.add_argument(
+        "--accelerator-profile",
+        choices=("cpu", "cuda", "directml"),
+        default=os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "cpu").strip().lower(),
+        help="Runtime to preserve during sync (default: EDMG_BACKEND_ACCELERATOR_PROFILE or cpu).",
+    )
+    args = parser.parse_args(argv)
+    profile = args.accelerator_profile
+    # argparse does not validate a string default against choices.
+    if profile not in {"cpu", "cuda", "directml"}:
+        parser.error(f"Unsupported accelerator profile: {profile!r}")
     uv = _resolve_uv()
     toolchain_env = dict(os.environ)
+    toolchain_env["EDMG_BACKEND_ACCELERATOR_PROFILE"] = profile
     lock_rc = run_step(
         "validate uv lock", BACKEND_ROOT, [uv, "lock", "--check"], env=toolchain_env
     )
@@ -98,8 +110,9 @@ def main() -> int:
             uv,
             "sync",
             "--frozen",
+            "--inexact",
             "--extra",
-            "cpu",
+            profile,
             "--extra",
             "core",
             "--extra",
@@ -125,6 +138,7 @@ def main() -> int:
     ) as raw_root:
         isolated_root = Path(raw_root)
         env = _isolated_environment(isolated_root)
+        env["EDMG_BACKEND_ACCELERATOR_PROFILE"] = profile
         steps = [
             (
                 "repo-level tests",
@@ -138,6 +152,7 @@ def main() -> int:
                     str(isolated_root / "pytest-repo"),
                     "-p",
                     "no:cacheprovider",
+                    profile=profile,
                 ),
             ),
             (
@@ -151,6 +166,7 @@ def main() -> int:
                     str(isolated_root / "pytest-backend"),
                     "-p",
                     "no:cacheprovider",
+                    profile=profile,
                 ),
             ),
         ]

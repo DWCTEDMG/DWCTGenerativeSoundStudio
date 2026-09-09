@@ -92,7 +92,7 @@ const readyLegacyTensorRt = {
 };
 
 describe("Models page polling", () => {
-  it("shows managed packages in basic mode with separate runtime status and uninstall", async () => {
+  it("shows installed managed packages with unavailable runtime status and uninstall", async () => {
     vi.useRealTimers();
     const modelId = "hf_ltx_25_distilled_internal";
     const fetchMock = installFetchMock({
@@ -102,6 +102,7 @@ describe("Models page polling", () => {
           recommended: "advanced", installable: true, package_managed: true,
           required_files: ["vae/video.safetensors"], download_size_bytes: 70122982342,
           package_status: { installed: true, runtime_ready: false, files_present: true,
+            runtime_state: "installed_runtime_unavailable", validation_level: 1,
             hardware_known: true, hardware_compatible: false,
             blockers: ["LTX execution adapter is pending."], validation_issues: [] } }],
         installed: { [modelId]: true }, accepted: { [modelId]: true },
@@ -114,8 +115,9 @@ describe("Models page polling", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
     expect(await screen.findByText("LTX-2.5 Distilled")).toBeTruthy();
-    expect(screen.getByText("Installed locally")).toBeTruthy();
-    expect(screen.getByText("Runtime blocked")).toBeTruthy();
+    expect(screen.getAllByText("Installed / Runtime unavailable").length).toBeGreaterThan(0);
+    expect(screen.getByText("Qualification: level 1 of 5")).toBeTruthy();
+    expect(screen.getByText("LTX execution adapter is pending.")).toBeTruthy();
     expect(screen.getByText(/Below provisional targets/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Revalidate files" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/models/validate"))).toBe(true));

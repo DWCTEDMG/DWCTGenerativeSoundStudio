@@ -56,3 +56,35 @@ def test_resolve_uv_rejects_wrong_version_even_when_explicit(monkeypatch: pytest
 
     with pytest.raises(RuntimeError, match=r"Expected uv 0\.11\.28"):
         module._resolve_uv()
+
+
+@pytest.mark.parametrize("profile", ["cpu", "cuda", "directml"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_selected_profile_is_preserved_in_sync_and_both_test_scopes(monkeypatch, tmp_path, profile, explicit):
+    module = _load_module()
+    calls = []
+    monkeypatch.setattr(module, "_resolve_uv", lambda: "uv")
+    monkeypatch.setenv("EDMG_PYTEST_TEMP_ROOT", str(tmp_path))
+    monkeypatch.setenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "cpu" if explicit else profile)
+
+    def record(label, cwd, args, *, env):
+        calls.append((label, args, env))
+        return 0
+
+    monkeypatch.setattr(module, "run_step", record)
+    assert module.main(["--accelerator-profile", profile] if explicit else []) == 0
+    assert len(calls) == 4
+    for _, command, env in calls[1:]:
+        extras = [command[i + 1] for i, arg in enumerate(command) if arg == "--extra"]
+        assert set(extras) == {profile, "core", "audio"}
+        assert env["EDMG_BACKEND_ACCELERATOR_PROFILE"] == profile
+    assert "--inexact" in calls[1][1]  # Preserve installed ASR/model packages.
+
+
+def test_invalid_profile_fails_before_sync(monkeypatch):
+    module = _load_module()
+    monkeypatch.setenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "typo")
+    monkeypatch.setattr(module, "_resolve_uv", lambda: pytest.fail("Must reject before running tools"))
+    with pytest.raises(SystemExit) as error:
+        module.main([])
+    assert error.value.code == 2

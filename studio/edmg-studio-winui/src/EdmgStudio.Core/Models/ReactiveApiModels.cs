@@ -120,11 +120,13 @@ public sealed record ReactiveMapping
 
 public sealed class ReactivePreset
 {
+    private List<ReactiveMapping> _mappings = [];
+
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
 
     [JsonPropertyName("mappings")]
-    public List<ReactiveMapping> Mappings { get; set; } = [];
+    public List<ReactiveMapping> Mappings { get => _mappings; set => _mappings = value ?? []; }
 
     [JsonPropertyName("mapping_preset")]
     public string MappingPreset { get; set; } = "cinematic";
@@ -157,11 +159,14 @@ public sealed class ReactivePreset
 
 public sealed class ReactiveLabLocalState
 {
+    private ReactivePreset _current = new();
+    private List<ReactivePreset> _presets = [];
+
     [JsonPropertyName("current")]
-    public ReactivePreset Current { get; set; } = new();
+    public ReactivePreset Current { get => _current; set => _current = value ?? new(); }
 
     [JsonPropertyName("presets")]
-    public List<ReactivePreset> Presets { get; set; } = [];
+    public List<ReactivePreset> Presets { get => _presets; set => _presets = value ?? []; }
 
     [JsonPropertyName("workspace_draft_id")]
     public string? WorkspaceDraftId { get; set; }
@@ -175,6 +180,9 @@ public sealed class ReactiveLabLocalState
 
 public sealed class ReactiveLabMetadata
 {
+    private List<ReactiveMapping> _mappings = [];
+    private ReactivePreset _settings = new();
+
     [JsonPropertyName("source")]
     public string Source { get; set; } = "winui";
 
@@ -182,10 +190,11 @@ public sealed class ReactiveLabMetadata
     public int? SelectedVariantIndex { get; set; }
 
     [JsonPropertyName("mappings")]
-    public List<ReactiveMapping> Mappings { get; set; } = [];
+    public List<ReactiveMapping> Mappings { get => _mappings; set => _mappings = value ?? []; }
 
     [JsonPropertyName("settings")]
-    public ReactivePreset Settings { get; set; } = new();
+    // Older drafts may explicitly write null as well as omit custom settings.
+    public ReactivePreset Settings { get => _settings; set => _settings = value ?? new(); }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
