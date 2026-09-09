@@ -70,6 +70,17 @@ function snapshotTimeline(timeline: AnyDict): AnyDict {
   return JSON.parse(JSON.stringify(timeline || {})) as AnyDict;
 }
 
+function stripExactTimelinePositions(timeline: AnyDict): AnyDict {
+  const copy = snapshotTimeline(timeline);
+  for (const track of Array.isArray(copy.tracks) ? copy.tracks : []) {
+    for (const clip of Array.isArray(track?.clips) ? track.clips : []) {
+      delete clip.start_sample;
+      delete clip.end_sample;
+    }
+  }
+  return copy;
+}
+
 type Selected =
   | { kind: "track"; trackIdx: number; clipIdx: number }
   | { kind: "overlay"; layerIdx: number }
@@ -599,6 +610,7 @@ function ensureTimelineShape(timeline: AnyDict, planVariant: AnyDict | null): An
     if (idx >= 0) {
       const cur = tl.tracks[idx] || {};
       tl.tracks[idx] = {
+        ...cur,
         id: cur.id || id,
         name: cur.name || name,
         type,
@@ -703,6 +715,13 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const timelineRef = useRef<AnyDict>(timeline);
   const projectRevisionRef = useRef<number | null>(null);
+  const projectRevisionsRef = useRef(new Map<string, number>());
+  const activeProjectIdRef = useRef("");
+  const timelineDirtyRef = useRef(false);
+  const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const timelineVersionRef = useRef(0);
+  const refreshGenerationRef = useRef(0);
+  const [editorHistory, setEditorHistory] = useState<AnyDict | null>(null);
   const [revisionConflict, setRevisionConflict] = useState<ApiError | null>(null);
 
   const [durationS, setDurationS] = useState<number>(60);
@@ -804,11 +823,18 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const withExpectedRevision = <T extends AnyDict,>(body: T): T & { expected_revision?: number } =>
     expectedRevisionBody(body, { revision: projectRevisionRef.current });
 
-  const setRevisionFromResponse = (response: unknown) => {
+  const setProjectRevisionFromResponse = (pid: string, response: unknown) => {
     const revision = projectRevisionFromResponse(response);
     if (revision == null) return;
-    projectRevisionRef.current = revision;
-    setProject((current: AnyDict | null) => current ? { ...current, revision } : current);
+    projectRevisionsRef.current.set(pid, revision);
+    if (activeProjectIdRef.current === pid) {
+      projectRevisionRef.current = revision;
+      setProject((current: AnyDict | null) => current ? { ...current, revision } : current);
+    }
+  };
+
+  const setRevisionFromResponse = (response: unknown) => {
+    if (projectId) setProjectRevisionFromResponse(projectId, response);
   };
 
   const reportMutationError = (error: unknown) => {
@@ -816,24 +842,71 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   };
 
   const replaceTimelineState = (next: AnyDict, dirty: boolean) => {
+    timelineVersionRef.current += 1;
     timelineRef.current = next;
+    timelineDirtyRef.current = dirty;
     setTimeline(next);
     setTimelineDirty(dirty);
+  };
+
+  const enqueueProjectMutation = <T,>(pid: string, mutation: () => Promise<T>): Promise<T> => {
+    const result = mutationQueueRef.current.then(mutation, mutation);
+    mutationQueueRef.current = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  const queueEditorCommand = (
+    pid: string,
+    action: "replace" | "undo" | "redo",
+    label: string,
+    nextTimeline?: AnyDict,
+  ) => {
+    const submittedVersion = timelineVersionRef.current;
+    return enqueueProjectMutation(pid, async () => {
+      const revision = projectRevisionsRef.current.get(pid);
+      if (revision == null) throw new Error("Project revision is unavailable; reload before editing.");
+      const body: AnyDict = {
+        operation_id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+        expected_revision: revision,
+        action,
+        label,
+      };
+      if (nextTimeline) body.timeline = stripExactTimelinePositions(nextTimeline);
+      const response = await apiPost(`/v1/projects/${encodeURIComponent(pid)}/editor/commands`, body);
+      setProjectRevisionFromResponse(pid, response);
+      if (activeProjectIdRef.current === pid) {
+        setEditorHistory(response?.history || null);
+        if (response?.timeline && timelineVersionRef.current === submittedVersion) {
+          replaceTimelineState(ensureTimelineShape(response.timeline, null), false);
+        }
+      }
+      return response;
+    }).catch((error) => {
+      reportMutationError(error);
+      setErr(String(error));
+      throw error;
+    });
   };
 
   const commitTimeline = (next: AnyDict, label = "edit") => {
     timelineHistory.push(timelineRef.current, next, label);
     replaceTimelineState(next, true);
+    const pid = activeProjectIdRef.current;
+    if (pid && projectRevisionsRef.current.has(pid)) void queueEditorCommand(pid, "replace", label, next);
   };
 
   const undoTimeline = () => {
     const previous = timelineHistory.undo();
     if (previous) replaceTimelineState(ensureTimelineShape(previous, null), true);
+    const pid = activeProjectIdRef.current;
+    if (pid && projectRevisionsRef.current.has(pid)) void queueEditorCommand(pid, "undo", "Undo");
   };
 
   const redoTimeline = () => {
     const next = timelineHistory.redo();
     if (next) replaceTimelineState(ensureTimelineShape(next, null), true);
+    const pid = activeProjectIdRef.current;
+    if (pid && projectRevisionsRef.current.has(pid)) void queueEditorCommand(pid, "redo", "Redo");
   };
 
   const refreshProjects = async () => {
@@ -885,9 +958,25 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   };
 
   const refreshProject = async (pid: string) => {
+    const requestGeneration = ++refreshGenerationRef.current;
+    const requestRevision = projectRevisionsRef.current.get(pid);
+    const requestTimelineVersion = timelineVersionRef.current;
     const d = await apiGet(`/v1/projects/${encodeURIComponent(pid)}`);
+    if (
+      activeProjectIdRef.current !== pid ||
+      requestGeneration !== refreshGenerationRef.current ||
+      timelineVersionRef.current !== requestTimelineVersion ||
+      timelineDirtyRef.current
+    ) return;
     const loadedProject = d?.project || null;
-    projectRevisionRef.current = projectRevision(loadedProject);
+    const responseRevision = projectRevision(loadedProject);
+    const currentRevision = projectRevisionsRef.current.get(pid);
+    if (
+      (requestRevision !== undefined && requestRevision !== currentRevision) ||
+      (responseRevision != null && currentRevision != null && responseRevision < currentRevision)
+    ) return;
+    projectRevisionRef.current = responseRevision;
+    if (projectRevisionRef.current != null) projectRevisionsRef.current.set(pid, projectRevisionRef.current);
     setRevisionConflict(null);
     setProject(loadedProject);
     const p = d?.project || {};
@@ -903,6 +992,22 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     );
     replaceTimelineState(tl, false);
     timelineHistory.clear();
+    setEditorHistory(null);
+    if (projectRevisionRef.current != null) {
+      const editorRequestRevision = projectRevisionsRef.current.get(pid);
+      apiGet(`/v1/projects/${encodeURIComponent(pid)}/editor`)
+        .then((editor) => {
+          if (activeProjectIdRef.current !== pid || timelineDirtyRef.current) return;
+          const currentRevision = projectRevisionsRef.current.get(pid);
+          const responseRevision = projectRevisionFromResponse(editor);
+          if (editorRequestRevision !== currentRevision) return;
+          if (typeof responseRevision === "number" && typeof currentRevision === "number" && responseRevision < currentRevision) return;
+          setProjectRevisionFromResponse(pid, editor);
+          setEditorHistory(editor?.history || null);
+          if (editor?.timeline) replaceTimelineState(ensureTimelineShape(editor.timeline, null), false);
+        })
+        .catch(() => {});
+    }
 
     const dur = Number(
       p?.meta?.audio?.duration_s || p?.meta?.analysis?.features?.duration_s || p?.duration_s || 60,
@@ -937,6 +1042,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   }, [backendUrl]);
   useEffect(() => {
     if (!projectsReady) return;
+    activeProjectIdRef.current = projectId;
     if (projectId) refreshProject(projectId).catch(() => {});
     else {
       projectRevisionRef.current = null;
@@ -964,7 +1070,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   }, [diffUrl]);
 
   useEffect(() => {
-    if (!projectId || !timelineDirty) return;
+    if (!projectId || !timelineDirty || projectRevisionsRef.current.has(projectId)) return;
     const timer = window.setTimeout(() => {
       apiPost(`/v1/projects/${encodeURIComponent(projectId)}/autosave`, withExpectedRevision({
         timeline,
@@ -1099,11 +1205,22 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const laneIdForTrack = (track: Track, trackIdx: number) =>
     `track:${String(track.id || trackIdx)}`;
   const isLaneLocked = (laneId: string) => {
+    if (laneId === "camera") return timeline.camera?.locked === true;
     if (!laneId.startsWith("track:")) return lockedLaneIds.includes(laneId);
     return tracks.some((track, trackIdx) =>
       laneIdForTrack(track, trackIdx) === laneId && track.locked === true);
   };
   const toggleLaneLock = (laneId: string) => {
+    if (laneId === "camera") {
+      commitTimeline(
+        {
+          ...timelineRef.current,
+          camera: { ...(timelineRef.current.camera || {}), locked: !isLaneLocked("camera") },
+        },
+        "toggle_camera_lock",
+      );
+      return;
+    }
     if (laneId.startsWith("track:")) {
       const nextTracks = tracks.map((track, trackIdx) =>
         laneIdForTrack(track, trackIdx) === laneId
@@ -1444,6 +1561,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       }
     }
     timelineHistory.push(drag.historyBefore, timelineRef.current, drag.historyLabel);
+    const pid = activeProjectIdRef.current;
+    if (pid && projectRevisionsRef.current.has(pid)) {
+      void queueEditorCommand(pid, "replace", drag.historyLabel, timelineRef.current);
+    }
   };
 
   const onRulerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1467,6 +1588,11 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (!projectId) return;
     setErr(null);
     try {
+      if (projectRevisionsRef.current.has(projectId)) {
+        await queueEditorCommand(projectId, "replace", "Save timeline", timelineRef.current);
+        replaceTimelineState(timelineRef.current, false);
+        return;
+      }
       const saved = await runOperation(
         {
           label: "Saving timeline",
@@ -1618,6 +1744,12 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (!projectId) return;
     setErr(null);
     try {
+      if (projectRevisionsRef.current.has(projectId)) {
+        await queueEditorCommand(projectId, "replace", "Sync timeline to renderer", timelineRef.current);
+        replaceTimelineState(timelineRef.current, false);
+        onNavigate?.("render");
+        return;
+      }
       const saved = await runOperation(
         {
           label: "Syncing timeline to renderer",
@@ -1720,12 +1852,17 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     setMediaRenderStatus("Saving the edit decision list…");
     setErr(null);
     try {
-      const saved = await apiPost(
-        `/v1/projects/${encodeURIComponent(projectId)}/timeline`,
-        withExpectedRevision({ timeline: timelineRef.current }),
-      );
-      setRevisionFromResponse(saved);
-      replaceTimelineState(saved?.timeline || timelineRef.current, false);
+      if (projectRevisionsRef.current.has(projectId)) {
+        await queueEditorCommand(projectId, "replace", "Prepare edited master", timelineRef.current);
+        replaceTimelineState(timelineRef.current, false);
+      } else {
+        const saved = await apiPost(
+          `/v1/projects/${encodeURIComponent(projectId)}/timeline`,
+          withExpectedRevision({ timeline: timelineRef.current }),
+        );
+        setRevisionFromResponse(saved);
+        replaceTimelineState(saved?.timeline || timelineRef.current, false);
+      }
       setMediaRenderStatus("Queueing the non-destructive video edit…");
       const renderRequest: AnyDict = {
         width: editWidth,
@@ -1736,10 +1873,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         name: editOutputSafeName,
       };
       if (editVideoCodec !== "prores") renderRequest.quality = editQuality;
-      const response = await apiPost(
-        `/v1/projects/${encodeURIComponent(projectId)}/timeline/render`,
-        withExpectedRevision(renderRequest),
-      );
+      const response = await enqueueProjectMutation(projectId, () => apiPost(
+          `/v1/projects/${encodeURIComponent(projectId)}/timeline/render`,
+          expectedRevisionBody(renderRequest, { revision: projectRevisionsRef.current.get(projectId) }),
+        ));
       setRevisionFromResponse(response);
       setMediaRenderStatus(
         response?.job?.id
@@ -2917,10 +3054,10 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
               </div>
             </div>
             <div className="timeline-toolbarActions timeline-toolbarActions--wide">
-              <button className="secondary" disabled={!timelineHistory.canUndo} onClick={undoTimeline}>
+              <button className="secondary" disabled={!timelineHistory.canUndo && !editorHistory?.can_undo} onClick={undoTimeline}>
                 Undo
               </button>
-              <button className="secondary" disabled={!timelineHistory.canRedo} onClick={redoTimeline}>
+              <button className="secondary" disabled={!timelineHistory.canRedo && !editorHistory?.can_redo} onClick={redoTimeline}>
                 Redo
               </button>
               <button className="secondary" disabled={!selected || selectedLaneLocked} onClick={quantizeSelection}>

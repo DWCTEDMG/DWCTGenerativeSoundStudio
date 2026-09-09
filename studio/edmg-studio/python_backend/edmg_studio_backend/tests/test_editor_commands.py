@@ -162,6 +162,31 @@ def test_precise_sample_survives_legacy_round_trip():
     assert normalize_timeline(edited, precise)["tracks"][0]["clips"][0]["start_sample"] == "144000"
 
 
+def test_new_clip_source_seconds_create_exact_sample_metadata():
+    source = timeline()
+    source["tracks"][0]["clips"][0]["data"].update({"source_in_s": 1.25, "source_out_s": 3.5})
+    normalized = normalize_timeline(source)
+    data = normalized["tracks"][0]["clips"][0]["data"]
+    assert data["source_offset_sample"] == "55125"
+    assert data["source_offset_remainder"] == "0"
+    assert data["source_end_sample"] == "154350"
+    assert data["source_end_remainder"] == "0"
+
+
+def test_queued_source_edits_replace_stale_exact_sample_metadata():
+    initial = normalize_timeline(timeline())
+    first = deepcopy(initial)
+    first["tracks"][0]["clips"][0]["data"]["source_in_s"] = 3
+    first = normalize_timeline(first, initial)
+    second = deepcopy(initial)
+    second["tracks"][0]["clips"][0]["data"]["source_in_s"] = 4
+    second = normalize_timeline(second, first)
+    data = second["tracks"][0]["clips"][0]["data"]
+    assert data["source_in_s"] == 4
+    assert data["source_offset_sample"] == "176400"
+    assert data["source_offset_remainder"] == "0"
+
+
 def test_locked_tracks_and_media_paths_are_protected(editor):
     store, pid, _ = editor
     store.mutate(pid, lambda p: p.meta["timeline"]["tracks"][0].update({"locked": True}))
@@ -178,6 +203,27 @@ def test_locked_tracks_and_media_paths_are_protected(editor):
     modified = timeline()
     modified["tracks"][0]["clips"][0]["source_path"] = "../outside.mp4"
     assert submit(editor, action="replace", timeline=modified).status_code == 422
+
+
+def test_locked_camera_is_protected_from_replacement(editor):
+    store, pid, _ = editor
+    store.mutate(
+        pid,
+        lambda p: p.meta["timeline"].update(
+            {"camera": {"locked": True, "keyframes": [{"id": "camera-1", "t": 1}]}}
+        ),
+    )
+    modified = deepcopy(store.get(pid).meta["timeline"])
+    modified["camera"]["keyframes"] = []
+    assert submit(editor, action="replace", timeline=modified).status_code == 422
+    without_camera = deepcopy(store.get(pid).meta["timeline"])
+    del without_camera["camera"]
+    assert submit(editor, action="replace", timeline=without_camera).status_code == 422
+    unlocked = deepcopy(store.get(pid).meta["timeline"])
+    unlocked["camera"]["locked"] = False
+    response = submit(editor, action="replace", timeline=unlocked)
+    assert response.status_code == 200, response.text
+    assert response.json()["timeline"]["camera"] == unlocked["camera"]
 
 
 def test_history_is_bounded_and_new_edit_discards_redo():
@@ -297,3 +343,179 @@ def test_legacy_save_uses_same_history_and_exact_fields(editor):
     assert response.json()["timeline"]["tracks"][0]["clips"][0]["start_sample"] == "96000"
     undone = submit(editor, action="undo")
     assert undone.json()["timeline"]["tracks"][0]["clips"][0]["start_sample"] == "48000"
+
+
+def test_property_camera_and_modulation_edits_are_persistent_and_reversible(editor):
+    store, pid, _ = editor
+
+    def add_command_targets(project):
+        project.meta["timeline"]["tracks"].append(
+            {
+                "id": "motion",
+                "type": "motion",
+                "clips": [{"id": "motion-clip", "start_s": 0, "end_s": 5, "data": {}}],
+            }
+        )
+        project.meta["timeline"]["camera"] = {
+            "keyframes": [{"id": "camera-1", "t": 0, "zoom": 1.0}]
+        }
+
+    store.mutate(pid, add_command_targets)
+    response = submit(
+        editor,
+        label="Edit prompt, camera, and modulation",
+        operations=[
+            {
+                "kind": "set_clip_property",
+                "track_id": "video",
+                "clip_id": "clip",
+                "field": "prompt",
+                "value": "Updated prompt",
+            },
+            {
+                "kind": "update_camera_keyframe",
+                "keyframe_id": "camera-1",
+                "values": {"t": 2.5, "zoom": 1.25, "pan_x": 4},
+            },
+            {
+                "kind": "set_modulation",
+                "track_id": "motion",
+                "clip_id": "motion-clip",
+                "field": "strength_schedule",
+                "value": "0:(0.35), 24:(0.6)",
+            },
+        ],
+    )
+    assert response.status_code == 200, response.text
+    edited = response.json()["timeline"]
+    assert edited["tracks"][0]["clips"][0]["data"]["prompt"] == "Updated prompt"
+    assert edited["camera"]["keyframes"][0]["t"] == 2.5
+    assert edited["camera"]["keyframes"][0]["zoom"] == 1.25
+    assert edited["tracks"][1]["clips"][0]["data"]["strength_schedule"] == "0:(0.35), 24:(0.6)"
+    assert response.json()["history"]["undo_label"] == "Edit prompt, camera, and modulation"
+
+    undone = submit(editor, action="undo")
+    assert undone.status_code == 200
+    restored = undone.json()["timeline"]
+    assert "prompt" not in restored["tracks"][0]["clips"][0]["data"]
+    assert restored["camera"]["keyframes"][0]["t"] == 0
+    assert "strength_schedule" not in restored["tracks"][1]["clips"][0]["data"]
+    assert undone.json()["history"]["redo_label"] == "Edit prompt, camera, and modulation"
+
+    redone = submit(editor, action="redo")
+    assert redone.status_code == 200
+    assert redone.json()["timeline"] == edited
+
+
+def test_source_property_edit_rebuilds_exact_sample_position(editor):
+    store, pid, _ = editor
+
+    def add_exact_source_position(project):
+        data = project.meta["timeline"]["tracks"][0]["clips"][0].setdefault("data", {})
+        data.update(
+            {
+                "source_in_s": 1.0,
+                "source_sample_rate": 48_000,
+                "source_offset_sample": "48000",
+            }
+        )
+
+    store.mutate(pid, add_exact_source_position)
+    response = submit(
+        editor,
+        operations=[
+            {
+                "kind": "set_clip_property",
+                "track_id": "video",
+                "clip_id": "clip",
+                "field": "source_in_s",
+                "value": 2.0,
+            }
+        ],
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["timeline"]["tracks"][0]["clips"][0]["data"]
+    assert data["source_in_s"] == 2.0
+    assert data["source_offset_sample"] == "96000"
+
+
+def test_camera_keyframe_add_delete_and_lock_are_command_safe(editor):
+    store, pid, _ = editor
+    store.mutate(pid, lambda project: project.meta["timeline"].update({"camera": {"keyframes": []}}))
+    added = submit(
+        editor,
+        operations=[
+            {
+                "kind": "add_camera_keyframe",
+                "new_id": "camera-new",
+                "values": {"t": 1.5, "zoom": 1.1, "rotation_deg": 2},
+            }
+        ],
+    )
+    assert added.status_code == 200, added.text
+    assert added.json()["timeline"]["camera"]["keyframes"][0]["id"] == "camera-new"
+    deleted = submit(
+        editor,
+        operations=[{"kind": "delete_camera_keyframe", "keyframe_id": "camera-new"}],
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["timeline"]["camera"]["keyframes"] == []
+    assert submit(editor, action="undo").json()["timeline"]["camera"]["keyframes"][0]["id"] == "camera-new"
+
+    store.mutate(pid, lambda project: project.meta["timeline"]["camera"].update({"locked": True}))
+    rejected = submit(
+        editor,
+        operations=[
+            {
+                "kind": "update_camera_keyframe",
+                "keyframe_id": "camera-new",
+                "values": {"zoom": 2},
+            }
+        ],
+    )
+    assert rejected.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        (
+            {
+                "kind": "set_clip_property",
+                "track_id": "video",
+                "clip_id": "clip",
+                "field": "source_path",
+                "value": "outside.mp4",
+            },
+            "Unsupported clip property",
+        ),
+        (
+            {
+                "kind": "set_clip_property",
+                "track_id": "video",
+                "clip_id": "clip",
+                "field": "speed",
+                "value": 10,
+            },
+            "Playback speed",
+        ),
+        (
+            {
+                "kind": "set_modulation",
+                "track_id": "video",
+                "clip_id": "clip",
+                "field": "strength_schedule",
+                "value": "0:(1)",
+            },
+            "motion or automation track",
+        ),
+    ],
+)
+def test_typed_editor_operations_reject_unsafe_or_unbounded_values(editor, operation, message):
+    store, pid, _ = editor
+    before = deepcopy(store.get(pid).meta)
+    response = submit(editor, operations=[operation])
+    assert response.status_code == 422
+    assert message in response.text
+    assert store.get(pid).meta == before

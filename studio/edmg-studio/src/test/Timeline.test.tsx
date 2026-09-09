@@ -5,6 +5,80 @@ import Timeline from "../pages/Timeline";
 import { installEdmgBridge, installFetchMock, renderWithStudio } from "./testUtils";
 
 describe("Timeline page", () => {
+  it("persists timeline edits and undo through the editor command API", async () => {
+    installEdmgBridge();
+    const commands: any[] = [];
+    let revision = 1;
+    let serverTimeline: any = {
+      duration_s: 8,
+      tracks: [
+        {
+          id: "track_prompt",
+          name: "Prompts",
+          type: "prompt",
+          clips: [{ id: "prompt_0", start_s: 0, end_s: 4, data: { prompt: "Original prompt" } }],
+        },
+      ],
+      camera: { keyframes: [] },
+    };
+    installFetchMock({
+      "/v1/projects": { projects: [{ id: "p1", name: "Persistent History" }] },
+      "/v1/projects/p1": {
+        project: {
+          id: "p1",
+          name: "Persistent History",
+          revision,
+          meta: {
+            audio: { duration_s: 8 },
+            analysis: { features: { duration_s: 8, bpm: 120 } },
+            timeline: serverTimeline,
+          },
+        },
+      },
+      "/v1/projects/p1/editor": {
+        ok: true,
+        revision,
+        timeline: serverTimeline,
+        history: { can_undo: false, can_redo: false },
+      },
+      "POST /v1/projects/p1/editor/commands": (_path, init) => {
+        const body = JSON.parse(String(init?.body || "{}"));
+        commands.push(body);
+        revision += 1;
+        if (body.timeline) serverTimeline = body.timeline;
+        return {
+          ok: true,
+          revision,
+          timeline: serverTimeline,
+          history: {
+            can_undo: body.action !== "undo",
+            can_redo: body.action === "undo",
+            undo_label: body.label,
+            redo_label: body.label,
+          },
+        };
+      },
+    });
+
+    renderWithStudio(<Timeline backendUrl="http://127.0.0.1:7863" config={{}} />);
+    fireEvent.pointerDown(await screen.findByTitle("Original prompt"));
+    fireEvent.click(screen.getByRole("tab", { name: /Inspector/ }));
+    fireEvent.change(await screen.findByLabelText("Prompt text"), { target: { value: "Persistent prompt" } });
+    await waitFor(() => expect(commands).toHaveLength(1));
+    expect(commands[0]).toMatchObject({ action: "replace", label: "update_clip_property" });
+    expect(commands[0].timeline.tracks[0].clips[0].data.prompt).toBe("Persistent prompt");
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(commands).toHaveLength(2));
+    expect(commands[1]).toMatchObject({ action: "undo" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Lock Camera track" }));
+    await waitFor(() => expect(commands).toHaveLength(3));
+    expect(commands[2]).toMatchObject({ action: "replace", label: "toggle_camera_lock" });
+    expect(commands[2].timeline.camera.locked).toBe(true);
+    expect(await screen.findByRole("button", { name: "Unlock Camera track" })).toBeTruthy();
+  });
+
   it("updates the transport button when audio playback events fire", async () => {
     installEdmgBridge();
     installFetchMock({

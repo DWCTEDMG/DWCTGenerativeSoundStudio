@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from copy import deepcopy
 from fractions import Fraction
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -16,6 +17,47 @@ from .project_time import ProjectClock, int64, nearest
 
 HISTORY_LIMIT = 200
 RECEIPT_LIMIT = 2048
+
+CLIP_PROPERTY_FIELDS = {
+    "name",
+    "prompt",
+    "negative_prompt",
+    "source_in_s",
+    "source_out_s",
+    "speed",
+    "volume",
+    "fade_in_s",
+    "fade_out_s",
+    "muted",
+    "opacity",
+    "blend_mode",
+}
+CAMERA_FIELDS = {
+    "t",
+    "zoom",
+    "pan_x",
+    "pan_y",
+    "pan_z",
+    "rotation_deg",
+    "pitch",
+    "yaw",
+    "roll",
+    "easing",
+}
+MODULATION_FIELDS = {
+    "strength_schedule",
+    "cfg_scale_schedule",
+    "steps_schedule",
+    "zoom_schedule",
+    "rotation_schedule",
+    "rotation_y_schedule",
+    "translation_x_schedule",
+    "translation_y_schedule",
+    "translation_z_schedule",
+    "pan_x_schedule",
+    "pan_y_schedule",
+    "brightness_schedule",
+}
 
 
 class EditorConflict(ValueError):
@@ -83,13 +125,12 @@ def normalize_timeline(source: dict, baseline: dict | None = None) -> dict:
                 ("source_in_s", "source_offset_sample", "source_offset_remainder"),
                 ("source_out_s", "source_end_sample", "source_end_remainder"),
             ):
-                if (
-                    baseline
-                    and sample_key in data
-                    and seconds_key in data
-                    and data.get(seconds_key) != old_data.get(seconds_key)
-                    and data.get(sample_key) == old_data.get(sample_key)
-                ):
+                seconds_changed = seconds_key in data and data.get(seconds_key) != old_data.get(seconds_key)
+                exact_missing = seconds_key in data and sample_key not in data
+                # Replacement clients edit seconds; if they changed, regenerate exact
+                # metadata even when a queued snapshot still carries an older sample.
+                exact_stale = bool(baseline and sample_key in data and seconds_changed)
+                if exact_missing or exact_stale:
                     rate = int64(data.get("source_sample_rate", clock.sample_rate))
                     if rate <= 0:
                         raise ValueError("Source sample rate must be positive")
@@ -214,6 +255,11 @@ def execute(meta: dict, command: dict) -> None:
 
 
 def _preserve_locked(before: dict, after: dict) -> None:
+    before_camera = before.get("camera") or {}
+    after_camera = after.get("camera") or {}
+    if before_camera.get("locked") and after_camera != before_camera:
+        if after_camera.get("locked") is not False or {**after_camera, "locked": True} != before_camera:
+            raise ValueError("Unlock the camera lane before editing it")
     candidates = {t.get("id"): t for t in after.get("tracks", [])}
     for track in before.get("tracks", []):
         replacement = candidates.get(track.get("id"))
@@ -235,6 +281,9 @@ def _preserve_locked(before: dict, after: dict) -> None:
 def _edit(timeline: dict, op: dict) -> None:
     kind = op.get("kind")
     tracks = timeline["tracks"]
+    if kind in {"add_camera_keyframe", "update_camera_keyframe", "delete_camera_keyframe"}:
+        _edit_camera(timeline, op)
+        return
     if kind == "add_track":
         track_type = op.get("track_type", "video")
         if track_type not in {
@@ -307,6 +356,23 @@ def _edit(timeline: dict, op: dict) -> None:
         return
     if clip.get("locked"):
         raise ValueError("Unlock the clip before editing it")
+    if kind == "set_clip_property":
+        _set_clip_property(clip, op)
+        return
+    if kind == "set_modulation":
+        if str(track.get("type") or "").lower() not in {"motion", "automation", "ai_visual"}:
+            raise ValueError("Modulation edits require a motion or automation track")
+        field = op.get("field")
+        if field not in MODULATION_FIELDS:
+            raise ValueError("Unsupported modulation field")
+        value = op.get("value")
+        if value is not None and not isinstance(value, str):
+            raise ValueError("Modulation schedules must be strings or null")
+        data = clip.setdefault("data", {})
+        if not isinstance(data, dict):
+            raise ValueError("Clip data must be an object")
+        data[field] = value
+        return
     start, end = int64(clip["start_sample"]), int64(clip["end_sample"])
     clock = ProjectClock.from_timeline(timeline)
     if kind in {"move", "trim", "split"}:
@@ -352,6 +418,101 @@ def _edit(timeline: dict, op: dict) -> None:
         clip["muted"] = op["value"]
     else:
         raise ValueError("Unsupported timeline operation")
+
+
+def _set_clip_property(clip: dict, op: dict) -> None:
+    field = op.get("field")
+    if field not in CLIP_PROPERTY_FIELDS:
+        raise ValueError("Unsupported clip property")
+    value = op.get("value")
+    if field in {"speed", "volume", "fade_in_s", "fade_out_s", "source_in_s", "source_out_s", "opacity"}:
+        if type(value) not in {int, float} or not math.isfinite(float(value)):
+            raise ValueError(f"{field} must be a finite number")
+        value = float(value)
+        if field == "speed" and not 0.25 <= value <= 4:
+            raise ValueError("Playback speed must be between 0.25 and 4")
+        if field == "volume" and not 0 <= value <= 2:
+            raise ValueError("Volume must be between 0 and 2")
+        if field in {"fade_in_s", "fade_out_s", "source_in_s", "source_out_s"} and value < 0:
+            raise ValueError(f"{field} cannot be negative")
+        if field == "opacity" and not 0 <= value <= 1:
+            raise ValueError("Opacity must be between 0 and 1")
+    elif field == "muted" and type(value) is not bool:
+        raise ValueError("Muted state must be boolean")
+    elif field in {"name", "prompt", "negative_prompt", "blend_mode"} and not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    data = clip.setdefault("data", {})
+    if not isinstance(data, dict):
+        raise ValueError("Clip data must be an object")
+    data[field] = value
+    if field == "source_in_s":
+        _set_exact_source_property(data, value, "source_offset_sample", "source_offset_remainder")
+    elif field == "source_out_s":
+        _set_exact_source_property(data, value, "source_end_sample", "source_end_remainder")
+
+
+def _set_exact_source_property(data: dict, seconds: float, sample_key: str, remainder_key: str) -> None:
+    rate = int64(data.get("source_sample_rate", 48_000))
+    if rate <= 0:
+        raise ValueError("Source sample rate must be positive")
+    exact = Fraction(str(seconds)) * rate
+    rounded = int64(nearest(exact))
+    data["source_sample_rate"] = rate
+    data[sample_key], data[remainder_key] = str(rounded), str(exact - rounded)
+
+
+def _edit_camera(timeline: dict, op: dict) -> None:
+    camera = timeline.setdefault("camera", {})
+    if not isinstance(camera, dict):
+        raise ValueError("Timeline camera must be an object")
+    if camera.get("locked"):
+        raise ValueError("Unlock the camera lane before editing it")
+    keyframes = camera.setdefault("keyframes", [])
+    if not isinstance(keyframes, list):
+        raise ValueError("Camera keyframes must be an array")
+    kind = op["kind"]
+    if kind == "add_camera_keyframe":
+        values = op.get("values")
+        if not isinstance(values, dict):
+            raise ValueError("A camera keyframe requires values")
+        keyframe = {"id": op.get("new_id") or str(uuid4())}
+        _update_camera_values(keyframe, values)
+        keyframe.setdefault("t", 0.0)
+        keyframes.append(keyframe)
+    else:
+        keyframe_id = op.get("keyframe_id")
+        index = op.get("index")
+        keyframe = next((item for item in keyframes if item.get("id") == keyframe_id), None)
+        if keyframe is None and type(index) is int and 0 <= index < len(keyframes):
+            keyframe = keyframes[index]
+        if keyframe is None:
+            raise ValueError("Camera keyframe not found")
+        if kind == "delete_camera_keyframe":
+            keyframes.remove(keyframe)
+        else:
+            values = op.get("values")
+            if not isinstance(values, dict) or not values:
+                raise ValueError("Camera update requires values")
+            _update_camera_values(keyframe, values)
+    keyframes.sort(key=lambda item: float(item.get("t", 0)))
+
+
+def _update_camera_values(keyframe: dict, values: dict) -> None:
+    if not values.keys() <= CAMERA_FIELDS:
+        raise ValueError("Unsupported camera keyframe field")
+    for field, value in values.items():
+        if field == "easing":
+            if not isinstance(value, str):
+                raise ValueError("Camera easing must be a string")
+        else:
+            if type(value) not in {int, float} or not math.isfinite(float(value)):
+                raise ValueError(f"Camera {field} must be a finite number")
+            value = float(value)
+            if field == "t" and value < 0:
+                raise ValueError("Camera time cannot be negative")
+            if field == "zoom" and value <= 0:
+                raise ValueError("Camera zoom must be positive")
+        keyframe[field] = value
 
 
 def _advance_source(clip: dict, delta: int, clock: ProjectClock) -> None:
