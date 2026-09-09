@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -156,3 +157,59 @@ def test_hunyuan_adapter_is_implemented_but_fails_closed_without_runner(tmp_path
     assert adapter.smoke_test is not None
     assert adapter.descriptor.dependency_modules == ()
     assert any("EDMG_HUNYUAN15_RUNNER" in issue for issue in adapter.validate_config(tmp_path))
+
+
+def test_opt_in_real_model_runtime_smoke_tests():
+    if os.environ.get("REAL_MODEL_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        pytest.skip("Set REAL_MODEL_TESTS=1 to run destructive, hardware-dependent model inference")
+
+    from edmg_studio_backend.services.engine_packages import MANIFESTS, validate_package
+
+    model_ids = [
+        value.strip()
+        for value in os.environ.get("EDMG_REAL_MODEL_IDS", "").split(",")
+        if value.strip()
+    ]
+    assert model_ids, "Set EDMG_REAL_MODEL_IDS to one or more comma-separated managed package IDs"
+    try:
+        roots = json.loads(os.environ.get("EDMG_REAL_MODEL_ROOTS", ""))
+    except json.JSONDecodeError as exc:
+        pytest.fail(f"EDMG_REAL_MODEL_ROOTS must be a JSON object: {exc}")
+    assert isinstance(roots, dict), "EDMG_REAL_MODEL_ROOTS must map package IDs to installation directories"
+
+    try:
+        import psutil
+
+        ram_gb = round(float(psutil.virtual_memory().total) / float(1024 ** 3), 2)
+    except ImportError:
+        ram_gb = 0.0
+    device = os.environ.get("EDMG_REAL_MODEL_DEVICE", "cuda:0").strip().lower()
+    hardware = {
+        "backend": "cuda" if device.startswith("cuda") else "cpu",
+        "device": device,
+        "device_name": device,
+        "ram_gb": ram_gb,
+        "vram_gb": 0.0,
+    }
+    if device.startswith("cuda"):
+        import torch
+
+        assert torch.cuda.is_available(), f"Requested {device}, but CUDA is unavailable"
+        index = int(device.partition(":")[2] or "0")
+        properties = torch.cuda.get_device_properties(index)
+        hardware["device_name"] = properties.name
+        hardware["vram_gb"] = round(float(properties.total_memory) / float(1024 ** 3), 2)
+
+    for model_id in model_ids:
+        assert model_id in MANIFESTS, f"Unknown managed runtime package: {model_id}"
+        assert model_id in roots, f"EDMG_REAL_MODEL_ROOTS has no path for {model_id}"
+        package_root = Path(str(roots[model_id])).expanduser().resolve()
+        validation = validate_package(package_root, MANIFESTS[model_id])
+        assert validation["valid"], f"{model_id} package validation failed: {validation['issues']}"
+        result = DEFAULT_RUNTIME_REGISTRY.smoke_test(
+            model_id,
+            package_root=package_root,
+            package_validation=validation,
+            hardware=hardware,
+        )
+        assert result["runtime_ready"], f"{model_id} did not reach Level-5 readiness: {result['blockers']}"

@@ -100,6 +100,26 @@ The Tencent package does not include those separately licensed companion assets.
 their configured paths and the official `HunyuanVideo_1_5_Pipeline.create_pipeline` environment,
 isolates the requested `cuda:N`, and remains unavailable until real inference succeeds.
 
+### Opt-in real-model qualification tests
+
+Normal CI uses synthetic packages and mocked subprocesses. To run real Level-5 inference against
+one or more existing managed installations, explicitly provide the package IDs, installation roots,
+and target device. The test fails rather than skips when an opted-in package or runtime is incomplete:
+
+```powershell
+$env:REAL_MODEL_TESTS = "1"
+$env:EDMG_REAL_MODEL_IDS = "hf_ltx_25_distilled_internal"
+$env:EDMG_REAL_MODEL_ROOTS = '{"hf_ltx_25_distilled_internal":"D:\EDMG\models\internal\video\hf_ltx_25_distilled_internal"}'
+$env:EDMG_REAL_MODEL_DEVICE = "cuda:0"
+uv run --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio --group test `
+  python -m pytest studio\edmg-studio\python_backend\edmg_studio_backend\tests\test_model_runtime_registry.py `
+  -k opt_in_real_model_runtime_smoke_tests -v
+```
+
+The configured package must already have a valid `model.json` installation receipt. LTX, Hunyuan,
+and Qwen also require their documented external runtime configuration. A successful run writes the
+same hardware- and runtime-fingerprinted `runtime-validation.json` receipt used by the Models UI.
+
 ## S3-backed model hosting
 
 Install the Studio backend bundle or the `aws` extra so `boto3` is available, then enable the cache with normal AWS credentials:
