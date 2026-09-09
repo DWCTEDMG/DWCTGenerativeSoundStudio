@@ -1339,7 +1339,7 @@ These form the dependency-critical queue for the integration captain. They are n
 | WP-05 / P1-02 | Done | SQLite `JobStore` with leases, events, JSON migrate |
 | WP-06 / P1-05 | Done | Autosave journal + Timeline recovery UI |
 | WP-07 / P1-03 | Done | `.mp4.artifact.json` on internal render completion |
-| WP-08 / P1-06 | Partial | Typed contracts extended for Music Graph, Render Plan GET, variant review, live assets, template packages, and performer plan in `src/shared/api/contracts.ts` |
+| WP-08 / P1-06 | Done | Project Health is the reference generated-contract domain: FastAPI response models feed `openapi-typescript`, committed output is consumed through compatibility aliases, and `check:tooling` rejects schema drift |
 | WP-09 / P2-01 | Partial | System + Project durability + **Models** routers extracted to `api/routers.py` |
 | WP-10 / P2-02 | Partial | Command stack + Timeline Undo/Redo for delete/move/trim (UI drag + backend helpers); split/property coverage still open |
 | WP-11 / P2-04 | Done | Shared `ProjectJobsPanel` + `useProjectJobs` on Render Queue and Review; job events in log viewer |
@@ -1355,6 +1355,8 @@ Also landed in parallel: P0-03 hygiene (`LICENSE`, `SECURITY.md`, `CHANGELOG.md`
 | W7-05 beta handoff | Blocked | Signing creds, clean VM installer proof, GPU benchmark evidence, full e2e matrix |
 
 **Verification on this audit (2026-07-21):** backend pytest **240+ passed** (includes understand corrections + timeline move/trim command tests); frontend `typecheck` + targeted vitest **pass** for Understand corrections and timeline history. Router store lookup fixed so extracted project routes honor test/runtime `store` monkeypatches. Blueprint acceptance gates (signed installer, GPU benchmarks, full Electron e2e, named-hardware W7-04) remain open.
+
+**WP-08 verification (2026-09-09):** Project Health backend/OpenAPI tests **pass**; frontend contract and Workspace tests **pass**; generated-contract drift check, frontend typecheck, lint, and the integrated tooling gate **pass**.
 
 1. **WP-01 / P0-01:** repair FFmpeg provisioning in CI and make the four failing tests diagnostic when FFmpeg is absent.
 2. **WP-02 / P0-04:** add one shared system-readiness service and surface its result in Settings/System.

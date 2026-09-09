@@ -49,6 +49,51 @@ class HealthResponse(BaseModel):
     ok: bool = True
     version: str = STUDIO_VERSION
 
+
+class ProjectHealthIssue(BaseModel):
+    code: str
+    severity: Literal["error", "warning", "info"]
+    message: str
+
+
+class ProjectMissingAsset(BaseModel):
+    path: str
+    reason: str
+
+
+class ProjectAssetRecord(BaseModel):
+    path: str
+    role: str
+    exists: bool
+    bytes: int | None
+    sha256: str | None
+    referenced: bool
+
+
+class ProjectAssetIndex(BaseModel):
+    schema_version: int
+    generated_at: str
+    asset_count: int
+    missing_count: int
+    total_bytes: int
+    disk_estimate_gb: float
+    missing: list[ProjectMissingAsset]
+    assets: list[ProjectAssetRecord]
+
+
+class ProjectHealthReport(BaseModel):
+    ok: bool
+    status: Literal["ok", "warning", "error"]
+    issues: list[ProjectHealthIssue]
+    asset_index: ProjectAssetIndex
+    actions: list[str]
+
+
+class ProjectHealthResponse(BaseModel):
+    ok: bool = True
+    health: ProjectHealthReport
+
+
 class ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 

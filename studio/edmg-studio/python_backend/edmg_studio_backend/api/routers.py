@@ -31,6 +31,7 @@ from ..schemas import (
     LiveCuePublishRequest,
     MotionPhrasesApplyRequest,
     MusicGraphCorrectionsRequest,
+    ProjectHealthResponse,
     ProjectCreateRequest,
     RecoveryApplyRequest,
     RenderPlan,
@@ -101,7 +102,7 @@ def create_project_router(
             raise HTTPException(404, "Project not found")
         return project_response(proj)
 
-    @router.get("/v1/projects/{project_id}/health")
+    @router.get("/v1/projects/{project_id}/health", response_model=ProjectHealthResponse)
     def get_project_health(project_id: str) -> dict[str, Any]:
         proj = store().get(project_id)
         if not proj:

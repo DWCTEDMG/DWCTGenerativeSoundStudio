@@ -24,6 +24,7 @@ import { useStudioSession } from "../components/studioSession";
 import { useUiMode } from "../components/uiMode";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { useSignedProjectMedia } from "../hooks/useSignedProjectMedia";
+import type { ProjectHealthReport, ProjectHealthResponse } from "../shared/api/contracts";
 import type { PageProps } from "../types/pageProps";
 import AiNlpWorkbench from "../workbenches/AiNlpWorkbench";
 import AudioReactiveWorkbench from "../workbenches/AudioReactiveWorkbench";
@@ -235,7 +236,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const [err, setErr] = useState<string | null>(null);
   const [revisionConflict, setRevisionConflict] = useState<ApiError | null>(null);
   const [revisionReloading, setRevisionReloading] = useState(false);
-  const [projectHealth, setProjectHealth] = useState<any>(null);
+  const [projectHealth, setProjectHealth] = useState<ProjectHealthReport | null>(null);
   const [musicGraph, setMusicGraph] = useState<any>(null);
   const [liveCues, setLiveCues] = useState<any>(null);
   const [liveAssets, setLiveAssets] = useState<any>(null);
@@ -293,8 +294,8 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
       setAssets(null);
     }
     try {
-      const health = await apiGet(`/v1/projects/${id}/health`);
-      setProjectHealth(health?.health || null);
+      const health = await apiGet(`/v1/projects/${id}/health`) as ProjectHealthResponse;
+      setProjectHealth(health.health);
     } catch {
       setProjectHealth(null);
     }

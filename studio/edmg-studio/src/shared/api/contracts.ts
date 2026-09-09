@@ -1,7 +1,6 @@
-/**
- * Typed API contracts for extracted System/Project durability domains (WP-08 / P1-06).
- * Keep these aligned with FastAPI responses from `edmg_studio_backend.api.routers` and `app.py`.
- */
+/** Typed API contracts for extracted System/Project durability domains (WP-08 / P1-06). */
+
+import type { components as ProjectHealthComponents } from "./generated/project-health";
 
 export type SystemReadinessStatus = "ok" | "warn" | "blocked" | string;
 
@@ -17,37 +16,10 @@ export type SystemReadinessReport = {
   warnings?: Array<{ code?: string; message?: string }>;
 };
 
-export type ProjectHealthIssue = {
-  code: string;
-  severity: "error" | "warning" | "info" | string;
-  message: string;
-};
-
-export type ProjectAssetIndex = {
-  schema_version: number;
-  generated_at: string;
-  asset_count: number;
-  missing_count: number;
-  total_bytes: number;
-  disk_estimate_gb: number;
-  missing: Array<{ path: string; reason?: string }>;
-  assets: Array<{
-    path: string;
-    role: string;
-    exists: boolean;
-    bytes: number | null;
-    sha256: string | null;
-    referenced: boolean;
-  }>;
-};
-
-export type ProjectHealthReport = {
-  ok: boolean;
-  status: "ok" | "warning" | "error" | string;
-  issues: ProjectHealthIssue[];
-  asset_index: ProjectAssetIndex;
-  actions: string[];
-};
+export type ProjectHealthIssue = ProjectHealthComponents["schemas"]["ProjectHealthIssue"];
+export type ProjectAssetIndex = ProjectHealthComponents["schemas"]["ProjectAssetIndex"];
+export type ProjectHealthReport = ProjectHealthComponents["schemas"]["ProjectHealthReport"];
+export type ProjectHealthResponse = ProjectHealthComponents["schemas"]["ProjectHealthResponse"];
 
 export type RecoveryCandidate = {
   kind: "journal" | "snapshot" | string;
