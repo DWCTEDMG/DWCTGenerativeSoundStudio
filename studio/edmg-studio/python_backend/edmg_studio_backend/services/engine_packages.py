@@ -22,15 +22,15 @@ HIGH_GGUF_ID = "hf_qwen3_vl_30b_gguf_director"
 PROFILES = {
     STANDARD_GGUF_ID: ("qwen3_vl_gguf", "director", 0, 16, ("llama_cpp",)),
     HIGH_GGUF_ID: ("qwen3_vl_gguf", "director", 0, 32, ("llama_cpp",)),
-    "hf_hunyuan_video15_internal": ("hunyuan_video15", "video", 14, 64, ("torch", "hyvideo")),
+    "hf_hunyuan_video15_internal": ("hunyuan_video15", "video", 14, 64, ()),
     "hf_whisper_large_v3_turbo_internal": ("whisper_transformers", "asr", 0, 8, ("torch", "transformers")),
     "hf_ltx_25_distilled_internal": ("ltx_25", "video", 5, 36, ("torch", "ltx_core", "ltx_pipelines")),
 }
 RUNTIME_BLOCKERS = {
     "qwen3_vl_gguf": ["Install a supported llama-server build and run the model runtime smoke test before using this Director package."],
-    "hunyuan_video15": ["The upstream Hunyuan distilled layout is not supported by Studio's Diffusers loader; the local adapter is not release-qualified.", "Separate upstream text/image encoders and the Hunyuan runtime are required; they are not included in this package."],
+    "hunyuan_video15": ["Configure the explicit WSL2 or external Linux Python runner and qualify it with the runtime smoke test.", "Separate Qwen2.5-VL, ByT5, Glyph-SDXL-v2, and gated FLUX.1-Redux-dev assets are required and are not included in the Tencent package."],
     "whisper_transformers": ["Run the model runtime smoke test before selecting the managed Transformers Whisper provider."],
-    "ltx_25": ["The selective package includes the official split components, but Studio's isolated LTX-2.5 execution adapter is not implemented or release-qualified."],
+    "ltx_25": ["Configure ltx-pipelines 1.3.0 in the isolated runtime and run the model runtime smoke test."],
 }
 
 

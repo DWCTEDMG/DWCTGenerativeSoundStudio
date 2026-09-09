@@ -119,18 +119,37 @@ def _validate_hunyuan(root: Path) -> list[str]:
     except ValueError as exc:
         issues.append(str(exc))
     required = (
-        "text_encoder/llm/config.json",
-        "text_encoder/byt5-small/config.json",
-        "text_encoder/Glyph-SDXL-v2/assets/color_idx.json",
-        "text_encoder/Glyph-SDXL-v2/assets/multilingual_10-lang_idx.json",
-        "text_encoder/Glyph-SDXL-v2/checkpoints/byt5_model.pt",
-        "vision_encoder/siglip/image_encoder/config.json",
-        "vision_encoder/siglip/feature_extractor/preprocessor_config.json",
+        "transformer/480p_t2v_distilled/config.json",
+        "transformer/480p_t2v_distilled/diffusion_pytorch_model.safetensors",
+        "transformer/480p_i2v_step_distilled/config.json",
+        "transformer/480p_i2v_step_distilled/diffusion_pytorch_model.safetensors",
+        "vae/diffusion_pytorch_model.safetensors",
     )
     missing = [name for name in required if not (root / name).is_file()]
     if missing:
-        issues.append("Required Hunyuan runtime components are missing: " + ", ".join(missing))
+        issues.append("Required managed Hunyuan components are missing: " + ", ".join(missing))
+    from .internal_video_models import validate_hunyuan_runner
+    issues.extend(validate_hunyuan_runner())
     return issues
+
+
+def _smoke_test_hunyuan(
+    *, package_root: Path, hardware: Mapping[str, Any],
+    cancel_check: Callable[[], Any] | None = None, **_kwargs: Any,
+) -> Mapping[str, Any]:
+    from .internal_video_models import generate_video_model_frames
+
+    frames = generate_video_model_frames(
+        engine="hunyuan_video15", video_model_dir=package_root, base_model_dir=package_root,
+        init_image=None, prompt="A red cube slowly rotates on a black background",
+        negative_prompt="text, watermark", width=256, height=256, num_frames=9, fps=24,
+        steps=2, cfg=1.0, seed=1, device=ModelRuntimeRegistry._device(hardware),
+        dtype="bfloat16", cpu_offload=True, workspace=package_root, cancel_check=cancel_check,
+    )
+    if len(frames) != 9:
+        raise RuntimeError(f"Hunyuan smoke test decoded {len(frames)} frames instead of 9")
+    return {"success": True, "device": ModelRuntimeRegistry._device(hardware), "dtype": "bfloat16",
+            "frames": len(frames), "official_pipeline": "HunyuanVideo_1_5_Pipeline.create_pipeline"}
 
 
 def _validate_ltx(root: Path) -> list[str]:
@@ -143,7 +162,44 @@ def _validate_ltx(root: Path) -> list[str]:
         "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
     )
     missing = [name for name in required if not (root / name).is_file()]
-    return (["Required LTX-2.5 components are missing: " + ", ".join(missing)] if missing else [])
+    issues = (["Required LTX-2.5 components are missing: " + ", ".join(missing)] if missing else [])
+    if not issues:
+        try:
+            from .ltx_25_runtime import validate_runtime_version
+
+            validate_runtime_version()
+        except Exception as exc:
+            issues.append(str(exc))
+    return issues
+
+
+def _smoke_test_ltx_25(
+    *,
+    package_root: Path,
+    hardware: Mapping[str, Any],
+    cancel_check: Callable[[], bool] | None = None,
+    **_kwargs: Any,
+) -> Mapping[str, Any]:
+    from .ltx_25_runtime import generate_ltx_frames
+
+    device = ModelRuntimeRegistry._device(hardware)
+    frames = generate_ltx_frames(
+        package_root=package_root,
+        workspace=package_root,
+        prompt="A single white circle on a black background, static camera",
+        width=64,
+        height=64,
+        num_frames=9,
+        fps=8,
+        seed=1,
+        device=device,
+        cpu_offload=True,
+        cancel_check=cancel_check,
+        timeout_s=float(os.environ.get("EDMG_LTX25_SMOKE_TIMEOUT_SECONDS", "600")),
+    )
+    if not frames:
+        raise RuntimeError("LTX-2.5 smoke test returned no decoded frames")
+    return {"success": True, "device": device, "dtype": "bfloat16", "frame_count": len(frames)}
 
 
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
@@ -316,6 +372,22 @@ class ModelRuntimeRegistry:
                 "device_name": hardware.get("device_name"),
             },
         }
+        if descriptor.package_id == "hf_hunyuan_video15_internal":
+            from .internal_video_models import hunyuan_runner_config
+            runner = hunyuan_runner_config()
+            payload["external_runtime"] = {
+                "mode": runner.mode, "python": runner.python, "repo": runner.repo,
+                "distro": runner.distro, "companions": dict(runner.companions),
+            }
+        elif descriptor.package_id == "hf_ltx_25_distilled_internal":
+            from .ltx_25_runtime import runtime_identity
+            try:
+                payload["external_runtime"] = runtime_identity()
+            except Exception:
+                payload["external_runtime"] = {
+                    "python": os.environ.get("EDMG_LTX25_PYTHON", "").strip(),
+                    "ltx_pipelines_version": "unavailable",
+                }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
@@ -344,6 +416,10 @@ class ModelRuntimeRegistry:
         backend = str(hw.get("backend") or "").lower()
         hardware_known = bool(hw)
         hardware_issues: list[str] = []
+        if hardware_known and backend not in descriptor.supported_devices:
+            hardware_issues.append(
+                f"Requires one of these compute backends: {', '.join(descriptor.supported_devices)}."
+            )
         if descriptor.minimum_vram_gb and (
             backend != "cuda" or self._number(hw, "vram_gb") < descriptor.minimum_vram_gb
         ):
@@ -540,12 +616,15 @@ def create_default_registry() -> ModelRuntimeRegistry:
         ),
         (
             "hf_hunyuan_video15_internal",
-            _descriptor(
-                "hf_hunyuan_video15_internal", "hunyuan_video15", "native_hunyuan15", "hyvideo15",
-                "video", ("text-to-video", "image-to-video"),
-                ("transformer", "scheduler", "vae", "qwen_text_encoder", "byt5_glyph", "siglip"),
-                ("torch", "hyvideo"), ("cuda",), "bfloat16", 14, 64,
-                "The selective package does not yet include the required Qwen, ByT5/Glyph, and SigLIP runtime assets.",
+            RuntimeDescriptor(
+                package_id="hf_hunyuan_video15_internal", model_family="hunyuan_video15",
+                model_format="native_hunyuan15", runtime_backend="hyvideo15_linux_subprocess",
+                runtime_version="official-create-pipeline-v1", role="video",
+                capabilities=("text-to-video", "image-to-video"),
+                required_components=("transformer", "scheduler", "vae", "external_qwen_text_encoder",
+                                     "external_byt5", "external_glyph", "external_siglip"),
+                dependency_modules=(), supported_devices=("cuda",), recommended_dtype="bfloat16",
+                minimum_vram_gb=14, minimum_ram_gb=64, adapter_ready=True, smoke_test_supported=True,
             ),
             _validate_hunyuan,
         ),
@@ -572,12 +651,13 @@ def create_default_registry() -> ModelRuntimeRegistry:
         ),
         (
             "hf_ltx_25_distilled_internal",
-            _descriptor(
-                "hf_ltx_25_distilled_internal", "ltx_25", "ltx25", "ltx_pipelines_distilled",
-                "video", ("text-to-video", "image-to-video", "audio"),
-                ("transformer", "gemma_text_encoder", "video_vae", "audio_vae", "duration_head", "spatial_upsampler"),
-                ("torch", "ltx_core", "ltx_pipelines"), ("cuda",), "bfloat16", 5, 36,
-                "The required LTX-2.5 latent spatial upsampler and native adapter must be installed and qualified.",
+            RuntimeDescriptor(
+                package_id="hf_ltx_25_distilled_internal", model_family="ltx_25", model_format="ltx25",
+                runtime_backend="ltx_pipelines_distilled", runtime_version="ltx-pipelines==1.3.0",
+                role="video", capabilities=("text-to-video", "image-to-video", "audio"),
+                required_components=("transformer", "gemma_text_encoder", "video_vae", "audio_vae", "duration_head", "spatial_upsampler"),
+                dependency_modules=(), supported_devices=("cuda",), recommended_dtype="bfloat16",
+                minimum_vram_gb=5, minimum_ram_gb=36, adapter_ready=True, smoke_test_supported=True,
             ),
             _validate_ltx,
         ),
@@ -588,8 +668,12 @@ def create_default_registry() -> ModelRuntimeRegistry:
             smoke_test=(
                 _smoke_test_transformers_whisper
                 if package_id == "hf_whisper_large_v3_turbo_internal"
+                else _smoke_test_hunyuan
+                if package_id == "hf_hunyuan_video15_internal"
                 else _smoke_test_qwen_gguf
                 if package_id in {"hf_qwen3_vl_8b_gguf_director", "hf_qwen3_vl_30b_gguf_director"}
+                else _smoke_test_ltx_25
+                if package_id == "hf_ltx_25_distilled_internal"
                 else None
             ),
         ))

@@ -64,6 +64,42 @@ From the repo root:
 - `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --group test python -m pytest` runs repo-level tests only
 - `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py` runs repo-level tests, then backend-local tests
 
+## Managed video runtimes
+
+Managed model installation and runtime readiness are separate. Models become ready only after
+the Models page runtime smoke test completes a real inference and writes a receipt matching the
+current package, dependencies, runner configuration, and selected GPU.
+
+### LTX-2.5
+
+LTX-2.5 runs in an isolated Python environment containing exactly `ltx-pipelines==1.3.0`.
+Point Studio at that interpreter with `EDMG_LTX25_PYTHON`. The managed model package supplies
+the transformer, Gemma text encoder, video/audio VAEs, duration head, and spatial upsampler.
+CUDA is required; `cuda:N` is isolated through `CUDA_VISIBLE_DEVICES`, while the pipeline's CPU
+offload option can reduce VRAM use. Optional overrides are `EDMG_LTX25_TIMEOUT_SECONDS` and
+`EDMG_LTX25_SMOKE_TIMEOUT_SECONDS`.
+
+### HunyuanVideo-1.5
+
+The official Hunyuan runtime is Linux-only. On Windows, configure WSL2 or an externally managed
+Linux Python environment; Studio does not silently substitute a different implementation:
+
+```text
+EDMG_HUNYUAN15_RUNNER=wsl                 # or external
+EDMG_HUNYUAN15_WSL_DISTRO=<distro>        # optional for wsl
+EDMG_HUNYUAN15_PYTHON=<linux-python>
+EDMG_HUNYUAN15_REPO=<official-checkout>
+EDMG_HUNYUAN15_LLM_PATH=<Qwen2.5-VL assets>
+EDMG_HUNYUAN15_BYT5_PATH=<ByT5 assets>
+EDMG_HUNYUAN15_GLYPH_PATH=<Glyph-SDXL-v2 assets>
+EDMG_HUNYUAN15_VISION_PATH=<FLUX Redux/SigLIP assets>
+EDMG_HUNYUAN15_TIMEOUT_SECONDS=3600
+```
+
+The Tencent package does not include those separately licensed companion assets. Studio validates
+their configured paths and the official `HunyuanVideo_1_5_Pipeline.create_pipeline` environment,
+isolates the requested `cuda:N`, and remains unavailable until real inference succeeds.
+
 ## S3-backed model hosting
 
 Install the Studio backend bundle or the `aws` extra so `boto3` is available, then enable the cache with normal AWS credentials:

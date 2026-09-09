@@ -317,6 +317,13 @@ def _video_model_adapter_canvas(
     cpu_offload: bool,
 ) -> tuple[int, int, str | None]:
     engine_l = str(engine or "").lower()
+    if engine_l == "ltx_25":
+        adapter_w = max(64, int(width) // 64 * 64)
+        adapter_h = max(64, int(height) // 64 * 64)
+        note = None if (adapter_w, adapter_h) == (int(width), int(height)) else (
+            f"LTX-2.5 canvas aligned to {adapter_w}x{adapter_h}"
+        )
+        return adapter_w, adapter_h, note
     if engine_l not in {"animatediff", "svd", "hunyuan_video15"} or str(device or "").lower() != "cuda":
         return int(width), int(height), None
     vram_gb = _cuda_total_vram_gb(device)
@@ -3400,6 +3407,8 @@ def render_internal_video_variant(
                 noise_aug_strength=float(noise_aug_strength),
                 decode_chunk_size=int(settings.video_model_decode_chunk_size),
                 cpu_offload=bool(settings.video_model_cpu_offload),
+                workspace=out_frames,
+                cancel_check=cancel_check_fn,
             )
             if not generated:
                 raise RuntimeError(f"Internal {engine} adapter returned no frames.")

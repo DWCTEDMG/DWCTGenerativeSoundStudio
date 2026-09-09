@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from edmg_studio_backend.services.model_runtime_registry import (
+    DEFAULT_RUNTIME_REGISTRY,
     ModelRuntimeRegistry,
     RuntimeAdapter,
     RuntimeDescriptor,
@@ -145,3 +145,14 @@ def test_duplicate_and_unknown_adapters_are_rejected(tmp_path):
         subject.register(RuntimeAdapter(descriptor=descriptor(), validate_config=lambda root: []))
     with pytest.raises(KeyError, match="No runtime adapter"):
         subject.status("unknown")
+
+
+def test_hunyuan_adapter_is_implemented_but_fails_closed_without_runner(tmp_path, monkeypatch):
+    for name in ("RUNNER", "PYTHON", "REPO", "LLM_PATH", "BYT5_PATH", "GLYPH_PATH", "VISION_PATH"):
+        monkeypatch.delenv(f"EDMG_HUNYUAN15_{name}", raising=False)
+    adapter = DEFAULT_RUNTIME_REGISTRY.adapter("hf_hunyuan_video15_internal")
+    assert adapter.descriptor.adapter_ready
+    assert adapter.descriptor.smoke_test_supported
+    assert adapter.smoke_test is not None
+    assert adapter.descriptor.dependency_modules == ()
+    assert any("EDMG_HUNYUAN15_RUNNER" in issue for issue in adapter.validate_config(tmp_path))

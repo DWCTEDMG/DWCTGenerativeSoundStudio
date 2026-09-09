@@ -3,8 +3,15 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import os
 import random
-from pathlib import Path
+import shutil
+import subprocess
+import time
+import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..errors import UserFacingError
@@ -19,6 +26,116 @@ SVD_MIN_GUIDANCE_SCALE = 1.0
 SVD_MAX_GUIDANCE_SCALE = 3.0
 ANIMATEDIFF_MAX_GUIDANCE_SCALE = 7.5
 HUNYUAN_DEFAULT_FPS = 24
+HUNYUAN_ENV_PREFIX = "EDMG_HUNYUAN15_"
+HUNYUAN_COMPANIONS = {
+    "llm": ("LLM_PATH", ("config.json",)),
+    "byt5": ("BYT5_PATH", ("config.json",)),
+    "glyph": (
+        "GLYPH_PATH",
+        ("assets/color_idx.json", "assets/multilingual_10-lang_idx.json", "checkpoints/byt5_model.pt"),
+    ),
+    "vision": ("VISION_PATH", ("image_encoder/config.json", "feature_extractor/preprocessor_config.json")),
+}
+
+
+@dataclass(frozen=True)
+class HunyuanRunnerConfig:
+    mode: str
+    python: str
+    repo: str
+    distro: str | None
+    timeout_s: float
+    companions: Mapping[str, str]
+
+
+def hunyuan_runner_config(environ: Mapping[str, str] | None = None) -> HunyuanRunnerConfig:
+    env = os.environ if environ is None else environ
+    mode = str(env.get(f"{HUNYUAN_ENV_PREFIX}RUNNER") or "").strip().lower()
+    timeout_raw = str(env.get(f"{HUNYUAN_ENV_PREFIX}TIMEOUT_SECONDS") or "3600")
+    try:
+        timeout_s = float(timeout_raw)
+    except ValueError:
+        timeout_s = 0
+    return HunyuanRunnerConfig(
+        mode=mode,
+        python=str(env.get(f"{HUNYUAN_ENV_PREFIX}PYTHON") or "").strip(),
+        repo=str(env.get(f"{HUNYUAN_ENV_PREFIX}REPO") or "").strip(),
+        distro=str(env.get(f"{HUNYUAN_ENV_PREFIX}WSL_DISTRO") or "").strip() or None,
+        timeout_s=timeout_s,
+        companions={key: str(env.get(f"{HUNYUAN_ENV_PREFIX}{name}") or "").strip()
+                    for key, (name, _required) in HUNYUAN_COMPANIONS.items()},
+    )
+
+
+def _runner_prefix(config: HunyuanRunnerConfig) -> list[str]:
+    if config.mode == "wsl":
+        command = ["wsl.exe"]
+        if config.distro:
+            command.extend(["--distribution", config.distro])
+        return [*command, "--"]
+    return []
+
+
+def _wsl_path(path: Path | str, config: HunyuanRunnerConfig) -> str:
+    value = str(path)
+    if config.mode != "wsl":
+        return value
+    if value.startswith("/"):
+        return value
+    proc = subprocess.run(
+        [*_runner_prefix(config), "wslpath", "-a", value], capture_output=True, text=True, timeout=30, check=False
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        detail = (proc.stderr or proc.stdout or "wslpath returned no path").strip()
+        raise RuntimeError(f"Could not map Windows path into WSL: {detail[-1000:]}")
+    return proc.stdout.strip()
+
+
+def validate_hunyuan_runner(*, probe: bool = True) -> list[str]:
+    config = hunyuan_runner_config()
+    issues: list[str] = []
+    if config.mode not in {"wsl", "external"}:
+        issues.append(f"Set {HUNYUAN_ENV_PREFIX}RUNNER to 'wsl' or 'external'.")
+    if not config.python:
+        issues.append(f"Set {HUNYUAN_ENV_PREFIX}PYTHON to the Linux Python executable.")
+    if not config.repo:
+        issues.append(f"Set {HUNYUAN_ENV_PREFIX}REPO to the official HunyuanVideo-1.5 checkout.")
+    if config.mode == "wsl" and shutil.which("wsl.exe") is None:
+        issues.append("wsl.exe is unavailable; install WSL2 or select the external runner.")
+    if config.timeout_s <= 0:
+        issues.append(f"{HUNYUAN_ENV_PREFIX}TIMEOUT_SECONDS must be positive.")
+    for key, (env_name, _required) in HUNYUAN_COMPANIONS.items():
+        if not config.companions[key]:
+            issues.append(f"Set {HUNYUAN_ENV_PREFIX}{env_name} to the separately downloaded {key} assets.")
+    if issues or not probe:
+        return issues
+    script = (
+        "import importlib.util,json,os,sys;"
+        "required=json.loads(sys.argv[1]);"
+        "missing=[p for p in required if not os.path.isfile(p)];"
+        "repo=sys.argv[2];"
+        "sys.path.insert(0,repo);"
+        "mods=[m for m in ('torch','hyvideo','imageio','einops') if importlib.util.find_spec(m) is None];"
+        "missing += ([] if os.path.isfile(os.path.join(repo,'hyvideo','pipelines','hunyuan_video_pipeline.py')) else [repo]);"
+        "print(json.dumps({'missing':missing,'modules':mods}));"
+        "raise SystemExit(bool(missing or mods))"
+    )
+    required: list[str] = []
+    for key, (_env_name, names) in HUNYUAN_COMPANIONS.items():
+        root = config.companions[key]
+        path_type = PurePosixPath if config.mode in {"wsl", "external"} and root.startswith("/") else Path
+        required.extend(str(path_type(root) / name) for name in names)
+    try:
+        mapped_required = [_wsl_path(path, config) for path in required]
+        command = [*_runner_prefix(config), config.python, "-c", script,
+                   json.dumps(mapped_required), _wsl_path(config.repo, config)]
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        return [f"Hunyuan Linux runner probe failed: {exc}"]
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "probe failed without output").strip()[-2000:]
+        issues.append(f"Hunyuan Linux environment is incomplete: {detail}")
+    return issues
 
 
 def validate_video_model_layout(engine: str, model_dir: Path) -> None:
@@ -49,15 +166,14 @@ def validate_video_model_layout(engine: str, model_dir: Path) -> None:
             status_code=400,
         )
 
-    if engine_l == "svd":
+    if engine_l == "hunyuan_video15":
+        config_names = ("config.json",)
+    elif engine_l == "svd":
         config_names = ("model_index.json",)
     elif engine_l == "animatediff":
         config_names = ("config.json",)
     else:
-        # Diffusers-compatible Hunyuan snapshots use model_index.json.  The
-        # upstream Tencent snapshot uses config.json, so accept both layouts
-        # and let the loader report missing runtime components precisely.
-        config_names = ("model_index.json", "config.json")
+        config_names = ("config.json",)
     config_name = next((name for name in config_names if (model_dir / name).is_file()), config_names[0])
     config_path = model_dir / config_name
     if not config_path.is_file():
@@ -95,10 +211,7 @@ def validate_video_model_layout(engine: str, model_dir: Path) -> None:
     class_matches = (
         expected_class.lower() in class_name.lower()
         if engine_l != "hunyuan_video15"
-        else any(
-            token in class_name.lower()
-            for token in ("hunyuanvideo15", "hunyuan_video_1_5", "hunyuanvideo_1_5")
-        )
+        else class_name == "HunyuanVideo_1_5_Pipeline"
     )
     if not class_matches:
         raise UserFacingError(
@@ -393,73 +506,139 @@ def _load_animatediff_pipeline(
     return pipe
 
 
-def _load_hunyuan_pipeline(
-    model_dir: Path,
-    *,
-    device: str,
-    dtype: str,
-    cpu_offload: bool,
-    image_to_video: bool,
-):
-    """Load a Diffusers-compatible HunyuanVideo-1.5 pipeline lazily.
-
-    Hunyuan has separate T2V and I2V pipeline classes. Keeping them in the
-    cache under distinct keys prevents a text-to-video request from reusing an
-    image-to-video pipeline with an incompatible call contract.
-    """
-
-    try:
-        from diffusers import (  # type: ignore
-            HunyuanVideo15ImageToVideoPipeline,
-            HunyuanVideo15Pipeline,
-        )
-    except Exception as exc:
-        raise UserFacingError(
-            "Internal HunyuanVideo-1.5 support is not installed",
-            hint=(
-                "Install the reviewed internal-video runtime with HunyuanVideo-1.5 support, "
-                "then qualify the local model snapshot before enabling this renderer."
-            ),
-            code="INTERNAL_VIDEO_MODEL_DEPS",
-            status_code=500,
-        ) from exc
-
-    pipeline_kind = "hunyuan_video15_i2v" if image_to_video else "hunyuan_video15_t2v"
-    key = (pipeline_kind, str(model_dir), device, f"{dtype}|offload={int(bool(cpu_offload))}")
-    cached = _VIDEO_PIPELINE_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    pipeline_cls = HunyuanVideo15ImageToVideoPipeline if image_to_video else HunyuanVideo15Pipeline
-    load_kwargs: dict[str, Any] = {"torch_dtype": _parse_torch_dtype(dtype, device)}
-    load_kwargs.update(_video_model_base_load_kwargs(model_dir, device))
-    try:
-        pipe = pipeline_cls.from_pretrained(str(model_dir), **load_kwargs)
-    except Exception as exc:
-        _reraise_video_model_load_error(exc, model_dir)
-    pipe = _optimize_pipeline(pipe, device, cpu_offload=cpu_offload)
-    _VIDEO_PIPELINE_CACHE[key] = pipe
-    return pipe
-
-
-def _configure_hunyuan_guidance(pipe: Any, cfg: float) -> None:
-    """Apply CFG through the Hunyuan guider without passing unsupported kwargs."""
-
-    guider = getattr(pipe, "guider", None)
-    guider_new = getattr(guider, "new", None)
-    if callable(guider_new):
+def _stop_hunyuan_process(proc: subprocess.Popen[str], config: HunyuanRunnerConfig, pid_file: Path) -> None:
+    if proc.poll() is not None:
+        return
+    if config.mode == "wsl":
         try:
-            pipe.guider = guider_new(guidance_scale=float(cfg))
-            return
-        except Exception as exc:
-            logger.debug("Hunyuan guider rejected guidance scale: %s", exc)
-    # Older/fake pipelines may expose a mutable guidance_scale instead of a
-    # guider factory. This fallback is deliberately best-effort.
-    if hasattr(pipe, "guidance_scale"):
-        try:
-            pipe.guidance_scale = float(cfg)
-        except Exception:
+            linux_pid = int(pid_file.read_text(encoding="ascii").strip())
+            subprocess.run(
+                [*_runner_prefix(config), "kill", "-TERM", str(linux_pid)],
+                capture_output=True, timeout=10, check=False,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError):
             pass
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def _decode_video(path: Path, *, width: int, height: int) -> list[Any]:
+    import cv2  # type: ignore
+    from PIL import Image  # type: ignore
+
+    capture = cv2.VideoCapture(str(path))
+    frames: list[Any] = []
+    try:
+        if not capture.isOpened():
+            raise RuntimeError("HunyuanVideo-1.5 output is not a readable MP4 video")
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(Image.fromarray(frame).convert("RGB").resize((int(width), int(height))))
+    finally:
+        capture.release()
+    return frames
+
+
+def _run_hunyuan(
+    model_dir: Path, *, init_image: Any | None, prompt: str, negative_prompt: str,
+    width: int, height: int, num_frames: int, fps: int, steps: int, cfg: float,
+    seed: int, device: str, dtype: str, cpu_offload: bool,
+    cancel_check: Callable[[], Any] | None, workspace: Path,
+) -> list[Any]:
+    issues = validate_hunyuan_runner()
+    if issues:
+        raise UserFacingError(
+            "HunyuanVideo-1.5 Linux runtime is not configured",
+            hint="; ".join(issues), code="INTERNAL_VIDEO_MODEL_DEPS", status_code=422,
+        )
+    config = hunyuan_runner_config()
+    if not str(device).lower().startswith("cuda"):
+        raise UserFacingError(
+            "HunyuanVideo-1.5 requires a CUDA device",
+            hint="Select a CUDA device such as cuda:0.", code="INTERNAL_VIDEO_MODEL_DEVICE", status_code=422,
+        )
+    try:
+        gpu_index = int(str(device).split(":", 1)[1]) if ":" in str(device) else 0
+    except ValueError as exc:
+        raise UserFacingError("Invalid CUDA device", hint="Use cuda:N, for example cuda:0.",
+                              code="INTERNAL_VIDEO_MODEL_DEVICE", status_code=422) from exc
+    dtype_l = str(dtype).strip().lower()
+    dtype_l = {"auto": "bfloat16", "bf16": "bfloat16", "fp16": "float16", "fp32": "float32"}.get(dtype_l, dtype_l)
+    if dtype_l not in {"bfloat16", "float16", "float32"}:
+        raise UserFacingError("Unsupported Hunyuan dtype", hint="Choose bfloat16, float16, or float32.",
+                              code="INTERNAL_VIDEO_MODEL_CONFIG", status_code=422)
+    resolution = "480p"
+    work = Path(workspace) / ".hunyuan-runs" / uuid.uuid4().hex
+    work.mkdir(parents=True)
+    request_path = work / "request.json"
+    output_path = work / "output.mp4"
+    image_path = work / "input.png"
+    pid_path = work / "worker.pid"
+    try:
+        if init_image is not None:
+            init_image.convert("RGB").resize((int(width), int(height))).save(image_path)
+        request = {
+            "mode": "i2v" if init_image is not None else "t2v", "resolution": resolution,
+            "prompt": str(prompt or "cinematic subject motion"), "negative_prompt": str(negative_prompt or ""),
+            "width": int(width), "height": int(height), "frames": int(num_frames), "fps": int(fps),
+            "steps": int(steps), "guidance_scale": float(cfg), "seed": int(seed), "dtype": dtype_l,
+            "cpu_offload": bool(cpu_offload), "cfg_distilled": init_image is None,
+            "step_distilled": init_image is not None,
+            "image": _wsl_path(image_path, config) if init_image is not None else None,
+        }
+        request_path.write_text(json.dumps(request), encoding="utf-8")
+        worker = Path(__file__).with_name("hunyuan_video15_worker.py")
+        command = [*_runner_prefix(config)]
+        if config.mode == "wsl":
+            command.extend(["env", f"CUDA_VISIBLE_DEVICES={gpu_index}",
+                            "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
+                            f"PYTHONPATH={_wsl_path(config.repo, config)}"])
+        command.extend([
+            config.python, _wsl_path(worker, config), "--request", _wsl_path(request_path, config),
+            "--model", _wsl_path(model_dir, config), "--llm", _wsl_path(config.companions["llm"], config),
+            "--byt5", _wsl_path(config.companions["byt5"], config), "--glyph", _wsl_path(config.companions["glyph"], config),
+            "--vision", _wsl_path(config.companions["vision"], config), "--output", _wsl_path(output_path, config),
+            "--pid-file", _wsl_path(pid_path, config),
+        ])
+        child_env = os.environ.copy()
+        child_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
+        child_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        child_env["PYTHONPATH"] = config.repo
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=config.mode == "external", env=child_env)
+        started = time.monotonic()
+        while True:
+            try:
+                if cancel_check and cancel_check():
+                    raise RuntimeError("HunyuanVideo-1.5 generation was cancelled")
+                remaining = config.timeout_s - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise TimeoutError(f"Hunyuan generation exceeded {config.timeout_s:g} seconds")
+                stdout, stderr = proc.communicate(timeout=min(0.25, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+            except BaseException:
+                _stop_hunyuan_process(proc, config, pid_path)
+                raise
+        if proc.returncode:
+            detail = (stderr or stdout or "worker exited without diagnostics").strip()[-4000:]
+            raise RuntimeError(f"HunyuanVideo-1.5 Linux worker failed ({proc.returncode}): {detail}")
+        if not output_path.is_file() or output_path.stat().st_size <= 0:
+            raise RuntimeError("HunyuanVideo-1.5 worker did not produce a non-empty MP4")
+        frames = _decode_video(output_path, width=width, height=height)
+        if len(frames) != int(num_frames):
+            raise RuntimeError(f"HunyuanVideo-1.5 MP4 has {len(frames)} frames; expected {int(num_frames)}")
+        return frames
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def generate_video_model_frames(
@@ -483,12 +662,14 @@ def generate_video_model_frames(
     noise_aug_strength: float = 0.02,
     decode_chunk_size: int = 8,
     cpu_offload: bool = False,
+    workspace: Path | None = None,
+    cancel_check: Any | None = None,
 ) -> list[Any]:
-    """Generate PIL frames with an internal Diffusers video model.
+    """Generate PIL frames with an internal video model.
 
     SVD is image-to-video and uses ``init_image``. AnimateDiff is text-to-video
     through a motion adapter and uses the internal SD1.5 base model. Hunyuan
-    selects its Diffusers T2V or I2V pipeline from the presence of ``init_image``.
+    runs the official native pipeline in an explicitly configured Linux process.
     """
     if num_frames <= 0:
         return []
@@ -502,53 +683,40 @@ def generate_video_model_frames(
 
     engine_l = str(engine or "svd").strip().lower()
     if engine_l == "ltx_25":
-        from .engine_packages import RUNTIME_BLOCKERS
-        raise UserFacingError("LTX-2.5 execution adapter is not ready",
-            hint=" ".join(RUNTIME_BLOCKERS["ltx_25"]), code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
+        from .ltx_25_runtime import generate_ltx_frames
+
+        validate_video_model_layout(engine_l, video_model_dir)
+        requested_frames = int(num_frames)
+        legal_frames = max(1, ((requested_frames - 1 + 7) // 8) * 8 + 1)
+        frames = generate_ltx_frames(
+            package_root=video_model_dir,
+            workspace=Path(workspace or video_model_dir),
+            prompt=prompt,
+            width=int(width),
+            height=int(height),
+            num_frames=legal_frames,
+            fps=float(fps),
+            seed=int(seed if seed is not None else random.SystemRandom().randint(0, 2**31 - 1)),
+            device=device,
+            init_image=init_image,
+            cpu_offload=cpu_offload,
+            fp8=str(dtype or "").strip().lower().startswith("fp8"),
+            cancel_check=cancel_check,
+        )
+        return frames[:requested_frames]
     validate_video_model_layout(engine_l, video_model_dir)
     dtype_l = "float16" if str(dtype or "auto").strip().lower() == "auto" and device == "cuda" else str(dtype or "float32")
-    generator, used_seed = _seeded_generator(seed, device)
-
     if engine_l == "hunyuan_video15":
-        pipe = _load_hunyuan_pipeline(
-            video_model_dir,
-            device=device,
-            dtype=dtype_l,
-            cpu_offload=cpu_offload,
-            image_to_video=init_image is not None,
+        used_seed = int(seed) if seed is not None else random.randint(0, 2**31 - 1)
+        return _run_hunyuan(
+            video_model_dir, init_image=init_image, prompt=prompt, negative_prompt=negative_prompt,
+            width=width, height=height, num_frames=num_frames, fps=fps or HUNYUAN_DEFAULT_FPS,
+            steps=steps, cfg=cfg, seed=used_seed, device=device, dtype=dtype_l,
+            cpu_offload=cpu_offload, cancel_check=cancel_check,
+            workspace=Path(workspace or video_model_dir),
         )
-        _configure_hunyuan_guidance(pipe, cfg)
-        kwargs: dict[str, Any] = {
-            "prompt": str(prompt or "cinematic subject motion"),
-            "negative_prompt": str(negative_prompt or ""),
-            "height": int(height),
-            "width": int(width),
-            "num_frames": int(num_frames),
-            "num_inference_steps": int(steps),
-            "generator": generator,
-            "output_type": "pil",
-        }
-        if init_image is not None:
-            kwargs["image"] = init_image.convert("RGB").resize((int(width), int(height)))
-        try:
-            # HunyuanVideo-1.5 configures classifier-free guidance through its
-            # guider; passing guidance_scale here is rejected by current
-            # Diffusers releases and would make a valid runtime fail early.
-            result = pipe(**kwargs)
-        except Exception as exc:
-            _cleanup_cuda(device)
-            if _is_cuda_out_of_memory(exc):
-                _raise_cuda_oom("HunyuanVideo-1.5", exc)
-            raise
-        frames = _normalize_frames(result)
-        if not frames:
-            raise RuntimeError(f"HunyuanVideo-1.5 returned no frames (seed={used_seed}).")
-        rgb_frames = _to_rgb_frames(frames, width=width, height=height)
-        if len(rgb_frames) != int(num_frames):
-            raise RuntimeError(
-                f"HunyuanVideo-1.5 returned {len(rgb_frames)} frames; expected {int(num_frames)} (seed={used_seed})."
-            )
-        return rgb_frames
+
+    generator, used_seed = _seeded_generator(seed, device)
 
     if engine_l == "svd":
         if init_image is None:

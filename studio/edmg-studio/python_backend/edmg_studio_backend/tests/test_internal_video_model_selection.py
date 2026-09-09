@@ -20,6 +20,26 @@ def test_ltx_selection_is_registered_but_never_bypasses_runtime_admission(tmp_pa
         assert "LTX-2.5" in exc.value.hint
 
 
+def test_qualified_ltx_selection_is_admitted(tmp_path, monkeypatch):
+    from edmg_studio_backend.services import engine_packages
+
+    installed = _install_lookup(tmp_path, monkeypatch)
+    ltx_path = tmp_path / "ltx"
+    ltx_path.mkdir()
+    installed[app_module.LTX_MODEL_ID] = ltx_path
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
+    monkeypatch.setattr(engine_packages, "runtime_status", lambda *args, **kwargs: {
+        "runtime_ready": True,
+        "blockers": [],
+    })
+    monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+
+    assert app_module._resolve_internal_video_model_selection(
+        {"video_model_engine": "ltx_25", "video_model_id": app_module.LTX_MODEL_ID},
+        base_model_family="sd15",
+    ) == ("ltx_25", app_module.LTX_MODEL_ID, ltx_path)
+
+
 def _write_svd_layout(path: Path) -> Path:
     path.mkdir(parents=True)
     (path / "model_index.json").write_text(
@@ -153,7 +173,33 @@ def test_hunyuan_selection_is_blocked_until_renderer_admission_is_qualified(
         )
 
     assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
-    assert "not release-qualified" in (exc.value.hint or "")
+    assert "runtime qualification failed" in (exc.value.hint or "")
+
+
+def test_qualified_hunyuan_selection_is_admitted(tmp_path: Path, monkeypatch) -> None:
+    from edmg_studio_backend.services import engine_packages
+
+    hunyuan = _write_hunyuan_layout(tmp_path / "hunyuan")
+    installed = {
+        app_module.INTERNAL_SVD_VIDEO_MODEL_ID: None,
+        app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID: None,
+        app_module.HUNYUAN_MODEL_ID: hunyuan,
+    }
+    monkeypatch.setattr(app_module.models, "installed_path", installed.get)
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
+    monkeypatch.setattr(engine_packages, "runtime_status", lambda *args, **kwargs: {
+        "runtime_ready": True,
+        "blockers": [],
+    })
+    monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+
+    assert app_module._resolve_internal_video_model_selection(
+        {
+            "video_model_engine": "hunyuan_video15",
+            "video_model_id": app_module.HUNYUAN_MODEL_ID,
+        },
+        base_model_family="sd15",
+    ) == ("hunyuan_video15", app_module.HUNYUAN_MODEL_ID, hunyuan)
 
 
 def test_public_render_job_error_preserves_only_curated_details() -> None:

@@ -108,121 +108,94 @@ def test_video_model_layout_accepts_canonical_assets(tmp_path: Path) -> None:
     ivm.validate_video_model_layout("animatediff", animatediff_dir)
 
 
-def test_hunyuan_layout_accepts_diffusers_and_upstream_config_names(tmp_path: Path) -> None:
-    diffusers_dir = tmp_path / "hunyuan-diffusers"
-    diffusers_dir.mkdir()
-    (diffusers_dir / "model_index.json").write_text(
-        '{"_class_name": "HunyuanVideo15Pipeline"}',
-        encoding="utf-8",
-    )
-    upstream_dir = tmp_path / "hunyuan-upstream"
-    upstream_dir.mkdir()
-    (upstream_dir / "config.json").write_text(
-        '{"_class_name": "HunyuanVideo_1_5_Pipeline"}',
-        encoding="utf-8",
-    )
-
-    ivm.validate_video_model_layout("hunyuan_video15", diffusers_dir)
-    ivm.validate_video_model_layout("hunyuan_video15", upstream_dir)
-
-
-def test_hunyuan_t2v_and_i2v_use_distinct_pipeline_contracts(tmp_path: Path, monkeypatch) -> None:
+def test_hunyuan_layout_requires_official_upstream_config(tmp_path: Path) -> None:
     model_dir = tmp_path / "hunyuan"
     model_dir.mkdir()
-    (model_dir / "model_index.json").write_text(
-        '{"_class_name": "HunyuanVideo15Pipeline"}',
-        encoding="utf-8",
+    (model_dir / "config.json").write_text(
+        '{"_class_name": "HunyuanVideo_1_5_Pipeline"}', encoding="utf-8"
     )
-    calls: list[tuple[str, dict[str, object]]] = []
-    guider_calls: list[float] = []
-    tiling_calls: list[str] = []
+    ivm.validate_video_model_layout("hunyuan_video15", model_dir)
 
-    class FakeGuider:
-        def new(self, **kwargs):
-            guider_calls.append(float(kwargs["guidance_scale"]))
-            return self
-
-    class FakeVae:
-        def enable_tiling(self):
-            tiling_calls.append("vae")
-
-    class FakePipe:
-        def __init__(self) -> None:
-            self.guider = FakeGuider()
-            self.vae = FakeVae()
-
-        @classmethod
-        def from_pretrained(cls, _path, **kwargs):
-            calls.append((cls.__name__, dict(kwargs)))
-            return cls()
-
-        def to(self, _device):
-            return self
-
-        def __call__(self, **kwargs):
-            frame = Image.new("RGB", (32, 20), color=(len(calls), 0, 0))
-            return SimpleNamespace(frames=[[frame.copy(), frame.copy()]])
-
-    class FakeT2VPipeline(FakePipe):
-        pass
-
-    class FakeI2VPipeline(FakePipe):
-        pass
-
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "diffusers",
-        type(
-            "FakeDiffusers",
-            (),
-            {
-                "HunyuanVideo15Pipeline": FakeT2VPipeline,
-                "HunyuanVideo15ImageToVideoPipeline": FakeI2VPipeline,
-            },
-        ),
+    (model_dir / "config.json").write_text(
+        '{"_class_name": "HunyuanVideo15Pipeline"}', encoding="utf-8"
     )
-    monkeypatch.setattr(ivm, "_parse_torch_dtype", lambda _dtype, _device: "float32")
-    monkeypatch.setattr(ivm, "_seeded_generator", lambda seed, _device: (object(), int(seed or 0)))
-    ivm.clear_video_pipeline_cache()
+    with pytest.raises(UserFacingError, match="does not match"):
+        ivm.validate_video_model_layout("hunyuan_video15", model_dir)
 
-    t2v = ivm.generate_video_model_frames(
-        engine="hunyuan_video15",
-        video_model_dir=model_dir,
-        base_model_dir=tmp_path / "base",
-        init_image=None,
-        prompt="a dancer in a red room",
-        negative_prompt="frozen frame",
-        width=32,
-        height=20,
-        num_frames=2,
-        fps=24,
-        steps=5,
-        cfg=4.5,
-        seed=11,
-        device="cpu",
+
+def test_hunyuan_wsl_runner_maps_paths_and_isolates_cuda(tmp_path: Path, monkeypatch) -> None:
+    model_dir = tmp_path / "hunyuan"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        '{"_class_name": "HunyuanVideo_1_5_Pipeline"}', encoding="utf-8"
     )
-    i2v = ivm.generate_video_model_frames(
-        engine="hunyuan_video15",
-        video_model_dir=model_dir,
-        base_model_dir=tmp_path / "base",
-        init_image=Image.new("RGB", (32, 20), color="white"),
-        prompt="the dancer turns",
-        negative_prompt="frozen frame",
-        width=32,
-        height=20,
-        num_frames=2,
-        fps=24,
-        steps=5,
-        cfg=5.5,
-        seed=12,
-        device="cpu",
+    env = {
+        "EDMG_HUNYUAN15_RUNNER": "wsl", "EDMG_HUNYUAN15_WSL_DISTRO": "Ubuntu",
+        "EDMG_HUNYUAN15_PYTHON": "/opt/hunyuan/bin/python", "EDMG_HUNYUAN15_REPO": "/opt/HunyuanVideo-1.5",
+        "EDMG_HUNYUAN15_LLM_PATH": "/models/qwen", "EDMG_HUNYUAN15_BYT5_PATH": "/models/byt5",
+        "EDMG_HUNYUAN15_GLYPH_PATH": "/models/glyph", "EDMG_HUNYUAN15_VISION_PATH": "/models/siglip",
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ivm, "validate_hunyuan_runner", lambda: [])
+    monkeypatch.setattr(ivm, "_wsl_path", lambda path, _config: "/mnt/c/" + Path(path).name)
+    monkeypatch.setattr(ivm, "_decode_video", lambda *_args, **_kwargs: [Image.new("RGB", (32, 32))] * 2)
+    calls = []
+
+    class Proc:
+        returncode = 0
+        def __init__(self, command, **kwargs):
+            calls.append((command, kwargs))
+            output = tmp_path / ".hunyuan-runs" / "run" / "output.mp4"
+            output.write_bytes(b"mp4")
+        def poll(self): return 0
+        def communicate(self, timeout=None): return ("", "")
+
+    # Keep generated files in tmp_path and resolve the mocked output by basename.
+    monkeypatch.setattr(ivm.uuid, "uuid4", lambda: SimpleNamespace(hex="run"))
+    monkeypatch.setattr(ivm.subprocess, "Popen", Proc)
+    frames = ivm.generate_video_model_frames(
+        engine="hunyuan_video15", video_model_dir=model_dir, base_model_dir=tmp_path,
+        init_image=None, prompt="p", negative_prompt="n", width=32, height=32,
+        num_frames=2, fps=24, steps=3, cfg=4.0, seed=7, device="cuda:2", workspace=tmp_path,
     )
+    command, kwargs = calls[0]
+    assert command[:4] == ["wsl.exe", "--distribution", "Ubuntu", "--"]
+    assert "CUDA_VISIBLE_DEVICES=2" in command
+    assert len(frames) == 2
+    assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "2"
 
-    assert len(t2v) == len(i2v) == 2
-    assert [name for name, _kwargs in calls] == ["FakeT2VPipeline", "FakeI2VPipeline"]
-    assert guider_calls == [4.5, 5.5]
-    assert tiling_calls == ["vae", "vae"]
 
+def test_hunyuan_runner_fails_closed_without_explicit_configuration(monkeypatch) -> None:
+    for name in ("RUNNER", "PYTHON", "REPO", "WSL_DISTRO", "LLM_PATH", "BYT5_PATH", "GLYPH_PATH", "VISION_PATH"):
+        monkeypatch.delenv(f"EDMG_HUNYUAN15_{name}", raising=False)
+    issues = ivm.validate_hunyuan_runner()
+    assert any("RUNNER" in issue for issue in issues)
+    assert any("VISION_PATH" in issue for issue in issues)
+
+
+def test_hunyuan_wsl_probe_preserves_linux_companion_paths(monkeypatch) -> None:
+    env = {
+        "EDMG_HUNYUAN15_RUNNER": "wsl", "EDMG_HUNYUAN15_WSL_DISTRO": "Ubuntu",
+        "EDMG_HUNYUAN15_PYTHON": "/opt/hunyuan/bin/python", "EDMG_HUNYUAN15_REPO": "/opt/HunyuanVideo-1.5",
+        "EDMG_HUNYUAN15_LLM_PATH": "/models/qwen", "EDMG_HUNYUAN15_BYT5_PATH": "/models/byt5",
+        "EDMG_HUNYUAN15_GLYPH_PATH": "/models/glyph", "EDMG_HUNYUAN15_VISION_PATH": "/models/siglip",
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ivm.shutil, "which", lambda _name: "wsl.exe")
+    captured = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ivm.subprocess, "run", fake_run)
+
+    assert ivm.validate_hunyuan_runner() == []
+    required = captured["command"][captured["command"].index("-c") + 2]
+    assert "\\\\models" not in required
+    assert "/models/qwen/config.json" in required
 
 def test_video_model_cache_key_separates_cpu_offload(tmp_path: Path, monkeypatch) -> None:
     calls: list[dict[str, object]] = []

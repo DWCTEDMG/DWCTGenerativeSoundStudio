@@ -11057,48 +11057,35 @@ def _resolve_internal_video_model_selection(
         )
 
     resolved_path = Path(path)
-    if engine in {"hunyuan_video15", "ltx_25"}:
-        from .services.engine_packages import runtime_status
-        status = runtime_status(requested_model_id, _hardware_profile())
-        raise UserFacingError("Selected engine package is not ready for local rendering",
-            hint=" ".join(status["blockers"]), code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
-    internal_video_models.validate_video_model_layout(engine, resolved_path)
-
     if engine == "hunyuan_video15":
-        # The Workspace readiness card is diagnostic, but this second
-        # resolution is authoritative at queue time. It prevents a manually
-        # crafted render request from loading a discovery-only Hunyuan snapshot
-        # before the adapter and hardware profile have passed qualification.
-        installed_for_readiness = {
-            HUNYUAN_MODEL_ID: bool(installed_hunyuan),
-            STANDARD_DIRECTOR_MODEL_ID: bool(models.installed_path(STANDARD_DIRECTOR_MODEL_ID)),
-            HIGH_TIER_DIRECTOR_MODEL_ID: bool(models.installed_path(HIGH_TIER_DIRECTOR_MODEL_ID)),
-            LTX_MODEL_ID: bool(models.installed_path(LTX_MODEL_ID)),
-        }
-        try:
-            readiness = resolve_director_readiness(
-                _hardware_profile(),
-                mode="automatic",
-                engine=engine,
-                installed_models=installed_for_readiness,
-                allow_external=False,
-            )
-        except ValueError as exc:
-            raise UserFacingError(
-                "HunyuanVideo-1.5 renderer admission could not be resolved",
-                hint="Refresh Workspace readiness and retry after the hardware probe completes.",
-                code="DIRECTOR_RENDERER_READINESS_INVALID",
-                status_code=422,
-            ) from exc
-        if not readiness.renderer.ready:
-            blockers = list(readiness.blockers) or [readiness.renderer.reason]
-            actions = list(readiness.actions)
-            raise UserFacingError(
-                "HunyuanVideo-1.5 is not admitted for local rendering",
-                hint=" ".join([*blockers, *actions]),
-                code="DIRECTOR_RENDERER_NOT_READY",
-                status_code=422,
-            )
+        from .services.engine_packages import MANIFESTS, runtime_status, validate_package
+
+        package_validation = validate_package(resolved_path, MANIFESTS[requested_model_id])
+        status = runtime_status(
+            requested_model_id,
+            _hardware_profile(),
+            package_root=resolved_path,
+            package_validation=package_validation,
+        )
+        if not status["runtime_ready"]:
+            raise UserFacingError("Selected engine package is not ready for local rendering",
+                hint="HunyuanVideo-1.5 runtime qualification failed. " + " ".join(status["blockers"]),
+                code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
+    if engine == "ltx_25":
+        from .services.engine_packages import MANIFESTS, runtime_status, validate_package
+
+        package_validation = validate_package(resolved_path, MANIFESTS[requested_model_id])
+        status = runtime_status(
+            requested_model_id,
+            _hardware_profile(),
+            package_root=resolved_path,
+            package_validation=package_validation,
+        )
+        if not status["runtime_ready"]:
+            raise UserFacingError("Selected engine package is not ready for local rendering",
+                hint="LTX-2.5 runtime qualification failed. " + " ".join(status["blockers"]),
+                code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
+    internal_video_models.validate_video_model_layout(engine, resolved_path)
 
     if engine == "animatediff" and str(base_model_family or "").lower() != "sd15":
         raise UserFacingError(
