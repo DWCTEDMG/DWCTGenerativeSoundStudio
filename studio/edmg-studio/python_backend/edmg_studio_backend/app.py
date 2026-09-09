@@ -4585,6 +4585,30 @@ def _normalize_transcript_payload(raw: Any) -> dict[str, Any]:
     duration_s = _pick_raw_number(raw, ["duration_s", "duration"])
     duration_after_vad_s = _pick_raw_number(raw, ["duration_after_vad_s"])
     word_count = int(raw.get("word_count") or len(text.split()))
+    provenance: dict[str, Any] = {}
+    for key in ("provider", "device", "compute_type", "requested_device", "device_fallback_note", "source_audio_path"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            provenance[key] = value.strip()
+    if isinstance(raw.get("device_fallback_used"), bool):
+        provenance["device_fallback_used"] = raw["device_fallback_used"]
+    separation = raw.get("vocal_separation")
+    if isinstance(separation, dict):
+        safe_separation: dict[str, Any] = {}
+        for key in ("source", "model", "requested_audio_path", "audio_path", "fallback_audio_path", "error"):
+            value = separation.get(key)
+            if isinstance(value, str):
+                safe_separation[key] = value
+        for key in ("enabled", "available", "cached"):
+            if isinstance(separation.get(key), bool):
+                safe_separation[key] = separation[key]
+        provenance["vocal_separation"] = safe_separation
+    # Existing clients use note for transcription status. Keep the actual
+    # execution device visible there without changing the recognized text.
+    note = str(raw.get("note") or "").strip()
+    fallback_note = provenance.get("device_fallback_note", "")
+    if fallback_note and fallback_note not in note:
+        note = " ".join(part for part in (note, fallback_note) if part)
     return {
         "text": text,
         "segments": segments,
@@ -4596,7 +4620,8 @@ def _normalize_transcript_payload(raw: Any) -> dict[str, Any]:
         "model_size": str(raw.get("model_size") or "small"),
         "source": str(raw.get("source") or "transcribe"),
         **({"error": str(raw.get("error"))} if raw.get("error") else {}),
-        **({"note": str(raw.get("note"))} if raw.get("note") else {}),
+        **({"note": note} if note else {}),
+        **provenance,
     }
 
 
@@ -4660,7 +4685,11 @@ def _analysis_summary_text(transcript: dict[str, Any], text: str, segments: list
         if error:
             return _analysis_audio_only_status("Transcription failed.")
         return _analysis_audio_only_status("No transcript is available for this track yet.")
-    return " ".join(candidates[:3]).strip()
+    summary = " ".join(candidates[:3]).strip()
+    fallback_note = str((transcript or {}).get("device_fallback_note") or "").strip()
+    if fallback_note:
+        summary = f"{summary} {fallback_note}"
+    return summary
 
 
 def _derive_longform_analysis_sections(

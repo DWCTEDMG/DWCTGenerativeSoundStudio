@@ -173,3 +173,70 @@ def test_analyze_audio_failure_preserves_previous_analysis_and_plan(tmp_path, mo
     assert saved is not None
     assert saved.meta["analysis"] == {"features": {"bpm": 100}}
     assert saved.meta["last_plan"] == {"variants": [{"name": "Previous"}]}
+
+
+@pytest.mark.parametrize("text", ["We follow the dawn.", ""])
+def test_analysis_preserves_actual_transcription_device_across_reanalysis_and_save(tmp_path, monkeypatch, text):
+    store, jobs, proj = _make_project(tmp_path)
+    monkeypatch.setattr(studio_app, "store", store)
+    monkeypatch.setattr(studio_app, "jobs", jobs)
+    audio_path = store.project_dir(proj.id) / "assets" / "audio" / "track.wav"
+    audio_path.write_bytes(b"fake-wav")
+    store.set_audio(proj.id, "track.wav", audio_path.stat().st_size)
+    separation = {"enabled": False, "source": "original_mix", "audio_path": str(audio_path)}
+    fallback_note = "CUDA transcription failed; transcription completed on CPU int8."
+    provenance = {
+        "provider": "faster_whisper", "device": "cpu", "compute_type": "int8",
+        "requested_device": "cuda", "device_fallback_used": True,
+        "device_fallback_note": fallback_note,
+    }
+    monkeypatch.setattr(studio_app, "_collect_audio_analysis_features", lambda _: {
+        "duration_s": 8.0, "bpm": 120.0, "beats": [0.5, 1.0, 1.5], "energy": [.2, .8, .4],
+    })
+    monkeypatch.setattr(studio_app, "_prepare_transcription_audio", lambda *_: (audio_path, separation))
+    monkeypatch.setattr(studio_app.ai, "transcribe", lambda *_, **__: {
+        "text": text, "note": "No speech detected." if not text else "",
+        **provenance,
+    })
+
+    try:
+        for revision in (1, 2):
+            analysis = studio_app.analyze_audio(proj.id)["analysis"]
+            assert analysis["revision"] == revision
+            transcript = analysis["transcript"]
+            assert transcript["text"] == text
+            for key, value in provenance.items():
+                assert transcript[key] == value
+            assert transcript["source_audio_path"] == str(audio_path)
+            assert transcript["vocal_separation"] == separation
+            assert fallback_note in transcript["note"]
+            assert fallback_note in analysis["summary"]
+            # Re-normalizing stored analysis must not duplicate the status note.
+            assert studio_app._normalize_transcript_payload(transcript) == transcript
+            loaded = ProjectStore(store.base_dir).get(proj.id)
+            assert loaded is not None
+            assert loaded.meta["analysis"] == analysis
+            snapshot = json.loads((store.project_dir(proj.id) / analysis["analysis_path"]).read_text(encoding="utf-8"))
+            assert snapshot["transcript"] == transcript
+            direction = studio_app._build_creative_direction_payload(loaded, 0, "cinematic", 1.0)
+            assert fallback_note in direction["transcript_summary"]
+    finally:
+        jobs.close()
+
+
+def test_transcription_provenance_rejects_unexpected_types_without_coercing_flags():
+    raw = {
+        "provider": {"secret": "not a provider"}, "device": ["cuda"], "compute_type": 16,
+        "requested_device": False, "device_fallback_used": "false", "device_fallback_note": ["note"],
+        "source_audio_path": {"path": "not a path"},
+        "vocal_separation": {"enabled": "false", "available": False, "cached": True,
+                             "source": "original_mix", "model": {}, "audio_path": [],
+                             "unrecognized": {"nested": "ignored"}},
+    }
+
+    normalized = studio_app._normalize_transcript_payload(raw)
+
+    for key in raw.keys() - {"vocal_separation"}:
+        assert key not in normalized
+    assert normalized["vocal_separation"] == {"available": False, "cached": True, "source": "original_mix"}
+    assert studio_app._normalize_transcript_payload({"device_fallback_used": False})["device_fallback_used"] is False

@@ -22,6 +22,10 @@ def _load_model(model_size: str):
 
 @lru_cache(maxsize=8)
 def _load_faster_whisper_model(model_size: str, device: str, compute_type: str):
+    if device == "cuda":
+        from edmg_studio_backend.asr_cuda import preload_cuda12_cublas
+
+        preload_cuda12_cublas()
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception as e:

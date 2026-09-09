@@ -523,8 +523,11 @@ def toolchain_status(*, profile: str | None = None, check_sync: bool = True) -> 
         status["lock_check"] = "ok"
         if check_sync:
             sync_args = frozen_project_args("sync", resolved_profile)
+            # Readiness requires the locked runtime, but source environments can
+            # also contain test, build, or specialist extras. Keep those packages
+            # out of the health decision; actual installation remains exact.
             run_checked(
-                [uv, *sync_args, "--check"],
+                [uv, *sync_args, "--check", "--inexact"],
                 cwd=backend_root(),
                 env=env,
                 capture_output=True,
