@@ -8,8 +8,10 @@ from typing import Any
 from .render_settings import _config_dir
 
 
-TRANSCRIPTION_PROVIDERS = ("faster_whisper", "parakeet", "parakeet_nim")
+TRANSFORMERS_WHISPER_PACKAGE_ID = "hf_whisper_large_v3_turbo_internal"
+TRANSCRIPTION_PROVIDERS = ("faster_whisper", "transformers_whisper", "parakeet", "parakeet_nim")
 WHISPER_MODELS = ("turbo", "large-v3", "medium", "small")
+TRANSFORMERS_WHISPER_MODELS = (TRANSFORMERS_WHISPER_PACKAGE_ID,)
 PARAKEET_MODELS = (
     "nvidia/parakeet-tdt-0.6b-v3",
     "nvidia/parakeet-tdt-0.6b-v2",
@@ -58,6 +60,8 @@ def normalize_provider(value: Any) -> str:
     provider = str(value or "").strip().lower().replace("-", "_")
     if provider in {"whisper", "fasterwhisper", "faster_whisper"}:
         return "faster_whisper"
+    if provider in {"transformers_whisper", "transformerswhisper", "hf_whisper"}:
+        return "transformers_whisper"
     if provider in {"parakeet", "nvidia_parakeet", "nvidia-parakeet"}:
         return "parakeet"
     if provider in {"parakeet_nim", "nvidia_nim_asr", "nim_asr", "parakeet-nim"}:
@@ -80,6 +84,8 @@ def normalize_model(provider: str, value: Any) -> str:
         if lower in {"0.6b-v2", "tdt-0.6b-v2", "parakeet-tdt-0.6b-v2"}:
             return "parakeet-tdt-0.6b-v2"
         return raw if raw in PARAKEET_NIM_MODELS else "parakeet-ctc-1.1b-asr"
+    if provider == "transformers_whisper":
+        return TRANSFORMERS_WHISPER_PACKAGE_ID
 
     if lower in {"large-v3-turbo", "whisper-large-v3-turbo"}:
         return "turbo"
@@ -106,10 +112,13 @@ def transcription_dependency_status() -> dict[str, Any]:
     faster_whisper_available = importlib.util.find_spec("faster_whisper") is not None
     nemo_available = importlib.util.find_spec("nemo") is not None
     torch_available = importlib.util.find_spec("torch") is not None
+    transformers_available = importlib.util.find_spec("transformers") is not None
+    librosa_available = importlib.util.find_spec("librosa") is not None
     demucs_available = importlib.util.find_spec("demucs") is not None
     requests_available = importlib.util.find_spec("requests") is not None
     return {
         "faster_whisper_available": faster_whisper_available,
+        "transformers_whisper_available": bool(torch_available and transformers_available and librosa_available),
         "parakeet_available": bool(nemo_available and torch_available),
         "parakeet_nim_available": requests_available,  # just needs requests + NVIDIA API key
         "nemo_available": nemo_available,
@@ -148,6 +157,8 @@ class TranscriptionSettingsStore:
             model = "nvidia/parakeet-tdt-0.6b-v3"
         if provider == "parakeet_nim" and model not in PARAKEET_NIM_MODELS:
             model = "parakeet-ctc-1.1b-asr"
+        if provider == "transformers_whisper" and model not in TRANSFORMERS_WHISPER_MODELS:
+            model = TRANSFORMERS_WHISPER_PACKAGE_ID
         if provider == "faster_whisper" and model not in WHISPER_MODELS:
             model = DEFAULT_TRANSCRIPTION_SETTINGS["model"]
 

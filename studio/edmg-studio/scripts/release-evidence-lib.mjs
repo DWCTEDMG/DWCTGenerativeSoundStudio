@@ -26,6 +26,7 @@ const RELEASE_ARTIFACT_GLOBS = Object.freeze({
 });
 
 export const RELEASE_ARTIFACT_SETS = Object.freeze([
+  "win-winui-exe",
   "win-nsis",
   "linux-appimage",
   "win-inno",
@@ -33,6 +34,11 @@ export const RELEASE_ARTIFACT_SETS = Object.freeze([
 ]);
 
 const DIST_ARTIFACT_GLOBS = Object.freeze({
+  "win-winui-exe": [
+    "dist-winui/*.exe",
+    "release/winui-msix/*.msix",
+    "release/winui-msix/winui-msix.json",
+  ],
   "win-nsis": [
     "dist/*.exe",
     "dist/*.blockmap",

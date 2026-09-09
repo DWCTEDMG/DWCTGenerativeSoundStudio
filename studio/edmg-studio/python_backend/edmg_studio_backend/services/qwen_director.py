@@ -7,6 +7,7 @@ hardware qualification and process cancellation; never call inference on a UI th
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -35,12 +36,55 @@ def run_director_job(
     if progress_fn:
         progress_fn("validating_model", "Checking the installed Director model and available memory")
     model_id = payload.get("model_id")
-    if model_id != "hf_qwen3_vl_8b_director":
+    supported_gguf = {"hf_qwen3_vl_8b_gguf_director", "hf_qwen3_vl_30b_gguf_director"}
+    if model_id not in {"hf_qwen3_vl_8b_director", *supported_gguf}:
         raise ValueError("Unsupported Director model")
     directory = models.installed_path(model_id)
     if directory is None:
-        raise ValueError("Qwen3-VL-8B Director is no longer installed")
+        raise ValueError(f"Director model {model_id} is no longer installed")
     directory = Path(directory).resolve(strict=True)
+    document = DirectorDocument.model_validate(payload["document"])
+    if model_id in supported_gguf:
+        from .llama_cpp_director import LlamaCppDirectorBackend
+
+        if progress_fn:
+            progress_fn("loading_model", "Loading the GGUF Director model and vision projector")
+        backend = LlamaCppDirectorBackend(
+            directory,
+            device=str(payload.get("device") or os.getenv("EDMG_LLAMA_DEVICE") or "cpu"),
+            gpu_layers=payload.get("gpu_layers", os.getenv("EDMG_LLAMA_GPU_LAYERS", "all")),
+            context_length=int(payload.get("context_length") or os.getenv("EDMG_LLAMA_CONTEXT_LENGTH", "8192")),
+            timeout_s=float(payload.get("timeout_s") or os.getenv("EDMG_LLAMA_TIMEOUT_S", "180")),
+        )
+        try:
+            backend.start(cancel_check=cancel_check)
+            if progress_fn:
+                progress_fn("generating", "Generating a Director draft with llama.cpp")
+            text = backend.generate(
+                document,
+                str(payload["instruction"]),
+                image_paths=[str(value) for value in payload.get("image_paths", [])],
+                max_tokens=int(payload.get("max_new_tokens") or 4096),
+                cancel_check=cancel_check,
+            )
+            if progress_fn:
+                progress_fn("validating_draft", "Checking the draft against approved scene constraints")
+            proposal = validate_proposal(text, document)
+        finally:
+            backend.close()
+        return {
+            "status": "draft",
+            "document": proposal.model_dump(mode="json"),
+            "source_revision": payload["source_revision"],
+            "provenance": {
+                "model_id": model_id,
+                "model_directory": str(directory),
+                "model_type": "qwen3_vl_gguf",
+                "runtime": "llama-server",
+                "device": backend.device,
+            },
+        }
+
     index = json.loads((directory / "model.safetensors.index.json").read_text(encoding="utf-8"))
     weights = set(index.get("weight_map", {}).values())
     if not weights:
@@ -77,7 +121,7 @@ def run_director_job(
         )
     result = generate_proposal(
         directory,
-        DirectorDocument.model_validate(payload["document"]),
+        document,
         payload["instruction"],
         max_memory=budgets,
         cancel_check=cancel_check,

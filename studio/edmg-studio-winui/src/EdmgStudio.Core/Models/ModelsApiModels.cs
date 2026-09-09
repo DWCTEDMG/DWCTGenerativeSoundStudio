@@ -74,9 +74,25 @@ public sealed class ModelCatalogueEntry
     [JsonPropertyName("available")]
     public bool Available { get; set; }
 
+    [JsonPropertyName("package_status")]
+    public ModelRuntimeStatus? PackageStatus { get; set; }
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
+
+public sealed record ModelRuntimeStatus(
+    [property: JsonPropertyName("package_id")] string PackageId,
+    [property: JsonPropertyName("runtime_state")] string RuntimeState,
+    [property: JsonPropertyName("installed")] bool Installed,
+    [property: JsonPropertyName("runtime_ready")] bool RuntimeReady,
+    [property: JsonPropertyName("validation_level")] int ValidationLevel,
+    [property: JsonPropertyName("adapter_ready")] bool AdapterReady,
+    [property: JsonPropertyName("smoke_test_supported")] bool SmokeTestSupported,
+    [property: JsonPropertyName("hardware_known")] bool HardwareKnown,
+    [property: JsonPropertyName("hardware_compatible")] bool HardwareCompatible,
+    [property: JsonPropertyName("error")] string? Error,
+    [property: JsonPropertyName("blockers")] IReadOnlyList<string>? Blockers);
 
 public sealed class ModelPackEntry
 {

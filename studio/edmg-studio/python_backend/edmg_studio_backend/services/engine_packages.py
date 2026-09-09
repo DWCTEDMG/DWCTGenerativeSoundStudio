@@ -6,12 +6,12 @@ adapter from importability, an installed directory, or a user benchmark flag.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
-import math
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+from .model_runtime_registry import DEFAULT_RUNTIME_REGISTRY
 
 MANIFESTS = json.loads(Path(__file__).with_name("engine_package_manifests.json").read_text(encoding="utf-8"))
 STANDARD_GGUF_ID = "hf_qwen3_vl_8b_gguf_director"
@@ -24,13 +24,13 @@ PROFILES = {
     HIGH_GGUF_ID: ("qwen3_vl_gguf", "director", 0, 32, ("llama_cpp",)),
     "hf_hunyuan_video15_internal": ("hunyuan_video15", "video", 14, 64, ("torch", "hyvideo")),
     "hf_whisper_large_v3_turbo_internal": ("whisper_transformers", "asr", 0, 8, ("torch", "transformers")),
-    "hf_ltx_25_distilled_internal": ("ltx_25", "video", 48, 96, ("torch", "ltx_core", "ltx_pipelines")),
+    "hf_ltx_25_distilled_internal": ("ltx_25", "video", 5, 36, ("torch", "ltx_core", "ltx_pipelines")),
 }
 RUNTIME_BLOCKERS = {
-    "qwen3_vl_gguf": ["The Studio GGUF Director adapter with Qwen3-VL vision-projector support is not implemented. The existing Director uses Transformers weights."],
+    "qwen3_vl_gguf": ["Install a supported llama-server build and run the model runtime smoke test before using this Director package."],
     "hunyuan_video15": ["The upstream Hunyuan distilled layout is not supported by Studio's Diffusers loader; the local adapter is not release-qualified.", "Separate upstream text/image encoders and the Hunyuan runtime are required; they are not included in this package."],
-    "whisper_transformers": ["The Studio transcription adapter for the OpenAI Transformers checkpoint is not implemented. The existing faster-whisper provider requires CTranslate2 weights."],
-    "ltx_25": ["The Studio LTX-2.5 split-pack execution adapter is not implemented and is not release-qualified.", "The upstream distilled pipeline also requires a spatial upsampler. It is excluded from this five-file package; the pipeline and duration-head integration must be qualified."],
+    "whisper_transformers": ["Run the model runtime smoke test before selecting the managed Transformers Whisper provider."],
+    "ltx_25": ["The selective package includes the official split components, but Studio's isolated LTX-2.5 execution adapter is not implemented or release-qualified."],
 }
 
 
@@ -119,30 +119,19 @@ def validate_package(root: Path, manifest: dict[str, Any], *, verify_hashes: boo
             "repo_id": manifest["repo_id"], "revision": manifest["revision"], "schema_version": 1}
 
 
-def runtime_status(model_id: str, hardware: dict[str, Any] | None = None) -> dict[str, Any]:
-    engine, role, vram, ram, modules = PROFILES[model_id]
-    hw = hardware or {}
-    def number(key: str) -> float:
-        try:
-            value = float(hw.get(key) or 0)
-            return value if math.isfinite(value) else 0
-        except (ValueError, TypeError):
-            return 0
-    hardware_issues = []
-    if vram and (str(hw.get("backend") or "").lower() != "cuda" or number("vram_gb") < vram):
-        hardware_issues.append(f"Requires CUDA and at least {vram} GB VRAM on one GPU (provisional offload target).")
-    if number("ram_gb") < ram:
-        hardware_issues.append(f"Requires at least {ram} GB system RAM (provisional target).")
-    dependencies = {}
-    for module in modules:
-        try:
-            dependencies[module] = importlib.util.find_spec(module) is not None
-        except (ImportError, ValueError):
-            dependencies[module] = False
-    blockers = list(RUNTIME_BLOCKERS[engine])
-    blockers += [f"Missing runtime dependency: {name}" for name, found in dependencies.items() if not found]
-    blockers += hardware_issues
-    return {"engine": engine, "role": role, "adapter_ready": False, "runtime_ready": False,
-            "hardware_compatible": not hardware_issues, "hardware_known": bool(hw),
-            "hardware_requirements": {"min_vram_gb": vram, "min_ram_gb": ram, "provisional": True},
-            "dependencies": dependencies, "blockers": blockers}
+def runtime_status(
+    model_id: str,
+    hardware: dict[str, Any] | None = None,
+    *,
+    package_root: Path | None = None,
+    package_validation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the backward-compatible package status plus qualification details."""
+    status = DEFAULT_RUNTIME_REGISTRY.status(
+        model_id,
+        package_root=package_root,
+        package_validation=package_validation,
+        hardware=hardware,
+    )
+    status["engine"] = PROFILES[model_id][0]
+    return status

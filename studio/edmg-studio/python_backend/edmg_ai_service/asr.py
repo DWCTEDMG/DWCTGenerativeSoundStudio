@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
+import re
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
 
@@ -13,6 +16,7 @@ DEFAULT_MODEL_SIZE = "turbo"
 DEFAULT_MODEL_FALLBACK_CHAIN = ("turbo", "large-v3", "medium", "small")
 DEFAULT_ASR_PROVIDER = "faster_whisper"
 DEFAULT_PARAKEET_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
+TRANSFORMERS_WHISPER_CANCELLED = "Transformers Whisper transcription cancelled."
 
 
 @lru_cache(maxsize=4)
@@ -27,6 +31,56 @@ def _load_faster_whisper_model(model_size: str, device: str, compute_type: str):
     except Exception as e:
         raise RuntimeError("ASR requires the locked `asr` capability in the active uv profile.") from e
     return WhisperModel(model_size, device=device, compute_type=compute_type)
+
+
+@lru_cache(maxsize=4)
+def _load_transformers_whisper_model(model_path: str, device: str):
+    if not os.path.isdir(model_path):
+        raise RuntimeError(
+            f"Transformers Whisper model directory does not exist: {model_path}. "
+            "Download Whisper large-v3-turbo and pass its local directory as model_size."
+        )
+    try:
+        import torch  # type: ignore
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "Transformers Whisper requires the locked `audio` capability in the active uv profile."
+        ) from e
+
+    dtype = torch.float16 if device.startswith("cuda:") else torch.float32
+    try:
+        processor = AutoProcessor.from_pretrained(
+            model_path, local_files_only=True, trust_remote_code=False
+        )
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_path,
+            local_files_only=True,
+            trust_remote_code=False,
+            torch_dtype=dtype,
+        )
+        model = model.to(device)
+        model.eval()
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not load the local Transformers Whisper model at {model_path!r} on {device}. "
+            "Verify that the directory contains a complete Hugging Face Whisper checkpoint "
+            "and that the requested device is available."
+        ) from e
+    return processor, model
+
+
+def unload_transformers_whisper_models() -> None:
+    """Release cached Transformers Whisper models and accelerator memory."""
+    _load_transformers_whisper_model.cache_clear()
+    gc.collect()
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def _release_failed_cuda_whisper_models() -> None:
@@ -92,6 +146,8 @@ def _normalize_provider(provider: str | None) -> str:
     raw = str(provider or DEFAULT_ASR_PROVIDER).strip().lower().replace("-", "_")
     if raw in {"whisper", "fasterwhisper", "faster_whisper"}:
         return "faster_whisper"
+    if raw in {"transformers_whisper", "transformerswhisper", "huggingface_whisper", "hf_whisper"}:
+        return "transformers_whisper"
     if raw in {"parakeet", "nvidia_parakeet"}:
         return "parakeet"
     if raw in {"parakeet_nim", "nvidia_nim_asr", "nim_asr", "parakeet-nim"}:
@@ -116,6 +172,41 @@ def _normalize_compute_type(compute_type: str | None, device: str) -> str:
     if raw == "auto":
         return "float16" if device == "cuda" else "int8"
     return raw if raw in {"float16", "int8", "int8_float16"} else "int8"
+
+
+def _normalize_transformers_device(device: str | None) -> str:
+    raw = str(device or "cpu").strip().lower()
+    try:
+        import torch  # type: ignore
+    except Exception as e:
+        raise RuntimeError("Transformers Whisper requires PyTorch in the active uv profile.") from e
+    if raw == "auto":
+        raw = "cuda:0" if torch.cuda.is_available() else "cpu"
+    elif raw == "cuda":
+        raw = "cuda:0"
+    if raw == "cpu":
+        return raw
+    match = re.fullmatch(r"cuda:(\d+)", raw)
+    if not match:
+        raise ValueError("Transformers Whisper device must be 'cpu', 'cuda:N', or 'auto'.")
+    index = int(match.group(1))
+    if not torch.cuda.is_available() or index >= torch.cuda.device_count():
+        raise RuntimeError(f"Transformers Whisper requested unavailable CUDA device {raw}.")
+    return raw
+
+
+def _check_transformers_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise RuntimeError(TRANSFORMERS_WHISPER_CANCELLED)
+
+
+class _CancellationStoppingCriteria:
+    def __init__(self, cancel_check: Callable[[], bool]):
+        self.cancel_check = cancel_check
+
+    def __call__(self, *_args: Any, **_kwargs: Any) -> bool:
+        _check_transformers_cancelled(self.cancel_check)
+        return False
 
 
 def _normalize_parakeet_model(model_size: str | None) -> str:
@@ -214,6 +305,105 @@ def _transcribe_once(
     result["segment_count"] = len(segments)
     result["word_count"] = len(text.split())
     return result
+
+
+def _decode_transformers_whisper(
+    processor: Any, sequences: Any, duration_s: float
+) -> tuple[str, list[dict[str, Any]], str]:
+    timestamped = processor.batch_decode(
+        sequences, skip_special_tokens=True, decode_with_timestamps=True
+    )[0]
+    raw = processor.batch_decode(sequences, skip_special_tokens=False)[0]
+    text = processor.batch_decode(sequences, skip_special_tokens=True)[0].strip()
+    language_match = re.search(r"<\|([a-z]{2,3})\|>", raw, flags=re.IGNORECASE)
+    language = language_match.group(1).lower() if language_match else ""
+
+    matches = list(re.finditer(r"<\|(\d+(?:\.\d+)?)\|>", timestamped))
+    segments: list[dict[str, Any]] = []
+    for current, following in zip(matches, matches[1:], strict=False):
+        chunk_text = timestamped[current.end() : following.start()].strip()
+        chunk_text = re.sub(r"<\|[^|]+\|>", "", chunk_text).strip()
+        if chunk_text:
+            segments.append(
+                {
+                    "start": _coerce_float(current.group(1)),
+                    "end": _coerce_float(following.group(1)),
+                    "text": chunk_text,
+                }
+            )
+    if text and not segments:
+        segments = [{"start": 0.0, "end": duration_s, "text": text}]
+    return text, segments, language
+
+
+def _transcribe_transformers_whisper(
+    path: str,
+    model_path: str,
+    *,
+    device: str = "cpu",
+    cancel_check: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    _check_transformers_cancelled(cancel_check)
+    requested_model_path = str(model_path or "").strip()
+    if not requested_model_path:
+        raise ValueError(
+            "Transformers Whisper requires a local Hugging Face model directory in model_size."
+        )
+    resolved_model_path = os.path.abspath(os.path.expanduser(requested_model_path))
+    resolved_device = _normalize_transformers_device(device)
+    processor, model = _load_transformers_whisper_model(resolved_model_path, resolved_device)
+    try:
+        import librosa  # type: ignore
+        import torch  # type: ignore
+
+        audio, sampling_rate = librosa.load(path, sr=16000, mono=True)
+        duration_s = len(audio) / sampling_rate if sampling_rate else 0.0
+        _check_transformers_cancelled(cancel_check)
+        inputs = processor(audio, sampling_rate=sampling_rate, return_tensors="pt")
+        dtype = torch.float16 if resolved_device.startswith("cuda:") else torch.float32
+        model_inputs = {}
+        for key, value in inputs.items():
+            if getattr(value, "is_floating_point", lambda: False)():
+                model_inputs[key] = value.to(device=resolved_device, dtype=dtype)
+            else:
+                model_inputs[key] = value.to(device=resolved_device)
+        generate_kwargs: dict[str, Any] = {"return_timestamps": True}
+        if cancel_check is not None:
+            from transformers import StoppingCriteriaList  # type: ignore
+
+            generate_kwargs["stopping_criteria"] = StoppingCriteriaList(
+                [_CancellationStoppingCriteria(cancel_check)]
+            )
+        with torch.inference_mode():
+            generated = model.generate(**model_inputs, **generate_kwargs)
+        _check_transformers_cancelled(cancel_check)
+        sequences = getattr(generated, "sequences", generated)
+        text, segments, language = _decode_transformers_whisper(processor, sequences, duration_s)
+    except RuntimeError as e:
+        if str(e) == TRANSFORMERS_WHISPER_CANCELLED:
+            raise
+        raise RuntimeError(
+            f"Transformers Whisper transcription failed on {resolved_device}: {e}"
+        ) from e
+    except Exception as e:
+        raise RuntimeError(
+            f"Transformers Whisper could not read or transcribe {path!r} on {resolved_device}: {e}"
+        ) from e
+
+    return {
+        "text": text,
+        "segments": segments,
+        "language": language,
+        "duration_s": duration_s,
+        "duration_after_vad_s": duration_s,
+        "segment_count": len(segments),
+        "word_count": len(text.split()),
+        "model_size": resolved_model_path,
+        "source": "transformers_whisper",
+        "provider": "transformers_whisper",
+        "device": resolved_device,
+        "compute_type": "float16" if resolved_device.startswith("cuda:") else "float32",
+    }
 
 
 def _segment_from_parakeet_entry(entry: Any) -> dict[str, Any] | None:
@@ -517,9 +707,15 @@ def transcribe_detailed(
     fallback_to_whisper: bool = True,
     nvidia_api_key: str = "",
     nim_base_url: str = "",
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Transcribe audio with long-form metadata and timestamped segments."""
     normalized_provider = _normalize_provider(provider)
+
+    if normalized_provider == "transformers_whisper":
+        return _transcribe_transformers_whisper(
+            path, model_size, device=device, cancel_check=cancel_check
+        )
 
     if normalized_provider == "parakeet_nim":
         try:
@@ -572,6 +768,7 @@ def transcribe(
     device: str = "cpu",
     compute_type: str = "int8",
     fallback_to_whisper: bool = True,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> str:
     """Transcribe audio to text using optional faster-whisper (CPU-friendly).
 
@@ -586,6 +783,7 @@ def transcribe(
             device=device,
             compute_type=compute_type,
             fallback_to_whisper=fallback_to_whisper,
+            cancel_check=cancel_check,
         ).get("text")
         or ""
     )

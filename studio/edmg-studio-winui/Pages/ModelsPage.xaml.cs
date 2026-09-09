@@ -236,7 +236,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
             : model.Entry.Description;
         ModelMetadataText.Text =
             $"{model.Entry.Id}\nKind: {model.Kind}  |  Source: {model.Source}  |  Lane: {model.Lane}\n"
-            + $"State: {model.StateLabel}";
+            + $"State: {model.StateLabel}{model.RuntimeDetail}";
         LicenseText.Text = model.RequiresLicense
             ? $"{model.Entry.LicenseName ?? model.Entry.LicenseId ?? "Model license"}"
                 + (model.IsAccepted ? " - accepted" : " - acceptance required before installation")
@@ -271,6 +271,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         };
         AcceptLicenseButton.IsEnabled = available && model!.RequiresLicense && !model.IsAccepted;
         BenchmarkButton.IsEnabled = available;
+        SmokeTestButton.IsEnabled = available && model!.CanSmokeTest;
         RemoveButton.IsEnabled = available && model!.IsUserModel;
         PromoteButton.IsEnabled = available;
         RefreshButton.IsEnabled = !_isCommandRunning;
@@ -396,6 +397,22 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
                 token => _apiClient.RecordModelBenchmarkAsync(model.Entry.Id, token),
                 "Benchmark record saved.");
         }
+    }
+
+    private async void SmokeTest_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedModel is not { CanSmokeTest: true } model)
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            async token =>
+            {
+                ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(model.Entry.Id, token);
+                UpsertTask(response.Task);
+            },
+            "Runtime smoke test queued. Readiness will update only after real inference succeeds.");
     }
 
     private async void Remove_Click(object sender, RoutedEventArgs e)
@@ -747,7 +764,21 @@ public sealed class ModelPresentation
     public string Source => Entry.Source ?? (IsUserModel ? "local" : "catalogue");
     public string Lane => ReadString("lane") ?? "recommended";
     public bool RequiresLicense => !string.Equals(Source, "ollama", StringComparison.OrdinalIgnoreCase);
-    public string StateLabel => IsInstalled ? "Installed" : IsUserModel ? "Imported" : "Available";
+    public ModelRuntimeStatus? RuntimeStatus => Entry.PackageStatus;
+    public bool CanSmokeTest => IsInstalled && RuntimeStatus?.SmokeTestSupported == true;
+    public string StateLabel => RuntimeStatus?.RuntimeState switch
+    {
+        "runtime_ready" => "Runtime ready",
+        "runtime_degraded" => "Runtime degraded",
+        "installed_runtime_unavailable" when IsInstalled => "Installed / Runtime unavailable",
+        _ when IsInstalled => "Installed",
+        _ when IsUserModel => "Imported",
+        _ => "Available"
+    };
+    public string RuntimeDetail => RuntimeStatus is null
+        ? string.Empty
+        : $"\nQualification: level {RuntimeStatus.ValidationLevel} of 5"
+          + (string.IsNullOrWhiteSpace(RuntimeStatus.Error) ? string.Empty : $"\nReason: {RuntimeStatus.Error}");
     public string Subtitle => $"{Kind} - {Source} - {Lane}";
 
     public bool Matches(string query) =>

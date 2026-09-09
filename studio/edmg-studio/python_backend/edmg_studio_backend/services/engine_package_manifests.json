@@ -166,6 +166,11 @@
         "path": "model_patches/ltx-2.5-duration-head-bf16.safetensors",
         "size_bytes": 3843690,
         "sha256": "2ec71e4206ed365d015f00c05a48caccfb0ee862986809d06ae376c09f5d9190"
+      },
+      {
+        "path": "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        "size_bytes": 995778752,
+        "sha256": "eb5a71fe4068ee87ccdb1c3aa635e547ca76bd2d30ae20ae889f2c325c0677e8"
       }
     ]
   }

@@ -47,7 +47,9 @@ def test_catalog_exact_recommended_formats_and_no_wildcards():
         assert entry["hf_repo_id"] == manifest["repo_id"]
         assert len(entry["hf_revision"]) == 40
         assert entry["required_files"] == [item["path"] for item in packages.checked_files(manifest)]
-    assert len(catalog["hf_ltx_25_distilled_internal"]["required_files"]) == 5
+    ltx = catalog["hf_ltx_25_distilled_internal"]["required_files"]
+    assert len(ltx) == 6
+    assert "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors" in ltx
     assert "Q4_K_M.gguf" in catalog[packages.STANDARD_GGUF_ID]["required_files"][0]
     assert catalog["hf_qwen3_vl_8b_director"]["kind"] == "transformers"
     hunyuan = catalog["hf_hunyuan_video15_internal"]["required_files"]

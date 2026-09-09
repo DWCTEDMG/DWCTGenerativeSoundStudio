@@ -76,6 +76,43 @@ def test_explicit_external_policy_can_be_ready_after_director_installation():
     assert result.blockers == []
 
 
+def test_gguf_director_requires_backend_runtime_qualification():
+    hardware = {"backend": "cpu", "ram_gb": 64.0}
+    unavailable = resolve_director_readiness(
+        hardware,
+        mode="fast",
+        engine="external",
+        installed_models={
+            "hf_qwen3_vl_8b_gguf_director": {
+                "installed": True,
+                "runtime_ready": False,
+                "blockers": ["Run the model runtime smoke test."],
+            },
+        },
+        allow_external=True,
+    )
+    assert unavailable.director.installed is True
+    assert unavailable.director.ready is False
+    assert "smoke test" in unavailable.director.reason
+
+    qualified = resolve_director_readiness(
+        hardware,
+        mode="fast",
+        engine="external",
+        installed_models={
+            "hf_qwen3_vl_8b_gguf_director": {
+                "installed": True,
+                "runtime_ready": True,
+                "device": "cpu",
+                "blockers": [],
+            },
+        },
+        allow_external=True,
+    )
+    assert qualified.director.ready is True
+    assert qualified.ready is True
+
+
 def test_workspace_readiness_route_returns_project_revision_and_actionable_blockers(tmp_path):
     store = ProjectStore(tmp_path / "projects")
     project = store.create("Readiness")

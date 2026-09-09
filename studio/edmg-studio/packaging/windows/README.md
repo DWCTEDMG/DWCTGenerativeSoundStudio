@@ -1,8 +1,10 @@
 # Windows Release Build (Installer-grade)
 
-This folder contains the **WinUI-first** Windows packaging pipeline. It produces
-a packaged x64 WinUI primary frontend over the authenticated localhost FastAPI
-backend and retains Electron as an explicit compatibility frontend.
+This folder contains the **WinUI-first** Windows packaging pipeline. Its primary
+artifact is a conventional `Setup.exe` that installs a signed, self-contained x64
+WinUI package with the production FastAPI backend. MSIX remains the internal app
+container so package identity, Credential Locker, and Windows integrations keep
+working. Electron installers remain explicit compatibility artifacts.
 
 ## Prereqs
 
@@ -35,6 +37,19 @@ Open PowerShell in repo root and run:
 
 ```powershell
 ./studio/edmg-studio/packaging/windows/build_all.ps1
+```
+
+The default output is
+`studio/edmg-studio/dist-winui/EDMG-Studio-<version>-windows-x64-Setup.exe`.
+It contains the WinUI application, self-contained Windows App SDK runtime,
+production DirectML backend, FFmpeg, and FFprobe. A trusted signing certificate
+must be configured through `EDMG_CODE_SIGN_CERT`; the installer refuses to wrap
+an unsigned MSIX.
+
+To build only this primary artifact from `studio/edmg-studio`:
+
+```powershell
+pnpm run dist:win
 ```
 
 The CUDA backend exceeds NSIS's 4 GiB archive limit, so `dist:win:cuda` uses
@@ -99,8 +114,10 @@ The build machine still needs 7-Zip to create the archive.
 
 Outputs:
 
-- `studio/edmg-studio/dist/` (final electron-builder output: profile-qualified installer + unpacked app)
-- `studio/edmg-studio/release/staged-app/` (intermediate staged app passed to electron-builder)
+- `studio/edmg-studio/dist-winui/` (primary WinUI `Setup.exe`)
+- `studio/edmg-studio/release/winui-msix/` (signed package embedded by the installer)
+- `studio/edmg-studio/dist/` (Electron compatibility installer + unpacked app)
+- `studio/edmg-studio/release/staged-app/` (Electron compatibility staging tree)
 
 Windows NSIS installers use
 `EDMG-Studio-<version>-windows-x64-<profile>-Setup.exe`, where `<profile>` is

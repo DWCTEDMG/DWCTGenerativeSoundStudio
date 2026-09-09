@@ -9,6 +9,42 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-SigningCertificateSubject([string]$Reference, [string]$Root) {
+  if ([string]::IsNullOrWhiteSpace($Reference)) {
+    throw "RequireSigning needs EDMG_CODE_SIGN_CERT to identify a PFX/P12 file or certificate thumbprint."
+  }
+
+  $trimmed = $Reference.Trim()
+  $fileCandidate = if ([IO.Path]::IsPathRooted($trimmed)) { $trimmed } else { Join-Path $Root $trimmed }
+  if (Test-Path -LiteralPath $fileCandidate -PathType Leaf) {
+    if ([IO.Path]::GetExtension($fileCandidate).ToLowerInvariant() -notin @(".pfx", ".p12")) {
+      throw "EDMG_CODE_SIGN_CERT file references must use the .pfx or .p12 extension."
+    }
+    try {
+      $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+        $fileCandidate,
+        [string]$env:EDMG_CODE_SIGN_PASSWORD,
+        [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet
+      )
+      return $certificate.Subject
+    } catch {
+      throw "The configured signing certificate could not be opened: $($_.Exception.Message)"
+    } finally {
+      if ($certificate) { $certificate.Dispose() }
+    }
+  }
+
+  $thumbprint = ($trimmed -replace "\s", "").ToUpperInvariant()
+  if ($thumbprint -notmatch "^[A-F0-9]{40}$") {
+    throw "EDMG_CODE_SIGN_CERT must be an existing PFX/P12 file or a SHA1 certificate thumbprint."
+  }
+  foreach ($storePath in @("Cert:\CurrentUser\My", "Cert:\LocalMachine\My")) {
+    $certificate = Get-Item -LiteralPath (Join-Path $storePath $thumbprint) -ErrorAction SilentlyContinue
+    if ($certificate) { return $certificate.Subject }
+  }
+  throw "EDMG_CODE_SIGN_CERT was not found in the current-user or local-machine certificate store."
+}
+
 if (-not $StudioDir) {
   $StudioDir = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 } else {
@@ -88,6 +124,9 @@ if ($StoreIdentityFile) {
   $sourceManifest.Package.Identity.Version = [string]$storeIdentity.version
 }
 
+if ($RequireSigning -and -not $StoreIdentityFile -and -not $SideloadPublisher) {
+  $SideloadPublisher = Get-SigningCertificateSubject ([string]$env:EDMG_CODE_SIGN_CERT) $StudioDir
+}
 if ($SideloadPublisher) {
   if ($SideloadPublisher -notmatch "^CN=") {
     throw "SideloadPublisher must be the complete signing-certificate subject distinguished name (CN=...)."

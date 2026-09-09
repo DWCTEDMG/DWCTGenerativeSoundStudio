@@ -170,29 +170,38 @@ function Assert-WinUiMsix {
 
 switch ($Action) {
   "Install" {
-    $normalizedRoot = Get-NormalizedDirectoryPath $InstallRoot
     $normalizedMsixPath = [IO.Path]::GetFullPath($MsixPath)
-    Assert-BackendBundle $normalizedRoot
     Assert-WinUiMsix $normalizedMsixPath
 
+    $normalizedRoot = $null
     $previousLocator = $null
-    if (Test-Path -LiteralPath $locatorPath -PathType Leaf) {
-      $previousLocator = Get-Content -Raw -LiteralPath $locatorPath
+    $previousLocatedRoot = Read-LocatorInstallRoot
+    if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
+      $normalizedRoot = Get-NormalizedDirectoryPath $InstallRoot
+      Assert-BackendBundle $normalizedRoot
+      if (Test-Path -LiteralPath $locatorPath -PathType Leaf) {
+        $previousLocator = Get-Content -Raw -LiteralPath $locatorPath
+      }
+      $locator = [ordered]@{
+        schemaVersion = 1
+        installRoot = $normalizedRoot
+        updatedAt = (Get-Date).ToUniversalTime().ToString("o")
+      }
+      Write-Utf8FileAtomically $locatorPath (($locator | ConvertTo-Json -Depth 4) + [Environment]::NewLine)
     }
-    $locator = [ordered]@{
-      schemaVersion = 1
-      installRoot = $normalizedRoot
-      updatedAt = (Get-Date).ToUniversalTime().ToString("o")
-    }
-    Write-Utf8FileAtomically $locatorPath (($locator | ConvertTo-Json -Depth 4) + [Environment]::NewLine)
 
     try {
       Add-AppxPackage -Path $normalizedMsixPath -ForceApplicationShutdown
+      if ($null -eq $normalizedRoot -and $null -ne $previousLocatedRoot) {
+        Remove-MatchingLocator $previousLocatedRoot
+      }
     } catch {
-      if ($null -ne $previousLocator) {
-        Write-Utf8FileAtomically $locatorPath $previousLocator
-      } else {
-        Remove-MatchingLocator $normalizedRoot
+      if ($null -ne $normalizedRoot) {
+        if ($null -ne $previousLocator) {
+          Write-Utf8FileAtomically $locatorPath $previousLocator
+        } else {
+          Remove-MatchingLocator $normalizedRoot
+        }
       }
       throw
     }
@@ -209,11 +218,12 @@ switch ($Action) {
   }
 
   "Uninstall" {
-    $normalizedRoot = Get-NormalizedDirectoryPath $InstallRoot
     $package = Get-InstalledPackage
     if ($package) {
       Remove-AppxPackage -Package $package.PackageFullName
     }
-    Remove-MatchingLocator $normalizedRoot
+    if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
+      Remove-MatchingLocator (Get-NormalizedDirectoryPath $InstallRoot)
+    }
   }
 }

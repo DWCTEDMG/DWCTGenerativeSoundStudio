@@ -301,10 +301,16 @@ function normalizeTranscriptionSettings(payload?: Partial<TranscriptionSettings>
   const provider =
     providerRaw === "parakeet" || providerRaw === "nvidia_parakeet"
       ? "parakeet"
-      : "faster_whisper";
+      : providerRaw === "parakeet_nim" || providerRaw === "nvidia_nim_asr"
+        ? "parakeet_nim"
+        : providerRaw === "transformers_whisper" || providerRaw === "hf_whisper"
+          ? "transformers_whisper"
+          : "faster_whisper";
   const modelRaw = String(current.model ?? "").trim();
   let model = modelRaw || (provider === "parakeet" ? "nvidia/parakeet-tdt-0.6b-v3" : DEFAULT_TRANSCRIPTION_SETTINGS.model);
-  if (provider === "parakeet") {
+  if (provider === "transformers_whisper") {
+    model = "hf_whisper_large_v3_turbo_internal";
+  } else if (provider === "parakeet") {
     const lower = model.toLowerCase().replaceAll("_", "-");
     if (lower === "v2" || lower.endsWith("parakeet-tdt-0.6b-v2")) {
       model = "nvidia/parakeet-tdt-0.6b-v2";
@@ -1461,6 +1467,7 @@ export default function Settings(props: PageProps) {
         <div className="small" style={{ marginBottom: 12, opacity: 0.82 }}>
           Parakeet dependencies: <b>{transcriptionStatus?.dependencies?.parakeet_available ? "ready" : "missing"}</b>
           {" "}• faster-whisper: <b>{transcriptionStatus?.dependencies?.faster_whisper_available ? "ready" : "missing"}</b>
+          {" "}• Transformers Whisper: <b>{transcriptionStatus?.dependencies?.transformers_whisper_available ? "ready" : "missing"}</b>
           {" "}• Demucs: <b>{transcriptionStatus?.dependencies?.demucs_available ? "ready" : "missing"}</b>
           {" "}• backend GPU <b>{transcriptionStatus?.hardware?.device_name || hardware?.hardware?.device_name || "unknown"}</b>
         </div>
@@ -1482,6 +1489,7 @@ export default function Settings(props: PageProps) {
                 onChange={(e) => updateTranscriptionDraft({ provider: e.target.value })}
               >
                 <option value="faster_whisper">faster-whisper (local, CPU/GPU)</option>
+                <option value="transformers_whisper">Whisper large-v3-turbo package (Transformers)</option>
                 <option value="parakeet">NVIDIA Parakeet (local, requires NeMo)</option>
                 <option value="parakeet_nim">
                   NVIDIA Parakeet NIM ☁ (cloud, uses NVIDIA API key)
@@ -1506,7 +1514,9 @@ export default function Settings(props: PageProps) {
                 value={transcriptionDraft.model}
                 onChange={(e) => updateTranscriptionDraft({ model: e.target.value })}
               >
-                {transcriptionDraft.provider === "parakeet_nim" ? (
+                {transcriptionDraft.provider === "transformers_whisper" ? (
+                  <option value="hf_whisper_large_v3_turbo_internal">Managed Whisper large-v3-turbo</option>
+                ) : transcriptionDraft.provider === "parakeet_nim" ? (
                   <>
                     <option value="parakeet-ctc-1.1b-asr">Parakeet CTC 1.1B (best accuracy)</option>
                     <option value="parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2 (fast + timestamps)</option>

@@ -573,6 +573,22 @@ def create_models_router(*, get_models: Callable[[], Any], get_hardware: Callabl
     def models_catalog() -> dict[str, Any]:
         return get_models().catalog(hardware=get_hardware()) if get_hardware else get_models().catalog()
 
+    @router.get("/v1/runtimes")
+    def model_runtimes() -> dict[str, Any]:
+        hardware = get_hardware() if get_hardware else None
+        return {"runtimes": get_models().runtime_statuses(hardware)}
+
+    @router.get("/v1/runtimes/{model_id}/readiness")
+    def model_runtime_readiness(model_id: str) -> dict[str, Any]:
+        hardware = get_hardware() if get_hardware else None
+        return get_models().engine_package_status(model_id, hardware)
+
+    @router.post("/v1/runtimes/{model_id}/smoke-test")
+    def model_runtime_smoke_test(model_id: str) -> dict[str, Any]:
+        hardware = get_hardware() if get_hardware else None
+        task = get_models().smoke_test_runtime(model_id, hardware)
+        return {"task": task.__dict__}
+
     @router.post("/v1/models/promote")
     def models_promote(req: dict[str, Any]) -> dict[str, Any]:
         model_id = str(req.get("model_id") or "")

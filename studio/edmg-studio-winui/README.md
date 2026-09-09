@@ -210,9 +210,14 @@ Authored Timeline data, Visual DNA, imported lab state, outputs, jobs, and rende
 
 ## Packaging and release boundary
 
-This is a packaged MSIX project, but it is not a Store-submission artifact yet.
+The primary customer artifact is now a conventional Windows `Setup.exe`. The
+installer wraps the signed, self-contained MSIX because WinUI package identity is
+required for Credential Locker, activation, and Windows integrations; users do
+not need to install a loose MSIX manually. Build it from `studio/edmg-studio` with
+`pnpm run dist:win`. The direct MSIX output remains available for Store staging
+and packaging diagnostics.
 
-- `Package.appxmanifest` currently uses a development identity and publisher placeholder. Replace both with the exact Partner Center identity and publisher values before Store packaging.
+- `Package.appxmanifest` currently uses a development identity and publisher placeholder. The production EXE lane derives its sideload publisher from `EDMG_CODE_SIGN_CERT`; replace the identity with exact Partner Center values before Store packaging.
 - The production backend is a complete validated PyInstaller `onedir` payload, not a standalone executable. It belongs under the installed app's `backend` directory and must pass the repository's existing release-manifest/hash gate before packaging. The top-level path avoids the MSIX-reserved `resources` tree while remaining one of the launcher's supported packaged locations.
 - Do not commit or copy the current multi-gigabyte generated backend bundle into this source directory.
 - Store signing, final product icons, installer upgrade tests, clean-machine proof, and customer-flow release validation remain separate release gates.

@@ -26,6 +26,7 @@ from ..domain.model_lanes import (
 )
 from ..errors import UserFacingError
 from .engine_packages import (
+    PROFILES,
     checked_files,
     package_manifest,
     runtime_status,
@@ -33,6 +34,7 @@ from .engine_packages import (
     validate_package,
 )
 from .hf_auth import HfTokenCandidate, hf_token_candidates
+from .model_runtime_registry import DEFAULT_RUNTIME_REGISTRY, RUNTIME_RECEIPT
 from .model_catalog import built_in_catalog, built_in_packs
 from .model_weights import is_real_weight_file
 from .secrets import SecretStore
@@ -1311,13 +1313,54 @@ class ModelManager:
         _, dest = self._models_dest(entry)
         validation = validate_package(dest, manifest)
         installed = bool(validation["valid"]) and not self._snapshot_has_incomplete_markers(dest)
-        status = runtime_status(model_id, hardware)
+        status = runtime_status(
+            model_id,
+            hardware,
+            package_root=dest if installed else None,
+            package_validation=validation,
+        )
         status.update(installed=installed, state="installed" if installed else "installable",
                       files_present=dest.exists(), validation_issues=validation["issues"],
                       download_size_bytes=sum(item["size_bytes"] for item in manifest["files"]))
-        if not installed:
-            status["blockers"].insert(0, "Install or revalidate the required package files in Models.")
         return status
+
+    def runtime_statuses(self, hardware: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        return [self.engine_package_status(model_id, hardware) for model_id in sorted(PROFILES)]
+
+    def smoke_test_runtime(self, model_id: str, hardware: dict[str, Any] | None = None) -> ModelTask:
+        entry = self._find_entry(model_id)
+        if entry is None or package_manifest(model_id) is None:
+            raise UserFacingError("Unknown managed engine package", code="MODEL_PACKAGE_UNKNOWN")
+        status = self.engine_package_status(model_id, hardware)
+        if not status["installed"]:
+            raise UserFacingError("Model package is not installed", hint=status.get("error"), code="MODEL_PACKAGE_MISSING")
+        if not status["smoke_test_supported"]:
+            raise UserFacingError("Runtime smoke test is unavailable", hint=status.get("error"), code="MODEL_RUNTIME_UNAVAILABLE")
+        return self.tasks.start(
+            f"Runtime smoke test: {entry['name']}",
+            self._smoke_test_runtime,
+            entry,
+            hardware or {},
+        )
+
+    def _smoke_test_runtime(
+        self,
+        task: ModelTask,
+        entry: dict[str, Any],
+        hardware: dict[str, Any],
+    ) -> None:
+        manifest = package_manifest(entry["id"])
+        _, dest = self._models_dest(entry)
+        validation = validate_package(dest, manifest)
+        self.tasks.set_stage(task, "initializing_runtime", progress=0.1)
+        DEFAULT_RUNTIME_REGISTRY.smoke_test(
+            entry["id"],
+            package_root=dest,
+            package_validation=validation,
+            hardware=hardware,
+            cancel_check=lambda: task.cancel_requested,
+        )
+        self.tasks.set_stage(task, "complete", progress=1.0)
 
     def _validate_engine_package(self, task: ModelTask, entry: dict[str, Any]) -> None:
         manifest = package_manifest(entry["id"])
@@ -1325,6 +1368,7 @@ class ModelManager:
         self.tasks.set_stage(task, "validating", progress=0.90)
         receipt = safe_file(dest, "model.json")
         receipt.unlink(missing_ok=True)
+        safe_file(dest, RUNTIME_RECEIPT).unlink(missing_ok=True)
         result = validate_package(dest, manifest, verify_hashes=True,
             cancel_check=lambda: self._raise_if_task_cancelled(task, boundary="package validation"))
         if not result["valid"] or self._snapshot_has_incomplete_markers(dest):
@@ -1357,6 +1401,7 @@ class ModelManager:
             self.tasks.set_stage(task, "complete", progress=1.0)
             return
         safe_file(dest, "model.json").unlink(missing_ok=True)
+        safe_file(dest, RUNTIME_RECEIPT).unlink(missing_ok=True)
         # Hub may trust its own local metadata for an existing file. Remove only
         # corrupt managed artifacts so retry actually repairs them; retain valid
         # siblings and the resumable transport cache.

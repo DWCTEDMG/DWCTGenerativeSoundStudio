@@ -239,5 +239,5 @@ if (Test-Path $smokeScript) {
   }
 }
 
-Write-Host "Done. Final installer artifacts: studio/edmg-studio/dist/" -ForegroundColor Green
-Write-Host "Staged desktop app: studio/edmg-studio/release/staged-app/" -ForegroundColor Cyan
+Write-Host "Done. Primary WinUI installer: studio/edmg-studio/dist-winui/" -ForegroundColor Green
+Write-Host "Staged WinUI package: studio/edmg-studio/release/winui-msix/" -ForegroundColor Cyan

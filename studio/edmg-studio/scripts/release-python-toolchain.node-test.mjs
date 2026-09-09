@@ -756,6 +756,12 @@ test("package release commands select explicit profiles without changing pnpm", 
       `node scripts/prepare-release-bundle.mjs --profile ${profile}`,
     );
   }
+  assert.equal(packageJson.scripts["dist:win"], "pnpm run dist:win:winui");
+  assert.match(packageJson.scripts["dist:win:winui"], /prepare:release-bundle:directml/);
+  assert.match(packageJson.scripts["dist:win:winui"], /stage:winui:msix:production/);
+  assert.match(packageJson.scripts["dist:win:winui"], /build_winui_installer\.ps1/);
+  assert.match(packageJson.scripts["dist:win:winui"], /--artifact-set win-winui-exe/);
+  assert.match(packageJson.scripts["stage:winui:msix:production"], /-IncludeProductionBackend -RequireSigning/);
   assert.match(packageJson.scripts["dist:win:cpu"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:win:directml"], /prepare:release-bundle:directml/);
   assert.match(packageJson.scripts["dist:win:cuda"], /dist:win:cuda:dir/);
@@ -783,6 +789,10 @@ test("Windows packaging stages and installs a self-contained packaged WinUI prim
     path.join(studioRoot, "packaging", "windows", "build_inno_external.ps1"),
     "utf8",
   );
+  const winUiInstaller = fs.readFileSync(
+    path.join(studioRoot, "packaging", "windows", "build_winui_installer.ps1"),
+    "utf8",
+  );
 
   assert.match(stageWinUi, /-p:Platform=x64/);
   assert.match(stageWinUi, /-p:RuntimeIdentifier=win-x64/);
@@ -792,6 +802,12 @@ test("Windows packaging stages and installs a self-contained packaged WinUI prim
   assert.match(stageWinUi, /local-name\(\)='PackageDependency'/);
   assert.match(stageWinUi, /Generated WinUI MSIX is not self-contained/);
   assert.match(stageWinUi, /windowsAppSdkDeployment = "self-contained"/);
+  assert.match(stageWinUi, /Get-SigningCertificateSubject/);
+
+  assert.match(winUiInstaller, /backend\/edmg-studio-backend\.exe/);
+  assert.match(winUiInstaller, /Get-AuthenticodeSignature/);
+  assert.match(winUiInstaller, /-Action Install -MsixPath/);
+  assert.doesNotMatch(winUiInstaller, /Electron compatibility/);
 
   assert.match(innoBuild, /windowsAppSdkDeployment.*-cne "self-contained"/);
   assert.match(innoBuild, /release\\winui-msix/);
@@ -817,8 +833,8 @@ test("Windows packaging stages and installs a self-contained packaged WinUI prim
   );
   assert.ok(
     manageWinUi.indexOf("Remove-AppxPackage -Package $package.PackageFullName") <
-      manageWinUi.lastIndexOf("Remove-MatchingLocator $normalizedRoot"),
-    "uninstall must remove the package before its backend locator",
+      manageWinUi.lastIndexOf("Remove-MatchingLocator (Get-NormalizedDirectoryPath $InstallRoot)"),
+    "uninstall must remove the package before its optional external-backend locator",
   );
   assert.match(manageWinUi, /Write-Utf8FileAtomically \$locatorPath \$previousLocator/);
 });

@@ -45,7 +45,7 @@ function Resolve-SignableArtifacts($Root, $ExplicitPaths) {
   if ($ExplicitPaths -and $ExplicitPaths.Count -gt 0) {
     $candidates = @($ExplicitPaths)
   } else {
-    foreach ($directoryName in @("dist", "dist-inno", "dist-inno-cuda")) {
+    foreach ($directoryName in @("dist-winui", "dist", "dist-inno", "dist-inno-cuda")) {
       $directory = Join-Path $Root $directoryName
       if (Test-Path -LiteralPath $directory -PathType Container) {
         $candidates += @(

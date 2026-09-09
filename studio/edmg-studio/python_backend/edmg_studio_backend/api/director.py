@@ -43,8 +43,8 @@ class DirectorApplyRequest(BaseModel):
 def create_director_router(get_store, get_jobs=None, get_models=None, get_hardware=None):
     router = APIRouter(route_class=RevisionRoute, tags=["director"])
 
-    def installed_models() -> dict[str, bool]:
-        """Return install/cache availability without loading any weights."""
+    def installed_models() -> dict[str, object]:
+        """Return install availability and managed runtime qualification without loading weights."""
 
         model_ids = (
             STANDARD_DIRECTOR_MODEL_ID,
@@ -72,7 +72,14 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             # Readiness is diagnostic; an unavailable catalog must not take the
             # project document or editor offline.
             pass
+        managed_ids = {HUNYUAN_MODEL_ID, LTX_MODEL_ID, STANDARD_GGUF_ID, HIGH_GGUF_ID}
         for model_id in model_ids:
+            if model_id in managed_ids:
+                try:
+                    available[model_id] = service.engine_package_status(model_id, hardware_profile())
+                    continue
+                except (AttributeError, KeyError, ValueError):
+                    pass
             if model_id in available and available[model_id]:
                 continue
             try:

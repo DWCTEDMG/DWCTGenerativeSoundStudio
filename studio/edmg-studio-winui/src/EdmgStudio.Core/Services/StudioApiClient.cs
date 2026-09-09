@@ -1597,6 +1597,16 @@ public sealed class StudioApiClient : IDisposable
             new JsonObject { ["model_id"] = RequireValue(modelId, nameof(modelId)) },
             cancellationToken);
 
+    public Task<ModelTaskActionResponse> SmokeTestModelRuntimeAsync(
+        string modelId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ModelTaskActionResponse>(
+            HttpMethod.Post,
+            $"/v1/runtimes/{Uri.EscapeDataString(RequireValue(modelId, nameof(modelId)))}/smoke-test",
+            new StringContent("{}", Encoding.UTF8, "application/json"),
+            true,
+            cancellationToken);
+
     public Task<JsonElement> AcceptModelLicenseAsync(
         string modelId,
         string licenseId,

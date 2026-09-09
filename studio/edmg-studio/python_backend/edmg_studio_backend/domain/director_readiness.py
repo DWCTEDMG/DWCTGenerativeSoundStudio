@@ -115,9 +115,16 @@ def hardware_tier(hardware: dict[str, Any]) -> str:
 
 def _model_installed(installed_models: dict[str, Any], model_id: str) -> bool:
     value = installed_models.get(model_id, False)
+    if isinstance(value, dict):
+        return bool(value.get("installed"))
     if isinstance(value, str):
         return value.strip().lower() not in {"", "0", "false", "no", "missing", "none"}
     return bool(value)
+
+
+def _runtime_record(installed_models: dict[str, Any], model_id: str) -> dict[str, Any] | None:
+    value = installed_models.get(model_id)
+    return value if isinstance(value, dict) else None
 
 
 def _hardware_summary(hardware: dict[str, Any]) -> dict[str, Any]:
@@ -255,14 +262,19 @@ def resolve_director_readiness(
         else ("high_quality" if tier in {"high", "ultra"} else "standard")
     )
     director_installed = _model_installed(installed, director_model)
-    # Qwen3-VL-8B is the first qualified Director lane.  The 30B-A3B entry is
-    # intentionally discovery-only until its pinned runtime and memory profile
-    # pass the same qualification gate as the standard model.
+    director_status = _runtime_record(installed, director_model)
     director_runtime_ready = director_model == STANDARD_DIRECTOR_MODEL_ID
+    if director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID}:
+        director_status = director_status or runtime_status(director_model, hw)
+        director_runtime_ready = bool(director_status.get("runtime_ready"))
     if not director_installed:
         director_reason = f"Install {director_model} in Models before loading the Director."
     elif director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID}:
-        director_reason = " ".join(runtime_status(director_model, hw)["blockers"])
+        director_reason = (
+            f"Runtime ready on {director_status.get('device') or 'the qualified device'}."
+            if director_runtime_ready
+            else " ".join(director_status.get("blockers") or ["Run the model runtime smoke test."])
+        )
     elif director_runtime_ready:
         director_reason = "Installed and the Director adapter is available."
     else:
@@ -304,10 +316,11 @@ def resolve_director_readiness(
     renderer_installed = renderer_engine == "external" or _model_installed(
         installed, renderer_model
     )
-    # No Hunyuan/LTX execution adapter has passed the project qualification
-    # gate yet.  Keeping this explicit prevents a downloaded snapshot from
-    # being reported as a working temporal renderer.
-    renderer_adapter_ready = renderer_engine == "external" and allow_external
+    renderer_status = _runtime_record(installed, renderer_model)
+    renderer_adapter_ready = (
+        renderer_engine == "external" and allow_external
+        or bool(renderer_status and renderer_status.get("runtime_ready"))
+    )
     if renderer_engine == "external":
         renderer_reason = (
             "External provider policy is explicitly enabled."
@@ -315,16 +328,16 @@ def resolve_director_readiness(
             else "Enable an external provider policy before using an external renderer."
         )
     else:
+        status = renderer_status or runtime_status(renderer_model, hw)
         renderer_reason = (
-            f"Install {renderer_label} and qualify its local adapter before rendering."
+            f"Runtime ready on {status.get('device') or 'the qualified device'}."
+            if renderer_adapter_ready
+            else " ".join(status.get("blockers") or [f"Qualify {renderer_label} before rendering."])
         )
         if not renderer_installed:
             blockers.append(f"{renderer_label} is not installed in the local model catalog.")
-        if renderer_engine in {"ltx_25", "hunyuan_video15"}:
-            blockers.extend(runtime_status(renderer_model, hw)["blockers"])
-        blockers.append(
-            f"{renderer_label} local execution is not release-qualified yet; readiness remains blocked until its adapter passes validation."
-        )
+        if not renderer_adapter_ready:
+            blockers.extend(status.get("blockers") or [renderer_reason])
     if renderer_engine == "external" and not allow_external:
         blockers.append(renderer_reason)
 

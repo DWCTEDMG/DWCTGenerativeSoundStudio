@@ -1,4 +1,4 @@
-﻿# ----------------------------
+# ----------------------------
 # Python
 # ----------------------------
 __pycache__/
@@ -76,6 +76,7 @@ external/*
 desktop/electron/node_modules/
 node_modules/
 studio/edmg-studio/dist/
+studio/edmg-studio/dist-winui/
 studio/edmg-studio/dist-inno/
 studio/edmg-studio/dist-inno-cuda/
 studio/edmg-studio/dist-inno-cuda.zip

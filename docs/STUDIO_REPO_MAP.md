@@ -124,7 +124,8 @@ Current Electron release-lane version source:
 
 - `studio/edmg-studio/package.json#version`
 
-The Electron installer lane remains the currently qualified release path. WinUI
-is the primary Windows product client, but Store identity/signing, backend-bundle
-integration, clean-machine MSIX, upgrade, and customer-flow evidence must be
-completed before claiming a production WinUI package.
+The primary Windows distribution lane is the WinUI `Setup.exe`, which wraps a
+signed, self-contained MSIX containing the production backend. Electron/NSIS and
+the large external-payload Inno path remain compatibility lanes. Store identity,
+clean-machine installation, upgrade, and customer-flow evidence must still be
+completed before claiming a production-qualified WinUI release.

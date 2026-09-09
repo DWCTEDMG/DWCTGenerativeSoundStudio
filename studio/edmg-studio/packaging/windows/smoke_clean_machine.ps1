@@ -42,9 +42,10 @@ if (-not (Test-FileExists $evidenceIndex "Release evidence index")) { $failures 
 if (-not (Test-FileExists $bundleChecksum "Bundle checksum manifest")) { $failures += 1 }
 
 $installerSets = @(
-  [pscustomobject]@{ Name = "NSIS"; Directory = (Join-Path $StudioDir "dist"); Payload = "" },
-  [pscustomobject]@{ Name = "Inno"; Directory = (Join-Path $StudioDir "dist-inno"); Payload = "payload\win-unpacked.7z" },
-  [pscustomobject]@{ Name = "CUDA Inno"; Directory = (Join-Path $StudioDir "dist-inno-cuda"); Payload = "payload\win-unpacked.7z" }
+  [pscustomobject]@{ Name = "WinUI EXE"; Directory = (Join-Path $StudioDir "dist-winui"); Payload = "" },
+  [pscustomobject]@{ Name = "NSIS compatibility"; Directory = (Join-Path $StudioDir "dist"); Payload = "" },
+  [pscustomobject]@{ Name = "Inno compatibility"; Directory = (Join-Path $StudioDir "dist-inno"); Payload = "payload\win-unpacked.7z" },
+  [pscustomobject]@{ Name = "CUDA Inno compatibility"; Directory = (Join-Path $StudioDir "dist-inno-cuda"); Payload = "payload\win-unpacked.7z" }
 )
 $installers = @()
 foreach ($set in $installerSets) {
@@ -86,7 +87,7 @@ if ($installers.Count -gt 0) {
 Write-Host ""
 Write-Host "Manual clean-machine checklist:" -ForegroundColor Cyan
 Write-Host "  1. Use a VM or PC without Python, uv, Node, or prior EDMG Studio installs."
-Write-Host "  2. Copy the installer set from dist/, dist-inno/, or dist-inno-cuda/ plus release/evidence/."
+Write-Host "  2. Copy the primary installer from dist-winui/ (or a compatibility set) plus release/evidence/."
 Write-Host "  3. Install to a Studio Home on any chosen drive with sufficient free space."
 Write-Host "  4. Run Full Setup, create a project, upload audio, analyze, plan, render, export."
 Write-Host "  5. Verify release/evidence/release-artifacts.sha256.json matches shipped files."

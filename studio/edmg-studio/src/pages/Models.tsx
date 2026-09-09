@@ -25,8 +25,10 @@ type CatalogEntry = {
   download_size_bytes?: number;
   package_status?: {
     installed: boolean; runtime_ready: boolean; files_present: boolean;
+    runtime_state: "not_installed" | "installed_runtime_unavailable" | "runtime_degraded" | "runtime_ready";
+    validation_level: number; adapter_ready: boolean; smoke_test_supported: boolean;
     hardware_compatible: boolean; hardware_known: boolean;
-    blockers: string[]; validation_issues: string[];
+    blockers: string[]; validation_issues: string[]; error?: string | null;
   };
   hf_repo_id?: string;
   hf_url?: string;
@@ -196,6 +198,7 @@ function ModelCard({
   onInstall,
   onUninstall,
   onValidate,
+  onSmokeTest,
   onRestore,
   onOpen,
   onPromote,
@@ -211,6 +214,7 @@ function ModelCard({
   onInstall: () => void;
   onUninstall?: () => void;
   onValidate?: () => void;
+  onSmokeTest?: () => void;
   onRestore: () => void;
   onOpen: (u: string) => void;
   onPromote?: (lane: string) => void;
@@ -222,7 +226,20 @@ function ModelCard({
   const cloudStored = !!cloudRecord;
   const cloudOnly = storageMode === "cloud_only";
   const cloudProvider = cloudRecord?.provider || cacheLabel || "cloud cache";
-  const statusLabel = m.package_status?.runtime_ready ? "Runtime ready" : installed ? "Installed locally" : cloudStored ? `Stored in ${cloudProvider}` : installable ? "Not installed" : "Browser only";
+  const runtimeState = m.package_status?.runtime_state;
+  const statusLabel = runtimeState === "runtime_ready"
+    ? "Runtime ready"
+    : runtimeState === "runtime_degraded"
+      ? "Runtime degraded"
+      : installed && m.package_status
+        ? "Installed / Runtime unavailable"
+        : installed
+          ? "Installed"
+          : cloudStored
+            ? `Stored in ${cloudProvider}`
+            : installable
+              ? "Not installed"
+              : "Browser only";
   const installLabel = installed
     ? "Installed"
     : cloudStored
@@ -263,7 +280,8 @@ function ModelCard({
           ) : null}
           {m.package_status ? (
             <div className="small" style={{ marginTop: 8 }}>
-              <b>{m.package_status.runtime_ready ? "Runtime ready" : "Runtime blocked"}</b>
+              <b>{statusLabel}</b>
+              <div>Qualification: level {m.package_status.validation_level} of 5</div>
               <div>Hardware: {m.package_status.hardware_known ? (m.package_status.hardware_compatible ? "Meets provisional targets" : "Below provisional targets") : "Unknown"}</div>
               <div>Selective download: {((m.download_size_bytes || 0) / 1e9).toFixed(2)} GB · {m.required_files?.length || 0} required files</div>
               <ul>{m.package_status.blockers.map((reason) => <li key={reason}>{reason}</li>)}</ul>
@@ -305,6 +323,9 @@ function ModelCard({
             {m.package_managed && m.package_status?.files_present ? (
               <>
                 <button className="secondary" onClick={onValidate}>Revalidate files</button>
+                {m.package_status.smoke_test_supported ? (
+                  <button className="secondary" onClick={onSmokeTest}>Run runtime smoke test</button>
+                ) : null}
                 <button className="secondary" onClick={onUninstall}>Uninstall package</button>
               </>
             ) : null}
@@ -733,6 +754,21 @@ export default function Models(props: PageProps) {
     try {
       await apiPost(`/v1/models/${action}`, { model_id: m.id });
       await refresh();
+    } catch (error: any) {
+      setErr(String(error?.message ?? error));
+    }
+  }
+
+  async function smokeTestRuntime(m: CatalogEntry) {
+    setErr("");
+    try {
+      const payload = await apiPost(`/v1/runtimes/${encodeURIComponent(m.id)}/smoke-test`, {});
+      const task = (payload as any)?.task;
+      if (task?.id) {
+        setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      }
+      pollModelTasksNow();
+      await loadCatalog();
     } catch (error: any) {
       setErr(String(error?.message ?? error));
     }
@@ -1366,8 +1402,9 @@ export default function Models(props: PageProps) {
                 accepted={!!acceptedMap[m.id]}
                 onAccept={() => accept(m)}
                 onInstall={() => install(m)}
-            onUninstall={() => packageAction(m, "uninstall")}
-            onValidate={() => packageAction(m, "validate")}
+                onUninstall={() => packageAction(m, "uninstall")}
+                onValidate={() => packageAction(m, "validate")}
+                onSmokeTest={() => smokeTestRuntime(m)}
                 onRestore={() => restoreLocal(m)}
                 onOpen={(u) => window.edmg?.openExternal?.(u)}
                 onPromote={(lane) => promoteModel(m.id, lane)}
@@ -1389,8 +1426,9 @@ export default function Models(props: PageProps) {
                 accepted={!!acceptedMap[m.id]}
                 onAccept={() => accept(m)}
                 onInstall={() => install(m)}
-            onUninstall={() => packageAction(m, "uninstall")}
-            onValidate={() => packageAction(m, "validate")}
+                onUninstall={() => packageAction(m, "uninstall")}
+                onValidate={() => packageAction(m, "validate")}
+                onSmokeTest={() => smokeTestRuntime(m)}
                 onRestore={() => restoreLocal(m)}
                 onOpen={(u) => window.edmg?.openExternal?.(u)}
                 onPromote={(lane) => promoteModel(m.id, lane)}

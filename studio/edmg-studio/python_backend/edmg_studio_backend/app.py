@@ -4301,6 +4301,12 @@ def analyze_audio(project_id: str):
             asr_cfg,
         )
         asr_provider = str(asr_cfg.get("provider") or "faster_whisper")
+        asr_model = str(asr_cfg.get("model") or "turbo")
+        if asr_provider == "transformers_whisper":
+            managed_path = models.installed_path(asr_model)
+            if managed_path is None:
+                raise RuntimeError("The managed Transformers Whisper package is not installed or failed validation.")
+            asr_model = str(managed_path)
         # Resolve NVIDIA API key for Parakeet NIM cloud path
         _nvidia_key = ""
         if asr_provider == "parakeet_nim":
@@ -4312,7 +4318,7 @@ def analyze_audio(project_id: str):
             )
         transcript_result = ai.transcribe(
             str(transcription_audio_path),
-            model_size=str(asr_cfg.get("model") or "turbo"),
+            model_size=asr_model,
             provider=asr_provider,
             device=str(asr_cfg.get("device") or "auto"),
             compute_type=str(asr_cfg.get("compute_type") or "auto"),

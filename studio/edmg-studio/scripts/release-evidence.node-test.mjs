@@ -36,14 +36,21 @@ test("release artifact inventory keeps installer targets isolated", () => {
 
   const tempRoot = path.join(os.tmpdir(), `edmg-release-evidence-${process.pid}`);
   const distDir = path.join(tempRoot, "dist");
+  const winUiDir = path.join(tempRoot, "dist-winui");
+  const winUiStageDir = path.join(tempRoot, "release", "winui-msix");
   const genericInnoDir = path.join(tempRoot, "dist-inno");
   const innoDir = path.join(tempRoot, "dist-inno-cuda");
   const genericPayloadDir = path.join(genericInnoDir, "payload");
   const payloadDir = path.join(innoDir, "payload");
   fs.mkdirSync(distDir, { recursive: true });
+  fs.mkdirSync(winUiDir, { recursive: true });
+  fs.mkdirSync(winUiStageDir, { recursive: true });
   fs.mkdirSync(genericPayloadDir, { recursive: true });
   fs.mkdirSync(payloadDir, { recursive: true });
   const installer = path.join(distDir, "EDMG-Studio-1.0.0-windows-x64-directml-Setup.exe");
+  const winUiInstaller = path.join(winUiDir, "EDMG-Studio-1.0.0-windows-x64-Setup.exe");
+  const winUiMsix = path.join(winUiStageDir, "EDMG_1.0.0.0_x64.msix");
+  const winUiMetadata = path.join(winUiStageDir, "winui-msix.json");
   const appImage = path.join(distDir, "EDMG-Studio-1.0.0-linux-x64-cuda.AppImage");
   const genericInnoInstaller = path.join(
     genericInnoDir,
@@ -55,6 +62,9 @@ test("release artifact inventory keeps installer targets isolated", () => {
   const payload = path.join(payloadDir, "win-unpacked.7z");
   const sidecar = path.join(payloadDir, "payload-integrity.json");
   fs.writeFileSync(installer, "installer");
+  fs.writeFileSync(winUiInstaller, "winui installer");
+  fs.writeFileSync(winUiMsix, "winui package");
+  fs.writeFileSync(winUiMetadata, "{}");
   fs.writeFileSync(appImage, "appimage");
   fs.writeFileSync(genericInnoInstaller, "inno installer");
   fs.writeFileSync(genericPayload, "external payload");
@@ -63,6 +73,10 @@ test("release artifact inventory keeps installer targets isolated", () => {
   fs.writeFileSync(payload, "external payload");
   fs.writeFileSync(sidecar, "integrity sidecar");
   try {
+    assert.deepEqual(
+      new Set(collectReleaseArtifactPaths(tempRoot, "dist", "win-winui-exe")),
+      new Set([winUiInstaller, winUiMsix, winUiMetadata]),
+    );
     assert.deepEqual(new Set(collectReleaseArtifactPaths(tempRoot, "dist", "win-nsis")), new Set([installer]));
     assert.deepEqual(new Set(collectReleaseArtifactPaths(tempRoot, "dist", "linux-appimage")), new Set([appImage]));
     assert.deepEqual(
