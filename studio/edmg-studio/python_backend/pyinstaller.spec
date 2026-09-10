@@ -120,6 +120,9 @@ datas += safe_collect(copy_metadata, "hf-transfer")
 datas += safe_collect(copy_metadata, "hf-xet")
 if nltk_data_dir.exists():
     datas.append((str(nltk_data_dir), "nltk_data"))
+llama_installer = here / "scripts" / "install_llama_cuda_runtime.ps1"
+if llama_installer.exists():
+    datas.append((str(llama_installer), "scripts"))
 
 binaries = []
 if os.name == "nt":

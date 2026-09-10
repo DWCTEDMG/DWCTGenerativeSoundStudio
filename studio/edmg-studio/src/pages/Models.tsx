@@ -38,6 +38,24 @@ type CatalogEntry = {
   collections?: string[];
 };
 
+type DirectorRuntimeSettings = {
+  runtime_path: string;
+  gpu_layers: string;
+  context_length: number;
+  batch_size: number;
+  ubatch_size: number;
+  cuda_graphs: boolean;
+};
+
+const DEFAULT_DIRECTOR_RUNTIME_SETTINGS: DirectorRuntimeSettings = {
+  runtime_path: "",
+  gpu_layers: "auto",
+  context_length: 8192,
+  batch_size: 64,
+  ubatch_size: 16,
+  cuda_graphs: false,
+};
+
 type CatalogPayload = {
   catalog: CatalogEntry[];
   user: CatalogEntry[];
@@ -669,6 +687,9 @@ export default function Models(props: PageProps) {
   const [tensorRtBusy, setTensorRtBusy] = useState(false);
   const [tensorRtMessage, setTensorRtMessage] = useState("");
   const [cancellingTaskId, setCancellingTaskId] = useState("");
+  const [llamaInstallBusy, setLlamaInstallBusy] = useState(false);
+  const [directorRuntime, setDirectorRuntime] = useState<DirectorRuntimeSettings>(DEFAULT_DIRECTOR_RUNTIME_SETTINGS);
+  const [directorRuntimeSaving, setDirectorRuntimeSaving] = useState(false);
 
   const [hubCollectionId, setHubCollectionId] = useState<string>(HUB_COLLECTIONS[0].id);
   const [hubQuery, setHubQuery] = useState<string>("");
@@ -692,6 +713,13 @@ export default function Models(props: PageProps) {
       });
     catalogRequestRef.current = { promise: request, signal };
     return request;
+  }, []);
+
+  const loadDirectorRuntime = useCallback((signal?: AbortSignal) => {
+    return apiGet("/v1/settings/director_runtime", { signal, timeoutMs: 15_000 }).then((payload) => {
+      const settings = (payload as any)?.settings;
+      if (settings) setDirectorRuntime({ ...DEFAULT_DIRECTOR_RUNTIME_SETTINGS, ...settings });
+    });
   }, []);
 
   const loadRenderProviders = useCallback((signal?: AbortSignal) => {
@@ -774,6 +802,35 @@ export default function Models(props: PageProps) {
     }
   }
 
+  async function installLlamaCudaRuntime() {
+    setErr("");
+    setLlamaInstallBusy(true);
+    try {
+      const payload = await apiPost("/v1/runtimes/llama-cpp/install-cuda", {});
+      const task = (payload as any)?.task;
+      if (task?.id) setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      pollModelTasksNow();
+    } catch (error: any) {
+      setErr(String(error?.message ?? error));
+    } finally {
+      setLlamaInstallBusy(false);
+    }
+  }
+
+  async function saveDirectorRuntime() {
+    setErr("");
+    setDirectorRuntimeSaving(true);
+    try {
+      const payload = await apiPost("/v1/settings/director_runtime", directorRuntime);
+      const settings = (payload as any)?.settings;
+      if (settings) setDirectorRuntime({ ...DEFAULT_DIRECTOR_RUNTIME_SETTINGS, ...settings });
+    } catch (error: any) {
+      setErr(String(error?.message ?? error));
+    } finally {
+      setDirectorRuntimeSaving(false);
+    }
+  }
+
   async function promoteModel(modelId: string, lane: string) {
     setErr("");
     try {
@@ -804,13 +861,14 @@ export default function Models(props: PageProps) {
     void Promise.all([
       loadCatalog(controller.signal),
       loadRenderProviders(controller.signal),
+      loadDirectorRuntime(controller.signal),
     ]).catch((error: any) => {
       if (!controller.signal.aborted && !isRequestAbortError(error)) {
         setErr(String(error?.message ?? error));
       }
     });
     return () => controller.abort();
-  }, [loadCatalog, loadRenderProviders]);
+  }, [loadCatalog, loadDirectorRuntime, loadRenderProviders]);
 
   const merged = useMemo(() => {
     const built = data?.catalog ?? [];
@@ -1185,6 +1243,51 @@ export default function Models(props: PageProps) {
     ),
     runtime: (
       <>
+        <div className="card" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 900 }}>Internal Director llama.cpp runtime</div>
+          <div className="small" style={{ marginTop: 6 }}>
+            Install Studio&apos;s pinned official CUDA build for Qwen3-VL. On constrained NVIDIA GPUs,
+            Studio automatically uses conservative GPU/CPU hybrid offload and keeps the projector on CPU.
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <button disabled={llamaInstallBusy} onClick={() => void installLlamaCudaRuntime()}>
+              {llamaInstallBusy ? "Starting installer…" : "Install CUDA llama.cpp runtime"}
+            </button>
+          </div>
+          <div className="grid2" style={{ marginTop: 12 }}>
+            <label className="small">Runtime path (optional override)
+              <input value={directorRuntime.runtime_path} placeholder="Auto-discover Studio runtime"
+                onChange={(event) => setDirectorRuntime({ ...directorRuntime, runtime_path: event.target.value })} />
+            </label>
+            <label className="small">GPU layers
+              <input value={directorRuntime.gpu_layers} placeholder="auto"
+                onChange={(event) => setDirectorRuntime({ ...directorRuntime, gpu_layers: event.target.value })} />
+            </label>
+            <label className="small">Context size
+              <input type="number" min={8192} max={32768} value={directorRuntime.context_length}
+                onChange={(event) => setDirectorRuntime({ ...directorRuntime, context_length: Number(event.target.value) })} />
+            </label>
+            <label className="small">Physical batch
+              <input type="number" min={8} max={512} value={directorRuntime.batch_size}
+                onChange={(event) => setDirectorRuntime({ ...directorRuntime, batch_size: Number(event.target.value) })} />
+            </label>
+            <label className="small">Logical micro-batch
+              <input type="number" min={1} max={directorRuntime.batch_size} value={directorRuntime.ubatch_size}
+                onChange={(event) => setDirectorRuntime({ ...directorRuntime, ubatch_size: Number(event.target.value) })} />
+            </label>
+            <label className="small" style={{ alignSelf: "end" }}>
+              <input type="checkbox" checked={directorRuntime.cuda_graphs}
+                onChange={(event) => setDirectorRuntime({ ...directorRuntime, cuda_graphs: event.target.checked })} /> Enable CUDA graphs
+            </label>
+          </div>
+          <div className="small" style={{ marginTop: 8 }}>
+            Use <b>auto</b> for conservative partial offload. A numeric GPU-layer override remains bounded by adaptive fallback.
+          </div>
+          <button className="secondary" style={{ marginTop: 10 }} disabled={directorRuntimeSaving}
+            onClick={() => void saveDirectorRuntime()}>
+            {directorRuntimeSaving ? "Saving…" : "Save Director runtime settings"}
+          </button>
+        </div>
         {renderProviders?.stability?.visible ? (
           <div className="card" style={{ marginTop: 14 }}>
             <div style={{ fontWeight: 900 }}>Hosted Stability fallback</div>

@@ -190,6 +190,14 @@ def test_director_generation_persists_resolved_workspace_policy(tmp_path):
             lambda: jobs,
             lambda: Models(),
             lambda: {"backend": "cpu", "ram_gb": 32.0, "cpu_threads": 16},
+            lambda: {
+                "runtime_path": "C:\\Studio\\llama-server.exe",
+                "gpu_layers": "7",
+                "context_length": 12288,
+                "batch_size": 32,
+                "ubatch_size": 8,
+                "cuda_graphs": True,
+            },
         )
     )
     with TestClient(app) as client:
@@ -214,6 +222,12 @@ def test_director_generation_persists_resolved_workspace_policy(tmp_path):
     assert job.payload["allow_external"] is True
     assert job.payload["readiness"]["director"]["ready"] is True
     assert job.payload["readiness"]["renderer"]["engine"] == "external"
+    assert job.payload["runtime_path"] == "C:\\Studio\\llama-server.exe"
+    assert job.payload["gpu_layers"] == "7"
+    assert job.payload["context_length"] == 12288
+    assert job.payload["batch_size"] == 32
+    assert job.payload["ubatch_size"] == 8
+    assert job.payload["cuda_graphs"] is True
 
 
 def test_reviewed_draft_apply_checks_baseline_and_preserves_job(tmp_path):

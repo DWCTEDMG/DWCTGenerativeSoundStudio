@@ -40,7 +40,9 @@ class DirectorApplyRequest(BaseModel):
     expected_revision: int = Field(ge=1, strict=True)
 
 
-def create_director_router(get_store, get_jobs=None, get_models=None, get_hardware=None):
+def create_director_router(
+    get_store, get_jobs=None, get_models=None, get_hardware=None, get_runtime_settings=None,
+):
     router = APIRouter(route_class=RevisionRoute, tags=["director"])
 
     def installed_models() -> dict[str, object]:
@@ -73,10 +75,17 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             # project document or editor offline.
             pass
         managed_ids = {HUNYUAN_MODEL_ID, LTX_MODEL_ID, STANDARD_GGUF_ID, HIGH_GGUF_ID}
+        runtime_hardware = hardware_profile()
+        if get_runtime_settings is not None:
+            settings = dict(get_runtime_settings() or {})
+            runtime_path = str(settings.pop("runtime_path", "") or "").strip()
+            runtime_hardware.update(settings)
+            if runtime_path:
+                runtime_hardware["llama_server_path"] = runtime_path
         for model_id in model_ids:
             if model_id in managed_ids:
                 try:
-                    available[model_id] = service.engine_package_status(model_id, hardware_profile())
+                    available[model_id] = service.engine_package_status(model_id, runtime_hardware)
                     continue
                 except (AttributeError, KeyError, ValueError):
                     pass
@@ -135,10 +144,12 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             raise HTTPException(409, "Project changed; refresh direction before generating")
         model_id = STANDARD_DIRECTOR_MODEL_ID
         readiness_snapshot = None
+        hardware = hardware_profile() if get_hardware is not None else {}
+        runtime_settings = dict(get_runtime_settings() or {}) if get_runtime_settings is not None else {}
         if get_hardware is not None:
             try:
                 readiness = resolve_director_readiness(
-                    hardware_profile(),
+                    hardware,
                     mode=request.mode,
                     engine=request.renderer_engine,
                     installed_models=installed_models(),
@@ -178,7 +189,17 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             "mode": request.mode,
             "renderer_engine": request.renderer_engine,
             "allow_external": request.allow_external,
+            "device": str(hardware.get("llama_device") or hardware.get("device") or "cpu"),
+            "gpu_layers": runtime_settings.get("gpu_layers", "auto"),
+            "context_length": int(runtime_settings.get("context_length", 8192)),
+            "batch_size": int(runtime_settings.get("batch_size", 64)),
+            "ubatch_size": int(runtime_settings.get("ubatch_size", 16)),
+            "cuda_graphs": bool(runtime_settings.get("cuda_graphs", False)),
+            "vram_gb": float(hardware.get("llama_vram_gb") or hardware.get("vram_gb") or 0),
         }
+        runtime_path = str(runtime_settings.get("runtime_path") or "").strip()
+        if runtime_path:
+            payload["runtime_path"] = runtime_path
         if readiness_snapshot is not None:
             payload["readiness"] = readiness_snapshot
         job = get_jobs().create(

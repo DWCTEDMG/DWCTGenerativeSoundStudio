@@ -56,6 +56,15 @@ class RuntimeAdapter:
     descriptor: RuntimeDescriptor
     validate_config: Callable[[Path], list[str]]
     smoke_test: Callable[..., Mapping[str, Any]] | None = None
+    probe_dependencies: Callable[[Mapping[str, Any]], tuple[RuntimeDependency, ...]] | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeDependency:
+    name: str
+    ready: bool
+    identity: str | None = None
+    error: str | None = None
 
 
 def _json_object(path: Path) -> dict[str, Any]:
@@ -88,13 +97,25 @@ def _validate_qwen(root: Path) -> list[str]:
             if (size in main_name) != (size in projector_name):
                 issues.append("The Qwen3-VL GGUF model and projector sizes do not match.")
                 break
-    try:
-        from .llama_cpp_director import resolve_llama_server
-
-        resolve_llama_server()
-    except RuntimeError as exc:
-        issues.append(str(exc))
     return issues
+
+
+def _probe_qwen_dependencies(hardware: Mapping[str, Any]) -> tuple[RuntimeDependency, ...]:
+    from .llama_cpp_director import probe_llama_server, resolve_llama_server
+
+    try:
+        executable = resolve_llama_server(hardware.get("llama_server_path"))
+        probe = probe_llama_server(executable)
+        requested_cuda = str(hardware.get("llama_backend") or hardware.get("backend") or "").lower() == "cuda"
+        if requested_cuda and not probe.cuda_devices:
+            return (RuntimeDependency(
+                "llama_server_cuda", False, probe.identity,
+                "The selected llama-server executable is CPU-only; install the pinned CUDA runtime in Models.",
+            ),)
+        identity = probe.identity
+        return (RuntimeDependency("llama_server", True, identity),)
+    except (RuntimeError, OSError) as exc:
+        return (RuntimeDependency("llama_server", False, error=str(exc)),)
 
 
 def _validate_whisper(root: Path) -> list[str]:
@@ -231,7 +252,13 @@ def _smoke_test_qwen_gguf(
     backend = LlamaCppDirectorBackend(
         package_root,
         device=ModelRuntimeRegistry._device(hardware),
-        context_length=8192,
+        gpu_layers=hardware.get("gpu_layers", "auto"),
+        context_length=int(hardware.get("context_length", 8192)),
+        batch_size=int(hardware.get("batch_size", 64)),
+        ubatch_size=int(hardware.get("ubatch_size", 16)),
+        cuda_graphs=bool(hardware.get("cuda_graphs", False)),
+        vram_gb=float(hardware.get("llama_vram_gb") or hardware.get("vram_gb") or 0),
+        executable=Path(str(hardware["llama_server_path"])) if hardware.get("llama_server_path") else None,
         timeout_s=180,
     )
     try:
@@ -345,10 +372,11 @@ class ModelRuntimeRegistry:
 
     @staticmethod
     def _device(hardware: Mapping[str, Any]) -> str:
-        requested = str(hardware.get("device") or "").strip().lower()
+        requested = str(hardware.get("llama_device") or hardware.get("device") or "").strip().lower()
         if requested.startswith("cuda:"):
             return requested
-        return "cuda:0" if str(hardware.get("backend") or "").lower() == "cuda" else "cpu"
+        backend = str(hardware.get("llama_backend") or hardware.get("backend") or "").lower()
+        return "cuda:0" if backend == "cuda" else "cpu"
 
     @staticmethod
     def _fingerprint(
@@ -370,6 +398,12 @@ class ModelRuntimeRegistry:
                 "backend": hardware.get("backend"),
                 "device": ModelRuntimeRegistry._device(hardware),
                 "device_name": hardware.get("device_name"),
+                "vram_gb": hardware.get("llama_vram_gb", hardware.get("vram_gb")),
+                "gpu_layers": hardware.get("gpu_layers", "auto"),
+                "context_length": hardware.get("context_length", 8192),
+                "batch_size": hardware.get("batch_size", 64),
+                "ubatch_size": hardware.get("ubatch_size", 16),
+                "cuda_graphs": bool(hardware.get("cuda_graphs", False)),
             },
         }
         if descriptor.package_id == "hf_hunyuan_video15_internal":
@@ -405,13 +439,22 @@ class ModelRuntimeRegistry:
         validation = dict(package_validation or {})
         installed = bool(package_root and validation.get("valid"))
         dependencies, dependency_versions = self._dependency_status(descriptor.dependency_modules)
+        runtime_dependencies = adapter.probe_dependencies(hw) if adapter.probe_dependencies else ()
+        for dependency in runtime_dependencies:
+            dependencies[dependency.name] = dependency.ready
+            if dependency.identity:
+                dependency_versions[dependency.name] = dependency.identity
         blockers: list[str] = []
         validation_level = 1 if installed else 0
 
         if not installed:
             blockers.append("Install or revalidate the required package files in Models.")
         missing_dependencies = [name for name, found in dependencies.items() if not found]
-        blockers.extend(f"Missing runtime dependency: {name}" for name in missing_dependencies)
+        dependency_errors = {item.name: item.error for item in runtime_dependencies if not item.ready and item.error}
+        blockers.extend(
+            dependency_errors.get(name) or f"Missing runtime dependency: {name}"
+            for name in missing_dependencies
+        )
 
         backend = str(hw.get("backend") or "").lower()
         hardware_known = bool(hw)
@@ -426,9 +469,11 @@ class ModelRuntimeRegistry:
             hardware_issues.append(
                 f"Requires CUDA and at least {descriptor.minimum_vram_gb:g} GB VRAM on one GPU."
             )
-        if hardware_known and self._number(hw, "ram_gb") < descriptor.minimum_ram_gb:
+        from .hardware_memory import meets_physical_ram_requirement
+        if hardware_known and not meets_physical_ram_requirement(hw, descriptor.minimum_ram_gb):
             hardware_issues.append(
-                f"Requires at least {descriptor.minimum_ram_gb:g} GB system RAM."
+                f"Requires at least {descriptor.minimum_ram_gb:g} GB installed system RAM "
+                f"(detected {self._number(hw, 'installed_ram_gb') or self._number(hw, 'ram_gb'):g} GB)."
             )
         blockers.extend(hardware_issues)
 
@@ -674,6 +719,11 @@ def create_default_registry() -> ModelRuntimeRegistry:
                 if package_id in {"hf_qwen3_vl_8b_gguf_director", "hf_qwen3_vl_30b_gguf_director"}
                 else _smoke_test_ltx_25
                 if package_id == "hf_ltx_25_distilled_internal"
+                else None
+            ),
+            probe_dependencies=(
+                _probe_qwen_dependencies
+                if package_id in {"hf_qwen3_vl_8b_gguf_director", "hf_qwen3_vl_30b_gguf_director"}
                 else None
             ),
         ))

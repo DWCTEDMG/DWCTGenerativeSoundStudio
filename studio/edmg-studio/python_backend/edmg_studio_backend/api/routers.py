@@ -31,8 +31,8 @@ from ..schemas import (
     LiveCuePublishRequest,
     MotionPhrasesApplyRequest,
     MusicGraphCorrectionsRequest,
-    ProjectHealthResponse,
     ProjectCreateRequest,
+    ProjectHealthResponse,
     RecoveryApplyRequest,
     RenderPlan,
     StemModulationUpdateRequest,
@@ -522,30 +522,48 @@ def create_project_router(
     return router
 
 
-def create_models_router(*, get_models: Callable[[], Any], get_hardware: Callable[[], dict] | None = None) -> APIRouter:
+def create_models_router(
+    *,
+    get_models: Callable[[], Any],
+    get_hardware: Callable[[], dict] | None = None,
+    get_director_runtime_settings: Callable[[], dict] | None = None,
+) -> APIRouter:
     """Model catalog and install routes extracted from app.py for WP-09."""
 
     router = APIRouter(tags=["models"])
 
+    def runtime_hardware() -> dict | None:
+        hardware = dict(get_hardware() or {}) if get_hardware else {}
+        if get_director_runtime_settings:
+            settings = dict(get_director_runtime_settings() or {})
+            runtime_path = str(settings.pop("runtime_path", "") or "").strip()
+            hardware.update(settings)
+            if runtime_path:
+                hardware["llama_server_path"] = runtime_path
+        return hardware or None
+
     @router.get("/v1/models/catalog")
     def models_catalog() -> dict[str, Any]:
-        return get_models().catalog(hardware=get_hardware()) if get_hardware else get_models().catalog()
+        hardware = runtime_hardware()
+        return get_models().catalog(hardware=hardware) if hardware is not None else get_models().catalog()
 
     @router.get("/v1/runtimes")
     def model_runtimes() -> dict[str, Any]:
-        hardware = get_hardware() if get_hardware else None
-        return {"runtimes": get_models().runtime_statuses(hardware)}
+        return {"runtimes": get_models().runtime_statuses(runtime_hardware())}
 
     @router.get("/v1/runtimes/{model_id}/readiness")
     def model_runtime_readiness(model_id: str) -> dict[str, Any]:
-        hardware = get_hardware() if get_hardware else None
-        return get_models().engine_package_status(model_id, hardware)
+        return get_models().engine_package_status(model_id, runtime_hardware())
 
     @router.post("/v1/runtimes/{model_id}/smoke-test")
     def model_runtime_smoke_test(model_id: str) -> dict[str, Any]:
-        hardware = get_hardware() if get_hardware else None
-        task = get_models().smoke_test_runtime(model_id, hardware)
+        task = get_models().smoke_test_runtime(model_id, runtime_hardware())
         return {"task": task.__dict__}
+
+    @router.post("/v1/runtimes/llama-cpp/install-cuda")
+    def install_llama_cuda_runtime() -> dict[str, Any]:
+        task = get_models().install_llama_cuda_runtime()
+        return {"task": task.to_dict()}
 
     @router.post("/v1/models/promote")
     def models_promote(req: dict[str, Any]) -> dict[str, Any]:

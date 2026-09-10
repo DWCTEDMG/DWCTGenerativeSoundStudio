@@ -11,6 +11,7 @@ EXTRACTED_ROUTES = {
     "/v1/hardware",
     "/v1/settings/render_providers",
     "/v1/settings/transcription",
+    "/v1/settings/director_runtime",
     "/v1/config",
     "/v1/settings/secrets/status",
     "/v1/settings/secrets/set",

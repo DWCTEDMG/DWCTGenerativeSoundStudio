@@ -6,6 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from edmg_studio_backend.services.hardware_memory import (
+    meets_physical_ram_requirement,
+    nvidia_gpu_profile,
+)
 from edmg_studio_backend.services.model_runtime_registry import (
     DEFAULT_RUNTIME_REGISTRY,
     ModelRuntimeRegistry,
@@ -69,6 +73,13 @@ def test_not_installed_is_distinct_from_runtime_unavailable(tmp_path):
     assert installed["runtime_state"] == "installed_runtime_unavailable"
     assert installed["validation_level"] == 3
     assert "smoke test" in installed["error"].lower()
+
+
+def test_nominal_installed_ram_tolerates_os_reservation_but_not_undersized_systems():
+    assert meets_physical_ram_requirement({"installed_ram_gb": 16, "ram_gb": 15.64}, 16)
+    assert meets_physical_ram_requirement({"ram_gb": 15.64}, 16)
+    assert not meets_physical_ram_requirement({"installed_ram_gb": 12, "ram_gb": 11.7}, 16)
+    assert not meets_physical_ram_requirement({"installed_ram_gb": 16, "ram_gb": 15.64}, 32)
 
 
 def test_configuration_error_stops_at_dependency_validation(tmp_path):
@@ -192,13 +203,11 @@ def test_opt_in_real_model_runtime_smoke_tests():
         "vram_gb": 0.0,
     }
     if device.startswith("cuda"):
-        import torch
-
-        assert torch.cuda.is_available(), f"Requested {device}, but CUDA is unavailable"
         index = int(device.partition(":")[2] or "0")
-        properties = torch.cuda.get_device_properties(index)
-        hardware["device_name"] = properties.name
-        hardware["vram_gb"] = round(float(properties.total_memory) / float(1024 ** 3), 2)
+        gpu = nvidia_gpu_profile()
+        assert gpu is not None and gpu["index"] == index, f"Requested {device}, but CUDA is unavailable"
+        hardware["device_name"] = gpu["name"]
+        hardware["vram_gb"] = gpu["vram_gb"]
 
     for model_id in model_ids:
         assert model_id in MANIFESTS, f"Unknown managed runtime package: {model_id}"

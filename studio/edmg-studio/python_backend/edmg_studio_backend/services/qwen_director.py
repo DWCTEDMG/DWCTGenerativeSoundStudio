@@ -52,8 +52,13 @@ def run_director_job(
         backend = LlamaCppDirectorBackend(
             directory,
             device=str(payload.get("device") or os.getenv("EDMG_LLAMA_DEVICE") or "cpu"),
-            gpu_layers=payload.get("gpu_layers", os.getenv("EDMG_LLAMA_GPU_LAYERS", "all")),
+            gpu_layers=payload.get("gpu_layers", os.getenv("EDMG_LLAMA_GPU_LAYERS", "auto")),
             context_length=int(payload.get("context_length") or os.getenv("EDMG_LLAMA_CONTEXT_LENGTH", "8192")),
+            batch_size=int(payload.get("batch_size") or os.getenv("EDMG_LLAMA_BATCH_SIZE", "64")),
+            ubatch_size=int(payload.get("ubatch_size") or os.getenv("EDMG_LLAMA_UBATCH_SIZE", "16")),
+            cuda_graphs=bool(payload.get("cuda_graphs", False)),
+            vram_gb=float(payload.get("vram_gb") or 0),
+            executable=Path(payload["runtime_path"]) if payload.get("runtime_path") else None,
             timeout_s=float(payload.get("timeout_s") or os.getenv("EDMG_LLAMA_TIMEOUT_S", "180")),
         )
         try:
@@ -72,6 +77,11 @@ def run_director_job(
             proposal = validate_proposal(text, document)
         finally:
             backend.close()
+        launch_configuration = (
+            backend.launch_configuration()
+            if hasattr(backend, "launch_configuration")
+            else {"device": backend.device}
+        )
         return {
             "status": "draft",
             "document": proposal.model_dump(mode="json"),
@@ -82,6 +92,7 @@ def run_director_job(
                 "model_type": "qwen3_vl_gguf",
                 "runtime": "llama-server",
                 "device": backend.device,
+                "launch_configuration": launch_configuration,
             },
         }
 

@@ -67,6 +67,7 @@ from .schemas import (
     TensorRTStandaloneRenderRequest,
     TimelineRenderRequest,
 )
+from .services.director_runtime_settings import DirectorRuntimeSettingsStore
 from .services import animation_autoconfig as autoconfig
 from .services import layer_animation as layeranim
 from .services import parseq_adapter
@@ -295,6 +296,7 @@ setup_tasks = SetupTaskManager()
 secrets = SecretStore(settings.data_dir)
 render_settings = RenderSettingsStore(settings.data_dir)
 transcription_settings = TranscriptionSettingsStore(settings.data_dir)
+director_runtime_settings = DirectorRuntimeSettingsStore(settings.data_dir)
 # Project the persisted model-cache choice onto the environment before the
 # ModelManager resolves its cache, so the UI-selected Hugging Face bucket (the
 # preferred provider over S3/Azure) activates on startup. force=False lets an
@@ -308,6 +310,7 @@ models = ModelManager(
     settings.comfyui_url,
     os.getenv('EDMG_AI_OLLAMA_URL','http://127.0.0.1:11434'),
     secrets=secrets,
+    studio_home=settings.studio_home,
 )
 
 comfy_portable = ComfyPortableProcess()
@@ -403,6 +406,7 @@ app.include_router(
         # be registered beside the other project services without duplicating
         # hardware detection logic.
         lambda: _hardware_profile(),
+        lambda: director_runtime_settings.get(),
     )
 )
 
@@ -2521,21 +2525,14 @@ def _compute_hardware_profile() -> dict[str, Any]:
         "directml_runtime_ready": False,
         "directml_device_name": None,
     }
-    try:
-        page_size = int(os.sysconf("SC_PAGE_SIZE"))
-        phys_pages = int(os.sysconf("SC_PHYS_PAGES"))
-        out["ram_gb"] = round((page_size * phys_pages) / float(1024 ** 3), 2)
-    except Exception:
-        try:
-            import psutil  # type: ignore
-            out["ram_gb"] = round(float(psutil.virtual_memory().total) / float(1024 ** 3), 2)
-        except Exception:
-            out["ram_gb"] = 0.0
+    from .services.hardware_memory import memory_profile, nvidia_gpu_profile
+
+    out.update(memory_profile())
     try:
         import torch  # type: ignore
         if getattr(torch, "cuda", None) is not None and torch.cuda.is_available():
             out["backend"] = "cuda"
-            out["device"] = "cuda"
+            out["device"] = "cuda:0"
             out["available_backends"].append("cuda")
             try:
                 props = torch.cuda.get_device_properties(0)
@@ -2557,6 +2554,16 @@ def _compute_hardware_profile() -> dict[str, Any]:
                 pass
     except Exception:
         pass
+
+    if "cuda" not in out["available_backends"]:
+        nvidia = nvidia_gpu_profile()
+        if nvidia is not None:
+            index = int(nvidia["index"])
+            out["llama_backend"] = "cuda"
+            out["llama_device"] = f"cuda:{index}"
+            out["llama_device_name"] = str(nvidia["name"])
+            out["llama_vram_gb"] = float(nvidia["vram_gb"])
+            out["nvidia_driver_ready"] = True
 
     directml = _directml_runtime_status()
     out["supports_directml"] = bool(directml.get("available"))
@@ -3391,6 +3398,8 @@ app.include_router(
             invalidate_hardware=lambda: _hardware_profile_invalidate(),
             transcription_status=lambda: _transcription_status(),
             update_transcription_settings=lambda payload: transcription_settings.update(payload),
+            director_runtime_settings=lambda: director_runtime_settings.get(),
+            update_director_runtime_settings=lambda payload: director_runtime_settings.update(payload),
             config_payload=lambda: _config_payload(),
             secrets_status_payload=lambda: _secrets_status_payload(),
             set_secret=lambda name, value: secrets.set(name, value),
@@ -6438,7 +6447,11 @@ app.include_router(
         enqueue_timeline_render=_enqueue_timeline_render,
     )
 )
-app.include_router(create_models_router(get_models=lambda: models, get_hardware=_hardware_profile))
+app.include_router(create_models_router(
+    get_models=lambda: models,
+    get_hardware=_hardware_profile,
+    get_director_runtime_settings=lambda: director_runtime_settings.get(),
+))
 
 
 def _render_quality_tier_from_preset(preset: str | None) -> str:

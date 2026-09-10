@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -34,8 +35,8 @@ from .engine_packages import (
     validate_package,
 )
 from .hf_auth import HfTokenCandidate, hf_token_candidates
-from .model_runtime_registry import DEFAULT_RUNTIME_REGISTRY, RUNTIME_RECEIPT
 from .model_catalog import built_in_catalog, built_in_packs
+from .model_runtime_registry import DEFAULT_RUNTIME_REGISTRY, RUNTIME_RECEIPT
 from .model_weights import is_real_weight_file
 from .secrets import SecretStore
 from .setup_wizard import (
@@ -922,6 +923,7 @@ class ModelManager:
         comfyui_url: str,
         ollama_url: str,
         secrets: SecretStore | None = None,
+        studio_home: Path | None = None,
     ):
         self.data_dir = data_dir
         self.models_dir = models_dir
@@ -929,6 +931,7 @@ class ModelManager:
         self.comfyui_url = comfyui_url.rstrip("/")
         self.ollama_url = _ollama_base(ollama_url)
         self.secrets = secrets
+        self.studio_home = (studio_home or (data_dir.parent if data_dir.name.lower() == "data" else data_dir)).resolve()
 
         cfg = _config_dir(self.data_dir)
         task_dir = _ensure_managed_dir(self.data_dir / "tasks", label="task history")
@@ -1360,6 +1363,40 @@ class ModelManager:
             hardware=hardware,
             cancel_check=lambda: task.cancel_requested,
         )
+        self.tasks.set_stage(task, "complete", progress=1.0)
+
+    def install_llama_cuda_runtime(self) -> ModelTask:
+        if os.name != "nt":
+            raise UserFacingError(
+                "The managed llama.cpp CUDA installer is available on Windows only.",
+                code="LLAMA_RUNTIME_PLATFORM_UNSUPPORTED",
+            )
+        script = Path(__file__).resolve().parents[2] / "scripts" / "install_llama_cuda_runtime.ps1"
+        if not script.is_file():
+            raise UserFacingError("The managed llama.cpp installer is missing.", code="LLAMA_INSTALLER_MISSING")
+        return self.tasks.start(
+            "Install llama.cpp CUDA runtime",
+            self._install_llama_cuda_runtime,
+            script,
+            model_id="llama_cpp_cuda_runtime",
+        )
+
+    def _install_llama_cuda_runtime(self, task: ModelTask, script: Path) -> None:
+        self.tasks.set_stage(task, "installing_runtime", progress=0.1)
+        result = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-File", str(script), "-StudioHome", str(self.studio_home),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        output = "\n".join(value.strip() for value in (result.stdout, result.stderr) if value.strip())
+        self.tasks.log(task, output[-8000:])
+        if result.returncode != 0:
+            raise RuntimeError(f"llama.cpp CUDA runtime installation failed: {output[-2000:]}")
         self.tasks.set_stage(task, "complete", progress=1.0)
 
     def _validate_engine_package(self, task: ModelTask, entry: dict[str, Any]) -> None:

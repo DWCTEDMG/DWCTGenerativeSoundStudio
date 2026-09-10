@@ -21,6 +21,8 @@ class SystemSettingsDependencies:
     invalidate_hardware: Callable[[], None]
     transcription_status: Callable[[], dict[str, Any]]
     update_transcription_settings: Callable[[dict[str, Any]], dict[str, Any]]
+    director_runtime_settings: Callable[[], dict[str, Any]]
+    update_director_runtime_settings: Callable[[dict[str, Any]], dict[str, Any]]
     config_payload: Callable[[], dict[str, Any]]
     secrets_status_payload: Callable[[], dict[str, Any]]
     set_secret: Callable[[str, str], None]
@@ -67,6 +69,14 @@ def create_system_settings_router(deps: SystemSettingsDependencies) -> APIRouter
     def set_transcription_settings(payload: dict[str, Any]):
         saved = deps.update_transcription_settings(payload)
         return {"ok": True, "settings": saved, "status": deps.transcription_status()}
+
+    @router.get("/v1/settings/director_runtime")
+    def get_director_runtime_settings():
+        return {"ok": True, "settings": deps.director_runtime_settings()}
+
+    @router.post("/v1/settings/director_runtime")
+    def set_director_runtime_settings(payload: dict[str, Any]):
+        return {"ok": True, "settings": deps.update_director_runtime_settings(payload)}
 
     @router.get("/v1/codex/status")
     def get_codex_status():

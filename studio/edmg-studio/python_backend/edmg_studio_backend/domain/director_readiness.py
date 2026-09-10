@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..services.engine_packages import HIGH_GGUF_ID, STANDARD_GGUF_ID, runtime_status
+from ..services.hardware_memory import meets_physical_ram_requirement
 
 DirectorMode = Literal["automatic", "fast", "quality", "maximum"]
 RendererEngine = Literal["hunyuan_video15", "ltx_25", "external"]
@@ -135,6 +136,8 @@ def _hardware_summary(hardware: dict[str, Any]) -> dict[str, Any]:
         "gpu_vendor",
         "vram_gb",
         "ram_gb",
+        "installed_ram_gb",
+        "available_ram_gb",
         "cpu_threads",
         "cuda_runtime_ready",
         "directml_runtime_ready",
@@ -283,7 +286,7 @@ def resolve_director_readiness(
             "release-qualified yet."
         )
     if tier == "low" and director_model == STANDARD_DIRECTOR_MODEL_ID:
-        if _number(hw, "ram_gb") < 16:
+        if not meets_physical_ram_requirement(hw, 16):
             director_runtime_ready = False
             blockers.append(
                 "Qwen3-VL-8B requires at least 16 GB system RAM for the low-memory Director profile."

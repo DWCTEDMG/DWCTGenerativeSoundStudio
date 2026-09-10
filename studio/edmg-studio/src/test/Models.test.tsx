@@ -26,6 +26,7 @@ function installStrictModeAbortFetchMock() {
     "/v1/models/catalog": catalog,
     "/v1/models/tasks": { tasks: [] },
     "/v1/settings/render_providers": {},
+    "/v1/settings/director_runtime": { settings: {} },
   };
   const abortOnce = new Set(["/v1/models/catalog", "/v1/settings/render_providers"]);
   const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
@@ -109,6 +110,7 @@ describe("Models page polling", () => {
       },
       "/v1/models/tasks": { tasks: [] },
       "/v1/settings/render_providers": {},
+      "/v1/settings/director_runtime": { settings: {} },
       "/v1/models/uninstall": { task: { id: "remove", status: "queued" } },
       "/v1/models/validate": { task: { id: "check", status: "queued" } },
     });
@@ -141,6 +143,7 @@ describe("Models page polling", () => {
       "/v1/models/catalog": catalog,
       "/v1/models/tasks": { tasks: [] },
       "/v1/settings/render_providers": {},
+      "/v1/settings/director_runtime": { settings: {} },
     });
 
     renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
@@ -195,6 +198,7 @@ describe("Models page polling", () => {
         }],
       },
       "/v1/settings/render_providers": {},
+      "/v1/settings/director_runtime": { settings: {} },
     });
 
     renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
@@ -232,6 +236,7 @@ describe("Models page polling", () => {
         }],
       }),
       "/v1/settings/render_providers": {},
+      "/v1/settings/director_runtime": { settings: {} },
       "POST /v1/models/tasks/cancel": () => {
         cancellationRequested = true;
         return {
@@ -275,6 +280,7 @@ describe("Models page polling", () => {
         }],
       },
       "/v1/settings/render_providers": {},
+      "/v1/settings/director_runtime": { settings: {} },
     });
 
     renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
@@ -302,6 +308,7 @@ describe("Models page polling", () => {
       "/v1/models/catalog": { ...catalog, tensorrt_migration: readyLegacyTensorRt },
       "/v1/models/tasks": () => ({ tasks: importStarted ? [runningTask] : [] }),
       "/v1/settings/render_providers": {},
+      "/v1/settings/director_runtime": { settings: {} },
       "POST /v1/models/tensorrt/import-legacy": () => {
         importStarted = true;
         return { task: runningTask };
@@ -358,6 +365,7 @@ describe("Models page polling", () => {
       },
       "/v1/models/tasks": { tasks: [] },
       "/v1/settings/render_providers": {},
+      "/v1/settings/director_runtime": { settings: {} },
     });
 
     renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
