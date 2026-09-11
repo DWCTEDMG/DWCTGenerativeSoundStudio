@@ -21,6 +21,8 @@ public sealed record ModelRenderCandidate(
     string Lane,
     string Source,
     string LicenseId,
+    string VramRequirement,
+    bool IsHosted,
     bool IsInstalled,
     bool IsInstallable,
     bool IsHardwareCompatible,
@@ -231,6 +233,8 @@ public static class ModelRenderGuidanceEvaluator
             lane,
             entry.Source ?? string.Empty,
             entry.LicenseId ?? string.Empty,
+            VramRequirement(entry),
+            !installed && !string.IsNullOrWhiteSpace(entry.Source),
             installed,
             installable,
             hardwareCompatible,
@@ -378,6 +382,29 @@ public static class ModelRenderGuidanceEvaluator
         }
 
         return value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : string.Empty;
+    }
+
+    private static string VramRequirement(ModelCatalogueEntry entry)
+    {
+        foreach (string property in new[] { "min_vram_gb", "recommended_vram_gb", "vram_gb" })
+        {
+            if (!TryMetadata(entry, [property], out JsonElement value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double amount))
+            {
+                return $"{amount:0.#} GB VRAM";
+            }
+
+            if (value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()))
+            {
+                return value.GetString()!;
+            }
+        }
+
+        return "VRAM varies";
     }
 
     private static IReadOnlyList<string> MetadataStrings(ModelCatalogueEntry entry, params string[] path)

@@ -61,4 +61,21 @@ public sealed class ReactiveDraftCompatibilityTests
         var reloaded = JsonSerializer.Deserialize(saved, StudioJsonContext.Default.ReactiveLabLocalState)!;
         Assert.AreEqual(saved, JsonSerializer.Serialize(reloaded, StudioJsonContext.Default.ReactiveLabLocalState));
     }
+
+    [TestMethod]
+    public void PartialDraftWithNullCollectionsProducesUsableReactiveState()
+    {
+        const string json = """
+            {"keyframes":null,"beat_markers":null,"cue_events":null,"sections":null,
+             "repair_suggestions":null}
+            """;
+        var request = JsonSerializer.Deserialize(json, StudioJsonContext.Default.ReactiveLabApplyRequest)!;
+
+        Assert.IsNotNull(request.Keyframes);
+        Assert.IsNotNull(request.BeatMarkers);
+        Assert.IsNotNull(request.CueEvents);
+        Assert.IsNotNull(request.Sections);
+        Assert.IsNotNull(request.RepairSuggestions);
+        Assert.IsFalse(ReactiveWorkflow.HasMeaningfulPayload(request));
+    }
 }

@@ -20,7 +20,28 @@ public sealed class ModelRenderGuidanceTests
             Config(device: "cpu"));
 
         Assert.AreEqual("sd15", result.Primary?.ModelId);
+        Assert.AreEqual("VRAM varies", result.Primary?.VramRequirement);
+        Assert.IsFalse(result.Primary?.IsHosted);
         Assert.IsTrue(result.IsReady);
+    }
+
+    [TestMethod]
+    public void Evaluate_CatalogueVramAndRemoteSource_AppearInPickerMetadata()
+    {
+        ModelCatalogueEntry entry = Entry(
+            "sdxl",
+            "SDXL",
+            "diffusers",
+            installed: false,
+            family: "sdxl",
+            hardware: ["discrete_gpu"],
+            render: Render("internal", ["internal_video"]));
+        entry.ExtensionData!["min_vram_gb"] = Json("8");
+
+        ModelRenderGuidance result = ModelRenderGuidanceEvaluator.Evaluate(Catalogue(entry), Config(device: "cuda"));
+
+        Assert.AreEqual("8 GB VRAM", result.Primary?.VramRequirement);
+        Assert.IsTrue(result.Primary?.IsHosted);
     }
 
     [TestMethod]

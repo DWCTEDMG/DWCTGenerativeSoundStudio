@@ -263,6 +263,10 @@ def test_reviewed_draft_apply_checks_baseline_and_preserves_job(tmp_path):
         result = client.post(path + "/apply", json={"expected_revision": revision})
         assert result.status_code == 200, result.text
         assert result.json()["document"]["scenes"][0]["actions"] == proposal.scenes[0].actions
+        workflow = store.get(project.id).meta["director_workflow"]
+        assert workflow["document"] == result.json()["document"]
+        assert workflow["schedule"]["motion_keys"]
+        assert workflow["schedule"]["camera_keys"]
         # Retrying against a freshly loaded revision must not overwrite newer direction.
         assert (
             client.post(

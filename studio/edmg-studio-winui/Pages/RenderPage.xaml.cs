@@ -6,6 +6,7 @@ using EdmgStudio.Core.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.Storage;
 
 namespace EdmgStudio.WinUI.Pages;
 
@@ -20,11 +21,20 @@ public sealed partial class RenderPage : Page
     private ModelRenderGuidance? _modelGuidance;
     private JsonElement? _hardwareProfile;
 
+    private sealed record ModelPickerItem(
+        string ModelId,
+        string DisplayName,
+        string Detail,
+        string Status);
+
     public RenderPage()
     {
         InitializeComponent();
         _modelGuidanceUiReady = true;
         HeaderVariantBox.ValueChanged += HeaderVariantBox_ValueChanged;
+        ApplyAdvancedMode();
+        RestoreSavedPreset();
+        UpdateReadinessCard();
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -75,6 +85,7 @@ public sealed partial class RenderPage : Page
         {
             _modelCatalogue = await App.Services.ApiClient.GetTypedModelCatalogueAsync(cancellationToken);
             UpdateModelGuidance();
+            UpdateModelSuggestions(QuickModelBox.Text);
             UpdateRuntimeCapabilityUi();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -154,6 +165,8 @@ public sealed partial class RenderPage : Page
         {
             RuntimeAcceleratorText.Text = $"Backend hardware report could not be read: {ex.Message}";
         }
+
+        UpdateReadinessCard();
     }
 
     private async void RefreshRuntimeCapabilities_Click(object sender, RoutedEventArgs e)
@@ -205,6 +218,53 @@ public sealed partial class RenderPage : Page
         ApplyRecommendedVideoModelButton.IsEnabled =
             configuration.TemporalMode.Equals("video_model", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(_modelGuidance.RecommendedVideoModelId);
+        UpdateReadinessCard();
+    }
+
+    private void UpdateReadinessCard()
+    {
+        RenderQuickSetup setup = ResolveQuickSetup();
+        string selectedModel = QuickModelBox.Text.Trim();
+        ReadinessStatusText.Text = _projectId is null
+            ? "Blocked - no active project"
+            : _modelGuidance is null
+                ? "Checking"
+                : _modelGuidance.IsReady ? "Ready" : "Warning";
+        ReadinessEngineText.Text = setup.VideoModelEngine.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? $"Automatic · {setup.Route}"
+            : $"{setup.VideoModelEngine} · {setup.Route}";
+        ReadinessModelText.Text = string.IsNullOrWhiteSpace(selectedModel)
+            || selectedModel.Equals("auto", StringComparison.OrdinalIgnoreCase)
+                ? _modelGuidance?.Primary?.Name ?? "Automatic selection"
+                : _modelGuidance?.Primary?.Name ?? selectedModel;
+        ReadinessFrameText.Text = setup.Route is "motion" or "internal"
+            ? $"Up to {setup.MaximumFrames:N0} generated frames · {setup.OutputFps} FPS output"
+            : setup.Route == "stills" ? "One still per planned scene" : "Calculated by the selected workflow";
+    }
+
+    private void AdvancedModeToggle_Toggled(object sender, RoutedEventArgs e) => ApplyAdvancedMode();
+
+    private void ApplyAdvancedMode()
+    {
+        bool advanced = AdvancedModeToggle.IsOn;
+        AdvancedControlsPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+        AdvancedDiagnosticsHeader.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+        GlobalResultBox.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+        AdvancedActivityHeader.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+        ActionLogBox.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+
+        for (int index = 1; index < WorkflowTabView.TabItems.Count; index++)
+        {
+            if (WorkflowTabView.TabItems[index] is TabViewItem item)
+            {
+                item.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
+        if (!advanced && WorkflowTabView.SelectedIndex != 0)
+        {
+            WorkflowTabView.SelectedIndex = 0;
+        }
     }
 
     private static string FormatModelGuidance(string label, ModelRenderCandidate? candidate)
@@ -227,6 +287,64 @@ public sealed partial class RenderPage : Page
 
     private void ModelGuidanceText_Changed(object sender, TextChangedEventArgs e) =>
         UpdateModelGuidance();
+
+    private void QuickModelBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
+        {
+            UpdateModelSuggestions(sender.Text);
+        }
+
+        UpdateReadinessCard();
+    }
+
+    private void QuickModelBox_SuggestionChosen(
+        AutoSuggestBox sender,
+        AutoSuggestBoxSuggestionChosenEventArgs args)
+    {
+        if (args.SelectedItem is ModelPickerItem item)
+        {
+            sender.Text = item.ModelId;
+        }
+    }
+
+    private void QuickModelBox_QuerySubmitted(
+        AutoSuggestBox sender,
+        AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        if (args.ChosenSuggestion is ModelPickerItem item)
+        {
+            sender.Text = item.ModelId;
+        }
+
+        ApplyQuickSetup();
+    }
+
+    private void UpdateModelSuggestions(string query)
+    {
+        string normalized = query.Trim();
+        IEnumerable<ModelRenderCandidate> candidates = _modelGuidance?.PrimaryAlternatives ?? [];
+        if (normalized.Length > 0 && !normalized.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            candidates = candidates.Where(candidate =>
+                candidate.ModelId.Contains(normalized, StringComparison.OrdinalIgnoreCase)
+                || candidate.Name.Contains(normalized, StringComparison.OrdinalIgnoreCase)
+                || candidate.Engine.Contains(normalized, StringComparison.OrdinalIgnoreCase)
+                || candidate.Source.Contains(normalized, StringComparison.OrdinalIgnoreCase));
+        }
+
+        QuickModelBox.ItemsSource = candidates.Take(20).Select(candidate => new ModelPickerItem(
+            candidate.ModelId,
+            candidate.Name,
+            $"{DisplayValue(candidate.Engine, "Automatic engine")} · {candidate.VramRequirement} · "
+            + (candidate.IsHosted ? "Hosted" : "Local"),
+            candidate.IsInstalled
+                ? candidate.IsHardwareCompatible ? "Ready" : "Incompatible"
+                : candidate.IsInstallable ? "Install" : "Unavailable")).ToArray();
+    }
+
+    private static string DisplayValue(string value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value;
 
     private void ApplyRecommendedPrimaryModel_Click(object sender, RoutedEventArgs e)
     {
@@ -384,6 +502,7 @@ public sealed partial class RenderPage : Page
 
         string model = QuickModelBox.Text.Trim();
         string selectedModel = string.IsNullOrWhiteSpace(model) ? "auto" : model;
+        PromptBox.Text = QuickPromptBox.Text;
         SelectComboValue(PipelinePresetComboBox, setup.Quality);
         SelectComboValue(PipelineModeComboBox, "auto");
 
@@ -428,6 +547,8 @@ public sealed partial class RenderPage : Page
             : $"{QuickGoalLabel(setup.Goal)} · {setup.RenderTier} · {setup.Width} × {setup.Height} · "
               + $"{setup.OutputFps} FPS delivery / {setup.RenderFps} FPS generation · "
               + $"{setup.TemporalMode} · {setup.VideoModelEngine}";
+        UpdateModelGuidance();
+        UpdateReadinessCard();
         return setup;
     }
 
@@ -460,6 +581,22 @@ public sealed partial class RenderPage : Page
 
     private void ApplyQuickSetup_Click(object sender, RoutedEventArgs e) => ApplyQuickSetup();
 
+    private void QuickSetupSelection_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_modelGuidanceUiReady)
+        {
+            UpdateReadinessCard();
+        }
+    }
+
+    private void QuickFpsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_modelGuidanceUiReady)
+        {
+            UpdateReadinessCard();
+        }
+    }
+
     private void QuickPreflight_Click(object sender, RoutedEventArgs e)
     {
         RenderQuickSetup setup = ResolveQuickSetup();
@@ -471,7 +608,7 @@ public sealed partial class RenderPage : Page
 
         if (setup.Route == "pipeline")
         {
-            ValidatePipeline_Click(sender, e);
+            _ = RunStructuredPipelinePreflightAsync();
         }
         else if (setup.Route == "internal")
         {
@@ -511,15 +648,167 @@ public sealed partial class RenderPage : Page
         }
     }
 
-    private async void Preflight_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Running internal render preflight",
-            PreflightResultBox,
-            (projectId, token) => App.Services.ApiClient.PreflightInternalRenderAsync(
+    private async void Preflight_Click(object sender, RoutedEventArgs e) => await RunStructuredPreflightAsync();
+
+    private async Task RunStructuredPreflightAsync()
+    {
+        string? projectId = RequireActiveProject();
+        if (projectId is null)
+        {
+            return;
+        }
+
+        await RunBusyAsync("Running internal render preflight", async token =>
+        {
+            JsonElement result = await App.Services.ApiClient.PreflightInternalRenderAsync(
                 projectId,
                 BuildInternalRenderRequest(),
-                token),
-            "Internal render preflight completed.");
+                token);
+            DisplayResult(PreflightResultBox, result);
+            await ShowPreflightDialogAsync(result);
+            ShowStatus("Internal render preflight completed.", InfoBarSeverity.Success);
+            AppendLog("Internal render preflight completed.");
+        });
+    }
+
+    private async Task ShowPreflightDialogAsync(JsonElement result)
+    {
+        IReadOnlyList<string> blockers = FindStringValues(result, "blockers", "errors");
+        IReadOnlyList<string> warnings = FindStringValues(result, "warnings");
+        bool blocked = blockers.Count > 0 || FindBoolean(result, "ready") == false;
+        string state = blocked ? "Blocked" : warnings.Count > 0 ? "Warning" : "Ready";
+
+        var content = new StackPanel { Spacing = 10, MaxWidth = 620 };
+        content.Children.Add(new InfoBar
+        {
+            IsOpen = true,
+            IsClosable = false,
+            Severity = blocked ? InfoBarSeverity.Error : warnings.Count > 0
+                ? InfoBarSeverity.Warning : InfoBarSeverity.Success,
+            Title = state,
+            Message = blocked
+                ? "Resolve the listed blockers before rendering."
+                : warnings.Count > 0 ? "Rendering can proceed after reviewing these warnings." : "This render path passed preflight."
+        });
+        AddPreflightRows(content, "Blockers", blockers);
+        AddPreflightRows(content, "Warnings", warnings);
+        content.Children.Add(new TextBlock
+        {
+            Text = $"Engine: {ReadinessEngineText.Text}\nGPU: {RuntimeAcceleratorText.Text}\nModel: {ReadinessModelText.Text}\nEstimate: {ReadinessFrameText.Text}",
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Render preflight",
+            Content = new ScrollViewer { Content = content, MaxHeight = 520 },
+            PrimaryButtonText = blocked ? "Open Models" : string.Empty,
+            SecondaryButtonText = blocked ? "Open Settings" : string.Empty,
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close
+        };
+        ContentDialogResult dialogResult = await dialog.ShowAsync();
+        if (dialogResult == ContentDialogResult.Primary)
+        {
+            App.Navigate("models");
+        }
+        else if (dialogResult == ContentDialogResult.Secondary)
+        {
+            App.Navigate("settings");
+        }
+    }
+
+    private static void AddPreflightRows(StackPanel content, string heading, IReadOnlyList<string> rows)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        content.Children.Add(new TextBlock { Text = heading, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        foreach (string row in rows)
+        {
+            content.Children.Add(new TextBlock { Text = $"• {row}", TextWrapping = TextWrapping.Wrap });
+        }
+    }
+
+    private static IReadOnlyList<string> FindStringValues(JsonElement value, params string[] propertyNames)
+    {
+        var values = new List<string>();
+        CollectStringValues(value, propertyNames, values);
+        return values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static void CollectStringValues(JsonElement value, IReadOnlyList<string> names, ICollection<string> values)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty property in value.EnumerateObject())
+            {
+                if (names.Contains(property.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (property.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (JsonElement item in property.Value.EnumerateArray())
+                        {
+                            if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
+                            {
+                                values.Add(item.GetString()!);
+                            }
+                        }
+                    }
+                    else if (property.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(property.Value.GetString()))
+                    {
+                        values.Add(property.Value.GetString()!);
+                    }
+                }
+
+                CollectStringValues(property.Value, names, values);
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in value.EnumerateArray())
+            {
+                CollectStringValues(item, names, values);
+            }
+        }
+    }
+
+    private static bool? FindBoolean(JsonElement value, string propertyName)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty property in value.EnumerateObject())
+            {
+                if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase)
+                    && property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    return property.Value.GetBoolean();
+                }
+
+                bool? nested = FindBoolean(property.Value, propertyName);
+                if (nested.HasValue)
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in value.EnumerateArray())
+            {
+                bool? nested = FindBoolean(item, propertyName);
+                if (nested.HasValue)
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
 
     private async void Render_Click(object sender, RoutedEventArgs e) =>
         await RunProjectJsonAsync(
@@ -537,6 +826,27 @@ public sealed partial class RenderPage : Page
             Selected(PipelinePresetComboBox, "balanced"),
             Selected(PipelineModeComboBox, "auto"),
             Selected(PipelineEngineComboBox, "auto"));
+
+    private async Task RunStructuredPipelinePreflightAsync()
+    {
+        string? projectId = RequireActiveProject();
+        if (projectId is null)
+        {
+            return;
+        }
+
+        await RunBusyAsync("Validating pipeline", async token =>
+        {
+            JsonElement result = await App.Services.ApiClient.ValidatePipelineAsync(
+                projectId,
+                BuildPipelineOptions(),
+                token);
+            DisplayResult(GlobalResultBox, result);
+            await ShowPreflightDialogAsync(result);
+            ShowStatus("Pipeline validation completed.", InfoBarSeverity.Success);
+            AppendLog("Pipeline validation completed.");
+        });
+    }
 
     private async void ValidatePipeline_Click(object sender, RoutedEventArgs e) =>
         await RunProjectJsonAsync(
@@ -1044,6 +1354,67 @@ public sealed partial class RenderPage : Page
     private void ClearLog_Click(object sender, RoutedEventArgs e)
     {
         ActionLogBox.Text = string.Empty;
+    }
+
+    private void StickyPreflight_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyQuickSetup();
+        QuickPreflight_Click(sender, e);
+    }
+
+    private void StickyRender_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyQuickSetup();
+        QuickRender_Click(sender, e);
+    }
+
+    private void SavePreset_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ApplicationDataContainer settings = ApplicationData.Current.LocalSettings;
+            settings.Values["RenderPreset.Goal"] = Selected(QuickGoalComboBox, "auto");
+            settings.Values["RenderPreset.Quality"] = Selected(QuickQualityComboBox, "balanced");
+            settings.Values["RenderPreset.Resolution"] = Selected(QuickResolutionComboBox, "768x432");
+            settings.Values["RenderPreset.Fps"] = Number(QuickFpsBox, 24);
+            settings.Values["RenderPreset.Model"] = QuickModelBox.Text.Trim();
+            settings.Values["RenderPreset.Prompt"] = QuickPromptBox.Text;
+            ShowStatus("The current Simple render preset was saved on this device.", InfoBarSeverity.Success);
+        }
+        catch (Exception exception)
+        {
+            ShowFailure($"The render preset could not be saved: {StudioPageHelpers.GetUserFacingError(exception)}");
+        }
+    }
+
+    private void RestoreSavedPreset()
+    {
+        try
+        {
+            ApplicationDataContainer settings = ApplicationData.Current.LocalSettings;
+            SelectComboValue(QuickGoalComboBox, settings.Values["RenderPreset.Goal"] as string ?? "auto");
+            SelectComboValue(QuickQualityComboBox, settings.Values["RenderPreset.Quality"] as string ?? "balanced");
+            SelectComboValue(QuickResolutionComboBox, settings.Values["RenderPreset.Resolution"] as string ?? "768x432");
+            QuickFpsBox.Value = settings.Values["RenderPreset.Fps"] is int fps ? fps : 24;
+            QuickModelBox.Text = settings.Values["RenderPreset.Model"] as string ?? "auto";
+            QuickPromptBox.Text = settings.Values["RenderPreset.Prompt"] as string ?? string.Empty;
+        }
+        catch (Exception exception)
+        {
+            AppendLog($"Saved render preset was unavailable: {StudioPageHelpers.GetUserFacingError(exception)}");
+        }
+    }
+
+    private void ResetRender_Click(object sender, RoutedEventArgs e)
+    {
+        SelectComboValue(QuickGoalComboBox, "auto");
+        SelectComboValue(QuickQualityComboBox, "balanced");
+        SelectComboValue(QuickResolutionComboBox, "768x432");
+        QuickFpsBox.Value = 24;
+        QuickModelBox.Text = "auto";
+        QuickPromptBox.Text = string.Empty;
+        ApplyQuickSetup();
+        ShowStatus("Render controls were reset to the safe automatic setup.", InfoBarSeverity.Informational);
     }
 
     private async Task RunProjectJsonAsync(

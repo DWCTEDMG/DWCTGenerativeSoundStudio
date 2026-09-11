@@ -5,24 +5,30 @@ namespace EdmgStudio.Core.Models;
 
 public sealed class ReactiveLabApplyRequest
 {
+    private List<JsonElement> _keyframes = [];
+    private List<JsonElement> _beatMarkers = [];
+    private List<JsonElement> _cueEvents = [];
+    private List<JsonElement> _sections = [];
+    private List<JsonElement> _repairSuggestions = [];
+
     [JsonPropertyName("metadata")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? Metadata { get; set; }
 
     [JsonPropertyName("keyframes")]
-    public List<JsonElement> Keyframes { get; set; } = [];
+    public List<JsonElement> Keyframes { get => _keyframes; set => _keyframes = value ?? []; }
 
     [JsonPropertyName("beat_markers")]
-    public List<JsonElement> BeatMarkers { get; set; } = [];
+    public List<JsonElement> BeatMarkers { get => _beatMarkers; set => _beatMarkers = value ?? []; }
 
     [JsonPropertyName("cue_events")]
-    public List<JsonElement> CueEvents { get; set; } = [];
+    public List<JsonElement> CueEvents { get => _cueEvents; set => _cueEvents = value ?? []; }
 
     [JsonPropertyName("sections")]
-    public List<JsonElement> Sections { get; set; } = [];
+    public List<JsonElement> Sections { get => _sections; set => _sections = value ?? []; }
 
     [JsonPropertyName("repair_suggestions")]
-    public List<JsonElement> RepairSuggestions { get; set; } = [];
+    public List<JsonElement> RepairSuggestions { get => _repairSuggestions; set => _repairSuggestions = value ?? []; }
 
     [JsonPropertyName("schedules")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

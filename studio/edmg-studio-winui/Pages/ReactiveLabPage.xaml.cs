@@ -243,6 +243,15 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
         var timeline = await timelineTask;
         var localState = await localStateTask;
         var workflow = await workflowTask;
+        string workflowStatus = workflow.TryGetProperty("status", out var status)
+            ? status.GetString() ?? "not_prepared"
+            : "not_prepared";
+        if (workflowStatus == "not_prepared" && project.Project.HasAnalysis)
+        {
+            workflow = await App.Services.ApiClient.PrepareDirectorWorkflowAsync(
+                projectId, new DirectorApplyRequest(project.Project.Revision), cancellationToken);
+            project = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        }
 
         _project = project.Project;
         _musicGraph = graph;
@@ -306,9 +315,11 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
         WorkspaceDraftSummaryText.Text = _workflowStatus switch
         {
             "draft" => $"Automatically prepared by Workspace · {_keyframes.Count} keyframes · {_draftRequest.CueEvents.Count} cues · {_draftRequest.Sections.Count} sections. Review here or in Overview + Director; applying commits the shared scene and reactive draft together.",
-            "applied" => "The shared Workspace draft is applied. Analyze audio or refine the scene plan to prepare the next draft.",
+            "applied" => "The shared Workspace draft and its reactive keyframes are applied. Refine the scene plan to prepare the next draft; reanalyze only when the song changes or you explicitly request it.",
             "stale" => "The source changed. Return to Overview + Director to prepare a current draft before applying.",
-            _ => "Analyze audio in Overview + Director. The shared plan and reactive keyframes will appear here automatically."
+            _ => _project?.HasAnalysis == true
+                ? "The saved audio analysis could not prepare a Workspace draft. Review the warning and retry without reanalyzing the song."
+                : "Analyze audio in Overview + Director. The shared plan and reactive keyframes will appear here automatically."
         };
         SetKeyframeEditingEnabled(_workflowStatus == "draft");
         SaveWorkspaceDraftButton.IsEnabled = _workflowStatus == "draft";

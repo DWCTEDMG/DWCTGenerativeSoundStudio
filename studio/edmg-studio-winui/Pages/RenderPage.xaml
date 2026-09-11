@@ -49,6 +49,13 @@
                            TextTrimming="CharacterEllipsis"
                            MaxWidth="360" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                    <ToggleSwitch x:Name="AdvancedModeToggle"
+                                  Header="Advanced"
+                                  OffContent="Simple"
+                                  OnContent="Advanced"
+                                  Toggled="AdvancedModeToggle_Toggled"
+                                  AutomationProperties.Name="Show advanced render controls"
+                                  AutomationProperties.AutomationId="RenderAdvancedModeToggle" />
                     <NumberBox x:Name="HeaderVariantBox"
                                Header="Variant"
                                Width="92"
@@ -116,6 +123,7 @@
                                         <StackPanel Spacing="4">
                                             <TextBlock Text="Goal" Style="{StaticResource FieldLabelStyle}" />
                                             <ComboBox x:Name="QuickGoalComboBox" SelectedIndex="0"
+                                                      SelectionChanged="QuickSetupSelection_Changed"
                                                       AutomationProperties.AutomationId="RenderQuickGoalComboBox">
                                                 <ComboBoxItem Content="Automatic internal" Tag="auto" />
                                                 <ComboBoxItem Content="Still scenes" Tag="stills" />
@@ -128,6 +136,7 @@
                                         <StackPanel Grid.Column="1" Spacing="4">
                                             <TextBlock Text="Quality" Style="{StaticResource FieldLabelStyle}" />
                                             <ComboBox x:Name="QuickQualityComboBox" SelectedIndex="1"
+                                                      SelectionChanged="QuickSetupSelection_Changed"
                                                       AutomationProperties.AutomationId="RenderQuickQualityComboBox">
                                                 <ComboBoxItem Content="Fast" Tag="fast" />
                                                 <ComboBoxItem Content="Balanced" Tag="balanced" />
@@ -138,6 +147,7 @@
                                         <StackPanel Grid.Column="2" Spacing="4">
                                             <TextBlock Text="Resolution" Style="{StaticResource FieldLabelStyle}" />
                                             <ComboBox x:Name="QuickResolutionComboBox" SelectedIndex="0"
+                                                      SelectionChanged="QuickSetupSelection_Changed"
                                                       AutomationProperties.AutomationId="RenderQuickResolutionComboBox">
                                                 <ComboBoxItem Content="768 × 432 — preview" Tag="768x432" />
                                                 <ComboBoxItem Content="1024 × 576 — 16:9" Tag="1024x576" />
@@ -151,14 +161,52 @@
                                         <StackPanel Grid.Row="1" Spacing="4">
                                             <TextBlock Text="Output FPS" Style="{StaticResource FieldLabelStyle}" />
                                             <NumberBox x:Name="QuickFpsBox" Value="24" Minimum="1" Maximum="60"
+                                                       ValueChanged="QuickFpsBox_ValueChanged"
                                                        AutomationProperties.AutomationId="RenderQuickFpsBox" />
                                         </StackPanel>
                                         <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Spacing="4">
                                             <TextBlock Text="Model" Style="{StaticResource FieldLabelStyle}" />
-                                            <TextBox x:Name="QuickModelBox"
-                                                     Text="auto"
-                                                     PlaceholderText="auto or a downloaded model ID"
-                                                     AutomationProperties.AutomationId="RenderQuickModelBox" />
+                                            <AutoSuggestBox x:Name="QuickModelBox"
+                                                            Text="auto"
+                                                            PlaceholderText="Search installed and hosted models"
+                                                            TextChanged="QuickModelBox_TextChanged"
+                                                            SuggestionChosen="QuickModelBox_SuggestionChosen"
+                                                            QuerySubmitted="QuickModelBox_QuerySubmitted"
+                                                            AutomationProperties.Name="Render model"
+                                                            AutomationProperties.AutomationId="RenderQuickModelBox">
+                                                <AutoSuggestBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid MinWidth="440" Padding="4" ColumnSpacing="10">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="40" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <Border Width="36" Height="36" CornerRadius="6"
+                                                                    Background="{ThemeResource AccentFillColorSecondaryBrush}">
+                                                                <FontIcon Glyph="&#xE8B9;" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            </Border>
+                                                            <StackPanel Grid.Column="1" Spacing="2">
+                                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                                                <TextBlock Text="{Binding Detail}" FontSize="12"
+                                                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                            </StackPanel>
+                                                            <TextBlock Grid.Column="2" Text="{Binding Status}"
+                                                                       VerticalAlignment="Center"
+                                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </AutoSuggestBox.ItemTemplate>
+                                            </AutoSuggestBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.ColumnSpan="3" Spacing="4">
+                                            <TextBlock Text="Prompt" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBox x:Name="QuickPromptBox"
+                                                     AcceptsReturn="True"
+                                                     MinHeight="72"
+                                                     TextWrapping="Wrap"
+                                                     PlaceholderText="Describe the visual result"
+                                                     AutomationProperties.AutomationId="RenderQuickPromptBox" />
                                         </StackPanel>
                                     </Grid>
                                     <StackPanel Orientation="Horizontal" Spacing="8">
@@ -169,13 +217,6 @@
                                         <Button Content="Apply setup"
                                                 Click="ApplyQuickSetup_Click"
                                                 AutomationProperties.AutomationId="ApplyRenderQuickSetupButton" />
-                                        <Button Content="Preflight"
-                                                Click="QuickPreflight_Click"
-                                                AutomationProperties.AutomationId="PreflightRenderQuickSetupButton" />
-                                        <Button Content="Render / open Timeline"
-                                                Style="{StaticResource AccentButtonStyle}"
-                                                Click="QuickRender_Click"
-                                                AutomationProperties.AutomationId="RunRenderQuickSetupButton" />
                                     </StackPanel>
                                     <TextBlock x:Name="QuickSetupSummaryText"
                                                Text="Automatic internal · balanced · 768 × 432 · 24 FPS"
@@ -185,6 +226,7 @@
                                 </StackPanel>
                             </Border>
 
+                            <StackPanel x:Name="AdvancedControlsPanel" Visibility="Collapsed" Spacing="12">
                             <Border Padding="16"
                                    CornerRadius="8"
                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -820,6 +862,7 @@
                                      TextWrapping="Wrap"
                                      FontFamily="Consolas"
                                      AutomationProperties.AutomationId="RenderPreflightResultBox" />
+                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                 </TabViewItem>
@@ -1920,6 +1963,18 @@
                                         Click="RefreshRuntimeCapabilities_Click"
                                         AutomationProperties.AutomationId="RefreshRenderRuntimeCapabilitiesButton" />
                             </Grid>
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" RowSpacing="4">
+                                <TextBlock Text="Status" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="ReadinessStatusText" Grid.Column="1" Text="Checking..."
+                                           FontWeight="SemiBold" AutomationProperties.AutomationId="RenderReadinessStatusText" />
+                                <TextBlock Grid.Row="1" Text="Engine" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="ReadinessEngineText" Grid.Row="1" Grid.Column="1" Text="Automatic" />
+                                <TextBlock Grid.Row="2" Text="Model" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="ReadinessModelText" Grid.Row="2" Grid.Column="1" Text="Automatic selection"
+                                           TextTrimming="CharacterEllipsis" />
+                                <TextBlock Grid.Row="3" Text="Estimate" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="ReadinessFrameText" Grid.Row="3" Grid.Column="1" Text="Frame count available after setup" />
+                            </Grid>
                             <TextBlock x:Name="RuntimeAcceleratorText"
                                        Text="Backend hardware has not been checked."
                                        FontWeight="SemiBold"
@@ -1940,7 +1995,7 @@
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                     </Border>
-                    <StackPanel Grid.Row="1" Spacing="2">
+                    <StackPanel x:Name="AdvancedDiagnosticsHeader" Grid.Row="1" Spacing="2" Visibility="Collapsed">
                         <TextBlock Text="Diagnostics" Style="{StaticResource SectionHeaderStyle}" />
                         <TextBlock Text="The latest backend response or actionable error."
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -1954,8 +2009,9 @@
                              TextWrapping="NoWrap"
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             Visibility="Collapsed"
                              AutomationProperties.AutomationId="RenderGlobalDiagnosticsBox" />
-                    <Grid Grid.Row="3">
+                    <Grid x:Name="AdvancedActivityHeader" Grid.Row="3" Visibility="Collapsed">
                         <TextBlock Text="Activity log" FontWeight="SemiBold" />
                         <Button Content="Clear"
                                 HorizontalAlignment="Right"
@@ -1969,30 +2025,55 @@
                              FontFamily="Consolas"
                              TextWrapping="Wrap"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             Visibility="Collapsed"
                              AutomationProperties.AutomationId="RenderActionLogBox" />
                 </Grid>
             </Border>
         </Grid>
 
-        <Grid Grid.Row="3" ColumnSpacing="10">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <ProgressRing x:Name="BusyRing"
-                          Width="24"
-                          Height="24"
-                          IsActive="False"
-                          AutomationProperties.AutomationId="RenderBusyRing" />
-            <StackPanel Grid.Column="1" Spacing="4">
-                <TextBlock x:Name="BusyText"
-                           Text="Ready"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <ProgressBar x:Name="BusyProgressBar"
-                             IsIndeterminate="False"
-                             Value="0"
-                             AutomationProperties.AutomationId="RenderBusyProgressBar" />
-            </StackPanel>
-        </Grid>
+        <Border Grid.Row="3"
+                Margin="-20,0,-20,-20"
+                Padding="20,8"
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0"
+                AutomationProperties.AutomationId="RenderStickyCommandSurface">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <CommandBar DefaultLabelPosition="Right" Background="Transparent">
+                    <AppBarButton Icon="Preview" Label="Preflight" Click="StickyPreflight_Click"
+                                  AutomationProperties.AutomationId="StickyRenderPreflightButton" />
+                    <AppBarButton Icon="Play" Label="Render" Click="StickyRender_Click"
+                                  AutomationProperties.AutomationId="StickyRenderStartButton" />
+                    <AppBarButton Icon="Save" Label="Save preset" Click="SavePreset_Click"
+                                  AutomationProperties.AutomationId="SaveRenderPresetButton" />
+                    <AppBarButton Icon="Refresh" Label="Reset" Click="ResetRender_Click"
+                                  AutomationProperties.AutomationId="ResetRenderButton" />
+                </CommandBar>
+                <Grid Grid.Column="1" ColumnSpacing="10" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ProgressRing x:Name="BusyRing"
+                                  Width="24"
+                                  Height="24"
+                                  IsActive="False"
+                                  AutomationProperties.AutomationId="RenderBusyRing" />
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock x:Name="BusyText"
+                                   Text="Ready"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <ProgressBar x:Name="BusyProgressBar"
+                                     IsIndeterminate="False"
+                                     Value="0"
+                                     AutomationProperties.AutomationId="RenderBusyProgressBar" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
     </Grid>
 </Page>
