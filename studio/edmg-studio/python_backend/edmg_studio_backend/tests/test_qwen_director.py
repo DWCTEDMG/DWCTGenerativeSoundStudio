@@ -38,6 +38,39 @@ def test_valid_proposal_is_a_draft_and_does_not_mutate_source():
     assert "9007199254740993" in planning_messages(original, "Add motion")[1]["content"][0]["text"]
 
 
+def test_compact_scene_updates_preserve_authoritative_document_fields():
+    original = document()
+    original.scenes[0].renderer_hints = {"source_scene": {"large": "metadata"}, "locked": False}
+    update = {
+        "scenes": [{
+            "scene_id": "one",
+            "actions": ["walks across the stream"],
+            "camera": {"movement": "slow push-in"},
+            "environment": {"secondary_motion": ["leaves drift"]},
+        }]
+    }
+
+    accepted = validate_proposal(json.dumps(update), original)
+
+    assert accepted.scenes[0].actions == ["walks across the stream"]
+    assert accepted.scenes[0].camera.movement == "slow push-in"
+    assert accepted.scenes[0].environment.secondary_motion == ["leaves drift"]
+    assert accepted.scenes[0].start_sample == "9007199254740993"
+    assert accepted.scenes[0].subjects == original.scenes[0].subjects
+    assert accepted.scenes[0].renderer_hints == original.scenes[0].renderer_hints
+
+
+def test_planning_messages_exclude_renderer_source_metadata():
+    original = document()
+    original.scenes[0].renderer_hints = {"source_scene": {"large": "metadata"}, "locked": False}
+
+    prompt = planning_messages(original, "Add motion")[1]["content"][0]["text"]
+
+    assert "9007199254740993" in prompt
+    assert "source_scene" not in prompt
+    assert '"locked":false' in prompt
+
+
 @pytest.mark.parametrize("change", ["timing", "bible", "identity", "analysis", "scene_set"])
 def test_model_cannot_override_approved_project_constraints(change):
     original = document()

@@ -25,10 +25,12 @@ public sealed partial class OutputsPage : Page
     private readonly LatestRequestGate _previewRequests = new();
     private string? _previewTempPath;
     private readonly LatestRequestGate _refreshRequests = new();
+    private bool _isInitialized;
 
     public OutputsPage()
     {
         InitializeComponent();
+        _isInitialized = true;
     }
 
     public ObservableCollection<StudioOutputItem> Items { get; } = [];
@@ -515,13 +517,19 @@ public sealed partial class OutputsPage : Page
 
     private void SearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
     {
-        if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
+        if (_isInitialized && args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
         {
             ApplyFilters();
         }
     }
 
-    private void Filter_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilters();
+    private void Filter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isInitialized)
+        {
+            ApplyFilters();
+        }
+    }
 
     private void ApplyFilters(string? preferredStableIdentity = null)
     {
