@@ -197,6 +197,7 @@ def test_legacy_job_plan_and_cue_adapters_preserve_render_path_data() -> None:
             "updated_at": "2026-07-14 01:00:01",
             "payload": {"seed": 7},
             "progress": {"stage": "frames", "percent": 50.0},
+            "priority": 50,
         }
     )
     plan = adapt_legacy_render_plan(
@@ -226,6 +227,7 @@ def test_legacy_job_plan_and_cue_adapters_preserve_render_path_data() -> None:
 
     assert job.job_type == "render_internal"
     assert job.payload == {"seed": 7}
+    assert job.priority == 50
     assert [task.id for task in plan.tasks] == ["keyframe", "motion"]
     assert plan.dependencies[0].from_task == "keyframe"
     assert plan.dependencies[0].to_task == "motion"

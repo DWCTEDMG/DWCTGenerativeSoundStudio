@@ -1939,6 +1939,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="180" />
@@ -1995,14 +1996,27 @@
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                     </Border>
-                    <StackPanel x:Name="AdvancedDiagnosticsHeader" Grid.Row="1" Spacing="2" Visibility="Collapsed">
+                    <Border Grid.Row="1" Padding="12" CornerRadius="8"
+                            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                            AutomationProperties.AutomationId="RenderQueueSummaryCard">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Project queue" FontWeight="SemiBold" />
+                                <TextBlock x:Name="RenderQueueSummaryText" Text="Queue status has not been loaded."
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                <ProgressBar x:Name="RenderQueueProgressBar" Minimum="0" Maximum="100" Value="0" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Open queue" Click="OpenQueue_Click" VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <StackPanel x:Name="AdvancedDiagnosticsHeader" Grid.Row="2" Spacing="2" Visibility="Collapsed">
                         <TextBlock Text="Diagnostics" Style="{StaticResource SectionHeaderStyle}" />
                         <TextBlock Text="The latest backend response or actionable error."
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                     <TextBox x:Name="GlobalResultBox"
-                             Grid.Row="2"
+                             Grid.Row="3"
                              AcceptsReturn="True"
                              IsReadOnly="True"
                              FontFamily="Consolas"
@@ -2011,7 +2025,7 @@
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              Visibility="Collapsed"
                              AutomationProperties.AutomationId="RenderGlobalDiagnosticsBox" />
-                    <Grid x:Name="AdvancedActivityHeader" Grid.Row="3" Visibility="Collapsed">
+                    <Grid x:Name="AdvancedActivityHeader" Grid.Row="4" Visibility="Collapsed">
                         <TextBlock Text="Activity log" FontWeight="SemiBold" />
                         <Button Content="Clear"
                                 HorizontalAlignment="Right"
@@ -2019,7 +2033,7 @@
                                 AutomationProperties.AutomationId="ClearRenderLogButton" />
                     </Grid>
                     <TextBox x:Name="ActionLogBox"
-                             Grid.Row="4"
+                             Grid.Row="5"
                              AcceptsReturn="True"
                              IsReadOnly="True"
                              FontFamily="Consolas"

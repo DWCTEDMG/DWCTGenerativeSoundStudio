@@ -1,5 +1,51 @@
 namespace EdmgStudio.Core.Models;
 
+public enum StudioTaskbarProgressState
+{
+    None,
+    Indeterminate,
+    Normal,
+    Paused,
+    Error
+}
+
+public sealed record StudioTaskbarProgress(StudioTaskbarProgressState State, double Percent)
+{
+    public static StudioTaskbarProgress None { get; } = new(StudioTaskbarProgressState.None, 0);
+
+    public static StudioTaskbarProgress Create(IEnumerable<StudioJob>? jobs)
+    {
+        StudioJob[] items = (jobs ?? []).ToArray();
+        StudioJob? running = items
+            .Where(job => job.Status == "running")
+            .OrderByDescending(job => job.Priority)
+            .ThenBy(job => job.CreatedAt, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (running is not null)
+        {
+            double? percent = running.Progress?.Percent;
+            return percent is >= 0 and <= 100
+                ? new(StudioTaskbarProgressState.Normal, percent.Value)
+                : new(StudioTaskbarProgressState.Indeterminate, 0);
+        }
+
+        StudioJob? paused = items.FirstOrDefault(job => job.Status == "paused");
+        if (paused is not null)
+        {
+            return new(StudioTaskbarProgressState.Paused, Math.Clamp(paused.Progress?.Percent ?? 0, 0, 100));
+        }
+
+        if (items.Any(job => job.Status == "queued"))
+        {
+            return new(StudioTaskbarProgressState.Indeterminate, 0);
+        }
+
+        return items.Any(job => job.Status == "failed")
+            ? new(StudioTaskbarProgressState.Error, 100)
+            : None;
+    }
+}
+
 public sealed record StudioShellActivity(
     StudioJob? FeaturedJob,
     int ActiveJobCount,

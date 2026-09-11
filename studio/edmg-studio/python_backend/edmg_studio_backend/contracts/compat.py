@@ -100,6 +100,7 @@ def adapt_legacy_job(payload: Mapping[str, Any]) -> JobContract:
         result=_mapping(payload.get("result")) if payload.get("result") is not None else None,
         error=str(payload["error"]) if payload.get("error") is not None else None,
         progress=_mapping(payload.get("progress")) if payload.get("progress") is not None else None,
+        priority=int(payload.get("priority") or 0),
     )
 
 

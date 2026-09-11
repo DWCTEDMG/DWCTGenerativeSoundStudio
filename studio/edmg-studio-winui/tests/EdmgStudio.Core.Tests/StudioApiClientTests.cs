@@ -765,6 +765,7 @@ public sealed class StudioApiClientTests
                     "type": "internal_video",
                     "status": "running",
                     "created_at": "2026-08-12T08:00:00Z",
+                    "priority": 50,
                     "progress": {
                       "percent": 37.5,
                       "stage": "render",
@@ -789,6 +790,35 @@ public sealed class StudioApiClientTests
         Assert.IsTrue(job.CanCancel);
         Assert.IsFalse(job.CanRetry);
         Assert.AreEqual(37.5, job.Progress?.Percent);
+        Assert.AreEqual(50, job.Priority);
+    }
+
+    [TestMethod]
+    public async Task SetJobPriorityAsync_UsesTypedPriorityRoute()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                await request.Content!.ReadAsStringAsync(cancellationToken));
+            return JsonResponse("""{"ok":true,"job":{"id":"job one","project_id":"project one","type":"render","status":"queued","priority":100}}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        StudioJobActionResponse result = await client.SetJobPriorityAsync("project one", "job one", 150);
+
+        Assert.AreEqual(HttpMethod.Post, captured?.Method);
+        Assert.AreEqual("/v1/projects/project%20one/jobs/job%20one/priority", captured?.Uri.AbsolutePath);
+        Assert.AreEqual("application/json", captured?.ContentType);
+        Assert.AreEqual("{\"priority\":100}", captured?.Body);
+        Assert.AreEqual(100, result.Job.Priority);
     }
 
     [TestMethod]

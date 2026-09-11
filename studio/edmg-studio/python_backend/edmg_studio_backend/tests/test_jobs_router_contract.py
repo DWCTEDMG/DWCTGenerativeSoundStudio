@@ -12,6 +12,7 @@ EXPECTED_JOB_ROUTES = {
     ("POST", "/v1/projects/{project_id}/jobs/{job_id}/cancel"),
     ("POST", "/v1/projects/{project_id}/jobs/{job_id}/pause"),
     ("POST", "/v1/projects/{project_id}/jobs/{job_id}/resume"),
+    ("POST", "/v1/projects/{project_id}/jobs/{job_id}/priority"),
     ("POST", "/v1/projects/{project_id}/jobs/{job_id}/retry"),
     ("POST", "/v1/projects/{project_id}/jobs/{job_id}/resume_from_checkpoint"),
     ("POST", "/v1/projects/{project_id}/jobs/{job_id}/restart_clean"),

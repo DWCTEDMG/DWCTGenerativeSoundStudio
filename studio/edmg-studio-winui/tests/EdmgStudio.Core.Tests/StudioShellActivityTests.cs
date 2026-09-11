@@ -40,6 +40,37 @@ public sealed class StudioShellActivityTests
     }
 
     [TestMethod]
+    public void TaskbarProgress_PrefersRunningThenPausedAndFailure()
+    {
+        StudioJob running = Job("running", "internal_video", "running", "2026-09-11T08:00:00Z");
+        StudioJob queued = Job("queued", "internal_video", "queued", "2026-09-11T09:00:00Z");
+        StudioJob paused = Job("paused", "internal_video", "paused", "2026-09-11T10:00:00Z");
+        StudioJob failed = Job("failed", "internal_video", "failed", "2026-09-11T11:00:00Z");
+
+        StudioTaskbarProgress active = StudioTaskbarProgress.Create([failed, paused, queued, running]);
+        StudioTaskbarProgress waiting = StudioTaskbarProgress.Create([failed, paused, queued]);
+        StudioTaskbarProgress error = StudioTaskbarProgress.Create([failed]);
+
+        Assert.AreEqual(StudioTaskbarProgressState.Normal, active.State);
+        Assert.AreEqual(25, active.Percent);
+        Assert.AreEqual(StudioTaskbarProgressState.Paused, waiting.State);
+        Assert.AreEqual(StudioTaskbarProgressState.Error, error.State);
+    }
+
+    [TestMethod]
+    public void TaskbarProgress_UsesIndeterminateForInvalidRunningPercent()
+    {
+        StudioJob running = Job("running", "internal_video", "running", "2026-09-11T08:00:00Z") with
+        {
+            Progress = new StudioJobProgress(double.NaN, "render", "Rendering", 1, 4),
+        };
+
+        StudioTaskbarProgress result = StudioTaskbarProgress.Create([running]);
+
+        Assert.AreEqual(StudioTaskbarProgressState.Indeterminate, result.State);
+    }
+
+    [TestMethod]
     public void Create_ExcludesReviewedAndNonRenderSuccesses()
     {
         StudioJob reviewed = Job("succeeded", "internal_video", "reviewed", "2026-09-11T08:00:00Z");

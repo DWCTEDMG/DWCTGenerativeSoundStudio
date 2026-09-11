@@ -1241,6 +1241,18 @@ public sealed class StudioApiClient : IDisposable
         CancellationToken cancellationToken = default) =>
         PostJobActionAsync(projectId, jobId, "retry", cancellationToken);
 
+    public Task<StudioJobActionResponse> SetJobPriorityAsync(
+        string projectId,
+        string jobId,
+        int priority,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<StudioJobActionResponse>(
+            HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/jobs/{EscapeIdentifier(jobId)}/priority",
+            JsonContent.Create(new StudioJobPriorityRequest(Math.Clamp(priority, -100, 100))),
+            true,
+            cancellationToken);
+
     public Task<JsonElement> ResumeJobFromCheckpointAsync(
         string projectId,
         string jobId,

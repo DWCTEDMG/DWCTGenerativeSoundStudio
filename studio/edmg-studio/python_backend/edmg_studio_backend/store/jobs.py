@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     lease_owner TEXT,
     lease_expires_at REAL,
     attempt INTEGER NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 0,
     idempotency_key TEXT,
     PRIMARY KEY (project_id, id)
 );
@@ -86,6 +87,7 @@ class Job:
     error: str | None = None
     progress: dict[str, Any] | None = None
     attempt: int = 0
+    priority: int = 0
     idempotency_key: str | None = None
 
 
@@ -102,12 +104,27 @@ class JobStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.executescript(_SCHEMA)
+        self._migrate_schema()
         self._conn.commit()
         self._migrate_json_jobs()
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    def _migrate_schema(self) -> None:
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "priority" not in columns:
+            self._conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_jobs_queue_order
+            ON jobs(status, priority DESC, created_at ASC, id ASC)
+            """
+        )
 
     def _jobs_dir(self, project_id: str) -> Path:
         d = self.projects_dir / project_id / "jobs"
@@ -130,6 +147,7 @@ class JobStore:
             error=row["error"],
             progress=json.loads(row["progress_json"]) if row["progress_json"] else None,
             attempt=int(row["attempt"] or 0),
+            priority=int(row["priority"] or 0),
             idempotency_key=row["idempotency_key"],
         )
 
@@ -148,8 +166,8 @@ class JobStore:
             INSERT INTO jobs(
                 id, project_id, type, status, created_at, updated_at,
                 payload_json, result_json, error, progress_json,
-                lease_owner, lease_expires_at, attempt, idempotency_key
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                lease_owner, lease_expires_at, attempt, priority, idempotency_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
             ON CONFLICT(project_id, id) DO UPDATE SET
                 type=excluded.type,
                 status=excluded.status,
@@ -175,6 +193,7 @@ class JobStore:
                 job.error,
                 json.dumps(job.progress, ensure_ascii=False) if job.progress is not None else None,
                 int(job.attempt or 0),
+                int(job.priority or 0),
                 job.idempotency_key,
             ),
         )
@@ -228,6 +247,7 @@ class JobStore:
                         error=data.get("error"),
                         progress=data.get("progress"),
                         attempt=int(data.get("attempt") or 0),
+                        priority=int(data.get("priority") or 0),
                         idempotency_key=data.get("idempotency_key"),
                     )
                 except Exception:
@@ -534,6 +554,40 @@ class JobStore:
             ).fetchall()
         return [self._row_to_job(row) for row in rows]
 
+    def set_priority(self, project_id: str, job_id: str, priority: int) -> Job | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT priority FROM jobs WHERE project_id = ? AND id = ?",
+                (project_id, job_id),
+            ).fetchone()
+            if row is None:
+                return None
+            previous = int(row["priority"] or 0)
+            cursor = self._conn.execute(
+                """
+                UPDATE jobs SET priority = ?, updated_at = ?
+                WHERE project_id = ? AND id = ? AND status IN ('queued', 'paused')
+                """,
+                (int(priority), self._now(), project_id, job_id),
+            )
+            if cursor.rowcount != 1:
+                self._conn.commit()
+                return None
+            self._record_event(
+                project_id,
+                job_id,
+                "priority_changed",
+                {"from_priority": previous, "to_priority": int(priority)},
+            )
+            updated = self._conn.execute(
+                "SELECT * FROM jobs WHERE project_id = ? AND id = ?",
+                (project_id, job_id),
+            ).fetchone()
+            self._conn.commit()
+            job = self._row_to_job(updated)
+        self._mirror_json(job)
+        return job
+
     def next_queued(self) -> Job | None:
         """Compatibility helper. Prefer claim_next_queued() in worker loops."""
         with self._lock:
@@ -541,7 +595,7 @@ class JobStore:
                 """
                 SELECT * FROM jobs
                 WHERE status = 'queued'
-                ORDER BY created_at ASC, id ASC
+                ORDER BY priority DESC, created_at ASC, id ASC
                 LIMIT 1
                 """
             ).fetchone()
@@ -572,7 +626,7 @@ class JobStore:
                     """
                     SELECT * FROM jobs
                     WHERE status = 'queued'
-                    ORDER BY created_at ASC, id ASC
+                    ORDER BY priority DESC, created_at ASC, id ASC
                     LIMIT 1
                     """
                 ).fetchone()

@@ -373,6 +373,9 @@ public sealed record StudioJobActionResponse(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("job")] StudioJob Job);
 
+public sealed record StudioJobPriorityRequest(
+    [property: JsonPropertyName("priority")] int Priority);
+
 public sealed record StudioJob(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("project_id")] string ProjectId,
@@ -386,7 +389,8 @@ public sealed record StudioJob(
     [property: JsonPropertyName("progress")] StudioJobProgress? Progress,
     [property: JsonPropertyName("result")] JsonElement? Result,
     [property: JsonPropertyName("payload")] JsonElement? Payload,
-    [property: JsonPropertyName("attempt")] int Attempt = 0)
+    [property: JsonPropertyName("attempt")] int Attempt = 0,
+    [property: JsonPropertyName("priority")] int Priority = 0)
 {
     public bool IsActive => Status is "queued" or "paused" or "running";
 
@@ -751,6 +755,7 @@ public static class StudioJson
 [JsonSerializable(typeof(ReactiveLabMetadata))]
 [JsonSerializable(typeof(StudioJobListResponse))]
 [JsonSerializable(typeof(StudioJobActionResponse))]
+[JsonSerializable(typeof(StudioJobPriorityRequest))]
 [JsonSerializable(typeof(StudioJob))]
 [JsonSerializable(typeof(TimelineUpdateRequest))]
 [JsonSerializable(typeof(EditorCommandRequest))]

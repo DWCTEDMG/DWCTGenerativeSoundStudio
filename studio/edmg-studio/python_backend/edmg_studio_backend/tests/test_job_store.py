@@ -30,6 +30,63 @@ def test_job_store_create_claim_and_idempotency(tmp_path: Path) -> None:
     store.close()
 
 
+def test_job_store_priority_controls_claim_order_and_persists(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    db_path = tmp_path / "jobs.sqlite"
+    store = JobStore(projects, db_path=db_path)
+    older = store.create("priority", "internal_video", {})
+    newer = store.create("priority", "internal_video", {})
+
+    promoted = store.set_priority("priority", newer.id, 100)
+    assert promoted is not None
+    assert promoted.priority == 100
+    assert store.next_queued().id == newer.id
+    claimed = store.claim_next_queued(owner="priority-worker")
+    assert claimed is not None
+    assert claimed.id == newer.id
+    assert store.set_priority("priority", newer.id, 0) is None
+    assert any(
+        event["event_type"] == "priority_changed"
+        for event in store.list_events("priority", newer.id)
+    )
+    store.close()
+
+    reopened = JobStore(projects, db_path=db_path)
+    try:
+        assert reopened.get("priority", newer.id).priority == 100
+        assert reopened.next_queued().id == older.id
+    finally:
+        reopened.close()
+
+
+def test_job_store_migrates_existing_database_priority_column(tmp_path: Path) -> None:
+    db_path = tmp_path / "jobs.sqlite"
+    import sqlite3
+
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE jobs (
+            id TEXT NOT NULL, project_id TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL,
+            result_json TEXT, error TEXT, progress_json TEXT, lease_owner TEXT,
+            lease_expires_at REAL, attempt INTEGER NOT NULL DEFAULT 0, idempotency_key TEXT,
+            PRIMARY KEY (project_id, id)
+        )
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    store = JobStore(tmp_path / "projects", db_path=db_path)
+    try:
+        created = store.create("migrated", "render", {})
+        assert created.priority == 0
+        assert store.get("migrated", created.id).priority == 0
+    finally:
+        store.close()
+
+
 def test_job_store_migrates_json_and_recovers_expired_lease(tmp_path: Path) -> None:
     projects = tmp_path / "projects"
     job_dir = projects / "proj2" / "jobs"

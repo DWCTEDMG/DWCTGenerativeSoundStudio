@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+
+class JobPriorityRequest(BaseModel):
+    priority: int = Field(ge=-100, le=100, strict=True)
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,17 @@ def create_jobs_router(deps: JobRouterDependencies) -> APIRouter:
         job = deps.get_jobs().resume(project_id, job_id)
         if not job or job.status != "queued":
             raise HTTPException(409, "Job could not be resumed because its state changed")
+        return {"ok": True, "job": job.__dict__}
+
+    @router.post("/v1/projects/{project_id}/jobs/{job_id}/priority")
+    def set_job_priority(project_id: str, job_id: str, request: JobPriorityRequest):
+        project_or_404(project_id)
+        current = job_or_404(project_id, job_id)
+        if current.status not in ("queued", "paused"):
+            raise HTTPException(409, "Only queued or paused jobs can be reprioritized")
+        job = deps.get_jobs().set_priority(project_id, job_id, request.priority)
+        if not job:
+            raise HTTPException(409, "Job could not be reprioritized because its state changed")
         return {"ok": True, "job": job.__dict__}
 
     @router.post("/v1/projects/{project_id}/jobs/{job_id}/retry")

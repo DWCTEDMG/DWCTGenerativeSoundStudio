@@ -25,12 +25,12 @@ public sealed partial class JobProgressCard : UserControl
             return;
         }
 
-        double percent = Math.Clamp(job.Progress?.Percent ?? 0, 0, 100);
-        TitleText.Text = $"{FormatLabel(job.Type)} · {ShortId(job.Id)}";
-        StageText.Text = job.Progress?.Message ?? job.Progress?.Stage ?? FormatLabel(job.Status);
-        JobProgress.Value = percent;
+        RenderQueueJobSummary summary = RenderQueueJobSummary.Create(job);
+        TitleText.Text = summary.Title;
+        StageText.Text = summary.StageLabel;
+        JobProgress.Value = summary.Percent;
         JobProgress.IsIndeterminate = !job.Progress?.Percent.HasValue ?? true;
-        EtaText.Text = EstimateEta(job, percent);
+        EtaText.Text = $"{summary.ProgressLabel} · {summary.EtaLabel}";
         PauseButton.IsEnabled = job.CanPause;
         CancelButton.IsEnabled = job.CanCancel;
     }
@@ -52,26 +52,4 @@ public sealed partial class JobProgressCard : UserControl
     }
 
     private void OpenQueueButton_Click(object sender, RoutedEventArgs e) => OpenQueueRequested?.Invoke(this, EventArgs.Empty);
-
-    private static string EstimateEta(StudioJob job, double percent)
-    {
-        if (percent <= 0 || percent >= 100 || !DateTimeOffset.TryParse(job.StartedAt, out DateTimeOffset started))
-        {
-            return $"{percent:0}% · ETA calculating";
-        }
-
-        double remainingSeconds = (DateTimeOffset.UtcNow - started).TotalSeconds * (100 - percent) / percent;
-        if (!double.IsFinite(remainingSeconds) || remainingSeconds < 0)
-        {
-            return $"{percent:0}% · ETA calculating";
-        }
-
-        TimeSpan remaining = TimeSpan.FromSeconds(Math.Min(remainingSeconds, TimeSpan.FromDays(7).TotalSeconds));
-        string eta = remaining.TotalHours >= 1 ? $"{remaining:h\\:mm\\:ss}" : $"{remaining:mm\\:ss}";
-        return $"{percent:0}% · ETA {eta}";
-    }
-
-    private static string FormatLabel(string value) => value.Replace('_', ' ');
-
-    private static string ShortId(string value) => value.Length <= 8 ? value : value[..8];
 }

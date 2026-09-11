@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
@@ -16,6 +17,8 @@ public sealed partial class RenderPage : Page
     private bool _isBusy;
     private bool _modelGuidanceUiReady;
     private bool _isApplyingVariant;
+    private bool _isRefreshingQueueSummary;
+    private readonly DispatcherQueueTimer _queueSummaryTimer;
     private CancellationTokenSource? _pageCancellation;
     private ModelCatalogueResponse? _modelCatalogue;
     private ModelRenderGuidance? _modelGuidance;
@@ -30,6 +33,9 @@ public sealed partial class RenderPage : Page
     public RenderPage()
     {
         InitializeComponent();
+        _queueSummaryTimer = DispatcherQueue.CreateTimer();
+        _queueSummaryTimer.Interval = TimeSpan.FromSeconds(3);
+        _queueSummaryTimer.Tick += QueueSummaryTimer_Tick;
         _modelGuidanceUiReady = true;
         HeaderVariantBox.ValueChanged += HeaderVariantBox_ValueChanged;
         ApplyAdvancedMode();
@@ -67,12 +73,58 @@ public sealed partial class RenderPage : Page
 
         _ = LoadModelGuidanceAsync(_pageCancellation.Token);
         _ = LoadHardwareCapabilitiesAsync(_pageCancellation.Token);
+        _ = LoadQueueSummaryAsync(_pageCancellation.Token);
+        _queueSummaryTimer.Start();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
+        _queueSummaryTimer.Stop();
         _pageCancellation?.Cancel();
         base.OnNavigatedFrom(e);
+    }
+
+    private async void QueueSummaryTimer_Tick(DispatcherQueueTimer sender, object args)
+    {
+        if (_pageCancellation is { IsCancellationRequested: false } cancellation)
+        {
+            await LoadQueueSummaryAsync(cancellation.Token);
+        }
+    }
+
+    private async Task LoadQueueSummaryAsync(CancellationToken cancellationToken)
+    {
+        if (_isRefreshingQueueSummary)
+        {
+            return;
+        }
+
+        if (_projectId is null)
+        {
+            RenderQueueSummaryText.Text = "Choose a project to view its render queue.";
+            RenderQueueProgressBar.Value = 0;
+            return;
+        }
+
+        _isRefreshingQueueSummary = true;
+        try
+        {
+            StudioJobListResponse response = await App.Services.ApiClient.GetProjectJobsAsync(_projectId, cancellationToken);
+            RenderQueueSnapshot snapshot = RenderQueueSnapshot.Create(response.Jobs);
+            RenderQueueSummaryText.Text = snapshot.Summary;
+            RenderQueueProgressBar.Value = snapshot.ActiveProgress;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            RenderQueueSummaryText.Text = $"Queue status unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
+        }
+        finally
+        {
+            _isRefreshingQueueSummary = false;
+        }
     }
 
     private async Task LoadModelGuidanceAsync(CancellationToken cancellationToken)
@@ -1435,6 +1487,7 @@ public sealed partial class RenderPage : Page
             DisplayResult(target, result);
             ShowStatus(successMessage, InfoBarSeverity.Success);
             AppendLog(successMessage);
+            await LoadQueueSummaryAsync(token);
         });
     }
 

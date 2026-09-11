@@ -14,12 +14,20 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
     private readonly DispatcherQueueTimer _refreshTimer;
     private bool _isRefreshing;
     private bool _isCommandRunning;
+    private bool _isRebuildingJobs;
+    private string? _desiredJobId;
+    private string? _desiredJobProjectId;
+    private readonly List<StudioJob> _allJobs = [];
 
     public ObservableCollection<JobListItem> Jobs { get; } = [];
 
     public QueuePage()
     {
         InitializeComponent();
+        _desiredJobId = App.Services.Session.SelectedJobId;
+        _desiredJobProjectId = App.Services.Session.SelectedJobProjectId;
+        AllProjectsSwitch.IsOn = App.Services.Session.QueueAllProjects;
+        StatusFilterComboBox.SelectedIndex = (int)App.Services.Session.QueueFilter;
         _refreshTimer = DispatcherQueue.CreateTimer();
         _refreshTimer.Interval = TimeSpan.FromSeconds(2);
         _refreshTimer.Tick += RefreshTimer_Tick;
@@ -55,26 +63,9 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
                 return;
             }
 
-            var selectedId = (JobsList.SelectedItem as JobListItem)?.Job.Id;
-            Jobs.Clear();
-            foreach (var job in response.Jobs.OrderByDescending(job => job.CreatedAt))
-            {
-                Jobs.Add(new JobListItem(job));
-            }
-
-            var selected = Jobs.FirstOrDefault(item => item.Job.Id == selectedId);
-            if (selected is not null)
-            {
-                JobsList.SelectedItem = selected;
-            }
-            else if (Jobs.Count > 0)
-            {
-                JobsList.SelectedIndex = 0;
-            }
-            else
-            {
-                ClearSelection();
-            }
+            _allJobs.Clear();
+            _allJobs.AddRange(response.Jobs);
+            ApplyFilter();
 
             ShowStatus(
                 Jobs.Count == 0 ? "No jobs are queued for this scope." : $"{Jobs.Count} jobs loaded.",
@@ -105,7 +96,7 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
 
     private async void RefreshTimer_Tick(DispatcherQueueTimer sender, object args)
     {
-        if (!_isCommandRunning && Jobs.Any(item => item.Job.IsActive))
+        if (!_isCommandRunning && _allJobs.Any(job => job.IsActive))
         {
             await RefreshAsync();
         }
@@ -115,31 +106,104 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
 
     private async void AllProjectsSwitch_Toggled(object sender, RoutedEventArgs e)
     {
+        App.Services.Session.QueueAllProjects = AllProjectsSwitch.IsOn;
         if (IsLoaded)
         {
             await RefreshAsync();
         }
     }
 
+    private void StatusFilterComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (StatusFilterComboBox.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            Enum.TryParse(tag, out RenderQueueFilter filter))
+        {
+            App.Services.Session.QueueFilter = filter;
+            ApplyFilter();
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        RenderQueueFilter filter = App.Services.Session.QueueFilter;
+        RenderQueueSnapshot snapshot = RenderQueueSnapshot.Create(_allJobs);
+        ActiveMetricText.Text = snapshot.ActiveCount.ToString();
+        RunningMetricText.Text = snapshot.RunningCount.ToString();
+        CompletedMetricText.Text = snapshot.CompletedCount.ToString();
+        AttentionMetricText.Text = snapshot.AttentionCount.ToString();
+
+        IEnumerable<StudioJob> ordered = _allJobs
+            .OrderBy(job => job.IsActive ? 0 : 1)
+            .ThenByDescending(job => job.IsActive ? job.Priority : int.MinValue)
+            .ThenBy(job => job.IsActive ? job.CreatedAt : null, StringComparer.Ordinal)
+            .ThenByDescending(job => job.IsActive ? null : job.UpdatedAt ?? job.CreatedAt);
+        _isRebuildingJobs = true;
+        try
+        {
+            Jobs.Clear();
+            foreach (StudioJob job in ordered)
+            {
+                RenderQueueJobSummary summary = RenderQueueJobSummary.Create(job);
+                if (summary.Matches(filter))
+                {
+                    Jobs.Add(new JobListItem(summary));
+                }
+            }
+
+            JobListItem? selected = Jobs.FirstOrDefault(item =>
+                item.Job.Id == _desiredJobId && item.Job.ProjectId == _desiredJobProjectId);
+            JobsList.SelectedItem = selected ?? Jobs.FirstOrDefault();
+            if (JobsList.SelectedItem is JobListItem visible)
+            {
+                UpdateSelection(visible, persist: false);
+            }
+            else
+            {
+                ClearSelection(false);
+            }
+        }
+        finally
+        {
+            _isRebuildingJobs = false;
+        }
+    }
+
     private void JobsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_isRebuildingJobs)
+        {
+            return;
+        }
+
         if (JobsList.SelectedItem is not JobListItem item)
         {
-            ClearSelection();
+            ClearSelection(false);
             return;
         }
 
         UpdateSelection(item);
     }
 
-    private void UpdateSelection(JobListItem item)
+    private void UpdateSelection(JobListItem item, bool persist = true)
     {
         var job = item.Job;
-        App.Services.Session.SetSelectedJob(job.ProjectId, job.Id);
+        if (persist)
+        {
+            _desiredJobProjectId = job.ProjectId;
+            _desiredJobId = job.Id;
+            App.Services.Session.SetSelectedJob(job.ProjectId, job.Id);
+        }
         SelectedJobText.Text = $"{job.Type} · {StudioPageHelpers.ShortId(job.Id)}";
         SelectedJobSummaryText.Text = item.Summary;
+        SelectedDestinationText.Text = $"Destination: {item.Operations.DestinationLabel}";
+        RecommendationBar.Message = item.Operations.Recommendation;
+        RecommendationBar.IsOpen = true;
         SelectedProgressBar.Value = item.Percent;
         SelectedProgressBar.Visibility = item.ProgressVisibility;
+        bool canPrioritize = job.Status is "queued" or "paused";
+        PriorityHighButton.IsEnabled = canPrioritize;
+        PriorityNormalButton.IsEnabled = canPrioritize;
+        PriorityLowButton.IsEnabled = canPrioritize;
         PauseButton.IsEnabled = job.CanPause;
         ResumeButton.IsEnabled = job.CanResume;
         CancelButton.IsEnabled = job.CanCancel;
@@ -155,6 +219,16 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         OpenTimelineButton.IsEnabled = true;
         DetailsTextBox.Text = FormatJobDetails(job);
     }
+
+    private async void PriorityHighButton_Click(object sender, RoutedEventArgs e) => await SetPriorityAsync(50);
+
+    private async void PriorityNormalButton_Click(object sender, RoutedEventArgs e) => await SetPriorityAsync(0);
+
+    private async void PriorityLowButton_Click(object sender, RoutedEventArgs e) => await SetPriorityAsync(-50);
+
+    private Task SetPriorityAsync(int priority) => RunJobActionAsync(
+        priority switch { > 0 => "promoted", < 0 => "deprioritized", _ => "priority reset" },
+        (projectId, jobId) => _apiClient.SetJobPriorityAsync(projectId, jobId, priority));
 
     private async void PauseButton_Click(object sender, RoutedEventArgs e) =>
         await RunJobActionAsync("pause", (projectId, jobId) => _apiClient.PauseJobAsync(projectId, jobId));
@@ -309,6 +383,7 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
             ["startedAt"] = job.StartedAt,
             ["finishedAt"] = job.FinishedAt,
             ["attempt"] = job.Attempt,
+            ["priority"] = job.Priority,
             ["error"] = job.Error,
             ["progress"] = job.Progress is null
                 ? null
@@ -328,12 +403,21 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         return StudioPageHelpers.FormatJson(details);
     }
 
-    private void ClearSelection()
+    private void ClearSelection(bool clearPersistedSelection = true)
     {
-        App.Services.Session.SetSelectedJob(null, null);
+        if (clearPersistedSelection)
+        {
+            App.Services.Session.SetSelectedJob(null, null);
+        }
+
         SelectedJobText.Text = "Select a job";
         SelectedJobSummaryText.Text = "Job actions and diagnostic details appear here.";
+        SelectedDestinationText.Text = string.Empty;
+        RecommendationBar.IsOpen = false;
         SelectedProgressBar.Visibility = Visibility.Collapsed;
+        PriorityHighButton.IsEnabled = false;
+        PriorityNormalButton.IsEnabled = false;
+        PriorityLowButton.IsEnabled = false;
         PauseButton.IsEnabled = false;
         ResumeButton.IsEnabled = false;
         CancelButton.IsEnabled = false;
@@ -359,11 +443,11 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         {
             if (JobsList.SelectedItem is JobListItem item)
             {
-                UpdateSelection(item);
+                UpdateSelection(item, persist: false);
             }
             else
             {
-                ClearSelection();
+                ClearSelection(false);
             }
         }
     }
@@ -378,22 +462,14 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
 
 public sealed class JobListItem
 {
-    public JobListItem(StudioJob job) => Job = job;
+    public JobListItem(RenderQueueJobSummary operations) => Operations = operations;
 
-    public StudioJob Job { get; }
-    public string Title => $"{Job.Type} · {StudioPageHelpers.ShortId(Job.Id)}";
-    public string StatusLabel => Job.Status.Replace('_', ' ');
-    public double Percent => Math.Clamp(Job.Progress?.Percent ?? 0, 0, 100);
+    public RenderQueueJobSummary Operations { get; }
+    public StudioJob Job => Operations.Job;
+    public string Title => Operations.Title;
+    public string StatusLabel => Operations.StatusLabel;
+    public string PriorityLabel => Operations.PriorityLabel;
+    public double Percent => Operations.Percent;
     public Visibility ProgressVisibility => Job.IsActive ? Visibility.Visible : Visibility.Collapsed;
-    public string Summary
-    {
-        get
-        {
-            var progress = Job.Progress?.Message ?? Job.Progress?.Stage;
-            var timestamp = Job.UpdatedAt ?? Job.CreatedAt ?? "unknown time";
-            return string.IsNullOrWhiteSpace(progress)
-                ? $"{StudioPageHelpers.ShortId(Job.ProjectId)} · {timestamp}"
-                : $"{progress} · {StudioPageHelpers.ShortId(Job.ProjectId)} · {timestamp}";
-        }
-    }
+    public string Summary => $"{Operations.StageLabel} · {Operations.ProgressLabel} · {Operations.EtaLabel}";
 }

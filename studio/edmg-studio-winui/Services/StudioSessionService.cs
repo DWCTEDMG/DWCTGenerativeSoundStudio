@@ -12,6 +12,8 @@ public sealed class StudioSessionService
     private const string ComparisonReferenceKey = "StudioSession.ReviewComparisonReference";
     private const string JobKey = "StudioSession.SelectedJobId";
     private const string JobProjectKey = "StudioSession.SelectedJobProjectId";
+    private const string QueueAllProjectsKey = "StudioSession.QueueAllProjects";
+    private const string QueueFilterKey = "StudioSession.QueueFilter";
     private const string SourceAssetKey = "StudioSession.SourceAssetPath";
     private const string TimelineFocusKey = "StudioSession.TimelineFocusSeconds";
     private const string RenderContextKey = "StudioSession.RenderContext";
@@ -80,6 +82,26 @@ public sealed class StudioSessionService
     public string? SelectedJobId => _context.SelectedJobId;
 
     public string? SelectedJobProjectId => _context.SelectedJobProjectId;
+
+    public bool QueueAllProjects
+    {
+        get => _settings?.Values[QueueAllProjectsKey] is bool value && value;
+        set
+        {
+            if (_settings is not null)
+            {
+                _settings.Values[QueueAllProjectsKey] = value;
+            }
+        }
+    }
+
+    public RenderQueueFilter QueueFilter
+    {
+        get => Enum.TryParse(ReadString(QueueFilterKey), out RenderQueueFilter value)
+            ? value
+            : RenderQueueFilter.All;
+        set => PersistString(QueueFilterKey, value.ToString());
+    }
 
     public string? SourceAssetPath => _context.SourceAssetPath;
 

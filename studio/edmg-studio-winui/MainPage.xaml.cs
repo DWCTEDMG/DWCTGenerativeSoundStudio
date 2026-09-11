@@ -277,8 +277,14 @@ public sealed partial class MainPage : Page
 
     private async Task RefreshActivityAsync()
     {
-        if (_isRefreshingActivity || !App.Services.BackendSupervisor.Status.IsReady)
+        if (_isRefreshingActivity)
         {
+            return;
+        }
+
+        if (!App.Services.BackendSupervisor.Status.IsReady)
+        {
+            App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.None);
             return;
         }
 
@@ -295,6 +301,7 @@ public sealed partial class MainPage : Page
             StudioShellActivity activity = StudioShellActivity.Create(jobs.Jobs, _modelCatalogue, _reviewedJobIds);
             _activityTimer.Interval = TimeSpan.FromSeconds(2);
             GlobalRenderPlayer.UpdateJob(activity.FeaturedJob);
+            App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.Create(jobs.Jobs));
             SetBadge(QueueBadge, activity.ActiveJobCount + activity.FailedJobCount);
             SetBadge(ReviewBadge, activity.ReviewItemCount);
             SetBadge(ModelsBadge, activity.ModelAttentionCount);
@@ -305,6 +312,7 @@ public sealed partial class MainPage : Page
         catch (Exception ex)
         {
             _activityTimer.Interval = TimeSpan.FromSeconds(10);
+            App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.None);
             BackendInfoBar.Severity = InfoBarSeverity.Warning;
             BackendInfoBar.Title = "Studio activity could not be refreshed";
             BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
@@ -355,7 +363,15 @@ public sealed partial class MainPage : Page
         await RunGlobalJobActionAsync(() => App.Services.ApiClient.CancelJobAsync(job.ProjectId, job.Id));
     }
 
-    private void GlobalRenderPlayer_OpenQueueRequested(object? sender, EventArgs e) => NavigateTo("queue");
+    private void GlobalRenderPlayer_OpenQueueRequested(object? sender, EventArgs e)
+    {
+        if (GlobalRenderPlayer.DataContext is StudioJob job)
+        {
+            App.Services.Session.SetSelectedJob(job.ProjectId, job.Id);
+        }
+
+        NavigateTo("queue");
+    }
 
     private async Task RunGlobalJobActionAsync(Func<Task<StudioJobActionResponse>> action)
     {

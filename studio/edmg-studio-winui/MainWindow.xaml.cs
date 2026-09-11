@@ -4,6 +4,7 @@ using Microsoft.UI;
 using System.Runtime.InteropServices;
 using Windows.Graphics;
 using Windows.Storage;
+using EdmgStudio.Core.Models;
 using EdmgStudio.WinUI.Services;
 
 namespace EdmgStudio.WinUI;
@@ -16,6 +17,7 @@ public sealed partial class MainWindow : Window
     private bool _closing;
     private bool _closeCompleted;
     private readonly ApplicationDataContainer? _settings;
+    private readonly WindowsTaskbarProgressService _taskbarProgress;
 
     private const string WindowXKey = "MainWindow.X";
     private const string WindowYKey = "MainWindow.Y";
@@ -34,6 +36,7 @@ public sealed partial class MainWindow : Window
         AppWindow.Title = "EDMG Studio";
 
         var hwnd = Win32Interop.GetWindowFromWindowId(AppWindow.Id);
+        _taskbarProgress = new WindowsTaskbarProgressService(hwnd);
         var scale = hwnd != IntPtr.Zero ? GetDpiForWindow(hwnd) / 96.0 : 1.0;
         if (scale <= 0)
         {
@@ -47,6 +50,8 @@ public sealed partial class MainWindow : Window
     }
 
     public nint WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+    public void UpdateTaskbarProgress(StudioTaskbarProgress progress) => _taskbarProgress.Update(progress);
 
     private static ApplicationDataContainer? TryGetLocalSettings()
     {
@@ -221,6 +226,7 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            _taskbarProgress.Dispose();
             _closeCompleted = true;
             Close();
         }

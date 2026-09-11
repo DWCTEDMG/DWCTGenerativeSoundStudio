@@ -369,3 +369,34 @@ def test_pause_and_resume_job_routes_require_the_expected_state(tmp_path: Path, 
         assert claimed is not None
         cannot_pause_running = client.post(f"/v1/projects/{project.id}/jobs/{job.id}/pause")
         assert cannot_pause_running.status_code == 409
+
+
+def test_priority_route_reorders_waiting_jobs_and_validates_state(tmp_path: Path, monkeypatch) -> None:
+    store = ProjectStore(tmp_path / "data")
+    jobs = JobStore(store.projects_dir)
+    project = store.create("Priority controls")
+    monkeypatch.setattr(backend_app, "store", store)
+    monkeypatch.setattr(backend_app, "jobs", jobs)
+    monkeypatch.setattr(backend_app.worker, "start", lambda *args, **kwargs: None)
+    first = jobs.create(project.id, "internal_video", {})
+    promoted = jobs.create(project.id, "internal_video", {})
+
+    with TestClient(backend_app.app) as client:
+        response = client.post(
+            f"/v1/projects/{project.id}/jobs/{promoted.id}/priority",
+            json={"priority": 100},
+        )
+        assert response.status_code == 200
+        assert response.json()["job"]["priority"] == 100
+        assert jobs.next_queued().id == promoted.id
+
+        assert client.post(
+            f"/v1/projects/{project.id}/jobs/{first.id}/priority",
+            json={"priority": 101},
+        ).status_code == 422
+        claimed = jobs.claim_next_queued(owner="test-worker")
+        assert claimed is not None
+        assert client.post(
+            f"/v1/projects/{project.id}/jobs/{claimed.id}/priority",
+            json={"priority": 0},
+        ).status_code == 409
