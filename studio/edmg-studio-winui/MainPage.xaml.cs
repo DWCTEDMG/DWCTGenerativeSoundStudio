@@ -10,12 +10,20 @@ namespace EdmgStudio.WinUI;
 
 public sealed partial class MainPage : Page
 {
+    private readonly DispatcherQueueTimer _activityTimer;
+    private readonly HashSet<string> _reviewedJobIds = new(StringComparer.OrdinalIgnoreCase);
     private bool _started;
     private bool _isBackendStatusSubscribed;
+    private bool _isRefreshingActivity;
+    private ModelCatalogueResponse? _modelCatalogue;
+    private DateTimeOffset _modelCatalogueUpdatedAt;
 
     public MainPage()
     {
         InitializeComponent();
+        _activityTimer = DispatcherQueue.CreateTimer();
+        _activityTimer.Interval = TimeSpan.FromSeconds(2);
+        _activityTimer.Tick += ActivityTimer_Tick;
         if (StudioNavigation.SettingsItem is NavigationViewItem settingsItem)
         {
             AutomationProperties.SetAutomationId(settingsItem, "SettingsNavigationItem");
@@ -89,11 +97,14 @@ public sealed partial class MainPage : Page
                 ? "migration"
                 : StudioNavigationDestination.NormalizeRestorableOrDefault(
                     App.Services.Session.LastWorkflowDestination));
+            await RefreshActivityAsync();
+            _activityTimer.Start();
         }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        _activityTimer.Stop();
         if (App.Shell == this)
         {
             App.Shell = null;
@@ -132,9 +143,9 @@ public sealed partial class MainPage : Page
 
     private void UpdateBackendStatus(BackendStatus status)
     {
-        BackendStateText.Text = $"Backend: {StatusLabel(status)}";
-        BackendUriText.Text = status.CurrentBackendUri.ToString().TrimEnd('/');
-        ToolTipService.SetToolTip(BackendUriText, status.CurrentBackendUri.ToString());
+        BackendStatusCard.Title = $"Backend: {StatusLabel(status)}";
+        BackendStatusCard.Detail = status.CurrentBackendUri.ToString().TrimEnd('/');
+        ToolTipService.SetToolTip(BackendStatusCard, status.CurrentBackendUri.ToString());
 
         BackendInfoBar.Title = status.Message;
         BackendInfoBar.Message = status.Detail ?? status.CurrentBackendUri.ToString();
@@ -212,6 +223,11 @@ public sealed partial class MainPage : Page
 
         if (args.SelectedItemContainer?.Tag is string destination)
         {
+            if (destination.Equals("review", StringComparison.OrdinalIgnoreCase))
+            {
+                MarkReviewItemsRead();
+            }
+
             var pageType = ResolvePageType(destination);
             if (ContentFrame.CurrentSourcePageType != pageType)
             {
@@ -248,6 +264,112 @@ public sealed partial class MainPage : Page
         {
             App.Services.Session.SetLastWorkflowDestination(destination);
         }
+    }
+
+    private async void ActivityTimer_Tick(DispatcherQueueTimer sender, object args) => await RefreshActivityAsync();
+
+    private async Task RefreshActivityAsync()
+    {
+        if (_isRefreshingActivity || !App.Services.BackendSupervisor.Status.IsReady)
+        {
+            return;
+        }
+
+        _isRefreshingActivity = true;
+        try
+        {
+            StudioJobListResponse jobs = await App.Services.ApiClient.GetJobsAsync();
+            if (_modelCatalogue is null || DateTimeOffset.UtcNow - _modelCatalogueUpdatedAt >= TimeSpan.FromSeconds(30))
+            {
+                _modelCatalogue = await App.Services.ApiClient.GetTypedModelCatalogueAsync();
+                _modelCatalogueUpdatedAt = DateTimeOffset.UtcNow;
+            }
+
+            StudioShellActivity activity = StudioShellActivity.Create(jobs.Jobs, _modelCatalogue, _reviewedJobIds);
+            _activityTimer.Interval = TimeSpan.FromSeconds(2);
+            GlobalRenderPlayer.UpdateJob(activity.FeaturedJob);
+            SetBadge(QueueBadge, activity.ActiveJobCount + activity.FailedJobCount);
+            SetBadge(ReviewBadge, activity.ReviewItemCount);
+            SetBadge(ModelsBadge, activity.ModelAttentionCount);
+            ToolTipService.SetToolTip(
+                QueueBadge,
+                $"{activity.ActiveJobCount} active and {activity.FailedJobCount} failed jobs");
+        }
+        catch (Exception ex)
+        {
+            _activityTimer.Interval = TimeSpan.FromSeconds(10);
+            BackendInfoBar.Severity = InfoBarSeverity.Warning;
+            BackendInfoBar.Title = "Studio activity could not be refreshed";
+            BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
+            BackendInfoBar.IsOpen = true;
+        }
+        finally
+        {
+            _isRefreshingActivity = false;
+        }
+    }
+
+    private void MarkReviewItemsRead()
+    {
+        _ = MarkReviewItemsReadAsync();
+    }
+
+    private async Task MarkReviewItemsReadAsync()
+    {
+        try
+        {
+            StudioJobListResponse response = await App.Services.ApiClient.GetJobsAsync();
+            foreach (StudioJob job in response.Jobs.Where(job =>
+                         job.Status.Equals("succeeded", StringComparison.OrdinalIgnoreCase)
+                         && (job.Type.Contains("render", StringComparison.OrdinalIgnoreCase)
+                             || job.Type.Contains("video", StringComparison.OrdinalIgnoreCase))))
+            {
+                _reviewedJobIds.Add(job.Id);
+            }
+
+            await RefreshActivityAsync();
+        }
+        catch (Exception ex)
+        {
+            BackendInfoBar.Severity = InfoBarSeverity.Warning;
+            BackendInfoBar.Title = "Review badge could not be updated";
+            BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
+            BackendInfoBar.IsOpen = true;
+        }
+    }
+
+    private async void GlobalRenderPlayer_PauseRequested(object? sender, StudioJob job)
+    {
+        await RunGlobalJobActionAsync(() => App.Services.ApiClient.PauseJobAsync(job.ProjectId, job.Id));
+    }
+
+    private async void GlobalRenderPlayer_CancelRequested(object? sender, StudioJob job)
+    {
+        await RunGlobalJobActionAsync(() => App.Services.ApiClient.CancelJobAsync(job.ProjectId, job.Id));
+    }
+
+    private void GlobalRenderPlayer_OpenQueueRequested(object? sender, EventArgs e) => NavigateTo("queue");
+
+    private async Task RunGlobalJobActionAsync(Func<Task<StudioJobActionResponse>> action)
+    {
+        try
+        {
+            await action();
+            await RefreshActivityAsync();
+        }
+        catch (Exception ex)
+        {
+            BackendInfoBar.Severity = InfoBarSeverity.Error;
+            BackendInfoBar.Title = "Render command failed";
+            BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
+            BackendInfoBar.IsOpen = true;
+        }
+    }
+
+    private static void SetBadge(InfoBadge badge, int value)
+    {
+        badge.Value = value;
+        badge.Visibility = value > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private NavigationViewItem? FindNavigationItem(string destination)

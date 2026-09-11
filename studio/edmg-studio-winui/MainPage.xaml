@@ -3,6 +3,7 @@
     x:Class="EdmgStudio.WinUI.MainPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:EdmgStudio.WinUI.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     NavigationCacheMode="Required"
@@ -12,17 +13,18 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Image
-            Grid.RowSpan="2"
+            Grid.RowSpan="3"
             AutomationProperties.AccessibilityView="Raw"
             IsHitTestVisible="False"
             Opacity="{ThemeResource StudioArtworkOpacity}"
             Source="ms-appx:///Assets/Brand/StudioBackground.jpg"
             Stretch="UniformToFill" />
         <Rectangle
-            Grid.RowSpan="2"
+            Grid.RowSpan="3"
             IsHitTestVisible="False"
             Fill="{ThemeResource StudioContentScrimBrush}" />
 
@@ -92,34 +94,20 @@
             </NavigationView.PaneHeader>
 
             <NavigationView.PaneFooter>
-                <Border
+                <controls:StatusCard
+                    x:Name="BackendStatusCard"
                     Margin="8"
-                    Padding="10"
-                    Background="{ThemeResource StudioLogoPanelBrush}"
-                    BorderBrush="{ThemeResource StudioBorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="10">
-                    <StackPanel Spacing="3">
-                        <TextBlock
-                            x:Name="BackendStateText"
-                            FontWeight="SemiBold"
-                            Foreground="{ThemeResource StudioTextBrush}"
-                            Text="Backend: resolving" />
-                        <TextBlock
-                            x:Name="BackendUriText"
-                            AutomationProperties.Name="Active backend address"
-                            Foreground="{ThemeResource StudioMutedTextBrush}"
-                            Text="http://127.0.0.1:7863"
-                            TextTrimming="CharacterEllipsis"
-                            ToolTipService.ToolTip="Active Studio backend address" />
+                    AutomationProperties.Name="Backend connection status"
+                    Detail="http://127.0.0.1:7863"
+                    Glyph="&#xE774;"
+                    Title="Backend: resolving">
+                    <controls:StatusCard.ActionContent>
                         <Button
-                            Margin="0,6,0,0"
                             AutomationProperties.AutomationId="ReconnectBackendButton"
                             Click="ReconnectBackend_Click"
-                            Content="Reconnect"
-                            HorizontalAlignment="Stretch" />
-                    </StackPanel>
-                </Border>
+                            Content="Reconnect" />
+                    </controls:StatusCard.ActionContent>
+                </controls:StatusCard>
             </NavigationView.PaneFooter>
 
             <NavigationView.MenuItems>
@@ -143,9 +131,11 @@
                 </NavigationViewItem>
                 <NavigationViewItem AutomationProperties.AutomationId="QueueNavigationItem" Content="Render Queue" Tag="queue" ToolTipService.ToolTip="Progress, logs, and retries">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Bullets" /></NavigationViewItem.Icon>
+                    <NavigationViewItem.InfoBadge><InfoBadge x:Name="QueueBadge" Visibility="Collapsed" /></NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
                 <NavigationViewItem AutomationProperties.AutomationId="ReviewNavigationItem" Content="Review" Tag="review" ToolTipService.ToolTip="Compare and approve variants">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Preview" /></NavigationViewItem.Icon>
+                    <NavigationViewItem.InfoBadge><InfoBadge x:Name="ReviewBadge" Visibility="Collapsed" /></NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
                 <NavigationViewItem AutomationProperties.AutomationId="OutputsNavigationItem" Content="Outputs" Tag="outputs" ToolTipService.ToolTip="Browse generated media">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Pictures" /></NavigationViewItem.Icon>
@@ -171,6 +161,7 @@
                 </NavigationViewItem>
                 <NavigationViewItem AutomationProperties.AutomationId="ModelsNavigationItem" Content="Models" Tag="models" ToolTipService.ToolTip="Model packs and availability">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Download" /></NavigationViewItem.Icon>
+                    <NavigationViewItem.InfoBadge><InfoBadge x:Name="ModelsBadge" Visibility="Collapsed" /></NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
                 <NavigationViewItem AutomationProperties.AutomationId="SetupNavigationItem" Content="Setup" Tag="setup" ToolTipService.ToolTip="Dependency and storage readiness">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Repair" /></NavigationViewItem.Icon>
@@ -187,5 +178,14 @@
 
             <Frame x:Name="ContentFrame" Background="Transparent" Navigated="ContentFrame_Navigated" />
         </NavigationView>
+
+        <controls:JobProgressCard
+            x:Name="GlobalRenderPlayer"
+            Grid.Row="2"
+            Margin="12,8,12,12"
+            CancelRequested="GlobalRenderPlayer_CancelRequested"
+            OpenQueueRequested="GlobalRenderPlayer_OpenQueueRequested"
+            PauseRequested="GlobalRenderPlayer_PauseRequested"
+            Visibility="Collapsed" />
     </Grid>
 </Page>
