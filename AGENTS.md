@@ -8,6 +8,25 @@ capabilities should come with the corresponding UI controls (e.g. on the Render,
 Models, or Settings pages) so users can drive them without curl/API calls. Assume the user wants
 every feature available in the UI unless they say otherwise.
 
+## Studio regression reference set
+
+Before changing Studio architecture, Director/Reactive Lab handoffs, rendering, timeline behavior,
+or the WinUI experience, check the implementation claims and acceptance criteria in all of these
+records so completed milestone work is not accidentally removed:
+
+- `studio/edmg-studio-winui/ChatLog3.md`
+- `studio/edmg-studio-winui/ChatLog4.md`
+- `C:\Users\user\Downloads\ChatLog5.md`
+- `C:\Scripts\EDMG_Studio_Master_Blueprint_AI_DAW_Timeline.md`
+
+The two external absolute paths are workstation reference records and may not exist in CI or on
+another developer machine; their absence must not fail builds. Treat the master blueprint's
+architecture phases 0-13 and its separate 14-item WinUI 3 Native Experience roadmap as distinct
+checklists. A recent WinUI milestone does not prove that the corresponding professional DAW phase
+is complete. Preserve and regression-test the Director-to-Reactive Lab draft recovery, reviewed
+camera/motion keyframe persistence, render-profile compatibility, backend schema importability,
+and WinUI XAML page compilation when touching related code.
+
 ## Cursor Cloud specific instructions
 
 EDMG Studio is a music-reactive AI video generation studio. The product lives under

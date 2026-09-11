@@ -906,7 +906,7 @@ class VariantReviewDecisionRequest(BaseModel):
     annotations: list[ReviewAnnotationRequest] | None = Field(default=None, max_length=200)
 
 
-class LiveCuePublishRequest
+class LiveCuePublishRequest(BaseModel):
     osc_host: str = Field(default="127.0.0.1", max_length=200)
     osc_port: int = Field(default=9000, ge=1, le=65535)
     midi_enabled: bool = True

@@ -2660,6 +2660,10 @@ def _render_profiles_for_hardware(hw: dict[str, Any] | None = None) -> dict[str,
     return {"ok": True, "recommended_profile": recommended_profile, "profiles": profiles, "hardware": hw}
 
 
+def render_profiles() -> dict[str, Any]:
+    return _render_profiles_for_hardware()
+
+
 def _system_readiness_report() -> dict[str, Any]:
     """Shared Studio readiness report used by Settings and Setup."""
     return assess_system_readiness(
@@ -3390,7 +3394,7 @@ app.include_router(
             security_status=lambda scheme, host: backend_security.public_status(
                 request_scheme=scheme, request_server_host=host
             ),
-            render_profiles=lambda: _render_profiles_for_hardware(),
+            render_profiles=render_profiles,
             hardware=lambda: _hardware_profile(),
             render_plan=lambda hw: _build_internal_render_plan(hw, requested_tier="auto"),
             render_provider_status=lambda: _render_provider_status(),
