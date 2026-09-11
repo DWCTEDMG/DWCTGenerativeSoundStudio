@@ -147,6 +147,36 @@ public sealed class GraphicsPipelineTests
     }
 
     [TestMethod]
+    public void PreviewGeometry_CalculatesFillAndActualSizePresentations()
+    {
+        PreviewRectangle fill = PreviewGeometry.CalculatePresentation(
+            1920, 1080, 1000, 1000, PreviewDisplayMode.Fill);
+        PreviewRectangle actual = PreviewGeometry.CalculatePresentation(
+            1920, 1080, 1000, 1000, PreviewDisplayMode.ActualSize);
+
+        Assert.AreEqual(-388.889f, fill.X, 0.001f);
+        Assert.AreEqual(0.0f, fill.Y, 0.001f);
+        Assert.AreEqual(1777.778f, fill.Width, 0.001f);
+        Assert.AreEqual(1000.0f, fill.Height, 0.001f);
+        Assert.AreEqual(-460.0f, actual.X, 0.001f);
+        Assert.AreEqual(-40.0f, actual.Y, 0.001f);
+        Assert.AreEqual(1920.0f, actual.Width, 0.001f);
+        Assert.AreEqual(1080.0f, actual.Height, 0.001f);
+    }
+
+    [TestMethod]
+    public void PreviewGeometry_CalculatesSafeAreaWithinPresentedFrame()
+    {
+        var frame = new PreviewRectangle(100, 50, 800, 450);
+
+        PreviewRectangle safeArea = PreviewGeometry.CalculateSafeArea(frame, 0.1);
+
+        Assert.AreEqual(new PreviewRectangle(180, 95, 640, 360), safeArea);
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+            () => PreviewGeometry.CalculateSafeArea(frame, 0.5));
+    }
+
+    [TestMethod]
     public void PreviewGeometry_ConvertsDipsToPhysicalPixelsAndPreservesZero()
     {
         Assert.AreEqual(

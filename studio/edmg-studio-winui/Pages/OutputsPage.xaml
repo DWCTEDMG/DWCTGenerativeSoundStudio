@@ -155,7 +155,8 @@
                     <controls:Direct3DPreviewControl
                         x:Name="OutputPreview"
                         AutomationProperties.AutomationId="Outputs.ArtifactPreview"
-                        AutomationProperties.Name="Selected output Direct3D preview" />
+                        AutomationProperties.Name="Selected output Direct3D preview"
+                        PreviewContext="Output preview" />
                 </Border>
                 <TextBlock x:Name="MetadataText" Grid.Row="2" FontFamily="Consolas" TextWrapping="Wrap" />
                 <Border

@@ -12,20 +12,93 @@
     mc:Ignorable="d">
 
     <Grid
-        MinHeight="220"
+        x:Name="PreviewRoot"
+        MinHeight="160"
         Background="{ThemeResource CardBackgroundBrush}">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
+
+        <CommandBar
+            x:Name="PreviewCommandBar"
+            Grid.Row="0"
+            DefaultLabelPosition="Right"
+            IsDynamicOverflowEnabled="True">
+            <AppBarButton
+                x:Name="DisplayModeButton"
+                AutomationProperties.Name="Preview display mode"
+                Icon="View">
+                <AppBarButton.Flyout>
+                    <MenuFlyout>
+                        <RadioMenuFlyoutItem
+                            x:Name="FitMenuItem"
+                            Click="DisplayModeMenuItem_Click"
+                            GroupName="PreviewDisplayMode"
+                            IsChecked="True"
+                            Tag="Fit"
+                            Text="Fit" />
+                        <RadioMenuFlyoutItem
+                            x:Name="FillMenuItem"
+                            Click="DisplayModeMenuItem_Click"
+                            GroupName="PreviewDisplayMode"
+                            Tag="Fill"
+                            Text="Fill" />
+                        <RadioMenuFlyoutItem
+                            x:Name="ActualSizeMenuItem"
+                            Click="DisplayModeMenuItem_Click"
+                            GroupName="PreviewDisplayMode"
+                            Tag="ActualSize"
+                            Text="1:1" />
+                    </MenuFlyout>
+                </AppBarButton.Flyout>
+            </AppBarButton>
+            <AppBarToggleButton
+                x:Name="SafeAreasButton"
+                AutomationProperties.Name="Show action and title safe areas"
+                Click="SafeAreasButton_Click"
+                Icon="Crop"
+                Label="Safe areas" />
+            <AppBarButton
+                x:Name="FullScreenButton"
+                AutomationProperties.Name="Enter full screen preview"
+                Click="FullScreenButton_Click"
+                Icon="FullScreen"
+                Label="Full screen" />
+            <CommandBar.Content>
+                <StackPanel
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="8">
+                    <TextBlock
+                        x:Name="PreviewContextText"
+                        VerticalAlignment="Center"
+                        FontWeight="SemiBold"
+                        Text="Preview" />
+                    <Border
+                        x:Name="FrameMetadataBadge"
+                        Padding="8,3"
+                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                        CornerRadius="10"
+                        Visibility="Collapsed">
+                        <TextBlock
+                            x:Name="FrameMetadataText"
+                            FontFamily="Consolas"
+                            FontSize="11" />
+                    </Border>
+                </StackPanel>
+            </CommandBar.Content>
+        </CommandBar>
+
         <SwapChainPanel
             x:Name="PreviewPanel"
-            Grid.Row="0"
+            Grid.Row="1"
             SizeChanged="PreviewPanel_SizeChanged" />
 
         <Border
             x:Name="StateOverlay"
-            Grid.Row="0"
+            Grid.Row="1"
             Background="{ThemeResource CardBackgroundBrush}"
             IsHitTestVisible="False">
             <StackPanel
@@ -40,6 +113,11 @@
                     HorizontalAlignment="Center"
                     IsActive="False"
                     Visibility="Collapsed" />
+                <FontIcon
+                    x:Name="StateIcon"
+                    HorizontalAlignment="Center"
+                    FontSize="24"
+                    Glyph="&#xE946;" />
                 <TextBlock
                     x:Name="StateText"
                     HorizontalAlignment="Center"
@@ -53,7 +131,7 @@
 
         <Border
             x:Name="VideoTransport"
-            Grid.Row="1"
+            Grid.Row="2"
             Padding="12,8"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"

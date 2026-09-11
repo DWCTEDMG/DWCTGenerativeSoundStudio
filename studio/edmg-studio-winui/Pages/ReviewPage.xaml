@@ -184,9 +184,10 @@
                                         Content="Outputs" />
                             </Grid>
                             <controls:Direct3DPreviewControl x:Name="ArtifactPreview"
-                                                             Height="300"
+                                                             Height="340"
                                                              AutomationProperties.AutomationId="ReviewArtifactPreview"
-                                                             AutomationProperties.Name="Selected artifact preview" />
+                                                             AutomationProperties.Name="Selected artifact preview"
+                                                             PreviewContext="Review preview" />
                             <TextBlock x:Name="ArtifactMetadataText"
                                        FontFamily="Consolas"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"

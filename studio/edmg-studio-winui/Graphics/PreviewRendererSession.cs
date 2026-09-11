@@ -42,6 +42,8 @@ internal sealed class PreviewRendererSession : IAsyncDisposable
     private PhysicalPixelSize _requestedSize;
     private double _requestedScale = 1.0;
     private long _requestedResizeVersion;
+    private PreviewDisplayMode _displayMode = PreviewDisplayMode.Fit;
+    private bool _showSafeAreas;
     private bool _isAcceptingFrames = true;
     private bool _isDisposed;
     private Task? _disposeTask;
@@ -120,6 +122,23 @@ internal sealed class PreviewRendererSession : IAsyncDisposable
         {
             _requestedSize = size;
             _requestedScale = rasterizationScale;
+            _requestedResizeVersion++;
+        }
+
+        _workAvailable.Set();
+    }
+
+    public void SetPresentation(PreviewDisplayMode displayMode, bool showSafeAreas)
+    {
+        if (!Enum.IsDefined(displayMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(displayMode));
+        }
+
+        lock (_resizeSync)
+        {
+            _displayMode = displayMode;
+            _showSafeAreas = showSafeAreas;
             _requestedResizeVersion++;
         }
 
@@ -457,16 +476,18 @@ internal sealed class PreviewRendererSession : IAsyncDisposable
             return;
         }
 
-        AspectFitRectangle fit = PreviewGeometry.CalculateAspectFit(
+        SnapshotPresentation(out PreviewDisplayMode displayMode, out bool showSafeAreas);
+        PreviewRectangle frame = PreviewGeometry.CalculatePresentation(
             _retainedFrame.Layout.Width,
             _retainedFrame.Layout.Height,
             _surfaceSize.Width,
-            _surfaceSize.Height);
+            _surfaceSize.Height,
+            displayMode);
         var destination = new Vortice.RawRectF(
-            fit.X,
-            fit.Y,
-            fit.X + fit.Width,
-            fit.Y + fit.Height);
+            frame.X,
+            frame.Y,
+            frame.X + frame.Width,
+            frame.Y + frame.Height);
 
         _d2dContext.BeginDraw();
         _d2dContext.Clear(new Color4(0.035f, 0.035f, 0.045f, 1.0f));
@@ -474,11 +495,44 @@ internal sealed class PreviewRendererSession : IAsyncDisposable
             _sourceBitmap,
             destination,
             1.0f,
-            InterpolationMode.Linear,
+            displayMode == PreviewDisplayMode.ActualSize ? InterpolationMode.NearestNeighbor : InterpolationMode.Linear,
             null,
             null);
+        if (showSafeAreas)
+        {
+            DrawSafeArea(frame, 0.05, 0.35f);
+            DrawSafeArea(frame, 0.10, 0.65f);
+        }
         _d2dContext.EndDraw().CheckError();
         _swapChain.Present(1, PresentFlags.None).CheckError();
+    }
+
+    private void DrawSafeArea(PreviewRectangle frame, double insetFraction, float opacity)
+    {
+        if (_d2dContext is null)
+        {
+            return;
+        }
+
+        PreviewRectangle safeArea = PreviewGeometry.CalculateSafeArea(frame, insetFraction);
+        using ID2D1SolidColorBrush brush = _d2dContext.CreateSolidColorBrush(new Color4(1, 1, 1, opacity));
+        _d2dContext.DrawRectangle(
+            new Vortice.RawRectF(
+                safeArea.X,
+                safeArea.Y,
+                safeArea.X + safeArea.Width,
+                safeArea.Y + safeArea.Height),
+            brush,
+            1.0f);
+    }
+
+    private void SnapshotPresentation(out PreviewDisplayMode displayMode, out bool showSafeAreas)
+    {
+        lock (_resizeSync)
+        {
+            displayMode = _displayMode;
+            showSafeAreas = _showSafeAreas;
+        }
     }
 
     private void RecoverGraphics(

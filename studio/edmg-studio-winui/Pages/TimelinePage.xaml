@@ -584,8 +584,9 @@
                                 <controls:Direct3DPreviewControl
                                     x:Name="PreviewSurface"
                                     AutomationProperties.AutomationId="Timeline.PreviewSurface"
-                                    Height="190"
-                                    HorizontalAlignment="Stretch" />
+                                    Height="260"
+                                    HorizontalAlignment="Stretch"
+                                    PreviewContext="Timeline frame" />
                                 <TextBlock x:Name="PreviewHintText"
                                            Text="Scrub or play to preview the current timeline frame."
                                            TextWrapping="Wrap"

@@ -1,6 +1,7 @@
 using EdmgStudio.Core.Graphics;
 using EdmgStudio.Core.Media;
 using EdmgStudio.WinUI.Graphics;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -19,14 +20,19 @@ public sealed partial class Direct3DPreviewControl : UserControl
     private CancellationTokenSource? _seekDebounceCancellation;
     private PreviewRendererSession? _renderer;
     private VideoPlaybackSession? _videoSession;
+    private Popup? _fullScreenPopup;
     private Task _videoCleanupTask = Task.CompletedTask;
     private XamlRoot? _subscribedXamlRoot;
     private string _emptyMessage = "No preview selected.";
+    private string _previewContext = "Preview";
     private bool _hasFrame;
     private bool _isLoading;
     private bool _isVideoPlaying;
     private bool _isUpdatingPosition;
     private bool _resumePlaybackAfterSeek;
+    private bool _isFullScreen;
+    private bool _restoreMaximizedAfterFullScreen;
+    private PreviewDisplayMode _displayMode = PreviewDisplayMode.Fit;
     private int _videoGeneration;
     private TimeSpan _videoPosition;
 
@@ -36,6 +42,16 @@ public sealed partial class Direct3DPreviewControl : UserControl
     }
 
     public string? AdapterDiagnostics { get; private set; }
+
+    public string PreviewContext
+    {
+        get => _previewContext;
+        set
+        {
+            _previewContext = string.IsNullOrWhiteSpace(value) ? "Preview" : value.Trim();
+            PreviewContextText.Text = _previewContext;
+        }
+    }
 
     public async Task LoadStreamAsync(
         Stream source,
@@ -52,6 +68,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
             token.ThrowIfCancellationRequested();
             _isLoading = true;
             _hasFrame = false;
+            await SetFrameMetadataAsync(string.Empty);
             await SetStateAsync("Loading preview…", isProgressActive: true, isVisible: true);
             frame = await _decoder.DecodeAsync(source, contentType, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
@@ -62,6 +79,8 @@ public sealed partial class Direct3DPreviewControl : UserControl
                 throw new InvalidOperationException("The preview surface is not available.");
             }
 
+            int width = frame.Layout.Width;
+            int height = frame.Layout.Height;
             if (!renderer.TrySubmitFrame(frame))
             {
                 frame = null;
@@ -70,6 +89,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
             frame = null;
             _isLoading = false;
+            await SetFrameMetadataAsync($"{width} x {height} · BGRA8");
             _hasFrame = true;
             await SetStateAsync(string.Empty, isProgressActive: false, isVisible: false);
         }
@@ -121,6 +141,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
             int generation = Interlocked.Increment(ref _videoGeneration);
             _isLoading = true;
             _hasFrame = false;
+            await SetFrameMetadataAsync(string.Empty);
             await SetStateAsync("Preparing video preview…", isProgressActive: true, isVisible: true);
             MediaToolPaths tools = MediaToolLocator.Locate();
             session = await VideoPlaybackSession.CreateAsync(source, tools, knownContentLength, token).ConfigureAwait(false);
@@ -184,6 +205,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
         _emptyMessage = message;
         _isLoading = false;
         _hasFrame = false;
+        SetFrameMetadata(string.Empty);
         SetState(message, isProgressActive: false, isVisible: true);
     }
 
@@ -193,6 +215,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
         BeginVideoCleanup();
         _isLoading = false;
         _hasFrame = false;
+        SetFrameMetadata(string.Empty);
         SetState(message, isProgressActive: false, isVisible: true);
     }
 
@@ -202,6 +225,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
         BeginVideoCleanup();
         _isLoading = false;
         _hasFrame = false;
+        SetFrameMetadata(string.Empty);
         SetState(message, isProgressActive: false, isVisible: true);
     }
 
@@ -218,6 +242,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
             if (App.Services.TryTrackPreviewSession(renderer))
             {
                 _renderer = renderer;
+                ApplyPresentation();
             }
             else
             {
@@ -233,6 +258,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
     private async void Direct3DPreviewControl_Unloaded(object sender, RoutedEventArgs e)
     {
         CancelPendingLoad();
+        ExitFullScreen();
         UnsubscribeFromXamlRoot();
         // Capture this attachment before yielding. A later Loaded event may
         // already have installed a new renderer when cleanup resumes.
@@ -264,7 +290,14 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
     private void PreviewPanel_SizeChanged(object sender, SizeChangedEventArgs e) => RequestResize();
 
-    private void XamlRoot_Changed(XamlRoot sender, XamlRootChangedEventArgs args) => RequestResize();
+    private void XamlRoot_Changed(XamlRoot sender, XamlRootChangedEventArgs args)
+    {
+        if (_isFullScreen)
+        {
+            SizeFullScreenPreview(sender);
+        }
+        RequestResize();
+    }
 
     private void SubscribeToXamlRoot()
     {
@@ -296,6 +329,109 @@ public sealed partial class Direct3DPreviewControl : UserControl
         SubscribeToXamlRoot();
         double scale = XamlRoot?.RasterizationScale ?? 1.0;
         _renderer?.RequestResize(PreviewPanel.ActualWidth, PreviewPanel.ActualHeight, scale);
+    }
+
+    private void DisplayModeMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioMenuFlyoutItem { Tag: string modeName } ||
+            !Enum.TryParse(modeName, out PreviewDisplayMode mode))
+        {
+            return;
+        }
+
+        _displayMode = mode;
+        DisplayModeButton.Label = mode switch
+        {
+            PreviewDisplayMode.Fill => "Fill",
+            PreviewDisplayMode.ActualSize => "1:1",
+            _ => "Fit",
+        };
+        ApplyPresentation();
+    }
+
+    private void SafeAreasButton_Click(object sender, RoutedEventArgs e) => ApplyPresentation();
+
+    private void ApplyPresentation()
+        => _renderer?.SetPresentation(_displayMode, SafeAreasButton.IsChecked == true);
+
+    private void FullScreenButton_Click(object sender, RoutedEventArgs e)
+    {
+        MainWindow? window = App.MainWindowInstance;
+        if (window is null)
+        {
+            return;
+        }
+
+        if (_isFullScreen)
+        {
+            ExitFullScreen();
+        }
+        else
+        {
+            XamlRoot? root = XamlRoot;
+            if (root is null)
+            {
+                return;
+            }
+
+            _restoreMaximizedAfterFullScreen =
+                window.AppWindow.Presenter is OverlappedPresenter
+                {
+                    State: OverlappedPresenterState.Maximized,
+                };
+            Content = null;
+            _fullScreenPopup = new Popup
+            {
+                XamlRoot = root,
+                Child = PreviewRoot,
+                IsLightDismissEnabled = false,
+                IsOpen = true,
+            };
+            _isFullScreen = true;
+            SizeFullScreenPreview(root);
+            window.AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+            FullScreenButton.Icon = new SymbolIcon(Symbol.BackToWindow);
+            FullScreenButton.Label = "Exit full screen";
+            AutomationProperties.SetName(FullScreenButton, "Exit full screen preview");
+            RequestResize();
+        }
+    }
+
+    private void ExitFullScreen()
+    {
+        if (!_isFullScreen || App.MainWindowInstance is not MainWindow window)
+        {
+            return;
+        }
+
+        Popup? popup = _fullScreenPopup;
+        _fullScreenPopup = null;
+        if (popup is not null)
+        {
+            popup.IsOpen = false;
+            popup.Child = null;
+        }
+        PreviewRoot.Width = double.NaN;
+        PreviewRoot.Height = double.NaN;
+        Content = PreviewRoot;
+
+        window.AppWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
+        if (_restoreMaximizedAfterFullScreen && window.AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.Maximize();
+        }
+        _restoreMaximizedAfterFullScreen = false;
+        _isFullScreen = false;
+        FullScreenButton.Icon = new SymbolIcon(Symbol.FullScreen);
+        FullScreenButton.Label = "Full screen";
+        AutomationProperties.SetName(FullScreenButton, "Enter full screen preview");
+        RequestResize();
+    }
+
+    private void SizeFullScreenPreview(XamlRoot root)
+    {
+        PreviewRoot.Width = root.Size.Width;
+        PreviewRoot.Height = root.Size.Height;
     }
 
     private void Renderer_StatusChanged(RendererStatus status)
@@ -336,6 +472,9 @@ public sealed partial class Direct3DPreviewControl : UserControl
             AdapterDiagnostics =
                 $"{diagnostics.Description}; LUID {diagnostics.LuidText}; " +
                 (diagnostics.IsWarp ? "WARP" : "hardware");
+            PreviewContextText.Text = diagnostics.IsWarp
+                ? $"{_previewContext} · software GPU"
+                : _previewContext;
             ToolTipService.SetToolTip(this, AdapterDiagnostics);
             AutomationProperties.SetHelpText(this, AdapterDiagnostics);
         }
@@ -556,6 +695,8 @@ public sealed partial class Direct3DPreviewControl : UserControl
                 _isUpdatingPosition = false;
             }
             PositionText.Text = $"{FormatTime(TimeSpan.Zero)} / {FormatTime(metadata.Duration)}";
+            PositionSlider.StepFrequency = 1.0 / metadata.FramesPerSecond;
+            SetFrameMetadata($"{metadata.Width} x {metadata.Height} · {metadata.FramesPerSecond:0.##} fps");
             SetPlaybackButtonState(isPlaying: false);
         });
 
@@ -712,6 +853,17 @@ public sealed partial class Direct3DPreviewControl : UserControl
         catch (ObjectDisposedException) { }
     }
 
+    private Task SetFrameMetadataAsync(string metadata)
+        => RunOnDispatcherAsync(() => SetFrameMetadata(metadata));
+
+    private void SetFrameMetadata(string metadata)
+    {
+        FrameMetadataText.Text = metadata;
+        FrameMetadataBadge.Visibility = string.IsNullOrWhiteSpace(metadata)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
     private Task SetStateAsync(string message, bool isProgressActive, bool isVisible)
         => RunOnDispatcherAsync(() => SetState(message, isProgressActive, isVisible));
 
@@ -720,6 +872,12 @@ public sealed partial class Direct3DPreviewControl : UserControl
         StateText.Text = message;
         StateProgressRing.IsActive = isProgressActive;
         StateProgressRing.Visibility = isProgressActive ? Visibility.Visible : Visibility.Collapsed;
+        StateIcon.Visibility = isProgressActive ? Visibility.Collapsed : Visibility.Visible;
+        StateIcon.Glyph = message.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("could not", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("failed", StringComparison.OrdinalIgnoreCase)
+                ? "\uEA39"
+                : "\uE946";
         StateOverlay.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
     }
 }
