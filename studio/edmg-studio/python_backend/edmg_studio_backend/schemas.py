@@ -892,15 +892,21 @@ class VisualDNAUpdateRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=1000)
 
 
+class ReviewAnnotationRequest(BaseModel):
+    position: float = Field(ge=0.0, le=1.0)
+    note: str = Field(min_length=1, max_length=500)
+
+
 class VariantReviewDecisionRequest(BaseModel):
     artifact_path: str = Field(min_length=1, max_length=1024)
     decision: Literal["approved", "rejected", "cherry_picked", "unreviewed"]
     notes: str | None = Field(default=None, max_length=2000)
     cherry_pick_traits: list[str] = Field(default_factory=list)
     lock_fields: list[str] = Field(default_factory=list)
+    annotations: list[ReviewAnnotationRequest] | None = Field(default=None, max_length=200)
 
 
-class LiveCuePublishRequest(BaseModel):
+class LiveCuePublishRequest
     osc_host: str = Field(default="127.0.0.1", max_length=200)
     osc_port: int = Field(default=9000, ge=1, le=65535)
     midi_enabled: bool = True

@@ -1807,6 +1807,15 @@ public sealed class StudioApiClient : IDisposable
         {
             throw new ArgumentException("Review notes cannot exceed 2000 characters.", nameof(request));
         }
+
+        if (request.Annotations.Count > 200 || request.Annotations.Any(annotation =>
+                !double.IsFinite(annotation.Position) ||
+                annotation.Position is < 0 or > 1 ||
+                string.IsNullOrWhiteSpace(annotation.Note) ||
+                annotation.Note.Length > 500))
+        {
+            throw new ArgumentException("Review annotations are invalid.", nameof(request));
+        }
     }
 
     private static void ValidateLiveCuePublish(LiveCuePublishRequest request)

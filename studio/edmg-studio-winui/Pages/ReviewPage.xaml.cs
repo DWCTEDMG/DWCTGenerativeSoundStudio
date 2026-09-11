@@ -5,9 +5,14 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
+using EdmgStudio.WinUI.Controls;
+using Microsoft.UI;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 
 namespace EdmgStudio.WinUI.Pages;
 
@@ -16,15 +21,20 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     private readonly StudioApiClient _apiClient = App.Services.ApiClient;
     private readonly StudioProjectMediaClient _projectMediaClient = App.Services.ProjectMediaClient;
     private readonly List<string> _selectedPaths = [];
+    private readonly Dictionary<string, Direct3DPreviewControl> _comparisonPreviews = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _synchronizedSeekGate = new(1, 1);
     private CancellationTokenSource? _pageCancellation;
     private CancellationTokenSource? _previewCancellation;
+    private CancellationTokenSource? _synchronizedSeekCancellation;
     private DispatcherQueueTimer? _pollTimer;
     private ProjectDto? _selectedProject;
     private ReviewArtifact? _primaryArtifact;
     private ReviewJobItem? _selectedJob;
+    private string? _referencePath;
     private bool _isBusy;
     private bool _isPolling;
     private bool _isRestoringSelection;
+    private bool _isSynchronizingTransport;
     private int _previewGeneration;
 
     public ReviewPage()
@@ -37,6 +47,12 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     public ObservableCollection<ReviewArtifact> Artifacts { get; } = [];
 
     public ObservableCollection<ReviewArtifact> SelectedArtifacts { get; } = [];
+
+    public ObservableCollection<ReviewComparisonSlot> ComparisonSlots { get; } = [];
+
+    public ObservableCollection<ReviewMetadataRow> MetadataDifferences { get; } = [];
+
+    public ObservableCollection<ReviewAnnotationItem> ActiveAnnotations { get; } = [];
 
     public ObservableCollection<ReviewContinuityWarning> ContinuityWarnings { get; } = [];
 
@@ -72,6 +88,14 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         }
 
         CancelPreview();
+        _synchronizedSeekCancellation?.Cancel();
+        _synchronizedSeekCancellation?.Dispose();
+        _synchronizedSeekCancellation = null;
+        foreach (Direct3DPreviewControl preview in _comparisonPreviews.Values)
+        {
+            preview.PositionChanged -= ComparisonPreview_PositionChanged;
+        }
+        _comparisonPreviews.Clear();
         _pageCancellation?.Cancel();
         _pageCancellation?.Dispose();
         _pageCancellation = null;
@@ -260,10 +284,16 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
             Artifacts.Add(artifact);
         }
 
+        IReadOnlyList<string> requestedSelection = _selectedPaths.Count == 0
+            ? App.Services.Session.ReviewComparisonPaths
+            : _selectedPaths;
         IReadOnlyList<string> availableSelection = StudioReviewSelection.KeepAvailable(
-            _selectedPaths,
+            requestedSelection,
             Artifacts.Select(item => item.Path));
         ReplaceSelectedPaths(availableSelection);
+        _referencePath = StudioReviewComparison.KeepReference(
+            _referencePath ?? App.Services.Session.ReviewComparisonReference,
+            _selectedPaths);
 
         string? sessionArtifact = App.Services.Session.SelectedArtifactPath;
         if (_selectedPaths.Count == 0 &&
@@ -372,7 +402,11 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
             }
         }
 
-        _primaryArtifact = SelectedArtifacts.LastOrDefault();
+        _primaryArtifact = SelectedArtifacts.FirstOrDefault(item =>
+            string.Equals(item.Path, _primaryArtifact?.Path, StringComparison.OrdinalIgnoreCase))
+            ?? SelectedArtifacts.LastOrDefault();
+        _referencePath = StudioReviewComparison.KeepReference(_referencePath, _selectedPaths);
+        App.Services.Session.SetReviewComparison(_selectedPaths, _referencePath);
         int selectedCount = SelectedArtifacts.Count;
         SelectionSummaryText.Text = selectedCount == 0
             ? "Select up to four artifacts."
@@ -383,83 +417,118 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         CherryPickButton.IsEnabled = hasSelection && !_isBusy;
         RejectButton.IsEnabled = hasSelection && !_isBusy;
 
+        RebuildComparisonState();
         if (_primaryArtifact is null || _selectedProject is null)
         {
             App.Services.Session.SetSelectedArtifact(null);
             App.Services.Session.SetSourceAsset(null);
             CancelPreview();
-            ArtifactPreview.ShowEmpty("Select an artifact to preview it here.");
-            PreviewTitleText.Text = "Select an artifact.";
-            ArtifactMetadataText.Text = "No artifact selected.";
+            PreviewTitleText.Text = "Select artifacts to compare.";
             return;
         }
 
         App.Services.Session.SetSelectedArtifact(_primaryArtifact.Path);
         App.Services.Session.SetSourceAsset(_primaryArtifact.Path);
         App.Services.Session.SelectedVariantIndex = _primaryArtifact.VariantIndex;
-        PreviewTitleText.Text = _primaryArtifact.Name;
-        ArtifactMetadataText.Text = _primaryArtifact.Metadata;
-        await LoadPreviewAsync(_selectedProject.Id, _primaryArtifact, cancellationToken);
+        PreviewTitleText.Text = $"Active: {_primaryArtifact.Name}";
+        NotesTextBox.Text = _primaryArtifact.ReviewNotes;
+        RebuildActiveAnnotations();
+        await LoadComparisonPreviewsAsync(_selectedProject.Id, cancellationToken);
     }
 
-    private async Task LoadPreviewAsync(
-        string projectId,
-        ReviewArtifact artifact,
-        CancellationToken pageToken)
+    private void RebuildComparisonState()
+    {
+        foreach (Direct3DPreviewControl preview in _comparisonPreviews.Values)
+        {
+            preview.PositionChanged -= ComparisonPreview_PositionChanged;
+        }
+        _comparisonPreviews.Clear();
+        ComparisonSlots.Clear();
+        foreach (ReviewArtifact artifact in SelectedArtifacts)
+        {
+            ComparisonSlots.Add(new ReviewComparisonSlot(
+                artifact,
+                string.Equals(artifact.Path, _primaryArtifact?.Path, StringComparison.OrdinalIgnoreCase),
+                string.Equals(artifact.Path, _referencePath, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        MetadataDifferences.Clear();
+        IReadOnlyList<ReviewMetadataDifference> differences = StudioReviewComparison.CompareMetadata(
+            SelectedArtifacts.Select(item => new ReviewComparisonArtifact(
+                item.Path,
+                item.Name,
+                item.Kind,
+                item.VariantLabel,
+                item.ReviewState,
+                item.Engine,
+                item.ModelId,
+                item.Seed,
+                item.SizeBytes)));
+        foreach (ReviewMetadataDifference difference in differences)
+        {
+            MetadataDifferences.Add(new ReviewMetadataRow(
+                difference.Label,
+                string.Join("  |  ", difference.Values),
+                difference.IsDifferent));
+        }
+    }
+
+    private async Task LoadComparisonPreviewsAsync(string projectId, CancellationToken pageToken)
     {
         CancelPreview();
         int generation = ++_previewGeneration;
         _previewCancellation = CancellationTokenSource.CreateLinkedTokenSource(pageToken);
         CancellationToken cancellationToken = _previewCancellation.Token;
-
-        if (!artifact.IsImage && !artifact.IsVideo)
+        await Task.WhenAll(SelectedArtifacts.Select(async artifact =>
         {
-            ArtifactPreview.ShowUnsupported("This artifact does not have an inline preview.");
-            return;
-        }
-
-        try
-        {
-            await _projectMediaClient.StreamProjectMediaAsync(
-                projectId,
-                artifact.Path,
-                async (file, callbackToken) =>
-                {
-                    callbackToken.ThrowIfCancellationRequested();
-                    if (generation != Volatile.Read(ref _previewGeneration))
-                    {
-                        return false;
-                    }
-
-                    if (artifact.IsVideo)
-                    {
-                        await ArtifactPreview.LoadVideoStreamAsync(file.Stream, file.ContentHeaders.ContentLength, callbackToken);
-                    }
-                    else
-                    {
-                        await ArtifactPreview.LoadStreamAsync(
-                            file.Stream,
-                            file.ContentHeaders.ContentType?.MediaType,
-                            callbackToken);
-                    }
-
-                    return true;
-                },
-                cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            if (generation != _previewGeneration)
+            if (!_comparisonPreviews.TryGetValue(artifact.Path, out Direct3DPreviewControl? preview))
             {
                 return;
             }
 
-            ArtifactPreview.ShowError("Preview failed to load.");
-            ShowStatus("Preview failed", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
-        }
+            if (!artifact.IsImage && !artifact.IsVideo)
+            {
+                preview.ShowUnsupported("This artifact does not have an inline preview.");
+                return;
+            }
+
+            try
+            {
+                await _projectMediaClient.StreamProjectMediaAsync(
+                    projectId,
+                    artifact.Path,
+                    async (file, callbackToken) =>
+                    {
+                        callbackToken.ThrowIfCancellationRequested();
+                        if (generation != Volatile.Read(ref _previewGeneration))
+                        {
+                            return false;
+                        }
+
+                        if (artifact.IsVideo)
+                        {
+                            await preview.LoadVideoStreamAsync(file.Stream, file.ContentHeaders.ContentLength, callbackToken);
+                        }
+                        else
+                        {
+                            await preview.LoadStreamAsync(file.Stream, file.ContentHeaders.ContentType?.MediaType, callbackToken);
+                        }
+                        return true;
+                    },
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (generation == _previewGeneration)
+                {
+                    preview.ShowError("Preview failed to load.");
+                    ShowStatus("Preview failed", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+                }
+            }
+        }));
     }
 
     private void CancelPreview()
@@ -492,14 +561,18 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
                     {
                         ArtifactPath = path,
                         Decision = decision,
-                        Notes = string.IsNullOrWhiteSpace(NotesTextBox.Text) ? null : NotesTextBox.Text.Trim(),
+                        Notes = string.Equals(path, _primaryArtifact?.Path, StringComparison.OrdinalIgnoreCase)
+                            ? (string.IsNullOrWhiteSpace(NotesTextBox.Text) ? null : NotesTextBox.Text.Trim())
+                            : Artifacts.FirstOrDefault(item => string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase))?.ReviewNotes,
                         CherryPickTraits = decision == "cherry_picked" ? traits : [],
-                        LockFields = decision == "approved" ? ["timing", "reference"] : []
+                        LockFields = decision == "approved" ? ["timing", "reference"] : [],
+                        Annotations = GetAnnotationRequests(path)
                     },
                     cancellationToken);
             }
 
             ReplaceSelectedPaths([]);
+            App.Services.Session.SetReviewComparison([], null);
             RestoreArtifactSelection();
             await LoadReviewAsync(_selectedProject.Id, cancellationToken);
             ShowStatus(
@@ -786,13 +859,16 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         Jobs.Clear();
         ReplaceSelectedPaths([]);
         SelectedJob = null;
+        ComparisonSlots.Clear();
+        MetadataDifferences.Clear();
+        ActiveAnnotations.Clear();
         ReviewSummaryText.Text = "Select a project to review.";
         SelectionSummaryText.Text = "Select up to four artifacts.";
+        PreviewTitleText.Text = "Select artifacts to compare.";
         ContinuitySummaryText.Text = "Run analysis and generate a plan to populate continuity checks.";
         JobsSummaryText.Text = "No jobs loaded.";
         PublishStatusText.Text = "Publishing status unavailable.";
         JobLogTextBox.Visibility = Visibility.Collapsed;
-        ArtifactPreview.ShowEmpty("Select an artifact to preview it here.");
     }
 
     private async void OnProjectSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -851,6 +927,310 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e) =>
         await RefreshSurfaceAsync(_pageCancellation?.Token ?? CancellationToken.None, showSuccess: true);
+
+    private async void OnComparisonPreviewLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Direct3DPreviewControl preview || preview.Tag is not string path)
+        {
+            return;
+        }
+
+        if (_comparisonPreviews.TryGetValue(path, out Direct3DPreviewControl? existing))
+        {
+            existing.PositionChanged -= ComparisonPreview_PositionChanged;
+        }
+        _comparisonPreviews[path] = preview;
+        preview.PositionChanged += ComparisonPreview_PositionChanged;
+
+        ReviewArtifact? artifact = SelectedArtifacts.FirstOrDefault(item =>
+            string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (artifact is not null && _selectedProject is not null)
+        {
+            try
+            {
+                await LoadSingleComparisonPreviewAsync(
+                    _selectedProject.Id,
+                    artifact,
+                    preview,
+                    _pageCancellation?.Token ?? CancellationToken.None);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                preview.ShowError("Preview failed to load.");
+                ShowStatus("Preview failed", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+            }
+        }
+    }
+
+    private async Task LoadSingleComparisonPreviewAsync(
+        string projectId,
+        ReviewArtifact artifact,
+        Direct3DPreviewControl preview,
+        CancellationToken cancellationToken)
+    {
+        if (!artifact.IsImage && !artifact.IsVideo)
+        {
+            preview.ShowUnsupported("This artifact does not have an inline preview.");
+            return;
+        }
+
+        await _projectMediaClient.StreamProjectMediaAsync(
+            projectId,
+            artifact.Path,
+            async (file, callbackToken) =>
+            {
+                if (artifact.IsVideo)
+                {
+                    await preview.LoadVideoStreamAsync(file.Stream, file.ContentHeaders.ContentLength, callbackToken);
+                }
+                else
+                {
+                    await preview.LoadStreamAsync(file.Stream, file.ContentHeaders.ContentType?.MediaType, callbackToken);
+                }
+                return true;
+            },
+            cancellationToken);
+    }
+
+    private async void ComparisonPreview_PositionChanged(object? sender, PreviewPositionChangedEventArgs e)
+    {
+        if (_isSynchronizingTransport || sender is not Direct3DPreviewControl source ||
+            !string.Equals(source.Tag as string, _primaryArtifact?.Path, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _isSynchronizingTransport = true;
+        try
+        {
+            ComparisonPositionSlider.Value = e.NormalizedPosition;
+        }
+        finally
+        {
+            _isSynchronizingTransport = false;
+        }
+        await Task.CompletedTask;
+    }
+
+    private async void OnComparisonPositionChanged(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (_isSynchronizingTransport)
+        {
+            return;
+        }
+
+        _synchronizedSeekCancellation?.Cancel();
+        _synchronizedSeekCancellation?.Dispose();
+        _synchronizedSeekCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _pageCancellation?.Token ?? CancellationToken.None);
+        CancellationToken cancellationToken = _synchronizedSeekCancellation.Token;
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(180), cancellationToken);
+            await SeekAllAsync(e.NewValue, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            ShowStatus("Comparison seek failed", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+        }
+    }
+
+    private async Task SeekAllAsync(double position, CancellationToken cancellationToken = default)
+    {
+        await _synchronizedSeekGate.WaitAsync(cancellationToken);
+        _isSynchronizingTransport = true;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.WhenAll(_comparisonPreviews.Values.Where(item => item.HasVideo)
+                .Select(item => item.SeekNormalizedAsync(position)));
+        }
+        finally
+        {
+            _isSynchronizingTransport = false;
+            _synchronizedSeekGate.Release();
+        }
+    }
+
+    private async void OnSyncPlayPauseClick(object sender, RoutedEventArgs e) => await ToggleSynchronizedPlaybackAsync();
+
+    private async void OnSyncPositionClick(object sender, RoutedEventArgs e) =>
+        await SeekAllAsync(_primaryArtifact is not null && _comparisonPreviews.TryGetValue(_primaryArtifact.Path, out Direct3DPreviewControl? preview)
+            ? preview.NormalizedPosition
+            : ComparisonPositionSlider.Value);
+
+    private async Task ToggleSynchronizedPlaybackAsync()
+    {
+        Direct3DPreviewControl[] videos = _comparisonPreviews.Values.Where(item => item.HasVideo).ToArray();
+        bool play = videos.Any() && !videos.Any(item => item.IsVideoPlaying);
+        if (play)
+        {
+            await SeekAllAsync(ComparisonPositionSlider.Value);
+        }
+        await Task.WhenAll(videos.Select(item => item.SetPlayingAsync(play)));
+        SyncPlayPauseButton.Content = play ? "Pause all" : "Play all";
+    }
+
+    private async void OnActivateComparisonClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string path })
+        {
+            await SetActiveArtifactAsync(path);
+        }
+    }
+
+    private void OnSetReferenceClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string path })
+        {
+            _referencePath = path;
+            App.Services.Session.SetReviewComparison(_selectedPaths, _referencePath);
+            RebuildComparisonState();
+        }
+    }
+
+    private async Task SetActiveArtifactAsync(string? path)
+    {
+        ReviewArtifact? artifact = SelectedArtifacts.FirstOrDefault(item =>
+            string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (artifact is null)
+        {
+            return;
+        }
+
+        _primaryArtifact = artifact;
+        App.Services.Session.SetSelectedArtifact(artifact.Path);
+        App.Services.Session.SetSourceAsset(artifact.Path);
+        PreviewTitleText.Text = $"Active: {artifact.Name}";
+        NotesTextBox.Text = artifact.ReviewNotes;
+        RebuildComparisonState();
+        RebuildActiveAnnotations();
+        await Task.CompletedTask;
+    }
+
+    private void RebuildActiveAnnotations()
+    {
+        ActiveAnnotations.Clear();
+        if (_primaryArtifact is null)
+        {
+            return;
+        }
+
+        foreach (ReviewAnnotation annotation in _primaryArtifact.Annotations)
+        {
+            ActiveAnnotations.Add(new ReviewAnnotationItem(Guid.NewGuid().ToString("N"), annotation.Position, annotation.Note));
+        }
+    }
+
+    private void OnAddMarkerClick(object sender, RoutedEventArgs e)
+    {
+        string note = MarkerTextBox.Text.Trim();
+        if (_primaryArtifact is null || string.IsNullOrWhiteSpace(note))
+        {
+            ShowStatus("Marker not added", "Select an active artifact and enter a marker note.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        ActiveAnnotations.Add(new ReviewAnnotationItem(Guid.NewGuid().ToString("N"), ComparisonPositionSlider.Value, note));
+        MarkerTextBox.Text = string.Empty;
+    }
+
+    private void OnRemoveMarkerClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string id } && ActiveAnnotations.FirstOrDefault(item => item.Id == id) is { } marker)
+        {
+            ActiveAnnotations.Remove(marker);
+        }
+    }
+
+    private async void OnSaveAnnotationsClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedProject is null || _primaryArtifact is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _apiClient.SaveVariantDecisionAsync(
+                _selectedProject.Id,
+                new VariantReviewDecisionRequest
+                {
+                    ArtifactPath = _primaryArtifact.Path,
+                    Decision = NormalizeDecision(_primaryArtifact.ReviewState),
+                    Notes = string.IsNullOrWhiteSpace(NotesTextBox.Text) ? null : NotesTextBox.Text.Trim(),
+                    CherryPickTraits = _primaryArtifact.Traits,
+                    LockFields = _primaryArtifact.Locks,
+                    Annotations = GetAnnotationRequests(_primaryArtifact.Path)
+                },
+                _pageCancellation?.Token ?? CancellationToken.None);
+            await LoadReviewAsync(_selectedProject.Id, _pageCancellation?.Token ?? CancellationToken.None);
+            ShowStatus("Review notes saved", "The active artifact notes and markers were saved.", InfoBarSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            ShowStatus("Review notes could not be saved", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+        }
+    }
+
+    private IReadOnlyList<ReviewAnnotationRequest> GetAnnotationRequests(string path)
+    {
+        if (string.Equals(path, _primaryArtifact?.Path, StringComparison.OrdinalIgnoreCase))
+        {
+            return ActiveAnnotations.Select(item => new ReviewAnnotationRequest(item.Position, item.Note)).ToArray();
+        }
+
+        return Artifacts.FirstOrDefault(item => string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase))?.Annotations
+            .Select(item => new ReviewAnnotationRequest(item.Position, item.Note)).ToArray() ?? [];
+    }
+
+    private async void PreviousArtifactAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        await SetActiveArtifactAsync(StudioReviewComparison.MoveActive(_selectedPaths, _primaryArtifact?.Path, -1));
+    }
+
+    private async void NextArtifactAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        await SetActiveArtifactAsync(StudioReviewComparison.MoveActive(_selectedPaths, _primaryArtifact?.Path, 1));
+    }
+
+    private async void PlayPauseAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (FocusManager.GetFocusedElement(XamlRoot) is TextBox)
+        {
+            return;
+        }
+        args.Handled = true;
+        await ToggleSynchronizedPlaybackAsync();
+    }
+
+    private async void ApproveAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (FocusManager.GetFocusedElement(XamlRoot) is TextBox)
+        {
+            return;
+        }
+        args.Handled = true;
+        await ApplyDecisionAsync("approved");
+    }
+
+    private async void RejectAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (FocusManager.GetFocusedElement(XamlRoot) is TextBox)
+        {
+            return;
+        }
+        args.Handled = true;
+        await ApplyDecisionAsync("rejected");
+    }
 
     private async void OnApproveClick(object sender, RoutedEventArgs e) =>
         await ApplyDecisionAsync("approved");
@@ -1059,6 +1439,14 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     internal static string TitleCase(string value) =>
         CultureInfo.CurrentCulture.TextInfo.ToTitleCase(value.Replace('_', ' '));
 
+    private static string NormalizeDecision(string? decision) => decision?.Trim().ToLowerInvariant() switch
+    {
+        "approved" => "approved",
+        "rejected" => "rejected",
+        "cherry_picked" => "cherry_picked",
+        _ => "unreviewed"
+    };
+
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))
@@ -1073,6 +1461,45 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 }
 
 public sealed record VariantOption(int Index, string Label);
+
+public sealed class ReviewComparisonSlot(
+    ReviewArtifact artifact,
+    bool isActive,
+    bool isReference)
+{
+    public ReviewArtifact Artifact { get; } = artifact;
+
+    public Thickness ActiveBorderThickness { get; } = isActive ? new Thickness(2) : new Thickness(0);
+
+    public string RoleText { get; } = (isActive, isReference) switch
+    {
+        (true, true) => "Active · Reference",
+        (true, false) => "Active",
+        (false, true) => "Reference",
+        _ => "Comparison"
+    };
+}
+
+public sealed class ReviewMetadataRow(string label, string values, bool isDifferent)
+{
+    public string Label { get; } = label;
+
+    public string Values { get; } = values;
+
+    public Brush ValueBrush { get; } = new SolidColorBrush(
+        isDifferent ? Colors.Orange : Colors.Gray);
+}
+
+public sealed class ReviewAnnotationItem(string id, double position, string note)
+{
+    public string Id { get; set; } = id;
+
+    public double Position { get; set; } = position;
+
+    public string Note { get; set; } = note;
+
+    public string PositionText => $"{Position:P1}";
+}
 
 public sealed class ReviewArtifact
 {
@@ -1105,6 +1532,8 @@ public sealed class ReviewArtifact
         public IReadOnlyList<string> Traits { get; set; } = [];
 
         public IReadOnlyList<string> Locks { get; set; } = [];
+
+        public IReadOnlyList<ReviewAnnotation> Annotations { get; set; } = [];
 
         public string Provenance { get; set; } = string.Empty;
 
@@ -1182,6 +1611,7 @@ public sealed class ReviewArtifact
                 Seed = ReviewPage.ReadString(artifact, "seed"),
                 Traits = ReadStringArray(artifact, "cherry_pick_traits"),
                 Locks = ReadStringArray(artifact, "locks"),
+                Annotations = ReadAnnotations(artifact),
                 Provenance = FormatProvenance(artifact),
                 SizeBytes = ReviewPage.ReadLong(artifact, "size_bytes"),
                 ModifiedAt = ReviewPage.ReadDouble(artifact, "modified_at")
@@ -1201,6 +1631,23 @@ public sealed class ReviewArtifact
                 .Select(item => item.GetString())
                 .Where(item => !string.IsNullOrWhiteSpace(item))
                 .Cast<string>()
+                .ToArray();
+        }
+
+        private static IReadOnlyList<ReviewAnnotation> ReadAnnotations(JsonElement element)
+        {
+            if (!element.TryGetProperty("annotations", out JsonElement values) || values.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            return values.EnumerateArray()
+                .Select(item => new ReviewAnnotation(
+                    ReviewPage.ReadDouble(item, "position") ?? 0,
+                    ReviewPage.ReadString(item, "note")))
+                .Where(item => !string.IsNullOrWhiteSpace(item.Note))
+                .Select(item => item.Normalize())
+                .Take(200)
                 .ToArray();
         }
 

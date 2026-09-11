@@ -457,6 +457,10 @@ public sealed record RecoveryApplyRequest(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     long? ExpectedRevision = null);
 
+public sealed record ReviewAnnotationRequest(
+    [property: JsonPropertyName("position")] double Position,
+    [property: JsonPropertyName("note")] string Note);
+
 public sealed class VariantReviewDecisionRequest
 {
     [JsonPropertyName("artifact_path")]
@@ -473,6 +477,9 @@ public sealed class VariantReviewDecisionRequest
 
     [JsonPropertyName("lock_fields")]
     public IReadOnlyList<string> LockFields { get; init; } = [];
+
+    [JsonPropertyName("annotations")]
+    public IReadOnlyList<ReviewAnnotationRequest> Annotations { get; init; } = [];
 }
 
 public sealed class VariantReviewDecisionResponse
@@ -760,6 +767,7 @@ public static class StudioJson
 [JsonSerializable(typeof(ApplyMotionGrammarRequest))]
 [JsonSerializable(typeof(ApplyMotionGrammarResponse))]
 [JsonSerializable(typeof(RecoveryApplyRequest))]
+[JsonSerializable(typeof(ReviewAnnotationRequest))]
 [JsonSerializable(typeof(VariantReviewDecisionRequest))]
 [JsonSerializable(typeof(VariantReviewDecisionResponse))]
 [JsonSerializable(typeof(LiveCuePublishRequest))]

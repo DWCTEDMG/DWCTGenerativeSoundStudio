@@ -257,6 +257,11 @@ def create_project_router(
                 notes=req.notes,
                 cherry_pick_traits=list(req.cherry_pick_traits or []),
                 lock_fields=list(req.lock_fields or []),
+                annotations=(
+                    [item.model_dump() for item in req.annotations]
+                    if req.annotations is not None
+                    else None
+                ),
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc

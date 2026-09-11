@@ -10,6 +10,14 @@
     Unloaded="OnUnloaded"
     mc:Ignorable="d">
 
+    <Page.KeyboardAccelerators>
+        <KeyboardAccelerator Key="Left" Modifiers="Control" Invoked="PreviousArtifactAccelerator_Invoked" />
+        <KeyboardAccelerator Key="Right" Modifiers="Control" Invoked="NextArtifactAccelerator_Invoked" />
+        <KeyboardAccelerator Key="Space" Invoked="PlayPauseAccelerator_Invoked" />
+        <KeyboardAccelerator Key="A" Modifiers="Control" Invoked="ApproveAccelerator_Invoked" />
+        <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="RejectAccelerator_Invoked" />
+    </Page.KeyboardAccelerators>
+
     <Grid Padding="24" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -171,10 +179,10 @@
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Spacing="4">
                                     <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
-                                               Text="Active preview" />
+                                               Text="Comparison workspace" />
                                     <TextBlock x:Name="PreviewTitleText"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                               Text="Select an artifact."
+                                               Text="Select artifacts to compare."
                                                TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
                                 <Button Grid.Column="1"
@@ -183,38 +191,97 @@
                                         Click="OnOpenOutputsClick"
                                         Content="Outputs" />
                             </Grid>
-                            <controls:Direct3DPreviewControl x:Name="ArtifactPreview"
-                                                             Height="340"
-                                                             AutomationProperties.AutomationId="ReviewArtifactPreview"
-                                                             AutomationProperties.Name="Selected artifact preview"
-                                                             PreviewContext="Review preview" />
-                            <TextBlock x:Name="ArtifactMetadataText"
-                                       FontFamily="Consolas"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       Text="No artifact selected."
-                                       TextWrapping="Wrap" />
-                            <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
-                                       Text="Comparison set" />
-                            <ItemsRepeater ItemsSource="{x:Bind SelectedArtifacts}">
+
+                            <ItemsRepeater ItemsSource="{x:Bind ComparisonSlots}">
                                 <ItemsRepeater.Layout>
-                                    <UniformGridLayout MinColumnSpacing="8"
-                                                       MinItemWidth="180"
-                                                       MinRowSpacing="8" />
+                                    <UniformGridLayout MaximumRowsOrColumns="2"
+                                                       MinColumnSpacing="10"
+                                                       MinItemWidth="320"
+                                                       MinRowSpacing="10" />
                                 </ItemsRepeater.Layout>
                                 <ItemsRepeater.ItemTemplate>
-                                    <DataTemplate x:DataType="local:ReviewArtifact">
+                                    <DataTemplate x:DataType="local:ReviewComparisonSlot">
                                         <Border Padding="10"
                                                 Background="{ThemeResource ControlFillColorSecondaryBrush}"
-                                                CornerRadius="8">
-                                            <StackPanel Spacing="2">
-                                                <TextBlock FontWeight="SemiBold"
-                                                           Text="{x:Bind Name}"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                           Text="{x:Bind ComparisonSummary}"
+                                                BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                                                BorderThickness="{x:Bind ActiveBorderThickness}"
+                                                CornerRadius="10">
+                                            <StackPanel Spacing="8">
+                                                <Grid ColumnSpacing="8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel>
+                                                        <TextBlock FontWeight="SemiBold"
+                                                                   Text="{x:Bind Artifact.Name}"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                                   Text="{x:Bind RoleText}" />
+                                                    </StackPanel>
+                                                    <Button Grid.Column="1"
+                                                            AutomationProperties.Name="Make active comparison artifact"
+                                                            Click="OnActivateComparisonClick"
+                                                            Content="Active"
+                                                            Tag="{x:Bind Artifact.Path}" />
+                                                    <Button Grid.Column="2"
+                                                            AutomationProperties.Name="Set comparison reference"
+                                                            Click="OnSetReferenceClick"
+                                                            Content="Reference"
+                                                            Tag="{x:Bind Artifact.Path}" />
+                                                </Grid>
+                                                <controls:Direct3DPreviewControl Height="250"
+                                                                                 AutoPlay="False"
+                                                                                 Loaded="OnComparisonPreviewLoaded"
+                                                                                 PreviewContext="Comparison"
+                                                                                 Tag="{x:Bind Artifact.Path}" />
+                                                <TextBlock FontFamily="Consolas"
+                                                           FontSize="11"
+                                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                           Text="{x:Bind Artifact.ComparisonSummary}"
                                                            TextWrapping="Wrap" />
                                             </StackPanel>
                                         </Border>
+                                    </DataTemplate>
+                                </ItemsRepeater.ItemTemplate>
+                            </ItemsRepeater>
+
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="SyncPlayPauseButton"
+                                        AutomationProperties.Name="Play or pause all comparison videos"
+                                        Click="OnSyncPlayPauseClick"
+                                        Content="Play all" />
+                                <Button AutomationProperties.Name="Align comparison videos to active position"
+                                        Click="OnSyncPositionClick"
+                                        Content="Align to active" />
+                                <TextBlock VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           Text="Space: play/pause · Ctrl+Left/Right: active artifact"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Slider x:Name="ComparisonPositionSlider"
+                                    AutomationProperties.Name="Synchronized comparison position"
+                                    Maximum="1"
+                                    StepFrequency="0.001"
+                                    ValueChanged="OnComparisonPositionChanged" />
+
+                            <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                       Text="Metadata differences" />
+                            <ItemsRepeater ItemsSource="{x:Bind MetadataDifferences}">
+                                <ItemsRepeater.ItemTemplate>
+                                    <DataTemplate x:DataType="local:ReviewMetadataRow">
+                                        <Grid Padding="8,6" ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind Label}" />
+                                            <TextBlock Grid.Column="1"
+                                                       Foreground="{x:Bind ValueBrush}"
+                                                       Text="{x:Bind Values}"
+                                                       TextWrapping="Wrap" />
+                                        </Grid>
                                     </DataTemplate>
                                 </ItemsRepeater.ItemTemplate>
                             </ItemsRepeater>
@@ -244,6 +311,45 @@
                                      AutomationProperties.Name="Cherry-pick traits"
                                      PlaceholderText="palette, motion, reference frame"
                                      Text="palette, motion" />
+                            <TextBlock Text="Active artifact markers" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="MarkerTextBox"
+                                         AutomationProperties.Name="Marker note"
+                                         MaxLength="500"
+                                         PlaceholderText="Add note at the synchronized playhead" />
+                                <Button Grid.Column="1"
+                                        AutomationProperties.Name="Add review marker"
+                                        Click="OnAddMarkerClick"
+                                        Content="Add marker" />
+                            </Grid>
+                            <ItemsRepeater ItemsSource="{x:Bind ActiveAnnotations}">
+                                <ItemsRepeater.ItemTemplate>
+                                    <DataTemplate x:DataType="local:ReviewAnnotationItem">
+                                        <Grid Padding="8,4" ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock FontFamily="Consolas" Text="{x:Bind PositionText}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind Note}" TextWrapping="Wrap" />
+                                            <Button Grid.Column="2"
+                                                    AutomationProperties.Name="Remove review marker"
+                                                    Click="OnRemoveMarkerClick"
+                                                    Content="Remove"
+                                                    Tag="{x:Bind Id}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsRepeater.ItemTemplate>
+                            </ItemsRepeater>
+                            <Button HorizontalAlignment="Left"
+                                    AutomationProperties.Name="Save notes and markers for active artifact"
+                                    Click="OnSaveAnnotationsClick"
+                                    Content="Save notes and markers" />
                             <CommandBar DefaultLabelPosition="Right">
                                 <AppBarButton x:Name="ApproveButton"
                                               AutomationProperties.AutomationId="ReviewApproveButton"

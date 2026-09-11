@@ -98,6 +98,7 @@ def _artifact_entry(
         "review_notes": str(review.get("notes") or ""),
         "cherry_pick_traits": list(review.get("cherry_pick_traits") or []) if isinstance(review.get("cherry_pick_traits"), list) else [],
         "locks": list(review.get("locks") or []) if isinstance(review.get("locks"), list) else [],
+        "annotations": list(review.get("annotations") or []) if isinstance(review.get("annotations"), list) else [],
         "engine": str((manifest or {}).get("engine") or (metadata or {}).get("engine") or ""),
         "model_id": str(model.get("id") or (metadata or {}).get("model_id") or "") if manifest or metadata else "",
         "seed": manifest.get("seed") if isinstance(manifest, dict) else metadata.get("seed") if isinstance(metadata, dict) else None,
@@ -188,6 +189,7 @@ def apply_variant_review_decision(
     notes: str | None = None,
     cherry_pick_traits: list[str] | None = None,
     lock_fields: list[str] | None = None,
+    annotations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Persist review state on the artifact sidecar manifest."""
     state = str(decision or "").strip().lower()
@@ -229,6 +231,15 @@ def apply_variant_review_decision(
         review["cherry_pick_traits"] = [str(item).strip() for item in cherry_pick_traits if str(item).strip()]
     if lock_fields is not None:
         review["locks"] = [str(item).strip() for item in lock_fields if str(item).strip()]
+    if annotations is not None:
+        review["annotations"] = [
+            {
+                "position": max(0.0, min(1.0, float(item.get("position") or 0.0))),
+                "note": str(item.get("note") or "").strip(),
+            }
+            for item in annotations
+            if isinstance(item, dict) and str(item.get("note") or "").strip()
+        ]
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
     tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

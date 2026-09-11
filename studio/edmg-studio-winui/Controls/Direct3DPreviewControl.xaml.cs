@@ -11,6 +11,11 @@ using System.Globalization;
 
 namespace EdmgStudio.WinUI.Controls;
 
+public sealed class PreviewPositionChangedEventArgs(double normalizedPosition) : EventArgs
+{
+    public double NormalizedPosition { get; } = normalizedPosition;
+}
+
 public sealed partial class Direct3DPreviewControl : UserControl
 {
     private readonly ImageFrameDecoder _decoder = new();
@@ -43,6 +48,19 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
     public string? AdapterDiagnostics { get; private set; }
 
+    public bool AutoPlay { get; set; } = true;
+
+    public bool HasVideo => Volatile.Read(ref _videoSession) is not null;
+
+    public bool IsVideoPlaying => _isVideoPlaying;
+
+    public double NormalizedPosition => Volatile.Read(ref _videoSession) is { Metadata.Duration: var duration }
+        && duration > TimeSpan.Zero
+            ? Math.Clamp(_videoPosition.TotalSeconds / duration.TotalSeconds, 0, 1)
+            : 0;
+
+    public event EventHandler<PreviewPositionChangedEventArgs>? PositionChanged;
+
     public string PreviewContext
     {
         get => _previewContext;
@@ -50,6 +68,51 @@ public sealed partial class Direct3DPreviewControl : UserControl
         {
             _previewContext = string.IsNullOrWhiteSpace(value) ? "Preview" : value.Trim();
             PreviewContextText.Text = _previewContext;
+        }
+    }
+
+    public async Task SetPlayingAsync(bool isPlaying)
+    {
+        VideoPlaybackSession? session = Volatile.Read(ref _videoSession);
+        if (session is null || isPlaying == _isVideoPlaying)
+        {
+            return;
+        }
+
+        if (!isPlaying)
+        {
+            CancelPlayback();
+            await session.StopAsync();
+            await UpdatePlaybackStateAsync(false);
+            return;
+        }
+
+        _ = StartPlaybackAsync(session, PlaybackStartPosition(session), Volatile.Read(ref _videoGeneration));
+    }
+
+    public async Task SeekNormalizedAsync(double normalizedPosition)
+    {
+        VideoPlaybackSession? session = Volatile.Read(ref _videoSession);
+        if (session is null || session.Metadata.Duration <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        TimeSpan target = TimeSpan.FromTicks((long)(session.Metadata.Duration.Ticks * Math.Clamp(normalizedPosition, 0, 1)));
+        bool resume = _isVideoPlaying;
+        CancelPlayback();
+        await session.StopAsync();
+        _videoPosition = target;
+        await UpdatePlaybackStateAsync(false);
+        await session.DecodeAsync(
+            target,
+            frame => SubmitVideoFrame(session, Volatile.Read(ref _videoGeneration), frame),
+            paceFrames: false,
+            maximumFrames: 1,
+            CancellationToken.None);
+        if (resume)
+        {
+            _ = StartPlaybackAsync(session, target, Volatile.Read(ref _videoGeneration));
         }
     }
 
@@ -165,7 +228,19 @@ public sealed partial class Direct3DPreviewControl : UserControl
                 _videoPosition = TimeSpan.Zero;
                 _isLoading = false;
                 await ConfigureVideoTransportAsync(playbackSession.Metadata);
-                _ = StartPlaybackAsync(playbackSession, TimeSpan.Zero, generation);
+                if (AutoPlay)
+                {
+                    _ = StartPlaybackAsync(playbackSession, TimeSpan.Zero, generation);
+                }
+                else
+                {
+                    await playbackSession.DecodeAsync(
+                        TimeSpan.Zero,
+                        frame => SubmitVideoFrame(playbackSession, generation, frame),
+                        paceFrames: false,
+                        maximumFrames: 1,
+                        token);
+                }
             }
             finally
             {
@@ -491,38 +566,21 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
     private async void PlayPauseButton_Click(object sender, RoutedEventArgs e)
     {
-        VideoPlaybackSession? session = Volatile.Read(ref _videoSession);
-        if (session is null)
+        try
         {
-            return;
+            await SetPlayingAsync(!_isVideoPlaying);
         }
-
-        if (_isVideoPlaying)
+        catch (Exception exception)
         {
-            try
-            {
-                CancelPlayback();
-                await session.StopAsync();
-                if (ReferenceEquals(session, Volatile.Read(ref _videoSession)))
-                    await UpdatePlaybackStateAsync(isPlaying: false);
-            }
-            catch (Exception exception)
-            {
-                if (ReferenceEquals(session, Volatile.Read(ref _videoSession)))
-                    await SetStateAsync($"Video preview could not pause. {exception.Message}", false, true);
-            }
-            return;
+            await SetStateAsync($"Video preview transport failed. {exception.Message}", false, true);
         }
-
-        TimeSpan startPosition = _videoPosition;
-        if (session.Metadata.Duration > TimeSpan.Zero
-            && startPosition >= session.Metadata.Duration - TimeSpan.FromMilliseconds(50))
-        {
-            startPosition = TimeSpan.Zero;
-        }
-
-        _ = StartPlaybackAsync(session, startPosition, Volatile.Read(ref _videoGeneration));
     }
+
+    private TimeSpan PlaybackStartPosition(VideoPlaybackSession session) =>
+        session.Metadata.Duration > TimeSpan.Zero
+        && _videoPosition >= session.Metadata.Duration - TimeSpan.FromMilliseconds(50)
+            ? TimeSpan.Zero
+            : _videoPosition;
 
     private async void PositionSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
@@ -726,6 +784,12 @@ public sealed partial class Direct3DPreviewControl : UserControl
         finally
         {
             _isUpdatingPosition = false;
+        }
+
+        if (duration > TimeSpan.Zero)
+        {
+            PositionChanged?.Invoke(this, new PreviewPositionChangedEventArgs(
+                Math.Clamp(position.TotalSeconds / duration.TotalSeconds, 0, 1)));
         }
     }
 

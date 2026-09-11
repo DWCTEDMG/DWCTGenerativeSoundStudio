@@ -8,6 +8,8 @@ public sealed class StudioSessionService
     private const string ProjectKey = "StudioSession.ActiveProjectId";
     private const string VariantKey = "StudioSession.SelectedVariant";
     private const string ArtifactKey = "StudioSession.SelectedArtifactPath";
+    private const string ComparisonPathsKey = "StudioSession.ReviewComparisonPaths";
+    private const string ComparisonReferenceKey = "StudioSession.ReviewComparisonReference";
     private const string JobKey = "StudioSession.SelectedJobId";
     private const string JobProjectKey = "StudioSession.SelectedJobProjectId";
     private const string SourceAssetKey = "StudioSession.SourceAssetPath";
@@ -47,7 +49,15 @@ public sealed class StudioSessionService
     public string ActiveProjectId
     {
         get => _context.ActiveProjectId ?? string.Empty;
-        set => SetContext(_context.WithActiveProject(value));
+        set
+        {
+            bool changed = !string.Equals(_context.ActiveProjectId, value?.Trim(), StringComparison.Ordinal);
+            SetContext(_context.WithActiveProject(value));
+            if (changed)
+            {
+                SetReviewComparison([], null);
+            }
+        }
     }
 
     public int SelectedVariantIndex
@@ -57,6 +67,15 @@ public sealed class StudioSessionService
     }
 
     public string? SelectedArtifactPath => _context.SelectedArtifactPath;
+
+    public IReadOnlyList<string> ReviewComparisonPaths =>
+        (ReadString(ComparisonPathsKey) ?? string.Empty)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(StudioReviewSelection.MaximumComparisonArtifacts)
+            .ToArray();
+
+    public string? ReviewComparisonReference => ReadString(ComparisonReferenceKey);
 
     public string? SelectedJobId => _context.SelectedJobId;
 
@@ -72,6 +91,20 @@ public sealed class StudioSessionService
 
     public void SetSelectedArtifact(string? artifactPath) =>
         SetContext(_context with { SelectedArtifactPath = artifactPath });
+
+    public void SetReviewComparison(IEnumerable<string>? paths, string? referencePath)
+    {
+        string[] normalized = (paths ?? [])
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(StudioReviewSelection.MaximumComparisonArtifacts)
+            .ToArray();
+        string? reference = StudioReviewComparison.KeepReference(referencePath, normalized);
+        PersistString(ComparisonPathsKey, normalized.Length == 0 ? null : string.Join('\n', normalized));
+        PersistString(ComparisonReferenceKey, reference);
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
 
     public void SetSelectedJob(string? projectId, string? jobId) =>
         SetContext(_context.WithSelectedJob(projectId, jobId));
@@ -127,13 +160,18 @@ public sealed class StudioSessionService
 
     private void PersistString(string key, string? value)
     {
+        if (_settings is null)
+        {
+            return;
+        }
+
         if (value is null)
         {
-            _settings!.Values.Remove(key);
+            _settings.Values.Remove(key);
         }
         else
         {
-            _settings!.Values[key] = value;
+            _settings.Values[key] = value;
         }
     }
 

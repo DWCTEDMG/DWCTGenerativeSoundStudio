@@ -2011,7 +2011,8 @@ public sealed class StudioApiClientTests
                 Decision = "cherry_picked",
                 Notes = "Keep the lighting.",
                 CherryPickTraits = ["lighting"],
-                LockFields = ["seed"]
+                LockFields = ["seed"],
+                Annotations = [new ReviewAnnotationRequest(0.42, "Check transition")]
             });
         await client.StartLiveCuePublishAsync(" project /#1 ", new LiveCuePublishRequest());
         await client.StopLiveCuePublishAsync(" project /#1 ");
@@ -2039,6 +2040,8 @@ public sealed class StudioApiClientTests
         Assert.AreEqual("cherry_picked", decision.RootElement.GetProperty("decision").GetString());
         Assert.AreEqual("lighting", decision.RootElement.GetProperty("cherry_pick_traits")[0].GetString());
         Assert.AreEqual("seed", decision.RootElement.GetProperty("lock_fields")[0].GetString());
+        Assert.AreEqual(0.42, decision.RootElement.GetProperty("annotations")[0].GetProperty("position").GetDouble());
+        Assert.AreEqual("Check transition", decision.RootElement.GetProperty("annotations")[0].GetProperty("note").GetString());
 
         using var publish = JsonDocument.Parse(captured[1].Body);
         Assert.AreEqual("127.0.0.1", publish.RootElement.GetProperty("osc_host").GetString());

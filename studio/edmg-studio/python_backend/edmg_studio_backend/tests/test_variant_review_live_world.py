@@ -60,6 +60,7 @@ def test_apply_variant_review_decision_updates_manifest(tmp_path: Path) -> None:
         notes="Hero framing locked",
         cherry_pick_traits=["palette:magenta"],
         lock_fields=["camera"],
+        annotations=[{"position": 0.42, "note": "Check transition"}],
     )
     manifest = json.loads((project_dir / "outputs" / "videos" / "internal_v00_demo.mp4.artifact.json").read_text(encoding="utf-8"))
     assert result["review"]["state"] == "approved"
@@ -67,11 +68,13 @@ def test_apply_variant_review_decision_updates_manifest(tmp_path: Path) -> None:
     assert manifest["review"]["notes"] == "Hero framing locked"
     assert manifest["review"]["cherry_pick_traits"] == ["palette:magenta"]
     assert manifest["review"]["locks"] == ["camera"]
+    assert manifest["review"]["annotations"] == [{"position": 0.42, "note": "Check transition"}]
 
     refreshed = collect_variant_review(project_dir, {})
     artifact = refreshed["groups"][0]["artifacts"][0]
     assert artifact["cherry_pick_traits"] == ["palette:magenta"]
     assert artifact["locks"] == ["camera"]
+    assert artifact["annotations"] == [{"position": 0.42, "note": "Check transition"}]
 
     cleared = apply_variant_review_decision(
         project_dir,
@@ -82,6 +85,15 @@ def test_apply_variant_review_decision_updates_manifest(tmp_path: Path) -> None:
     )
     assert cleared["review"]["cherry_pick_traits"] == []
     assert cleared["review"]["locks"] == []
+    assert cleared["review"]["annotations"] == [{"position": 0.42, "note": "Check transition"}]
+
+    annotations_cleared = apply_variant_review_decision(
+        project_dir,
+        artifact_path="outputs/videos/internal_v00_demo.mp4",
+        decision="approved",
+        annotations=[],
+    )
+    assert annotations_cleared["review"]["annotations"] == []
 
 
 def test_apply_variant_review_decision_rejects_path_traversal(tmp_path: Path) -> None:
