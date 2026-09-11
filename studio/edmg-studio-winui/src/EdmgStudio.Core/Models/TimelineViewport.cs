@@ -19,4 +19,52 @@ public static class TimelineViewport
         for (double index = first; index <= last; index++)
             yield return Math.Min(durationSeconds, index * stepSeconds);
     }
+
+    public static double FitPixelsPerSecond(
+        double durationSeconds,
+        double viewportWidth,
+        double minimumPixelsPerSecond,
+        double maximumPixelsPerSecond)
+    {
+        double minimum = double.IsFinite(minimumPixelsPerSecond) && minimumPixelsPerSecond > 0
+            ? minimumPixelsPerSecond
+            : 1;
+        double maximum = double.IsFinite(maximumPixelsPerSecond) && maximumPixelsPerSecond >= minimum
+            ? maximumPixelsPerSecond
+            : minimum;
+        if (!double.IsFinite(durationSeconds) || durationSeconds <= 0 ||
+            !double.IsFinite(viewportWidth) || viewportWidth <= 0)
+        {
+            return minimum;
+        }
+
+        return Math.Clamp(viewportWidth / durationSeconds, minimum, maximum);
+    }
+
+    public static double OffsetAfterZoom(
+        double horizontalOffset,
+        double anchorInViewport,
+        double oldPixelsPerSecond,
+        double newPixelsPerSecond,
+        double durationSeconds,
+        double viewportWidth)
+    {
+        if (!double.IsFinite(oldPixelsPerSecond) || oldPixelsPerSecond <= 0 ||
+            !double.IsFinite(newPixelsPerSecond) || newPixelsPerSecond <= 0)
+        {
+            return 0;
+        }
+
+        double offset = double.IsFinite(horizontalOffset) ? Math.Max(0, horizontalOffset) : 0;
+        double width = double.IsFinite(viewportWidth) ? Math.Max(0, viewportWidth) : 0;
+        double anchor = Math.Clamp(
+            double.IsFinite(anchorInViewport) ? anchorInViewport : width / 2,
+            0,
+            width);
+        double anchorSeconds = (offset + anchor) / oldPixelsPerSecond;
+        double requestedOffset = (anchorSeconds * newPixelsPerSecond) - anchor;
+        double duration = double.IsFinite(durationSeconds) ? Math.Max(0, durationSeconds) : 0;
+        double maximumOffset = Math.Max(0, (duration * newPixelsPerSecond) - width);
+        return Math.Clamp(requestedOffset, 0, maximumOffset);
+    }
 }

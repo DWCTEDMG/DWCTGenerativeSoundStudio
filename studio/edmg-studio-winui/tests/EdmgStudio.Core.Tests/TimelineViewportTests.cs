@@ -34,4 +34,28 @@ public sealed class TimelineViewportTests
         Assert.IsEmpty(TimelineViewport.RulerTicks(60, 0, 0, 900, 1));
         Assert.IsEmpty(TimelineViewport.RulerTicks(60, 80, 0, 900, 0));
     }
+
+    [TestMethod]
+    public void ZoomOffsetKeepsPointerTimeAnchored()
+    {
+        double offset = TimelineViewport.OffsetAfterZoom(800, 400, 80, 160, 60, 900);
+
+        Assert.AreEqual(2000, offset);
+        Assert.AreEqual((800 + 400) / 80, (offset + 400) / 160);
+    }
+
+    [TestMethod]
+    public void ZoomOffsetClampsAtProjectEdges()
+    {
+        Assert.AreEqual(0, TimelineViewport.OffsetAfterZoom(0, 0, 80, 160, 60, 900));
+        Assert.AreEqual(300, TimelineViewport.OffsetAfterZoom(3900, 900, 80, 20, 60, 900));
+    }
+
+    [TestMethod]
+    public void FitPixelsPerSecondHonorsZoomLimits()
+    {
+        Assert.AreEqual(30, TimelineViewport.FitPixelsPerSecond(30, 900, 12, 360));
+        Assert.AreEqual(12, TimelineViewport.FitPixelsPerSecond(300, 900, 12, 360));
+        Assert.AreEqual(360, TimelineViewport.FitPixelsPerSecond(1, 900, 12, 360));
+    }
 }

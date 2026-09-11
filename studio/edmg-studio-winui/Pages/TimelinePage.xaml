@@ -5,6 +5,13 @@
     xmlns:controls="using:EdmgStudio.WinUI.Controls"
     NavigationCacheMode="Enabled">
 
+    <Page.KeyboardAccelerators>
+        <KeyboardAccelerator Key="Z" Modifiers="Control" Invoked="UndoAccelerator_Invoked" />
+        <KeyboardAccelerator Key="Y" Modifiers="Control" Invoked="RedoAccelerator_Invoked" />
+        <KeyboardAccelerator Key="S" Modifiers="Control" Invoked="SaveAccelerator_Invoked" />
+        <KeyboardAccelerator Key="D" Modifiers="Control" Invoked="DuplicateAccelerator_Invoked" />
+    </Page.KeyboardAccelerators>
+
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -160,10 +167,11 @@
                 <Slider x:Name="ZoomSlider"
                         Grid.Column="11"
                         AutomationProperties.AutomationId="Timeline.Zoom"
+                        ToolTipService.ToolTip="Timeline zoom. Hold Ctrl and use the mouse wheel over the timeline to zoom around the pointer."
                         Width="108"
-                        Minimum="35"
-                        Maximum="320"
-                        Value="100"
+                        Minimum="12"
+                        Maximum="360"
+                        Value="80"
                         ValueChanged="ZoomSlider_ValueChanged" />
                 <Button Grid.Column="12"
                         AutomationProperties.AutomationId="Timeline.Fit"
@@ -217,7 +225,12 @@
                                   HorizontalScrollMode="Enabled">
                         <Canvas x:Name="RulerCanvas"
                                 Height="34"
-                                Background="{ThemeResource StudioCardBrush}" />
+                                Background="{ThemeResource StudioCardBrush}"
+                                ToolTipService.ToolTip="Click or drag to scrub the playhead."
+                                PointerPressed="RulerCanvas_PointerPressed"
+                                PointerMoved="RulerCanvas_PointerMoved"
+                                PointerReleased="RulerCanvas_PointerReleased"
+                                PointerCanceled="RulerCanvas_PointerCanceled" />
                     </ScrollViewer>
                     <ScrollViewer x:Name="TimelineScroll"
                                   Grid.Row="1"
@@ -225,11 +238,15 @@
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollMode="Enabled"
                                   VerticalScrollMode="Enabled"
+                                  PointerWheelChanged="TimelineScroll_PointerWheelChanged"
                                   ViewChanged="TimelineScroll_ViewChanged"
                                   SizeChanged="TimelineScroll_SizeChanged">
                         <Canvas x:Name="TimelineCanvas"
                                 AutomationProperties.AutomationId="Timeline.ClipSurface"
+                                AutomationProperties.HelpText="Select clips, press Space to play, use Left and Right to step frames, or press Delete to remove the selection."
                                 Background="{ThemeResource StudioCardBrush}"
+                                IsTabStop="True"
+                                KeyDown="TimelineCanvas_KeyDown"
                                 PointerPressed="TimelineCanvas_PointerPressed" />
                     </ScrollViewer>
                 </Grid>

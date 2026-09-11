@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
+using EdmgStudio.WinUI.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -16,7 +17,9 @@ using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
 using Windows.Storage;
 using Windows.Storage.Pickers;
+using Windows.System;
 using Windows.UI;
+using Windows.UI.Core;
 
 namespace EdmgStudio.WinUI.Pages;
 
@@ -29,6 +32,7 @@ public sealed partial class TimelinePage : Page
     private const double MinimumPixelsPerSecond = 12;
     private const double MaximumPixelsPerSecond = 360;
     private const string PointerToolSettingKey = "Timeline.PointerTool";
+    private const string ViewStateSettingPrefix = "Timeline.ViewState.";
 
     private readonly DispatcherTimer _transportTimer = new()
     {
@@ -76,7 +80,10 @@ public sealed partial class TimelinePage : Page
     private bool _positionPointerActive;
     private bool _updatingPosition;
     private bool _updatingPointerTool;
+    private bool _updatingZoom;
     private bool _syncingScroll;
+    private bool _rulerPointerActive;
+    private uint _rulerPointerId;
     private bool _suppressSessionChange;
     private bool _suppressCameraSelectionChange;
     private bool _revisionConflictInterruptedOperation;
@@ -125,6 +132,7 @@ public sealed partial class TimelinePage : Page
 
         _isLoaded = false;
         App.Services.Session.Changed -= Session_Changed;
+        PersistViewState();
         StopPlayback();
         CancelPreview();
         _automationCancellation?.Cancel();
@@ -233,12 +241,12 @@ public sealed partial class TimelinePage : Page
             _lanes = TimelineProjection.Project(_timelineDocument);
             _cameraKeyframes = TimelineCameraProjection.Project(_timelineDocument);
             _durationSeconds = ResolveDuration(_project, _lanes);
-            _positionSeconds = 0;
-            _selectedLaneId = null;
+            RestoreViewState(projectId);
             _selectedCameraKeyframeIdentity = null;
             _isDirty = false;
 
             RefreshEditor(updateRawText: true);
+            ApplyRestoredViewport();
             RefreshRecoverySummary();
             RefreshWorkflowPlanSummary();
             try
@@ -712,7 +720,58 @@ public sealed partial class TimelinePage : Page
         border.PointerMoved += Clip_PointerMoved;
         border.PointerReleased += Clip_PointerReleased;
         border.PointerCanceled += Clip_PointerCanceled;
+        border.ContextFlyout = CreateClipContextFlyout(lane);
         return border;
+    }
+
+    private MenuFlyout CreateClipContextFlyout(TimelineLaneDocument lane)
+    {
+        bool editable = !IsLaneLocked(lane);
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(CreateClipMenuItem("Move to playhead", "move", lane.StableId, editable));
+        flyout.Items.Add(CreateClipMenuItem("Split at playhead", "split", lane.StableId,
+            editable && TimelineProjection.CanSplitAt(lane, _positionSeconds)));
+        flyout.Items.Add(CreateClipMenuItem("Duplicate at playhead", "duplicate", lane.StableId, editable));
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        flyout.Items.Add(CreateClipMenuItem("Delete", "delete", lane.StableId, editable));
+        return flyout;
+    }
+
+    private MenuFlyoutItem CreateClipMenuItem(string text, string action, string stableId, bool enabled)
+    {
+        var item = new MenuFlyoutItem
+        {
+            Text = text,
+            Tag = new ClipMenuAction(action, stableId),
+            IsEnabled = enabled,
+        };
+        item.Click += ClipMenuItem_Click;
+        return item;
+    }
+
+    private async void ClipMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: ClipMenuAction command })
+        {
+            return;
+        }
+
+        SelectLane(command.StableId);
+        switch (command.Action)
+        {
+            case "move":
+                await MoveSelectedToPlayheadAsync();
+                break;
+            case "split":
+                await SplitSelectedAtPlayheadAsync();
+                break;
+            case "duplicate":
+                await DuplicateSelectedAsync();
+                break;
+            case "delete":
+                await DeleteSelectedAsync();
+                break;
+        }
     }
 
     private static Brush ResolveClipBrush(string type, bool selected)
@@ -738,6 +797,7 @@ public sealed partial class TimelinePage : Page
     {
         _selectedLaneId = stableId;
         _selectedCameraKeyframeIdentity = null;
+        PersistViewState();
         if (stableId is not null)
         {
             InspectorPivot.SelectedIndex = 0;
@@ -1206,13 +1266,22 @@ public sealed partial class TimelinePage : Page
         }
 
         TimelineLaneDocument? lane = _lanes.FirstOrDefault(item => item.StableId == stableId);
-        if (lane is null || IsLaneLocked(lane))
+        if (lane is null)
         {
-            if (lane is not null)
-            {
-                SelectLane(stableId);
-                ShowInfo("Unlock this track before editing its clips.", InfoBarSeverity.Warning);
-            }
+            return;
+        }
+
+        Microsoft.UI.Input.PointerPoint pointerPoint = e.GetCurrentPoint(border);
+        if (!pointerPoint.Properties.IsLeftButtonPressed)
+        {
+            SelectLane(stableId);
+            return;
+        }
+
+        if (IsLaneLocked(lane))
+        {
+            SelectLane(stableId);
+            ShowInfo("Unlock this track before editing its clips.", InfoBarSeverity.Warning);
             return;
         }
 
@@ -2326,7 +2395,10 @@ public sealed partial class TimelinePage : Page
             right.StableId);
     }
 
-    private async void SplitClip_Click(object sender, RoutedEventArgs e)
+    private async void SplitClip_Click(object sender, RoutedEventArgs e) =>
+        await SplitSelectedAtPlayheadAsync();
+
+    private async Task SplitSelectedAtPlayheadAsync()
     {
         if (_timelineDocument is null ||
             SelectedLane is not TimelineLaneDocument lane ||
@@ -2345,7 +2417,10 @@ public sealed partial class TimelinePage : Page
         }
     }
 
-    private async void DuplicateClip_Click(object sender, RoutedEventArgs e)
+    private async void DuplicateClip_Click(object sender, RoutedEventArgs e) =>
+        await DuplicateSelectedAsync();
+
+    private async Task DuplicateSelectedAsync()
     {
         if (_selectedCameraKeyframeIdentity is not null)
         {
@@ -2369,7 +2444,10 @@ public sealed partial class TimelinePage : Page
         await CommitLanesAsync(before, "timeline clip duplicated", duplicate.StableId);
     }
 
-    private async void DeleteSelectedClip_Click(object sender, RoutedEventArgs e)
+    private async void DeleteSelectedClip_Click(object sender, RoutedEventArgs e) =>
+        await DeleteSelectedAsync();
+
+    private async Task DeleteSelectedAsync()
     {
         if (_selectedCameraKeyframeIdentity is not null)
         {
@@ -2402,7 +2480,10 @@ public sealed partial class TimelinePage : Page
         await CommitLanesAsync(before, "timeline clip deleted", selectionId: null);
     }
 
-    private async void MoveSelectedToPlayhead_Click(object sender, RoutedEventArgs e)
+    private async void MoveSelectedToPlayhead_Click(object sender, RoutedEventArgs e) =>
+        await MoveSelectedToPlayheadAsync();
+
+    private async Task MoveSelectedToPlayheadAsync()
     {
         if (_selectedCameraKeyframeIdentity is not null)
         {
@@ -2541,6 +2622,7 @@ public sealed partial class TimelinePage : Page
     private void SetPosition(double position, bool requestPreview)
     {
         _positionSeconds = Math.Clamp(position, 0, _durationSeconds);
+        PersistViewState();
         _updatingPosition = true;
         PositionSlider.Value = _positionSeconds;
         _updatingPosition = false;
@@ -2581,6 +2663,7 @@ public sealed partial class TimelinePage : Page
         }
 
         _positionSeconds = Math.Clamp(e.NewValue, 0, _durationSeconds);
+        PersistViewState();
         UpdateTransportUi();
         RenderPlayhead();
         UpdateSplitCommandState();
@@ -2606,15 +2689,39 @@ public sealed partial class TimelinePage : Page
         object sender,
         RangeBaseValueChangedEventArgs e)
     {
-        _pixelsPerSecond = Math.Clamp(
-            80 * e.NewValue,
+        if (_updatingZoom)
+        {
+            return;
+        }
+
+        ApplyZoom(e.NewValue, TimelineScroll.ViewportWidth / 2);
+    }
+
+    private void ApplyZoom(double pixelsPerSecond, double anchorInViewport)
+    {
+        double oldPixelsPerSecond = _pixelsPerSecond;
+        double newPixelsPerSecond = Math.Clamp(
+            pixelsPerSecond,
             MinimumPixelsPerSecond,
             MaximumPixelsPerSecond);
+        double targetOffset = TimelineViewport.OffsetAfterZoom(
+            TimelineScroll.HorizontalOffset,
+            anchorInViewport,
+            oldPixelsPerSecond,
+            newPixelsPerSecond,
+            _durationSeconds,
+            TimelineScroll.ViewportWidth);
+        _pixelsPerSecond = newPixelsPerSecond;
+        _updatingZoom = true;
+        ZoomSlider.Value = newPixelsPerSecond;
+        _updatingZoom = false;
         if (_timelineDocument is not null)
         {
             RenderRuler();
             RenderTimeline();
+            TimelineScroll.ChangeView(targetOffset, null, null, true);
         }
+        PersistViewState(targetOffset);
     }
 
     private void FitTimeline_Click(object sender, RoutedEventArgs e)
@@ -2627,14 +2734,18 @@ public sealed partial class TimelinePage : Page
         double viewport = TimelineScroll.ViewportWidth > 0
             ? TimelineScroll.ViewportWidth
             : 900;
-        _pixelsPerSecond = Math.Clamp(
-            viewport / _durationSeconds,
+        _pixelsPerSecond = TimelineViewport.FitPixelsPerSecond(
+            _durationSeconds,
+            viewport,
             MinimumPixelsPerSecond,
             MaximumPixelsPerSecond);
-        ZoomSlider.Value = Math.Clamp(_pixelsPerSecond / 80, 0.25, 4);
+        _updatingZoom = true;
+        ZoomSlider.Value = _pixelsPerSecond;
+        _updatingZoom = false;
         RenderRuler();
         RenderTimeline();
         TimelineScroll.ChangeView(0, null, null, true);
+        PersistViewState(horizontalOffset: 0);
     }
 
     private void TrackHeaderScroll_ViewChanged(
@@ -2679,6 +2790,7 @@ public sealed partial class TimelinePage : Page
         _syncingScroll = false;
         RenderRuler();
         if (_timelineDocument is not null && _dragBorder is null) RenderTimeline();
+        if (!e.IsIntermediate) PersistViewState();
     }
 
     private void TimelineScroll_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -2694,8 +2806,103 @@ public sealed partial class TimelinePage : Page
     {
         Point point = e.GetCurrentPoint(TimelineCanvas).Position;
         StopPlayback();
+        TimelineCanvas.Focus(FocusState.Pointer);
         SelectLane(null);
         SetPosition(SnapTime(point.X / _pixelsPerSecond), requestPreview: true);
+    }
+
+    private void TimelineScroll_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    {
+        if (!IsControlPressed())
+        {
+            return;
+        }
+
+        Microsoft.UI.Input.PointerPoint point = e.GetCurrentPoint(TimelineScroll);
+        double factor = point.Properties.MouseWheelDelta > 0 ? 1.15 : 1 / 1.15;
+        ApplyZoom(_pixelsPerSecond * factor, point.Position.X);
+        e.Handled = true;
+    }
+
+    private void RulerCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        _rulerPointerActive = true;
+        _rulerPointerId = e.Pointer.PointerId;
+        RulerCanvas.CapturePointer(e.Pointer);
+        StopPlayback();
+        ScrubRuler(e, forcePreview: false);
+        e.Handled = true;
+    }
+
+    private void RulerCanvas_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_rulerPointerActive || e.Pointer.PointerId != _rulerPointerId)
+        {
+            return;
+        }
+
+        ScrubRuler(e, forcePreview: false);
+        e.Handled = true;
+    }
+
+    private void RulerCanvas_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_rulerPointerActive || e.Pointer.PointerId != _rulerPointerId)
+        {
+            return;
+        }
+
+        ScrubRuler(e, forcePreview: true);
+        RulerCanvas.ReleasePointerCapture(e.Pointer);
+        _rulerPointerActive = false;
+        _rulerPointerId = 0;
+        e.Handled = true;
+    }
+
+    private void RulerCanvas_PointerCanceled(object sender, PointerRoutedEventArgs e)
+    {
+        if (e.Pointer.PointerId == _rulerPointerId)
+        {
+            _rulerPointerActive = false;
+            _rulerPointerId = 0;
+        }
+    }
+
+    private void ScrubRuler(PointerRoutedEventArgs e, bool forcePreview)
+    {
+        double position = SnapTime(e.GetCurrentPoint(RulerCanvas).Position.X / _pixelsPerSecond);
+        SetPosition(position, requestPreview: !forcePreview);
+        if (forcePreview)
+        {
+            _ = RefreshPreviewAsync(force: true);
+        }
+    }
+
+    private async void TimelineCanvas_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case VirtualKey.Space:
+                PlayPause_Click(sender, new RoutedEventArgs());
+                e.Handled = true;
+                break;
+            case VirtualKey.Left:
+                StepBackward_Click(sender, new RoutedEventArgs());
+                e.Handled = true;
+                break;
+            case VirtualKey.Right:
+                StepForward_Click(sender, new RoutedEventArgs());
+                e.Handled = true;
+                break;
+            case VirtualKey.Delete:
+                await DeleteSelectedAsync();
+                e.Handled = true;
+                break;
+            case VirtualKey.Escape:
+                SelectLane(null);
+                e.Handled = true;
+                break;
+        }
     }
 
     private void SelectToolButton_Click(object sender, RoutedEventArgs e) =>
@@ -2736,6 +2943,34 @@ public sealed partial class TimelinePage : Page
             locked ? "timeline track locked" : "timeline track unlocked",
             _selectedLaneId);
     }
+
+    private async void UndoAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        await ApplyHistoryAsync("undo");
+    }
+
+    private async void RedoAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        await ApplyHistoryAsync("redo");
+    }
+
+    private void SaveAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        SaveTimeline_Click(sender, new RoutedEventArgs());
+    }
+
+    private async void DuplicateAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        await DuplicateSelectedAsync();
+    }
+
+    private static bool IsControlPressed() =>
+        (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control) &
+         CoreVirtualKeyStates.Down) == CoreVirtualKeyStates.Down;
 
     private bool CanQuantizeToCurrentGrid() =>
         TryGetSnapGridSeconds(out _);
@@ -3518,6 +3753,73 @@ public sealed partial class TimelinePage : Page
         comboBox.SelectedItem = match ?? comboBox.Items.OfType<ComboBoxItem>().FirstOrDefault();
     }
 
+    private void RestoreViewState(string projectId)
+    {
+        TimelineEditorViewState fallback = new(0, 80, 0, 0, null);
+        TimelineEditorViewState restored = fallback;
+        if (_settings?.Values[$"{ViewStateSettingPrefix}{projectId}"] is string json)
+        {
+            try
+            {
+                restored = JsonSerializer.Deserialize<TimelineEditorViewState>(json) ?? fallback;
+            }
+            catch (JsonException ex)
+            {
+                CrashLogger.Write($"Unable to read Timeline view state for project '{projectId}'.", ex);
+            }
+        }
+
+        restored = restored.Normalize(
+            _durationSeconds,
+            MinimumPixelsPerSecond,
+            MaximumPixelsPerSecond,
+            TimelineScroll.ViewportWidth,
+            VisualTrackCount * TrackHeight,
+            TimelineScroll.ViewportHeight,
+            _lanes.Select(lane => lane.StableId));
+        _positionSeconds = restored.PositionSeconds;
+        _pixelsPerSecond = restored.PixelsPerSecond;
+        _selectedLaneId = restored.SelectedLaneId;
+        _restoredHorizontalOffset = restored.HorizontalOffset;
+        _restoredVerticalOffset = restored.VerticalOffset;
+    }
+
+    private double _restoredHorizontalOffset;
+    private double _restoredVerticalOffset;
+
+    private void ApplyRestoredViewport()
+    {
+        _updatingZoom = true;
+        ZoomSlider.Value = _pixelsPerSecond;
+        _updatingZoom = false;
+        TimelineScroll.ChangeView(_restoredHorizontalOffset, _restoredVerticalOffset, null, true);
+        _restoredHorizontalOffset = 0;
+        _restoredVerticalOffset = 0;
+    }
+
+    private void PersistViewState(double? horizontalOffset = null)
+    {
+        if (_settings is null || string.IsNullOrWhiteSpace(_loadedProjectId))
+        {
+            return;
+        }
+
+        var state = new TimelineEditorViewState(
+            _positionSeconds,
+            _pixelsPerSecond,
+            horizontalOffset ?? TimelineScroll.HorizontalOffset,
+            TimelineScroll.VerticalOffset,
+            _selectedLaneId);
+        try
+        {
+            _settings.Values[$"{ViewStateSettingPrefix}{_loadedProjectId}"] = JsonSerializer.Serialize(state);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            CrashLogger.Write($"Unable to persist Timeline view state for project '{_loadedProjectId}'.", ex);
+        }
+    }
+
     private static bool IsVisualLane(TimelineLaneDocument lane) =>
         lane.IsLayer
             ? IsVisualSourcePath(lane.SourcePath)
@@ -3572,6 +3874,8 @@ public sealed partial class TimelinePage : Page
         Select,
         Blade
     }
+
+    private sealed record ClipMenuAction(string Action, string StableId);
 }
 
 public sealed class CameraKeyframeListItem
