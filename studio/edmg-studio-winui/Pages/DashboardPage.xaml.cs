@@ -3,20 +3,26 @@ using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
+using Windows.Storage.Streams;
 
 namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class DashboardPage : Page, INotifyPropertyChanged
 {
     private readonly StudioApiClient _apiClient = App.Services.ApiClient;
+    private readonly StudioProjectMediaClient _mediaClient = App.Services.ProjectMediaClient;
     private readonly StudioSessionService _session = App.Services.Session;
     private CancellationTokenSource? _loadCancellation;
     private bool _isBusy;
     private bool _hasActiveProject;
+    private bool _hasNoProjects = true;
 
     public DashboardPage()
     {
@@ -35,6 +41,23 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ObservableCollection<DashboardCard> Cards { get; }
+
+    public ObservableCollection<DashboardProjectItem> ProjectCards { get; } = [];
+
+    public bool HasNoProjects
+    {
+        get => _hasNoProjects;
+        private set
+        {
+            if (_hasNoProjects == value)
+            {
+                return;
+            }
+
+            _hasNoProjects = value;
+            OnPropertyChanged();
+        }
+    }
 
     public bool IsBusy
     {
@@ -119,7 +142,7 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
 
             var projectsResult = await projectsTask;
             var projects = projectsResult.Value?.Projects
-                .OrderByDescending(project => project.CreatedAt, StringComparer.Ordinal)
+                .OrderByDescending(project => project.UpdatedAt.Length > 0 ? project.UpdatedAt : project.CreatedAt, StringComparer.Ordinal)
                 .ToList() ?? [];
             var activeProject = ResolveActiveProject(projects);
 
@@ -135,12 +158,18 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
                     "Outputs");
             }
 
+            ProjectDto[] recentProjects = [.. projects.Take(6)];
+            Task<ProjectDashboardData>[] projectDataTasks = recentProjects
+                .Select(project => LoadProjectDashboardDataAsync(project, cancellationToken))
+                .ToArray();
+
             var healthResult = await healthTask;
             var configResult = await configTask;
             var modelsResult = await modelsTask;
             var providersResult = await providersTask;
             var jobsResult = jobsTask is null ? null : await jobsTask;
             var outputsResult = outputsTask is null ? null : await outputsTask;
+            ProjectDashboardData[] projectData = await Task.WhenAll(projectDataTasks);
 
             RenderBackendCard(healthResult, configResult);
             RenderProjectCard(activeProject, projects.Count);
@@ -148,7 +177,8 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
             RenderOutputsCard(activeProject, outputsResult);
             RenderModelsCard(modelsResult);
             RenderProvidersCard(providersResult);
-            RenderRecentActivity(projects, jobsResult?.Value?.Jobs);
+            await RenderProjectCardsAsync(projectData, cancellationToken);
+            _ = WindowsJumpListService.SynchronizeProjectsAsync(projects);
 
             var errors = new[]
             {
@@ -159,7 +189,10 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
                 providersResult.Error,
                 jobsResult?.Error,
                 outputsResult?.Error,
-            }.Where(error => !string.IsNullOrWhiteSpace(error)).ToArray();
+            }.Concat(projectData.SelectMany(data => new[] { data.Jobs.Error, data.Outputs.Error }))
+                .Where(error => !string.IsNullOrWhiteSpace(error))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
 
             if (errors.Length > 0)
             {
@@ -329,25 +362,72 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
         card.Subtitle = $"{total} detected · configure hosted providers in Settings or Cloud.";
     }
 
-    private void RenderRecentActivity(
-        IReadOnlyList<ProjectDto> projects,
-        IReadOnlyList<StudioJob>? jobs)
+    private async Task<ProjectDashboardData> LoadProjectDashboardDataAsync(
+        ProjectDto project,
+        CancellationToken cancellationToken)
     {
-        RecentProjectsText.Text = projects.Count == 0
-            ? "Recent projects: none."
-            : "Recent projects: " + string.Join(
-                "  •  ",
-                projects.Take(3).Select(project => project.Name));
+        var jobsTask = CaptureAsync(
+            () => _apiClient.GetProjectJobsAsync(project.Id, cancellationToken),
+            $"{project.Name} jobs");
+        var outputsTask = CaptureAsync(
+            () => _apiClient.GetOutputsAsync(project.Id, cancellationToken),
+            $"{project.Name} outputs");
+        await Task.WhenAll(jobsTask, outputsTask);
+        return new ProjectDashboardData(project, await jobsTask, await outputsTask);
+    }
 
-        RecentJobsText.Text = jobs is null
-            ? "Recent jobs: select an active project."
-            : jobs.Count == 0
-                ? "Recent jobs: none."
-                : "Recent jobs: " + string.Join(
-                    "  •  ",
-                    jobs.OrderByDescending(job => job.UpdatedAt ?? job.CreatedAt, StringComparer.Ordinal)
-                        .Take(3)
-                        .Select(job => $"{job.Type} — {job.Status}"));
+    private async Task RenderProjectCardsAsync(
+        IReadOnlyList<ProjectDashboardData> projectData,
+        CancellationToken cancellationToken)
+    {
+        ProjectCards.Clear();
+        HasNoProjects = projectData.Count == 0;
+        foreach (ProjectDashboardData data in projectData)
+        {
+            IReadOnlyList<StudioJob> jobs = data.Jobs.Value?.Jobs ?? [];
+            DashboardProjectCard card = DashboardProjectCard.Create(data.Project, jobs, data.Outputs.Value);
+            ProjectCards.Add(new DashboardProjectItem(card));
+        }
+
+        foreach (DashboardProjectItem item in ProjectCards.Where(item => item.ArtworkPath is not null))
+        {
+            item.Artwork = await LoadArtworkAsync(item.ProjectId, item.ArtworkPath!, cancellationToken);
+        }
+    }
+
+    private async Task<ImageSource?> LoadArtworkAsync(
+        string projectId,
+        string relativePath,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _mediaClient.StreamProjectMediaAsync(
+                projectId,
+                relativePath,
+                async (file, token) =>
+                {
+                    using var memory = new MemoryStream();
+                    await file.Stream.CopyToAsync(memory, token);
+                    memory.Position = 0;
+                    using var randomAccess = new InMemoryRandomAccessStream();
+                    await randomAccess.WriteAsync(memory.ToArray().AsBuffer());
+                    randomAccess.Seek(0);
+                    var image = new BitmapImage();
+                    await image.SetSourceAsync(randomAccess);
+                    return image;
+                },
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is StudioApiException or HttpRequestException or InvalidOperationException)
+        {
+            CrashLogger.Write($"Unable to load dashboard artwork '{relativePath}' for project '{projectId}'.", exception);
+            return null;
+        }
     }
 
     private static (int Ready, int Total) CountReadyProviders(JsonElement providers)
@@ -421,13 +501,95 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
 
     private void OnOpenModelsClick(object sender, RoutedEventArgs e) => App.Navigate("models");
 
+    private void OnProjectWorkspaceClick(object sender, RoutedEventArgs e) =>
+        ActivateProjectAndNavigate(sender, "workspace");
+
+    private void OnProjectRenderClick(object sender, RoutedEventArgs e) =>
+        ActivateProjectAndNavigate(sender, "render");
+
+    private void OnProjectReviewClick(object sender, RoutedEventArgs e) =>
+        ActivateProjectAndNavigate(sender, "review");
+
+    private void OnProjectOutputsClick(object sender, RoutedEventArgs e) =>
+        ActivateProjectAndNavigate(sender, "outputs");
+
+    private void ActivateProjectAndNavigate(object sender, string destination)
+    {
+        if (sender is not FrameworkElement { Tag: string projectId } || string.IsNullOrWhiteSpace(projectId))
+        {
+            CrashLogger.Write($"Dashboard project action '{destination}' did not include a project ID.");
+            return;
+        }
+
+        _session.ActiveProjectId = projectId;
+        App.Navigate(destination);
+    }
+
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 
     private sealed record LoadResult<T>(T? Value, string? Error);
+
+    private sealed record ProjectDashboardData(
+        ProjectDto Project,
+        LoadResult<StudioJobListResponse> Jobs,
+        LoadResult<JsonElement> Outputs);
 }
 
-public sealed class DashboardCard : INotifyPropertyChanged
+public sealed class DashboardProjectItem : INotifyPropertyChanged
+{
+    private ImageSource? _artwork;
+
+    public DashboardProjectItem(DashboardProjectCard card)
+    {
+        ProjectId = card.ProjectId;
+        Name = card.Name;
+        UpdatedLabel = card.UpdatedLabel;
+        DurationLabel = card.DurationLabel;
+        HealthLabel = card.HealthLabel;
+        HealthMessage = card.HealthMessage;
+        LastRenderLabel = card.LastRenderLabel;
+        ArtworkPath = card.ArtworkPath;
+        HasRender = card.HasRender;
+        Waveform = card.Waveform;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string ProjectId { get; }
+    public string Name { get; }
+    public string UpdatedLabel { get; }
+    public string DurationLabel { get; }
+    public string HealthLabel { get; }
+    public string HealthMessage { get; }
+    public string LastRenderLabel { get; }
+    public string? ArtworkPath { get; }
+    public bool HasRender { get; }
+    public IReadOnlyList<DashboardWaveformBar> Waveform { get; }
+
+    public ImageSource? Artwork
+    {
+        get => _artwork;
+        set
+        {
+            if (ReferenceEquals(_artwork, value))
+            {
+                return;
+            }
+
+            _artwork = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Artwork)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ArtworkVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WaveformVisibility)));
+        }
+    }
+
+    public Visibility ArtworkVisibility => Artwork is null ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility WaveformVisibility => Artwork is null ? Visibility.Visible : Visibility.Collapsed;
+}
+
+public sealed class DashboardCard
 {
     private string _value;
     private string _subtitle;

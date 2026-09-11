@@ -93,10 +93,17 @@ public sealed partial class MainPage : Page
                 return;
             }
 
+            StudioLaunchRequest? launchRequest = App.TakePendingLaunchRequest();
+            if (launchRequest?.ProjectId is { Length: > 0 } projectId)
+            {
+                App.Services.Session.ActiveProjectId = projectId;
+            }
+
             NavigateTo(App.Services.Configuration.HasPendingMigration
                 ? "migration"
-                : StudioNavigationDestination.NormalizeRestorableOrDefault(
-                    App.Services.Session.LastWorkflowDestination));
+                : launchRequest?.Destination
+                    ?? StudioNavigationDestination.NormalizeRestorableOrDefault(
+                        App.Services.Session.LastWorkflowDestination));
             await RefreshActivityAsync();
             _activityTimer.Start();
         }

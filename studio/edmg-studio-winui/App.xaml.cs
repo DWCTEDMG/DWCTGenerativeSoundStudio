@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Sockets;
+using EdmgStudio.Core.Models;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 
@@ -8,6 +9,7 @@ namespace EdmgStudio.WinUI;
 public partial class App : Application
 {
     private MainWindow? _window;
+    private static StudioLaunchRequest? _pendingLaunchRequest;
 
     public App()
     {
@@ -35,6 +37,7 @@ public partial class App : Application
     {
         try
         {
+            _pendingLaunchRequest = StudioLaunchRequest.Parse(args.Arguments);
             _window = new MainWindow();
             MainWindowInstance = _window;
             _window.Activate();
@@ -47,6 +50,13 @@ public partial class App : Application
     }
 
     public static void Navigate(string destination) => Shell?.NavigateTo(destination);
+
+    internal static StudioLaunchRequest? TakePendingLaunchRequest()
+    {
+        StudioLaunchRequest? request = _pendingLaunchRequest;
+        _pendingLaunchRequest = null;
+        return request;
+    }
 
     private static void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
     {
