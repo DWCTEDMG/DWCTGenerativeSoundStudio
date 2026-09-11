@@ -299,6 +299,37 @@
                     </Border>
 
                     <Border
+                        x:Name="HunyuanCard"
+                        Visibility="Collapsed"
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="HunyuanVideo-1.5 Linux runtime" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Hunyuan runs through WSL2 or an external Linux host. Save paths here, then probe the environment before installing or smoke-testing the model." TextWrapping="Wrap" />
+                            <ComboBox x:Name="HunyuanModeCombo" Header="Runner" SelectedIndex="0">
+                                <ComboBoxItem Content="WSL2" Tag="wsl" />
+                                <ComboBoxItem Content="External Linux" Tag="external" />
+                            </ComboBox>
+                            <TextBox x:Name="HunyuanDistroBox" Header="WSL distribution" PlaceholderText="Ubuntu" />
+                            <TextBox x:Name="HunyuanPythonBox" Header="Linux Python" PlaceholderText="/opt/hunyuan/bin/python" />
+                            <TextBox x:Name="HunyuanRepoBox" Header="HunyuanVideo-1.5 checkout" PlaceholderText="/opt/HunyuanVideo-1.5" />
+                            <NumberBox x:Name="HunyuanTimeoutBox" Header="Probe/render timeout (seconds)" Minimum="1" Maximum="86400" Value="3600" />
+                            <TextBox x:Name="HunyuanLlmBox" Header="Qwen/LLM assets" />
+                            <TextBox x:Name="HunyuanByt5Box" Header="ByT5 assets" />
+                            <TextBox x:Name="HunyuanGlyphBox" Header="Glyph assets" />
+                            <TextBox x:Name="HunyuanVisionBox" Header="Vision assets" />
+                            <TextBlock x:Name="HunyuanStatusText" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="HunyuanSaveButton" Click="HunyuanSave_Click" Content="Save runtime settings" />
+                                <Button x:Name="HunyuanProbeButton" Click="HunyuanProbe_Click" Content="Probe Linux runtime" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border
                         Padding="20"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"

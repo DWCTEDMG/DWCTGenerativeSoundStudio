@@ -1675,6 +1675,15 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
 
+    public Task<JsonElement> GetHunyuanRuntimeConfigAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/runtimes/hunyuan-video15/config", null, true, cancellationToken);
+
+    public Task<JsonElement> SaveHunyuanRuntimeConfigAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/runtimes/hunyuan-video15/config", request, cancellationToken);
+
+    public Task<JsonElement> ProbeHunyuanRuntimeAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Post, "/v1/runtimes/hunyuan-video15/probe", new StringContent("{}", Encoding.UTF8, "application/json"), true, cancellationToken);
+
     public Task<JsonElement> AcceptModelLicenseAsync(
         string modelId,
         string licenseId,

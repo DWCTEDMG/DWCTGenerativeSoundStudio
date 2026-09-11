@@ -169,9 +169,6 @@
                         AutomationProperties.AutomationId="Timeline.Zoom"
                         ToolTipService.ToolTip="Timeline zoom. Hold Ctrl and use the mouse wheel over the timeline to zoom around the pointer."
                         Width="108"
-                        Minimum="12"
-                        Maximum="360"
-                        Value="80"
                         ValueChanged="ZoomSlider_ValueChanged" />
                 <Button Grid.Column="12"
                         AutomationProperties.AutomationId="Timeline.Fit"

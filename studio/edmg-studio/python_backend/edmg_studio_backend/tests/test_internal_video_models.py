@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -196,6 +197,46 @@ def test_hunyuan_wsl_probe_preserves_linux_companion_paths(monkeypatch) -> None:
     required = captured["command"][captured["command"].index("-c") + 2]
     assert "\\\\models" not in required
     assert "/models/qwen/config.json" in required
+
+
+def test_hunyuan_config_persists_allowlisted_values_and_preserves_launcher_settings(tmp_path, monkeypatch) -> None:
+    launcher_env = tmp_path / "launcher_env.json"
+    launcher_env.write_text(json.dumps({"EDMG_STUDIO_HOME": "C:/studio", "UNRELATED": "keep"}), encoding="utf-8")
+    monkeypatch.setenv("EDMG_LAUNCHER_ENV", str(launcher_env))
+    monkeypatch.setattr(ivm, "validate_hunyuan_runner", lambda **_kwargs: [])
+
+
+    result = ivm.update_hunyuan_runner_config({
+        "mode": "wsl",
+        "distro": "Ubuntu",
+        "python": "/opt/hunyuan/bin/python",
+        "repo": "/opt/HunyuanVideo-1.5",
+        "timeout_s": 1800,
+        "llm": "/models/qwen",
+        "byt5": "/models/byt5",
+        "glyph": "/models/glyph",
+        "vision": "/models/siglip",
+        "ignored": "must not be persisted",
+    })
+
+    saved = json.loads(launcher_env.read_text(encoding="utf-8"))
+    assert saved["UNRELATED"] == "keep"
+    assert saved["EDMG_STUDIO_HOME"] == "C:/studio"
+    assert saved["EDMG_HUNYUAN15_RUNNER"] == "wsl"
+    assert saved["EDMG_HUNYUAN15_TIMEOUT_SECONDS"] == "1800.0"
+    assert "ignored" not in json.dumps(saved)
+    assert result["config"]["repo"] == "/opt/HunyuanVideo-1.5"
+
+
+def test_hunyuan_config_rejects_invalid_mode_without_writing(tmp_path, monkeypatch) -> None:
+    launcher_env = tmp_path / "launcher_env.json"
+    launcher_env.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("EDMG_LAUNCHER_ENV", str(launcher_env))
+
+    with pytest.raises(ValueError, match="mode"):
+        ivm.update_hunyuan_runner_config({"mode": "windows"})
+
+    assert json.loads(launcher_env.read_text(encoding="utf-8")) == {}
 
 def test_video_model_cache_key_separates_cpu_offload(tmp_path: Path, monkeypatch) -> None:
     calls: list[dict[str, object]] = []

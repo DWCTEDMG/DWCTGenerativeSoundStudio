@@ -92,6 +92,9 @@ public sealed partial class TimelinePage : Page
     public TimelinePage()
     {
         InitializeComponent();
+        ZoomSlider.Maximum = MaximumPixelsPerSecond;
+        ZoomSlider.Minimum = MinimumPixelsPerSecond;
+        ZoomSlider.Value = _pixelsPerSecond;
         try
         {
             _settings = ApplicationData.Current.LocalSettings;

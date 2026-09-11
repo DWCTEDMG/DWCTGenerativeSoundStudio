@@ -52,6 +52,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
             RebuildModels();
             RebuildPacks();
             UpdateStorage(response);
+            await LoadHunyuanConfigAsync(cancellationToken);
             if (_tensorRtStatus is null)
             {
                 _tensorRtStatus = await _apiClient.GetTensorRtLegacyStatusAsync(cancellationToken);
@@ -241,6 +242,95 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         {
             SelectModel(model);
         }
+    }
+
+    private async Task LoadHunyuanConfigAsync(CancellationToken cancellationToken)
+    {
+        bool available = (_catalogue?.Catalog ?? []).Any(entry => entry.Id == "hf_hunyuan_video15_internal");
+        HunyuanCard.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+        if (!available)
+        {
+            return;
+        }
+
+        JsonElement response = await _apiClient.GetHunyuanRuntimeConfigAsync(cancellationToken);
+        if (!response.TryGetProperty("config", out JsonElement config))
+        {
+            throw new InvalidOperationException("Hunyuan runtime configuration response was missing its config object.");
+        }
+
+        SetHunyuanText(HunyuanDistroBox, config, "distro");
+        SetHunyuanText(HunyuanPythonBox, config, "python");
+        SetHunyuanText(HunyuanRepoBox, config, "repo");
+        HunyuanTimeoutBox.Value = config.TryGetProperty("timeout_s", out JsonElement timeout) && timeout.TryGetDouble(out double timeoutSeconds)
+            ? timeoutSeconds
+            : 3600;
+        SetHunyuanText(HunyuanLlmBox, config, "llm");
+        SetHunyuanText(HunyuanByt5Box, config, "byt5");
+        SetHunyuanText(HunyuanGlyphBox, config, "glyph");
+        SetHunyuanText(HunyuanVisionBox, config, "vision");
+        string mode = config.TryGetProperty("mode", out JsonElement modeValue) ? modeValue.GetString() ?? "wsl" : "wsl";
+        HunyuanModeCombo.SelectedIndex = string.Equals(mode, "external", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        HunyuanStatusText.Text = "Settings loaded. Probe the Linux environment to check Python, CUDA modules, repository, and companion assets.";
+    }
+
+    private static void SetHunyuanText(TextBox box, JsonElement config, string propertyName)
+    {
+        box.Text = config.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    private async void HunyuanSave_Click(object sender, RoutedEventArgs e)
+    {
+        if (HunyuanModeCombo.SelectedItem is not ComboBoxItem { Tag: string mode })
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            async token =>
+            {
+                JsonElement request = JsonSerializer.SerializeToElement(new
+                {
+                    mode,
+                    distro = HunyuanDistroBox.Text,
+                    python = HunyuanPythonBox.Text,
+                    repo = HunyuanRepoBox.Text,
+                    timeout_s = HunyuanTimeoutBox.Value,
+                    llm = HunyuanLlmBox.Text,
+                    byt5 = HunyuanByt5Box.Text,
+                    glyph = HunyuanGlyphBox.Text,
+                    vision = HunyuanVisionBox.Text
+                });
+                await _apiClient.SaveHunyuanRuntimeConfigAsync(request, token);
+            },
+            "Hunyuan runtime settings saved locally. Probe before rendering.");
+    }
+
+    private async void HunyuanProbe_Click(object sender, RoutedEventArgs e)
+    {
+        await RunCommandAsync(
+            async token =>
+            {
+                JsonElement response = await _apiClient.ProbeHunyuanRuntimeAsync(token);
+                bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
+                HunyuanStatusText.Text = ready
+                    ? "Hunyuan Linux environment passed its readiness probe. Run the model smoke test for inference qualification."
+                    : FormatHunyuanIssues(response);
+            },
+            "Hunyuan Linux runtime probe completed.");
+    }
+
+    private static string FormatHunyuanIssues(JsonElement response)
+    {
+        if (!response.TryGetProperty("issues", out JsonElement issues) || issues.ValueKind != JsonValueKind.Array)
+        {
+            return "Hunyuan runtime probe did not return issue details.";
+        }
+
+        string detail = string.Join("\n", issues.EnumerateArray().Select(issue => issue.GetString()).Where(issue => !string.IsNullOrWhiteSpace(issue)));
+        return string.IsNullOrWhiteSpace(detail) ? "Hunyuan runtime is not ready." : detail;
     }
 
     private void SelectModel(ModelPresentation model)

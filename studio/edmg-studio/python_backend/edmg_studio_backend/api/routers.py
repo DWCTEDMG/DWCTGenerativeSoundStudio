@@ -7,7 +7,6 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from .media import validate_timeline_media
 
 from ..domain.continuity_validation import validate_project_continuity
 from ..domain.editor_commands import execute as execute_editor_command
@@ -25,6 +24,14 @@ from ..domain.world_adapters import (
     export_unreal_adapter,
     run_adapter_simulator,
 )
+from ..project_metadata import (
+    MetadataValidationError,
+    extract_recoverable_metadata,
+    merge_recovery_metadata,
+    recoverable_metadata_from_patch,
+    validate_metadata_patch,
+)
+from ..revisions import RevisionRoute
 from ..schemas import (
     AutosaveRequest,
     LiveAssetModulationRequest,
@@ -42,14 +49,11 @@ from ..schemas import (
     VariantReviewDecisionRequest,
     WorldAdapterExportRequest,
 )
+from ..services import internal_video_models
 from ..services.live_publishers import publish_status, start_live_publish, stop_live_publish
 from ..store.autosave import AutosaveJournal
 from ..store.projects import ProjectStore
-from ..revisions import RevisionRoute
-from ..project_metadata import (
-    validate_metadata_patch, recoverable_metadata_from_patch,
-    extract_recoverable_metadata, merge_recovery_metadata, MetadataValidationError,
-)
+from .media import validate_timeline_media
 
 
 def create_system_router(
@@ -555,6 +559,21 @@ def create_models_router(
     @router.get("/v1/runtimes")
     def model_runtimes() -> dict[str, Any]:
         return {"runtimes": get_models().runtime_statuses(runtime_hardware())}
+
+    @router.get("/v1/runtimes/hunyuan-video15/config")
+    def hunyuan_config() -> dict[str, Any]:
+        return internal_video_models.hunyuan_runner_status(probe=False)
+
+    @router.post("/v1/runtimes/hunyuan-video15/config")
+    def update_hunyuan_config(req: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return internal_video_models.update_hunyuan_runner_config(req)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/v1/runtimes/hunyuan-video15/probe")
+    def probe_hunyuan_config() -> dict[str, Any]:
+        return internal_video_models.hunyuan_runner_status(probe=True)
 
     @router.get("/v1/runtimes/{model_id}/readiness")
     def model_runtime_readiness(model_id: str) -> dict[str, Any]:

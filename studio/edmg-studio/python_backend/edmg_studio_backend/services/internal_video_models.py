@@ -76,6 +76,86 @@ def _runner_prefix(config: HunyuanRunnerConfig) -> list[str]:
     return []
 
 
+HUNYUAN_CONFIG_FIELDS = {
+    "mode": "RUNNER",
+    "python": "PYTHON",
+    "repo": "REPO",
+    "distro": "WSL_DISTRO",
+    "timeout_s": "TIMEOUT_SECONDS",
+    **{key: env_name for key, (env_name, _required) in HUNYUAN_COMPANIONS.items()},
+}
+
+
+def _launcher_env_path() -> Path:
+    override = os.getenv("EDMG_LAUNCHER_ENV", "").strip()
+    return Path(override).expanduser() if override else Path(__file__).resolve().parents[3] / "launcher_env.json"
+
+
+def hunyuan_runner_status(*, probe: bool = False) -> dict[str, Any]:
+    config = hunyuan_runner_config()
+    issues = validate_hunyuan_runner(probe=probe)
+    return {
+        "config": {
+            "mode": config.mode,
+            "python": config.python,
+            "repo": config.repo,
+            "distro": config.distro or "",
+            "timeout_s": config.timeout_s,
+            **config.companions,
+        },
+        "issues": issues,
+        "ready": not issues,
+        "probe_requested": probe,
+    }
+
+
+def update_hunyuan_runner_config(values: Mapping[str, Any]) -> dict[str, Any]:
+    updates: dict[str, str] = {}
+    for field, env_name in HUNYUAN_CONFIG_FIELDS.items():
+        if field not in values:
+            continue
+        value = values[field]
+        if field == "timeout_s":
+            try:
+                timeout_s = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("timeout_s must be a positive number") from exc
+            if not 0 < timeout_s <= 86400:
+                raise ValueError("timeout_s must be between 1 and 86400 seconds")
+            text = str(timeout_s)
+        else:
+            text = str(value or "").strip()
+            if len(text) > 2048:
+                raise ValueError(f"{field} cannot exceed 2048 characters")
+            if field == "mode" and text.lower() not in {"", "wsl", "external"}:
+                raise ValueError("mode must be 'wsl' or 'external'")
+            if field == "distro" and len(text) > 128:
+                raise ValueError("distro cannot exceed 128 characters")
+        updates[f"{HUNYUAN_ENV_PREFIX}{env_name}"] = text
+
+    path = _launcher_env_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Launcher configuration is not valid JSON: {exc}") from exc
+        if not isinstance(loaded, dict):
+            raise ValueError("Launcher configuration must contain a JSON object")
+        data = loaded
+    data.update(updates)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    for key, value in updates.items():
+        os.environ[key] = value
+    return hunyuan_runner_status(probe=False)
+
+
 def _wsl_path(path: Path | str, config: HunyuanRunnerConfig) -> str:
     value = str(path)
     if config.mode != "wsl":
