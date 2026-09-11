@@ -27,6 +27,15 @@ public sealed class BackendConfigurationTests
     }
 
     [TestMethod]
+    public void ResolveAcceleratorProfile_AutoSelectsHardwareWithoutOverridingExplicitChoice()
+    {
+        Assert.AreEqual("cuda", BackendConfiguration.ResolveAcceleratorProfile(null, () => true, isWindows: true));
+        Assert.AreEqual("directml", BackendConfiguration.ResolveAcceleratorProfile(null, () => false, isWindows: true));
+        Assert.AreEqual("cpu", BackendConfiguration.ResolveAcceleratorProfile(null, () => false, isWindows: false));
+        Assert.AreEqual("cpu", BackendConfiguration.ResolveAcceleratorProfile("cpu", () => true, isWindows: true));
+    }
+
+    [TestMethod]
     public void CreateSourceSpec_MatchesTheFrozenBackendLaunchContract()
     {
         var root = CreateTemporaryRoot();

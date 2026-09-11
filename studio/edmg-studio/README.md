@@ -114,8 +114,8 @@ pnpm run dev
 `corepack enable` is only needed once per machine if `pnpm` is not already on `PATH`. The package
 manager version is pinned via `packageManager` in `package.json`.
 
-On Windows, use the WinUI package profile for the primary desktop experience. `pnpm run dev` starts
-the Electron compatibility client; for browser-only UI work use
+On Windows, use the root `RUN_ME.bat` to build and launch the current unpackaged WinUI source tree.
+`pnpm run dev` starts the Electron compatibility client; for browser-only UI work use
 `pnpm exec vite --host 127.0.0.1 --port 5173 --strictPort`.
 
 To repoint the desktop/dev frontend at a different backend target without hand-editing the bootstrap

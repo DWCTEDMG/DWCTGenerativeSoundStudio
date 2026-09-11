@@ -3135,10 +3135,10 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
                            <div className="small">Adapter engine</div>
                             <select aria-label="Internal video engine" value={internalVideoModelEngine} onChange={(e) => selectInternalVideoModelEngine(e.target.value)}>
                              <option value="auto">Auto installed</option>
-                             <option value="svd">SVD image-to-video</option>
+                              <option value="svd">SVD image-to-video (6 GB default)</option>
                              <option value="animatediff">AnimateDiff SD1.5</option>
-                             <option value="hunyuan_video15">HunyuanVideo-1.5 (runtime pending)</option>
-                             <option value="ltx_25">LTX-2.5 Distilled (runtime pending)</option>
+                              <option value="hunyuan_video15">HunyuanVideo-1.5 (high memory)</option>
+                              <option value="ltx_25">LTX-2.5 Distilled (high memory)</option>
                            </select>
                          </div>
                         <div style={{ minWidth: 280 }}>
@@ -3204,7 +3204,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
                          </div>
                          <label className="row small" style={{ gap: 6, alignItems: "center" }}>
                            <input type="checkbox" checked={internalVideoCpuOffload} onChange={(e) => setInternalVideoCpuOffload(e.target.checked)} />
-                           CPU offload
+                            Prefer CPU offload (automatic on low VRAM)
                          </label>
                          <div style={{ minWidth: 170 }}>
                            <div className="small">Motion score</div>

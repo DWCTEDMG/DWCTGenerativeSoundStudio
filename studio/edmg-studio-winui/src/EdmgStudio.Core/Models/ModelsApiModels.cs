@@ -140,7 +140,7 @@ public sealed record ModelTask(
         Status;
 
     public static string Fingerprint(IEnumerable<ModelTask> tasks) =>
-        string.Join("|", tasks.Select(task => $"{task.Id}:{task.Status}"));
+        string.Join("|", tasks.Select(task => $"{task.Id}:{task.Status}:{task.CancelRequested}"));
 }
 
 public sealed record ModelTaskListResponse(
@@ -171,6 +171,12 @@ public sealed record ModelImportResponse(
     [property: JsonPropertyName("entry")] JsonElement Entry);
 
 public sealed record TensorRtCancelImportRequest(
+    [property: JsonPropertyName("task_id")] string TaskId);
+
+public sealed record ModelIdRequest(
+    [property: JsonPropertyName("model_id")] string ModelId);
+
+public sealed record ModelTaskCancelRequest(
     [property: JsonPropertyName("task_id")] string TaskId);
 
 public sealed record TensorRtMigrationStatus(

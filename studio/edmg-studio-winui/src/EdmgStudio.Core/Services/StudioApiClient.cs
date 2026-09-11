@@ -116,6 +116,30 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
 
+    public Task<ModelTaskActionResponse> ValidateModelPackageAsync(
+        string modelId,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<ModelIdRequest, ModelTaskActionResponse>(
+            "/v1/models/validate",
+            new ModelIdRequest(RequireValue(modelId, nameof(modelId))),
+            cancellationToken);
+
+    public Task<ModelTaskActionResponse> UninstallModelPackageAsync(
+        string modelId,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<ModelIdRequest, ModelTaskActionResponse>(
+            "/v1/models/uninstall",
+            new ModelIdRequest(RequireValue(modelId, nameof(modelId))),
+            cancellationToken);
+
+    public Task<ModelTaskActionResponse> CancelModelTaskAsync(
+        string taskId,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<ModelTaskCancelRequest, ModelTaskActionResponse>(
+            "/v1/models/tasks/cancel",
+            new ModelTaskCancelRequest(RequireValue(taskId, nameof(taskId))),
+            cancellationToken);
+
     public async Task UploadAudioAsync(
         string projectId,
         Stream audioStream,

@@ -588,7 +588,7 @@ describe("Render page", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Use latest job settings" }));
 
-    const engineOption = await screen.findByRole("option", { name: "SVD image-to-video" });
+    const engineOption = await screen.findByRole("option", { name: "SVD image-to-video (6 GB default)" });
     const engineSelect = engineOption.closest("select") as HTMLSelectElement;
     const modelOption = await screen.findByRole("option", { name: "Stable Video Diffusion XT 1.1 (Internal / Diffusers)" });
     const modelSelect = modelOption.closest("select") as HTMLSelectElement;

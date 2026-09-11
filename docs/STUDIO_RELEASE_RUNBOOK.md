@@ -189,9 +189,9 @@ new Studio Home is active and its Models page has inspected the root-level engin
 
 ### Native WinUI x64 preview proof
 
-The WinUI 3 client is packaged and x64-only. Do not add an unpackaged
-`WindowsPackageType=None` path, remove `Package.appxmanifest`, build AnyCPU, or
-start the packaged executable directly.
+The WinUI 3 release client is packaged and x64-only. Source builds are intentionally
+unpackaged; the release staging script explicitly supplies `Package.appxmanifest` and
+the validated backend payload. Do not build AnyCPU or start a packaged executable directly.
 
 Run from `studio/edmg-studio-winui`:
 
@@ -203,8 +203,8 @@ dotnet build .\EdmgStudio.WinUI.csproj `
   -p:Platform=x64 -p:Configuration=Release
 ```
 
-Launch the package through its package profile or `winapp run`, never by invoking
-the generated `.exe`. On every physical release candidate, manually verify:
+Install and launch the release package through its registered package identity, never by invoking
+the generated packaged `.exe`. On every physical release candidate, manually verify:
 
 1. Outputs and Review display generated images without a temporary preview file;
    Save Copy and Reveal continue to work.

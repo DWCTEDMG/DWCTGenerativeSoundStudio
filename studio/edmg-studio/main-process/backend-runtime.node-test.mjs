@@ -7,12 +7,14 @@ import {
   SOURCE_RUNTIME_CAPABILITY_EXTRAS,
   buildBackendLaunchSpec,
   createBackendRuntime,
+  detectNvidiaGpu,
   executablePathsEqual,
   managedBackendUrl,
   normalizeAcceleratorProfile,
   parseLinuxSsListeningPid,
   parseWindowsNetstatListeningPid,
   resolveStudioUiOrigin,
+  resolveAcceleratorProfile,
 } from "./backend-runtime.mjs";
 import { buildCacheEnvPaths } from "./storage-env.mjs";
 
@@ -54,6 +56,32 @@ test("selected Studio cache overrides hostile inherited Hugging Face cache paths
       TRANSFORMERS_CACHE: path.join(selectedCacheRoot, "transformers"),
     },
   );
+});
+
+test("source backend defaults to CUDA when NVIDIA hardware is available", () => {
+  const spec = buildBackendLaunchSpec({
+    ...base,
+    appIsPackaged: false,
+    env: {},
+    hasNvidiaGpu: true,
+  });
+
+  assert.equal(spec.acceleratorProfile, "cuda");
+  assert.deepEqual(
+    spec.args.flatMap((value, index) => value === "--extra" ? [spec.args[index + 1]] : []),
+    ["cuda", ...SOURCE_RUNTIME_CAPABILITY_EXTRAS],
+  );
+});
+
+test("automatic accelerator selection preserves portable fallbacks and explicit profiles", () => {
+  assert.equal(resolveAcceleratorProfile("", { isWindows: true, hasNvidiaGpu: true }), "cuda");
+  assert.equal(resolveAcceleratorProfile("", { isWindows: true, hasNvidiaGpu: false }), "directml");
+  assert.equal(resolveAcceleratorProfile("", { isWindows: false, hasNvidiaGpu: false }), "cpu");
+  assert.equal(resolveAcceleratorProfile("cpu", { isWindows: true, hasNvidiaGpu: true }), "cpu");
+  assert.equal(detectNvidiaGpu({
+    spawnSyncImpl: () => ({ status: 0, stdout: "GPU 0: NVIDIA GeForce RTX 4050 Laptop GPU" }),
+  }), true);
+  assert.equal(detectNvidiaGpu({ spawnSyncImpl: () => ({ status: 1, stdout: "" }) }), false);
 });
 
 test("source backend runs exactly one profile through the frozen uv project", () => {

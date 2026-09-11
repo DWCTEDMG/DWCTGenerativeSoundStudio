@@ -1,7 +1,0 @@
-{
-  "profiles": {
-    "EdmgStudio.WinUI (Package)": {
-      "commandName": "MsixPackage"
-    }
-  }
-}

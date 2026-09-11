@@ -9632,7 +9632,7 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
     backend = str(settings_obj.device_preference or "").strip().lower()
     if backend in {"", "auto"}:
         backend = str(hw.get("backend") or hw.get("device") or "cpu").lower()
-    if engine not in {"animatediff", "svd", "hunyuan_video15"} or backend != "cuda":
+    if engine not in {"animatediff", "svd", "hunyuan_video15", "ltx_25"} or backend != "cuda":
         return settings_obj
     vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
     updates: dict[str, Any] = {}
@@ -9670,7 +9670,7 @@ def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, h
     engine = str(settings_obj.video_model_engine or "").lower()
     if engine == "auto":
         engine = _video_model_engine_from_id(settings_obj.video_model_id)
-    if engine not in {"animatediff", "svd", "hunyuan_video15"}:
+    if engine not in {"animatediff", "svd", "hunyuan_video15", "ltx_25"}:
         return []
     backend = str(settings_obj.device_preference or "").strip().lower()
     if backend in {"", "auto"}:
@@ -9687,8 +9687,12 @@ def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, h
             return [
             "6 GB CUDA AnimateDiff safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps adapter frames to 12, uses small decode chunks, and renders the adapter at a lower working canvas before resizing to the final video size. Inference steps are preserved because they affect render time rather than peak model allocation."
             ]
+        if engine == "hunyuan_video15":
+            return [
+                "6 GB CUDA HunyuanVideo-1.5 safety targets are active: Studio would use CPU offload, cap each temporal shot to 8 frames, decode in a single-frame chunk, and render a conservative adapter canvas. This profile remains unverified until fresh temporal output evidence passes."
+            ]
         return [
-            "6 GB CUDA HunyuanVideo-1.5 safety targets are active: Studio would use CPU offload, cap each temporal shot to 8 frames, decode in a single-frame chunk, and render a conservative adapter canvas. This profile remains unverified until fresh temporal output evidence passes."
+            "6 GB CUDA LTX-2.5 safety targets are active: Studio requests CPU offload and caps each temporal shot to 8 frames. The full 22B package still exceeds this system's practical host-memory budget, so use a higher-memory or remote runtime."
         ]
     if vram_gb and vram_gb <= 8.5:
         if engine == "svd":
@@ -9699,8 +9703,12 @@ def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, h
             return [
                 "8 GB CUDA AnimateDiff safety is active: Studio enables CPU offload, caps adapter frames to 16, preserves inference steps, and uses smaller decode chunks."
             ]
+        if engine == "hunyuan_video15":
+            return [
+                "8 GB CUDA HunyuanVideo-1.5 safety targets are active: Studio would use CPU offload, cap each temporal shot to 12 frames, and use small decode chunks. This profile remains unverified until fresh temporal output evidence passes."
+            ]
         return [
-            "8 GB CUDA HunyuanVideo-1.5 safety targets are active: Studio would use CPU offload, cap each temporal shot to 12 frames, and use small decode chunks. This profile remains unverified until fresh temporal output evidence passes."
+            "8 GB CUDA LTX-2.5 safety targets are active: Studio requests CPU offload and caps each temporal shot to 12 frames. The full 22B package still requires substantially more host memory than a minimum-spec system."
         ]
     return []
 

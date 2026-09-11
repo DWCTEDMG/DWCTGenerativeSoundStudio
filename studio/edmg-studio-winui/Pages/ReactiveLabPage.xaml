@@ -599,62 +599,67 @@
                     AutomationProperties.Name="JSON and diagnostics"
                     Header="Advanced JSON"
                     IsClosable="False">
-                    <Grid Padding="8,12,20,20" RowSpacing="12">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <TextBlock
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="Inspect or edit the complete Reactive Lab document. Imported unknown fields are retained."
-                            TextWrapping="Wrap" />
-                        <TextBox
-                            x:Name="RawJsonTextBox"
-                            Grid.Row="1"
-                            AcceptsReturn="True"
-                            AutomationProperties.AutomationId="ReactiveRawJsonTextBox"
-                            AutomationProperties.Name="Reactive Lab raw JSON"
-                            FontFamily="Consolas"
-                            ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                            TextWrapping="NoWrap"
-                            ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
-                <Button
-                    x:Name="ImportButton"
-                    VerticalAlignment="Bottom"
-                    AutomationProperties.AutomationId="ReactiveImportButton"
-                    AutomationProperties.Name="Import Reactive Lab document"
-                    Click="ImportButton_Click"
-                    Content="Import JSON" />
-                <Button
-                    x:Name="ExportButton"
-                    VerticalAlignment="Bottom"
-                    AutomationProperties.AutomationId="ReactiveExportButton"
-                    AutomationProperties.Name="Export Reactive Lab document"
-                    Click="ExportButton_Click"
-                    Content="Export JSON" />
-
-                            <Button
-                                AutomationProperties.AutomationId="ReactiveValidateJsonButton"
-                                AutomationProperties.Name="Validate raw JSON"
-                                Click="ValidateJsonButton_Click"
-                                Content="Validate JSON" />
-                            <Button
-                                AutomationProperties.AutomationId="ReactiveUseJsonButton"
-                                AutomationProperties.Name="Use raw JSON"
-                                Click="UseJsonButton_Click"
-                                Content="Use JSON" />
-                        </StackPanel>
-                        <TextBlock
-                            x:Name="DiagnosticsTextBlock"
-                            Grid.Row="3"
-                            AutomationProperties.Name="Reactive Lab diagnostics"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="Diagnostics will appear after context refresh."
-                            TextWrapping="Wrap" />
-                    </Grid>
+                    <Expander Header="Advanced: raw request JSON and diagnostics"
+                              Margin="8,12,20,20"
+                              IsExpanded="False"
+                              HorizontalContentAlignment="Stretch">
+                        <Grid Margin="0,10,0,0" RowSpacing="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Inspect or edit the complete Reactive Lab document. Imported unknown fields are retained."
+                                TextWrapping="Wrap" />
+                            <TextBox
+                                x:Name="RawJsonTextBox"
+                                Grid.Row="1"
+                                MinHeight="300"
+                                AcceptsReturn="True"
+                                AutomationProperties.AutomationId="ReactiveRawJsonTextBox"
+                                AutomationProperties.Name="Reactive Lab raw JSON"
+                                FontFamily="Consolas"
+                                ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                TextWrapping="NoWrap"
+                                ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                                <Button
+                                    x:Name="ImportButton"
+                                    VerticalAlignment="Bottom"
+                                    AutomationProperties.AutomationId="ReactiveImportButton"
+                                    AutomationProperties.Name="Import Reactive Lab document"
+                                    Click="ImportButton_Click"
+                                    Content="Import JSON" />
+                                <Button
+                                    x:Name="ExportButton"
+                                    VerticalAlignment="Bottom"
+                                    AutomationProperties.AutomationId="ReactiveExportButton"
+                                    AutomationProperties.Name="Export Reactive Lab document"
+                                    Click="ExportButton_Click"
+                                    Content="Export JSON" />
+                                <Button
+                                    AutomationProperties.AutomationId="ReactiveValidateJsonButton"
+                                    AutomationProperties.Name="Validate raw JSON"
+                                    Click="ValidateJsonButton_Click"
+                                    Content="Validate JSON" />
+                                <Button
+                                    AutomationProperties.AutomationId="ReactiveUseJsonButton"
+                                    AutomationProperties.Name="Use raw JSON"
+                                    Click="UseJsonButton_Click"
+                                    Content="Use JSON" />
+                            </StackPanel>
+                            <TextBlock
+                                x:Name="DiagnosticsTextBlock"
+                                Grid.Row="3"
+                                AutomationProperties.Name="Reactive Lab diagnostics"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Diagnostics will appear after context refresh."
+                                TextWrapping="Wrap" />
+                        </Grid>
+                    </Expander>
                 </TabViewItem>
             </TabView>
         </Grid>

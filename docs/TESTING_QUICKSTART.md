@@ -2,16 +2,11 @@
 
 1. Unzip this folder somewhere short (e.g. `C:\EDMG\`).
 2. Double-click **RUN_ME.bat**
-3. In the Launcher:
-   - Click **Install/Update Backend (auto CUDA + TensorRT)**
-   - Click **Install/Update Studio UI**
-   - Click **Start Backend**
-   - Click **Run Health Test**
-   - Click **Start Studio (Electron dev)**
+3. The current WinUI source build opens directly. It cannot activate an older debug package.
 
-`LAUNCH_EDMG_STUDIO_GUI.bat` still exists as a compatibility alias, but the
-canonical launcher now lives under `studio/edmg-studio/RUN_ME.bat` and the
-repo-root `RUN_ME.bat` simply forwards to it.
+`LAUNCH_EDMG_STUDIO_GUI.bat` remains a compatibility alias to the repo-root
+`RUN_ME.bat`. Use `RUN_ME.bat electron` only when intentionally testing the
+Electron compatibility client.
 
 ## Prereqs (installed once)
 - **Python 3.12** (the source launcher can acquire it through pinned uv)

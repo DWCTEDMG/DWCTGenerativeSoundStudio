@@ -19,7 +19,7 @@ if not "%~1"=="" (
 )
 
 pushd "%~dp0studio\edmg-studio-winui"
-dotnet run --project ".\EdmgStudio.WinUI.csproj" --launch-profile "EdmgStudio.WinUI (Package)" -p:Platform=x64
+dotnet run --project ".\EdmgStudio.WinUI.csproj" --no-launch-profile -p:Platform=x64
 set "exit_code=%errorlevel%"
 popd
 exit /b %exit_code%

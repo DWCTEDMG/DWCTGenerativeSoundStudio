@@ -42,7 +42,7 @@ Canonical launch path from the repo root:
 - `RUN_ME.bat`
 - `./run_me.sh`
 
-`RUN_ME.bat` defaults to packaged WinUI. Pass `electron` or `compat` for the
+`RUN_ME.bat` defaults to the current unpackaged WinUI source build. Pass `electron` or `compat` for the
 Electron client. Linux continues to use the Electron launcher.
 
 ## Internal support surfaces

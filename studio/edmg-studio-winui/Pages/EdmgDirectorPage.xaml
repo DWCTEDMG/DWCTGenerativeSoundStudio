@@ -71,7 +71,7 @@
                         </CommandBar>
                         <TextBlock Text="Generation uses saved scenes and returns a draft. Select a job in Queue to review it here; cancellation is available in Queue." TextWrapping="Wrap" />
                         <TextBox x:Name="DirectorDraftBox" Header="Draft review" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="300" AutomationProperties.AutomationId="Director.Draft" />
-                        <Expander Header="Advanced: structured scenes" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                        <Expander Header="Advanced: structured scenes JSON" IsExpanded="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                             <TextBox x:Name="SceneSpecsBox" Header="SceneSpecs (JSON array with scene_id, start_sample, end_sample and intent)" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="160" MaxHeight="360" AutomationProperties.AutomationId="Director.SceneSpecs" />
                         </Expander>
                         <CommandBar DefaultLabelPosition="Right">

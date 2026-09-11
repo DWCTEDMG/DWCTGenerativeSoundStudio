@@ -158,8 +158,9 @@ The whole solution can also be compiled with:
 dotnet build .\EdmgStudio.WinUI.slnx -p:Platform=x64
 ```
 
-Only x64 is qualified for the native preview path. Do not build or publish this project as AnyCPU,
-do not remove `Package.appxmanifest`, and do not add `WindowsPackageType=None`.
+Only x64 is qualified for the native preview path. Do not build or publish this project as AnyCPU.
+Normal source builds are unpackaged (`WindowsPackageType=None`); release packaging supplies
+`Package.appxmanifest` explicitly and switches the build to MSIX.
 
 The current implementation/verification ledger is
 [`docs/WINUI_PARITY_STATUS.md`](../../docs/WINUI_PARITY_STATUS.md). Core tests and a
@@ -167,22 +168,22 @@ successful build do not establish launched-app stability or full Electron parity
 
 The focused backend data-freshness tests live in the existing Python test suite and should be run with the repository's frozen backend environment.
 
-## Run with package identity
+## Run the current source build
 
-The default development route retains package identity so Credential Locker, MSIX behavior, and Windows integrations are exercised:
+The default development route is intentionally unpackaged. It launches the executable built from the
+current worktree and cannot redirect to an older registered debug package:
 
-In Visual Studio, open `EdmgStudio.WinUI.slnx`, select `Release` and `x64`, set
-`EdmgStudio.WinUI` as the startup project, choose the `EdmgStudio.WinUI (Package)` launch profile,
-then press F5 or Ctrl+F5.
+In Visual Studio, open `EdmgStudio.WinUI.slnx`, select `Debug` and `x64`, set
+`EdmgStudio.WinUI` as the startup project, then press F5 or Ctrl+F5.
 
 ```powershell
 dotnet run --project .\EdmgStudio.WinUI.csproj `
-  --launch-profile "EdmgStudio.WinUI (Package)" `
+  --no-launch-profile `
   -p:Platform=x64
 ```
 
-Never start the packaged executable directly. Use the package launch profile or `winapp run` so
-MSIX identity and Windows App SDK activation are present.
+Installed release builds still use the signed MSIX and must be launched through their registered
+package identity. The development project no longer registers a separate debug package identity.
 
 For a deterministic source-development launch against an existing local backend on port 7863:
 
@@ -192,7 +193,7 @@ $env:EDMG_STUDIO_BACKEND_HOST = "127.0.0.1"
 $env:EDMG_STUDIO_BACKEND_PORT = "7863"
 $env:EDMG_STUDIO_SPAWN_BACKEND = "1"
 dotnet run --project .\EdmgStudio.WinUI.csproj `
-  --launch-profile "EdmgStudio.WinUI (Package)" `
+  --no-launch-profile `
   -p:Platform=x64
 ```
 

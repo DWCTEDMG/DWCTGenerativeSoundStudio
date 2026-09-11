@@ -1258,7 +1258,44 @@ public sealed class StudioApiClientTests
         Assert.IsTrue(task.IsActive);
         Assert.AreEqual(1d, task.ClampedProgress);
         Assert.AreEqual("Downloading", task.DisplayStage);
-        Assert.AreEqual("task-1:running", ModelTask.Fingerprint(tasks));
+        Assert.AreEqual("task-1:running:False", ModelTask.Fingerprint(tasks));
+    }
+
+    [TestMethod]
+    public async Task ManagedModelLifecycleActions_UseExactAuthenticatedRequests()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, _) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync()));
+            return JsonResponse(
+                """{"task":{"id":"task-1","name":"Model task","status":"queued","progress":0.0,"last_log":null,"error":null,"started_at":null,"ended_at":null,"model_id":"svd_xt_11","stage":"queued","bytes_completed":0,"bytes_total":null,"files_completed":0,"files_total":null,"cancel_requested":false}}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        ModelTaskActionResponse validate = await client.ValidateModelPackageAsync("svd_xt_11");
+        await client.UninstallModelPackageAsync("svd_xt_11");
+        await client.CancelModelTaskAsync("task-1");
+
+        Assert.AreEqual("task-1", validate.Task.Id);
+        Assert.HasCount(3, captured);
+        Assert.AreEqual("/v1/models/validate", captured[0].Uri.AbsolutePath);
+        Assert.AreEqual("/v1/models/uninstall", captured[1].Uri.AbsolutePath);
+        Assert.AreEqual("/v1/models/tasks/cancel", captured[2].Uri.AbsolutePath);
+        Assert.AreEqual("{\"model_id\":\"svd_xt_11\"}", captured[0].Body);
+        Assert.AreEqual("{\"model_id\":\"svd_xt_11\"}", captured[1].Body);
+        Assert.AreEqual("{\"task_id\":\"task-1\"}", captured[2].Body);
+        Assert.IsTrue(captured.All(request => request.Method == HttpMethod.Post));
+        Assert.IsTrue(captured.All(request => request.Authorization == "Bearer session-token"));
+        Assert.IsTrue(captured.All(request => request.ContentType == "application/json"));
     }
 
     [TestMethod]

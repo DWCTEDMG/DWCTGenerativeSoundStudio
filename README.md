@@ -63,7 +63,7 @@ macOS/Linux:
 ./run_me.sh
 ```
 
-On Windows, `RUN_ME.bat` launches the packaged WinUI profile by default.
+On Windows, `RUN_ME.bat` builds and launches the current unpackaged WinUI source tree by default.
 `RUN_ME.bat electron` (or `compat`) opens the established Electron launcher when
 that compatibility surface is required. On Linux, `run_me.sh` continues to use
 the Electron/React Studio. The clients share Studio Home, backend settings, and

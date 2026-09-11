@@ -161,8 +161,11 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
             (_catalogue.Catalog ?? []).Select(entry => CreatePresentation(entry, false))
             .Concat((_catalogue.User ?? []).Select(entry => CreatePresentation(entry, true)));
         string query = SearchBox.Text.Trim();
-        foreach (ModelPresentation model in models
+        string filter = ModelFilterComboBox.SelectedItem is ComboBoxItem { Tag: string tag } ? tag : "all";
+        List<ModelPresentation> allModels = models.ToList();
+        foreach (ModelPresentation model in allModels
             .Where(model => model.Matches(query))
+            .Where(model => model.MatchesFilter(filter))
             .OrderByDescending(model => model.IsInstalled)
             .ThenBy(model => model.DisplayName, StringComparer.OrdinalIgnoreCase))
         {
@@ -181,6 +184,20 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         else
         {
             ClearSelection();
+        }
+
+        int installed = allModels.Count(model => model.IsInstalled);
+        int ready = allModels.Count(model => model.RuntimeStatus?.RuntimeReady == true);
+        int video = allModels.Count(model => model.IsVideoModel);
+        CatalogueSummaryText.Text =
+            $"{_visibleModels.Count} shown | {installed} installed | {ready} runtime ready | {video} video/motion";
+    }
+
+    private void ModelFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_catalogue is not null)
+        {
+            RebuildModels();
         }
     }
 
@@ -272,12 +289,60 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         AcceptLicenseButton.IsEnabled = available && model!.RequiresLicense && !model.IsAccepted;
         BenchmarkButton.IsEnabled = available;
         SmokeTestButton.IsEnabled = available && model!.CanSmokeTest;
+        RevalidateButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
+        UninstallButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
         RemoveButton.IsEnabled = available && model!.IsUserModel;
         PromoteButton.IsEnabled = available;
         RefreshButton.IsEnabled = !_isCommandRunning;
         CivitaiImportButton.IsEnabled = !_isCommandRunning && !string.IsNullOrWhiteSpace(CivitaiUrlBox.Text);
         InstallPackButton.IsEnabled = !_isCommandRunning && PackCombo.SelectedItem is ModelPackPresentation;
         UpdateTensorRt();
+    }
+
+    private async void Revalidate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedModel is not { IsManagedPackage: true, IsInstalled: true } model)
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            async token =>
+            {
+                ModelTaskActionResponse response = await _apiClient.ValidateModelPackageAsync(model.Entry.Id, token);
+                UpsertTask(response.Task);
+            },
+            "Package validation queued.");
+    }
+
+    private async void Uninstall_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedModel is not { IsManagedPackage: true, IsInstalled: true } model)
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Uninstall managed package?",
+            Content = $"Remove the downloaded files for {model.DisplayName}? The catalogue entry remains available for reinstall.",
+            PrimaryButtonText = "Uninstall",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            async token =>
+            {
+                ModelTaskActionResponse response = await _apiClient.UninstallModelPackageAsync(model.Entry.Id, token);
+                UpsertTask(response.Task);
+            },
+            "Package uninstall queued.");
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
@@ -287,6 +352,22 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
             await RefreshAsync(cancellation.Token);
             await PollTasksAsync(cancellation.Token);
         }
+    }
+
+    private async void CancelTask_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { CommandParameter: string taskId } || string.IsNullOrWhiteSpace(taskId))
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            async token =>
+            {
+                ModelTaskActionResponse response = await _apiClient.CancelModelTaskAsync(taskId, token);
+                UpsertTask(response.Task);
+            },
+            "Task cancellation requested.");
     }
 
     private async void PrimaryAction_Click(object sender, RoutedEventArgs e)
@@ -765,6 +846,14 @@ public sealed class ModelPresentation
     public string Lane => ReadString("lane") ?? "recommended";
     public bool RequiresLicense => !string.Equals(Source, "ollama", StringComparison.OrdinalIgnoreCase);
     public ModelRuntimeStatus? RuntimeStatus => Entry.PackageStatus;
+    public bool IsManagedPackage => RuntimeStatus is not null;
+    public bool IsVideoModel =>
+        Kind.Contains("video", StringComparison.OrdinalIgnoreCase)
+        || Kind.Contains("motion", StringComparison.OrdinalIgnoreCase)
+        || Entry.Id.Contains("svd", StringComparison.OrdinalIgnoreCase)
+        || Entry.Id.Contains("animatediff", StringComparison.OrdinalIgnoreCase)
+        || Entry.Id.Contains("hunyuan", StringComparison.OrdinalIgnoreCase)
+        || Entry.Id.Contains("ltx", StringComparison.OrdinalIgnoreCase);
     public bool CanSmokeTest => IsInstalled && RuntimeStatus?.SmokeTestSupported == true;
     public string StateLabel => RuntimeStatus?.RuntimeState switch
     {
@@ -788,6 +877,14 @@ public sealed class ModelPresentation
         || Kind.Contains(query, StringComparison.OrdinalIgnoreCase)
         || Source.Contains(query, StringComparison.OrdinalIgnoreCase)
         || Lane.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    public bool MatchesFilter(string filter) => filter switch
+    {
+        "installed" => IsInstalled,
+        "ready" => RuntimeStatus?.RuntimeReady == true,
+        "video" => IsVideoModel,
+        _ => true
+    };
 
     private string? ReadString(string propertyName) =>
         Entry.ExtensionData?.TryGetValue(propertyName, out JsonElement value) == true
@@ -826,4 +923,5 @@ public sealed class ModelTaskPresentation
     public double Progress => Task.ClampedProgress;
     public Visibility ProgressVisibility => Task.HasProgress ? Visibility.Visible : Visibility.Collapsed;
     public string Detail => Task.Error ?? Task.DisplayStage;
+    public bool CanCancel => Task.IsActive && !Task.CancelRequested;
 }

@@ -596,14 +596,21 @@
                                     </Grid>
                                 </TabViewItem>
                                 <TabViewItem Header="Raw JSON" IsClosable="False">
-                                    <TextBox
-                                        x:Name="RawPlanTextBox"
-                                        AcceptsReturn="True"
-                                        AutomationProperties.AutomationId="Planner.RawJson"
-                                        FontFamily="Consolas"
-                                        IsReadOnly="True"
-                                        TextWrapping="NoWrap"
-                                        ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                                    <Expander Header="Advanced: raw plan JSON"
+                                              Margin="12"
+                                              IsExpanded="False"
+                                              HorizontalContentAlignment="Stretch">
+                                        <TextBox
+                                            x:Name="RawPlanTextBox"
+                                            Margin="0,8,0,0"
+                                            MinHeight="300"
+                                            AcceptsReturn="True"
+                                            AutomationProperties.AutomationId="Planner.RawJson"
+                                            FontFamily="Consolas"
+                                            IsReadOnly="True"
+                                            TextWrapping="NoWrap"
+                                            ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                                    </Expander>
                                 </TabViewItem>
                             </TabView>
                         </Grid>

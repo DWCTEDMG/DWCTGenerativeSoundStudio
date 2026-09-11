@@ -145,6 +145,7 @@ Desktop.ini
 *.code-workspace
 .vs/
 .vscode/
+.winapp/
 .secrets/
 DWCTGenerativeSoundStudio-main/
 Untitled-2 copy 2.jpg

@@ -27,6 +27,31 @@ export function normalizeAcceleratorProfile(value, { isWindows = process.platfor
   return profile;
 }
 
+export function detectNvidiaGpu({ spawnSyncImpl = spawnSync } = {}) {
+  try {
+    const result = spawnSyncImpl("nvidia-smi", ["-L"], {
+      windowsHide: true,
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    return result?.status === 0 && /GPU\s+\d+\s*:/i.test(String(result.stdout || ""));
+  } catch {
+    return false;
+  }
+}
+
+export function resolveAcceleratorProfile(
+  value,
+  { isWindows = process.platform === "win32", hasNvidiaGpu } = {},
+) {
+  if (String(value || "").trim()) {
+    return normalizeAcceleratorProfile(value, { isWindows });
+  }
+  const nvidiaAvailable = hasNvidiaGpu ?? detectNvidiaGpu();
+  if (nvidiaAvailable) return "cuda";
+  return isWindows ? "directml" : "cpu";
+}
+
 export function buildBackendLaunchSpec({
   appIsPackaged,
   resourcesPath,
@@ -35,6 +60,7 @@ export function buildBackendLaunchSpec({
   backendHost,
   backendPort,
   env = process.env,
+  hasNvidiaGpu,
 }) {
   if (appIsPackaged) {
     const pathApi = isWindows ? path.win32 : path;
@@ -48,9 +74,9 @@ export function buildBackendLaunchSpec({
     };
   }
 
-  const acceleratorProfile = normalizeAcceleratorProfile(
+  const acceleratorProfile = resolveAcceleratorProfile(
     env.EDMG_BACKEND_ACCELERATOR_PROFILE,
-    { isWindows },
+    { isWindows, hasNvidiaGpu },
   );
   const command = String(env.EDMG_UV_BIN || "uv").trim() || "uv";
   const args = ["run", "--frozen", "--no-default-groups", "--python", "3.12"];

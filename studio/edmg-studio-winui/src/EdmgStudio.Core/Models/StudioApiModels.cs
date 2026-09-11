@@ -794,6 +794,8 @@ public static class StudioJson
 [JsonSerializable(typeof(LocalModelImportRequest))]
 [JsonSerializable(typeof(ModelImportResponse))]
 [JsonSerializable(typeof(TensorRtCancelImportRequest))]
+[JsonSerializable(typeof(ModelIdRequest))]
+[JsonSerializable(typeof(ModelTaskCancelRequest))]
 [JsonSerializable(typeof(TensorRtMigrationStatus))]
 [JsonSerializable(typeof(TensorRtLegacyStatus))]
 [JsonSerializable(typeof(TensorRtLegacyFile))]

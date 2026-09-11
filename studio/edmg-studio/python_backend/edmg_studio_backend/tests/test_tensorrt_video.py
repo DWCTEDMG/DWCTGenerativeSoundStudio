@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from edmg_studio_backend.tests.revision_client import TestClient
 from PIL import Image
 
 from edmg_studio_backend import app as app_module
@@ -14,6 +13,7 @@ from edmg_studio_backend.services import internal_video, tensorrt_standalone, te
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
+from edmg_studio_backend.tests.revision_client import TestClient
 
 
 def _make_render_project(tmp_path: Path):
@@ -980,6 +980,31 @@ def test_svd_low_vram_memory_safety_preserves_steps_and_warns() -> None:
     assert safe.temporal_steps == 20
     assert any("6 GB CUDA SVD safety" in warning for warning in warnings)
     assert any("Inference steps are preserved" in warning for warning in warnings)
+
+
+def test_ltx_low_vram_memory_safety_enables_supported_cpu_offload() -> None:
+    settings = InternalVideoSettings(
+        temporal_mode="video_model",
+        video_model_engine="ltx_25",
+        video_model_id="ltx_25_distilled_t2v_22b_bf16",
+        video_model_max_frames_per_scene=25,
+        video_model_decode_chunk_size=8,
+    )
+
+    safe = app_module._apply_internal_video_model_memory_safety(
+        settings,
+        {"backend": "cuda", "vram_gb": 6.0},
+    )
+    warnings = app_module._internal_video_model_memory_warnings(
+        safe,
+        {"backend": "cuda", "vram_gb": 6.0},
+    )
+
+    assert safe.video_model_cpu_offload is True
+    assert safe.video_model_max_frames_per_scene == 8
+    assert safe.video_model_decode_chunk_size == 1
+    assert any("6 GB CUDA LTX-2.5 safety" in warning for warning in warnings)
+    assert any("host-memory budget" in warning for warning in warnings)
 
 
 def test_svd_low_vram_canvas_is_capped(monkeypatch) -> None:

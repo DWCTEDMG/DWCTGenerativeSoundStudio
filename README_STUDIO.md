@@ -2,7 +2,7 @@
 
 This repo includes the Studio desktop product under:
 
-- `studio/edmg-studio-winui/` — primary packaged Windows frontend
+- `studio/edmg-studio-winui/` — primary Windows frontend
 - `studio/edmg-studio/` — Electron/React frontend for Linux and compatibility
 
 Both frontends use the same local FastAPI backend and project format for the "DAW-like" Studio
@@ -21,8 +21,9 @@ From the repo root:
 - `RUN_ME.bat`
 - `./run_me.sh`
 
-Compatibility aliases may still exist. On Windows, launch the packaged WinUI app; on Linux use the
-Electron/React Studio launcher.
+On Windows, the root launcher runs the current WinUI source output directly; on Linux use the
+Electron/React Studio launcher. Installed releases continue to launch through their registered
+package identity.
 
 That launcher keeps the Studio product aligned with the same `Studio Home`, backend port,
 and runtime data that the in-app Setup page uses.
@@ -50,15 +51,16 @@ Python 3.12 and uv 0.11.28 are pinned repository inputs. Select one accelerator 
 
 2. Start Studio UI
 
-Windows packaged app (from `studio/edmg-studio-winui`):
+Windows source app (from `studio/edmg-studio-winui`):
 
-- open `EdmgStudio.WinUI.slnx` in Visual Studio, select `Release` and `x64`, set
-  `EdmgStudio.WinUI` as the startup project, select the `EdmgStudio.WinUI (Package)` profile,
-  and press F5 or Ctrl+F5
+- open `EdmgStudio.WinUI.slnx` in Visual Studio, select `Debug` and `x64`, set
+  `EdmgStudio.WinUI` as the startup project, and press F5 or Ctrl+F5
 - from PowerShell, the equivalent source launch is `dotnet run --project .\EdmgStudio.WinUI.csproj
-  --launch-profile "EdmgStudio.WinUI (Package)" -p:Platform=x64`
-- never run the generated packaged executable directly
-- retain `Package.appxmanifest`; package identity is part of the supported runtime contract
+  --no-launch-profile -p:Platform=x64`
+- source builds are explicitly unpackaged and use the Windows App SDK bootstrapper, so they cannot
+  activate a stale debug MSIX registration
+- retain `Package.appxmanifest`; release packaging supplies it explicitly and launches through the
+  installed package identity
 
 Linux/compatibility client:
 

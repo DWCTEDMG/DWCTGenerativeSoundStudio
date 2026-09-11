@@ -40,7 +40,7 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            TextWrapping="Wrap" />
             </StackPanel>
-            <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+            <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="6">
                 <TextBlock Text="Active project" HorizontalAlignment="Right"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <TextBlock x:Name="ActiveProjectText"
@@ -48,6 +48,23 @@
                            FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis"
                            MaxWidth="360" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                    <NumberBox x:Name="HeaderVariantBox"
+                               Header="Variant"
+                               Width="92"
+                               Value="0"
+                               Minimum="0"
+                               AutomationProperties.AutomationId="RenderHeaderVariantBox" />
+                    <Button Content="Workspace" Click="OpenWorkspace_Click"
+                            VerticalAlignment="Bottom"
+                            AutomationProperties.AutomationId="OpenWorkspaceFromRenderButton" />
+                    <Button Content="Queue" Click="OpenQueue_Click"
+                            VerticalAlignment="Bottom"
+                            AutomationProperties.AutomationId="OpenQueueFromRenderButton" />
+                    <Button Content="Outputs" Click="OpenOutputs_Click"
+                            VerticalAlignment="Bottom"
+                            AutomationProperties.AutomationId="OpenOutputsFromRenderButton" />
+                </StackPanel>
             </StackPanel>
         </Grid>
 
@@ -478,28 +495,34 @@
                                                   SelectionChanged="ModelGuidanceSelection_Changed"
                                                   AutomationProperties.AutomationId="RenderVideoModelEngineComboBox">
                                             <ComboBoxItem Content="auto" />
-                                            <ComboBoxItem Content="animatediff" />
                                             <ComboBoxItem Content="svd" />
+                                            <ComboBoxItem Content="animatediff" />
+                                            <ComboBoxItem Content="hunyuan_video15" />
+                                            <ComboBoxItem Content="ltx_25" />
                                         </ComboBox>
                                     </StackPanel>
                                     <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Spacing="4">
                                         <TextBlock Text="Video model ID" Style="{StaticResource FieldLabelStyle}" />
                                         <TextBox x:Name="VideoModelBox"
-                                                 PlaceholderText="Optional downloaded AnimateDiff or SVD model ID"
+                                                 PlaceholderText="Optional downloaded SVD, AnimateDiff, Hunyuan, or LTX model ID"
                                                  TextChanged="ModelGuidanceText_Changed"
                                                  AutomationProperties.AutomationId="RenderVideoModelBox" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="5" Grid.ColumnSpan="2" Spacing="4">
-                                        <TextBlock Text="Parseq manifest (optional JSON)" Style="{StaticResource FieldLabelStyle}" />
-                                        <ToggleSwitch x:Name="ParseqToggle" Header="Enable Parseq schedules" IsOn="True"
-                                                      AutomationProperties.AutomationId="RenderParseqToggle" />
-                                        <TextBox x:Name="ParseqBox"
-                                                 AcceptsReturn="True"
-                                                 MinHeight="110"
-                                                 TextWrapping="Wrap"
-                                                 PlaceholderText="JSON object"
-                                                 AutomationProperties.AutomationId="RenderParseqBox" />
-                                    </StackPanel>
+                                    <Expander Grid.Row="5" Grid.ColumnSpan="2"
+                                              Header="Advanced: Parseq JSON"
+                                              IsExpanded="False">
+                                        <StackPanel Padding="0,8,0,0" Spacing="4">
+                                            <ToggleSwitch x:Name="ParseqToggle" Header="Enable Parseq schedules" IsOn="True"
+                                                          AutomationProperties.AutomationId="RenderParseqToggle" />
+                                            <TextBox x:Name="ParseqBox"
+                                                     Header="Parseq manifest (optional JSON)"
+                                                     AcceptsReturn="True"
+                                                     MinHeight="110"
+                                                     TextWrapping="Wrap"
+                                                     PlaceholderText="JSON object"
+                                                     AutomationProperties.AutomationId="RenderParseqBox" />
+                                        </StackPanel>
+                                    </Expander>
                                     <ToggleSwitch x:Name="LoopToggle"
                                                   Grid.Row="6"
                                                   Header="Loop output"
@@ -670,7 +693,7 @@
                                                  AutomationProperties.AutomationId="RenderKeyframeModelBox" />
                                     </StackPanel>
                                     <StackPanel Grid.Row="5" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="18">
-                                        <ToggleSwitch x:Name="VideoCpuOffloadToggle" Header="CPU offload"
+                                        <ToggleSwitch x:Name="VideoCpuOffloadToggle" Header="Prefer CPU offload (automatic on low VRAM)"
                                                       AutomationProperties.AutomationId="RenderVideoCpuOffloadToggle" />
                                         <ToggleSwitch x:Name="VideoPromptRefineToggle" Header="Prompt refinement" IsOn="True"
                                                       AutomationProperties.AutomationId="RenderVideoPromptRefineToggle" />
@@ -680,7 +703,7 @@
                                 </Grid>
                             </Expander>
 
-                            <Expander Header="Animation schedules"
+                            <Expander Header="Advanced: animation schedules"
                                       Style="{StaticResource WorkflowExpanderStyle}"
                                       AutomationProperties.AutomationId="InternalSchedulesExpander">
                                 <StackPanel Padding="12" Spacing="10">
@@ -727,7 +750,7 @@
                                 </StackPanel>
                             </Expander>
 
-                            <Expander Header="Hosted provider"
+                            <Expander Header="Advanced: hosted provider"
                                       Style="{StaticResource WorkflowExpanderStyle}"
                                       AutomationProperties.AutomationId="InternalHostedExpander">
                                 <Grid Padding="12" ColumnSpacing="12" RowSpacing="12">
@@ -756,15 +779,17 @@
                                         <TextBox x:Name="HostedModelBox" PlaceholderText="Optional hosted model"
                                                  AutomationProperties.AutomationId="RenderHostedModelBox" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="4">
-                                        <TextBlock Text="Provider options (JSON)" Style="{StaticResource FieldLabelStyle}" />
-                                        <TextBox x:Name="HostedOptionsBox"
-                                                 AcceptsReturn="True"
-                                                 MinHeight="90"
-                                                 TextWrapping="Wrap"
-                                                 PlaceholderText="JSON object"
-                                                 AutomationProperties.AutomationId="RenderHostedOptionsBox" />
-                                    </StackPanel>
+                                        <Expander Grid.Row="1" Grid.ColumnSpan="2"
+                                                  Header="Advanced: provider options JSON"
+                                                  IsExpanded="False">
+                                            <TextBox x:Name="HostedOptionsBox"
+                                                     Margin="0,8,0,0"
+                                                     AcceptsReturn="True"
+                                                     MinHeight="90"
+                                                     TextWrapping="Wrap"
+                                                     PlaceholderText="JSON object"
+                                                     AutomationProperties.AutomationId="RenderHostedOptionsBox" />
+                                        </Expander>
                                     <StackPanel Grid.Row="2" Spacing="4">
                                         <TextBlock Text="Style preset" Style="{StaticResource FieldLabelStyle}" />
                                         <TextBox x:Name="HostedStyleBox" PlaceholderText="Optional provider style preset"
@@ -1059,16 +1084,18 @@
                                                 <ComboBoxItem Content="mock" />
                                             </ComboBox>
                                         </StackPanel>
-                                        <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="4">
-                                            <TextBlock Text="Render settings (JSON object)" Style="{StaticResource FieldLabelStyle}" />
+                                        <Expander Grid.Row="2" Grid.ColumnSpan="2"
+                                                  Header="Advanced: render settings JSON"
+                                                  IsExpanded="False">
                                             <TextBox x:Name="PerformerSettingsBox"
+                                                     Margin="0,8,0,0"
                                                      Text="{}{ }"
                                                      AcceptsReturn="True"
                                                      MinHeight="90"
                                                      FontFamily="Consolas"
                                                      TextWrapping="Wrap"
                                                      AutomationProperties.AutomationId="PerformerSettingsBox" />
-                                        </StackPanel>
+                                        </Expander>
                                     </Grid>
                                     <ToggleSwitch x:Name="PerformerMockFallbackToggle"
                                                   Header="Allow mock fallback"
@@ -1101,13 +1128,16 @@
                                                       VerticalAlignment="Bottom"
                                                       AutomationProperties.AutomationId="MotionSequencerActivateToggle" />
                                     </StackPanel>
-                                    <TextBox x:Name="MotionSequencerManifestBox"
-                                             Header="Manifest JSON (blank lets the backend generate one)"
-                                             AcceptsReturn="True"
-                                             MinHeight="130"
-                                             FontFamily="Consolas"
-                                             TextWrapping="Wrap"
-                                             AutomationProperties.AutomationId="MotionSequencerManifestBox" />
+                                    <Expander Header="Advanced: manifest JSON" IsExpanded="False">
+                                        <TextBox x:Name="MotionSequencerManifestBox"
+                                                 Margin="0,8,0,0"
+                                                 Header="Blank lets the backend generate a manifest"
+                                                 AcceptsReturn="True"
+                                                 MinHeight="130"
+                                                 FontFamily="Consolas"
+                                                 TextWrapping="Wrap"
+                                                 AutomationProperties.AutomationId="MotionSequencerManifestBox" />
+                                    </Expander>
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <Button Content="Inspect sequencer" Click="InspectMotionSequencer_Click"
                                                 AutomationProperties.AutomationId="InspectMotionSequencerButton" />
@@ -1252,14 +1282,17 @@
                                                       Header="Diffusion refine"
                                                       AutomationProperties.AutomationId="LayerRefineToggle" />
                                     </Grid>
-                                    <TextBox x:Name="LayerMasksBox"
-                                             Header="Masks (JSON array; required for masked mode)"
-                                             Text="[ ]"
-                                             AcceptsReturn="True"
-                                             MinHeight="100"
-                                             FontFamily="Consolas"
-                                             TextWrapping="Wrap"
-                                             AutomationProperties.AutomationId="LayerMasksBox" />
+                                    <Expander Header="Advanced: masks JSON" IsExpanded="False">
+                                        <TextBox x:Name="LayerMasksBox"
+                                                 Margin="0,8,0,0"
+                                                 Header="JSON array; required for masked mode"
+                                                 Text="[ ]"
+                                                 AcceptsReturn="True"
+                                                 MinHeight="100"
+                                                 FontFamily="Consolas"
+                                                 TextWrapping="Wrap"
+                                                 AutomationProperties.AutomationId="LayerMasksBox" />
+                                    </Expander>
                                     <Grid ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -1732,14 +1765,17 @@
                                                        AutomationProperties.AutomationId="ComfyExportStepsBox" />
                                         </StackPanel>
                                     </Grid>
-                                    <TextBox x:Name="ComfyExportAdvancedBox"
-                                             Header="Optional advanced query JSON (loras, outpaint, controlnet_units, hires_fix, refiner, upscaler)"
-                                             Text="{}{}"
-                                             AcceptsReturn="True"
-                                             MinHeight="120"
-                                             FontFamily="Consolas"
-                                             TextWrapping="Wrap"
-                                             AutomationProperties.AutomationId="ComfyExportAdvancedBox" />
+                                    <Expander Header="Advanced: ComfyUI query JSON" IsExpanded="False">
+                                        <TextBox x:Name="ComfyExportAdvancedBox"
+                                                 Margin="0,8,0,0"
+                                                 Header="Optional: LoRAs, outpaint, ControlNet, hires fix, refiner, and upscaler"
+                                                 Text="{}{}"
+                                                 AcceptsReturn="True"
+                                                 MinHeight="120"
+                                                 FontFamily="Consolas"
+                                                 TextWrapping="Wrap"
+                                                 AutomationProperties.AutomationId="ComfyExportAdvancedBox" />
+                                    </Expander>
                                     <Button Content="Export ComfyUI workflows"
                                             HorizontalAlignment="Left"
                                             Click="ExportComfyUi_Click"

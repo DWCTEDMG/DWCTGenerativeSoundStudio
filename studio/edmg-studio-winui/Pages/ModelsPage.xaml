@@ -64,16 +64,34 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <TextBox
-                    x:Name="SearchBox"
-                    AutomationProperties.AutomationId="ModelsSearchBox"
-                    Header="Search catalogue"
-                    PlaceholderText="Name, ID, source, kind, or lane"
-                    TextChanged="SearchBox_TextChanged" />
+                <StackPanel Spacing="8">
+                    <TextBox
+                        x:Name="SearchBox"
+                        AutomationProperties.AutomationId="ModelsSearchBox"
+                        Header="Search catalogue"
+                        PlaceholderText="Name, ID, source, kind, or lane"
+                        TextChanged="SearchBox_TextChanged" />
+                    <ComboBox x:Name="ModelFilterComboBox"
+                              Header="Show"
+                              SelectedIndex="0"
+                              SelectionChanged="ModelFilter_SelectionChanged"
+                              AutomationProperties.AutomationId="ModelsFilterComboBox">
+                        <ComboBoxItem Content="All models" Tag="all" />
+                        <ComboBoxItem Content="Installed" Tag="installed" />
+                        <ComboBoxItem Content="Runtime ready" Tag="ready" />
+                        <ComboBoxItem Content="Video and motion" Tag="video" />
+                    </ComboBox>
+                    <TextBlock x:Name="CatalogueSummaryText"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Loading catalogue..."
+                               TextWrapping="Wrap"
+                               AutomationProperties.AutomationId="ModelsCatalogueSummaryText" />
+                </StackPanel>
 
                 <ListView
                     x:Name="ModelList"
                     Grid.Row="1"
+                    MinHeight="180"
                     AutomationProperties.AutomationId="ModelsCatalogList"
                     AutomationProperties.Name="Model catalogue"
                     IsItemClickEnabled="True"
@@ -110,6 +128,7 @@
 
                 <Border
                     Grid.Row="2"
+                    MaxHeight="280"
                     Padding="12"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -127,36 +146,50 @@
                             x:Name="NoTasksText"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Text="No model tasks yet." />
-                        <ItemsControl x:Name="TaskItems">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Margin="0,3" Spacing="3">
-                                        <Grid>
+                        <ScrollViewer MaxHeight="210" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="TaskItems">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,3" Spacing="3">
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock
+                                                    MaxWidth="240"
+                                                    FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Text="{Binding DisplayName}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="1"
+                                                    HorizontalAlignment="Right"
+                                                    FontSize="11"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Text="{Binding StatusLabel}" />
+                                                <Button Grid.Column="2"
+                                                        Padding="8,2"
+                                                        Content="Cancel"
+                                                        Click="CancelTask_Click"
+                                                        CommandParameter="{Binding Task.Id}"
+                                                        IsEnabled="{Binding CanCancel}"
+                                                        AutomationProperties.Name="Cancel model task" />
+                                            </Grid>
+                                            <ProgressBar
+                                                Maximum="1"
+                                                Value="{Binding Progress}"
+                                                Visibility="{Binding ProgressVisibility}" />
                                             <TextBlock
-                                                MaxWidth="240"
-                                                FontSize="12"
-                                                FontWeight="SemiBold"
-                                                Text="{Binding DisplayName}"
-                                                TextTrimming="CharacterEllipsis" />
-                                            <TextBlock
-                                                HorizontalAlignment="Right"
                                                 FontSize="11"
                                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                Text="{Binding StatusLabel}" />
-                                        </Grid>
-                                        <ProgressBar
-                                            Maximum="1"
-                                            Value="{Binding Progress}"
-                                            Visibility="{Binding ProgressVisibility}" />
-                                        <TextBlock
-                                            FontSize="11"
-                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                            Text="{Binding Detail}"
-                                            TextTrimming="CharacterEllipsis" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                                                Text="{Binding Detail}"
+                                                TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
                     </StackPanel>
                 </Border>
             </Grid>
@@ -185,43 +218,61 @@
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 TextWrapping="Wrap" />
 
-                            <StackPanel Orientation="Horizontal">
-                                <Button
-                                    x:Name="PrimaryActionButton"
-                                    Margin="0,0,8,8"
-                                    AutomationProperties.AutomationId="ModelsPrimaryActionButton"
-                                    Click="PrimaryAction_Click"
-                                    IsEnabled="False"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    Content="Install" />
-                                <Button
-                                    x:Name="AcceptLicenseButton"
-                                    Margin="0,0,8,8"
-                                    AutomationProperties.AutomationId="ModelsAcceptLicenseButton"
-                                    Click="AcceptLicense_Click"
-                                    IsEnabled="False"
-                                    Content="Review license" />
-                                <Button
-                                    x:Name="BenchmarkButton"
-                                    Margin="0,0,8,8"
-                                    AutomationProperties.AutomationId="ModelsBenchmarkButton"
-                                    Click="Benchmark_Click"
-                                    IsEnabled="False"
-                                    Content="Record benchmark" />
-                                <Button
-                                    x:Name="SmokeTestButton"
-                                    Margin="0,0,8,8"
-                                    AutomationProperties.AutomationId="ModelsSmokeTestButton"
-                                    Click="SmokeTest_Click"
-                                    IsEnabled="False"
-                                    Content="Run runtime smoke test" />
-                                <Button
-                                    x:Name="RemoveButton"
-                                    Margin="0,0,8,8"
-                                    AutomationProperties.AutomationId="ModelsRemoveButton"
-                                    Click="Remove_Click"
-                                    IsEnabled="False"
-                                    Content="Remove" />
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal">
+                                    <Button
+                                        x:Name="PrimaryActionButton"
+                                        Margin="0,0,8,8"
+                                        AutomationProperties.AutomationId="ModelsPrimaryActionButton"
+                                        Click="PrimaryAction_Click"
+                                        IsEnabled="False"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Content="Install" />
+                                    <Button
+                                        x:Name="AcceptLicenseButton"
+                                        Margin="0,0,8,8"
+                                        AutomationProperties.AutomationId="ModelsAcceptLicenseButton"
+                                        Click="AcceptLicense_Click"
+                                        IsEnabled="False"
+                                        Content="Review license" />
+                                    <Button
+                                        x:Name="SmokeTestButton"
+                                        Margin="0,0,8,8"
+                                        AutomationProperties.AutomationId="ModelsSmokeTestButton"
+                                        Click="SmokeTest_Click"
+                                        IsEnabled="False"
+                                        Content="Run runtime smoke test" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button
+                                        x:Name="RevalidateButton"
+                                        Margin="0,0,8,8"
+                                        AutomationProperties.AutomationId="ModelsRevalidateButton"
+                                        Click="Revalidate_Click"
+                                        IsEnabled="False"
+                                        Content="Revalidate files" />
+                                    <Button
+                                        x:Name="UninstallButton"
+                                        Margin="0,0,8,8"
+                                        AutomationProperties.AutomationId="ModelsUninstallButton"
+                                        Click="Uninstall_Click"
+                                        IsEnabled="False"
+                                        Content="Uninstall package" />
+                                    <Button
+                                        x:Name="RemoveButton"
+                                        Margin="0,0,8,8"
+                                        AutomationProperties.AutomationId="ModelsRemoveButton"
+                                        Click="Remove_Click"
+                                        IsEnabled="False"
+                                        Content="Remove" />
+                                    <Button
+                                        x:Name="BenchmarkButton"
+                                        Margin="0,0,8,8"
+                                        AutomationProperties.AutomationId="ModelsBenchmarkButton"
+                                        Click="Benchmark_Click"
+                                        IsEnabled="False"
+                                        Content="Record benchmark" />
+                                </StackPanel>
                             </StackPanel>
 
                             <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />

@@ -103,7 +103,7 @@ public sealed record BackendConfiguration(
         string acceleratorProfile;
         try
         {
-            acceleratorProfile = NormalizeAcceleratorProfile(values.AcceleratorProfile);
+            acceleratorProfile = ResolveAcceleratorProfile(values.AcceleratorProfile);
         }
         catch (ArgumentException exception)
         {
@@ -171,6 +171,60 @@ public sealed record BackendConfiguration(
         }
 
         return normalized;
+    }
+
+    public static string ResolveAcceleratorProfile(
+        string? value,
+        Func<bool>? hasNvidiaGpu = null,
+        bool? isWindows = null)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            return NormalizeAcceleratorProfile(value);
+        }
+
+        var windows = isWindows ?? OperatingSystem.IsWindows();
+        var nvidiaAvailable = hasNvidiaGpu?.Invoke() ?? DetectNvidiaGpu();
+        if (nvidiaAvailable)
+        {
+            return "cuda";
+        }
+
+        return windows ? "directml" : "cpu";
+    }
+
+    private static bool DetectNvidiaGpu()
+    {
+        try
+        {
+            using var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "nvidia-smi",
+                    Arguments = "-L",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }
+            };
+            if (!process.Start() || !process.WaitForExit(5000))
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                return false;
+            }
+
+            return process.ExitCode == 0 &&
+                   process.StandardOutput.ReadToEnd().Contains("GPU ", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public static Uri? NormalizeBackendUri(string? value)
@@ -577,7 +631,7 @@ public sealed record BackendConfiguration(
         public string ModeSource { get; set; } = "defaults";
         public string AddressSource { get; set; } = "defaults";
         public bool? SpawnBackend { get; set; }
-        public string? AcceleratorProfile { get; set; } = "cpu";
+        public string? AcceleratorProfile { get; set; }
         public string? SourceDirectory { get; set; }
         public string? StudioHome { get; set; }
         public string? ReadyTimeoutMilliseconds { get; set; }

@@ -101,6 +101,21 @@ public sealed class InternalVideoRenderRequestBuilderTests
         Assert.AreEqual("both", request.GetProperty("video_model_anchor_mode").GetString());
     }
 
+    [DataTestMethod]
+    [DataRow("svd")]
+    [DataRow("animatediff")]
+    [DataRow("hunyuan_video15")]
+    [DataRow("ltx_25")]
+    public void Build_AllowsEveryBackendVideoModelEngine(string engine)
+    {
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            VideoModelEngine = engine,
+        });
+
+        Assert.AreEqual(engine, request.GetProperty("video_model_engine").GetString());
+    }
+
     [TestMethod]
     public void Build_SerializesProjectKeyframeContinuityMode()
     {

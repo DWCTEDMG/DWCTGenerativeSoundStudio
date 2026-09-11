@@ -14,6 +14,7 @@ public sealed partial class RenderPage : Page
     private string? _projectId;
     private bool _isBusy;
     private bool _modelGuidanceUiReady;
+    private bool _isApplyingVariant;
     private CancellationTokenSource? _pageCancellation;
     private ModelCatalogueResponse? _modelCatalogue;
     private ModelRenderGuidance? _modelGuidance;
@@ -23,6 +24,7 @@ public sealed partial class RenderPage : Page
     {
         InitializeComponent();
         _modelGuidanceUiReady = true;
+        HeaderVariantBox.ValueChanged += HeaderVariantBox_ValueChanged;
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -256,13 +258,33 @@ public sealed partial class RenderPage : Page
     private void ApplySelectedVariant()
     {
         int variantIndex = Math.Max(0, App.Services.Session.SelectedVariantIndex);
+        _isApplyingVariant = true;
+        HeaderVariantBox.Value = variantIndex;
         WorkflowVariantBox.Value = variantIndex;
         ToolsVariantBox.Value = variantIndex;
         TensorVariantBox.Value = variantIndex;
         AssemblyVariantBox.Value = variantIndex;
         DeforumVariantBox.Value = variantIndex;
         ComfyExportVariantBox.Value = variantIndex;
+        _isApplyingVariant = false;
     }
+
+    private void HeaderVariantBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (!_modelGuidanceUiReady || _isApplyingVariant || double.IsNaN(args.NewValue))
+        {
+            return;
+        }
+
+        App.Services.Session.SelectedVariantIndex = Math.Max(0, (int)args.NewValue);
+        ApplySelectedVariant();
+    }
+
+    private void OpenWorkspace_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
+
+    private void OpenQueue_Click(object sender, RoutedEventArgs e) => App.Navigate("queue");
+
+    private void OpenOutputs_Click(object sender, RoutedEventArgs e) => App.Navigate("outputs");
 
     private JsonElement BuildInternalRenderRequest()
     {

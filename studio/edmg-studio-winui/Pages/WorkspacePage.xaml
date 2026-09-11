@@ -790,7 +790,9 @@
                             </StackPanel>
                         </Border>
 
-                        <Expander AutomationProperties.AutomationId="Workspace.TemplatePackage" Header="Template package">
+                        <Expander AutomationProperties.AutomationId="Workspace.TemplatePackage"
+                                  Header="Advanced: template package JSON"
+                                  IsExpanded="False">
                             <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
                                 <StackPanel Spacing="10">
                                     <Button
@@ -841,7 +843,9 @@
                             </Border>
                         </Expander>
 
-                        <Expander AutomationProperties.AutomationId="Workspace.Inspect" Header="Inspect JSON">
+                        <Expander AutomationProperties.AutomationId="Workspace.Inspect"
+                                  Header="Advanced: inspect JSON"
+                                  IsExpanded="False">
                             <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
                                 <StackPanel Spacing="10">
                                     <TextBox

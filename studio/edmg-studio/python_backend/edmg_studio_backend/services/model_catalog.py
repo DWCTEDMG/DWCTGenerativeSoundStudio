@@ -677,9 +677,11 @@ def built_in_catalog() -> list[dict[str, Any]]:
             target={"engine": "internal", "folder": "video"},
             license_id="stability-ai-community",
             license_url="https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt-1-1/blob/main/LICENSE.md",
-            recommended="advanced",
+            recommended="default",
             notes=(
-                "Internal image-to-video adapter for real short subject/object motion from generated keyframes. "
+                "Qualified minimum-spec CUDA renderer: real inference passed on an RTX 4050 6 GB with model CPU "
+                "offload at 320x192, using 3.73 GiB peak CUDA allocation. Internal image-to-video adapter for "
+                "real short subject/object motion from generated keyframes. "
                 "Use this for walking, turning, dancing, fabric motion, and transitions when you want motion inside "
                 "the Studio internal renderer without ComfyUI."
             ),
@@ -693,7 +695,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
                 "workflow_family": "svd",
                 "render_modes": ["internal_video_model"],
                 "video_model_engine": "svd",
-                "preferred_for": ["subject_motion", "fabric_motion", "transitions"],
+                "preferred_for": ["low_vram", "automatic", "subject_motion", "fabric_motion", "transitions"],
             },
         ),
         _entry(
