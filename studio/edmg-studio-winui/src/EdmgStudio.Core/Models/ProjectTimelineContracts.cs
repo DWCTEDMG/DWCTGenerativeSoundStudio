@@ -154,6 +154,13 @@ public sealed record TimelineEvent(
     public TimelinePosition Duration => new(checked(End.Samples - Start.Samples));
 }
 
+public sealed record TimelineMarker(
+    string Id,
+    string Name,
+    TimelinePosition Position,
+    string? Color,
+    JsonObject Metadata);
+
 public sealed record Track(
     string Id,
     string Name,
@@ -175,6 +182,7 @@ public sealed record CanonicalProject(
     ProjectTimebase Timebase,
     IReadOnlyList<Track> Tracks,
     IReadOnlyList<MediaAsset> MediaAssets,
+    IReadOnlyList<TimelineMarker> Markers,
     JsonObject Metadata,
     JsonObject Timeline);
 
@@ -189,15 +197,33 @@ public static class ProjectTimelineContracts
         JsonObject timeline = metadata["timeline"] is JsonObject sourceTimeline
             ? sourceTimeline.DeepClone().AsObject()
             : [];
+        return FromTimeline(project, metadata, timeline);
+    }
+
+    public static CanonicalProject FromTimeline(ProjectDto project, JsonObject timeline)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(timeline);
+        JsonObject metadata = project.Meta.ValueKind == JsonValueKind.Object
+            ? JsonNode.Parse(project.Meta.GetRawText())!.AsObject()
+            : [];
+        metadata["timeline"] = timeline.DeepClone();
+        return FromTimeline(project, metadata, timeline.DeepClone().AsObject());
+    }
+
+    private static CanonicalProject FromTimeline(ProjectDto project, JsonObject metadata, JsonObject timeline)
+    {
         ProjectTimebase timebase = ReadTimebase(timeline);
+        IReadOnlyList<Track> tracks = ReadTracks(timeline, timebase);
         return new CanonicalProject(
             project.Id,
             project.Name,
             project.Revision,
             project.SchemaVersion,
             timebase,
-            ReadTracks(timeline, timebase),
+            tracks,
             ReadMediaAssets(metadata, timeline),
+            ReadMarkers(timeline, timebase, tracks),
             metadata,
             timeline);
     }
@@ -236,6 +262,19 @@ public static class ProjectTimelineContracts
         }
 
         timeline["media_pool"] = mediaPool;
+        var markers = new JsonArray();
+        foreach (TimelineMarker marker in project.Markers.OrderBy(item => item.Position.Samples))
+        {
+            JsonObject markerNode = marker.Metadata.DeepClone().AsObject();
+            markerNode["id"] = marker.Id;
+            markerNode["name"] = marker.Name;
+            markerNode["position_sample"] = marker.Position.Samples.ToString(CultureInfo.InvariantCulture);
+            markerNode["time_s"] = project.Timebase.ToSeconds(marker.Position);
+            WriteOptionalString(markerNode, "color", marker.Color);
+            markers.Add(markerNode);
+        }
+
+        timeline["markers"] = markers;
         return timeline;
     }
 
@@ -394,6 +433,48 @@ public static class ProjectTimelineContracts
         ReadMediaAssetPool(metadataAssets, assets, assetIndexes);
         ReadMediaAssetPool(timelineAssets, assets, assetIndexes);
         return assets;
+    }
+
+    private static IReadOnlyList<TimelineMarker> ReadMarkers(
+        JsonObject timeline,
+        ProjectTimebase timebase,
+        IReadOnlyList<Track> tracks)
+    {
+        if (timeline["markers"] is not JsonArray sourceMarkers)
+        {
+            return [];
+        }
+
+        var markers = new List<TimelineMarker>(sourceMarkers.Count);
+        var identifiers = tracks.Select(track => track.Id)
+            .Concat(tracks.SelectMany(track => track.Events).Select(item => item.Id))
+            .ToHashSet(StringComparer.Ordinal);
+        for (int index = 0; index < sourceMarkers.Count; index++)
+        {
+            if (sourceMarkers[index] is not JsonObject sourceMarker)
+            {
+                continue;
+            }
+
+            string markerId = ReadString(sourceMarker["id"]) ?? $"marker-{index}";
+            AddUniqueIdentifier(identifiers, markerId, "timeline marker");
+            TimelinePosition position = sourceMarker["position_sample"] is null && sourceMarker["time_s"] is null
+                ? timebase.FromSeconds(ReadDouble(sourceMarker["t"], 0))
+                : ReadPosition(sourceMarker, "position_sample", "time_s", timebase);
+            if (position.Samples < 0)
+            {
+                throw new InvalidDataException($"Timeline marker '{markerId}' cannot be before zero.");
+            }
+
+            markers.Add(new TimelineMarker(
+                markerId,
+                ReadString(sourceMarker["name"]) ?? ReadString(sourceMarker["label"]) ?? $"Marker {index + 1}",
+                position,
+                ReadString(sourceMarker["color"]),
+                sourceMarker.DeepClone().AsObject()));
+        }
+
+        return markers.OrderBy(marker => marker.Position.Samples).ToArray();
     }
 
     private static void ReadMediaAssetPool(

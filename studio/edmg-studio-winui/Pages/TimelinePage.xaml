@@ -41,6 +41,8 @@
                                   AutomationProperties.AutomationId="Timeline.AddAudioTrack" />
                     <AppBarButton Label="Add video track" Icon="Video" Click="AddVideoTrack_Click"
                                   AutomationProperties.AutomationId="Timeline.AddVideoTrack" />
+                    <AppBarButton Label="Add marker" Icon="Flag" Click="AddMarker_Click"
+                                  AutomationProperties.AutomationId="Timeline.AddMarker" />
                 </CommandBar>
                 <Button x:Name="UndoButton"
                         AutomationProperties.AutomationId="Timeline.Undo"
@@ -277,6 +279,28 @@
                                             <Button x:Name="SplitExactButton" Content="Split" Click="SplitExact_Click"
                                                     AutomationProperties.AutomationId="Timeline.SplitExact" />
                                         </StackPanel>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Timeline markers" HorizontalAlignment="Stretch">
+                                    <StackPanel Spacing="8">
+                                        <ComboBox x:Name="MarkerComboBox"
+                                                  Header="Selected marker"
+                                                  DisplayMemberPath="Name"
+                                                  SelectionChanged="MarkerComboBox_SelectionChanged"
+                                                  AutomationProperties.AutomationId="Timeline.MarkerSelection" />
+                                        <TextBox x:Name="MarkerNameTextBox"
+                                                 Header="Marker name"
+                                                 PlaceholderText="Marker"
+                                                 AutomationProperties.AutomationId="Timeline.MarkerName" />
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <Button Grid.Column="0" Content="Add here" Click="AddMarker_Click"
+                                                    AutomationProperties.AutomationId="Timeline.MarkerAddHere" />
+                                            <Button x:Name="MoveMarkerButton" Grid.Column="1" Content="Move here" Click="MoveMarker_Click"
+                                                    AutomationProperties.AutomationId="Timeline.MarkerMoveHere" />
+                                            <Button x:Name="DeleteMarkerButton" Grid.Column="2" Content="Delete" Click="DeleteMarker_Click"
+                                                    AutomationProperties.AutomationId="Timeline.MarkerDelete" />
+                                        </Grid>
                                     </StackPanel>
                                 </Expander>
 

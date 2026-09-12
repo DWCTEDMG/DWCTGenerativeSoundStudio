@@ -90,6 +90,67 @@ def test_grouped_edit_undo_redo_persists_across_store_reload(editor):
     assert redone.json()["timeline"] == result.json()["timeline"]
 
 
+def test_marker_commands_are_exact_sorted_persistent_and_reversible(editor):
+    first = submit(
+        editor,
+        operations=[
+            {"kind": "add_marker", "new_id": "outro", "name": "Outro", "position": "9007199254740993"},
+            {"kind": "add_marker", "new_id": "intro", "name": "Intro", "position": "24000"},
+        ],
+    )
+    assert first.status_code == 200, first.text
+    assert [marker["id"] for marker in first.json()["timeline"]["markers"]] == ["intro", "outro"]
+    assert first.json()["timeline"]["markers"][1]["position_sample"] == "9007199254740993"
+
+    moved = submit(
+        editor,
+        operations=[{"kind": "move_marker", "marker_id": "outro", "position": "12000"}],
+    )
+    assert moved.status_code == 200, moved.text
+    assert [marker["id"] for marker in moved.json()["timeline"]["markers"]] == ["outro", "intro"]
+    assert submit(editor, action="undo").json()["timeline"] == first.json()["timeline"]
+    deleted = submit(
+        editor,
+        operations=[{"kind": "delete_marker", "marker_id": "intro"}],
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert [marker["id"] for marker in deleted.json()["timeline"]["markers"]] == ["outro"]
+
+
+def test_marker_commands_reject_duplicate_ids_and_invalid_positions(editor):
+    assert submit(
+        editor,
+        operations=[{"kind": "add_marker", "new_id": "clip", "name": "Duplicate", "position": "0"}],
+    ).status_code == 422
+    assert submit(
+        editor,
+        operations=[{"kind": "add_marker", "new_id": "bad", "name": "Bad", "position": "-1"}],
+    ).status_code == 422
+
+
+def test_replacement_marker_time_edit_regenerates_stale_exact_position():
+    baseline = normalize_timeline({
+        "timebase": {"sample_rate": 48000, "frame_rate": {"numerator": 30, "denominator": 1}},
+        "tracks": [],
+        "markers": [{"id": "cue", "name": "Cue", "time_s": 1.0}],
+    })
+    proposed = deepcopy(baseline)
+    proposed["markers"][0]["time_s"] = 2.0
+
+    normalized = normalize_timeline(proposed, baseline)
+
+    assert normalized["markers"][0]["position_sample"] == "96000"
+    assert normalized["markers"][0]["time_s"] == 2.0
+
+
+def test_legacy_marker_time_is_preserved_without_changing_its_shape():
+    marker = {"id": "planner", "t": 1.25, "label": "Cue"}
+
+    normalized = normalize_timeline({"tracks": [], "markers": [deepcopy(marker)]})
+
+    assert normalized["markers"] == [marker]
+
+
 def test_retry_is_idempotent_and_changed_reuse_rejected(editor):
     store, pid, client = editor
     body = {

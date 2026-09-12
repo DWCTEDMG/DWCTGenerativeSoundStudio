@@ -137,6 +137,33 @@ def normalize_timeline(source: dict, baseline: dict | None = None) -> dict:
                     exact = Fraction(str(data[seconds_key])) * rate
                     rounded = int64(nearest(exact))
                     data[sample_key], data[remainder_key] = str(rounded), str(exact - rounded)
+    markers = result.setdefault("markers", [])
+    if not isinstance(markers, list):
+        raise ValueError("Timeline markers must be an array")
+    previous_markers = {
+        marker.get("id"): marker for marker in (baseline or {}).get("markers", [])
+        if isinstance(marker, dict)
+    }
+    for index, marker in enumerate(markers):
+        if not isinstance(marker, dict):
+            raise ValueError("Timeline marker must be an object")
+        marker.setdefault("id", str(uuid5(NAMESPACE_URL, f"edmg:marker:{index}")))
+        _unique_id(marker["id"], ids)
+        legacy_marker = "position_sample" not in marker and "time_s" not in marker and "t" in marker
+        if not legacy_marker:
+            marker.setdefault("name", str(marker.get("label") or f"Marker {index + 1}"))
+        old = previous_markers.get(marker["id"], {})
+        seconds_changed = "time_s" in marker and marker.get("time_s") != old.get("time_s")
+        if "position_sample" in marker and (not baseline or not seconds_changed):
+            position = int64(marker["position_sample"])
+        else:
+            position = clock.samples(marker.get("time_s", marker.get("t", 0)))
+        if position < 0:
+            raise ValueError("Timeline markers cannot be before zero")
+        if not legacy_marker:
+            marker["position_sample"] = str(position)
+            marker["time_s"] = float(clock.seconds(position))
+    markers.sort(key=lambda marker: _marker_sample(marker, clock))
     return result
 
 
@@ -144,6 +171,12 @@ def _unique_id(value: object, seen: set[str]) -> None:
     if not isinstance(value, str) or not value or value in seen:
         raise ValueError("Track and clip IDs must be nonempty and unique")
     seen.add(value)
+
+
+def _marker_sample(marker: dict, clock: ProjectClock) -> int:
+    if "position_sample" in marker:
+        return int64(marker["position_sample"])
+    return clock.samples(marker.get("time_s", marker.get("t", 0)))
 
 
 def history_state(meta: dict) -> dict:
@@ -283,6 +316,9 @@ def _edit(timeline: dict, op: dict) -> None:
     tracks = timeline["tracks"]
     if kind in {"add_camera_keyframe", "update_camera_keyframe", "delete_camera_keyframe"}:
         _edit_camera(timeline, op)
+        return
+    if kind in {"add_marker", "move_marker", "delete_marker"}:
+        _edit_marker(timeline, op)
         return
     if kind == "add_track":
         track_type = op.get("track_type", "video")
@@ -438,6 +474,50 @@ def _edit(timeline: dict, op: dict) -> None:
         clip["muted"] = op["value"]
     else:
         raise ValueError("Unsupported timeline operation")
+
+
+def _edit_marker(timeline: dict, op: dict) -> None:
+    markers = timeline.setdefault("markers", [])
+    if not isinstance(markers, list):
+        raise ValueError("Timeline markers must be an array")
+    kind = op["kind"]
+    if kind == "add_marker":
+        marker_id = op.get("new_id") or str(uuid4())
+        if not isinstance(marker_id, str) or not marker_id:
+            raise ValueError("Marker ID must be a nonempty string")
+        if any(marker.get("id") == marker_id for marker in markers):
+            raise ValueError("Marker ID is already in use")
+        marker = {
+            "id": marker_id,
+            "name": str(op.get("name") or "Marker"),
+            "position_sample": str(_marker_position(timeline, op)),
+        }
+        if op.get("color") is not None:
+            if not isinstance(op["color"], str):
+                raise ValueError("Marker color must be a string")
+            marker["color"] = op["color"]
+        markers.append(marker)
+    else:
+        marker = next((item for item in markers if item.get("id") == op.get("marker_id")), None)
+        if marker is None:
+            raise ValueError("Marker not found")
+        if kind == "delete_marker":
+            markers.remove(marker)
+        else:
+            marker["position_sample"] = str(_marker_position(timeline, op))
+    clock = ProjectClock.from_timeline(timeline)
+    markers.sort(key=lambda marker: _marker_sample(marker, clock))
+
+
+def _marker_position(timeline: dict, op: dict) -> int:
+    position = int64(op.get("position"))
+    if op.get("snap") == "frame":
+        position = ProjectClock.from_timeline(timeline).snap_frame(position)
+    elif op.get("snap") not in {None, "off", "sample"}:
+        raise ValueError("Unsupported snap mode")
+    if position < 0:
+        raise ValueError("Position cannot be negative")
+    return position
 
 
 def _set_clip_property(clip: dict, op: dict) -> None:

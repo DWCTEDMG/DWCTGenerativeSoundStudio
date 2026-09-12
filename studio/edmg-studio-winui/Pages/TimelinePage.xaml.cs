@@ -48,6 +48,7 @@ public sealed partial class TimelinePage : Page
     private CancellationTokenSource? _previewCancellation;
     private CancellationTokenSource? _automationCancellation;
     private JsonObject? _timelineDocument;
+    private CanonicalProject? _canonicalProject;
     private JsonObject? _recoveryDocument;
     private IReadOnlyList<TimelineLaneDocument> _lanes = [];
     private IReadOnlyList<TimelineCameraKeyframeDocument> _cameraKeyframes = [];
@@ -55,6 +56,7 @@ public sealed partial class TimelinePage : Page
     private string? _loadedProjectId;
     private string? _selectedLaneId;
     private string? _selectedCameraKeyframeIdentity;
+    private string? _selectedMarkerId;
     private string _selectedSourcePath = string.Empty;
     private int _loadedVariantIndex;
     private Border? _selectedClipBorder;
@@ -86,6 +88,7 @@ public sealed partial class TimelinePage : Page
     private uint _rulerPointerId;
     private bool _suppressSessionChange;
     private bool _suppressCameraSelectionChange;
+    private bool _suppressMarkerSelectionChange;
     private bool _revisionConflictInterruptedOperation;
     private TimelinePointerTool _pointerTool;
 
@@ -319,11 +322,13 @@ public sealed partial class TimelinePage : Page
         _loadedProjectId = null;
         _project = null;
         _timelineDocument = null;
+        _canonicalProject = null;
         _recoveryDocument = null;
         _lanes = [];
         _cameraKeyframes = [];
         _selectedLaneId = null;
         _selectedCameraKeyframeIdentity = null;
+        _selectedMarkerId = null;
         _selectedSourcePath = string.Empty;
         _editorHistory = new();
         _editorRevision = 0;
@@ -340,6 +345,8 @@ public sealed partial class TimelinePage : Page
         TimelineCanvas.Children.Clear();
         _cameraKeyframeItems.Clear();
         CameraKeyframeListView.SelectedItem = null;
+        MarkerComboBox.ItemsSource = null;
+        MarkerComboBox.SelectedItem = null;
         SelectedClipTitle.Text = "No clip selected";
         SelectedClipSubtitle.Text = "Select a clip to inspect its timing and media properties.";
         PreviewSurface.ShowEmpty(message);
@@ -360,6 +367,7 @@ public sealed partial class TimelinePage : Page
         }
 
         _lanes = TimelineProjection.Project(_timelineDocument);
+        _canonicalProject = _project is null ? null : ProjectTimelineContracts.FromTimeline(_project, _timelineDocument);
         _cameraKeyframes = TimelineCameraProjection.Project(_timelineDocument);
         _durationSeconds = Math.Max(
             TimelineProjection.MinimumDurationSeconds,
@@ -376,6 +384,11 @@ public sealed partial class TimelinePage : Page
                 keyframe => keyframe.StableId == _selectedCameraKeyframeIdentity))
         {
             _selectedCameraKeyframeIdentity = null;
+        }
+        if (_selectedMarkerId is not null &&
+            _canonicalProject?.Markers.All(marker => marker.Id != _selectedMarkerId) != false)
+        {
+            _selectedMarkerId = null;
         }
 
         ProjectText.Text = _project?.Name ?? _loadedProjectId ?? "Timeline";
@@ -406,6 +419,7 @@ public sealed partial class TimelinePage : Page
         RenderRuler();
         RenderTimeline();
         PopulateInspector();
+        RefreshMarkers();
         RefreshCameraEditor();
         UpdateTransportUi();
         UpdateCommandState();
@@ -561,6 +575,27 @@ public sealed partial class TimelinePage : Page
             Canvas.SetTop(label, 5);
             RulerCanvas.Children.Add(line);
             RulerCanvas.Children.Add(label);
+        }
+
+        if (_canonicalProject is null)
+        {
+            return;
+        }
+
+        foreach (TimelineMarker marker in _canonicalProject.Markers)
+        {
+            double x = _canonicalProject.Timebase.ToSeconds(marker.Position) * _pixelsPerSecond;
+            var flag = new TextBlock
+            {
+                Text = "\u25bc",
+                Tag = marker.Id,
+                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+                FontSize = 13,
+            };
+            ToolTipService.SetToolTip(flag, marker.Name);
+            Canvas.SetLeft(flag, Math.Max(0, x - 6));
+            Canvas.SetTop(flag, 18);
+            RulerCanvas.Children.Add(flag);
         }
     }
 
@@ -1410,6 +1445,7 @@ public sealed partial class TimelinePage : Page
         TimelineLaneDocument original = _dragOriginalLane;
         TimelineLaneDocument provisional = _dragProvisionalLane;
         JsonObject before = _dragBeforeSnapshot;
+        DragMode dragMode = _dragMode;
         ResetDragState();
         border.ReleasePointerCapture(e.Pointer);
 
@@ -1417,6 +1453,26 @@ public sealed partial class TimelinePage : Page
         {
             RenderTimeline();
             return;
+        }
+
+        if (!original.IsLayer && !_rippleEnabled && original.TrackIndex == provisional.TrackIndex)
+        {
+            string kind = dragMode == DragMode.Move ? "move" : "trim";
+            double editSeconds = dragMode == DragMode.TrimEnd
+                ? provisional.EndSeconds
+                : provisional.StartSeconds;
+            if (TryCreateNativeEventOperation(original, kind, SnapSample(editSeconds), out JsonObject operation))
+            {
+                if (dragMode != DragMode.Move)
+                {
+                    operation["edge"] = dragMode == DragMode.TrimStart ? "start" : "end";
+                }
+                await ExecuteNativeEditAsync(operation, dragMode == DragMode.Move
+                    ? "Move timeline clip"
+                    : "Trim timeline clip");
+                e.Handled = true;
+                return;
+            }
         }
 
         ReplaceLaneByStableId(original.StableId, provisional);
@@ -1611,6 +1667,76 @@ public sealed partial class TimelinePage : Page
     private async void AddVideoTrack_Click(object sender, RoutedEventArgs e) =>
         await ExecuteNativeEditAsync(new JsonObject { ["kind"] = "add_track", ["track_type"] = "video" }, "Add video track");
 
+    private async void AddMarker_Click(object sender, RoutedEventArgs e)
+    {
+        string id = $"marker-{Guid.NewGuid():N}";
+        string name = string.IsNullOrWhiteSpace(MarkerNameTextBox.Text) ? "Marker" : MarkerNameTextBox.Text.Trim();
+        await ExecuteNativeEditAsync(new JsonObject
+        {
+            ["kind"] = "add_marker",
+            ["new_id"] = id,
+            ["name"] = name,
+            ["position"] = CurrentSampleText(),
+            ["snap"] = "sample",
+        }, "Add timeline marker");
+        _selectedMarkerId = id;
+    }
+
+    private async void MoveMarker_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedMarkerId is null) return;
+        await ExecuteNativeEditAsync(new JsonObject
+        {
+            ["kind"] = "move_marker",
+            ["marker_id"] = _selectedMarkerId,
+            ["position"] = CurrentSampleText(),
+            ["snap"] = "sample",
+        }, "Move timeline marker");
+    }
+
+    private async void DeleteMarker_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedMarkerId is null) return;
+        await ExecuteNativeEditAsync(new JsonObject
+        {
+            ["kind"] = "delete_marker",
+            ["marker_id"] = _selectedMarkerId,
+        }, "Delete timeline marker");
+        _selectedMarkerId = null;
+    }
+
+    private void MarkerComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressMarkerSelectionChange) return;
+        _selectedMarkerId = (MarkerComboBox.SelectedItem as TimelineMarker)?.Id;
+        if (MarkerComboBox.SelectedItem is TimelineMarker marker)
+        {
+            MarkerNameTextBox.Text = marker.Name;
+        }
+        UpdateCommandState();
+    }
+
+    private void RefreshMarkers()
+    {
+        _suppressMarkerSelectionChange = true;
+        try
+        {
+            TimelineMarker[] markers = _canonicalProject?.Markers.ToArray() ?? [];
+            MarkerComboBox.ItemsSource = markers;
+            MarkerComboBox.SelectedItem = markers.FirstOrDefault(marker => marker.Id == _selectedMarkerId);
+        }
+        finally
+        {
+            _suppressMarkerSelectionChange = false;
+        }
+    }
+
+    private string CurrentSampleText()
+    {
+        ProjectTimebase timebase = _canonicalProject?.Timebase ?? new ProjectTimebase();
+        return timebase.FromSeconds(_positionSeconds).Samples.ToString(CultureInfo.InvariantCulture);
+    }
+
     private async void MoveExact_Click(object sender, RoutedEventArgs e) => await EditAtExactSampleAsync("move");
 
     private async void SplitExact_Click(object sender, RoutedEventArgs e) => await EditAtExactSampleAsync("split");
@@ -1636,6 +1762,51 @@ public sealed partial class TimelinePage : Page
         }, kind == "move" ? "Move clip to exact sample" : "Split clip at exact sample");
     }
 
+    private bool TryCreateNativeEventOperation(
+        TimelineLaneDocument lane,
+        string kind,
+        long position,
+        out JsonObject operation)
+    {
+        operation = [];
+        if (lane.IsLayer || _timelineDocument?["tracks"] is not JsonArray tracks ||
+            lane.TrackIndex < 0 || lane.TrackIndex >= tracks.Count ||
+            tracks[lane.TrackIndex] is not JsonObject track ||
+            track["id"]?.GetValue<string>() is not string trackId ||
+            lane.Source["id"]?.GetValue<string>() is not string eventId)
+        {
+            return false;
+        }
+
+        operation = new JsonObject
+        {
+            ["kind"] = kind,
+            ["track_id"] = trackId,
+            ["clip_id"] = eventId,
+            ["position"] = position.ToString(CultureInfo.InvariantCulture),
+            ["snap"] = "sample",
+        };
+        return true;
+    }
+
+    private long SnapSample(double seconds)
+    {
+        ProjectTimebase timebase = _canonicalProject?.Timebase ?? new ProjectTimebase();
+        TimelinePosition position = timebase.FromSeconds(Math.Max(0, seconds));
+        string mode = GetSelectedTag(SnapCombo) ?? "off";
+        TimelineSnapMode snapMode = mode switch
+        {
+            "beat" => TimelineSnapMode.Beat,
+            "half" => TimelineSnapMode.HalfBeat,
+            "quarter" => TimelineSnapMode.QuarterBeat,
+            _ => TimelineSnapMode.Off,
+        };
+        decimal bpm = _project?.Bpm is double value && double.IsFinite(value) && value > 0
+            ? (decimal)value
+            : 120;
+        return ProjectTimelineOperations.Snap(timebase, position, snapMode, bpm).Samples;
+    }
+
     private async Task ExecuteNativeEditAsync(JsonObject operation, string label, JsonObject? precedingOperation = null)
     {
         if (_isBusy || _isDirty || _editorRevision < 1 || _loadedProjectId is not string projectId)
@@ -1656,6 +1827,19 @@ public sealed partial class TimelinePage : Page
             {
                 _selectedLaneId = operation["new_id"]?.GetValue<string>();
                 _selectedCameraKeyframeIdentity = null;
+            }
+            else if (operation["kind"]?.GetValue<string>() is "split" or "duplicate")
+            {
+                _selectedLaneId = operation["new_id"]?.GetValue<string>();
+                _selectedCameraKeyframeIdentity = null;
+            }
+            else if (operation["kind"]?.GetValue<string>() == "add_marker")
+            {
+                _selectedMarkerId = operation["new_id"]?.GetValue<string>();
+            }
+            else if (operation["kind"]?.GetValue<string>() == "delete_marker")
+            {
+                _selectedMarkerId = null;
             }
             RefreshEditor(updateRawText: true);
             await RefreshProjectRevisionAsync(projectId, token);
@@ -2380,6 +2564,13 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
+        if (!lane.IsLayer && TryCreateNativeEventOperation(lane, "split", SnapSample(splitSeconds), out JsonObject operation))
+        {
+            operation["new_id"] = Guid.NewGuid().ToString("N");
+            await ExecuteNativeEditAsync(operation, "Split timeline clip");
+            return;
+        }
+
         JsonObject before = CloneDocument(_timelineDocument);
         var (left, right) = TimelineProjection.Split(lane, splitSeconds);
         var updated = _lanes.ToList();
@@ -2438,6 +2629,15 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
+        if (!lane.IsLayer && TryCreateNativeEventOperation(lane, "duplicate", 0, out JsonObject operation))
+        {
+            operation.Remove("position");
+            operation.Remove("snap");
+            operation["new_id"] = Guid.NewGuid().ToString("N");
+            await ExecuteNativeEditAsync(operation, "Duplicate timeline clip");
+            return;
+        }
+
         JsonObject before = CloneDocument(_timelineDocument);
         TimelineLaneDocument duplicate = TimelineProjection.DuplicateAt(
             lane,
@@ -2476,6 +2676,16 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
+
+        if (!lane.IsLayer && !_rippleEnabled && TryCreateNativeEventOperation(lane, "delete", 0, out JsonObject operation))
+        {
+            operation.Remove("position");
+            operation.Remove("snap");
+            _selectedLaneId = null;
+            await ExecuteNativeEditAsync(operation, "Delete timeline clip");
+            return;
+        }
+
         JsonObject before = CloneDocument(_timelineDocument);
         _lanes = _rippleEnabled && !lane.IsLayer
             ? TimelineProjection.RippleAfterDelete(_lanes, lane, _durationSeconds)
@@ -2498,6 +2708,14 @@ public sealed partial class TimelinePage : Page
             SelectedLane is not TimelineLaneDocument lane ||
             IsLaneLocked(lane))
         {
+            return;
+        }
+
+
+        if (!lane.IsLayer && !_rippleEnabled &&
+            TryCreateNativeEventOperation(lane, "move", SnapSample(_positionSeconds), out JsonObject operation))
+        {
+            await ExecuteNativeEditAsync(operation, "Move timeline clip to playhead");
             return;
         }
 
@@ -2532,6 +2750,13 @@ public sealed partial class TimelinePage : Page
         if (!CanQuantizeToCurrentGrid())
         {
             ShowInfo("Turn snap on and choose an available beat or BPM grid first.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!lane.IsLayer && !_rippleEnabled &&
+            TryCreateNativeEventOperation(lane, "move", SnapSample(lane.StartSeconds), out JsonObject operation))
+        {
+            await ExecuteNativeEditAsync(operation, "Quantize timeline clip");
             return;
         }
 
@@ -3648,6 +3873,11 @@ public sealed partial class TimelinePage : Page
         MoveExactButton.IsEnabled = exactEnabled;
         SplitExactButton.IsEnabled = exactEnabled;
         ExactSampleTextBox.IsEnabled = exactEnabled;
+        bool hasMarkerSelection = _selectedMarkerId is not null && !_isBusy;
+        MarkerComboBox.IsEnabled = hasTimeline;
+        MarkerNameTextBox.IsEnabled = hasTimeline;
+        MoveMarkerButton.IsEnabled = hasMarkerSelection;
+        DeleteMarkerButton.IsEnabled = hasMarkerSelection;
         RedoButton.IsEnabled = hasTimeline && !_isDirty && _editorHistory.CanRedo;
         ToolTipService.SetToolTip(UndoButton, _editorHistory.UndoLabel ?? "No saved edit to undo");
         ToolTipService.SetToolTip(RedoButton, _editorHistory.RedoLabel ?? "No saved edit to redo");

@@ -107,6 +107,38 @@ public sealed class ProjectTimelineContractsTests
     }
 
     [TestMethod]
+    public void FromProject_ReadsLegacyMarkerTime()
+    {
+        ProjectDto dto = JsonSerializer.Deserialize<ProjectDto>(
+            """{"id":"legacy-marker","name":"Legacy marker","meta":{"timeline":{"tracks":[],"markers":[{"id":"cue","t":1.25,"label":"Cue"}]}}}""",
+            StudioJson.Options)!;
+
+        TimelineMarker marker = dto.CanonicalProject.Markers.Single();
+
+        Assert.AreEqual("Cue", marker.Name);
+        Assert.AreEqual(60_000L, marker.Position.Samples);
+    }
+
+    [TestMethod]
+    public void FromProject_PreservesExactMarkersAndRejectsCrossDomainIdCollisions()
+    {
+        ProjectDto dto = JsonSerializer.Deserialize<ProjectDto>(
+            """{"id":"markers","name":"Markers","meta":{"timeline":{"tracks":[{"id":"video","clips":[{"id":"clip","start_sample":"0","end_sample":"3"}]}],"markers":[{"id":"chapter","label":"Chapter","position_sample":"9007199254740993","vendor":{"keep":true}}]}}}""",
+            StudioJson.Options)!;
+        ProjectDto collisionDto = JsonSerializer.Deserialize<ProjectDto>(
+            """{"id":"collision","name":"Collision","meta":{"timeline":{"tracks":[{"id":"video","clips":[]}],"markers":[{"id":"video","position_sample":"0"}]}}}""",
+            StudioJson.Options)!;
+
+        CanonicalProject project = dto.CanonicalProject;
+        Assert.AreEqual("Chapter", project.Markers.Single().Name);
+        Assert.AreEqual(9_007_199_254_740_993L, project.Markers.Single().Position.Samples);
+        JsonObject rebuilt = ProjectTimelineContracts.RebuildTimeline(project);
+        Assert.AreEqual("9007199254740993", rebuilt["markers"]![0]!["position_sample"]!.GetValue<string>());
+        Assert.IsTrue(rebuilt["markers"]![0]!["vendor"]!["keep"]!.GetValue<bool>());
+        Assert.Throws<InvalidDataException>(() => collisionDto.CanonicalProject);
+    }
+
+    [TestMethod]
     public void RebuildTimeline_UsesCanonicalEventTypeAndClearsMediaReferences()
     {
         ProjectDto dto = JsonSerializer.Deserialize<ProjectDto>(
