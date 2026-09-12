@@ -316,7 +316,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
                 JsonElement response = await _apiClient.ProbeHunyuanRuntimeAsync(token);
                 bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
                 HunyuanStatusText.Text = ready
-                    ? "Hunyuan Linux environment passed its readiness probe. Run the model smoke test for inference qualification."
+                    ? "Hunyuan Linux environment passed its readiness probe and is available for rendering."
                     : FormatHunyuanIssues(response);
             },
             "Hunyuan Linux runtime probe completed.");
@@ -379,6 +379,9 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         AcceptLicenseButton.IsEnabled = available && model!.RequiresLicense && !model.IsAccepted;
         BenchmarkButton.IsEnabled = available;
         SmokeTestButton.IsEnabled = available && model!.CanSmokeTest;
+        SmokeTestButton.Content = model?.RuntimeStatus?.SmokeTestRequired == false
+            ? "Run optional runtime test"
+            : "Run runtime smoke test";
         RevalidateButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
         UninstallButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
         RemoveButton.IsEnabled = available && model!.IsUserModel;
@@ -583,7 +586,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
                 ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(model.Entry.Id, token);
                 UpsertTask(response.Task);
             },
-            "Runtime smoke test queued. Readiness will update only after real inference succeeds.");
+            "Optional runtime test queued.");
     }
 
     private async void Remove_Click(object sender, RoutedEventArgs e)
@@ -956,7 +959,7 @@ public sealed class ModelPresentation
     };
     public string RuntimeDetail => RuntimeStatus is null
         ? string.Empty
-        : $"\nQualification: level {RuntimeStatus.ValidationLevel} of 5"
+        : $"\nValidation level: {RuntimeStatus.ValidationLevel}"
           + (string.IsNullOrWhiteSpace(RuntimeStatus.Error) ? string.Empty : $"\nReason: {RuntimeStatus.Error}");
     public string Subtitle => $"{Kind} - {Source} - {Lane}";
 

@@ -170,6 +170,53 @@ def test_hunyuan_adapter_is_implemented_but_fails_closed_without_runner(tmp_path
     assert any("EDMG_HUNYUAN15_RUNNER" in issue for issue in adapter.validate_config(tmp_path))
 
 
+def test_hunyuan_wsl_uses_driver_visible_cuda_without_promoting_native_runtimes(monkeypatch):
+    monkeypatch.setenv("EDMG_HUNYUAN15_RUNNER", "wsl")
+    hardware = {
+        "backend": "cpu",
+        "device": "cpu",
+        "device_name": "CPU",
+        "vram_gb": 0,
+        "ram_gb": 128,
+        "llama_backend": "cuda",
+        "llama_device": "cuda:0",
+        "llama_device_name": "NVIDIA RTX A6000",
+        "llama_vram_gb": 48,
+    }
+
+    hunyuan = DEFAULT_RUNTIME_REGISTRY.status("hf_hunyuan_video15_internal", hardware=hardware)
+    assert hunyuan["hardware_compatible"]
+    assert hunyuan["device"] == "cuda:0"
+
+    native = DEFAULT_RUNTIME_REGISTRY._runtime_hardware("fixture", hardware)
+    assert native["backend"] == "cpu"
+    assert native["device"] == "cpu"
+
+
+def test_hunyuan_does_not_require_smoke_test_receipt(tmp_path, monkeypatch):
+    monkeypatch.setenv("EDMG_HUNYUAN15_RUNNER", "wsl")
+    adapter = DEFAULT_RUNTIME_REGISTRY.adapter("hf_hunyuan_video15_internal")
+    subject = ModelRuntimeRegistry()
+    subject.register(RuntimeAdapter(
+        descriptor=adapter.descriptor,
+        validate_config=lambda root: [],
+        smoke_test=adapter.smoke_test,
+    ))
+    status = subject.status(
+        "hf_hunyuan_video15_internal",
+        package_root=tmp_path,
+        package_validation=package_validation(),
+        hardware={"backend": "cuda", "device": "cuda:0", "vram_gb": 48, "ram_gb": 128},
+    )
+
+    assert status["runtime_ready"]
+    assert status["runtime_state"] == "runtime_ready"
+    assert status["validation_level"] == 3
+    assert status["smoke_test_required"] is False
+    assert not status["smoke_tested"]
+    assert not status["blockers"]
+
+
 def test_opt_in_real_model_runtime_smoke_tests():
     if os.environ.get("REAL_MODEL_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
         pytest.skip("Set REAL_MODEL_TESTS=1 to run destructive, hardware-dependent model inference")

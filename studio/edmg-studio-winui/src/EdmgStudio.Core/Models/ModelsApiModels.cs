@@ -92,7 +92,11 @@ public sealed record ModelRuntimeStatus(
     [property: JsonPropertyName("hardware_known")] bool HardwareKnown,
     [property: JsonPropertyName("hardware_compatible")] bool HardwareCompatible,
     [property: JsonPropertyName("error")] string? Error,
-    [property: JsonPropertyName("blockers")] IReadOnlyList<string>? Blockers);
+    [property: JsonPropertyName("blockers")] IReadOnlyList<string>? Blockers)
+{
+    [JsonPropertyName("smoke_test_required")]
+    public bool SmokeTestRequired { get; init; } = true;
+}
 
 public sealed class ModelPackEntry
 {

@@ -118,7 +118,7 @@ describe("Models page polling", () => {
     renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
     expect(await screen.findByText("LTX-2.5 Distilled")).toBeTruthy();
     expect(screen.getAllByText("Installed / Runtime unavailable").length).toBeGreaterThan(0);
-    expect(screen.getByText("Qualification: level 1 of 5")).toBeTruthy();
+    expect(screen.getByText("Validation level: 1")).toBeTruthy();
     expect(screen.getByText("LTX execution adapter is pending.")).toBeTruthy();
     expect(screen.getByText(/Below provisional targets/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Revalidate files" }));

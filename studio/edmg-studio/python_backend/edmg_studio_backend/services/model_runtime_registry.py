@@ -379,6 +379,25 @@ class ModelRuntimeRegistry:
         return "cuda:0" if backend == "cuda" else "cpu"
 
     @staticmethod
+    def _runtime_hardware(package_id: str, hardware: Mapping[str, Any]) -> dict[str, Any]:
+        effective = dict(hardware)
+        if package_id != "hf_hunyuan_video15_internal":
+            return effective
+
+        from .internal_video_models import hunyuan_runner_config
+
+        if (
+            hunyuan_runner_config().mode == "wsl"
+            and str(effective.get("backend") or "").lower() != "cuda"
+            and str(effective.get("llama_backend") or "").lower() == "cuda"
+        ):
+            effective["backend"] = "cuda"
+            effective["device"] = str(effective.get("llama_device") or "cuda:0")
+            effective["device_name"] = effective.get("llama_device_name") or effective.get("device_name")
+            effective["vram_gb"] = effective.get("llama_vram_gb", effective.get("vram_gb", 0.0))
+        return effective
+
+    @staticmethod
     def _fingerprint(
         descriptor: RuntimeDescriptor,
         package_validation: Mapping[str, Any],
@@ -435,7 +454,7 @@ class ModelRuntimeRegistry:
     ) -> dict[str, Any]:
         adapter = self.adapter(package_id)
         descriptor = adapter.descriptor
-        hw = dict(hardware or {})
+        hw = self._runtime_hardware(package_id, hardware or {})
         validation = dict(package_validation or {})
         installed = bool(package_root and validation.get("valid"))
         dependencies, dependency_versions = self._dependency_status(descriptor.dependency_modules)
@@ -507,12 +526,17 @@ class ModelRuntimeRegistry:
             and receipt.get("validation_level") == 5
             and receipt.get("fingerprint") == fingerprint
         )
+        smoke_required = package_id != "hf_hunyuan_video15_internal"
         if smoke_valid and descriptor.adapter_ready and not blockers:
             validation_level = 5
-        elif installed and descriptor.adapter_ready and validation_level == 3:
+        elif smoke_required and installed and descriptor.adapter_ready and validation_level == 3:
             blockers.append("Run the model runtime smoke test to initialize and qualify this installation.")
 
-        runtime_ready = validation_level == 5 and not blockers
+        runtime_ready = bool(
+            descriptor.adapter_ready
+            and not blockers
+            and (validation_level == 5 or (not smoke_required and validation_level >= 3))
+        )
         state: ValidationState = (
             "runtime_ready" if runtime_ready else
             "installed_runtime_unavailable" if installed else
@@ -548,6 +572,7 @@ class ModelRuntimeRegistry:
             "device": self._device(hw) if hardware_known else None,
             "dtype": descriptor.recommended_dtype if hardware_known else None,
             "smoke_test_supported": descriptor.smoke_test_supported,
+            "smoke_test_required": smoke_required,
             "smoke_tested": smoke_valid,
             "fingerprint": fingerprint,
             "error": blockers[0] if blockers else None,
@@ -565,17 +590,18 @@ class ModelRuntimeRegistry:
         **kwargs: Any,
     ) -> dict[str, Any]:
         adapter = self.adapter(package_id)
+        effective_hardware = self._runtime_hardware(package_id, hardware)
         status = self.status(
             package_id,
             package_root=package_root,
             package_validation=package_validation,
-            hardware=hardware,
+            hardware=effective_hardware,
         )
         if status["validation_level"] < 3:
             raise RuntimeError(status["error"] or "Runtime prerequisites are incomplete")
         if adapter.smoke_test is None:
             raise RuntimeError("This runtime does not provide a smoke test")
-        result = dict(adapter.smoke_test(package_root=package_root, hardware=dict(hardware), **kwargs))
+        result = dict(adapter.smoke_test(package_root=package_root, hardware=effective_hardware, **kwargs))
         if result.get("success") is not True:
             raise RuntimeError(str(result.get("error") or "Runtime smoke test did not return a valid result"))
         receipt = {
@@ -593,7 +619,7 @@ class ModelRuntimeRegistry:
             package_id,
             package_root=package_root,
             package_validation=package_validation,
-            hardware=hardware,
+            hardware=effective_hardware,
         )
 
 

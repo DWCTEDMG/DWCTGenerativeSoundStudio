@@ -72,7 +72,7 @@ def _runner_prefix(config: HunyuanRunnerConfig) -> list[str]:
         command = ["wsl.exe"]
         if config.distro:
             command.extend(["--distribution", config.distro])
-        return [*command, "--"]
+        return [*command, "--exec"]
     return []
 
 
@@ -674,14 +674,17 @@ def _run_hunyuan(
             "image": _wsl_path(image_path, config) if init_image is not None else None,
         }
         request_path.write_text(json.dumps(request), encoding="utf-8")
-        worker = Path(__file__).with_name("hunyuan_video15_worker.py")
+        backend_root = Path(__file__).resolve().parents[2]
+        python_path = os.pathsep.join((config.repo, str(backend_root)))
         command = [*_runner_prefix(config)]
         if config.mode == "wsl":
+            python_path = ":".join((_wsl_path(config.repo, config), _wsl_path(backend_root, config)))
             command.extend(["env", f"CUDA_VISIBLE_DEVICES={gpu_index}",
                             "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
-                            f"PYTHONPATH={_wsl_path(config.repo, config)}"])
+                            f"PYTHONPATH={python_path}"])
         command.extend([
-            config.python, _wsl_path(worker, config), "--request", _wsl_path(request_path, config),
+            config.python, "-m", "edmg_studio_backend.services.hunyuan_video15_worker",
+            "--request", _wsl_path(request_path, config),
             "--model", _wsl_path(model_dir, config), "--llm", _wsl_path(config.companions["llm"], config),
             "--byt5", _wsl_path(config.companions["byt5"], config), "--glyph", _wsl_path(config.companions["glyph"], config),
             "--vision", _wsl_path(config.companions["vision"], config), "--output", _wsl_path(output_path, config),
@@ -690,7 +693,7 @@ def _run_hunyuan(
         child_env = os.environ.copy()
         child_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
         child_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-        child_env["PYTHONPATH"] = config.repo
+        child_env["PYTHONPATH"] = python_path
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 start_new_session=config.mode == "external", env=child_env)
         started = time.monotonic()

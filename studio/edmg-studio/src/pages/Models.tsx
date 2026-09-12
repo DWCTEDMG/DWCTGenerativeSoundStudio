@@ -27,6 +27,7 @@ type CatalogEntry = {
     installed: boolean; runtime_ready: boolean; files_present: boolean;
     runtime_state: "not_installed" | "installed_runtime_unavailable" | "runtime_degraded" | "runtime_ready";
     validation_level: number; adapter_ready: boolean; smoke_test_supported: boolean;
+    smoke_test_required?: boolean;
     hardware_compatible: boolean; hardware_known: boolean;
     blockers: string[]; validation_issues: string[]; error?: string | null;
   };
@@ -299,7 +300,7 @@ function ModelCard({
           {m.package_status ? (
             <div className="small" style={{ marginTop: 8 }}>
               <b>{statusLabel}</b>
-              <div>Qualification: level {m.package_status.validation_level} of 5</div>
+              <div>Validation level: {m.package_status.validation_level}</div>
               <div>Hardware: {m.package_status.hardware_known ? (m.package_status.hardware_compatible ? "Meets provisional targets" : "Below provisional targets") : "Unknown"}</div>
               <div>Selective download: {((m.download_size_bytes || 0) / 1e9).toFixed(2)} GB · {m.required_files?.length || 0} required files</div>
               <ul>{m.package_status.blockers.map((reason) => <li key={reason}>{reason}</li>)}</ul>
@@ -342,7 +343,9 @@ function ModelCard({
               <>
                 <button className="secondary" onClick={onValidate}>Revalidate files</button>
                 {m.package_status.smoke_test_supported ? (
-                  <button className="secondary" onClick={onSmokeTest}>Run runtime smoke test</button>
+                  <button className="secondary" onClick={onSmokeTest}>
+                    {m.package_status.smoke_test_required === false ? "Run optional runtime test" : "Run runtime smoke test"}
+                  </button>
                 ) : null}
                 <button className="secondary" onClick={onUninstall}>Uninstall package</button>
               </>

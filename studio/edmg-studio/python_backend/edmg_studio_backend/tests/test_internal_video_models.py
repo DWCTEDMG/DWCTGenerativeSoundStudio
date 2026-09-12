@@ -161,8 +161,11 @@ def test_hunyuan_wsl_runner_maps_paths_and_isolates_cuda(tmp_path: Path, monkeyp
         num_frames=2, fps=24, steps=3, cfg=4.0, seed=7, device="cuda:2", workspace=tmp_path,
     )
     command, kwargs = calls[0]
-    assert command[:4] == ["wsl.exe", "--distribution", "Ubuntu", "--"]
+    assert command[:4] == ["wsl.exe", "--distribution", "Ubuntu", "--exec"]
     assert "CUDA_VISIBLE_DEVICES=2" in command
+    assert "-m" in command
+    assert "edmg_studio_backend.services.hunyuan_video15_worker" in command
+    assert any(value.startswith("PYTHONPATH=/mnt/c/HunyuanVideo-1.5:/mnt/c/python_backend") for value in command)
     assert len(frames) == 2
     assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "2"
 
