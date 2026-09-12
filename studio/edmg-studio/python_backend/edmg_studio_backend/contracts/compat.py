@@ -9,7 +9,14 @@ from typing import Any
 from .v1 import (
     AssetRef,
     CapabilityRequirement,
+    CommandContract,
     CueContract,
+    DirectorCameraContract,
+    DirectorDocumentContract,
+    DirectorEnvironmentContract,
+    DirectorSceneContract,
+    DirectorStoryBibleContract,
+    DirectorSubjectContract,
     JobContract,
     PlanWarning,
     ProjectContract,
@@ -38,6 +45,145 @@ def _timestamp(value: object, *, fallback: datetime | None = None) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _split_extensions(payload: Mapping[str, Any], known: set[str]) -> dict[str, Any]:
+    return {str(key): value for key, value in payload.items() if key not in known}
+
+
+def adapt_legacy_director_document(
+    payload: Mapping[str, Any], *, project_id: str, revision: int = 1
+) -> DirectorDocumentContract:
+    """Adapt the extensible operational Director document without losing future fields."""
+
+    source = _mapping(payload)
+    bible_source = _mapping(source.get("story_bible"))
+    bible_known = {
+        "revision", "project_theme", "narrative_summary", "visual_style", "characters",
+        "locations", "continuity_rules", "forbidden_changes",
+    }
+    bible = DirectorStoryBibleContract(
+        revision=bible_source.get("revision", 1),
+        project_theme=str(bible_source.get("project_theme") or ""),
+        narrative_summary=str(bible_source.get("narrative_summary") or ""),
+        visual_style=str(bible_source.get("visual_style") or ""),
+        characters=_mapping(bible_source.get("characters")),
+        locations=_mapping(bible_source.get("locations")),
+        continuity_rules=list(bible_source.get("continuity_rules") or []),
+        forbidden_changes=list(bible_source.get("forbidden_changes") or []),
+        extensions=_split_extensions(bible_source, bible_known),
+    )
+    scenes: list[DirectorSceneContract] = []
+    for scene_value in source.get("scenes") or []:
+        scene = _mapping(scene_value)
+        subjects = []
+        for subject_value in scene.get("subjects") or []:
+            subject = _mapping(subject_value)
+            subject_known = {"id", "role", "appearance_lock", "appearance_notes", "expression"}
+            subjects.append(DirectorSubjectContract(
+                id=str(subject.get("id") or ""), role=str(subject.get("role") or "primary"),
+                appearance_lock=bool(subject.get("appearance_lock", True)),
+                appearance_notes=list(subject.get("appearance_notes") or []),
+                expression=str(subject.get("expression") or ""),
+                extensions=_split_extensions(subject, subject_known),
+            ))
+        camera = _mapping(scene.get("camera"))
+        camera_known = {"shot_type", "movement", "stability", "motion_strength"}
+        environment = _mapping(scene.get("environment"))
+        environment_known = {"location_id", "location", "weather", "secondary_motion"}
+        scene_known = {
+            "scene_id", "start_sample", "end_sample", "intent", "continuity_mode", "subjects",
+            "actions", "camera", "environment", "lighting", "renderer_hints",
+        }
+        scenes.append(DirectorSceneContract(
+            scene_id=str(scene.get("scene_id") or ""),
+            start_sample=scene.get("start_sample", "0"), end_sample=scene.get("end_sample"),
+            intent=str(scene.get("intent") or ""),
+            continuity_mode=scene.get("continuity_mode", "continuous"), subjects=subjects,
+            actions=list(scene.get("actions") or []),
+            camera=DirectorCameraContract(
+                shot_type=str(camera.get("shot_type") or ""), movement=str(camera.get("movement") or ""),
+                stability=str(camera.get("stability") or ""),
+                motion_strength=camera.get("motion_strength", 0.4),
+                extensions=_split_extensions(camera, camera_known),
+            ),
+            environment=DirectorEnvironmentContract(
+                location_id=str(environment.get("location_id") or ""),
+                location=str(environment.get("location") or ""), weather=str(environment.get("weather") or ""),
+                secondary_motion=list(environment.get("secondary_motion") or []),
+                extensions=_split_extensions(environment, environment_known),
+            ),
+            lighting=_mapping(scene.get("lighting")), renderer_hints=_mapping(scene.get("renderer_hints")),
+            extensions=_split_extensions(scene, scene_known),
+        ))
+    known = {"version", "story_bible", "scenes", "analysis_revision"}
+    return DirectorDocumentContract(
+        id=f"{project_id}-director", project_id=project_id, revision=max(1, revision),
+        operational_version=source.get("version", 1), story_bible=bible, scenes=scenes,
+        analysis_revision=source.get("analysis_revision"),
+        extensions=_split_extensions(source, known),
+    )
+
+
+def restore_legacy_director_document(contract: DirectorDocumentContract) -> dict[str, Any]:
+    """Restore the operational ``version: 1`` shape with extensions in their original locations."""
+
+    def merge(model, *, exclude: set[str]) -> dict[str, Any]:
+        payload = model.model_dump(mode="json", exclude=exclude | {"extensions"})
+        return {**payload, **model.extensions}
+
+    scenes = []
+    for scene in contract.scenes:
+        payload = merge(scene, exclude=set())
+        payload["subjects"] = [merge(subject, exclude=set()) for subject in scene.subjects]
+        payload["camera"] = merge(scene.camera, exclude=set())
+        payload["environment"] = merge(scene.environment, exclude=set())
+        scenes.append(payload)
+    return {
+        "version": contract.operational_version,
+        "story_bible": merge(contract.story_bible, exclude=set()),
+        "scenes": scenes,
+        "analysis_revision": contract.analysis_revision,
+        **contract.extensions,
+    }
+
+
+def adapt_legacy_editor_command(
+    payload: Mapping[str, Any], *, project_id: str
+) -> CommandContract:
+    """Adapt the operational editor command while retaining future request fields."""
+
+    source = _mapping(payload)
+    operation_id = str(source.get("operation_id") or "").strip()
+    known = {
+        "operation_id", "expected_revision", "action", "label", "operations", "timeline"
+    }
+    return CommandContract(
+        id=operation_id,
+        project_id=project_id,
+        operation_id=operation_id,
+        expected_revision=source.get("expected_revision"),
+        action=source.get("action"),
+        label=str(source.get("label") or "Timeline edit"),
+        operations=list(source.get("operations") or []),
+        timeline=_mapping(source.get("timeline")) if source.get("timeline") is not None else None,
+        metadata={"legacy_request_extensions": _split_extensions(source, known)},
+    )
+
+
+def restore_legacy_editor_command(contract: CommandContract) -> dict[str, Any]:
+    """Restore the current editor endpoint request shape."""
+
+    extensions = _mapping(contract.metadata.get("legacy_request_extensions"))
+    return {
+        "operation_id": contract.operation_id,
+        "expected_revision": contract.expected_revision,
+        "action": contract.action,
+        "label": contract.label,
+        "operations": contract.operations,
+        "timeline": contract.timeline,
+        **extensions,
+    }
 
 
 def adapt_legacy_project(payload: Mapping[str, Any]) -> ProjectContract:

@@ -9,17 +9,25 @@ from edmg_studio_backend.contracts import (
     CONTRACT_MODELS,
     ArtifactManifestContract,
     CapabilityContract,
+    CommandContract,
+    CommandHistoryStateContract,
     CreativeIntentContract,
     CueContract,
+    DirectorDocumentContract,
+    HardwareProfileContract,
     JobContract,
     MusicGraphContract,
     ProjectContract,
     RenderPlanContract,
     adapt_legacy_cue,
+    adapt_legacy_director_document,
+    adapt_legacy_editor_command,
     adapt_legacy_job,
     adapt_legacy_project,
     adapt_legacy_render_plan,
     contract_schema_bundle,
+    restore_legacy_director_document,
+    restore_legacy_editor_command,
 )
 from edmg_studio_backend.contracts.v1 import (
     AssetRef,
@@ -67,6 +75,18 @@ def _all_contracts():
             director_mode="abstract",
             concept="A compact contract fixture",
         ),
+        DirectorDocumentContract(
+            id="director-1", project_id="project-1",
+            scenes=[{
+                "scene_id": "scene-1", "start_sample": "9007199254740993",
+                "end_sample": "9007199254788993", "intent": "A compact scene",
+            }],
+        ),
+        CommandContract(
+            id="operation-1", project_id="project-1", operation_id="operation-1",
+            expected_revision=1, action="edit", label="Move clip",
+            operations=[{"kind": "move", "track_id": "video", "clip_id": "clip-1", "position": "48000"}],
+        ),
         RenderPlanContract(
             id="plan-1",
             project_id="project-1",
@@ -103,6 +123,19 @@ def _all_contracts():
             supports_cancel=True,
             locality="in_process",
         ),
+        HardwareProfileContract(
+            id="workstation-1",
+            backend="cuda",
+            device="cuda:0",
+            device_name="Fixture GPU",
+            available_backends=["cpu", "cuda"],
+            vram_gb=24.0,
+            ram_gb=64.0,
+            cpu_threads=16,
+            platform="windows",
+            machine="amd64",
+            gpu_vendor="nvidia",
+        ),
         JobContract(
             id="job-1",
             project_id="project-1",
@@ -121,7 +154,7 @@ def _all_contracts():
 def test_all_frozen_contracts_have_common_persisted_fields() -> None:
     contracts = _all_contracts()
 
-    assert len(contracts) == len(CONTRACT_MODELS) == 8
+    assert len(contracts) == len(CONTRACT_MODELS) == 11
     for contract in contracts:
         payload = contract.model_dump(mode="json")
         assert payload["schema_version"] == "1.0"
@@ -159,6 +192,17 @@ def test_schema_bundle_contains_each_named_contract() -> None:
         assert schema["title"]
         assert schema["properties"]["contract_type"]["const"] == contract_type
         assert schema["properties"]["schema_version"]["const"] == "1.0"
+
+
+def test_hardware_profile_requires_cpu_fallback_and_available_selected_backend() -> None:
+    common = {
+        "id": "workstation-1", "device": "cuda:0", "device_name": "GPU",
+        "cpu_threads": 8, "platform": "windows", "machine": "amd64",
+    }
+    with pytest.raises(ValidationError, match="selected hardware backend must be available"):
+        HardwareProfileContract(backend="cuda", available_backends=["cpu"], **common)
+    with pytest.raises(ValidationError, match="CPU must remain"):
+        HardwareProfileContract(backend="cuda", available_backends=["cuda"], **common)
 
 
 def test_legacy_project_adapter_preserves_current_shape_and_extensions() -> None:
@@ -236,3 +280,72 @@ def test_legacy_job_plan_and_cue_adapters_preserve_render_path_data() -> None:
     assert plan.extensions["legacy_render_plan"]["variant_index"] == 2
     assert cue.frame == 15
     assert cue.payload == {"instruction": "Move in"}
+
+
+def test_director_adapter_preserves_operational_extensions_and_exact_samples() -> None:
+    source = {
+        "version": 1,
+        "analysis_revision": 7,
+        "future_document": {"keep": True},
+        "story_bible": {"revision": 2, "project_theme": "Arrival", "future_bible": "keep"},
+        "scenes": [{
+            "scene_id": "scene-1", "start_sample": "9007199254740993",
+            "end_sample": "9007199254788993", "intent": "A traveler arrives",
+            "subjects": [{"id": "traveler", "future_subject": 4}],
+            "camera": {"reviewed_keyframes": [1, 2]},
+            "renderer_hints": {"provider_id": "external"},
+            "future_scene": {"keep": True},
+        }],
+    }
+
+    contract = adapt_legacy_director_document(source, project_id="project-1", revision=9)
+    restored = restore_legacy_director_document(contract)
+
+    assert contract.schema_version == "1.0"
+    assert contract.scenes[0].start_sample == "9007199254740993"
+    assert contract.scenes[0].renderer_hints["provider_id"] == "external"
+    assert restored["future_document"] == source["future_document"]
+    assert restored["story_bible"]["future_bible"] == "keep"
+    assert restored["scenes"][0]["future_scene"] == {"keep": True}
+    assert restored["scenes"][0]["subjects"][0]["future_subject"] == 4
+    assert restored["scenes"][0]["camera"]["reviewed_keyframes"] == [1, 2]
+
+
+def test_editor_command_adapter_preserves_grouping_and_future_fields() -> None:
+    source = {
+        "operation_id": "operation-1", "expected_revision": 9, "action": "edit",
+        "label": "Arrange scene", "timeline": None,
+        "operations": [
+            {"kind": "move", "track_id": "video", "clip_id": "a", "position": "9007199254740993"},
+            {"kind": "set_mute", "track_id": "video", "clip_id": "b", "value": True},
+        ],
+        "future_request_field": {"keep": True},
+    }
+
+    contract = adapt_legacy_editor_command(source, project_id="project-1")
+    restored = restore_legacy_editor_command(contract)
+
+    assert contract.id == contract.operation_id == "operation-1"
+    assert len(contract.operations) == 2
+    assert contract.operations[0]["position"] == "9007199254740993"
+    assert restored == source
+
+
+def test_command_contract_enforces_action_payload_and_safe_history() -> None:
+    with pytest.raises(ValidationError, match="require at least one operation"):
+        CommandContract(
+            id="op", project_id="project", operation_id="op", expected_revision=1,
+            action="edit",
+        )
+    with pytest.raises(ValidationError, match="cannot include mutation payloads"):
+        CommandContract(
+            id="op", project_id="project", operation_id="op", expected_revision=1,
+            action="undo", timeline={},
+        )
+    with pytest.raises(ValidationError, match="command ID must match"):
+        CommandContract(
+            id="contract-id", project_id="project", operation_id="operation-id",
+            expected_revision=1, action="undo",
+        )
+    with pytest.raises(ValidationError, match="externally changed history"):
+        CommandHistoryStateContract(can_undo=True, undo_label="Move", external_change=True)

@@ -258,6 +258,146 @@ class CreativeIntentContract(VersionedDocument):
     accessibility: AccessibilityIntent | None = None
 
 
+class DirectorStoryBibleContract(ContractModel):
+    revision: int = Field(default=1, ge=1)
+    project_theme: str = Field(default="", max_length=4000)
+    narrative_summary: str = Field(default="", max_length=16000)
+    visual_style: str = Field(default="", max_length=16000)
+    characters: dict[str, str] = Field(default_factory=dict)
+    locations: dict[str, str] = Field(default_factory=dict)
+    continuity_rules: list[str] = Field(default_factory=list)
+    forbidden_changes: list[str] = Field(default_factory=list)
+    extensions: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DirectorSubjectContract(ContractModel):
+    id: str = Field(min_length=1, max_length=160)
+    role: str = Field(default="primary", max_length=160)
+    appearance_lock: bool = True
+    appearance_notes: list[str] = Field(default_factory=list)
+    expression: str = Field(default="", max_length=4000)
+    extensions: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DirectorCameraContract(ContractModel):
+    shot_type: str = Field(default="", max_length=500)
+    movement: str = Field(default="", max_length=2000)
+    stability: str = Field(default="", max_length=500)
+    motion_strength: float = Field(default=0.4, ge=0.0, le=1.0)
+    extensions: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DirectorEnvironmentContract(ContractModel):
+    location_id: str = Field(default="", max_length=160)
+    location: str = Field(default="", max_length=4000)
+    weather: str = Field(default="", max_length=2000)
+    secondary_motion: list[str] = Field(default_factory=list)
+    extensions: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DirectorSceneContract(ContractModel):
+    scene_id: str = Field(min_length=1, max_length=128)
+    start_sample: str = "0"
+    end_sample: str
+    intent: str = Field(min_length=1, max_length=16000)
+    continuity_mode: Literal["continuous", "cut", "independent"] = "continuous"
+    subjects: list[DirectorSubjectContract] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
+    camera: DirectorCameraContract = Field(default_factory=DirectorCameraContract)
+    environment: DirectorEnvironmentContract = Field(default_factory=DirectorEnvironmentContract)
+    lighting: dict[str, JsonValue] = Field(default_factory=dict)
+    renderer_hints: dict[str, JsonValue] = Field(default_factory=dict)
+    extensions: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("start_sample", "end_sample", mode="before")
+    @classmethod
+    def validate_exact_sample(cls, value: object) -> str:
+        if not isinstance(value, str) or str(int(value)) != value:
+            raise ValueError("scene samples must be canonical decimal int64 strings")
+        parsed = int(value)
+        if parsed < 0 or parsed > 9_223_372_036_854_775_807:
+            raise ValueError("scene samples must be nonnegative signed int64 values")
+        return value
+
+    @model_validator(mode="after")
+    def validate_scene(self) -> DirectorSceneContract:
+        if int(self.end_sample) <= int(self.start_sample):
+            raise ValueError("scene end must be after its start")
+        if len({subject.id for subject in self.subjects}) != len(self.subjects):
+            raise ValueError("subject IDs must be unique within a scene")
+        return self
+
+
+class DirectorDocumentContract(VersionedDocument):
+    contract_type: Literal["edmg.director_document"] = "edmg.director_document"
+    project_id: str = Field(min_length=1, max_length=160)
+    revision: int = Field(default=1, ge=1)
+    operational_version: Literal[1] = 1
+    story_bible: DirectorStoryBibleContract = Field(default_factory=DirectorStoryBibleContract)
+    scenes: list[DirectorSceneContract] = Field(default_factory=list, max_length=10000)
+    analysis_revision: int | None = Field(default=None, ge=1)
+    extensions: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_scene_ids(self) -> DirectorDocumentContract:
+        if len({scene.scene_id for scene in self.scenes}) != len(self.scenes):
+            raise ValueError("scene IDs must be unique")
+        return self
+
+
+class CommandHistoryStateContract(ContractModel):
+    can_undo: bool = False
+    can_redo: bool = False
+    undo_label: str | None = Field(default=None, max_length=200)
+    redo_label: str | None = Field(default=None, max_length=200)
+    external_change: bool = False
+
+    @model_validator(mode="after")
+    def validate_labels(self) -> CommandHistoryStateContract:
+        if not self.can_undo and self.undo_label is not None:
+            raise ValueError("undo label requires an available undo command")
+        if not self.can_redo and self.redo_label is not None:
+            raise ValueError("redo label requires an available redo command")
+        if self.external_change and (self.can_undo or self.can_redo):
+            raise ValueError("externally changed history cannot advertise undo or redo")
+        return self
+
+
+class CommandContract(VersionedDocument):
+    contract_type: Literal["edmg.command"] = "edmg.command"
+    project_id: str = Field(min_length=1, max_length=160)
+    operation_id: str = Field(min_length=1, max_length=128)
+    expected_revision: int = Field(ge=1, strict=True)
+    action: Literal["edit", "replace", "undo", "redo"]
+    label: str = Field(default="Timeline edit", min_length=1, max_length=200)
+    operations: list[dict[str, JsonValue]] = Field(default_factory=list, max_length=200)
+    timeline: dict[str, JsonValue] | None = None
+    source: str | None = Field(default=None, max_length=160)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_action_payload(self) -> CommandContract:
+        if self.id != self.operation_id:
+            raise ValueError("command ID must match its idempotent operation ID")
+        if self.action == "edit":
+            if not self.operations:
+                raise ValueError("edit commands require at least one operation")
+            if self.timeline is not None:
+                raise ValueError("edit commands cannot include a replacement timeline")
+            for operation in self.operations:
+                kind = operation.get("kind")
+                if not isinstance(kind, str) or not kind.strip():
+                    raise ValueError("every edit operation requires a stable kind")
+        elif self.action == "replace":
+            if self.timeline is None:
+                raise ValueError("replace commands require a timeline")
+            if self.operations:
+                raise ValueError("replace commands cannot include edit operations")
+        elif self.operations or self.timeline is not None:
+            raise ValueError("undo and redo commands cannot include mutation payloads")
+        return self
+
+
 class CapabilityRequirement(ContractModel):
     media: Literal["image", "video", "audio", "mask", "depth", "scene"]
     operation: Literal["generate", "transform", "extend", "upscale", "interpolate", "assemble"]
@@ -377,6 +517,35 @@ class CapabilityContract(VersionedDocument):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class HardwareProfileContract(VersionedDocument):
+    contract_type: Literal["edmg.hardware_profile"] = "edmg.hardware_profile"
+    backend: Literal["cpu", "cuda", "directml", "mps"]
+    device: str = Field(min_length=1, max_length=200)
+    device_name: str = Field(min_length=1, max_length=500)
+    available_backends: list[Literal["cpu", "cuda", "directml", "mps"]] = Field(
+        default_factory=lambda: ["cpu"]
+    )
+    vram_gb: float = Field(default=0.0, ge=0.0)
+    ram_gb: float = Field(default=0.0, ge=0.0)
+    cpu_threads: int = Field(ge=1)
+    platform: str = Field(min_length=1, max_length=120)
+    machine: str = Field(min_length=1, max_length=120)
+    integrated_acceleration: bool = False
+    gpu_vendor: str | None = Field(default=None, max_length=160)
+    supports_directml: bool = False
+    directml_runtime_ready: bool = False
+    directml_device_name: str | None = Field(default=None, max_length=500)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_selected_backend(self) -> HardwareProfileContract:
+        if self.backend not in self.available_backends:
+            raise ValueError("selected hardware backend must be available")
+        if "cpu" not in self.available_backends:
+            raise ValueError("CPU must remain an available hardware backend")
+        return self
+
+
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled", "paused", "blocked"]
 
 
@@ -413,9 +582,12 @@ CONTRACT_MODELS: dict[str, type[VersionedDocument]] = {
     "edmg.project": ProjectContract,
     "edmg.music_graph": MusicGraphContract,
     "edmg.creative_intent": CreativeIntentContract,
+    "edmg.director_document": DirectorDocumentContract,
+    "edmg.command": CommandContract,
     "edmg.render_plan": RenderPlanContract,
     "edmg.artifact": ArtifactManifestContract,
     "edmg.capability": CapabilityContract,
+    "edmg.hardware_profile": HardwareProfileContract,
     "edmg.job": JobContract,
     "edmg.cue": CueContract,
 }
