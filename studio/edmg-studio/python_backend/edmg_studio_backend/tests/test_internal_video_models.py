@@ -14,6 +14,75 @@ from edmg_studio_backend.tests.safetensors_test_utils import (
 )
 
 
+def test_hunyuan_chunking_anchors_stitches_and_reports(monkeypatch, tmp_path):
+    model = tmp_path / "model"
+    model.mkdir()
+    monkeypatch.setattr(ivm, "validate_video_model_layout", lambda *_: None)
+    calls = []
+
+    def run(_model, **kwargs):
+        calls.append(kwargs)
+        base = len(calls) * 40
+        return [Image.new("RGB", (2, 2), (base + i, 0, 0)) for i in range(kwargs["num_frames"])]
+
+    monkeypatch.setattr(ivm, "_run_hunyuan", run)
+    progress = []
+    frames = ivm.generate_video_model_frames(
+        engine="hunyuan_video15", video_model_dir=model, base_model_dir=model,
+        init_image=None, prompt="motion", negative_prompt="", width=2, height=2,
+        num_frames=9, fps=24, steps=2, cfg=1, seed=7, device="cuda",
+        generation_mode="t2v", chunk_frames=5, chunk_overlap=2,
+        chunk_callback=lambda current, total: progress.append((current, total)),
+    )
+    assert [call["num_frames"] for call in calls] == [5, 5, 3]
+    assert calls[0]["init_image"] is None
+    assert calls[1]["init_image"].getpixel((0, 0)) == (44, 0, 0)
+    assert len(frames) == 9
+    assert progress == [(1, 3), (2, 3), (3, 3)]
+    assert frames[3].getpixel((0, 0))[0] not in {43, 80}
+
+
+def test_hunyuan_i2v_requires_source(monkeypatch, tmp_path):
+    model = tmp_path / "model"
+    model.mkdir()
+    monkeypatch.setattr(ivm, "validate_video_model_layout", lambda *_: None)
+    with pytest.raises(Exception) as exc:
+        ivm.generate_video_model_frames(
+            engine="hunyuan_video15", video_model_dir=model, base_model_dir=model,
+            init_image=None, prompt="", negative_prompt="", width=2, height=2,
+            num_frames=2, fps=24, steps=2, cfg=1, seed=1, device="cuda",
+            generation_mode="i2v",
+        )
+    assert getattr(exc.value, "code", None) == "HUNYUAN_I2V_SOURCE_REQUIRED"
+
+
+def test_hunyuan_cancels_between_chunks(monkeypatch, tmp_path):
+    model = tmp_path / "model"
+    model.mkdir()
+    monkeypatch.setattr(ivm, "validate_video_model_layout", lambda *_: None)
+    calls = []
+    monkeypatch.setattr(
+        ivm,
+        "_run_hunyuan",
+        lambda _model, **kwargs: calls.append(kwargs)
+        or [Image.new("RGB", (2, 2)) for _ in range(kwargs["num_frames"])],
+    )
+
+    def cancel():
+        if calls:
+            raise RuntimeError("canceled")
+
+    with pytest.raises(RuntimeError, match="canceled"):
+        ivm.generate_video_model_frames(
+            engine="hunyuan_video15", video_model_dir=model, base_model_dir=model,
+            init_image=None, prompt="", negative_prompt="", width=2, height=2,
+            num_frames=8, fps=24, steps=2, cfg=1, seed=1, device="cuda",
+            generation_mode="t2v", chunk_frames=5, chunk_overlap=2,
+            cancel_check=cancel,
+        )
+    assert len(calls) == 1
+
+
 def _write_lfs_pointer(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

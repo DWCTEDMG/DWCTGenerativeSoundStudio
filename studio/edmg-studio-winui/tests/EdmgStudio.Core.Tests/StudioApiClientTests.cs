@@ -10,6 +10,33 @@ namespace EdmgStudio.Core.Tests;
 public sealed class StudioApiClientTests
 {
     [TestMethod]
+    public async Task InsertRenderResult_UsesTypedRevisionAwareContract()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, token) =>
+        {
+            captured = new CapturedRequest(request.Method, request.RequestUri!, null,
+                request.Content?.Headers.ContentType?.MediaType,
+                await request.Content!.ReadAsStringAsync(token));
+            return JsonResponse("""{"ok":true,"revision":18,"track_id":"video","clip_id":"clip"}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")), new StaticTokenProvider("token"), httpClient);
+
+        InsertRenderResultResponse response = await client.InsertRenderResultAsync(
+            "project /1", new InsertRenderResultRequest("job-8", 17, "video", 12.5));
+
+        Assert.AreEqual(18L, response.Revision);
+        Assert.AreEqual(HttpMethod.Post, captured!.Method);
+        Assert.AreEqual("/v1/projects/project%20%2F1/timeline/insert-render-result", captured.Uri.AbsolutePath);
+        using JsonDocument body = JsonDocument.Parse(captured.Body);
+        Assert.AreEqual("job-8", body.RootElement.GetProperty("job_id").GetString());
+        Assert.AreEqual(17L, body.RootElement.GetProperty("expected_revision").GetInt64());
+        Assert.AreEqual("video", body.RootElement.GetProperty("track_id").GetString());
+        Assert.AreEqual(12.5, body.RootElement.GetProperty("start_s").GetDouble());
+    }
+
+    [TestMethod]
     public async Task CreativeDirection_UsesExactQueryAndSerializesSceneOverrides()
     {
         var captured = new List<CapturedRequest>();

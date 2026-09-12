@@ -382,6 +382,16 @@ def test_app_worker_keeps_tensorrt_anchor_path_separate_from_video_model_path(tm
     assert captured["model_dir"] == base_path
     assert captured["settings"].video_model_path == str(svd_path)
     assert captured["tensorrt_bundle_path"] == bundle_path
+    assert result["artifact"] == {
+        "path": "outputs/videos/anchor.mp4",
+        "manifest_path": "outputs/videos/anchor.mp4.artifact.json",
+        "kind": "video",
+        "bytes": 5,
+        "content_hash": None,
+        "content_hash_alg": "sha256",
+        "engine": "svd",
+        "model": {"id": "hf_svd_xt_1_1_internal", "revision": None},
+    }
 
 
 def test_tensorrt_sd15_keyframe_anchor_resizes_and_uses_bundle(tmp_path, monkeypatch) -> None:
@@ -576,6 +586,8 @@ def test_internal_request_resolves_explicit_hunyuan_without_still_model(tmp_path
 def test_anchorless_hunyuan_render_uses_native_text_to_video(tmp_path, monkeypatch) -> None:
     model_path = tmp_path / "hunyuan"
     model_path.mkdir()
+    source_path = tmp_path / "source.png"
+    Image.new("RGB", (64, 64), "red").save(source_path)
     captured: dict = {}
 
     def fake_generate(**kwargs):
@@ -624,9 +636,11 @@ def test_anchorless_hunyuan_render_uses_native_text_to_video(tmp_path, monkeypat
             video_model_engine="hunyuan_video15",
             video_model_id=app_module.HUNYUAN_MODEL_ID,
             video_model_path=str(model_path),
+            hunyuan_generation_mode="t2v",
             video_model_max_frames_per_scene=8,
             device_preference="cuda",
         ),
+        source_image_path=source_path,
     )
 
     assert output.is_file()

@@ -660,6 +660,8 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
                                     <StackPanel Spacing="4">
                                         <TextBlock Text="Motion bucket ID" Style="{StaticResource FieldLabelStyle}" />
@@ -741,6 +743,30 @@
                                                       AutomationProperties.AutomationId="RenderVideoPromptRefineToggle" />
                                         <ToggleSwitch x:Name="TimelineCameraToggle" Header="Apply timeline camera" IsOn="True"
                                                       AutomationProperties.AutomationId="RenderTimelineCameraToggle" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="6" Spacing="4">
+                                        <TextBlock Text="Hunyuan generation mode" Style="{StaticResource FieldLabelStyle}" />
+                                        <ComboBox x:Name="VideoGenerationModeComboBox" SelectedIndex="0"
+                                                  AutomationProperties.AutomationId="RenderVideoGenerationModeComboBox">
+                                            <ComboBoxItem Content="Automatic" Tag="auto" />
+                                            <ComboBoxItem Content="Text to video" Tag="t2v" />
+                                            <ComboBoxItem Content="Image to video" Tag="i2v" />
+                                        </ComboBox>
+                                        <TextBlock Text="I2V requires a source image or video in Motion refinement → Source asset."
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="VideoLowVramToggle" Grid.Row="6" Grid.Column="1"
+                                                  Header="Deterministic low-VRAM mode"
+                                                  AutomationProperties.AutomationId="RenderVideoLowVramToggle" />
+                                    <StackPanel Grid.Row="7" Spacing="4">
+                                        <TextBlock Text="Generation chunk size (frames)" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="GenerationChunkSizeBox" Value="8" Minimum="2" Maximum="96"
+                                                   AutomationProperties.AutomationId="RenderGenerationChunkSizeBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="7" Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="Generation chunk overlap (frames)" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="GenerationChunkOverlapBox" Value="2" Minimum="0" Maximum="16"
+                                                   AutomationProperties.AutomationId="RenderGenerationChunkOverlapBox" />
                                     </StackPanel>
                                 </Grid>
                             </Expander>

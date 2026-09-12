@@ -117,6 +117,42 @@ public sealed class InternalVideoRenderRequestBuilderTests
     }
 
     [TestMethod]
+    public void Build_SerializesExplicitHunyuanGenerationSettings()
+    {
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            VideoModelEngine = "hunyuan_video15",
+            VideoModelGenerationMode = "i2v",
+            SourceAsset = "assets/reference.png",
+            VideoModelLowVramMode = true,
+            VideoModelGenerationChunkSize = 24,
+            VideoModelGenerationChunkOverlap = 6,
+        });
+
+        Assert.AreEqual("i2v", request.GetProperty("hunyuan_generation_mode").GetString());
+        Assert.IsTrue(request.GetProperty("hunyuan_low_vram_mode").GetBoolean());
+        Assert.AreEqual(24, request.GetProperty("hunyuan_chunk_frames").GetInt32());
+        Assert.AreEqual(6, request.GetProperty("hunyuan_chunk_overlap").GetInt32());
+        Assert.AreEqual(8, request.GetProperty("video_model_decode_chunk_size").GetInt32());
+    }
+
+    [TestMethod]
+    public void Build_RequiresSourceForI2vAndRejectsOverlappingWholeChunk()
+    {
+        InvalidOperationException sourceException = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings { VideoModelGenerationMode = "i2v" }));
+        InvalidOperationException overlapException = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+            {
+                VideoModelGenerationChunkSize = 8,
+                VideoModelGenerationChunkOverlap = 8,
+            }));
+
+        StringAssert.Contains(sourceException.Message, "I2V requires a source");
+        StringAssert.Contains(overlapException.Message, "overlap must be smaller");
+    }
+
+    [TestMethod]
     public void Build_SerializesProjectKeyframeContinuityMode()
     {
         JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings

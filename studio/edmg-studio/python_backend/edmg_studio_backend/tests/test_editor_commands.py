@@ -1,4 +1,6 @@
+import json
 from copy import deepcopy
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -141,6 +143,91 @@ def test_stale_revision_is_rejected(editor):
         editor, action="replace", timeline=timeline(), expected_revision=store.get(pid).revision - 1
     )
     assert response.status_code == 409
+
+
+def test_insert_artifact_is_revision_safe_idempotent_and_updates_media_pool(editor):
+    store, pid, client = editor
+    project_dir = store.project_dir(pid)
+    video = project_dir / "outputs" / "videos" / "generated.mp4"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"video")
+    manifest = {
+        "schema_version": 1, "id": "artifact-generated", "kind": "video",
+        "path": "outputs/videos/generated.mp4", "content_hash": "abc",
+        "engine": "comfyui", "provider": "local", "model": {"id": "hunyuan-video", "revision": "r2"},
+        "project_revision": 3, "plan_revision": "plan-2", "source_assets": [{"id": "audio-source"}],
+        "lineage": {"parents": ["artifact-parent"]},
+    }
+    video.with_suffix(".mp4.artifact.json").write_text(json.dumps(manifest), encoding="utf-8")
+    body = {
+        "operation_id": "insert-generated", "expected_revision": store.get(pid).revision,
+        "artifact_path": "outputs/videos/generated.mp4", "start_seconds": 2, "duration_seconds": 3,
+    }
+    url = f"/v1/projects/{pid}/editor/insert-artifact"
+    first = client.post(url, json=body)
+    second = client.post(url, json=body)
+    assert first.status_code == second.status_code == 200
+    assert second.json()["replayed"] is True
+    project = store.get(pid)
+    assert project.meta["media_pool"] == [{
+        "id": "artifact-generated", "version_id": "artifact-generated", "artifact_id": "artifact-generated",
+        "path": "outputs/videos/generated.mp4", "kind": "video",
+        "manifest_path": "outputs/videos/generated.mp4.artifact.json", "content_hash": "abc",
+        "renderer_id": "comfyui", "provider_id": "local",
+        "model": {"id": "hunyuan-video", "revision": "r2"},
+        "project_revision": 3, "plan_revision": "plan-2", "source_assets": [{"id": "audio-source"}],
+        "lineage": {"parents": ["artifact-parent"]},
+    }]
+    clips = project.meta["timeline"]["tracks"][0]["clips"]
+    assert len(clips) == 2 and clips[-1]["source_path"] == "outputs/videos/generated.mp4"
+    assert clips[-1]["media_asset_id"] == "artifact-generated"
+    assert clips[-1]["data"]["artifact_id"] == "artifact-generated"
+    changed = dict(body, duration_seconds=4)
+    assert client.post(url, json=changed).status_code == 409
+    stale = dict(body, operation_id="other", expected_revision=body["expected_revision"])
+    assert client.post(url, json=stale).status_code == 409
+
+
+def test_insert_render_result_resolves_completed_job_artifact(editor):
+    store, pid, _ = editor
+    project_dir = store.project_dir(pid)
+    video = project_dir / "outputs" / "videos" / "render.mp4"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"video")
+    manifest = {
+        "schema_version": 1,
+        "id": "artifact-render",
+        "kind": "video",
+        "path": "outputs/videos/render.mp4",
+        "engine": "hunyuan_video15",
+    }
+    video.with_suffix(".mp4.artifact.json").write_text(json.dumps(manifest), encoding="utf-8")
+    job = SimpleNamespace(
+        id="job-render",
+        project_id=pid,
+        type="internal_video",
+        status="succeeded",
+        result={"artifact": {"path": "outputs/videos/render.mp4"}},
+    )
+    job_store = SimpleNamespace(get=lambda project_id, job_id: job if (project_id, job_id) == (pid, job.id) else None)
+    app = FastAPI()
+    app.include_router(create_editor_router(lambda: store, lambda: job_store, lambda _path: 4.25))
+    with TestClient(app) as client:
+        body = {
+            "job_id": job.id,
+            "expected_revision": store.get(pid).revision,
+            "start_s": 2.5,
+        }
+        first = client.post(f"/v1/projects/{pid}/timeline/insert-render-result", json=body)
+        second = client.post(f"/v1/projects/{pid}/timeline/insert-render-result", json=body)
+
+    assert first.status_code == second.status_code == 200
+    assert second.json()["replayed"] is True
+    assert second.json()["job_id"] == job.id
+    inserted = store.get(pid).meta["timeline"]["tracks"][0]["clips"][-1]
+    assert inserted["source_path"] == "outputs/videos/render.mp4"
+    assert inserted["start_s"] == 2.5
+    assert inserted["end_s"] == 6.75
 
 
 def test_precise_sample_survives_legacy_round_trip():
@@ -297,6 +384,71 @@ def test_adding_clip_preserves_audio_track_and_batch_undo(editor):
     assert audio["clips"][0]["start_sample"] == "48000"
     assert submit(editor, action="undo").status_code == 200
     assert len(store.get(pid).meta["timeline"]["tracks"]) == 1
+
+
+def test_track_order_and_professional_state_are_persistent_and_reversible(editor):
+    response = submit(
+        editor,
+        operations=[
+            {"kind": "add_track", "track_type": "audio", "new_id": "dialogue", "name": "Dialogue"},
+            {"kind": "reorder_track", "track_id": "dialogue", "index": 0},
+            {
+                "kind": "set_track_state",
+                "track_id": "dialogue",
+                "muted": True,
+                "solo": False,
+                "record_armed": True,
+                "input_monitoring": True,
+            },
+        ],
+    )
+
+    assert response.status_code == 200, response.text
+    track = response.json()["timeline"]["tracks"][0]
+    assert track == {
+        "id": "dialogue",
+        "type": "audio",
+        "name": "Dialogue",
+        "clips": [],
+        "muted": True,
+        "solo": False,
+        "record_armed": True,
+        "input_monitoring": True,
+    }
+    assert submit(editor, action="undo").status_code == 200
+    assert [track["id"] for track in editor[0].get(editor[1]).meta["timeline"]["tracks"]] == ["video"]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        {"kind": "set_track_state", "track_id": "video"},
+        {"kind": "set_track_state", "track_id": "video", "muted": 1},
+    ],
+)
+def test_track_state_rejects_missing_or_non_boolean_values(editor, operation):
+    assert submit(editor, operations=[operation]).status_code == 422
+
+
+def test_locked_track_state_requires_a_separate_unlock(editor):
+    assert submit(
+        editor,
+        operations=[{"kind": "set_track_state", "track_id": "video", "locked": True}],
+    ).status_code == 200
+    assert submit(
+        editor,
+        operations=[{"kind": "set_track_state", "track_id": "video", "muted": True}],
+    ).status_code == 422
+    assert submit(
+        editor,
+        operations=[
+            {"kind": "set_track_state", "track_id": "video", "locked": False, "muted": True}
+        ],
+    ).status_code == 422
+    assert submit(
+        editor,
+        operations=[{"kind": "set_track_state", "track_id": "video", "locked": False}],
+    ).status_code == 200
 
 
 def test_repeated_source_trims_retain_fractional_resampling_phase():

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import math
 import os
 import random
 import shutil
@@ -747,6 +748,10 @@ def generate_video_model_frames(
     cpu_offload: bool = False,
     workspace: Path | None = None,
     cancel_check: Any | None = None,
+    generation_mode: str = "auto",
+    chunk_frames: int | None = None,
+    chunk_overlap: int = 2,
+    chunk_callback: Callable[[int, int], Any] | None = None,
 ) -> list[Any]:
     """Generate PIL frames with an internal video model.
 
@@ -790,14 +795,53 @@ def generate_video_model_frames(
     validate_video_model_layout(engine_l, video_model_dir)
     dtype_l = "float16" if str(dtype or "auto").strip().lower() == "auto" and device == "cuda" else str(dtype or "float32")
     if engine_l == "hunyuan_video15":
+        from PIL import Image  # type: ignore
+
         used_seed = int(seed) if seed is not None else random.randint(0, 2**31 - 1)
-        return _run_hunyuan(
-            video_model_dir, init_image=init_image, prompt=prompt, negative_prompt=negative_prompt,
-            width=width, height=height, num_frames=num_frames, fps=fps or HUNYUAN_DEFAULT_FPS,
-            steps=steps, cfg=cfg, seed=used_seed, device=device, dtype=dtype_l,
-            cpu_offload=cpu_offload, cancel_check=cancel_check,
-            workspace=Path(workspace or video_model_dir),
-        )
+        mode = str(generation_mode or "auto").strip().lower()
+        if mode not in {"auto", "t2v", "i2v"}:
+            raise UserFacingError("Unsupported Hunyuan generation mode", hint="Choose auto, t2v, or i2v.",
+                                  code="HUNYUAN_GENERATION_MODE_INVALID", status_code=422)
+        if mode == "i2v" and init_image is None:
+            raise UserFacingError("Hunyuan I2V requires a source image", hint="Select an existing project image as source_asset.",
+                                  code="HUNYUAN_I2V_SOURCE_REQUIRED", status_code=422)
+        first_image = None if mode == "t2v" else init_image
+        limit = max(2, int(chunk_frames or num_frames))
+        overlap_limit = max(0, int(chunk_overlap))
+        chunks = max(1, math.ceil(max(0, int(num_frames) - limit) / max(1, limit - overlap_limit)) + 1)
+        result: list[Any] = []
+        chunk_index = 0
+        while len(result) < int(num_frames):
+            if cancel_check:
+                cancel_check()
+            overlap = min(overlap_limit, len(result), limit - 1)
+            request_frames = min(limit, int(num_frames) - len(result) + overlap)
+            anchor = first_image if not result else result[-1]
+            generated = _run_hunyuan(
+                video_model_dir, init_image=anchor, prompt=prompt, negative_prompt=negative_prompt,
+                width=width, height=height, num_frames=request_frames, fps=fps or HUNYUAN_DEFAULT_FPS,
+                steps=steps, cfg=cfg, seed=used_seed + chunk_index, device=device, dtype=dtype_l,
+                cpu_offload=cpu_offload, cancel_check=cancel_check,
+                workspace=Path(workspace or video_model_dir),
+            )
+            if len(generated) != request_frames:
+                raise RuntimeError(
+                    f"Hunyuan chunk {chunk_index + 1} produced {len(generated)} frames; "
+                    f"expected {request_frames}"
+                )
+            if overlap:
+                tail = result[-overlap:]
+                result[-overlap:] = [
+                    Image.blend(old.convert("RGB"), new.convert("RGB"), (index + 1) / (overlap + 1))
+                    for index, (old, new) in enumerate(zip(tail, generated[:overlap], strict=True))
+                ]
+            result.extend(generated[overlap:])
+            chunk_index += 1
+            if chunk_callback:
+                chunk_callback(chunk_index, chunks)
+        if len(result) != int(num_frames):
+            raise RuntimeError(f"Hunyuan chunk stitching produced {len(result)} frames; expected {int(num_frames)}")
+        return result
 
     generator, used_seed = _seeded_generator(seed, device)
 

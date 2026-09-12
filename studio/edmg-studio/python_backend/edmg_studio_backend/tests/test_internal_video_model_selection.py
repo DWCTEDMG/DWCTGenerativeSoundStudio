@@ -6,6 +6,7 @@ import pytest
 
 from edmg_studio_backend import app as app_module
 from edmg_studio_backend.errors import UserFacingError
+from edmg_studio_backend.services.internal_video import InternalVideoSettings
 
 
 def test_ltx_selection_is_registered_but_never_bypasses_runtime_admission(tmp_path, monkeypatch):
@@ -200,6 +201,22 @@ def test_qualified_hunyuan_selection_is_admitted(tmp_path: Path, monkeypatch) ->
         },
         base_model_family="sd15",
     ) == ("hunyuan_video15", app_module.HUNYUAN_MODEL_ID, hunyuan)
+
+
+@pytest.mark.parametrize(("vram_gb", "chunk_frames"), [(6.0, 8), (8.0, 12)])
+def test_hunyuan_low_vram_settings_are_deterministic(vram_gb: float, chunk_frames: int) -> None:
+    resolved = app_module._apply_internal_video_model_memory_safety(
+        InternalVideoSettings(
+            temporal_mode="video_model",
+            device_preference="cuda",
+            video_model_engine="hunyuan_video15",
+            hunyuan_chunk_frames=25,
+        ),
+        {"backend": "cuda", "vram_gb": vram_gb},
+    )
+    assert resolved.video_model_cpu_offload is True
+    assert resolved.hunyuan_chunk_frames == chunk_frames
+    assert resolved.video_model_decode_chunk_size in {1, 2}
 
 
 def test_public_render_job_error_preserves_only_curated_details() -> None:

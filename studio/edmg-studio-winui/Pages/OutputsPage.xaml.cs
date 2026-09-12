@@ -574,16 +574,96 @@ public sealed partial class OutputsPage : Page
         Frame.Navigate(typeof(ReviewPage));
     }
 
-    private void TimelineButton_Click(object sender, RoutedEventArgs e)
+    private async void TimelineButton_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedOutput?.SupportsMediaWorkflow != true)
         {
             return;
         }
 
-        _session.SetLastWorkflowDestination("timeline");
-        Frame.Navigate(typeof(TimelinePage));
+        StudioOutputItem selected = SelectedOutput;
+        string? jobId = FindMetadataString(selected.Metadata, "job_id");
+        if (string.IsNullOrWhiteSpace(jobId))
+        {
+            StudioJobListResponse jobs = await _apiClient.GetProjectJobsAsync(ActiveProjectId);
+            jobId = jobs.Jobs.FirstOrDefault(job =>
+                job.Status == "succeeded" &&
+                string.Equals(
+                    NormalizeProjectPath(FindJobOutputPath(job.Result)),
+                    NormalizeProjectPath(selected.Path),
+                    StringComparison.OrdinalIgnoreCase))?.Id;
+        }
+        if (string.IsNullOrWhiteSpace(jobId))
+        {
+            SetStatus("Job identity required", "Select this completed render in Queue first, or use output metadata containing job_id.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            EditorState editor = await _apiClient.GetEditorStateAsync(ActiveProjectId);
+            double startSeconds = _session.TimelineFocusSeconds ?? 0;
+            await _apiClient.InsertRenderResultWithFallbackAsync(
+                ActiveProjectId,
+                new InsertRenderResultRequest(jobId, editor.Revision, StartSeconds: startSeconds),
+                new RenderResultDescriptor(jobId, selected.Path, Metadata: selected.Metadata as JsonObject));
+            _session.SetLastWorkflowDestination("timeline");
+            Frame.Navigate(typeof(TimelinePage));
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Timeline insertion failed", ex.Message, InfoBarSeverity.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
+
+    private static string? FindMetadataString(JsonNode? node, string name)
+    {
+        if (node is JsonObject obj)
+        {
+            if (obj[name] is JsonValue value && value.TryGetValue<string>(out string? result)) return result;
+            foreach ((_, JsonNode? child) in obj)
+            {
+                string? nested = FindMetadataString(child, name);
+                if (!string.IsNullOrWhiteSpace(nested)) return nested;
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (JsonNode? child in array)
+            {
+                string? nested = FindMetadataString(child, name);
+                if (!string.IsNullOrWhiteSpace(nested)) return nested;
+            }
+        }
+        return null;
+    }
+
+    private static string? FindJobOutputPath(JsonElement? result)
+    {
+        if (result is not JsonElement element) return null;
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (string name in new[] { "video", "output_path", "path", "video_path", "artifact_path" })
+            {
+                if (element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String)
+                    return value.GetString();
+            }
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                string? nested = FindJobOutputPath(property.Value);
+                if (!string.IsNullOrWhiteSpace(nested)) return nested;
+            }
+        }
+        return null;
+    }
+
+    private static string NormalizeProjectPath(string? path) =>
+        (path ?? string.Empty).Replace('\\', '/').TrimStart('/');
 
     private void RenderButton_Click(object sender, RoutedEventArgs e)
     {

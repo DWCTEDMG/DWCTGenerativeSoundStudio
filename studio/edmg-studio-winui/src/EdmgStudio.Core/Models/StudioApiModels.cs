@@ -50,6 +50,9 @@ public sealed class ProjectDto
     public int SchemaVersion { get; init; }
 
     [JsonIgnore]
+    public CanonicalProject CanonicalProject => ProjectTimelineContracts.FromProject(this);
+
+    [JsonIgnore]
     public bool HasAudio => TryGetMetaObject("audio", out _);
 
     [JsonIgnore]
@@ -758,6 +761,8 @@ public static class StudioJson
 [JsonSerializable(typeof(StudioJobPriorityRequest))]
 [JsonSerializable(typeof(StudioJob))]
 [JsonSerializable(typeof(TimelineUpdateRequest))]
+[JsonSerializable(typeof(InsertRenderResultRequest))]
+[JsonSerializable(typeof(InsertRenderResultResponse))]
 [JsonSerializable(typeof(EditorCommandRequest))]
 [JsonSerializable(typeof(EditorState))]
 [JsonSerializable(typeof(DirectorUpdateRequest))]

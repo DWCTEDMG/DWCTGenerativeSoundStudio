@@ -103,6 +103,10 @@ class InternalVideoSettings:
     video_model_engine: str = "auto"  # auto|svd|animatediff|hunyuan_video15
     video_model_id: str | None = None
     video_model_path: str | None = None
+    hunyuan_generation_mode: str = "auto"  # auto|t2v|i2v
+    hunyuan_low_vram_mode: bool = False
+    hunyuan_chunk_frames: int = 25
+    hunyuan_chunk_overlap: int = 2
     video_model_max_frames_per_scene: int = 25
     video_model_motion_bucket_id: int = 127
     video_model_noise_aug_strength: float = 0.02
@@ -2785,7 +2789,10 @@ def render_internal_video_variant(
     anchorless_hunyuan = (
         settings.temporal_mode == "video_model"
         and video_model_engine == "hunyuan_video15"
-        and source_image_path is None
+        and (
+            str(settings.hunyuan_generation_mode or "auto").lower() == "t2v"
+            or source_image_path is None
+        )
     )
     keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
     use_tensorrt_keyframes = (
@@ -3217,9 +3224,10 @@ def render_internal_video_variant(
                     "matching passing native-motion report."
                 )
 
-            adapter_frames = min(
-                max_scene_frames,
-                max(MIN_VIDEO_MODEL_NATIVE_FRAMES, scene_frame_count),
+            adapter_frames = (
+                scene_frame_count
+                if engine == "hunyuan_video15"
+                else min(max_scene_frames, max(MIN_VIDEO_MODEL_NATIVE_FRAMES, scene_frame_count))
             )
             if engine == "svd":
                 adapter_frames = min(adapter_frames, 25)
@@ -3427,6 +3435,14 @@ def render_internal_video_variant(
                 cpu_offload=bool(settings.video_model_cpu_offload),
                 workspace=out_frames,
                 cancel_check=cancel_check_fn,
+                generation_mode=str(settings.hunyuan_generation_mode or "auto"),
+                chunk_frames=int(settings.hunyuan_chunk_frames),
+                chunk_overlap=int(settings.hunyuan_chunk_overlap),
+                chunk_callback=lambda current, total: emit_checkpoint(
+                    stage="video_model",
+                    status="running",
+                    message=f"Generated {engine} inference chunk {current}/{total}",
+                ),
             )
             if not generated:
                 raise RuntimeError(f"Internal {engine} adapter returned no frames.")
@@ -3898,8 +3914,16 @@ def render_internal_video_variant(
             project_dir=project_dir,
             project_id=project_id,
             kind="video",
-            engine="internal_video",
-            model_id=str(settings.model_id or ""),
+            engine=(
+                str(settings.video_model_engine)
+                if settings.temporal_mode == "video_model"
+                else "internal_video"
+            ),
+            model_id=str(
+                settings.video_model_id
+                if settings.temporal_mode == "video_model" and settings.video_model_id
+                else settings.model_id or ""
+            ),
             model_revision=None,
             seed=int(settings.seed) if settings.seed is not None else None,
             params={

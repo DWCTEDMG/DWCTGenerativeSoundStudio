@@ -263,6 +263,10 @@ class InternalVideoRenderRequest(BaseModel):
     storyboard_shot_max_s: float = Field(default=4.0, ge=1.0, le=12.0)
     video_model_engine: Literal["auto","svd","animatediff","hunyuan_video15","ltx_25"] = "auto"
     video_model_id: str | None = None
+    hunyuan_generation_mode: Literal["auto","t2v","i2v"] = "auto"
+    hunyuan_low_vram_mode: bool = False
+    hunyuan_chunk_frames: int = Field(default=25, ge=2, le=96)
+    hunyuan_chunk_overlap: int = Field(default=2, ge=0, le=16)
     video_model_max_frames_per_scene: int = Field(default=25, ge=2, le=96)
     video_model_motion_bucket_id: int = Field(default=127, ge=1, le=255)
     video_model_noise_aug_strength: float = Field(default=0.02, ge=0.0, le=1.0)

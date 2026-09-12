@@ -254,7 +254,7 @@
                         Click="TimelineButton_Click"
                         Icon="Clock"
                         IsEnabled="False"
-                        Label="Timeline" />
+                        Label="Insert in timeline" />
                     <AppBarButton
                         x:Name="RenderButton"
                         AutomationProperties.AutomationId="Outputs.OpenRender"

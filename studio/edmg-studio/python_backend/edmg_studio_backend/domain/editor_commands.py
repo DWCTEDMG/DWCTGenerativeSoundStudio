@@ -322,6 +322,18 @@ def _edit(timeline: dict, op: dict) -> None:
             raise ValueError("Lock state must be boolean")
         track["locked"] = op["value"]
         return
+    if kind == "set_track_state":
+        fields = ("locked", "muted", "solo", "record_armed", "input_monitoring")
+        provided = [field for field in fields if field in op]
+        if not provided:
+            raise ValueError("At least one track state value is required")
+        if any(type(op[field]) is not bool for field in provided):
+            raise ValueError("Track state values must be boolean")
+        if track.get("locked") and not (provided == ["locked"] and op["locked"] is False):
+            raise ValueError("Unlock the track before editing it")
+        for field in provided:
+            track[field] = op[field]
+        return
     if track.get("locked"):
         raise ValueError("Unlock the track before editing it")
     if kind == "add_clip":
@@ -330,12 +342,20 @@ def _edit(timeline: dict, op: dict) -> None:
         end = clock.samples(op.get("end_seconds", 1))
         if start < 0 or end <= start:
             raise ValueError("A new clip requires a positive duration at a nonnegative position")
+        clip_data = deepcopy(op.get("data")) if isinstance(op.get("data"), dict) else {}
+        clip_data.setdefault("name", str(op.get("name") or "Clip"))
+        media_asset_id = op.get("media_asset_id")
+        if media_asset_id is not None and (not isinstance(media_asset_id, str) or not media_asset_id):
+            raise ValueError("Media asset ID must be a nonempty string")
         track["clips"].append(
             {
                 "id": op.get("new_id") or str(uuid4()),
+                "type": str(op.get("type") or track.get("type") or "video"),
                 "start_sample": str(start),
                 "end_sample": str(end),
-                "data": {"name": str(op.get("name") or "Clip")},
+                "data": clip_data,
+                **({"media_asset_id": media_asset_id} if media_asset_id else {}),
+                **({"source_path": op["source_path"]} if op.get("source_path") else {}),
             }
         )
         return

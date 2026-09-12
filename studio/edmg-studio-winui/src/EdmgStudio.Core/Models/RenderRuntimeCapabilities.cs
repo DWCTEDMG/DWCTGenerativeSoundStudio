@@ -52,8 +52,8 @@ public sealed record RenderRuntimeCapabilities(
     public string TritonSummary => TritonRuntimeReady switch
     {
         true => "Triton runtime is available for compatible backend model paths.",
-        false => "Triton runtime was explicitly reported unavailable.",
-        null => "Triton is backend-managed and has no independent Studio render switch.",
+        false => "Triton is optional and is not required for native Studio rendering.",
+        null => "Triton is optional, backend-managed, and has no independent Studio render switch.",
     };
 
     public static RenderRuntimeCapabilities Evaluate(

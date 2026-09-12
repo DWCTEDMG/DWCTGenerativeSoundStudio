@@ -216,7 +216,7 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         EventsButton.IsEnabled = true;
         OpenOutputsButton.IsEnabled = true;
         OpenReviewButton.IsEnabled = true;
-        OpenTimelineButton.IsEnabled = true;
+        OpenTimelineButton.IsEnabled = job.Status == "succeeded";
         DetailsTextBox.Text = FormatJobDetails(job);
     }
 
@@ -324,7 +324,73 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
 
     private void OpenReviewButton_Click(object sender, RoutedEventArgs e) => NavigateWithSelectedJob("review");
 
-    private void OpenTimelineButton_Click(object sender, RoutedEventArgs e) => NavigateWithSelectedJob("timeline");
+    private async void OpenTimelineButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (JobsList.SelectedItem is not JobListItem { Job.Status: "succeeded" } item)
+        {
+            ShowStatus("Only a completed render can be inserted into the timeline.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        _isCommandRunning = true;
+        SetBusy(true);
+        try
+        {
+            StudioJob job = item.Job;
+            App.Services.Session.ActiveProjectId = job.ProjectId;
+            App.Services.Session.SetSelectedJob(job.ProjectId, job.Id);
+            EditorState editor = await _apiClient.GetEditorStateAsync(job.ProjectId);
+            double startSeconds = App.Services.Session.TimelineFocusSeconds ?? 0;
+            string outputPath = FindOutputPath(job.Result) ?? string.Empty;
+            await _apiClient.InsertRenderResultWithFallbackAsync(
+                job.ProjectId,
+                new InsertRenderResultRequest(job.Id, editor.Revision, StartSeconds: startSeconds),
+                RenderResultDescriptor.FromJob(job, outputPath));
+            App.Services.Session.SetLastWorkflowDestination("timeline");
+            App.Navigate("timeline");
+        }
+        catch (Exception ex)
+        {
+            ShowStatus(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+        }
+        finally
+        {
+            _isCommandRunning = false;
+            SetBusy(false);
+        }
+    }
+
+    private static string? FindOutputPath(JsonElement? result)
+    {
+        if (result is not JsonElement element) return null;
+        return FindOutputPath(element);
+    }
+
+    private static string? FindOutputPath(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (string name in new[] { "output_path", "path", "video_path", "artifact_path" })
+            {
+                if (element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String)
+                    return value.GetString();
+            }
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                string? nested = FindOutputPath(property.Value);
+                if (!string.IsNullOrWhiteSpace(nested)) return nested;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in element.EnumerateArray())
+            {
+                string? nested = FindOutputPath(item);
+                if (!string.IsNullOrWhiteSpace(nested)) return nested;
+            }
+        }
+        return null;
+    }
 
     private void NavigateWithSelectedJob(string destination)
     {

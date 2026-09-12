@@ -392,7 +392,13 @@ from .api.planner_schedule import create_schedule_router
 from .domain.planner_schedule import attach_schedule_drafts
 app.include_router(create_schedule_router(lambda: store))
 from .api.editor import create_editor_router
-app.include_router(create_editor_router(lambda: store))
+app.include_router(
+    create_editor_router(
+        lambda: store,
+        lambda: jobs,
+        lambda path: _probe_duration_seconds(settings.ffmpeg_path, path),
+    )
+)
 from .api.director import create_director_router
 from .api.director_workflow import create_workflow_router
 
@@ -2033,6 +2039,10 @@ _RESOLVED_INTERNAL_VIDEO_PAYLOAD_KEYS = (
     "keyframe_continuity_mode",
     "video_model_engine",
     "video_model_id",
+    "hunyuan_generation_mode",
+    "hunyuan_low_vram_mode",
+    "hunyuan_chunk_frames",
+    "hunyuan_chunk_overlap",
     "video_model_max_frames_per_scene",
     "video_model_decode_chunk_size",
     "video_model_dtype",
@@ -8380,6 +8390,21 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         )
 
         rel_video = str(out.relative_to(pdir))
+        artifact_path = out.with_suffix(out.suffix + ".artifact.json")
+        try:
+            artifact_manifest = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            artifact_manifest = {}
+        artifact = {
+            "path": rel_video.replace("\\", "/"),
+            "manifest_path": str(artifact_path.relative_to(pdir)).replace("\\", "/"),
+            "kind": str(artifact_manifest.get("kind") or "video"),
+            "bytes": artifact_manifest.get("bytes", out.stat().st_size),
+            "content_hash": artifact_manifest.get("content_hash"),
+            "content_hash_alg": artifact_manifest.get("content_hash_alg", "sha256"),
+            "engine": artifact_manifest.get("engine", "internal_video"),
+            "model": artifact_manifest.get("model") or {"id": settings_obj.video_model_id or model_id, "revision": None},
+        }
         videos = proj.meta.setdefault("outputs", {}).setdefault("videos", [])
         if rel_video not in videos:
             videos.append(rel_video)
@@ -8410,6 +8435,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
             "mode": "hosted",
             "preflight": _public_render_preflight(preflight),
             "runtime_checkpoint": checkpoint_summary,
+            "artifact": artifact,
         }
 
     if preflight.get("mode") == "tensorrt":
@@ -8520,6 +8546,30 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         )
 
         rel_video = str(out.relative_to(pdir))
+        artifact_path = out.with_suffix(out.suffix + ".artifact.json")
+        artifact_manifest = {}
+        from .revisions import background_context
+        background = background_context.get()
+        if background is not None:
+            for pending_path, pending_manifest in reversed(background.get("artifacts", [])):
+                if Path(pending_path).resolve() == artifact_path.resolve():
+                    artifact_manifest = dict(pending_manifest)
+                    break
+        if not artifact_manifest:
+            try:
+                artifact_manifest = json.loads(artifact_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                artifact_manifest = {}
+        artifact = {
+            "path": rel_video.replace("\\", "/"),
+            "manifest_path": str(artifact_path.relative_to(pdir)).replace("\\", "/"),
+            "kind": str(artifact_manifest.get("kind") or "video"),
+            "bytes": artifact_manifest.get("bytes", out.stat().st_size),
+            "content_hash": artifact_manifest.get("content_hash"),
+            "content_hash_alg": artifact_manifest.get("content_hash_alg", "sha256"),
+            "engine": artifact_manifest.get("engine", settings_obj.video_model_engine or "internal_video"),
+            "model": artifact_manifest.get("model") or {"id": settings_obj.video_model_id or model_id, "revision": None},
+        }
         videos = proj.meta.setdefault("outputs", {}).setdefault("videos", [])
         if rel_video not in videos:
             videos.append(rel_video)
@@ -8672,6 +8722,21 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
     )
 
     rel_video = str(out.relative_to(pdir))
+    artifact_path = out.with_suffix(out.suffix + ".artifact.json")
+    try:
+        artifact_manifest = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        artifact_manifest = {}
+    artifact = {
+        "path": rel_video.replace("\\", "/"),
+        "manifest_path": str(artifact_path.relative_to(pdir)).replace("\\", "/"),
+        "kind": str(artifact_manifest.get("kind") or "video"),
+        "bytes": artifact_manifest.get("bytes", out.stat().st_size),
+        "content_hash": artifact_manifest.get("content_hash"),
+        "content_hash_alg": artifact_manifest.get("content_hash_alg", "sha256"),
+        "engine": artifact_manifest.get("engine", settings_obj.video_model_engine or "internal_video"),
+        "model": artifact_manifest.get("model") or {"id": settings_obj.video_model_id or model_id, "revision": None},
+    }
     videos = proj.meta.setdefault("outputs", {}).setdefault("videos", [])
     if rel_video not in videos:
         videos.append(rel_video)
@@ -8710,6 +8775,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         "mode": "diffusion",
         "preflight": _public_render_preflight(preflight),
         "runtime_checkpoint": checkpoint_summary,
+        "artifact": artifact,
     }
 
 
@@ -9016,6 +9082,10 @@ def _internal_settings_from_payload(
         video_model_engine=str(payload.get("video_model_engine") or "auto"),
         video_model_id=(str(payload.get("video_model_id")).strip() or None) if payload.get("video_model_id") is not None else None,
         video_model_path=(str(payload.get("video_model_path")).strip() or None) if payload.get("video_model_path") is not None else None,
+        hunyuan_generation_mode=str(payload.get("hunyuan_generation_mode") or "auto").strip().lower(),
+        hunyuan_low_vram_mode=bool(payload.get("hunyuan_low_vram_mode", False)),
+        hunyuan_chunk_frames=int(payload.get("hunyuan_chunk_frames", 25)),
+        hunyuan_chunk_overlap=int(payload.get("hunyuan_chunk_overlap", 2)),
         video_model_max_frames_per_scene=int(payload.get("video_model_max_frames_per_scene", 25)),
         video_model_motion_bucket_id=int(payload.get("video_model_motion_bucket_id", 127)),
         video_model_noise_aug_strength=float(payload.get("video_model_noise_aug_strength", 0.02)),
@@ -9352,6 +9422,38 @@ def _resolve_internal_render_request(
             video_model_path=str(video_model_path),
         )
         settings_obj = _apply_internal_video_model_memory_safety(settings_obj, hw)
+        if engine == "hunyuan_video15":
+            source_asset = str(settings_obj.source_asset or "").strip()
+            resolved_mode = settings_obj.hunyuan_generation_mode
+            if resolved_mode == "auto":
+                resolved_mode = "i2v" if source_asset else "t2v"
+            if resolved_mode == "i2v" and not source_asset:
+                raise UserFacingError(
+                    "Hunyuan I2V requires a source image",
+                    hint="Set source_asset to an existing image inside this project, or choose t2v/auto.",
+                    code="HUNYUAN_I2V_SOURCE_REQUIRED",
+                    status_code=422,
+                )
+            if source_asset and _resolve_project_reference_path(project_id, source_asset) is None:
+                raise UserFacingError(
+                    "Hunyuan source image was not found",
+                    hint="Choose an existing image from this project's assets/refs folder.",
+                    code="HUNYUAN_I2V_SOURCE_INVALID",
+                    status_code=422,
+                )
+            if settings_obj.hunyuan_low_vram_mode:
+                settings_obj = replace(
+                    settings_obj,
+                    width=min(settings_obj.width, 768),
+                    height=min(settings_obj.height, 432),
+                    video_model_max_frames_per_scene=min(settings_obj.video_model_max_frames_per_scene, 8),
+                    video_model_decode_chunk_size=1,
+                    video_model_dtype="float16",
+                    video_model_cpu_offload=True,
+                    hunyuan_chunk_frames=min(settings_obj.hunyuan_chunk_frames, 8),
+                    hunyuan_chunk_overlap=min(settings_obj.hunyuan_chunk_overlap, 2, settings_obj.hunyuan_chunk_frames - 1),
+                )
+            settings_obj = replace(settings_obj, hunyuan_generation_mode=resolved_mode)
         if normalize_video_model_keyframe_renderer(settings_obj.video_model_keyframe_renderer) == "tensorrt_sd15":
             settings_obj = replace(
                 settings_obj,
@@ -9688,6 +9790,7 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
         else:
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 8)
             updates["video_model_decode_chunk_size"] = 1
+            updates["hunyuan_chunk_frames"] = min(int(settings_obj.hunyuan_chunk_frames or 25), 8)
     elif vram_gb and vram_gb <= 8.5:
         updates["video_model_cpu_offload"] = True
         if engine == "svd":
@@ -9701,6 +9804,7 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
         else:
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
+            updates["hunyuan_chunk_frames"] = min(int(settings_obj.hunyuan_chunk_frames or 25), 12)
     return replace(settings_obj, **updates) if updates else settings_obj
 
 
@@ -10200,6 +10304,25 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "video_model_engine": settings_obj.video_model_engine,
             "video_model_id": settings_obj.video_model_id,
             "video_model_path": settings_obj.video_model_path,
+            "hunyuan_generation_mode": settings_obj.hunyuan_generation_mode,
+            "hunyuan_low_vram_mode": settings_obj.hunyuan_low_vram_mode,
+            "hunyuan_chunk_frames": settings_obj.hunyuan_chunk_frames,
+            "hunyuan_chunk_overlap": settings_obj.hunyuan_chunk_overlap,
+            "low_vram_mode": bool(
+                settings_obj.hunyuan_low_vram_mode
+                or (
+                    settings_obj.temporal_mode == "video_model"
+                    and str(settings_obj.video_model_engine) == "hunyuan_video15"
+                    and (
+                    str(settings_obj.device_preference or "auto").lower() == "cuda"
+                    or (
+                        str(settings_obj.device_preference or "auto").lower() == "auto"
+                        and str(hw.get("backend") or hw.get("device") or "").lower() == "cuda"
+                    )
+                    )
+                    and 0 < float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0) <= 8.5
+                )
+            ),
             "video_model_max_frames_per_scene": settings_obj.video_model_max_frames_per_scene,
             "video_model_decode_chunk_size": settings_obj.video_model_decode_chunk_size,
             "video_model_dtype": settings_obj.video_model_dtype,

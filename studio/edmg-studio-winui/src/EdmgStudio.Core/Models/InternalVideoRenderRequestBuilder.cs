@@ -48,6 +48,10 @@ public sealed record InternalVideoRenderSettings
     public int VideoModelMotionBucketId { get; init; } = 127;
     public double VideoModelNoiseAugStrength { get; init; } = 0.02;
     public int VideoModelDecodeChunkSize { get; init; } = 8;
+    public string VideoModelGenerationMode { get; init; } = "auto";
+    public bool VideoModelLowVramMode { get; init; }
+    public int VideoModelGenerationChunkSize { get; init; } = 8;
+    public int VideoModelGenerationChunkOverlap { get; init; } = 2;
     public string VideoModelDtype { get; init; } = "auto";
     public bool VideoModelCpuOffload { get; init; }
     public string VideoModelMotionScoreMode { get; init; } = "auto";
@@ -133,6 +137,10 @@ public static class InternalVideoRenderRequestBuilder
             ["video_model_motion_bucket_id"] = settings.VideoModelMotionBucketId,
             ["video_model_noise_aug_strength"] = settings.VideoModelNoiseAugStrength,
             ["video_model_decode_chunk_size"] = settings.VideoModelDecodeChunkSize,
+            ["hunyuan_generation_mode"] = settings.VideoModelGenerationMode,
+            ["hunyuan_low_vram_mode"] = settings.VideoModelLowVramMode,
+            ["hunyuan_chunk_frames"] = settings.VideoModelGenerationChunkSize,
+            ["hunyuan_chunk_overlap"] = settings.VideoModelGenerationChunkOverlap,
             ["video_model_dtype"] = settings.VideoModelDtype,
             ["video_model_cpu_offload"] = settings.VideoModelCpuOffload,
             ["video_model_motion_score_mode"] = settings.VideoModelMotionScoreMode,
@@ -204,6 +212,12 @@ public static class InternalVideoRenderRequestBuilder
         Range(settings.VideoModelMotionBucketId, 1, 255, "Video model motion bucket");
         Range(settings.VideoModelNoiseAugStrength, 0.0, 1.0, "Video model noise augmentation");
         Range(settings.VideoModelDecodeChunkSize, 1, 64, "Video model decode chunk size");
+        Range(settings.VideoModelGenerationChunkSize, 2, 96, "Video model generation chunk size");
+        Range(settings.VideoModelGenerationChunkOverlap, 0, 16, "Video model generation chunk overlap");
+        if (settings.VideoModelGenerationChunkOverlap >= settings.VideoModelGenerationChunkSize)
+        {
+            throw new InvalidOperationException("Video model generation chunk overlap must be smaller than the chunk size.");
+        }
         Range(settings.VideoModelManualMotionScore, 1, 7, "Video model manual motion score");
         Range(settings.SourceStrength, 0.05, 0.95, "Source strength");
         if (settings.RefinerEnabled)
@@ -219,6 +233,11 @@ public static class InternalVideoRenderRequestBuilder
         Enum(settings.HostedService, ["default", "core", "ultra", "sd3"], "Hosted service");
         Enum(settings.DevicePreference, ["auto", "cpu", "cuda", "mps", "directml"], "Device preference");
         Enum(settings.VideoModelEngine, ["auto", "svd", "animatediff", "hunyuan_video15", "ltx_25"], "Video model engine");
+        Enum(settings.VideoModelGenerationMode, ["auto", "t2v", "i2v"], "Video model generation mode");
+        if (settings.VideoModelGenerationMode == "i2v" && string.IsNullOrWhiteSpace(settings.SourceAsset))
+        {
+            throw new InvalidOperationException("Hunyuan I2V requires a source image or video asset.");
+        }
         Enum(settings.MotionStrategy, ["manual", "storyboard_full_motion"], "Motion strategy");
         Enum(settings.VideoModelDtype, ["auto", "float16", "bfloat16", "float32"], "Video model dtype");
         Enum(settings.VideoModelMotionScoreMode, ["auto", "manual", "off"], "Motion score mode");

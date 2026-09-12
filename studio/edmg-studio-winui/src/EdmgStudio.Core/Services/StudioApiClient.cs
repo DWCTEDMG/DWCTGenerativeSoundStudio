@@ -116,6 +116,56 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
 
+    public Task<InsertRenderResultResponse> InsertRenderResultAsync(
+        string projectId,
+        InsertRenderResultRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<InsertRenderResultRequest, InsertRenderResultResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/timeline/insert-render-result",
+            request,
+            cancellationToken);
+
+    public async Task<InsertRenderResultResponse> InsertRenderResultWithFallbackAsync(
+        string projectId,
+        InsertRenderResultRequest request,
+        RenderResultDescriptor renderResult,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await InsertRenderResultAsync(projectId, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed or HttpStatusCode.NotImplemented)
+        {
+            ProjectResponse response = await GetProjectAsync(projectId, cancellationToken).ConfigureAwait(false);
+            CanonicalProject project = response.Project.CanonicalProject;
+            TimelinePosition playhead = project.Timebase.FromSeconds(request.StartSeconds ?? 0);
+            CanonicalTimelineInsertionResult insertion = RenderResultTimelineInsertion.Insert(project, renderResult, playhead, request.TrackId);
+            using JsonDocument timelineDocument = JsonDocument.Parse(
+                ProjectTimelineContracts.RebuildTimeline(insertion.Project).ToJsonString());
+            JsonElement timeline = timelineDocument.RootElement.Clone();
+            EditorState state = await ExecuteEditorCommandAsync(
+                projectId,
+                new EditorCommandRequest(
+                    $"insert-render-result:{renderResult.JobId}",
+                    request.ExpectedRevision,
+                    "replace",
+                    "Insert completed render",
+                    timeline),
+                cancellationToken).ConfigureAwait(false);
+            return new InsertRenderResultResponse
+            {
+                Ok = state.Ok,
+                Revision = state.Revision,
+                Timeline = state.Timeline,
+                TrackId = insertion.TrackId,
+                ClipId = insertion.ClipId,
+                MediaAssetId = insertion.MediaAssetId,
+                Replayed = insertion.Replayed || state.Replayed
+            };
+        }
+    }
+
     public Task<ModelTaskActionResponse> ValidateModelPackageAsync(
         string modelId,
         CancellationToken cancellationToken = default) =>

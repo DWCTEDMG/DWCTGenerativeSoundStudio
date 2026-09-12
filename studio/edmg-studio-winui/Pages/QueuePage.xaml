@@ -180,7 +180,7 @@
                         <Button x:Name="OpenTimelineButton"
                                 AutomationProperties.AutomationId="Queue.OpenTimeline"
                                 Click="OpenTimelineButton_Click"
-                                Content="Timeline"
+                                Content="Insert in timeline"
                                 IsEnabled="False" />
                     </StackPanel>
                     <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Result and diagnostics" />
