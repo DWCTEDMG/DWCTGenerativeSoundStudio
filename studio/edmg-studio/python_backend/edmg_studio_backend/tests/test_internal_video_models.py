@@ -34,7 +34,7 @@ def test_hunyuan_chunking_anchors_stitches_and_reports(monkeypatch, tmp_path):
         generation_mode="t2v", chunk_frames=5, chunk_overlap=2,
         chunk_callback=lambda current, total: progress.append((current, total)),
     )
-    assert [call["num_frames"] for call in calls] == [5, 5, 3]
+    assert [call["num_frames"] for call in calls] == [5, 5, 5]
     assert calls[0]["init_image"] is None
     assert calls[1]["init_image"].getpixel((0, 0)) == (44, 0, 0)
     assert len(frames) == 9
@@ -209,7 +209,7 @@ def test_hunyuan_wsl_runner_maps_paths_and_isolates_cuda(tmp_path: Path, monkeyp
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(ivm, "validate_hunyuan_runner", lambda: [])
     monkeypatch.setattr(ivm, "_wsl_path", lambda path, _config: "/mnt/c/" + Path(path).name)
-    monkeypatch.setattr(ivm, "_decode_video", lambda *_args, **_kwargs: [Image.new("RGB", (32, 32))] * 2)
+    monkeypatch.setattr(ivm, "_decode_video", lambda *_args, **_kwargs: [Image.new("RGB", (32, 32))] * 5)
     calls = []
 
     class Proc:

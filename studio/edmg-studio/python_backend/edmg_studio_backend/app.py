@@ -8403,7 +8403,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
             "content_hash": artifact_manifest.get("content_hash"),
             "content_hash_alg": artifact_manifest.get("content_hash_alg", "sha256"),
             "engine": artifact_manifest.get("engine", "internal_video"),
-            "model": artifact_manifest.get("model") or {"id": settings_obj.video_model_id or model_id, "revision": None},
+            "model": artifact_manifest.get("model") or {"id": settings_obj.video_model_id or settings_obj.model_id, "revision": None},
         }
         videos = proj.meta.setdefault("outputs", {}).setdefault("videos", [])
         if rel_video not in videos:

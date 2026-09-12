@@ -216,7 +216,7 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         EventsButton.IsEnabled = true;
         OpenOutputsButton.IsEnabled = true;
         OpenReviewButton.IsEnabled = true;
-        OpenTimelineButton.IsEnabled = job.Status == "succeeded";
+        OpenTimelineButton.IsEnabled = job.Status == "succeeded" && job.Type == "internal_video";
         DetailsTextBox.Text = FormatJobDetails(job);
     }
 

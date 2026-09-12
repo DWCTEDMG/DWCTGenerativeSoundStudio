@@ -816,19 +816,21 @@ def generate_video_model_frames(
                 cancel_check()
             overlap = min(overlap_limit, len(result), limit - 1)
             request_frames = min(limit, int(num_frames) - len(result) + overlap)
+            model_frames = max(1, ((request_frames - 1 + 3) // 4) * 4 + 1)
             anchor = first_image if not result else result[-1]
             generated = _run_hunyuan(
                 video_model_dir, init_image=anchor, prompt=prompt, negative_prompt=negative_prompt,
-                width=width, height=height, num_frames=request_frames, fps=fps or HUNYUAN_DEFAULT_FPS,
+                width=width, height=height, num_frames=model_frames, fps=fps or HUNYUAN_DEFAULT_FPS,
                 steps=steps, cfg=cfg, seed=used_seed + chunk_index, device=device, dtype=dtype_l,
                 cpu_offload=cpu_offload, cancel_check=cancel_check,
                 workspace=Path(workspace or video_model_dir),
             )
-            if len(generated) != request_frames:
+            if len(generated) != model_frames:
                 raise RuntimeError(
                     f"Hunyuan chunk {chunk_index + 1} produced {len(generated)} frames; "
-                    f"expected {request_frames}"
+                    f"expected {model_frames}"
                 )
+            generated = generated[:request_frames]
             if overlap:
                 tail = result[-overlap:]
                 result[-overlap:] = [
