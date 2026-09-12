@@ -53,41 +53,47 @@
             OpenPaneLength="260"
             Background="Transparent"
             PaneDisplayMode="Auto"
-            PaneTitle="EDMG Studio"
+            PaneTitle=""
             SelectionChanged="Navigation_SelectionChanged">
 
             <NavigationView.PaneHeader>
                 <Border
-                    Margin="0,8,0,12"
-                    Padding="8"
+                    Margin="0,6,0,12"
+                    Padding="10"
                     Background="{ThemeResource StudioLogoPanelBrush}"
                     BorderBrush="{ThemeResource StudioBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="14">
                     <Grid ColumnSpacing="10">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="64" />
+                            <ColumnDefinition Width="52" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Image
-                            Width="64"
-                            Height="64"
+                            Width="52"
+                            Height="52"
                             AutomationProperties.Name="EDMG Studio logo"
                             Source="ms-appx:///Assets/Brand/StudioLogo.png"
                             Stretch="Uniform" />
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                            <TextBlock
+                                FontSize="14"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioTextBrush}"
+                                Text="EDMG Studio"
+                                TextTrimming="CharacterEllipsis" />
                             <TextBlock
                                 CharacterSpacing="120"
-                                FontSize="11"
+                                FontSize="10"
                                 FontWeight="Bold"
                                 Foreground="{ThemeResource StudioAccentSoftBrush}"
                                 Text="STUDIO CONTROL" />
                             <TextBlock
-                                FontSize="15"
+                                FontSize="12"
                                 FontWeight="SemiBold"
                                 Foreground="{ThemeResource StudioTextBrush}"
                                 Text="Create • react • render"
-                                TextWrapping="Wrap" />
+                                TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                     </Grid>
                 </Border>

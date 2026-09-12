@@ -6,7 +6,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid Background="{ThemeResource StudioBackgroundBrush}">
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup>
                 <VisualState x:Name="WideLayout">
@@ -28,8 +28,24 @@
                 </VisualState>
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
-        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-            <StackPanel Padding="32,28,32,48" Spacing="16" MaxWidth="1120" HorizontalAlignment="Stretch">
+        <Image
+            AutomationProperties.AccessibilityView="Raw"
+            IsHitTestVisible="False"
+            Opacity="{ThemeResource StudioDirectorArtworkOpacity}"
+            Source="ms-appx:///Assets/Brand/WorkspaceFlair.jpg"
+            Stretch="UniformToFill" />
+        <Rectangle
+            Fill="{ThemeResource StudioDirectorScrimBrush}"
+            IsHitTestVisible="False" />
+        <ScrollViewer
+            HorizontalContentAlignment="Stretch"
+            HorizontalScrollBarVisibility="Disabled"
+            VerticalScrollBarVisibility="Auto">
+            <StackPanel
+                MaxWidth="{StaticResource StudioPageMaxWidth}"
+                Padding="24,24,24,48"
+                HorizontalAlignment="Stretch"
+                Spacing="16">
                 <Grid ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -57,7 +73,7 @@
                     IsClosable="True"
                     IsOpen="False" />
 
-                <Border Style="{StaticResource StudioCardBorderStyle}">
+                <Border Padding="20" Style="{StaticResource StudioCardBorderStyle}">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Story Bible and scenes" Style="{ThemeResource SubtitleTextBlockStyle}" />
                         <TextBox x:Name="StoryThemeBox" Header="Project theme" AutomationProperties.AutomationId="Director.StoryTheme" />
@@ -88,7 +104,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardBorderStyle}">
+                <Border Padding="20" Style="{StaticResource StudioCardBorderStyle}">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Production bridge" Style="{ThemeResource SubtitleTextBlockStyle}" />
                         <TextBlock
@@ -156,7 +172,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardBorderStyle}">
+                <Border Padding="20" Style="{StaticResource StudioCardBorderStyle}">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Current handoff context" Style="{ThemeResource SubtitleTextBlockStyle}" />
                         <TextBlock
@@ -189,7 +205,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardBorderStyle}">
+                <Border Padding="20" Style="{StaticResource StudioCardBorderStyle}">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Direct the workflow" Style="{ThemeResource SubtitleTextBlockStyle}" />
                         <TextBlock

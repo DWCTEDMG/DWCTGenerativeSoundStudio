@@ -32,8 +32,15 @@
                 <GradientStop Offset="0.44" Color="#D1040C10" />
                 <GradientStop Offset="1" Color="#FA041417" />
             </LinearGradientBrush>
+            <LinearGradientBrush x:Key="StudioDirectorScrimBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+                <GradientStop Offset="0" Color="#E8041417" />
+                <GradientStop Offset="0.24" Color="#B8041417" />
+                <GradientStop Offset="0.76" Color="#B8041417" />
+                <GradientStop Offset="1" Color="#E8041417" />
+            </LinearGradientBrush>
             <x:Double x:Key="StudioArtworkOpacity">0.52</x:Double>
             <x:Double x:Key="StudioWorkspaceArtworkOpacity">0.42</x:Double>
+            <x:Double x:Key="StudioDirectorArtworkOpacity">0.46</x:Double>
             <SolidColorBrush x:Key="AccentButtonBackground" Color="#35D8DF" />
             <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#56E1E9" />
             <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#25AAB0" />
@@ -73,8 +80,15 @@
                 <GradientStop Offset="0.42" Color="#ECEDF7F7" />
                 <GradientStop Offset="1" Color="#FDEDF7F7" />
             </LinearGradientBrush>
+            <LinearGradientBrush x:Key="StudioDirectorScrimBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+                <GradientStop Offset="0" Color="#E6EDF7F7" />
+                <GradientStop Offset="0.24" Color="#BDEDF7F7" />
+                <GradientStop Offset="0.76" Color="#BDEDF7F7" />
+                <GradientStop Offset="1" Color="#E6EDF7F7" />
+            </LinearGradientBrush>
             <x:Double x:Key="StudioArtworkOpacity">0.25</x:Double>
             <x:Double x:Key="StudioWorkspaceArtworkOpacity">0.22</x:Double>
+            <x:Double x:Key="StudioDirectorArtworkOpacity">0.24</x:Double>
             <SolidColorBrush x:Key="AccentButtonBackground" Color="#006A6E" />
             <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#00858A" />
             <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#004F52" />
@@ -106,8 +120,10 @@
             <SolidColorBrush x:Key="StudioTitleBarBrush" Color="{ThemeResource SystemColorWindowColor}" />
             <SolidColorBrush x:Key="StudioContentScrimBrush" Color="{ThemeResource SystemColorWindowColor}" />
             <SolidColorBrush x:Key="StudioWorkspaceScrimBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="StudioDirectorScrimBrush" Color="{ThemeResource SystemColorWindowColor}" />
             <x:Double x:Key="StudioArtworkOpacity">0</x:Double>
             <x:Double x:Key="StudioWorkspaceArtworkOpacity">0</x:Double>
+            <x:Double x:Key="StudioDirectorArtworkOpacity">0</x:Double>
             <StaticResource x:Key="AccentButtonBackground" ResourceKey="SystemControlHighlightAccentBrush" />
             <StaticResource x:Key="AccentButtonBackgroundPointerOver" ResourceKey="SystemControlForegroundAccentBrush" />
             <StaticResource x:Key="AccentButtonBackgroundPressed" ResourceKey="SystemControlBackgroundBaseMediumLowBrush" />

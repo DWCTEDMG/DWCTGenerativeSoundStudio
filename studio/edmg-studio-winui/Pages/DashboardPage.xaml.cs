@@ -589,7 +589,7 @@ public sealed class DashboardProjectItem : INotifyPropertyChanged
     public Visibility WaveformVisibility => Artwork is null ? Visibility.Visible : Visibility.Collapsed;
 }
 
-public sealed class DashboardCard
+public sealed class DashboardCard : INotifyPropertyChanged
 {
     private string _value;
     private string _subtitle;

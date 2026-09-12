@@ -218,21 +218,32 @@ internal sealed class BackendAvailabilityHandler : DelegatingHandler
         {
             return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return CreateUnavailableResponse(request, exception);
+        }
         catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            CrashLogger.Write(
-                $"Studio API transport could not reach {request.RequestUri}; returning a nonfatal 503 response.",
-                exception);
-
-            var body =
-                "{\"error\":{\"code\":\"BACKEND_UNAVAILABLE\",\"message\":\"Studio backend is unavailable.\",\"hint\":\"Wait for the managed backend to finish starting, then retry.\"}}";
-
-            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
-            {
-                RequestMessage = request,
-                ReasonPhrase = "Studio backend unavailable",
-                Content = new StringContent(body, Encoding.UTF8, "application/json")
-            };
+            return CreateUnavailableResponse(request, exception);
         }
+    }
+
+    private static HttpResponseMessage CreateUnavailableResponse(
+        HttpRequestMessage request,
+        Exception exception)
+    {
+        CrashLogger.Write(
+            $"Studio API transport could not reach {request.RequestUri}; returning a nonfatal 503 response.",
+            exception);
+
+        const string body =
+            "{\"error\":{\"code\":\"BACKEND_UNAVAILABLE\",\"message\":\"Studio backend is unavailable.\",\"hint\":\"Wait for the managed backend to finish starting, then retry.\"}}";
+
+        return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            RequestMessage = request,
+            ReasonPhrase = "Studio backend unavailable",
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
     }
 }
