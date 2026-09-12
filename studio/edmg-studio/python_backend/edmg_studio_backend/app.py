@@ -9203,8 +9203,27 @@ def _resolve_internal_render_request(
             return mid
         return None
 
-    model_id = req_model_id
-    if req_model_id.lower() in ("auto", "auto_internal"):
+    requested_video_mode = (
+        str(payload.get("temporal_mode") or "").strip().lower() == "video_model"
+        or str(payload.get("render_mode") or "").strip().lower() == "video_model"
+    )
+    explicit_anchorless_hunyuan = (
+        requested_video_mode
+        and not str(payload.get("source_asset") or "").strip()
+        and (
+            str(payload.get("video_model_engine") or "").strip().lower() == "hunyuan_video15"
+            or str(payload.get("video_model_id") or "").strip() == HUNYUAN_MODEL_ID
+        )
+    )
+    resolved_video_selection: tuple[str, str, Path] | None = None
+    if explicit_anchorless_hunyuan:
+        resolved_video_selection = _resolve_internal_video_model_selection(
+            payload,
+            base_model_family="unknown",
+        )
+
+    model_id = HUNYUAN_MODEL_ID if explicit_anchorless_hunyuan else req_model_id
+    if not explicit_anchorless_hunyuan and req_model_id.lower() in ("auto", "auto_internal"):
         picked = _pick_auto_model()
         if not picked:
             if auto_model_hardware_issue:
@@ -9222,7 +9241,11 @@ def _resolve_internal_render_request(
             )
         model_id = picked
 
-    model_path = _resolve_installed_model_path(model_id, materialize_remote=False)
+    model_path = (
+        resolved_video_selection[2]
+        if resolved_video_selection is not None
+        else _resolve_installed_model_path(model_id, materialize_remote=False)
+    )
     if not model_path:
         issue = getattr(models, "internal_asset_issue", lambda _model_id: None)(model_id)
         if issue == "incomplete":
@@ -9248,7 +9271,11 @@ def _resolve_internal_render_request(
             status_code=400,
         )
 
-    model_family = _internal_model_family_for_request(model_id, model_path)
+    model_family = (
+        "hunyuan_video15"
+        if explicit_anchorless_hunyuan
+        else _internal_model_family_for_request(model_id, model_path)
+    )
     if model_family == "flux":
         raise UserFacingError(
             "FLUX is a still and storyboard-keyframe model, not an internal video base model.",
@@ -9259,7 +9286,7 @@ def _resolve_internal_render_request(
             code="FLUX_VIDEO_BASE_UNSUPPORTED",
             status_code=400,
         )
-    if model_family == "unknown":
+    if model_family == "unknown" and not explicit_anchorless_hunyuan:
         raise UserFacingError(
             "Internal diffusion model family is unsupported",
             hint="Reinstall a supported SD 1.5, SDXL, or SD3.5 internal video model.",
@@ -9267,7 +9294,7 @@ def _resolve_internal_render_request(
             status_code=400,
         )
     effective_device_preference = requested_device
-    if requested_device == "directml" and model_family not in {"sd15", "sdxl"}:
+    if not explicit_anchorless_hunyuan and requested_device == "directml" and model_family not in {"sd15", "sdxl"}:
         raise UserFacingError(
             "DirectML currently supports SD 1.5 and SDXL only.",
             hint="Use SDXL or SD 1.5 for AMD / DirectML, or switch device preference to CPU for SD3.5.",
@@ -9276,7 +9303,11 @@ def _resolve_internal_render_request(
         )
     if requested_device == "auto" and str(hw.get("backend") or "").lower() == "directml" and model_family not in {"sd15", "sdxl"}:
         effective_device_preference = "cpu"
-    hardware_issue = _internal_model_hardware_issue(model_id, model_family, hw, requested_device)
+    hardware_issue = (
+        None
+        if explicit_anchorless_hunyuan
+        else _internal_model_hardware_issue(model_id, model_family, hw, requested_device)
+    )
     if hardware_issue:
         raise UserFacingError(
             str(hardware_issue["message"]),
@@ -9288,7 +9319,9 @@ def _resolve_internal_render_request(
     tier_defaults = dict(tier_plan.get("defaults") or {})
     motion_strategy = normalize_internal_motion_strategy(payload.get("motion_strategy") or payload.get("internal_motion_strategy"))
     effective_temporal_mode = (
-        str(payload.get("temporal_mode"))
+        "video_model"
+        if str(payload.get("render_mode") or "").strip().lower() == "video_model"
+        else str(payload.get("temporal_mode"))
         if payload.get("temporal_mode") is not None
         else str(tier_defaults.get("temporal_mode", "frame_img2img"))
     )
@@ -9305,9 +9338,12 @@ def _resolve_internal_render_request(
         settings_obj = _apply_storyboard_full_motion_settings(settings_obj, payload)
     tensorrt_keyframe_bundle_path: Path | None = None
     if settings_obj.temporal_mode == "video_model":
-        engine, video_model_id, video_model_path = _resolve_internal_video_model_selection(
-            payload,
-            base_model_family=model_family,
+        engine, video_model_id, video_model_path = (
+            resolved_video_selection
+            or _resolve_internal_video_model_selection(
+                payload,
+                base_model_family=model_family,
+            )
         )
         settings_obj = replace(
             settings_obj,
@@ -10005,7 +10041,13 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         if e.code in {"MODEL_NOT_INSTALLED", "DIRECTML_MODEL_UNSUPPORTED", "MODEL_UNSUPPORTED_FOR_HARDWARE"} and _hosted_stability_ready(payload):
             return _hosted_render_preflight_data(project_id, payload, reason=e.message)
         raise
-    model_family = _internal_model_family_for_request(model_id, model_path)
+    model_family = (
+        "hunyuan_video15"
+        if settings_obj.temporal_mode == "video_model"
+        and settings_obj.video_model_engine == "hunyuan_video15"
+        and not settings_obj.source_asset
+        else _internal_model_family_for_request(model_id, model_path)
+    )
 
     scenes = variant.get("scenes") or []
     used_fallback_plan = str(variant.get("_fallback_plan_source") or "") == "creative_direction_fallback"

@@ -535,6 +535,106 @@ def test_internal_request_fails_preflight_when_tensorrt_anchor_bundle_is_missing
     assert exc.value.code == "TRT_ANCHOR_BUNDLE_NOT_INSTALLED"
 
 
+def test_internal_request_resolves_explicit_hunyuan_without_still_model(tmp_path, monkeypatch) -> None:
+    from edmg_studio_backend.services import engine_packages
+
+    store, project = _make_render_project(tmp_path)
+    hunyuan_path = tmp_path / "HunyuanVideo 1.5"
+    hunyuan_path.mkdir()
+
+    class FakeModels:
+        def installed_path(self, model_id: str):
+            return hunyuan_path if model_id == app_module.HUNYUAN_MODEL_ID else None
+
+    monkeypatch.setattr(app_module, "store", store)
+    monkeypatch.setattr(app_module, "models", FakeModels())
+    monkeypatch.setattr(app_module, "_hardware_profile", lambda: {"backend": "cuda", "vram_gb": 48.0})
+    monkeypatch.setattr(app_module, "_build_internal_render_plan", lambda *_args, **_kwargs: {
+        "preferred_internal_model": "hf_sd15_internal",
+        "device_preference": "cuda",
+        "defaults": {},
+        "applied_tier": "quality",
+    })
+    monkeypatch.setattr(app_module, "_render_provider_status", lambda _hw: {"settings": {"directml": {}}})
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
+    monkeypatch.setattr(engine_packages, "runtime_status", lambda *args, **kwargs: {"runtime_ready": True, "blockers": []})
+    monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+
+    resolved = app_module._resolve_internal_render_request(project.id, {
+        "render_mode": "video_model",
+        "model_id": "auto",
+        "video_model_engine": "hunyuan_video15",
+        "video_model_id": app_module.HUNYUAN_MODEL_ID,
+    })
+
+    assert resolved[2] == app_module.HUNYUAN_MODEL_ID
+    assert resolved[3] == hunyuan_path
+    assert resolved[5].temporal_mode == "video_model"
+    assert resolved[5].video_model_path == str(hunyuan_path)
+
+
+def test_anchorless_hunyuan_render_uses_native_text_to_video(tmp_path, monkeypatch) -> None:
+    model_path = tmp_path / "hunyuan"
+    model_path.mkdir()
+    captured: dict = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        frames = []
+        for index in range(kwargs["num_frames"]):
+            frame = Image.new("RGB", (64, 64), "black")
+            for x in range(8):
+                for y in range(8):
+                    frame.putpixel((index * 6 + x, 28 + y), (255, 255, 255))
+            frames.append(frame)
+        return frames
+
+    monkeypatch.setattr(internal_video, "_device_auto", lambda _preference: "cpu")
+    monkeypatch.setattr(internal_video, "validate_video_model_layout", lambda *_args: None)
+    monkeypatch.setattr(internal_video, "generate_video_model_frames", fake_generate)
+    monkeypatch.setattr(
+        internal_video,
+        "_try_load_pipelines",
+        lambda *_args, **_kwargs: pytest.fail("still-image pipeline must not load"),
+    )
+    monkeypatch.setattr(
+        internal_video,
+        "_apply_video_anchor_frames",
+        lambda *_args, **_kwargs: pytest.fail("anchor frames must not be applied"),
+    )
+    monkeypatch.setattr(
+        internal_video,
+        "assemble_image_sequence",
+        lambda **kwargs: kwargs["out_mp4"].write_bytes(b"video"),
+    )
+
+    output = internal_video.render_internal_video_variant(
+        ffmpeg_path="ffmpeg",
+        project_dir=tmp_path,
+        variant={"index": 0, "duration_s": 4.0},
+        scenes=[{"start_s": 0.0, "end_s": 4.0, "prompt": "a dancer spins"}],
+        audio_path=None,
+        model_dir=model_path,
+        settings=InternalVideoSettings(
+            width=64,
+            height=64,
+            fps_render=2,
+            fps_output=2,
+            temporal_mode="video_model",
+            video_model_engine="hunyuan_video15",
+            video_model_id=app_module.HUNYUAN_MODEL_ID,
+            video_model_path=str(model_path),
+            video_model_max_frames_per_scene=8,
+            device_preference="cuda",
+        ),
+    )
+
+    assert output.is_file()
+    assert captured["init_image"] is None
+    assert captured["base_model_dir"] == model_path
+    assert captured["device"] == "cuda:0"
+
+
 def test_internal_video_request_rejects_flux_still_model(tmp_path, monkeypatch) -> None:
     store, project = _make_render_project(tmp_path)
     flux_path = tmp_path / "hf_flux1_schnell_internal"

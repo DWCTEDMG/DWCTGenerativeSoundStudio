@@ -2763,6 +2763,10 @@ def render_internal_video_variant(
                 if "hunyuan" in video_model_id_hint
                 else ("animatediff" if "animatediff" in video_model_id_hint else "svd")
             )
+        if video_model_engine == "hunyuan_video15":
+            requested_device = str(settings.device_preference or "auto").strip().lower()
+            if requested_device.startswith("cuda"):
+                device = requested_device if ":" in requested_device else "cuda:0"
         validate_video_model_layout(video_model_engine, video_model_path)
         if video_model_engine == "animatediff" and _model_family_from_dir(model_dir) != "sd15":
             raise UserFacingError(
@@ -2778,8 +2782,17 @@ def render_internal_video_variant(
             engine=video_model_engine,
             device=device,
         )
+    anchorless_hunyuan = (
+        settings.temporal_mode == "video_model"
+        and video_model_engine == "hunyuan_video15"
+        and source_image_path is None
+    )
     keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
-    use_tensorrt_keyframes = settings.temporal_mode == "video_model" and keyframe_renderer == "tensorrt_sd15"
+    use_tensorrt_keyframes = (
+        settings.temporal_mode == "video_model"
+        and keyframe_renderer == "tensorrt_sd15"
+        and not anchorless_hunyuan
+    )
     resolved_tensorrt_bundle_path: Path | None = None
     if use_tensorrt_keyframes:
         if tensorrt_bundle_path is None:
@@ -2909,7 +2922,7 @@ def render_internal_video_variant(
     prev_key_scene_index: int | None = None
     anchor_dir = project_dir / "outputs" / "anchors_internal" / work_tag
     anchor_dir.mkdir(parents=True, exist_ok=True)
-    for i, t in enumerate(key_times):
+    for i, t in enumerate([] if anchorless_hunyuan else key_times):
         if cancel_check_fn:
             cancel_check_fn()
         key_scene_index = next(
@@ -3136,6 +3149,8 @@ def render_internal_video_variant(
                 end_s = max(start_s + (1.0 / fps_r), next_start)
 
             start_f = max(fi_cursor, int(round(start_s * fps_r)))
+            if anchorless_hunyuan:
+                start_f = fi_cursor
             end_f = min(total_frames, max(start_f + 1, int(round(end_s * fps_r))))
             if scene_index == len(sorted_scenes) - 1:
                 end_f = total_frames
@@ -3250,21 +3265,24 @@ def render_internal_video_variant(
                 fps=fps_schedule,
             ) or render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
             negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
-            start_anchor_img, end_anchor_img = _video_anchor_images(
-                key_imgs=key_imgs,
-                key_times=key_times,
-                start_s=start_s,
-                end_s=end_s,
-                duration_s=duration_s,
-                fps_render=fps_r,
-                width=out_w,
-                height=out_h,
-            )
+            start_anchor_img: Image.Image | None = None
+            end_anchor_img: Image.Image | None = None
+            if not anchorless_hunyuan:
+                start_anchor_img, end_anchor_img = _video_anchor_images(
+                    key_imgs=key_imgs,
+                    key_times=key_times,
+                    start_s=start_s,
+                    end_s=end_s,
+                    duration_s=duration_s,
+                    fps_render=fps_r,
+                    width=out_w,
+                    height=out_h,
+                )
             continuity_scope = normalize_keyframe_continuity_mode(
                 settings.keyframe_continuity_mode
             )
-            continuity_anchor_source = "generated_keyframe"
-            if previous_video_model_frame is not None and (
+            continuity_anchor_source = "none" if anchorless_hunyuan else "generated_keyframe"
+            if not anchorless_hunyuan and previous_video_model_frame is not None and (
                 transition_kind == "technical_continue" or continuity_scope == "project"
             ):
                 start_anchor_img = previous_video_model_frame.convert("RGB").resize(
@@ -3278,7 +3296,7 @@ def render_internal_video_variant(
                         f"(transition={transition_kind}, scope={continuity_scope})."
                     )
             anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
-            init_img = end_anchor_img if anchor_mode == "end" else start_anchor_img
+            init_img = None if anchorless_hunyuan else (end_anchor_img if anchor_mode == "end" else start_anchor_img)
             score_info = video_model_scene_motion_score(
                 scene=scene,
                 timeline=timeline,
@@ -3412,15 +3430,18 @@ def render_internal_video_variant(
             )
             if not generated:
                 raise RuntimeError(f"Internal {engine} adapter returned no frames.")
-            if anchor_mode == "end":
+            if not anchorless_hunyuan and anchor_mode == "end":
                 generated = list(reversed(generated))
-            generated = _apply_video_anchor_frames(
-                [frame.convert("RGB") for frame in generated],
-                anchor_mode=anchor_mode,
-                start_img=start_anchor_img,
-                end_img=end_anchor_img,
-                anchor_strength=float(shot_anchor_strength),
-            )
+            if anchorless_hunyuan:
+                generated = [frame.convert("RGB") for frame in generated]
+            else:
+                generated = _apply_video_anchor_frames(
+                    [frame.convert("RGB") for frame in generated],
+                    anchor_mode=anchor_mode,
+                    start_img=start_anchor_img,
+                    end_img=end_anchor_img,
+                    anchor_strength=float(shot_anchor_strength),
+                )
             previous_video_model_frame = generated[-1].convert("RGB").copy()
             native_motion_report = analyze_motion_images(generated, fps=fps_r)
             native_motion_report = {
@@ -3495,10 +3516,15 @@ def render_internal_video_variant(
 
         while fi_cursor < total_frames:
             t = fi_cursor / fps_r
-            a_t, b_t, w = _key_times_bracket(key_times, t)
-            filler = key_imgs[a_t].convert("RGB")
-            if a_t != b_t:
-                filler = Image.blend(filler, key_imgs[b_t].convert("RGB"), float(w))
+            if anchorless_hunyuan:
+                if previous_video_model_frame is None:
+                    raise RuntimeError("HunyuanVideo-1.5 returned no frame for the render tail.")
+                filler = previous_video_model_frame.convert("RGB")
+            else:
+                a_t, b_t, w = _key_times_bracket(key_times, t)
+                filler = key_imgs[a_t].convert("RGB")
+                if a_t != b_t:
+                    filler = Image.blend(filler, key_imgs[b_t].convert("RGB"), float(w))
             frame_paths.append(_save_frame(_finish_video_model_frame(filler, t), fi_cursor, t))
             fi_cursor += 1
 
@@ -4903,18 +4929,11 @@ def describe_internal_video_model_preflight(
         elif backend == "cuda" and vram_gb and vram_gb <= 8.5 and not bool(settings.video_model_cpu_offload):
             effective_native_cap = min(effective_native_cap, 16)
     elif engine == "hunyuan_video15":
-        # Hunyuan's native context is intentionally conservative until the
-        # project qualifies a concrete local checkpoint/profile. These caps
-        # describe the adapter contract and do not certify hardware support.
         effective_native_cap = min(effective_native_cap, 61)
         if backend == "cuda" and vram_gb and vram_gb <= 6.5:
             effective_native_cap = min(effective_native_cap, 8)
         elif backend == "cuda" and vram_gb and vram_gb <= 8.5:
             effective_native_cap = min(effective_native_cap, 12)
-        warnings.append(
-            "HunyuanVideo-1.5 local execution remains discovery-only until its adapter, low-VRAM profile, and fresh temporal output evidence are qualified."
-        )
-        checks.append({"name": "adapter_qualification", "status": "blocked"})
 
     motion_frame_budgets: list[dict[str, Any]] = []
     planned_windows = _storyboard_scene_windows(

@@ -163,6 +163,26 @@ def test_preflight_accepts_eight_native_frames_for_one_short_shot() -> None:
     assert report["motion_validation_required"] is True
 
 
+def test_hunyuan_preflight_is_not_marked_discovery_only() -> None:
+    report = describe_internal_video_model_preflight(
+        scenes=[{"start_s": 0.0, "end_s": 4.0, "prompt": "camera circles a dancer"}],
+        timeline=None,
+        settings=InternalVideoSettings(
+            fps_render=2,
+            temporal_mode="video_model",
+            video_model_engine="hunyuan_video15",
+            video_model_max_frames_per_scene=8,
+            device_preference="cuda",
+        ),
+        duration_s=4.0,
+        total_frames=8,
+        hardware={"backend": "cuda", "vram_gb": 48.0},
+    )
+
+    assert not any(check["name"] == "adapter_qualification" for check in report["checks"])
+    assert not any("discovery-only" in warning for warning in report["warnings"])
+
+
 def test_storyboard_full_motion_preserves_selected_flux_source() -> None:
     source_asset = "outputs/images/flux-source.png"
     settings = InternalVideoSettings(
