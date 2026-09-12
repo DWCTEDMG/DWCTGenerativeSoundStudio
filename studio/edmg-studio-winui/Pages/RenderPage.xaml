@@ -536,11 +536,11 @@
                                         <ComboBox x:Name="VideoModelEngineComboBox" SelectedIndex="0"
                                                   SelectionChanged="ModelGuidanceSelection_Changed"
                                                   AutomationProperties.AutomationId="RenderVideoModelEngineComboBox">
-                                            <ComboBoxItem Content="auto" />
-                                            <ComboBoxItem Content="svd" />
-                                            <ComboBoxItem Content="animatediff" />
-                                            <ComboBoxItem Content="hunyuan_video15" />
-                                            <ComboBoxItem Content="ltx_25" />
+                                            <ComboBoxItem Content="Automatic (best qualified local engine)" Tag="auto" />
+                                            <ComboBoxItem Content="Stable Video Diffusion" Tag="svd" />
+                                            <ComboBoxItem Content="AnimateDiff" Tag="animatediff" />
+                                            <ComboBoxItem Content="HunyuanVideo-1.5" Tag="hunyuan_video15" />
+                                            <ComboBoxItem Content="LTX-2.5 Distilled (High / Ultra, 22B)" Tag="ltx_25" />
                                         </ComboBox>
                                     </StackPanel>
                                     <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Spacing="4">
@@ -713,6 +713,7 @@
                                             <ComboBoxItem Content="Automatic" Tag="auto" />
                                             <ComboBoxItem Content="Float16" Tag="float16" />
                                             <ComboBoxItem Content="BFloat16" Tag="bfloat16" />
+                                            <ComboBoxItem Content="FP8 (LTX memory saver)" Tag="fp8" />
                                             <ComboBoxItem Content="Float32" Tag="float32" />
                                         </ComboBox>
                                     </StackPanel>
@@ -736,15 +737,22 @@
                                                  TextChanged="ModelGuidanceText_Changed"
                                                  AutomationProperties.AutomationId="RenderKeyframeModelBox" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="5" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="18">
+                                    <StackPanel Grid.Row="5" Grid.ColumnSpan="2" Spacing="8">
+                                        <TextBlock x:Name="LtxRenderGuidanceText"
+                                                   Visibility="Collapsed"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   Text="LTX-2.5 uses its isolated ltx-pipelines 1.3.0 runtime. Auto selects it only on qualified CUDA systems with at least 24 GB VRAM; common output sizes are normalized internally and restored exactly."
+                                                   TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="18">
                                         <ToggleSwitch x:Name="VideoCpuOffloadToggle" Header="Prefer CPU offload (automatic on low VRAM)"
                                                       AutomationProperties.AutomationId="RenderVideoCpuOffloadToggle" />
                                         <ToggleSwitch x:Name="VideoPromptRefineToggle" Header="Prompt refinement" IsOn="True"
                                                       AutomationProperties.AutomationId="RenderVideoPromptRefineToggle" />
                                         <ToggleSwitch x:Name="TimelineCameraToggle" Header="Apply timeline camera" IsOn="True"
                                                       AutomationProperties.AutomationId="RenderTimelineCameraToggle" />
+                                        </StackPanel>
                                     </StackPanel>
-                                    <StackPanel Grid.Row="6" Spacing="4">
+                                    <StackPanel x:Name="HunyuanGenerationPanel" Grid.Row="6" Spacing="4">
                                         <TextBlock Text="Hunyuan generation mode" Style="{StaticResource FieldLabelStyle}" />
                                         <ComboBox x:Name="VideoGenerationModeComboBox" SelectedIndex="0"
                                                   AutomationProperties.AutomationId="RenderVideoGenerationModeComboBox">
@@ -755,15 +763,17 @@
                                         <TextBlock Text="I2V requires a source image or video in Motion refinement → Source asset."
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                     </StackPanel>
-                                    <ToggleSwitch x:Name="VideoLowVramToggle" Grid.Row="6" Grid.Column="1"
-                                                  Header="Deterministic low-VRAM mode"
-                                                  AutomationProperties.AutomationId="RenderVideoLowVramToggle" />
-                                    <StackPanel Grid.Row="7" Spacing="4">
+                                    <StackPanel x:Name="HunyuanLowVramPanel" Grid.Row="6" Grid.Column="1">
+                                        <ToggleSwitch x:Name="VideoLowVramToggle"
+                                                      Header="Deterministic low-VRAM mode"
+                                                      AutomationProperties.AutomationId="RenderVideoLowVramToggle" />
+                                    </StackPanel>
+                                    <StackPanel x:Name="HunyuanChunkSizePanel" Grid.Row="7" Spacing="4">
                                         <TextBlock Text="Generation chunk size (frames)" Style="{StaticResource FieldLabelStyle}" />
                                         <NumberBox x:Name="GenerationChunkSizeBox" Value="8" Minimum="2" Maximum="96"
                                                    AutomationProperties.AutomationId="RenderGenerationChunkSizeBox" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="7" Grid.Column="1" Spacing="4">
+                                    <StackPanel x:Name="HunyuanChunkOverlapPanel" Grid.Row="7" Grid.Column="1" Spacing="4">
                                         <TextBlock Text="Generation chunk overlap (frames)" Style="{StaticResource FieldLabelStyle}" />
                                         <NumberBox x:Name="GenerationChunkOverlapBox" Value="2" Minimum="0" Maximum="16"
                                                    AutomationProperties.AutomationId="RenderGenerationChunkOverlapBox" />

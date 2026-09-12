@@ -299,6 +299,28 @@
                     </Border>
 
                     <Border
+                        x:Name="LtxCard"
+                        Visibility="Collapsed"
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="LTX-2.5 isolated runtime" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="LTX-2.5 uses a separate Python environment with exactly ltx-pipelines 1.3.0. Automatic High/Ultra selection requires CUDA, at least 24 GB VRAM, a valid model package, and a current smoke-test receipt." TextWrapping="Wrap" />
+                            <TextBox x:Name="LtxPythonBox" Header="LTX Python executable" PlaceholderText="C:\path\to\ltx-venv\Scripts\python.exe" />
+                            <NumberBox x:Name="LtxTimeoutBox" Header="Render timeout (seconds)" Minimum="1" Maximum="86400" Value="3600" />
+                            <NumberBox x:Name="LtxSmokeTimeoutBox" Header="Smoke-test timeout (seconds)" Minimum="1" Maximum="86400" Value="600" />
+                            <TextBlock x:Name="LtxStatusText" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="LtxSaveButton" Click="LtxSave_Click" Content="Save runtime settings" />
+                                <Button x:Name="LtxProbeButton" Click="LtxProbe_Click" Content="Probe LTX runtime" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border
                         x:Name="HunyuanCard"
                         Visibility="Collapsed"
                         Padding="20"

@@ -271,7 +271,7 @@ class InternalVideoRenderRequest(BaseModel):
     video_model_motion_bucket_id: int = Field(default=127, ge=1, le=255)
     video_model_noise_aug_strength: float = Field(default=0.02, ge=0.0, le=1.0)
     video_model_decode_chunk_size: int = Field(default=8, ge=1, le=64)
-    video_model_dtype: Literal["auto","float16","bfloat16","float32"] = "auto"
+    video_model_dtype: Literal["auto","float16","bfloat16","float32","fp8"] = "auto"
     video_model_cpu_offload: bool = False
     video_model_motion_score_mode: Literal["auto","manual","off"] = "auto"
     video_model_manual_motion_score: int = Field(default=4, ge=1, le=7)

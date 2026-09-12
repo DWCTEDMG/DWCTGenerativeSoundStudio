@@ -1116,7 +1116,8 @@ def test_ltx_low_vram_memory_safety_enables_supported_cpu_offload() -> None:
 
     assert safe.video_model_cpu_offload is True
     assert safe.video_model_max_frames_per_scene == 8
-    assert safe.video_model_decode_chunk_size == 1
+    assert safe.video_model_decode_chunk_size == 8
+    assert safe.video_model_dtype == "fp8"
     assert any("6 GB CUDA LTX-2.5 safety" in warning for warning in warnings)
     assert any("host-memory budget" in warning for warning in warnings)
 

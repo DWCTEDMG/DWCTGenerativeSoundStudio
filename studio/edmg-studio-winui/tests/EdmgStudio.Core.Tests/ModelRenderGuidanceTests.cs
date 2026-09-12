@@ -149,6 +149,29 @@ public sealed class ModelRenderGuidanceTests
         Assert.AreEqual("ad", result.VideoAlternatives[0].ModelId);
     }
 
+    [TestMethod]
+    public void Evaluate_LtxRuntimeQualificationControlsReadinessAndRanking()
+    {
+        ModelCatalogueEntry ltx = Entry("ltx", "LTX", "video_diffusers", true, "ltx", ["nvidia"],
+            Render("internal_video_model", ["internal_video_model"], "ltx_25"));
+        ltx.PackageStatus = RuntimeStatus(ready: false, blockers: ["Run the LTX runtime smoke test."]);
+        ModelCatalogueResponse catalogue = Catalogue(
+            Entry("sd15", "SD 1.5", "diffusers", true, "sd15", ["nvidia"],
+                Render("internal", ["internal_video"])),
+            ltx);
+
+        ModelRenderGuidance blocked = ModelRenderGuidanceEvaluator.Evaluate(catalogue,
+            Config(modelId: "sd15", videoModelId: "ltx", device: "cuda", temporalMode: "video_model", videoEngine: "ltx_25"));
+        Assert.IsFalse(blocked.IsReady);
+        StringAssert.Contains(string.Join(" ", blocked.Blockers), "smoke test");
+
+        ltx.PackageStatus = RuntimeStatus(ready: true);
+        ModelRenderGuidance ready = ModelRenderGuidanceEvaluator.Evaluate(catalogue,
+            Config(modelId: "sd15", videoModelId: "ltx", device: "cuda", temporalMode: "video_model", videoEngine: "ltx_25"));
+        Assert.IsTrue(ready.IsReady);
+        Assert.IsTrue(ready.Video?.IsRuntimeReady);
+    }
+
     private static ModelRenderConfiguration Config(
         string modelId = "auto",
         string videoModelId = "",
@@ -220,4 +243,7 @@ public sealed class ModelRenderGuidanceTests
 
     private static JsonElement Json(string value) =>
         JsonDocument.Parse(value).RootElement.Clone();
+
+    private static ModelRuntimeStatus RuntimeStatus(bool ready, IReadOnlyList<string>? blockers = null) =>
+        new("ltx", ready ? "ready" : "blocked", true, ready, 3, true, true, true, true, null, blockers);
 }

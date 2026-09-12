@@ -137,15 +137,41 @@ public sealed class InternalVideoRenderRequestBuilderTests
     }
 
     [TestMethod]
+    public void Build_LtxUsesCanonicalFieldsWithoutHunyuanSettings()
+    {
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            VideoModelEngine = "ltx_25",
+            VideoModelId = "hf_ltx_25_distilled_internal",
+            VideoModelDtype = "fp8",
+            VideoModelCpuOffload = true,
+            VideoModelGenerationMode = "i2v",
+            VideoModelGenerationChunkSize = 2,
+            VideoModelGenerationChunkOverlap = 2,
+        });
+
+        Assert.AreEqual("hf_ltx_25_distilled_internal", request.GetProperty("video_model_id").GetString());
+        Assert.AreEqual("fp8", request.GetProperty("video_model_dtype").GetString());
+        Assert.IsTrue(request.GetProperty("video_model_cpu_offload").GetBoolean());
+        Assert.IsFalse(request.TryGetProperty("hunyuan_generation_mode", out _));
+        Assert.IsFalse(request.TryGetProperty("hunyuan_chunk_frames", out _));
+    }
+
+    [TestMethod]
     public void Build_RequiresSourceForI2vAndRejectsOverlappingWholeChunk()
     {
         InvalidOperationException sourceException = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings { VideoModelGenerationMode = "i2v" }));
+            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+            {
+                VideoModelEngine = "hunyuan_video15",
+                VideoModelGenerationMode = "i2v",
+            }));
         InvalidOperationException overlapException = Assert.ThrowsExactly<InvalidOperationException>(() =>
             InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
             {
                 VideoModelGenerationChunkSize = 8,
                 VideoModelGenerationChunkOverlap = 8,
+                VideoModelEngine = "hunyuan_video15",
             }));
 
         StringAssert.Contains(sourceException.Message, "I2V requires a source");

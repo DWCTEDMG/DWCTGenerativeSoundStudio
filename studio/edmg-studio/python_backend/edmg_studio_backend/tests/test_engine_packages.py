@@ -164,6 +164,34 @@ def test_package_routes_are_exposed_without_other_provider_mutation(tmp_path, mo
         manager.uninstall("hf_sd15_internal")
 
 
+def test_ltx_runtime_config_routes_are_exposed(tmp_path, monkeypatch):
+    from edmg_studio_backend.services import ltx_25_runtime
+
+    manager = _manager(tmp_path, monkeypatch)
+    launcher = tmp_path / "launcher_env.json"
+    monkeypatch.setenv("EDMG_LAUNCHER_ENV", str(launcher))
+    monkeypatch.setattr(
+        ltx_25_runtime,
+        "runtime_identity",
+        lambda: {"python": "qualified-python", "ltx_pipelines_version": "1.3.0"},
+    )
+    app = FastAPI()
+    app.include_router(create_models_router(get_models=lambda: manager))
+
+    with TestClient(app) as client:
+        saved = client.post("/v1/runtimes/ltx-25/config", json={
+            "python": str(Path(ltx_25_runtime.sys.executable)),
+            "timeout_s": 7200,
+            "smoke_timeout_s": 900,
+        })
+        probed = client.post("/v1/runtimes/ltx-25/probe")
+
+    assert saved.status_code == 200
+    assert probed.status_code == 200
+    assert probed.json()["ready"] is True
+    assert probed.json()["identity"]["ltx_pipelines_version"] == "1.3.0"
+
+
 def test_install_requires_license_and_cloud_only_is_explicit(tmp_path, monkeypatch):
     manager = _manager(tmp_path, monkeypatch)
     with pytest.raises(UserFacingError, match="License not accepted"):

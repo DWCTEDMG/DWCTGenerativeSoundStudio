@@ -201,7 +201,7 @@ def _smoke_test_ltx_25(
     cancel_check: Callable[[], bool] | None = None,
     **_kwargs: Any,
 ) -> Mapping[str, Any]:
-    from .ltx_25_runtime import generate_ltx_frames
+    from .ltx_25_runtime import generate_ltx_frames, ltx_runtime_config
 
     device = ModelRuntimeRegistry._device(hardware)
     frames = generate_ltx_frames(
@@ -216,7 +216,7 @@ def _smoke_test_ltx_25(
         device=device,
         cpu_offload=True,
         cancel_check=cancel_check,
-        timeout_s=float(os.environ.get("EDMG_LTX25_SMOKE_TIMEOUT_SECONDS", "600")),
+        timeout_s=ltx_runtime_config().smoke_timeout_s,
     )
     if not frames:
         raise RuntimeError("LTX-2.5 smoke test returned no decoded frames")
@@ -433,12 +433,12 @@ class ModelRuntimeRegistry:
                 "distro": runner.distro, "companions": dict(runner.companions),
             }
         elif descriptor.package_id == "hf_ltx_25_distilled_internal":
-            from .ltx_25_runtime import runtime_identity
+            from .ltx_25_runtime import ltx_runtime_config, runtime_identity
             try:
                 payload["external_runtime"] = runtime_identity()
             except Exception:
                 payload["external_runtime"] = {
-                    "python": os.environ.get("EDMG_LTX25_PYTHON", "").strip(),
+                    "python": ltx_runtime_config().python,
                     "ltx_pipelines_version": "unavailable",
                 }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

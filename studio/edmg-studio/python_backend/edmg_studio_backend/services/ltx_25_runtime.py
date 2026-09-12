@@ -7,14 +7,17 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..errors import UserFacingError
+from .launcher_environment import update_launcher_environment
 
 LTX_PIPELINES_VERSION = "1.3.0"
 LTX_PIPELINE_MODULE = "ltx_pipelines.distilled"
+LTX_ENV_PREFIX = "EDMG_LTX25_"
 _COMPONENT_FLAGS = (
     ("--transformer-path", "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors"),
     ("--text-encoder-path", "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"),
@@ -29,9 +32,93 @@ def _runtime_error(message: str, hint: str) -> UserFacingError:
     return UserFacingError(message, hint=hint, code="LTX_25_RUNTIME_ERROR", status_code=422)
 
 
+@dataclass(frozen=True)
+class LtxRuntimeConfig:
+    python: str
+    timeout_s: float
+    smoke_timeout_s: float
+
+
+def ltx_runtime_config(environ: Mapping[str, str] | None = None) -> LtxRuntimeConfig:
+    env = os.environ if environ is None else environ
+
+    def timeout(name: str, fallback: float) -> float:
+        try:
+            return float(str(env.get(f"{LTX_ENV_PREFIX}{name}") or fallback))
+        except ValueError:
+            return 0.0
+
+    return LtxRuntimeConfig(
+        python=str(env.get(f"{LTX_ENV_PREFIX}PYTHON") or sys.executable).strip(),
+        timeout_s=timeout("TIMEOUT_SECONDS", 3600.0),
+        smoke_timeout_s=timeout("SMOKE_TIMEOUT_SECONDS", 600.0),
+    )
+
+
+def ltx_runtime_status(*, probe: bool = False) -> dict[str, Any]:
+    config = ltx_runtime_config()
+    issues: list[str] = []
+    executable = Path(config.python).expanduser()
+    if not executable.is_file():
+        issues.append("Choose the Python executable from the isolated ltx-pipelines 1.3.0 environment.")
+    if not 0 < config.timeout_s <= 86400:
+        issues.append("Render timeout must be between 1 and 86400 seconds.")
+    if not 0 < config.smoke_timeout_s <= 86400:
+        issues.append("Smoke-test timeout must be between 1 and 86400 seconds.")
+    identity: dict[str, str] | None = None
+    if probe and not issues:
+        try:
+            identity = runtime_identity()
+            validate_runtime_version()
+        except UserFacingError as exc:
+            issues.append(f"{exc.message} {exc.hint or ''}".strip())
+    return {
+        "config": {
+            "python": config.python,
+            "timeout_s": config.timeout_s,
+            "smoke_timeout_s": config.smoke_timeout_s,
+        },
+        "identity": identity,
+        "issues": issues,
+        "ready": not issues,
+        "probe_requested": probe,
+        "required_version": LTX_PIPELINES_VERSION,
+    }
+
+
+def update_ltx_runtime_config(values: Mapping[str, Any]) -> dict[str, Any]:
+    fields = {
+        "python": "PYTHON",
+        "timeout_s": "TIMEOUT_SECONDS",
+        "smoke_timeout_s": "SMOKE_TIMEOUT_SECONDS",
+    }
+    updates: dict[str, str] = {}
+    for field, env_name in fields.items():
+        if field not in values:
+            continue
+        value = values[field]
+        if field.endswith("timeout_s"):
+            try:
+                timeout_s = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field} must be a positive number") from exc
+            if not 0 < timeout_s <= 86400:
+                raise ValueError(f"{field} must be between 1 and 86400 seconds")
+            text = str(timeout_s)
+        else:
+            text = str(value or "").strip()
+            if not text:
+                raise ValueError("python is required")
+            if len(text) > 2048:
+                raise ValueError("python cannot exceed 2048 characters")
+        updates[f"{LTX_ENV_PREFIX}{env_name}"] = text
+
+    update_launcher_environment(updates)
+    return ltx_runtime_status(probe=False)
+
+
 def _python_executable() -> str:
-    configured = os.environ.get("EDMG_LTX25_PYTHON", "").strip()
-    executable = Path(configured).expanduser() if configured else Path(sys.executable)
+    executable = Path(ltx_runtime_config().python).expanduser()
     if not executable.is_file():
         raise _runtime_error(
             "The configured LTX-2.5 Python executable was not found",
@@ -211,7 +298,7 @@ def generate_ltx_frames(
         )
         _run(
             command, env=_device_environment(device),
-            timeout_s=timeout_s or float(os.environ.get("EDMG_LTX25_TIMEOUT_SECONDS", "3600")),
+            timeout_s=timeout_s or ltx_runtime_config().timeout_s,
             cancel_check=cancel_check,
         )
         return decode_mp4(output_path)

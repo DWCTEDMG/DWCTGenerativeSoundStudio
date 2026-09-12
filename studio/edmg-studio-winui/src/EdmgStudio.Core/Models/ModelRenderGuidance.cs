@@ -26,6 +26,7 @@ public sealed record ModelRenderCandidate(
     bool IsInstalled,
     bool IsInstallable,
     bool IsHardwareCompatible,
+    bool IsRuntimeReady,
     IReadOnlyList<string> Blockers);
 
 public sealed record ModelRenderGuidance(
@@ -206,6 +207,8 @@ public static class ModelRenderGuidanceEvaluator
         bool installable = MetadataBoolean(entry, "installable", true);
         IReadOnlyList<string> hardwareTargets = MetadataStrings(entry, "hardware_targets");
         bool hardwareCompatible = HardwareCompatible(hardwareTargets, device);
+        ModelRuntimeStatus? runtimeStatus = entry.PackageStatus;
+        bool runtimeReady = runtimeStatus?.RuntimeReady ?? true;
         var blockers = new List<string>();
         if (!installed)
         {
@@ -215,6 +218,19 @@ public static class ModelRenderGuidanceEvaluator
         if (!hardwareCompatible)
         {
             blockers.Add($"not compatible with the selected {device} device.");
+        }
+
+        if (installed && runtimeStatus is not null && !runtimeReady)
+        {
+            IReadOnlyList<string> runtimeBlockers = runtimeStatus.Blockers ?? [];
+            if (runtimeBlockers.Count == 0)
+            {
+                blockers.Add(runtimeStatus.Error ?? "Runtime qualification is incomplete.");
+            }
+            else
+            {
+                blockers.AddRange(runtimeBlockers);
+            }
         }
 
         if (!installed
@@ -238,6 +254,7 @@ public static class ModelRenderGuidanceEvaluator
             installed,
             installable,
             hardwareCompatible,
+            runtimeReady,
             blockers);
     }
 
@@ -271,6 +288,7 @@ public static class ModelRenderGuidanceEvaluator
     {
         int rank = candidate.IsInstalled ? 0 : 100;
         rank += candidate.IsHardwareCompatible ? 0 : 40;
+        rank += candidate.IsRuntimeReady ? 0 : 60;
         rank += candidate.Lane.ToLowerInvariant() switch
         {
             "stable" => 0,

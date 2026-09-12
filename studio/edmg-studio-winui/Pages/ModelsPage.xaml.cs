@@ -52,7 +52,9 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
             RebuildModels();
             RebuildPacks();
             UpdateStorage(response);
-            await LoadHunyuanConfigAsync(cancellationToken);
+            await Task.WhenAll(
+                LoadHunyuanConfigAsync(cancellationToken),
+                LoadLtxConfigAsync(cancellationToken));
             if (_tensorRtStatus is null)
             {
                 _tensorRtStatus = await _apiClient.GetTensorRtLegacyStatusAsync(cancellationToken);
@@ -331,6 +333,73 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
 
         string detail = string.Join("\n", issues.EnumerateArray().Select(issue => issue.GetString()).Where(issue => !string.IsNullOrWhiteSpace(issue)));
         return string.IsNullOrWhiteSpace(detail) ? "Hunyuan runtime is not ready." : detail;
+    }
+
+    private async Task LoadLtxConfigAsync(CancellationToken cancellationToken)
+    {
+        bool available = (_catalogue?.Catalog ?? []).Any(entry => entry.Id == "hf_ltx_25_distilled_internal");
+        LtxCard.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+        if (!available)
+        {
+            return;
+        }
+
+        JsonElement response = await _apiClient.GetLtxRuntimeConfigAsync(cancellationToken);
+        if (!response.TryGetProperty("config", out JsonElement config))
+        {
+            throw new InvalidOperationException("LTX runtime configuration response was missing its config object.");
+        }
+
+        SetHunyuanText(LtxPythonBox, config, "python");
+        LtxTimeoutBox.Value = JsonNumber(config, "timeout_s", 3600);
+        LtxSmokeTimeoutBox.Value = JsonNumber(config, "smoke_timeout_s", 600);
+        LtxStatusText.Text = "Settings loaded. Probe to verify the isolated Python environment contains exactly ltx-pipelines 1.3.0.";
+    }
+
+    private static double JsonNumber(JsonElement value, string propertyName, double fallback) =>
+        value.TryGetProperty(propertyName, out JsonElement property) && property.TryGetDouble(out double number)
+            ? number
+            : fallback;
+
+    private async void LtxSave_Click(object sender, RoutedEventArgs e)
+    {
+        await RunCommandAsync(
+            async token =>
+            {
+                JsonElement request = JsonSerializer.SerializeToElement(new
+                {
+                    python = LtxPythonBox.Text,
+                    timeout_s = LtxTimeoutBox.Value,
+                    smoke_timeout_s = LtxSmokeTimeoutBox.Value,
+                });
+                await _apiClient.SaveLtxRuntimeConfigAsync(request, token);
+            },
+            "LTX runtime settings saved locally. Probe before smoke testing or rendering.");
+    }
+
+    private async void LtxProbe_Click(object sender, RoutedEventArgs e)
+    {
+        await RunCommandAsync(
+            async token =>
+            {
+                JsonElement response = await _apiClient.ProbeLtxRuntimeAsync(token);
+                bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
+                LtxStatusText.Text = ready
+                    ? "LTX isolated runtime passed the exact ltx-pipelines 1.3.0 probe. Validate and smoke-test the model package to complete readiness."
+                    : FormatLtxIssues(response);
+            },
+            "LTX isolated runtime probe completed.");
+    }
+
+    private static string FormatLtxIssues(JsonElement response)
+    {
+        if (!response.TryGetProperty("issues", out JsonElement issues) || issues.ValueKind != JsonValueKind.Array)
+        {
+            return "LTX runtime probe did not return issue details.";
+        }
+
+        string detail = string.Join("\n", issues.EnumerateArray().Select(issue => issue.GetString()).Where(issue => !string.IsNullOrWhiteSpace(issue)));
+        return string.IsNullOrWhiteSpace(detail) ? "LTX runtime is not ready." : detail;
     }
 
     private void SelectModel(ModelPresentation model)

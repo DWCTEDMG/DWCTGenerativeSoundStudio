@@ -575,6 +575,27 @@ def create_models_router(
     def probe_hunyuan_config() -> dict[str, Any]:
         return internal_video_models.hunyuan_runner_status(probe=True)
 
+    @router.get("/v1/runtimes/ltx-25/config")
+    def ltx_config() -> dict[str, Any]:
+        from ..services.ltx_25_runtime import ltx_runtime_status
+
+        return ltx_runtime_status(probe=False)
+
+    @router.post("/v1/runtimes/ltx-25/config")
+    def update_ltx_config(req: dict[str, Any]) -> dict[str, Any]:
+        from ..services.ltx_25_runtime import update_ltx_runtime_config
+
+        try:
+            return update_ltx_runtime_config(req)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/v1/runtimes/ltx-25/probe")
+    def probe_ltx_config() -> dict[str, Any]:
+        from ..services.ltx_25_runtime import ltx_runtime_status
+
+        return ltx_runtime_status(probe=True)
+
     @router.get("/v1/runtimes/{model_id}/readiness")
     def model_runtime_readiness(model_id: str) -> dict[str, Any]:
         return get_models().engine_package_status(model_id, runtime_hardware())

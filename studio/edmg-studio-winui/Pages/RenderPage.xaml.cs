@@ -13,6 +13,8 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class RenderPage : Page
 {
+    private const string HunyuanModelId = "hf_hunyuan_video15_internal";
+    private const string LtxModelId = "hf_ltx_25_distilled_internal";
     private string? _projectId;
     private bool _isBusy;
     private bool _modelGuidanceUiReady;
@@ -39,6 +41,7 @@ public sealed partial class RenderPage : Page
         _modelGuidanceUiReady = true;
         HeaderVariantBox.ValueChanged += HeaderVariantBox_ValueChanged;
         ApplyAdvancedMode();
+        UpdateVideoEngineControls();
         RestoreSavedPreset();
         UpdateReadinessCard();
     }
@@ -334,8 +337,46 @@ public sealed partial class RenderPage : Page
         return $"{label}: {candidate.Name} ({candidate.ModelId}) - {installed}, {lane}{license}.";
     }
 
-    private void ModelGuidanceSelection_Changed(object sender, SelectionChangedEventArgs e) =>
+    private void ModelGuidanceSelection_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_modelGuidanceUiReady)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(sender, VideoModelEngineComboBox))
+        {
+            UpdateVideoEngineControls();
+        }
         UpdateModelGuidance();
+    }
+
+    private void UpdateVideoEngineControls()
+    {
+        string engine = Selected(VideoModelEngineComboBox, "auto");
+        bool hunyuan = engine.Equals("hunyuan_video15", StringComparison.OrdinalIgnoreCase);
+        bool ltx = engine.Equals("ltx_25", StringComparison.OrdinalIgnoreCase);
+        Visibility hunyuanVisibility = hunyuan ? Visibility.Visible : Visibility.Collapsed;
+        HunyuanGenerationPanel.Visibility = hunyuanVisibility;
+        HunyuanLowVramPanel.Visibility = hunyuanVisibility;
+        HunyuanChunkSizePanel.Visibility = hunyuanVisibility;
+        HunyuanChunkOverlapPanel.Visibility = hunyuanVisibility;
+        LtxRenderGuidanceText.Visibility = ltx ? Visibility.Visible : Visibility.Collapsed;
+
+        string currentModel = VideoModelBox.Text.Trim();
+        if (ltx && (currentModel.Length == 0 || currentModel == HunyuanModelId))
+        {
+            VideoModelBox.Text = LtxModelId;
+        }
+        else if (hunyuan && (currentModel.Length == 0 || currentModel == LtxModelId))
+        {
+            VideoModelBox.Text = HunyuanModelId;
+        }
+        else if (engine == "auto" && (currentModel == HunyuanModelId || currentModel == LtxModelId))
+        {
+            VideoModelBox.Text = string.Empty;
+        }
+    }
 
     private void ModelGuidanceText_Changed(object sender, TextChangedEventArgs e) =>
         UpdateModelGuidance();

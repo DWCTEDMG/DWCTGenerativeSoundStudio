@@ -9643,11 +9643,12 @@ def _resolve_internal_video_model_selection(
     installed_svd = models.installed_path(INTERNAL_SVD_VIDEO_MODEL_ID)
     installed_ad = models.installed_path(INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
     installed_hunyuan = models.installed_path(HUNYUAN_MODEL_ID)
+    installed_ltx = models.installed_path(LTX_MODEL_ID)
 
     if requested_engine not in {"auto", "svd", "animatediff", "hunyuan_video15", "ltx_25"}:
         raise UserFacingError(
             "Selected internal video adapter engine is not supported",
-            hint="Choose Auto installed, SVD image-to-video, AnimateDiff SD1.5, or HunyuanVideo-1.5.",
+            hint="Choose Auto installed, SVD image-to-video, AnimateDiff SD1.5, HunyuanVideo-1.5, or LTX-2.5.",
             code="INTERNAL_VIDEO_MODEL_ENGINE_UNKNOWN",
             status_code=400,
         )
@@ -9657,7 +9658,7 @@ def _resolve_internal_video_model_selection(
         if not expected_engine:
             raise UserFacingError(
                 "Selected model is not a supported internal video model",
-                hint="Open Models and select Stable Video Diffusion XT 1.1, AnimateDiff Motion Adapter, or HunyuanVideo-1.5.",
+                hint="Open Models and select Stable Video Diffusion XT 1.1, AnimateDiff Motion Adapter, HunyuanVideo-1.5, or LTX-2.5 Distilled.",
                 code="INTERNAL_VIDEO_MODEL_UNSUPPORTED",
                 status_code=400,
             )
@@ -9699,9 +9700,38 @@ def _resolve_internal_video_model_selection(
         engine = "hunyuan_video15"
         requested_model_id = HUNYUAN_MODEL_ID
     elif requested_engine == "ltx_25":
-        path = models.installed_path(LTX_MODEL_ID)
+        path = installed_ltx
         engine = "ltx_25"
         requested_model_id = LTX_MODEL_ID
+    elif installed_ltx:
+        from .services.engine_packages import MANIFESTS, runtime_status, validate_package
+
+        hardware = _hardware_profile()
+        backend = str(hardware.get("backend") or hardware.get("device") or "").lower()
+        vram_gb = float(hardware.get("vram_gb") or hardware.get("cuda_vram_gb") or 0.0)
+        package_validation = validate_package(Path(installed_ltx), MANIFESTS[LTX_MODEL_ID])
+        status = runtime_status(
+            LTX_MODEL_ID,
+            hardware,
+            package_root=Path(installed_ltx),
+            package_validation=package_validation,
+        )
+        if backend.startswith("cuda") and vram_gb >= 24.0 and status["runtime_ready"]:
+            path = installed_ltx
+            engine = "ltx_25"
+            requested_model_id = LTX_MODEL_ID
+        elif installed_svd:
+            path = installed_svd
+            engine = "svd"
+            requested_model_id = INTERNAL_SVD_VIDEO_MODEL_ID
+        elif installed_ad:
+            path = installed_ad
+            engine = "animatediff"
+            requested_model_id = INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID
+        else:
+            path = None
+            engine = "svd"
+            requested_model_id = INTERNAL_SVD_VIDEO_MODEL_ID
     elif installed_svd:
         path = installed_svd
         engine = "svd"
@@ -9718,7 +9748,7 @@ def _resolve_internal_video_model_selection(
     if not path:
         raise UserFacingError(
             "The selected internal video model is not installed",
-            hint="Open Models and install Stable Video Diffusion XT 1.1, AnimateDiff Motion Adapter, or the qualified HunyuanVideo-1.5 snapshot.",
+            hint="Open Models and install Stable Video Diffusion XT 1.1, AnimateDiff Motion Adapter, HunyuanVideo-1.5, or LTX-2.5 Distilled.",
             code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
             status_code=400,
         )
@@ -9787,10 +9817,13 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
             updates["temporal_steps"] = min(int(settings_obj.temporal_steps or 18), 8)
-        else:
+        elif engine == "hunyuan_video15":
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 8)
             updates["video_model_decode_chunk_size"] = 1
             updates["hunyuan_chunk_frames"] = min(int(settings_obj.hunyuan_chunk_frames or 25), 8)
+        else:
+            updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 8)
+            updates["video_model_dtype"] = "fp8"
     elif vram_gb and vram_gb <= 8.5:
         updates["video_model_cpu_offload"] = True
         if engine == "svd":
@@ -9801,10 +9834,13 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 4)
             if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 10:
                 updates["temporal_steps"] = 10
-        else:
+        elif engine == "hunyuan_video15":
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
             updates["hunyuan_chunk_frames"] = min(int(settings_obj.hunyuan_chunk_frames or 25), 12)
+        else:
+            updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
+            updates["video_model_dtype"] = "fp8"
     return replace(settings_obj, **updates) if updates else settings_obj
 
 

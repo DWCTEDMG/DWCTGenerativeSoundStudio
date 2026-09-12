@@ -41,6 +41,67 @@ def test_qualified_ltx_selection_is_admitted(tmp_path, monkeypatch):
     ) == ("ltx_25", app_module.LTX_MODEL_ID, ltx_path)
 
 
+@pytest.mark.parametrize("vram_gb", [24.0, 48.0])
+def test_auto_selection_prefers_qualified_ltx_on_high_tier_hardware(
+    tmp_path, monkeypatch, vram_gb
+):
+    from edmg_studio_backend.services import engine_packages
+
+    installed = _install_lookup(tmp_path, monkeypatch)
+    ltx_path = tmp_path / "ltx"
+    ltx_path.mkdir()
+    installed[app_module.LTX_MODEL_ID] = ltx_path
+    monkeypatch.setattr(
+        app_module,
+        "_hardware_profile",
+        lambda: {"backend": "cuda", "vram_gb": vram_gb, "ram_gb": 128},
+    )
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
+    monkeypatch.setattr(
+        engine_packages,
+        "runtime_status",
+        lambda *args, **kwargs: {"runtime_ready": True, "blockers": []},
+    )
+    monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+
+    assert app_module._resolve_internal_video_model_selection(
+        {"video_model_engine": "auto"}, base_model_family="sd15"
+    ) == ("ltx_25", app_module.LTX_MODEL_ID, ltx_path)
+
+
+@pytest.mark.parametrize(
+    ("hardware", "runtime_ready"),
+    [
+        ({"backend": "cuda", "vram_gb": 23.9, "ram_gb": 128}, True),
+        ({"backend": "cpu", "vram_gb": 48, "ram_gb": 128}, True),
+        ({"backend": "cuda", "vram_gb": 48, "ram_gb": 128}, False),
+    ],
+)
+def test_auto_selection_skips_ltx_when_not_high_tier_qualified(
+    tmp_path, monkeypatch, hardware, runtime_ready
+):
+    from edmg_studio_backend.services import engine_packages
+
+    installed = _install_lookup(tmp_path, monkeypatch)
+    ltx_path = tmp_path / "ltx"
+    ltx_path.mkdir()
+    installed[app_module.LTX_MODEL_ID] = ltx_path
+    monkeypatch.setattr(app_module, "_hardware_profile", lambda: hardware)
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
+    monkeypatch.setattr(
+        engine_packages,
+        "runtime_status",
+        lambda *args, **kwargs: {"runtime_ready": runtime_ready, "blockers": ["not qualified"]},
+    )
+
+    engine, model_id, path = app_module._resolve_internal_video_model_selection(
+        {"video_model_engine": "auto"}, base_model_family="sd15"
+    )
+    assert (engine, model_id, path) == (
+        "svd", app_module.INTERNAL_SVD_VIDEO_MODEL_ID, installed[app_module.INTERNAL_SVD_VIDEO_MODEL_ID]
+    )
+
+
 def _write_svd_layout(path: Path) -> Path:
     path.mkdir(parents=True)
     (path / "model_index.json").write_text(
@@ -217,6 +278,23 @@ def test_hunyuan_low_vram_settings_are_deterministic(vram_gb: float, chunk_frame
     assert resolved.video_model_cpu_offload is True
     assert resolved.hunyuan_chunk_frames == chunk_frames
     assert resolved.video_model_decode_chunk_size in {1, 2}
+
+
+def test_ltx_low_vram_settings_do_not_mutate_hunyuan_fields() -> None:
+    resolved = app_module._apply_internal_video_model_memory_safety(
+        InternalVideoSettings(
+            temporal_mode="video_model",
+            device_preference="cuda",
+            video_model_engine="ltx_25",
+            hunyuan_chunk_frames=25,
+            video_model_dtype="bfloat16",
+        ),
+        {"backend": "cuda", "vram_gb": 8.0},
+    )
+    assert resolved.video_model_cpu_offload is True
+    assert resolved.video_model_max_frames_per_scene == 12
+    assert resolved.video_model_dtype == "fp8"
+    assert resolved.hunyuan_chunk_frames == 25
 
 
 def test_public_render_job_error_preserves_only_curated_details() -> None:

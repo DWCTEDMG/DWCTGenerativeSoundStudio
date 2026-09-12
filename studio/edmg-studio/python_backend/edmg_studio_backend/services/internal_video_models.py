@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..errors import UserFacingError
+from .launcher_environment import update_launcher_environment
 from .model_weights import diffusers_weight_load_kwargs
 
 logger = logging.getLogger(__name__)
@@ -87,11 +88,6 @@ HUNYUAN_CONFIG_FIELDS = {
 }
 
 
-def _launcher_env_path() -> Path:
-    override = os.getenv("EDMG_LAUNCHER_ENV", "").strip()
-    return Path(override).expanduser() if override else Path(__file__).resolve().parents[3] / "launcher_env.json"
-
-
 def hunyuan_runner_status(*, probe: bool = False) -> dict[str, Any]:
     config = hunyuan_runner_config()
     issues = validate_hunyuan_runner(probe=probe)
@@ -134,26 +130,7 @@ def update_hunyuan_runner_config(values: Mapping[str, Any]) -> dict[str, Any]:
                 raise ValueError("distro cannot exceed 128 characters")
         updates[f"{HUNYUAN_ENV_PREFIX}{env_name}"] = text
 
-    path = _launcher_env_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data: dict[str, Any] = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Launcher configuration is not valid JSON: {exc}") from exc
-        if not isinstance(loaded, dict):
-            raise ValueError("Launcher configuration must contain a JSON object")
-        data = loaded
-    data.update(updates)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-    for key, value in updates.items():
-        os.environ[key] = value
+    update_launcher_environment(updates)
     return hunyuan_runner_status(probe=False)
 
 
@@ -776,22 +753,32 @@ def generate_video_model_frames(
         validate_video_model_layout(engine_l, video_model_dir)
         requested_frames = int(num_frames)
         legal_frames = max(1, ((requested_frames - 1 + 7) // 8) * 8 + 1)
+        requested_size = (int(width), int(height))
+        working_width = max(64, ((requested_size[0] + 32) // 64) * 64)
+        working_height = max(64, ((requested_size[1] + 32) // 64) * 64)
+        working_image = init_image
+        if init_image is not None and init_image.size != (working_width, working_height):
+            from PIL import Image  # type: ignore
+
+            working_image = init_image.convert("RGB").resize(
+                (working_width, working_height), resample=Image.LANCZOS,
+            )
         frames = generate_ltx_frames(
             package_root=video_model_dir,
             workspace=Path(workspace or video_model_dir),
             prompt=prompt,
-            width=int(width),
-            height=int(height),
+            width=working_width,
+            height=working_height,
             num_frames=legal_frames,
             fps=float(fps),
             seed=int(seed if seed is not None else random.SystemRandom().randint(0, 2**31 - 1)),
             device=device,
-            init_image=init_image,
+            init_image=working_image,
             cpu_offload=cpu_offload,
             fp8=str(dtype or "").strip().lower().startswith("fp8"),
             cancel_check=cancel_check,
         )
-        return frames[:requested_frames]
+        return _to_rgb_frames(frames[:requested_frames], width=requested_size[0], height=requested_size[1])
     validate_video_model_layout(engine_l, video_model_dir)
     dtype_l = "float16" if str(dtype or "auto").strip().lower() == "auto" and device == "cuda" else str(dtype or "float32")
     if engine_l == "hunyuan_video15":

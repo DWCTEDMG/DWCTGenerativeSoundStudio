@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -65,6 +67,61 @@ def test_runtime_version_is_fixed_to_qualified_release(monkeypatch) -> None:
     )
 
     ltx.validate_runtime_version()
+
+
+def test_runtime_config_is_persisted_to_launcher_environment(tmp_path: Path, monkeypatch) -> None:
+    launcher = tmp_path / "launcher_env.json"
+    launcher.write_text('{"PRESERVE": "yes"}\n', encoding="utf-8")
+    monkeypatch.setenv("EDMG_LAUNCHER_ENV", str(launcher))
+
+    status = ltx.update_ltx_runtime_config({
+        "python": str(Path(ltx.sys.executable)),
+        "timeout_s": 7200,
+        "smoke_timeout_s": 900,
+    })
+
+    assert status["config"]["timeout_s"] == 7200
+    assert status["config"]["smoke_timeout_s"] == 900
+    saved = json.loads(launcher.read_text(encoding="utf-8"))
+    assert saved["PRESERVE"] == "yes"
+    assert saved["EDMG_LTX25_PYTHON"] == str(Path(ltx.sys.executable))
+    assert saved["EDMG_LTX25_TIMEOUT_SECONDS"] == "7200.0"
+    assert saved["EDMG_LTX25_SMOKE_TIMEOUT_SECONDS"] == "900.0"
+
+
+def test_ltx_and_hunyuan_runtime_updates_preserve_each_other(tmp_path: Path, monkeypatch) -> None:
+    launcher = tmp_path / "launcher_env.json"
+    launcher.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("EDMG_LAUNCHER_ENV", str(launcher))
+    monkeypatch.setattr(ivm, "validate_hunyuan_runner", lambda **_kwargs: [])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(ltx.update_ltx_runtime_config, {"python": str(Path(ltx.sys.executable))}),
+            executor.submit(ivm.update_hunyuan_runner_config, {"mode": "wsl", "distro": "Ubuntu"}),
+        ]
+        for future in futures:
+            future.result()
+
+    saved = json.loads(launcher.read_text(encoding="utf-8"))
+    assert saved["EDMG_LTX25_PYTHON"] == str(Path(ltx.sys.executable))
+    assert saved["EDMG_HUNYUAN15_RUNNER"] == "wsl"
+    assert saved["EDMG_HUNYUAN15_WSL_DISTRO"] == "Ubuntu"
+
+
+def test_runtime_probe_requires_exact_qualified_version(monkeypatch) -> None:
+    monkeypatch.setenv("EDMG_LTX25_PYTHON", str(Path(ltx.sys.executable)))
+    monkeypatch.setattr(
+        ltx,
+        "runtime_identity",
+        lambda: {"python": str(Path(ltx.sys.executable)), "ltx_pipelines_version": "1.2.0"},
+    )
+
+    status = ltx.ltx_runtime_status(probe=True)
+
+    assert status["ready"] is False
+    assert status["required_version"] == "1.3.0"
+    assert "Expected ltx-pipelines==1.3.0" in " ".join(status["issues"])
 
 
 def test_generate_runs_isolated_cli_and_cleans_files(tmp_path: Path, monkeypatch) -> None:
@@ -189,3 +246,29 @@ def test_internal_video_dispatches_ltx_and_trims_legal_frame_count(tmp_path: Pat
     assert captured["num_frames"] == 17
     assert captured["device"] == "cuda:0"
     assert captured["workspace"] == tmp_path / "work"
+
+
+def test_internal_video_normalizes_ltx_working_dimensions_and_restores_requested_size(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "model"
+    root.mkdir()
+    captured = {}
+    monkeypatch.setattr(ivm, "validate_video_model_layout", lambda *args: None)
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return [Image.new("RGB", (kwargs["width"], kwargs["height"])) for _ in range(9)]
+
+    monkeypatch.setattr(ltx, "generate_ltx_frames", fake_generate)
+    result = ivm.generate_video_model_frames(
+        engine="ltx_25", video_model_dir=root, base_model_dir=root,
+        init_image=Image.new("RGB", (1280, 720)), prompt="test", negative_prompt="",
+        width=1280, height=720, num_frames=8, fps=8, steps=4, cfg=1, seed=5,
+        device="cuda:0", workspace=tmp_path / "work",
+    )
+
+    assert (captured["width"], captured["height"]) == (1280, 704)
+    assert captured["init_image"].size == (1280, 704)
+    assert len(result) == 8
+    assert all(frame.size == (1280, 720) for frame in result)
