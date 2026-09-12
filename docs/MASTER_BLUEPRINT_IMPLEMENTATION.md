@@ -2,6 +2,18 @@
 
 Status: partial implementation; no master-blueprint milestone is complete.
 
+## CUDA runtime and Workspace validation checkpoint — 2026-09-09
+
+The user requires CUDA/TensorRT for development and test launches on this workstation. The previous test runner hardcoded the CPU extra and pruned optional runtime packages. It now resolves the explicitly selected accelerator through the shared validator, uses that profile for sync and both test scopes, retains installed optional packages with frozen `--inexact`, and never retries failed CUDA setup as CPU. CUDA is saved in the Windows user environment; native test launches also pass `--accelerator-profile cuda` explicitly.
+
+The interrupted runtime restore completed from the project lock: Torch 2.11.0+cu130, CUDA 13.0, TensorRT 10.15.1.29. A CUDA tensor computation on the NVIDIA GeForce RTX 4050 Laptop GPU returned the expected sum 523776. This verifies the runtime/device boundary; it does not qualify an AI video model or prove TensorRT engine inference. Full test scopes run under the CUDA profile passed: repository 162 passed / 4 opt-in live-model skips; backend 666 passed / 3 documented Windows analyzer skips. The test runner retained ASR and internal-video packages.
+
+The supplied `3 Find a Cielin'.wav` was imported without changing the original into isolated project `a48dbf2729ba4a8a8f16f92d3493b164`, named `Find a Cielin - Workspace workflow test`. Source size: 97876302 bytes; SHA-256: `eb69ecae0f3d5bb68534be912af4f575de7965963dcaabd2bb65d7bce08d2037`. Native Upload and analyze prepared 13 scenes, 123 camera keys, 123 motion keys, and 37 markers at analysis revision 1 from 339.8479365079365 seconds of real audio. AI Planner and Reactive Lab both displayed that same draft automatically. That initial run used the earlier CPU test profile and lacked ASR; it is audio-analysis/UI evidence, not CUDA inference evidence. Revalidation with the restored CUDA profile remains pending at this pre-launch checkpoint.
+
+Cached Lab revisits now refresh the shared workflow while retaining unsaved edits; Planner imports reload current draft IDs before apply; successful Reactive loads clear the Working notice. The schedule compatibility API accepts analysis-only drafts and reviewed reactive values while preserving revision conflicts and alternate variants. Root extensions survive repeated reactive saves. Real-application regression assertions now use the application's `error` envelope. Native Core tests pass 288/288, and the final WinUI Release x64 build has zero warnings/errors. The native zoom control and value validation now match the shared 0.01–100 range. The native Lab frames have been moved out of the Overview scroll host to bound virtualized lists and keep the keyframe editor within the viewport; interactive layout acceptance remains pending until launch after commit and push.
+
+No master-blueprint milestone is complete. Native audio synchronization, actual Director/temporal-renderer artifacts, model/hardware qualification, Electron presentation parity, and the remaining editor/DAW/production gates remain open.
+
 ## Workspace integration checkpoint — 2026-09-08
 
 The user approved one connected Overview + Director, AI Planner, and Reactive Lab workflow, with automatically prepared downstream keyframes and one shared review/apply boundary. WinUI is the first implementation. This checkpoint is committed and pushed before launching the new UI, as explicitly requested; interactive acceptance is still pending at this checkpoint.
