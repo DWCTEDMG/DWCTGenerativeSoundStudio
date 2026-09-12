@@ -401,8 +401,10 @@ app.include_router(
 )
 from .api.director import create_director_router
 from .api.director_workflow import create_workflow_router
+from .api.director_review import create_director_review_router
 
 app.include_router(create_workflow_router(lambda: store, lambda project: _workspace_audio_plan(project)))
+app.include_router(create_director_review_router(lambda: store, settings.ffmpeg_path))
 app.include_router(
     create_director_router(
         lambda: store,

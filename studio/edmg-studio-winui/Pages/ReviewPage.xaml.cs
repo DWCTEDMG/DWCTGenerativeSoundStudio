@@ -30,6 +30,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     private ProjectDto? _selectedProject;
     private ReviewArtifact? _primaryArtifact;
     private ReviewJobItem? _selectedJob;
+    private ReviewReport? _selectedDirectorReport;
     private string? _referencePath;
     private bool _isBusy;
     private bool _isPolling;
@@ -57,6 +58,8 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     public ObservableCollection<ReviewContinuityWarning> ContinuityWarnings { get; } = [];
 
     public ObservableCollection<ReviewJobItem> Jobs { get; } = [];
+
+    public ObservableCollection<DirectorReviewReportItem> DirectorReports { get; } = [];
 
     public ReviewJobItem? SelectedJob
     {
@@ -181,6 +184,15 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 failures.Add($"Continuity: {StudioPageHelpers.GetErrorMessage(ex)}");
+            }
+
+            try
+            {
+                await LoadDirectorReviewsAsync(projectId, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failures.Add($"Director review: {StudioPageHelpers.GetErrorMessage(ex)}");
             }
 
             try
@@ -424,6 +436,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
             App.Services.Session.SetSourceAsset(null);
             CancelPreview();
             PreviewTitleText.Text = "Select artifacts to compare.";
+            UpdateDirectorReviewCommands();
             return;
         }
 
@@ -434,6 +447,165 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         NotesTextBox.Text = _primaryArtifact.ReviewNotes;
         RebuildActiveAnnotations();
         await LoadComparisonPreviewsAsync(_selectedProject.Id, cancellationToken);
+        UpdateDirectorReviewCommands();
+    }
+
+    private async Task LoadDirectorReviewsAsync(string projectId, CancellationToken cancellationToken)
+    {
+        string? selectedId = _selectedDirectorReport?.ReportId;
+        DirectorReviewListResponse response = await _apiClient.GetDirectorReviewsAsync(projectId, cancellationToken);
+        DirectorReports.Clear();
+        foreach (ReviewReport report in response.Reports)
+        {
+            DirectorReports.Add(new DirectorReviewReportItem(report));
+        }
+
+        DirectorReviewReportItem? selected = DirectorReports.FirstOrDefault(item => item.Report.ReportId == selectedId)
+            ?? DirectorReports.FirstOrDefault();
+        DirectorReportsList.SelectedItem = selected;
+        ShowDirectorReport(selected?.Report);
+    }
+
+    private void ShowDirectorReport(ReviewReport? report)
+    {
+        _selectedDirectorReport = report;
+        if (report is null)
+        {
+            DirectorReportSummaryText.Text = "No reports yet.";
+            DirectorDimensionsText.Text = string.Empty;
+            DirectorEvidenceText.Text = string.Empty;
+            DirectorFindingsText.Text = string.Empty;
+            DirectorRetryText.Text = string.Empty;
+            UpdateDirectorReviewCommands();
+            return;
+        }
+
+        int assessed = report.Dimensions.Count(item => string.Equals(item.State, "assessed", StringComparison.OrdinalIgnoreCase));
+        int unassessed = report.Dimensions.Count - assessed;
+        DirectorReportSummaryText.Text =
+            $"{TitleCase(report.Disposition)} · Aggregate {DirectorReviewPresentation.FormatScore(report.AggregateScore)} · " +
+            $"Continuity {DirectorReviewPresentation.FormatScore(report.ContinuityScore)} · Assessed {assessed}, unassessed {unassessed}\n" +
+            $"Clip understanding: {TitleCase(report.ClipUnderstanding.State)} — {report.ClipUnderstanding.Detail}\n" +
+            $"Correction: {TitleCase(report.CorrectionPlan.State)}" +
+            (string.IsNullOrWhiteSpace(report.CorrectionPlan.TargetSceneId) ? string.Empty : $" · target {report.CorrectionPlan.TargetSceneId}");
+        DirectorDimensionsText.Text = report.Dimensions.Count == 0
+            ? "No dimensions returned."
+            : string.Join(Environment.NewLine, report.Dimensions.Select(item =>
+                $"{TitleCase(item.Dimension)}: {DirectorReviewPresentation.FormatScore(item.Score, item.State)} ({TitleCase(item.State)})"));
+        DirectorEvidenceText.Text = report.Samples.Count == 0
+            ? "No sampled frames returned."
+            : string.Join(Environment.NewLine, report.Samples.Select(item => $"{item.TimestampSeconds:0.###}s — {item.Path}"));
+        var findingLines = report.Findings.Select(item =>
+            $"{TitleCase(item.Severity)} · {TitleCase(item.Dimension)}: {item.Message}");
+        var guidanceLines = report.CorrectionPlan.Guidance.Select(item => $"Guidance: {item}");
+        string[] detailLines = [.. findingLines, .. guidanceLines];
+        DirectorFindingsText.Text = detailLines.Length == 0 ? "No findings or correction guidance." : string.Join(Environment.NewLine, detailLines);
+        DirectorRetryText.Text =
+            $"Attempt {report.Retry.Attempt} of {report.Retry.MaxAttempts} · Result: {TitleCase(report.Retry.Result)}" +
+            (report.Retry.History.Count == 0
+                ? " · No prior attempts."
+                : Environment.NewLine + string.Join(Environment.NewLine, report.Retry.History.Select(item =>
+                    $"Attempt {item.Attempt}: {TitleCase(item.Disposition)}, {DirectorReviewPresentation.FormatScore(item.AggregateScore)}")));
+        UpdateDirectorReviewCommands();
+    }
+
+    private void UpdateDirectorReviewCommands()
+    {
+        bool videoSelected = _primaryArtifact?.IsVideo == true;
+        RunDirectorReviewButton.IsEnabled = !_isBusy && _selectedProject is not null && videoSelected;
+        RunNextDirectorAttemptButton.Visibility = DirectorReviewPresentation.CanRunNextAttempt(_selectedDirectorReport)
+            ? Visibility.Visible : Visibility.Collapsed;
+        RunNextDirectorAttemptButton.IsEnabled = !_isBusy && videoSelected &&
+            string.Equals(_selectedDirectorReport?.ArtifactPath, _primaryArtifact?.Path, StringComparison.OrdinalIgnoreCase);
+        ApplyDirectorGuidanceButton.Visibility = DirectorReviewPresentation.CanApplyCorrection(_selectedDirectorReport)
+            ? Visibility.Visible : Visibility.Collapsed;
+        ApplyDirectorGuidanceButton.IsEnabled = !_isBusy && _selectedProject is not null;
+        DirectorReviewStatusText.Text = _primaryArtifact is null
+            ? "Select one video artifact to run a Director review."
+            : !_primaryArtifact.IsVideo
+                ? "The active artifact is not a video. Director review accepts video artifacts only."
+                : $"Ready to review {_primaryArtifact.Name}. This action collects evidence; it does not regenerate video.";
+    }
+
+    private async Task RunDirectorReviewAsync(string? retryOfReportId)
+    {
+        if (_selectedProject is null || _primaryArtifact?.IsVideo != true || _isBusy)
+        {
+            ShowStatus("Director review unavailable", "Select a video artifact before running Director review.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        int sampleCount = (int)DirectorSampleCountBox.Value;
+        double threshold = DirectorThresholdBox.Value / 100d;
+        int maxAttempts = (int)DirectorMaxAttemptsBox.Value;
+        string? targetSceneId = string.IsNullOrWhiteSpace(DirectorTargetSceneTextBox.Text)
+            ? null : DirectorTargetSceneTextBox.Text.Trim();
+        CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+        SetBusy(true);
+        DirectorReviewStatusText.Text = retryOfReportId is null
+            ? "Collecting deterministic frame evidence and assessing available dimensions…"
+            : "Running the requested next Director review attempt…";
+        try
+        {
+            DirectorReviewResponse response = await _apiClient.CreateDirectorReviewAsync(
+                _selectedProject.Id,
+                new ReviewRequest(_selectedProject.Revision, _primaryArtifact.Path, sampleCount, threshold,
+                    maxAttempts, DirectorClipUnderstandingCheckBox.IsChecked == true, targetSceneId, retryOfReportId),
+                cancellationToken);
+            await LoadDirectorReviewsAsync(_selectedProject.Id, cancellationToken);
+            DirectorReportsList.SelectedItem = DirectorReports.FirstOrDefault(item => item.Report.ReportId == response.Report.ReportId);
+            ShowDirectorReport(response.Report);
+            ShowStatus("Director review complete",
+                $"{TitleCase(response.Report.Disposition)} at {DirectorReviewPresentation.FormatScore(response.Report.AggregateScore)}. No regeneration was performed.",
+                InfoBarSeverity.Success);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            DirectorReviewStatusText.Text = "Director review failed. Existing reports and the selected artifact were not changed.";
+            ShowStatus("Director review failed", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async Task ApplyDirectorGuidanceAsync()
+    {
+        if (_selectedProject is null || !DirectorReviewPresentation.CanApplyCorrection(_selectedDirectorReport) || _isBusy)
+        {
+            return;
+        }
+        CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+        SetBusy(true);
+        try
+        {
+            DirectorReviewApplyResponse response = await _apiClient.ApplyDirectorReviewCorrectionAsync(
+                _selectedProject.Id, _selectedDirectorReport!.ReportId,
+                new ApplyCorrectionRequest(_selectedProject.Revision), cancellationToken);
+            ProjectResponse refreshed = await _apiClient.GetProjectAsync(_selectedProject.Id, cancellationToken);
+            _selectedProject = refreshed.Project;
+            await LoadDirectorReviewsAsync(_selectedProject.Id, cancellationToken);
+            ShowStatus("Next-scene guidance applied",
+                $"The Director draft guidance was applied at project revision {response.Revision}. Video was not regenerated.",
+                InfoBarSeverity.Success);
+        }
+        catch (ProjectRevisionConflictException ex)
+        {
+            ShowStatus("Project revision changed", ex.UserFacingMessage, InfoBarSeverity.Warning);
+            ProjectResponse refreshed = await _apiClient.GetProjectAsync(_selectedProject.Id, cancellationToken);
+            _selectedProject = refreshed.Project;
+            await LoadDirectorReviewsAsync(_selectedProject.Id, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            ShowStatus("Guidance could not be applied", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private void RebuildComparisonState()
@@ -848,6 +1020,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         CherryPickButton.IsEnabled = !value && hasSelection;
         RejectButton.IsEnabled = !value && hasSelection;
         UpdateJobCommands();
+        UpdateDirectorReviewCommands();
     }
 
     private void ResetSurface()
@@ -857,6 +1030,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         SelectedArtifacts.Clear();
         ContinuityWarnings.Clear();
         Jobs.Clear();
+        DirectorReports.Clear();
         ReplaceSelectedPaths([]);
         SelectedJob = null;
         ComparisonSlots.Clear();
@@ -869,6 +1043,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         JobsSummaryText.Text = "No jobs loaded.";
         PublishStatusText.Text = "Publishing status unavailable.";
         JobLogTextBox.Visibility = Visibility.Collapsed;
+        ShowDirectorReport(null);
     }
 
     private async void OnProjectSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1267,6 +1442,26 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     private async void OnRetryJobClick(object sender, RoutedEventArgs e) =>
         await RunJobActionAsync("Retry", _apiClient.RetryJobAsync, StudioJobConfirmationAction.Retry);
 
+    private async void OnRunDirectorReviewClick(object sender, RoutedEventArgs e) =>
+        await RunDirectorReviewAsync(null);
+
+    private async void OnRunNextDirectorAttemptClick(object sender, RoutedEventArgs e)
+    {
+        if (!DirectorReviewPresentation.CanRunNextAttempt(_selectedDirectorReport))
+        {
+            return;
+        }
+        DirectorThresholdBox.Value = _selectedDirectorReport!.Retry.Threshold * 100;
+        DirectorMaxAttemptsBox.Value = _selectedDirectorReport.Retry.MaxAttempts;
+        await RunDirectorReviewAsync(_selectedDirectorReport.ReportId);
+    }
+
+    private async void OnApplyDirectorGuidanceClick(object sender, RoutedEventArgs e) =>
+        await ApplyDirectorGuidanceAsync();
+
+    private void OnDirectorReportSelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        ShowDirectorReport((DirectorReportsList.SelectedItem as DirectorReviewReportItem)?.Report);
+
     private async void OnViewJobLogClick(object sender, RoutedEventArgs e) =>
         await LoadSelectedJobLogAsync();
 
@@ -1461,6 +1656,16 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 }
 
 public sealed record VariantOption(int Index, string Label);
+
+public sealed class DirectorReviewReportItem(ReviewReport report)
+{
+    public ReviewReport Report { get; } = report;
+
+    public string Heading => $"{ReviewPage.TitleCase(Report.Disposition)} · attempt {Report.Retry.Attempt}";
+
+    public string Summary =>
+        $"{DirectorReviewPresentation.FormatScore(Report.AggregateScore)} · {Report.ArtifactPath} · {Report.CreatedAt}";
+}
 
 public sealed class ReviewComparisonSlot(
     ReviewArtifact artifact,

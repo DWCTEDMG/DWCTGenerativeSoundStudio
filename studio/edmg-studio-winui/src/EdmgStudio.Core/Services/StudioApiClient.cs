@@ -845,6 +845,57 @@ public sealed class StudioApiClient : IDisposable
     public Task<JsonElement> GetDirectorPromptsAsync(string projectId, string engine, CancellationToken cancellationToken = default) =>
         SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/prompts?engine={Uri.EscapeDataString(engine)}", null, true, cancellationToken);
 
+    public Task<DirectorReviewResponse> CreateDirectorReviewAsync(
+        string projectId,
+        ReviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateDirectorReviewRequest(request);
+        return PostJsonAsync<ReviewRequest, DirectorReviewResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/director/reviews",
+            request,
+            cancellationToken);
+    }
+
+    public Task<DirectorReviewListResponse> GetDirectorReviewsAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<DirectorReviewListResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/director/reviews",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<DirectorReviewResponse> GetDirectorReviewAsync(
+        string projectId,
+        string reportId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<DirectorReviewResponse>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/director/reviews/{EscapeDirectorReportId(reportId)}",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<DirectorReviewApplyResponse> ApplyDirectorReviewCorrectionAsync(
+        string projectId,
+        string reportId,
+        ApplyCorrectionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.ExpectedRevision < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Expected revision must be at least 1.");
+        }
+        return PostJsonAsync<ApplyCorrectionRequest, DirectorReviewApplyResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/director/reviews/{EscapeDirectorReportId(reportId)}/apply",
+            request,
+            cancellationToken);
+    }
+
     public Task<EditorState> ExecuteEditorCommandAsync(
         string projectId,
         EditorCommandRequest request,
@@ -2396,6 +2447,48 @@ public sealed class StudioApiClient : IDisposable
         }
 
         return Uri.EscapeDataString(value.Trim());
+    }
+
+    private static void ValidateDirectorReviewRequest(ReviewRequest request)
+    {
+        if (request.ExpectedRevision < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Expected revision must be at least 1.");
+        }
+        if (string.IsNullOrWhiteSpace(request.ArtifactPath) || request.ArtifactPath.Trim().Length > 1024)
+        {
+            throw new ArgumentException("Artifact path must contain between 1 and 1024 characters.", nameof(request));
+        }
+        if (request.SampleCount is < 1 or > 12)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Sample count must be between 1 and 12.");
+        }
+        if (!double.IsFinite(request.Threshold) || request.Threshold is < 0 or > 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Threshold must be between 0 and 1.");
+        }
+        if (request.MaxAttempts is < 1 or > 5)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Maximum attempts must be between 1 and 5.");
+        }
+        if (request.TargetSceneId is not null && (string.IsNullOrWhiteSpace(request.TargetSceneId) || request.TargetSceneId.Length > 128))
+        {
+            throw new ArgumentException("Target scene ID must contain between 1 and 128 characters when supplied.", nameof(request));
+        }
+        if (request.RetryOfReportId is not null)
+        {
+            _ = EscapeDirectorReportId(request.RetryOfReportId);
+        }
+    }
+
+    private static string EscapeDirectorReportId(string reportId)
+    {
+        string value = RequireValue(reportId, nameof(reportId));
+        if (value.Length != 64 || value.Any(character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
+        {
+            throw new ArgumentException("Director review report ID must be a 64-character lowercase hexadecimal value.", nameof(reportId));
+        }
+        return Uri.EscapeDataString(value);
     }
 
     private static string RequireValue(string value, string parameterName)

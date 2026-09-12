@@ -295,6 +295,123 @@
                             CornerRadius="12">
                         <StackPanel Spacing="10">
                             <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
+                                       Text="Director review" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Deterministic frame evidence is always collected. Semantic dimensions remain Not assessed unless clip understanding is available. Review does not regenerate video."
+                                       TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="12" RowSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150" />
+                                    <ColumnDefinition Width="190" />
+                                    <ColumnDefinition Width="150" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Frame samples (1–12)" />
+                                    <NumberBox x:Name="DirectorSampleCountBox"
+                                               AutomationProperties.Name="Director review frame samples"
+                                               Minimum="1" Maximum="12" Value="6"
+                                               SpinButtonPlacementMode="Compact" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="4">
+                                    <TextBlock Text="Approval threshold (0–100%)" />
+                                    <NumberBox x:Name="DirectorThresholdBox"
+                                               AutomationProperties.Name="Director review approval threshold percent"
+                                               Minimum="0" Maximum="100" Value="75"
+                                               SpinButtonPlacementMode="Compact" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Spacing="4">
+                                    <TextBlock Text="Maximum attempts (1–5)" />
+                                    <NumberBox x:Name="DirectorMaxAttemptsBox"
+                                               AutomationProperties.Name="Director review maximum attempts"
+                                               Minimum="1" Maximum="5" Value="2"
+                                               SpinButtonPlacementMode="Compact" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="3" Spacing="4">
+                                    <TextBlock Text="Target scene ID (optional)" />
+                                    <TextBox x:Name="DirectorTargetSceneTextBox"
+                                             AutomationProperties.Name="Director review target scene ID"
+                                             MaxLength="128"
+                                             PlaceholderText="scene-id" />
+                                </StackPanel>
+                                <CheckBox x:Name="DirectorClipUnderstandingCheckBox"
+                                          Grid.Row="1" Grid.ColumnSpan="2"
+                                          AutomationProperties.Name="Request clip understanding"
+                                          Content="Request clip understanding when available" />
+                                <StackPanel Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2"
+                                            HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="RunDirectorReviewButton"
+                                            AutomationProperties.AutomationId="RunDirectorReviewButton"
+                                            Click="OnRunDirectorReviewClick"
+                                            Content="Run Director Review" />
+                                    <Button x:Name="RunNextDirectorAttemptButton"
+                                            AutomationProperties.AutomationId="RunNextDirectorAttemptButton"
+                                            Click="OnRunNextDirectorAttemptClick"
+                                            Content="Run Next Attempt"
+                                            Visibility="Collapsed" />
+                                    <Button x:Name="ApplyDirectorGuidanceButton"
+                                            AutomationProperties.AutomationId="ApplyDirectorGuidanceButton"
+                                            Click="OnApplyDirectorGuidanceClick"
+                                            Content="Apply Next-Scene Guidance"
+                                            Visibility="Collapsed" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock x:Name="DirectorReviewStatusText"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Select one video artifact to run a Director review."
+                                       TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="280" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="4">
+                                    <TextBlock FontWeight="SemiBold" Text="Report history" />
+                                    <ListView x:Name="DirectorReportsList"
+                                              AutomationProperties.Name="Director review report history"
+                                              ItemsSource="{x:Bind DirectorReports}"
+                                              MaxHeight="240"
+                                              SelectionChanged="OnDirectorReportSelectionChanged">
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="local:DirectorReviewReportItem">
+                                                <StackPanel Padding="4" Spacing="2">
+                                                    <TextBlock FontWeight="SemiBold" Text="{x:Bind Heading}" />
+                                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                               Text="{x:Bind Summary}" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="6">
+                                    <TextBlock FontWeight="SemiBold" Text="Selected report" />
+                                    <TextBlock x:Name="DirectorReportSummaryText"
+                                               Text="No reports yet."
+                                               TextWrapping="Wrap" />
+                                    <TextBlock FontWeight="SemiBold" Text="Dimension scores" />
+                                    <TextBlock x:Name="DirectorDimensionsText" FontFamily="Consolas" TextWrapping="Wrap" />
+                                    <TextBlock FontWeight="SemiBold" Text="Sampled frame evidence" />
+                                    <TextBlock x:Name="DirectorEvidenceText" FontFamily="Consolas" TextWrapping="Wrap" />
+                                    <TextBlock FontWeight="SemiBold" Text="Findings and correction guidance" />
+                                    <TextBlock x:Name="DirectorFindingsText" TextWrapping="Wrap" />
+                                    <TextBlock FontWeight="SemiBold" Text="Retry history" />
+                                    <TextBlock x:Name="DirectorRetryText" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource StudioSectionTextBlockStyle}"
                                        Text="Editorial decision" />
                             <TextBlock Text="Review notes" />
                             <TextBox x:Name="NotesTextBox"
