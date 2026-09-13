@@ -13,6 +13,7 @@ from ..errors import UserFacingError
 from ..revisions import RevisionRoute
 from ..schemas import (
     AutoAnimateRequest,
+    GenerationRequest,
     InternalVideoRenderRequest,
     LayeredAnimateRequest,
     ParseqMotionApplyRequest,
@@ -1127,6 +1128,43 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         return {
             "ok": True,
             "job": job.__dict__,
+            "preflight": _public_render_preflight(preflight),
+        }
+
+    @router.post("/v1/projects/{project_id}/generation")
+    def submit_generation(project_id: str, req: GenerationRequest):
+        """Normalize a provider request onto the existing internal render queue."""
+        normalized_generation_job = deps.resolve("normalized_generation_job")
+        _enqueue_internal_video_job = deps.resolve("_enqueue_internal_video_job")
+        _public_render_preflight = deps.resolve("_public_render_preflight")
+        _request_payload = deps.resolve("_request_payload")
+        store = deps.resolve("store")
+        proj = store.get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+
+        payload = _request_payload(req.parameters)
+        if req.renderer_id in {"hunyuan_video15", "ltx_25"}:
+            payload["video_model_engine"] = req.renderer_id
+            payload["temporal_mode"] = "video_model"
+        elif req.renderer_id in {"diffusion", "tensorrt"}:
+            payload["render_mode"] = req.renderer_id
+        payload["_generation"] = {
+            "schema_version": req.schema_version,
+            "operation": req.operation,
+            "provider_id": req.provider_id,
+            "renderer_id": req.renderer_id,
+        }
+        job, preflight = _enqueue_internal_video_job(
+            project_id,
+            proj,
+            payload,
+            idempotency_key=req.idempotency_key,
+            priority=req.priority,
+        )
+        return {
+            "ok": True,
+            "generation": normalized_generation_job(job),
             "preflight": _public_render_preflight(preflight),
         }
 

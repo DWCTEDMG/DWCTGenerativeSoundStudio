@@ -75,6 +75,7 @@ from .store.projects import ProjectStore
 from .version import STUDIO_VERSION
 from .store.jobs import JobStore
 from .store.artifacts import write_artifact_manifest
+from .provider_generation import generation_provider_definitions, normalized_generation_job
 from .api import (
     CloudRouterDependencies,
     JobRouterDependencies,
@@ -3474,6 +3475,7 @@ app.include_router(
             edmg_status=lambda: core_status(),
             edmg_verify=lambda: edmg_selfcheck(),
             edmg_template=lambda: edmg_deforum_template(),
+            generation_providers=lambda: generation_provider_definitions(_render_provider_status()),
         )
     )
 )
@@ -8920,16 +8922,36 @@ def _enqueue_internal_video_job(
     *,
     job_type: str = "internal_video",
     queued_message: str | None = None,
+    idempotency_key: str | None = None,
+    priority: int = 0,
 ) -> tuple[Any, dict[str, Any]]:
     """Apply canonical motion/preflight rules and persist one video-render job."""
 
+    normalized_idempotency_key = str(idempotency_key or "").strip() or None
+    if normalized_idempotency_key:
+        existing = next(
+            (
+                candidate
+                for candidate in jobs.list_for_project(project_id)
+                if candidate.idempotency_key == normalized_idempotency_key
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing, {}
     resolved_payload, _parseq = _apply_active_parseq_motion(proj, payload)
     preflight = _internal_render_preflight_data(project_id, resolved_payload)
     resolved_payload = _persist_resolved_internal_video_payload(resolved_payload, preflight)
     estimated_total = max(1, int(preflight.get("estimated_frames", 1)) + 3)
     if str(preflight.get("mode") or "").strip().lower() == "tensorrt":
         estimated_total += max(0, int(preflight.get("estimated_keyframes", 0)))
-    job = jobs.create(project_id, job_type, resolved_payload)
+    job = jobs.create(
+        project_id,
+        job_type,
+        resolved_payload,
+        idempotency_key=normalized_idempotency_key,
+        priority=priority,
+    )
     job.progress = {
         "stage": "queued",
         "current": 0,
@@ -12376,6 +12398,7 @@ app.include_router(
             enqueue_from_source=lambda *args, **kwargs: _enqueue_internal_job_from_source(*args, **kwargs),
             mutate_artifacts=lambda *args, **kwargs: _mutate_internal_job_artifacts(*args, **kwargs),
             dispatch_job=lambda job: _dispatch_job(job),
+            normalize_generation_job=lambda job: normalized_generation_job(job),
         )
     )
 )

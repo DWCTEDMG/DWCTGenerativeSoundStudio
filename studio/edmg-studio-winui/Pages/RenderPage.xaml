@@ -2000,7 +2000,7 @@
                                         Click="RefreshRuntimeCapabilities_Click"
                                         AutomationProperties.AutomationId="RefreshRenderRuntimeCapabilitiesButton" />
                             </Grid>
-                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" RowSpacing="4">
+                            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="4">
                                 <TextBlock Text="Status" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <TextBlock x:Name="ReadinessStatusText" Grid.Column="1" Text="Checking..."
                                            FontWeight="SemiBold" AutomationProperties.AutomationId="RenderReadinessStatusText" />
@@ -2011,6 +2011,9 @@
                                            TextTrimming="CharacterEllipsis" />
                                 <TextBlock Grid.Row="3" Text="Estimate" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <TextBlock x:Name="ReadinessFrameText" Grid.Row="3" Grid.Column="1" Text="Frame count available after setup" />
+                                <TextBlock Grid.Row="4" Text="Provider" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="GenerationProviderText" Grid.Row="4" Grid.Column="1"
+                                           Text="EDMG Internal Renderer" AutomationProperties.AutomationId="RenderGenerationProviderText" />
                             </Grid>
                             <TextBlock x:Name="RuntimeAcceleratorText"
                                        Text="Backend hardware has not been checked."

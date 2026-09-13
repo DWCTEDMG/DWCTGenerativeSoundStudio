@@ -1065,6 +1065,28 @@ public sealed class StudioApiClient : IDisposable
             request,
             cancellationToken);
 
+    public Task<GenerationSubmitResponse> StartGenerationAsync(
+        string projectId,
+        JsonElement parameters,
+        string rendererId = "auto",
+        CancellationToken cancellationToken = default)
+    {
+        var request = new JsonObject
+        {
+            ["schema_version"] = "1.0",
+            ["operation"] = "video",
+            ["provider_id"] = "edmg.internal",
+            ["renderer_id"] = rendererId,
+            ["parameters"] = JsonNode.Parse(parameters.GetRawText())
+        };
+        return SendJsonAsync<GenerationSubmitResponse>(
+            HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/generation",
+            new StringContent(request.ToJsonString(StudioJson.Options), Encoding.UTF8, "application/json"),
+            true,
+            cancellationToken);
+    }
+
     public Task<JsonElement> ValidatePipelineAsync(
         string projectId,
         PipelineRunOptions? options = null,
@@ -1367,6 +1389,15 @@ public sealed class StudioApiClient : IDisposable
         SendJsonAsync<StudioJobListResponse>(
             HttpMethod.Get,
             $"/v1/projects/{EscapeIdentifier(projectId)}/jobs",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<GenerationProviderListResponse> GetGenerationProvidersAsync(
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<GenerationProviderListResponse>(
+            HttpMethod.Get,
+            "/v1/providers/generation",
             null,
             true,
             cancellationToken);

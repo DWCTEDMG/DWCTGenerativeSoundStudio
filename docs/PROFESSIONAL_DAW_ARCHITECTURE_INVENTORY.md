@@ -39,7 +39,7 @@ Renderer logic stays in the Python backend. Timeline UI may submit normalized in
 | ComfyUI | Backend status, workflow, and rendering integration | External runtime configuration; no workflow secrets in projects |
 | Internal model runtimes | Model manager, runtime registry, catalogue, setup, and validation receipts | Runtime state belongs under Studio Home, not project data |
 
-`api/providers.py` currently exposes operational status and discovery. Provider-neutral capability, render-plan, artifact, Director, and command contracts exist, but normalized generation request/output adapters and provider-to-queue state mapping remain Phase 11 work.
+`api/providers.py` exposes operational status, discovery, and provider-neutral generation definitions. Phase 11 adds a normalized generation envelope at `/v1/projects/{project_id}/generation` and normalized durable queue projections under `/v1/generation/jobs`; legacy render and job routes remain compatibility surfaces over the same canonical queue.
 
 ## Timeline and project inventory
 

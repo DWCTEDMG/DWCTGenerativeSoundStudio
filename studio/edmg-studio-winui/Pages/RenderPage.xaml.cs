@@ -25,6 +25,7 @@ public sealed partial class RenderPage : Page
     private ModelCatalogueResponse? _modelCatalogue;
     private ModelRenderGuidance? _modelGuidance;
     private JsonElement? _hardwareProfile;
+    private GenerationProviderDefinition? _generationProvider;
 
     private sealed record ModelPickerItem(
         string ModelId,
@@ -76,6 +77,7 @@ public sealed partial class RenderPage : Page
 
         _ = LoadModelGuidanceAsync(_pageCancellation.Token);
         _ = LoadHardwareCapabilitiesAsync(_pageCancellation.Token);
+        _ = LoadGenerationProviderAsync(_pageCancellation.Token);
         _ = LoadQueueSummaryAsync(_pageCancellation.Token);
         _queueSummaryTimer.Start();
     }
@@ -177,6 +179,7 @@ public sealed partial class RenderPage : Page
             _hardwareProfile = await App.Services.ApiClient.GetHardwareAsync(cancellationToken);
             UpdateRuntimeCapabilityUi();
         }
+
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
@@ -195,6 +198,26 @@ public sealed partial class RenderPage : Page
         {
             RuntimeCapabilityProgressRing.IsActive = false;
             RuntimeCapabilityProgressRing.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async Task LoadGenerationProviderAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            GenerationProviderListResponse response = await App.Services.ApiClient.GetGenerationProvidersAsync(cancellationToken);
+            _generationProvider = response.Providers.FirstOrDefault(provider => provider.Id == "edmg.internal");
+            GenerationProviderText.Text = _generationProvider is null
+                ? "Provider unavailable"
+                : $"{_generationProvider.Name} · {_generationProvider.HardwareBackend} · {(_generationProvider.Ready ? "ready" : "blocked")}";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _generationProvider = null;
+            GenerationProviderText.Text = $"Provider unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
         }
     }
 
@@ -233,7 +256,8 @@ public sealed partial class RenderPage : Page
 
         await Task.WhenAll(
             LoadHardwareCapabilitiesAsync(_pageCancellation.Token),
-            LoadModelGuidanceAsync(_pageCancellation.Token));
+            LoadModelGuidanceAsync(_pageCancellation.Token),
+            LoadGenerationProviderAsync(_pageCancellation.Token));
     }
 
     private void UpdateModelGuidance()
@@ -911,11 +935,16 @@ public sealed partial class RenderPage : Page
         await RunProjectJsonAsync(
             "Queueing internal render",
             PreflightResultBox,
-            (projectId, token) => App.Services.ApiClient.StartInternalRenderAsync(
+            async (projectId, token) =>
+            {
+                GenerationSubmitResponse response = await App.Services.ApiClient.StartGenerationAsync(
                 projectId,
                 BuildInternalRenderRequest(),
-                token),
-            "Internal render request was accepted. Review the response and project jobs.");
+                Selected(VideoModelEngineComboBox, "auto"),
+                token);
+                return JsonSerializer.SerializeToElement(response, StudioJson.Options);
+            },
+            "Generation request was accepted by the provider-neutral render queue.");
 
     private PipelineRunOptions BuildPipelineOptions() =>
         new(

@@ -31,6 +31,7 @@ EXTRACTED_ROUTES = {
     "/v1/setup/comfyui/portable/stop",
     "/v1/setup/edmg/install",
     "/v1/ai/status",
+    "/v1/providers/generation",
     "/v1/worker/status",
     "/v1/comfyui/nodes",
     "/v1/comfyui/object_info",

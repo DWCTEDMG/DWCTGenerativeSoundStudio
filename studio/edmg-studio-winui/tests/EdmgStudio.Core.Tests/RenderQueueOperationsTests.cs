@@ -26,9 +26,23 @@ public sealed class RenderQueueOperationsTests
         Assert.AreEqual("ETA 30:00", summary.EtaLabel);
         Assert.AreEqual("Elapsed 10:00", summary.ElapsedLabel);
         Assert.AreEqual("High", summary.PriorityLabel);
+        Assert.AreEqual("edmg.internal · auto", summary.ProviderLabel);
         Assert.AreEqual("outputs/final.mp4", summary.DestinationLabel);
         Assert.AreEqual(RenderQueueHealth.Active, summary.Health);
         Assert.IsTrue(summary.Matches(RenderQueueFilter.Active));
+    }
+
+    [TestMethod]
+    public void Create_NormalizedGenerationMetadataIdentifiesProviderAndRenderer()
+    {
+        StudioJob job = ReadJob("""
+            {"id":"provider","project_id":"project-a","type":"internal_video","status":"queued",
+             "payload":{"_generation":{"provider_id":"edmg.internal","renderer_id":"ltx_25"}}}
+            """);
+
+        RenderQueueJobSummary summary = RenderQueueJobSummary.Create(job, Now);
+
+        Assert.AreEqual("edmg.internal · ltx 25", summary.ProviderLabel);
     }
 
     [TestMethod]

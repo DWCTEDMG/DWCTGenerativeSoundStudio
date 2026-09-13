@@ -195,7 +195,7 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         }
         SelectedJobText.Text = $"{job.Type} · {StudioPageHelpers.ShortId(job.Id)}";
         SelectedJobSummaryText.Text = item.Summary;
-        SelectedDestinationText.Text = $"Destination: {item.Operations.DestinationLabel}";
+        SelectedDestinationText.Text = $"Provider: {item.Operations.ProviderLabel}\nDestination: {item.Operations.DestinationLabel}";
         RecommendationBar.Message = item.Operations.Recommendation;
         RecommendationBar.IsOpen = true;
         SelectedProgressBar.Value = item.Percent;

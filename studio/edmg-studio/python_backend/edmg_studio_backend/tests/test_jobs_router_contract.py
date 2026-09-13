@@ -7,7 +7,9 @@ from edmg_studio_backend import app as backend
 
 EXPECTED_JOB_ROUTES = {
     ("GET", "/v1/jobs"),
+    ("GET", "/v1/generation/jobs"),
     ("GET", "/v1/projects/{project_id}/jobs"),
+    ("GET", "/v1/projects/{project_id}/generation/jobs"),
     ("GET", "/v1/projects/{project_id}/jobs/{job_id}"),
     ("POST", "/v1/projects/{project_id}/jobs/{job_id}/cancel"),
     ("POST", "/v1/projects/{project_id}/jobs/{job_id}/pause"),
@@ -31,7 +33,9 @@ def test_job_route_contract_and_ownership() -> None:
         routes.extend(
             route
             for route in candidates
-            if isinstance(route, APIRoute) and (route.path == "/v1/jobs" or "/jobs" in route.path)
+            if isinstance(route, APIRoute) and (
+                route.path in {"/v1/jobs", "/v1/generation/jobs"} or "/jobs" in route.path
+            )
         )
     actual = {
         (method, route.path)

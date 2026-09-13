@@ -24,6 +24,7 @@ class JobRouterDependencies:
     enqueue_from_source: Callable[..., dict[str, Any]]
     mutate_artifacts: Callable[..., dict[str, Any]]
     dispatch_job: Callable[[Any], None]
+    normalize_generation_job: Callable[[Any], dict[str, Any]]
 
 
 def create_jobs_router(deps: JobRouterDependencies) -> APIRouter:
@@ -45,10 +46,26 @@ def create_jobs_router(deps: JobRouterDependencies) -> APIRouter:
     def list_jobs():
         return {"jobs": [job.__dict__ for job in deps.get_jobs().list_all()]}
 
+    @router.get("/v1/generation/jobs")
+    def list_generation_jobs():
+        jobs = [job for job in deps.get_jobs().list_all() if job.type == "internal_video"]
+        return {"schema_version": "1.0", "jobs": [deps.normalize_generation_job(job) for job in jobs]}
+
     @router.get("/v1/projects/{project_id}/jobs")
     def list_project_jobs(project_id: str):
         project_or_404(project_id)
         return {"jobs": [job.__dict__ for job in deps.get_jobs().list_for_project(project_id)]}
+
+    @router.get("/v1/projects/{project_id}/generation/jobs")
+    def list_project_generation_jobs(project_id: str):
+        project_or_404(project_id)
+        jobs = [
+            job for job in deps.get_jobs().list_for_project(project_id) if job.type == "internal_video"
+        ]
+        return {
+            "schema_version": "1.0",
+            "jobs": [deps.normalize_generation_job(job) for job in jobs],
+        }
 
     @router.get("/v1/projects/{project_id}/jobs/{job_id}")
     def get_project_job(project_id: str, job_id: str, tail_lines: int = 80):

@@ -23,6 +23,7 @@ RENDER_ROUTES = {
     ("POST", "/v1/projects/{project_id}/render/tensorrt-deforum"),
     ("POST", "/v1/projects/{project_id}/render/tensorrt-standalone/preview"),
     ("POST", "/v1/projects/{project_id}/render/internal/video"),
+    ("POST", "/v1/projects/{project_id}/generation"),
     ("GET", "/v1/projects/{project_id}/render/motion_sequencer"),
     ("POST", "/v1/projects/{project_id}/render/motion_sequencer/apply"),
     ("POST", "/v1/projects/{project_id}/render/internal/preflight"),

@@ -21,6 +21,7 @@ class ProviderRouterDependencies:
     edmg_status: Callable[[], dict[str, Any]]
     edmg_verify: Callable[[], dict[str, Any]]
     edmg_template: Callable[[], dict[str, Any]]
+    generation_providers: Callable[[], dict[str, Any]]
 
 
 def create_provider_router(deps: ProviderRouterDependencies) -> APIRouter:
@@ -29,6 +30,10 @@ def create_provider_router(deps: ProviderRouterDependencies) -> APIRouter:
     @router.get("/v1/ai/status")
     def ai_status():
         return {"ok": True, "ai": deps.ai_status(), "ai_config": deps.ai_config()}
+
+    @router.get("/v1/providers/generation")
+    def generation_providers():
+        return deps.generation_providers()
 
     @router.get("/v1/worker/status")
     def worker_status():

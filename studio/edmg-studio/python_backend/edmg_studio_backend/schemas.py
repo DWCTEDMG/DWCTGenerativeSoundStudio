@@ -305,6 +305,18 @@ class InternalVideoRenderRequest(BaseModel):
     deforum_steps_schedule: str | dict[str, float] | None = None
     deforum_denoise_schedule: str | dict[str, float] | None = None
 
+
+class GenerationRequest(BaseModel):
+    """Provider-neutral generation request backed by the durable render queue."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    operation: Literal["video"] = "video"
+    provider_id: Literal["edmg.internal"] = "edmg.internal"
+    renderer_id: Literal["auto", "diffusion", "tensorrt", "hunyuan_video15", "ltx_25"] = "auto"
+    parameters: InternalVideoRenderRequest = Field(default_factory=InternalVideoRenderRequest)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
+    priority: int = Field(default=0, ge=-100, le=100)
+
 class AutoAnimateRequest(BaseModel):
     """AI auto-configure (and optionally run) an animation render.
 

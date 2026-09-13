@@ -372,6 +372,41 @@ public sealed class PlanSceneDto
 public sealed record StudioJobListResponse(
     [property: JsonPropertyName("jobs")] IReadOnlyList<StudioJob> Jobs);
 
+public sealed record GenerationProviderListResponse(
+    [property: JsonPropertyName("schema_version")] string SchemaVersion,
+    [property: JsonPropertyName("providers")] IReadOnlyList<GenerationProviderDefinition> Providers);
+
+public sealed record GenerationProviderDefinition(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("operations")] IReadOnlyList<string> Operations,
+    [property: JsonPropertyName("capabilities")] IReadOnlyList<string> Capabilities,
+    [property: JsonPropertyName("renderer_ids")] IReadOnlyList<string> RendererIds,
+    [property: JsonPropertyName("ready")] bool Ready,
+    [property: JsonPropertyName("hardware_backend")] string HardwareBackend);
+
+public sealed record GenerationSubmitResponse(
+    [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("generation")] GenerationJob Generation,
+    [property: JsonPropertyName("preflight")] JsonElement Preflight);
+
+public sealed record GenerationJob(
+    [property: JsonPropertyName("schema_version")] string SchemaVersion,
+    [property: JsonPropertyName("job_id")] string JobId,
+    [property: JsonPropertyName("project_id")] string ProjectId,
+    [property: JsonPropertyName("operation")] string Operation,
+    [property: JsonPropertyName("provider_id")] string ProviderId,
+    [property: JsonPropertyName("renderer_id")] string RendererId,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("progress")] StudioJobProgress Progress,
+    [property: JsonPropertyName("artifacts")] IReadOnlyList<JsonElement> Artifacts,
+    [property: JsonPropertyName("error")] string? Error,
+    [property: JsonPropertyName("created_at")] string? CreatedAt,
+    [property: JsonPropertyName("updated_at")] string? UpdatedAt,
+    [property: JsonPropertyName("attempt")] int Attempt,
+    [property: JsonPropertyName("priority")] int Priority);
+
 public sealed record StudioJobActionResponse(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("job")] StudioJob Job);
@@ -395,6 +430,13 @@ public sealed record StudioJob(
     [property: JsonPropertyName("attempt")] int Attempt = 0,
     [property: JsonPropertyName("priority")] int Priority = 0)
 {
+    public string ProviderId => GenerationMetadata("provider_id") ?? "edmg.internal";
+
+    public string RendererId => GenerationMetadata("renderer_id")
+        ?? PayloadString("video_model_engine")
+        ?? PayloadString("render_mode")
+        ?? "auto";
+
     public bool IsActive => Status is "queued" or "paused" or "running";
 
     public bool CanPause => Status == "queued";
@@ -404,6 +446,32 @@ public sealed record StudioJob(
     public bool CanCancel => IsActive;
 
     public bool CanRetry => Status is "succeeded" or "failed" or "canceled";
+
+    private string? GenerationMetadata(string name)
+    {
+        if (Payload is not JsonElement { ValueKind: JsonValueKind.Object } payload ||
+            !payload.TryGetProperty("_generation", out JsonElement generation) ||
+            generation.ValueKind != JsonValueKind.Object ||
+            !generation.TryGetProperty(name, out JsonElement value) ||
+            value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return value.GetString();
+    }
+
+    private string? PayloadString(string name)
+    {
+        if (Payload is not JsonElement { ValueKind: JsonValueKind.Object } payload ||
+            !payload.TryGetProperty(name, out JsonElement value) ||
+            value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return value.GetString();
+    }
 }
 
 public sealed record StudioJobProgress(
@@ -764,6 +832,9 @@ public static class StudioJson
 [JsonSerializable(typeof(ReactiveLabLocalState))]
 [JsonSerializable(typeof(ReactiveLabMetadata))]
 [JsonSerializable(typeof(StudioJobListResponse))]
+[JsonSerializable(typeof(GenerationProviderListResponse))]
+[JsonSerializable(typeof(GenerationSubmitResponse))]
+[JsonSerializable(typeof(GenerationJob))]
 [JsonSerializable(typeof(StudioJobActionResponse))]
 [JsonSerializable(typeof(StudioJobPriorityRequest))]
 [JsonSerializable(typeof(StudioJob))]

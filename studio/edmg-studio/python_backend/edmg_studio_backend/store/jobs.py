@@ -177,6 +177,7 @@ class JobStore:
                 error=excluded.error,
                 progress_json=excluded.progress_json,
                 attempt=excluded.attempt,
+                priority=excluded.priority,
                 idempotency_key=excluded.idempotency_key
             WHERE jobs.status IN ('queued', 'paused', 'running')
               AND jobs.attempt = excluded.attempt
@@ -271,6 +272,7 @@ class JobStore:
         payload: dict[str, Any],
         *,
         idempotency_key: str | None = None,
+        priority: int = 0,
     ) -> Job:
         key = str(idempotency_key or "").strip() or None
         with self._lock:
@@ -295,6 +297,7 @@ class JobStore:
                 created_at=now,
                 updated_at=now,
                 payload=payload,
+                priority=priority,
                 idempotency_key=key,
             )
             self._upsert_job(job)
