@@ -1,6 +1,7 @@
 """Project-owned Director state; preparing prompts never submits generation."""
 
 from typing import Literal
+from copy import deepcopy
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,7 +14,7 @@ from ..domain.director_readiness import (
     resolve_director_readiness,
 )
 from ..domain.director_scene import DirectorDocument, compile_scene
-from ..domain.director_workflow import prepare_workflow
+from ..domain.director_workflow import DirectionDraft, prepare_workflow, source_fingerprint
 from ..revisions import RevisionRoute
 from ..services.engine_packages import HIGH_GGUF_ID, STANDARD_GGUF_ID
 from ..services.qwen_director import validate_proposal
@@ -178,13 +179,23 @@ def create_director_router(
             raise HTTPException(
                 422, f"Install the resolved Director model ({model_id}) in Models before generating direction"
             )
-        document = DirectorDocument.model_validate(project.meta.get("director_document") or {})
+        workflow = project.meta.get("director_workflow") or {}
+        document = DirectorDocument.model_validate(workflow.get("document") or project.meta.get("director_document") or {})
         if not document.scenes:
             raise HTTPException(422, "Save at least one scene range before generating direction")
         payload = {
             "document": document.model_dump(mode="json"),
             "instruction": request.instruction,
             "source_revision": project.revision,
+            "workflow_draft_id": workflow.get("draft_id"),
+            "workflow_source_fingerprint": workflow.get("source_fingerprint"),
+            "analysis_revision": (project.meta.get("analysis") or {}).get("revision"),
+            "source_audio_hash": (project.meta.get("analysis") or {}).get("source_audio_hash"),
+            "analyzer_version": (project.meta.get("analysis") or {}).get("analyzer_version"),
+            "schedule": deepcopy(workflow.get("schedule") or {}),
+            "reactive_overrides": deepcopy(workflow.get("reactive_overrides") or {}),
+            "reactive_extensions": deepcopy(workflow.get("reactive_extensions") or {}),
+            "workflow_variant_index": workflow.get("variant_index", 0),
             "model_id": model_id,
             "mode": request.mode,
             "renderer_engine": request.renderer_engine,
@@ -242,6 +253,7 @@ def create_director_router(
         job = director_job(project_id, job_id)
         if job.status != "succeeded" or not job.result or job.result.get("status") != "draft":
             raise HTTPException(409, "Director draft is not ready for review and application")
+        workflow_draft_id = job.payload.get("workflow_draft_id")
         baseline = DirectorDocument.model_validate(job.payload["document"])
         import json
 
@@ -253,7 +265,19 @@ def create_director_router(
             ) from exc
 
         def apply(project):
-            current = DirectorDocument.model_validate(project.meta.get("director_document") or {})
+            if workflow_draft_id:
+                workflow = DirectionDraft.model_validate(project.meta.get("director_workflow") or {})
+                if (
+                    workflow.draft_id != workflow_draft_id
+                    or workflow.source_fingerprint != job.payload.get("workflow_source_fingerprint")
+                    or workflow.source_fingerprint != source_fingerprint(project)
+                ):
+                    raise HTTPException(
+                        409, "Workspace draft changed during generation; retain this result for review"
+                    )
+                current = workflow.document
+            else:
+                current = DirectorDocument.model_validate(project.meta.get("director_document") or {})
             if current != baseline:
                 raise HTTPException(
                     409,
@@ -265,8 +289,11 @@ def create_director_router(
                 "source_revision": job.payload["source_revision"],
                 "provenance": job.result.get("provenance", {}),
             }
-            prepare_workflow(project, lambda _: project.meta.get("last_plan") or {},
-                             resulting_revision=project.revision + 1, source="director")
+            prepare_workflow(
+                project, lambda _: project.meta.get("last_plan") or {},
+                resulting_revision=project.revision + 1, source="director",
+                variant_index=int(job.payload.get("workflow_variant_index") or 0),
+            )
 
         try:
             return response(

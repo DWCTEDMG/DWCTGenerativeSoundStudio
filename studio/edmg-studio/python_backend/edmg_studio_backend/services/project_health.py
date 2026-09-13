@@ -17,6 +17,7 @@ class AssetRecord:
     bytes: int | None
     sha256: str | None
     referenced: bool
+    asset_id: str | None = None
 
 
 def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str | None:
@@ -45,6 +46,7 @@ def build_asset_index(project_dir: Path, meta: dict[str, Any] | None = None) -> 
     assets_root = project_dir / "assets"
     records: list[AssetRecord] = []
     referenced: set[str] = set()
+    asset_ids: dict[str, str] = {}
 
     audio = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
     audio_name = str(audio.get("filename") or "").strip()
@@ -52,6 +54,16 @@ def build_asset_index(project_dir: Path, meta: dict[str, Any] | None = None) -> 
         referenced.add(f"assets/audio/{Path(audio_name).name}")
 
     timeline = meta.get("timeline") if isinstance(meta.get("timeline"), dict) else {}
+    media_pool = timeline.get("media_pool") if isinstance(timeline.get("media_pool"), list) else []
+    for asset in media_pool:
+        if not isinstance(asset, dict):
+            continue
+        path = str(asset.get("path") or "").replace("\\", "/").lstrip("./")
+        asset_id = str(asset.get("id") or "").strip()
+        if path:
+            referenced.add(path)
+            if asset_id:
+                asset_ids[path] = asset_id
     for layer in timeline.get("layers") or []:
         if not isinstance(layer, dict):
             continue
@@ -59,6 +71,19 @@ def build_asset_index(project_dir: Path, meta: dict[str, Any] | None = None) -> 
             val = layer.get(key)
             if isinstance(val, str) and val.strip():
                 referenced.add(val.replace("\\", "/").lstrip("./"))
+    for track in timeline.get("tracks") or []:
+        if not isinstance(track, dict):
+            continue
+        for clip in track.get("clips") or []:
+            if not isinstance(clip, dict):
+                continue
+            asset_id = str(clip.get("media_asset_id") or "").strip()
+            asset = next((item for item in media_pool if isinstance(item, dict) and str(item.get("id")) == asset_id), None)
+            if asset is not None:
+                path = str(asset.get("path") or "").replace("\\", "/").lstrip("./")
+                if path:
+                    referenced.add(path)
+                    asset_ids[path] = asset_id
 
     if assets_root.exists():
         for path in assets_root.rglob("*"):
@@ -74,6 +99,7 @@ def build_asset_index(project_dir: Path, meta: dict[str, Any] | None = None) -> 
                     bytes=path.stat().st_size,
                     sha256=_sha256_file(path),
                     referenced=rel in referenced or any(rel.endswith(r.split("/")[-1]) for r in referenced),
+                    asset_id=asset_ids.get(rel),
                 )
             )
 
@@ -83,10 +109,10 @@ def build_asset_index(project_dir: Path, meta: dict[str, Any] | None = None) -> 
         try:
             target.relative_to(project_dir.resolve())
         except Exception:
-            missing.append({"path": ref, "reason": "outside_project"})
+            missing.append({"path": ref, "reason": "outside_project", **({"asset_id": asset_ids[ref]} if ref in asset_ids else {})})
             continue
         if not target.exists():
-            missing.append({"path": ref, "reason": "missing"})
+            missing.append({"path": ref, "reason": "missing", **({"asset_id": asset_ids[ref]} if ref in asset_ids else {})})
             if not any(r.path == ref for r in records):
                 records.append(
                     AssetRecord(
@@ -96,6 +122,7 @@ def build_asset_index(project_dir: Path, meta: dict[str, Any] | None = None) -> 
                         bytes=None,
                         sha256=None,
                         referenced=True,
+                        asset_id=asset_ids.get(ref),
                     )
                 )
 
@@ -116,6 +143,7 @@ def build_asset_index(project_dir: Path, meta: dict[str, Any] | None = None) -> 
                 "bytes": r.bytes,
                 "sha256": r.sha256,
                 "referenced": r.referenced,
+                "asset_id": r.asset_id,
             }
             for r in records
         ],
@@ -212,5 +240,9 @@ def suggest_relinks(project_dir: Path, meta: dict[str, Any] | None = None) -> di
     for miss in index.get("missing") or []:
         name = Path(str(miss.get("path") or "")).name
         if name and name in present:
-            suggestions.append({"missing": str(miss.get("path")), "candidate": present[name]})
+            suggestions.append({
+                "missing": str(miss.get("path")),
+                "candidate": present[name],
+                **({"asset_id": str(miss["asset_id"])} if miss.get("asset_id") else {}),
+            })
     return {"ok": True, "suggestions": suggestions, "missing_count": index.get("missing_count", 0)}

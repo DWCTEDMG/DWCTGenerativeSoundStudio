@@ -211,6 +211,49 @@
                             </Border>
                         </Expander>
 
+                        <Expander
+                            x:Name="MediaPoolExpander"
+                            AutomationProperties.AutomationId="Workspace.MediaPool"
+                            Header="Project media pool"
+                            IsExpanded="True">
+                            <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
+                                <StackPanel Spacing="12">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               Text="Import reusable audio, video, and images. Probe metadata, relink missing files, and build project-local waveform, thumbnail, and proxy caches."
+                                               TextWrapping="Wrap" />
+                                    <CommandBar DefaultLabelPosition="Right">
+                                        <AppBarButton AutomationProperties.AutomationId="Workspace.MediaPool.Import" Click="ImportMediaButton_Click" Icon="Add" Label="Import media" />
+                                        <AppBarButton AutomationProperties.AutomationId="Workspace.MediaPool.Refresh" Click="RefreshMediaPoolButton_Click" Icon="Refresh" Label="Refresh" />
+                                        <AppBarButton AutomationProperties.AutomationId="Workspace.MediaPool.Relink" Click="RelinkMediaButton_Click" Icon="Link" Label="Relink" />
+                                        <AppBarButton AutomationProperties.AutomationId="Workspace.MediaPool.Waveform" Click="GenerateWaveformButton_Click" Icon="Audio" Label="Generate waveform" />
+                                        <AppBarButton AutomationProperties.AutomationId="Workspace.MediaPool.Thumbnail" Click="GenerateThumbnailButton_Click" Icon="Pictures" Label="Generate thumbnail" />
+                                        <AppBarButton AutomationProperties.AutomationId="Workspace.MediaPool.Proxy" Click="GenerateProxyButton_Click" Icon="Video" Label="Generate proxy" />
+                                    </CommandBar>
+                                    <TextBlock x:Name="MediaPoolEmptyText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               Text="No media has been imported into this project." TextWrapping="Wrap" />
+                                    <ListView x:Name="MediaPoolListView" MaxHeight="360" ItemsSource="{x:Bind MediaPoolItems, Mode=OneWay}"
+                                              AutomationProperties.AutomationId="Workspace.MediaPool.List" SelectionMode="Single">
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="local:WorkspaceMediaPoolItem">
+                                                <Grid Padding="6,9" ColumnSpacing="12">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Spacing="3">
+                                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind DisplayName}" TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Detail}" TextWrapping="Wrap" />
+                                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind DerivativeSummary}" TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{x:Bind Status}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                </StackPanel>
+                            </Border>
+                        </Expander>
+
                         <Border Style="{StaticResource WorkspaceCardStyle}">
                             <StackPanel Spacing="12">
                                 <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Director scene draft" />
@@ -238,7 +281,7 @@
                                 <CommandBar DefaultLabelPosition="Right">
                                     <AppBarButton x:Name="PrepareWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Prepare" Label="Prepare draft" Icon="Refresh" IsEnabled="False" Click="PrepareWorkflowButton_Click" />
                                     <AppBarButton x:Name="SaveWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Save" Label="Save draft edits" Icon="Save" IsEnabled="False" Click="SaveWorkflowButton_Click" />
-                                    <AppBarButton x:Name="ApplyWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Apply" Label="Apply direction + schedule" Icon="Accept" IsEnabled="False" Click="ApplyWorkflowButton_Click" />
+                                    <AppBarButton x:Name="ApplyWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Apply" Label="Apply combined draft to Timeline" Icon="Accept" IsEnabled="False" Click="ApplyWorkflowButton_Click" />
                                     <AppBarButton x:Name="DiscardWorkflowEditsButton" AutomationProperties.AutomationId="Workspace.Direction.Discard" Label="Discard local edits" Icon="Undo" IsEnabled="False" Click="DiscardWorkflowEditsButton_Click" />
                                 </CommandBar>
                                 <TextBlock Text="Audio analysis prepares scenes and reactive keyframes automatically. The AI Planner and Reactive Lab show the same Workspace draft. Review it, apply once, then render when you are ready." TextWrapping="Wrap"
@@ -246,7 +289,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Expander Header="Advanced: saved direction and Qwen" AutomationProperties.AutomationId="Workspace.Director.Advanced">
+                        <Expander Header="Advanced: edit shared direction with Qwen" AutomationProperties.AutomationId="Workspace.Director.Advanced">
                             <StackPanel x:Name="DirectorPanel" Spacing="16">
                                 <Border Style="{StaticResource WorkspaceCardStyle}">
                                     <StackPanel Spacing="12">
@@ -594,20 +637,10 @@
                                             </DataTemplate>
                                         </RadioButtons.ItemTemplate>
                                     </RadioButtons>
-                                    <StackPanel Orientation="Horizontal" Spacing="10">
-                                        <Button
-                                            x:Name="ApplyPlanButton"
-                                            AccessKey="P"
-                                            AutomationProperties.AutomationId="Workspace.Plan.ApplyAppend"
-                                            Click="AppendTimelineButton_Click"
-                                            Content="Append to timeline"
-                                            Style="{StaticResource AccentButtonStyle}" />
-                                        <Button
-                                            x:Name="OverwritePlanButton"
-                                            AutomationProperties.AutomationId="Workspace.Plan.ApplyOverwrite"
-                                            Click="OverwriteTimelineButton_Click"
-                                            Content="Overwrite timeline" />
-                                    </StackPanel>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="Selecting or generating a variant updates the shared Director draft. Review and apply the combined result from Overview + Director."
+                                        TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                         </Expander>

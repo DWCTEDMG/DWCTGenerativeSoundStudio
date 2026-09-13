@@ -18,13 +18,16 @@ from edmg_studio_backend.contracts import (
     JobContract,
     MusicGraphContract,
     ProjectContract,
+    RendererContract,
     RenderPlanContract,
     adapt_legacy_cue,
     adapt_legacy_director_document,
     adapt_legacy_editor_command,
+    adapt_legacy_hardware_profile,
     adapt_legacy_job,
     adapt_legacy_project,
     adapt_legacy_render_plan,
+    adapt_legacy_renderer,
     contract_schema_bundle,
     restore_legacy_director_document,
     restore_legacy_editor_command,
@@ -40,6 +43,7 @@ from edmg_studio_backend.contracts.v1 import (
     RenderTaskContract,
     TempoMap,
 )
+from edmg_studio_backend.services.model_catalog import built_in_catalog
 
 
 def _curves() -> MusicFeatureCurves:
@@ -123,6 +127,18 @@ def _all_contracts():
             supports_cancel=True,
             locality="in_process",
         ),
+        RendererContract(
+            id="internal-video",
+            provider_id="internal",
+            engine="internal_video_model",
+            model_id="fixture-video",
+            family="fixture",
+            media="video",
+            operations=["generate"],
+            controls=["text", "image"],
+            hardware_backends=["cpu", "cuda"],
+            readiness={"state": "installable"},
+        ),
         HardwareProfileContract(
             id="workstation-1",
             backend="cuda",
@@ -154,7 +170,7 @@ def _all_contracts():
 def test_all_frozen_contracts_have_common_persisted_fields() -> None:
     contracts = _all_contracts()
 
-    assert len(contracts) == len(CONTRACT_MODELS) == 11
+    assert len(contracts) == len(CONTRACT_MODELS) == 12
     for contract in contracts:
         payload = contract.model_dump(mode="json")
         assert payload["schema_version"] == "1.0"
@@ -203,6 +219,96 @@ def test_hardware_profile_requires_cpu_fallback_and_available_selected_backend()
         HardwareProfileContract(backend="cuda", available_backends=["cpu"], **common)
     with pytest.raises(ValidationError, match="CPU must remain"):
         HardwareProfileContract(backend="cuda", available_backends=["cuda"], **common)
+
+
+def test_hardware_adapter_projects_recommendations_and_preserves_extensions() -> None:
+    profile = adapt_legacy_hardware_profile({
+        "ok": True,
+        "hardware": {
+            "backend": "cuda", "device": "cuda:0", "device_name": "Fixture GPU",
+            "available_backends": ["cpu", "cuda"], "vram_gb": 16,
+            "ram_gb": 64, "cpu_threads": 24, "physical_core_count": 12,
+            "platform": "windows", "machine": "amd64", "gpu_vendor": "nvidia",
+            "recommended_tier": "quality", "preferred_internal_model": "ltx_25_distilled",
+            "future_probe": {"keep": True},
+        },
+    }, profile_id="workstation-1")
+
+    assert profile.logical_core_count == 24
+    assert profile.physical_core_count == 12
+    assert profile.recommended_tier == "quality"
+    assert profile.recommended_renderer == "ltx_25_distilled"
+    assert profile.gpus[0].cuda_available is True
+    assert profile.gpus[0].dedicated_vram_gb == 16
+    assert profile.metadata["legacy_hardware_extensions"]["future_probe"] == {"keep": True}
+
+
+def test_renderer_adapter_separates_installation_from_validated_inference() -> None:
+    entry = {
+        "id": "hf_hunyuan_video15_internal", "source": "hf", "family": "hunyuan_video15",
+        "installable": True, "hardware_targets": ["cuda"], "future": {"keep": True},
+        "render": {"engine": "internal_video_model", "render_modes": ["t2v"], "controls": ["text"]},
+    }
+
+    installed = adapt_legacy_renderer(entry, {
+        "installed": True, "adapter_ready": True, "validation_level": 2,
+        "hardware_compatible": True,
+    })
+    validated = adapt_legacy_renderer(entry, {
+        "installed": True, "adapter_ready": True, "validation_level": 3,
+        "validation_receipt_id": "receipt-1", "validated_at": "2026-09-12T00:00:00Z",
+    })
+
+    assert installed.readiness.state == "adapter_ready"
+    assert validated.readiness.state == "validated"
+    assert validated.render_modes == ["t2v"]
+    assert validated.metadata["legacy_renderer_extensions"]["future"] == {"keep": True}
+
+
+def test_renderer_adapter_normalizes_managed_catalog_hardware_requirements() -> None:
+    catalog = {entry["id"]: entry for entry in built_in_catalog()}
+
+    hunyuan = adapt_legacy_renderer(catalog["hf_hunyuan_video15_internal"])
+
+    assert hunyuan.hardware_backends == ["cuda"]
+    assert hunyuan.minimum_vram_gb == 14
+
+
+@pytest.mark.parametrize(
+    ("targets", "expected"),
+    [
+        (["apple_silicon"], ["mps"]),
+        (["amd", "windows"], ["directml"]),
+        (["any"], ["cpu", "cuda", "directml", "mps"]),
+        (["cpu", "gpu_offload"], ["cpu", "cuda", "directml", "mps"]),
+    ],
+)
+def test_renderer_adapter_normalizes_catalog_target_vocabulary(targets, expected) -> None:
+    renderer = adapt_legacy_renderer({"id": "fixture", "hardware_targets": targets})
+
+    assert renderer.hardware_backends == expected
+
+
+def test_renderer_validated_state_requires_inference_receipt() -> None:
+    with pytest.raises(ValidationError, match="level-3 inference evidence"):
+        RendererContract(
+            id="renderer", provider_id="internal", engine="engine", media="video",
+            operations=["generate"],
+            readiness={"state": "validated", "installed": True, "adapter_ready": True, "validation_level": 3},
+        )
+
+
+def test_hardware_profile_rejects_impossible_topology_and_duplicate_device_ids() -> None:
+    common = {
+        "id": "workstation-1", "backend": "cpu", "device": "cpu", "device_name": "CPU",
+        "available_backends": ["cpu"], "cpu_threads": 8, "platform": "windows", "machine": "amd64",
+    }
+    with pytest.raises(ValidationError, match="physical core count cannot exceed"):
+        HardwareProfileContract(physical_core_count=9, logical_core_count=8, **common)
+    with pytest.raises(ValidationError, match="GPU IDs must be unique"):
+        HardwareProfileContract(gpus=[
+            {"id": "gpu-0", "name": "A"}, {"id": "gpu-0", "name": "B"},
+        ], **common)
 
 
 def test_legacy_project_adapter_preserves_current_shape_and_extensions() -> None:

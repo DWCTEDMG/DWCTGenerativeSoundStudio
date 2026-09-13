@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading.Channels;
 using EdmgStudio.Core.Services;
 using EdmgStudio.Core.Media;
+using EdmgStudio.Core.Audio;
 using EdmgStudio.WinUI.Graphics;
 
 namespace EdmgStudio.WinUI.Services;
@@ -21,7 +23,9 @@ public sealed class AppServices : IAsyncDisposable
         StudioApiClient apiClient,
         HttpClient apiHttpClient,
         StudioProjectMediaClient projectMediaClient,
-        StudioSessionService session)
+        StudioSessionService session,
+        ITransportService transport,
+        IAudioEngine audioEngine)
     {
         Configuration = configuration;
         BackendSupervisor = backendSupervisor;
@@ -29,6 +33,9 @@ public sealed class AppServices : IAsyncDisposable
         _apiHttpClient = apiHttpClient;
         ProjectMediaClient = projectMediaClient;
         Session = session;
+        Transport = transport;
+        AudioEngine = audioEngine;
+        Transport.StateChanged += OnTransportStateChanged;
     }
 
     public BackendConfiguration Configuration { get; }
@@ -36,6 +43,8 @@ public sealed class AppServices : IAsyncDisposable
     public StudioApiClient ApiClient { get; }
     public StudioProjectMediaClient ProjectMediaClient { get; }
     public StudioSessionService Session { get; }
+    public ITransportService Transport { get; }
+    public IAudioEngine AudioEngine { get; }
 
     internal bool TryTrackPreviewSession(PreviewRendererSession session)
     {
@@ -108,13 +117,17 @@ public sealed class AppServices : IAsyncDisposable
         var apiClient = new StudioApiClient(supervisor, tokenProvider, apiHttpClient);
         var projectMediaClient = new StudioProjectMediaClient(apiClient, new StudioApiSignedMediaUrlResolver(apiClient));
 
+        var transport = new TransportService();
+        var audioEngine = new WindowsAudioEngine();
         return new AppServices(
             configuration,
             supervisor,
             apiClient,
             apiHttpClient,
             projectMediaClient,
-            new StudioSessionService());
+            new StudioSessionService(),
+            transport,
+            audioEngine);
     }
 
     public async ValueTask DisposeAsync()
@@ -160,6 +173,16 @@ public sealed class AppServices : IAsyncDisposable
             }
         }
 
+        Transport.StateChanged -= OnTransportStateChanged;
+        try
+        {
+            await AudioEngine.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
         try
         {
             await BackendSupervisor.DisposeAsync();
@@ -201,8 +224,32 @@ public sealed class AppServices : IAsyncDisposable
             throw new AggregateException("One or more application services failed to shut down cleanly.", failures);
         }
     }
+
+    private void OnTransportStateChanged(object? sender, TransportState state)
+    {
+        ValueTask enqueue = AudioEngine.EnqueueTransportStateAsync(state);
+        if (!enqueue.IsCompletedSuccessfully)
+        {
+            _ = ObserveTransportEnqueueAsync(enqueue);
+        }
+    }
+
+    private static async Task ObserveTransportEnqueueAsync(ValueTask enqueue)
+    {
+        try
+        {
+            await enqueue.ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (ChannelClosedException)
+        {
+        }
+    }
 }
 
+[System.Diagnostics.DebuggerNonUserCode]
 internal sealed class BackendAvailabilityHandler : DelegatingHandler
 {
     public BackendAvailabilityHandler()

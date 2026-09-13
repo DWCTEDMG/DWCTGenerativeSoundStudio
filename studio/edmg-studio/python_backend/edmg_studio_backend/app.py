@@ -127,6 +127,7 @@ from .integrations import comfyui as comfy
 from .integrations.comfyui_pool import ComfyUINodePool
 from .services.worker_manager import WorkerManager
 from .services.hf_auth import describe_hf_auth
+from .services.media_pool import MediaPoolService
 from .services.ffmpeg import (
     TimelineRenderCanceled,
     _probe_duration_seconds,
@@ -280,6 +281,7 @@ settings.ollama_models_dir.mkdir(parents=True, exist_ok=True)
 
 store = ProjectStore(settings.data_dir)
 jobs = JobStore(store.projects_dir)
+media_pool = MediaPoolService(store, settings.ffmpeg_path)
 
 
 def _project_music_graph(proj: Any) -> dict[str, Any]:
@@ -3839,18 +3841,20 @@ if HAS_MULTIPART:
         name = _safe_upload_filename(file.filename, "audio.wav")
         out = audio_dir / name
         size = 0
+        source_hasher = hashlib.sha256()
         with out.open("wb") as handle:
             while True:
                 chunk = await file.read(1024 * 1024)
                 if not chunk:
                     break
                 handle.write(chunk)
+                source_hasher.update(chunk)
                 size += len(chunk)
         try:
             await file.close()
         except Exception:
             pass
-        store.set_audio(project_id, name, size)
+        store.set_audio(project_id, name, size, source_hash=source_hasher.hexdigest())
         return {"ok": True, "path": str(out)}
 else:
     async def upload_audio(project_id: str):
@@ -3983,8 +3987,20 @@ def _prepare_transcription_audio(audio_path: Path, project_dir: Path, asr_cfg: d
     metadata["cached"] = False
     return vocals_path, metadata
 
+_AUDIO_ANALYZER_VERSION = 1
 
-def analyze_audio(project_id: str):
+
+def _audio_source_hash(audio_path: Path, audio_meta: dict[str, Any]) -> str:
+    if not audio_path.is_file():
+        raise HTTPException(404, "Uploaded audio file is missing")
+    hasher = hashlib.sha256()
+    with audio_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def analyze_audio(project_id: str, *, force: bool = True):
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
@@ -3992,6 +4008,29 @@ def analyze_audio(project_id: str):
     if not audio_meta:
         raise HTTPException(400, "No audio uploaded")
     audio_path = store.project_dir(project_id) / "assets" / "audio" / audio_meta["filename"]
+    source_hash = _audio_source_hash(audio_path, audio_meta)
+    existing = proj.meta.get("analysis")
+    if (
+        not force
+        and isinstance(existing, dict)
+        and existing.get("source_audio_hash") == source_hash
+        and existing.get("analyzer_version") == _AUDIO_ANALYZER_VERSION
+    ):
+        from .domain.director_workflow import prepare_workflow, source_fingerprint
+
+        workflow = proj.meta.get("director_workflow") or {}
+        if not workflow or workflow.get("source_fingerprint") != source_fingerprint(proj):
+            try:
+                prepare_workflow(proj, _workspace_audio_plan, resulting_revision=proj.revision + 1)
+                proj.meta.pop("director_workflow_error", None)
+            except Exception:
+                logger.exception("Could not prepare Workspace direction from cached audio analysis")
+                proj.meta["director_workflow_error"] = (
+                    "Audio analysis is saved. Prepare direction again to retry the scene draft."
+                )
+            store.save(proj)
+        return {"ok": True, "analysis": existing, "reused": True,
+                "direction_prepared": not proj.meta.get("director_workflow_error")}
 
     development_timings_ms: dict[str, float] = {}
     with development_timing("audio_analysis", development_timings_ms):
@@ -4049,6 +4088,8 @@ def analyze_audio(project_id: str):
         analysis["duration_s"] = float(duration_s)
     previous_analysis = proj.meta.get("analysis") or next(iter(reversed(proj.meta.get("analysis_history") or [])), {})
     analysis["revision"] = int(previous_analysis.get("revision") or 0) + 1
+    analysis["source_audio_hash"] = source_hash
+    analysis["analyzer_version"] = _AUDIO_ANALYZER_VERSION
     analysis_path = _write_project_analysis_snapshot(project_id, analysis)
     if analysis_path:
         analysis["analysis_path"] = analysis_path
@@ -4063,7 +4104,7 @@ def analyze_audio(project_id: str):
         logger.exception("Could not prepare Workspace direction after audio analysis")
         proj.meta["director_workflow_error"] = "Audio analysis is saved. Prepare direction again to retry the scene draft."
     store.save(proj)
-    return {"ok": True, "analysis": analysis, "direction_prepared": not proj.meta.get("director_workflow_error")}
+    return {"ok": True, "analysis": analysis, "reused": False, "direction_prepared": not proj.meta.get("director_workflow_error")}
 
 
 app.include_router(create_project_media_router(ProjectMediaDependencies(
@@ -4074,7 +4115,8 @@ app.include_router(create_project_media_router(ProjectMediaDependencies(
     get_audio=lambda project_id: get_project_audio(project_id),
     upload_overlay=lambda *args: upload_overlay_asset(*args),
     upload_mask=lambda *args: upload_mask_asset(*args),
-    analyze_audio=lambda project_id: analyze_audio(project_id),
+    analyze_audio=lambda project_id, force=False: analyze_audio(project_id, force=force),
+    media_pool=media_pool,
     multipart_available=HAS_MULTIPART,
 )))
 
@@ -6931,9 +6973,9 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
         raise HTTPException(404, "Project not found")
 
     imported_analysis = planner_lab_to_project_analysis(req.analysis)
-    if imported_analysis:
+    if imported_analysis and not proj.meta.get("analysis"):
         proj.meta["analysis"] = enrich_with_multitrack_defaults(
-            _merge_imported_analysis(proj.meta.get("analysis"), imported_analysis)
+            _merge_imported_analysis(None, imported_analysis)
         )
 
     imported_plan = planner_lab_to_canonical_plan(req.analysis, req.plan, req.settings)

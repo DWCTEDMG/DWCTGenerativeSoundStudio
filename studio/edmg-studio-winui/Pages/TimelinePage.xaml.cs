@@ -1,10 +1,13 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
+using EdmgStudio.Core.Audio;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
@@ -33,12 +36,12 @@ public sealed partial class TimelinePage : Page
     private const double MaximumPixelsPerSecond = 360;
     private const string PointerToolSettingKey = "Timeline.PointerTool";
     private const string ViewStateSettingPrefix = "Timeline.ViewState.";
+    private const int DefaultAudioBufferFrames = 512;
 
     private readonly DispatcherTimer _transportTimer = new()
     {
         Interval = TimeSpan.FromMilliseconds(1000 / DefaultFps)
     };
-    private readonly Stopwatch _transportWatch = new();
     private EditorHistoryState _editorHistory = new();
     private long _editorRevision;
     private readonly ObservableCollection<CameraKeyframeListItem> _cameraKeyframeItems = [];
@@ -70,14 +73,14 @@ public sealed partial class TimelinePage : Page
     private DragMode _dragMode;
     private double _durationSeconds = DefaultDurationSeconds;
     private double _positionSeconds;
-    private double _transportAnchorSeconds;
     private double _pixelsPerSecond = 80;
     private long _previewGeneration;
+    private long _audioGraphGeneration;
+    private string? _configuredAudioGraphKey;
     private bool _isLoaded;
     private bool _isBusy;
     private bool _isAutomationBusy;
     private bool _isDirty;
-    private bool _isPlaying;
     private bool _rippleEnabled;
     private bool _positionPointerActive;
     private bool _updatingPosition;
@@ -126,6 +129,7 @@ public sealed partial class TimelinePage : Page
 
         _isLoaded = true;
         App.Services.Session.Changed += Session_Changed;
+        App.Services.Transport.StateChanged += Transport_StateChanged;
         await LoadActiveProjectAsync();
     }
 
@@ -138,8 +142,9 @@ public sealed partial class TimelinePage : Page
 
         _isLoaded = false;
         App.Services.Session.Changed -= Session_Changed;
+        App.Services.Transport.StateChanged -= Transport_StateChanged;
         PersistViewState();
-        StopPlayback();
+        _transportTimer.Stop();
         CancelPreview();
         _automationCancellation?.Cancel();
         _automationCancellation?.Dispose();
@@ -147,6 +152,7 @@ public sealed partial class TimelinePage : Page
         _pageCancellation?.Cancel();
         _pageCancellation?.Dispose();
         _pageCancellation = null;
+        Interlocked.Increment(ref _audioGraphGeneration);
     }
 
     private void Session_Changed(object? sender, EventArgs e)
@@ -253,6 +259,9 @@ public sealed partial class TimelinePage : Page
 
             RefreshEditor(updateRawText: true);
             ApplyRestoredViewport();
+            SyncTransportConfiguration();
+            ApplyLoopToTransport();
+            await ConfigureAudioEngineAsync(cancellationToken);
             RefreshRecoverySummary();
             RefreshWorkflowPlanSummary();
             try
@@ -317,12 +326,15 @@ public sealed partial class TimelinePage : Page
 
     private void ClearTimeline(string message)
     {
-        StopPlayback();
+        _transportTimer.Stop();
+        App.Services.Transport.Stop();
         CancelPreview();
         _loadedProjectId = null;
         _project = null;
         _timelineDocument = null;
         _canonicalProject = null;
+        _configuredAudioGraphKey = null;
+        Interlocked.Increment(ref _audioGraphGeneration);
         _recoveryDocument = null;
         _lanes = [];
         _cameraKeyframes = [];
@@ -1657,6 +1669,7 @@ public sealed partial class TimelinePage : Page
         ApplyEditorState(result);
         RefreshEditor(updateRawText: true);
         await RefreshProjectRevisionAsync(projectId, cancellationToken);
+        await ConfigureAudioEngineAsync(cancellationToken);
     }
 
     private async void Undo_Click(object sender, RoutedEventArgs e) => await ApplyHistoryAsync("undo");
@@ -1843,6 +1856,7 @@ public sealed partial class TimelinePage : Page
             }
             RefreshEditor(updateRawText: true);
             await RefreshProjectRevisionAsync(projectId, token);
+            await ConfigureAudioEngineAsync(token);
             await RefreshPreviewAsync(force: false);
             StatusText.Text = $"{label} saved.";
         }
@@ -2781,7 +2795,7 @@ public sealed partial class TimelinePage : Page
 
     private void PlayPause_Click(object sender, RoutedEventArgs e)
     {
-        if (_isPlaying)
+        if (App.Services.Transport.State.Mode != TransportMode.Stopped)
         {
             StopPlayback();
             return;
@@ -2792,11 +2806,18 @@ public sealed partial class TimelinePage : Page
             SetPosition(LoopToggle.IsChecked == true ? ResolveLoopBounds().Start : 0, requestPreview: false);
         }
 
-        _transportAnchorSeconds = _positionSeconds;
-        _transportWatch.Restart();
+        SyncTransportConfiguration();
+        ApplyLoopToTransport();
+        App.Services.Transport.Play();
         _transportTimer.Start();
-        _isPlaying = true;
         UpdateTransportUi();
+    }
+
+    private void Stop_Click(object sender, RoutedEventArgs e)
+    {
+        _transportTimer.Stop();
+        App.Services.Transport.Stop();
+        SetPosition(0, requestPreview: true, updateTransport: false);
     }
 
     private void StepBackward_Click(object sender, RoutedEventArgs e)
@@ -2813,43 +2834,52 @@ public sealed partial class TimelinePage : Page
 
     private void TransportTimer_Tick(object? sender, object e)
     {
-        if (!_isPlaying)
+        TransportState state = App.Services.Transport.State;
+        if (state.Mode == TransportMode.Stopped)
+        {
+            _transportTimer.Stop();
+            SetPosition(state.PositionSeconds, requestPreview: true, updateTransport: false);
+            return;
+        }
+        SetPosition(state.PositionSeconds, requestPreview: true, updateTransport: false);
+    }
+
+    private void Transport_StateChanged(object? sender, TransportState state)
+    {
+        if (!_isLoaded || !string.Equals(state.ProjectId, _loadedProjectId, StringComparison.Ordinal))
         {
             return;
         }
 
-        double position = _transportAnchorSeconds + _transportWatch.Elapsed.TotalSeconds;
-        if (LoopToggle.IsChecked == true)
+        DispatcherQueue.TryEnqueue(() =>
         {
-            (double start, double end) = ResolveLoopBounds();
-            if (position >= end)
+            if (state.Mode == TransportMode.Stopped)
             {
-                _transportAnchorSeconds = start;
-                _transportWatch.Restart();
-                position = start;
+                _transportTimer.Stop();
             }
-        }
-        else if (position >= _durationSeconds)
-        {
-            SetPosition(_durationSeconds, requestPreview: true);
-            StopPlayback();
-            return;
-        }
-
-        SetPosition(position, requestPreview: true);
+            else if (!_transportTimer.IsEnabled)
+            {
+                _transportTimer.Start();
+            }
+            SetPosition(state.PositionSeconds, requestPreview: state.Mode == TransportMode.Stopped, updateTransport: false);
+        });
     }
 
     private void StopPlayback()
     {
         _transportTimer.Stop();
-        _transportWatch.Stop();
-        _isPlaying = false;
+        App.Services.Transport.Pause();
         UpdateTransportUi();
     }
 
-    private void SetPosition(double position, bool requestPreview)
+    private void SetPosition(double position, bool requestPreview, bool updateTransport = true)
     {
         _positionSeconds = Math.Clamp(position, 0, _durationSeconds);
+        if (updateTransport && !string.IsNullOrWhiteSpace(_loadedProjectId))
+        {
+            SyncTransportConfiguration();
+            App.Services.Transport.Seek(ToSamples(_positionSeconds));
+        }
         PersistViewState();
         _updatingPosition = true;
         PositionSlider.Value = _positionSeconds;
@@ -2861,6 +2891,212 @@ public sealed partial class TimelinePage : Page
         {
             _ = RefreshPreviewAsync(force: false);
         }
+    }
+
+    private void SyncTransportConfiguration()
+    {
+        if (string.IsNullOrWhiteSpace(_loadedProjectId))
+        {
+            return;
+        }
+
+        int sampleRate = _canonicalProject?.Timebase.SampleRate ?? TransportService.DefaultSampleRate;
+        long durationSamples = checked((long)Math.Round(
+            _durationSeconds * sampleRate,
+            MidpointRounding.AwayFromZero));
+        TransportState current = App.Services.Transport.State;
+        if (!string.Equals(current.ProjectId, _loadedProjectId, StringComparison.Ordinal) ||
+            current.SampleRate != sampleRate ||
+            current.DurationSamples != durationSamples)
+        {
+            App.Services.Transport.Configure(_loadedProjectId, sampleRate, durationSamples, ToSamples(_positionSeconds));
+        }
+    }
+
+    private async Task ConfigureAudioEngineAsync(CancellationToken cancellationToken)
+        {
+            CanonicalProject? project = _canonicalProject;
+            string? projectId = _loadedProjectId;
+            if (project is null || string.IsNullOrWhiteSpace(projectId))
+            {
+                AudioEngineStatusText.Text = "Audio: not configured";
+                return;
+            }
+
+            string graphKey = CreateAudioGraphKey(project);
+            if (string.Equals(graphKey, _configuredAudioGraphKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            long generation = Interlocked.Increment(ref _audioGraphGeneration);
+            AudioEngineStatusText.Text = "Audio: preparing project media...";
+            try
+            {
+                await App.Services.AudioEngine.RefreshDevicesAsync(cancellationToken);
+                AudioDeviceDescriptor? device = App.Services.AudioEngine.Devices.FirstOrDefault(item => item.IsDefault)
+                    ?? App.Services.AudioEngine.Devices.FirstOrDefault();
+                string deviceId = device?.Id ?? "{default}";
+
+                IReadOnlyDictionary<string, string> localPaths = await MaterializeAudioAssetsAsync(
+                    project,
+                    projectId,
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (generation != Volatile.Read(ref _audioGraphGeneration) ||
+                    !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                AudioRenderGraph graph = AudioRenderGraphBuilder.Build(
+                    project,
+                    deviceId,
+                    DefaultAudioBufferFrames,
+                    asset => localPaths.GetValueOrDefault(asset.Id));
+                await App.Services.AudioEngine.ConfigureAsync(graph.Configuration, cancellationToken);
+                await App.Services.AudioEngine.EnqueueTransportStateAsync(App.Services.Transport.State, cancellationToken);
+                if (generation != Volatile.Read(ref _audioGraphGeneration) ||
+                    !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _configuredAudioGraphKey = graphKey;
+                int clipCount = graph.Configuration.Tracks.Sum(route => route.Clips.Length);
+                AudioEngineStatusText.Text =
+                    $"Audio: {device?.Name ?? "Windows default"} · {project.Timebase.SampleRate} Hz · {clipCount} clip{(clipCount == 1 ? string.Empty : "s")}";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                if (generation != Volatile.Read(ref _audioGraphGeneration) ||
+                    !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                AudioEngineStatusText.Text = "Audio: unavailable";
+                ShowInfo($"Timeline loaded, but audio playback could not be prepared: {exception.Message}", InfoBarSeverity.Warning);
+            }
+        }
+
+        private static async Task<IReadOnlyDictionary<string, string>> MaterializeAudioAssetsAsync(
+            CanonicalProject project,
+            string projectId,
+            CancellationToken cancellationToken)
+        {
+            HashSet<string> referencedAssetIds = project.Tracks
+                .Where(track => string.Equals(track.Type, "audio", StringComparison.OrdinalIgnoreCase) ||
+                                track.Events.Any(item => string.Equals(item.Type, "audio", StringComparison.OrdinalIgnoreCase)))
+                .SelectMany(track => track.Events)
+                .Where(item => !string.IsNullOrWhiteSpace(item.MediaAssetId))
+                .Select(item => item.MediaAssetId!)
+                .ToHashSet(StringComparer.Ordinal);
+            var localPaths = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (referencedAssetIds.Count == 0)
+            {
+                return localPaths;
+            }
+
+            string cacheRoot = System.IO.Path.Combine(ApplicationData.Current.LocalCacheFolder.Path, "audio-media");
+            foreach (MediaAsset asset in project.MediaAssets.Where(asset => referencedAssetIds.Contains(asset.Id)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string contentHash = ReadAssetContentHash(asset);
+                string cacheIdentity = CreateStableHash($"{projectId}\n{asset.Id}\n{asset.Path}\n{contentHash}");
+                string extension = System.IO.Path.GetExtension(asset.Path);
+                if (extension.Length is 0 or > 16 || extension.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
+                {
+                    extension = ".media";
+                }
+                string destination = System.IO.Path.Combine(cacheRoot, cacheIdentity + extension.ToLowerInvariant());
+                if (contentHash.Length == 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
+                {
+                    await App.Services.ProjectMediaClient.MaterializeProjectMediaAsync(
+                        projectId,
+                        asset.Path,
+                        destination,
+                        cancellationToken);
+                }
+                localPaths[asset.Id] = destination;
+            }
+            return localPaths;
+        }
+
+        private static string CreateAudioGraphKey(CanonicalProject project)
+        {
+            var value = new StringBuilder()
+                .Append(project.Id).Append('|')
+                .Append(project.Timebase.SampleRate);
+            foreach (Track track in project.Tracks)
+            {
+                value.Append('|').Append(track.Id).Append(':').Append(track.Type).Append(':')
+                    .Append(track.Muted).Append(':').Append(track.Solo).Append(':')
+                    .Append(track.Metadata["gain"]).Append(':').Append(track.Metadata["pan"])
+                    .Append(':').Append(track.Metadata["routing"]);
+                foreach (TimelineEvent item in track.Events)
+                {
+                    value.Append('|').Append(item.Id).Append(':').Append(item.Type).Append(':')
+                        .Append(item.MediaAssetId).Append(':').Append(item.Start.Samples).Append(':')
+                        .Append(item.End.Samples).Append(':').Append(item.Source?.Start.Samples).Append(':')
+                        .Append(item.Source?.Start.SampleRate);
+                }
+            }
+            foreach (MediaAsset asset in project.MediaAssets)
+            {
+                value.Append('|').Append(asset.Id).Append(':').Append(asset.Path).Append(':')
+                    .Append(ReadAssetContentHash(asset));
+            }
+            return CreateStableHash(value.ToString());
+        }
+
+        private static string ReadAssetContentHash(MediaAsset asset) =>
+            asset.Metadata["sha256"]?.GetValue<string>()?.Trim()
+            ?? asset.Provenance?.ContentHash?.Trim()
+            ?? string.Empty;
+
+        private static string CreateStableHash(string value) =>
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private void ApplyLoopToTransport()
+    {
+        if (LoopToggle.IsChecked == true)
+        {
+            (double start, double end) = ResolveLoopBounds();
+            App.Services.Transport.SetLoop(true, ToSamples(start), ToSamples(end));
+        }
+        else
+        {
+            App.Services.Transport.SetLoop(false, 0, ToSamples(_durationSeconds));
+        }
+    }
+
+    private void LoopControl_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_timelineDocument is not null)
+        {
+            SyncTransportConfiguration();
+            ApplyLoopToTransport();
+        }
+    }
+
+    private void LoopNumberBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_timelineDocument is not null && LoopToggle.IsChecked == true)
+        {
+            SyncTransportConfiguration();
+            ApplyLoopToTransport();
+        }
+    }
+
+    private long ToSamples(double seconds)
+    {
+        int sampleRate = _canonicalProject?.Timebase.SampleRate ?? TransportService.DefaultSampleRate;
+        return checked((long)Math.Round(seconds * sampleRate, MidpointRounding.AwayFromZero));
     }
 
     private void RenderPlayhead()
@@ -2878,7 +3114,7 @@ public sealed partial class TimelinePage : Page
     private void UpdateTransportUi()
     {
         TimecodeText.Text = FormatTimecode(_positionSeconds);
-        PlayPauseButton.Content = _isPlaying ? "Pause" : "Play";
+        PlayPauseButton.Content = App.Services.Transport.State.Mode == TransportMode.Stopped ? "Play" : "Pause";
     }
 
     private void PositionSlider_ValueChanged(
@@ -2891,11 +3127,13 @@ public sealed partial class TimelinePage : Page
         }
 
         _positionSeconds = Math.Clamp(e.NewValue, 0, _durationSeconds);
+        SyncTransportConfiguration();
+        App.Services.Transport.Seek(ToSamples(_positionSeconds));
         PersistViewState();
         UpdateTransportUi();
         RenderPlayhead();
         UpdateSplitCommandState();
-        if (_positionPointerActive || !_isPlaying)
+        if (_positionPointerActive || App.Services.Transport.State.Mode == TransportMode.Stopped)
         {
             _ = RefreshPreviewAsync(force: false);
         }

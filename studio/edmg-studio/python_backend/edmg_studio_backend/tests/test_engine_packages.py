@@ -13,7 +13,7 @@ from edmg_studio_backend.api.routers import create_models_router
 from edmg_studio_backend.domain.director_readiness import resolve_director_readiness
 from edmg_studio_backend.errors import UserFacingError
 from edmg_studio_backend.services import engine_packages as packages
-from edmg_studio_backend.services.model_catalog import built_in_catalog
+from edmg_studio_backend.services.model_catalog import built_in_catalog, built_in_packs
 from edmg_studio_backend.services.model_manager import ModelTask, ModelTaskCancelled
 from edmg_studio_backend.tests.test_model_manager_downloads import _manager
 
@@ -200,3 +200,115 @@ def test_install_requires_license_and_cloud_only_is_explicit(tmp_path, monkeypat
     with pytest.raises(UserFacingError) as exc:
         manager._install_engine_package(ModelTask(id="t", name="install"), manager._find_entry(IDS[0]))
     assert exc.value.code == "MODEL_PACKAGE_LOCAL_REQUIRED"
+
+
+def test_qwen_director_cuda_pack_metadata():
+    pack = next(item for item in built_in_packs() if item["id"] == "qwen_director_cuda")
+    assert pack["name"] == "Qwen Director CUDA Pack"
+    assert pack["package_type"] == "dlc"
+    assert pack["models"] == [packages.STANDARD_GGUF_ID]
+    assert pack["platforms"] == ["windows"]
+    assert pack["runtime_components"] == [{
+        "id": "llama_cpp_cuda", "name": "llama.cpp CUDA", "version": "v0.4.0", "build": "b10809",
+    }]
+    assert pack["download_size_bytes"] == 6_425_456_698
+
+
+def test_qwen_pack_requires_license_before_queueing(tmp_path, monkeypatch):
+    manager = _manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(manager.tasks, "start", lambda *_args, **_kwargs: pytest.fail("task queued"))
+    with pytest.raises(UserFacingError) as exc:
+        manager.install_pack("qwen_director_cuda", {"backend": "cuda"})
+    assert exc.value.code == "MODEL_LICENSE_NOT_ACCEPTED"
+
+
+def test_existing_pinned_llama_cuda_runtime_is_reused(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from edmg_studio_backend.services import model_manager as model_manager_module
+
+    manager = _manager(tmp_path, monkeypatch)
+    executable = manager._llama_cuda_runtime_path()
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"fixture")
+    (executable.parent / "runtime-install.json").write_text(json.dumps({
+        **manager._LLAMA_CUDA_RECEIPT, "schema_version": 1,
+    }))
+    monkeypatch.setattr(model_manager_module, "probe_llama_server", lambda path: SimpleNamespace(cuda_devices=("CUDA0: fixture",)))
+    persisted = []
+    monkeypatch.setattr(model_manager_module, "update_launcher_environment", lambda updates: persisted.append(updates))
+    monkeypatch.setattr(model_manager_module.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("installer invoked"))
+
+    result = manager._install_llama_cuda_runtime(ModelTask(id="t", name="runtime"), tmp_path / "installer.ps1")
+
+    assert result == executable.resolve()
+    assert persisted == [{"EDMG_LLAMA_SERVER": str(executable.resolve())}]
+
+
+def test_qwen_pack_worker_uses_exact_cuda_runtime_and_requires_ready(tmp_path, monkeypatch, tiny_packages):
+    from edmg_studio_backend.services import model_manager as model_manager_module
+
+    manager = _manager(tmp_path, monkeypatch)
+    entry = manager._find_entry(packages.STANDARD_GGUF_ID)
+    _, package_root = manager._models_dest(entry)
+
+    def install_model(task, selected):
+        assert selected["id"] == packages.STANDARD_GGUF_ID
+        materialize(package_root, tiny_packages[packages.STANDARD_GGUF_ID])
+        manager._validate_engine_package(task, selected)
+
+    executable = manager._llama_cuda_runtime_path()
+    observed = {}
+    sequence = []
+
+    def track_model(task, selected):
+        sequence.append("model")
+        install_model(task, selected)
+
+    def install_runtime(_task, _script):
+        sequence.append("runtime")
+        return executable
+
+    monkeypatch.setattr(manager, "_install_engine_package", track_model)
+    monkeypatch.setattr(manager, "_install_llama_cuda_runtime", install_runtime)
+
+    def smoke(model_id, **kwargs):
+        observed.update(kwargs["hardware"])
+        assert model_id == packages.STANDARD_GGUF_ID
+        return {"runtime_ready": True, "blockers": []}
+
+    monkeypatch.setattr(model_manager_module.DEFAULT_RUNTIME_REGISTRY, "smoke_test", smoke)
+    task = ModelTask(id="t", name="pack", model_id="pack:qwen_director_cuda")
+    manager._install_qwen_director_cuda_pack(task, tmp_path / "installer.ps1", {"backend": "cpu", "ram_gb": 64})
+
+    assert sequence == ["runtime", "model"]
+    assert observed["backend"] == "cpu"
+    assert observed["ram_gb"] == 64
+    assert observed["llama_backend"] == "cuda"
+    assert observed["llama_server_path"] == str(executable.resolve())
+    assert task.bytes_total == 6_425_456_698
+
+
+def test_install_pack_route_preserves_tasks_and_adds_coordinated_task(tmp_path, monkeypatch):
+    manager = _manager(tmp_path, monkeypatch)
+    observed = {}
+
+    def install_pack(pack_id, hardware):
+        observed.update(hardware)
+        return [ModelTask(id="pack-task", name="pack", model_id=f"pack:{pack_id}")]
+
+    monkeypatch.setattr(manager, "install_pack", install_pack)
+    app = FastAPI()
+    app.include_router(create_models_router(
+        get_models=lambda: manager,
+        get_hardware=lambda: {"backend": "cuda", "ram_gb": 64},
+        get_director_runtime_settings=lambda: {"runtime_path": "configured.exe", "llama_backend": "cpu"},
+    ))
+    with TestClient(app) as client:
+        response = client.post("/v1/models/install_pack", json={"pack_id": "qwen_director_cuda"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["task"] == body["tasks"][0]
+    assert observed["backend"] == "cuda"
+    assert observed["llama_backend"] == "cpu"
+    assert observed["llama_server_path"] == "configured.exe"

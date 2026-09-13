@@ -87,7 +87,7 @@ def test_set_audio_archives_analysis_and_preserves_plan_and_authored_state(tmp_p
     project = store.create("Replacement Audio")
     project.meta.update(
         {
-            "audio": {"filename": "old.wav", "size_bytes": 10},
+            "audio": {"filename": "old.wav", "size_bytes": 10, "custom_tag": {"keep": True}},
             "analysis": {"features": {"bpm": 120}},
             "last_plan": {"variants": [{"scenes": []}]},
             "timeline": {"layers": [{"id": "authored"}]},
@@ -101,7 +101,11 @@ def test_set_audio_archives_analysis_and_preserves_plan_and_authored_state(tmp_p
 
     saved = store.get(project.id)
     assert saved is not None
-    assert saved.meta["audio"] == {"filename": "replacement.wav", "size_bytes": 2048}
+    assert saved.meta["audio"] == {
+        "filename": "replacement.wav",
+        "size_bytes": 2048,
+        "custom_tag": {"keep": True},
+    }
     assert "analysis" not in saved.meta
     assert saved.meta["last_plan"] == project.meta["last_plan"]
     assert saved.meta["analysis_history"][-1] == project.meta["analysis"]

@@ -1292,6 +1292,29 @@ public sealed class StudioApiClientTests
     }
 
     [TestMethod]
+    public async Task ModelPackInstall_UsesTypedCoordinatedTaskResponse()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured = new CapturedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken));
+            return JsonResponse("""{"tasks":[{"id":"pack-task","name":"Install Qwen Director CUDA Pack","status":"queued","progress":0.0,"last_log":null,"error":null,"started_at":null,"ended_at":null,"model_id":"pack:qwen_director_cuda","stage":"queued","bytes_completed":0,"bytes_total":6425456698,"files_completed":0,"files_total":null,"cancel_requested":false}],"task":{"id":"pack-task","name":"Install Qwen Director CUDA Pack","status":"queued","progress":0.0,"last_log":null,"error":null,"started_at":null,"ended_at":null,"model_id":"pack:qwen_director_cuda","stage":"queued","bytes_completed":0,"bytes_total":6425456698,"files_completed":0,"files_total":null,"cancel_requested":false}}""");
+        }));
+        using var client = new StudioApiClient(new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"), httpClient);
+
+        ModelPackInstallResponse response = await client.InstallModelPackAsync("qwen_director_cuda");
+
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Post, captured.Method);
+        Assert.AreEqual("/v1/models/install_pack", captured.Uri.AbsolutePath);
+        Assert.AreEqual("""{"pack_id":"qwen_director_cuda"}""", captured.Body);
+        Assert.AreEqual("pack-task", response.Task!.Id);
+        Assert.AreEqual(6_425_456_698, response.Tasks!.Single().BytesTotal);
+    }
+    [TestMethod]
     public async Task ModelTasks_DeserializeProgressAndPresentationState()
     {
         using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
@@ -1378,6 +1401,15 @@ public sealed class StudioApiClientTests
                     "id": "starter",
                     "name": "Starter pack",
                     "models": ["sd15"],
+                    "description": "Optional runtime pack",
+                    "package_type": "dlc",
+                    "download_size_bytes": 6425456698,
+                    "runtime_components": [{"id":"llama_cpp_cuda","name":"llama.cpp CUDA","version":"v0.4.0","build":"b10809"}],
+                    "installed": true,
+                    "runtime_ready": false,
+                    "readiness_state": "installed_runtime_unavailable",
+                    "blockers": ["Run smoke test"],
+                    "license_accepted": true,
                     "future_pack_field": 7
                   }],
                   "accepted": {},
@@ -1402,6 +1434,15 @@ public sealed class StudioApiClientTests
         Assert.AreEqual("sd15", model.Id);
         Assert.IsTrue(model.Installed);
         Assert.AreEqual("kept", model.ExtensionData!["future_compatibility"].GetString());
+        Assert.AreEqual("Optional runtime pack", pack.Description);
+        Assert.AreEqual("dlc", pack.PackageType);
+        Assert.AreEqual(6_425_456_698, pack.DownloadSizeBytes);
+        Assert.AreEqual("llama_cpp_cuda", pack.RuntimeComponents!.Single().Id);
+        Assert.IsTrue(pack.Installed);
+        Assert.IsFalse(pack.RuntimeReady);
+        Assert.AreEqual("installed_runtime_unavailable", pack.ReadinessState);
+        Assert.AreEqual("Run smoke test", pack.Blockers!.Single());
+        Assert.IsTrue(pack.LicenseAccepted);
         Assert.AreEqual(7, pack.ExtensionData!["future_pack_field"].GetInt32());
         Assert.IsTrue(response.ExtensionData!["future_catalogue_field"].GetProperty("enabled").GetBoolean());
     }
@@ -2263,6 +2304,51 @@ public sealed class StudioApiClientTests
         Assert.AreEqual(8L, payload.RootElement.GetProperty("expected_revision").GetInt64());
         Assert.AreEqual("reviewed-draft", payload.RootElement.GetProperty("schedule_revision").GetString());
         Assert.AreEqual(2, payload.RootElement.GetProperty("variant_index").GetInt32());
+    }
+
+    [TestMethod]
+    public async Task MediaPool_UsesBackendRequestContracts()
+    {
+        var captured = new List<CapturedRequest>();
+        using var http = new HttpClient(new RecordingHandler(async (request, cancellation) =>
+        {
+            captured.Add(new CapturedRequest(request.Method, request.RequestUri!,
+                request.Headers.Authorization?.ToString(), request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellation)));
+            return request.Method == HttpMethod.Get
+                ? JsonResponse("""{"ok":true,"schema_version":1,"assets":[]}""")
+                : JsonResponse("""{"ok":true,"asset":{"id":"asset-1","display_name":"clip.wav","original_filename":"clip.wav","path":"assets/media/clip.wav","kind":"audio","content_type":"audio/wav","size_bytes":4,"sha256":"hash","status":"ready","missing":false,"probe":{},"derivatives":{}},"future_field":true}""");
+        }));
+        using var client = new StudioApiClient(new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("media-token"), http);
+
+        await client.GetMediaPoolAsync("project /1");
+        await using var imported = new MemoryStream(Encoding.UTF8.GetBytes("import-data"));
+        await client.ImportMediaAsync("project /1", imported, "clip.wav", "audio/wav");
+        await using var replacement = new MemoryStream(Encoding.UTF8.GetBytes("replacement-data"));
+        await client.RelinkMediaAsync("project /1", "asset /1", replacement, "replacement.wav", "audio/wav");
+        await client.GenerateMediaWaveformAsync("project /1", "asset /1", 1);
+        await client.GenerateMediaThumbnailAsync("project /1", "asset /1", 4096);
+        await client.GenerateMediaProxyAsync("project /1", "asset /1", 1);
+
+        Assert.AreEqual("/v1/projects/project%20%2F1/media-pool", captured[0].Uri.AbsolutePath);
+        Assert.AreEqual("/v1/projects/project%20%2F1/media-pool/import", captured[1].Uri.AbsolutePath);
+        Assert.AreEqual("multipart/form-data", captured[1].ContentType);
+        StringAssert.Contains(captured[1].Body, "filename=clip.wav");
+        Assert.AreEqual("/v1/projects/project%20%2F1/media-pool/asset%20%2F1/relink-import", captured[2].Uri.AbsolutePath);
+        Assert.AreEqual("multipart/form-data", captured[2].ContentType);
+        StringAssert.Contains(captured[2].Body, "replacement-data");
+        AssertJsonProperty(captured[3], "/waveform", "bins", 64);
+        AssertJsonProperty(captured[4], "/thumbnail", "width", 1920);
+        AssertJsonProperty(captured[5], "/proxy", "width", 320);
+    }
+
+    private static void AssertJsonProperty(CapturedRequest request, string pathSuffix, string propertyName, int expected)
+    {
+        StringAssert.EndsWith(request.Uri.AbsolutePath, pathSuffix);
+        Assert.AreEqual("application/json", request.ContentType);
+        using JsonDocument payload = JsonDocument.Parse(request.Body);
+        Assert.AreEqual(expected, payload.RootElement.GetProperty(propertyName).GetInt32());
     }
 
     private sealed record CapturedRequest(

@@ -249,6 +249,83 @@ public sealed class StudioProjectMediaClientTests
         Assert.AreEqual("?path=renders%2Fnative-preview.mp4", capturedApiUris[1].Query);
     }
 
+    [TestMethod]
+    public async Task MaterializeProjectMediaAsync_WritesAndReplacesDestinationAtomically()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"edmg-media-{Guid.NewGuid():N}");
+        string destination = Path.Combine(directory, "source.wav");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            await File.WriteAllBytesAsync(destination, [0x01]);
+            using var apiClient = CreateUnusedApiClient();
+            using var mediaClient = new StudioProjectMediaClient(
+                apiClient,
+                new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
+                    "assets/media/source.wav",
+                    new Uri("https://cdn.example.invalid/source.wav"))),
+                new HttpClient(new RecordingHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent([0x10, 0x20, 0x30])
+                }))));
+
+            string actual = await mediaClient.MaterializeProjectMediaAsync(
+                "p1", "assets/media/source.wav", destination);
+
+            Assert.AreEqual(Path.GetFullPath(destination), actual);
+            CollectionAssert.AreEqual(new byte[] { 0x10, 0x20, 0x30 }, await File.ReadAllBytesAsync(destination));
+            Assert.AreEqual(0, Directory.GetFiles(directory, "*.tmp").Length);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    [TestMethod]
+    public async Task MaterializeProjectMediaAsync_RemovesTemporaryFileWhenDownloadFails()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"edmg-media-{Guid.NewGuid():N}");
+        string destination = Path.Combine(directory, "source.wav");
+        try
+        {
+            using var apiClient = CreateUnusedApiClient();
+            using var mediaClient = new StudioProjectMediaClient(
+                apiClient,
+                new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
+                    "assets/media/source.wav",
+                    new Uri("https://cdn.example.invalid/source.wav"))),
+                new HttpClient(new RecordingHandler((_, _) => Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.InternalServerError)))));
+
+            await Assert.ThrowsExactlyAsync<StudioApiException>(() =>
+                mediaClient.MaterializeProjectMediaAsync("p1", "assets/media/source.wav", destination));
+
+            Assert.IsFalse(File.Exists(destination));
+            Assert.AreEqual(0, Directory.Exists(directory) ? Directory.GetFiles(directory, "*.tmp").Length : 0);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    [TestMethod]
+    public async Task MaterializeProjectMediaAsync_RejectsMissingDestination()
+    {
+        using var apiClient = CreateUnusedApiClient();
+        using var mediaClient = new StudioProjectMediaClient(apiClient);
+
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            mediaClient.MaterializeProjectMediaAsync("p1", "assets/media/source.wav", " "));
+    }
+
+    private static StudioApiClient CreateUnusedApiClient() => new(
+        new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+        new StaticTokenProvider(null),
+        new HttpClient(new RecordingHandler((_, _) =>
+            throw new AssertFailedException("The API HTTP client should not be used by this test."))));
+
     private sealed class StaticEndpointProvider(Uri backendUri) : IBackendEndpointProvider
     {
         public Uri CurrentBackendUri { get; } = backendUri;

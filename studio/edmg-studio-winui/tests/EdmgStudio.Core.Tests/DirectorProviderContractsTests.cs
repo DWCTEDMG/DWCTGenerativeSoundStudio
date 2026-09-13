@@ -62,15 +62,36 @@ public sealed class DirectorProviderContractsTests
     }
 
     [TestMethod]
+    public void Renderer_RequiresInferenceEvidenceBeforeReportingValidated()
+    {
+        JsonObject source = JsonNode.Parse("""{"schema_version":"1.0","id":"hunyuan","provider_id":"internal","engine":"internal_video_model","model_id":"hunyuan-video-1.5","family":"hunyuan_video15","media":"video","operations":["generate"],"controls":["text","image"],"render_modes":["t2v","i2v"],"hardware_backends":["cuda"],"minimum_vram_gb":8,"readiness":{"state":"validated","installed":true,"adapter_ready":true,"hardware_compatible":true,"validation_level":3,"validation_receipt_id":"receipt-1","validated_at":"2026-09-12T00:00:00Z"},"future":{"keep":true}}""")!.AsObject();
+
+        RendererDescriptor renderer = DirectorProviderContracts.ParseRenderer(source);
+
+        Assert.AreEqual("validated", renderer.Readiness.State);
+        Assert.AreEqual("receipt-1", renderer.Readiness.ValidationReceiptId);
+        Assert.AreEqual("i2v", renderer.RenderModes[1]);
+        Assert.IsTrue(renderer.Metadata["future"]!["keep"]!.GetValue<bool>());
+
+        source["readiness"]!["validation_receipt_id"] = null;
+        Assert.Throws<InvalidDataException>(() => DirectorProviderContracts.ParseRenderer(source));
+    }
+
+    [TestMethod]
     public void HardwareProfile_ParsesSharedShapeAndPreservesMetadata()
     {
-        JsonObject source = JsonNode.Parse("""{"schema_version":"1.0","id":"workstation-1","backend":"cuda","device":"cuda:0","device_name":"Fixture GPU","available_backends":["cpu","cuda"],"vram_gb":24,"ram_gb":64,"cpu_threads":16,"platform":"windows","machine":"amd64","gpu_vendor":"nvidia","future":{"keep":true}}""")!.AsObject();
+        JsonObject source = JsonNode.Parse("""{"schema_version":"1.0","id":"workstation-1","backend":"cuda","device":"cuda:0","device_name":"Fixture GPU","available_backends":["cpu","cuda"],"vram_gb":24,"ram_gb":64,"cpu_threads":16,"physical_core_count":8,"logical_core_count":16,"platform":"windows","machine":"amd64","gpu_vendor":"nvidia","gpus":[{"id":"cuda:0","vendor":"nvidia","name":"Fixture GPU","dedicated_vram_gb":24,"cuda_available":true}],"disks":[{"id":"studio","path":"D:\\\\EDMG","free_gb":500,"total_gb":1000}],"audio_devices":[{"id":"wasapi-default","name":"Speakers","backend":"wasapi","output_channels":2,"is_default":true}],"recommended_tier":"quality","recommended_director":"qwen3-vl-30b","recommended_renderer":"ltx-2.5","warnings":["fixture"],"future":{"keep":true}}""")!.AsObject();
 
         HardwareProfile profile = DirectorProviderContracts.ParseHardwareProfile(source);
 
         Assert.AreEqual("cuda", profile.Backend);
         Assert.AreEqual(24, profile.VramGb);
         Assert.AreEqual("nvidia", profile.GpuVendor);
+        Assert.AreEqual(8, profile.PhysicalCoreCount);
+        Assert.AreEqual("Fixture GPU", profile.Gpus.Single().Name);
+        Assert.AreEqual(500, profile.Disks.Single().FreeGb);
+        Assert.AreEqual(2, profile.AudioDevices.Single().OutputChannels);
+        Assert.AreEqual("ltx-2.5", profile.RecommendedRenderer);
         Assert.IsTrue(profile.Metadata["future"]!["keep"]!.GetValue<bool>());
     }
 
@@ -79,5 +100,7 @@ public sealed class DirectorProviderContractsTests
     {
         Assert.Throws<InvalidDataException>(() => DirectorProviderContracts.ParseHardwareProfile(JsonNode.Parse("""{"id":"x","backend":"cuda","device":"cuda:0","device_name":"GPU","available_backends":["cpu"],"cpu_threads":8,"platform":"windows","machine":"amd64"}""")!.AsObject()));
         Assert.Throws<InvalidDataException>(() => DirectorProviderContracts.ParseHardwareProfile(JsonNode.Parse("""{"id":"x","backend":"cpu","device":"cpu","device_name":"CPU","available_backends":["cpu"],"vram_gb":-1,"cpu_threads":8,"platform":"windows","machine":"amd64"}""")!.AsObject()));
+        Assert.Throws<InvalidDataException>(() => DirectorProviderContracts.ParseHardwareProfile(JsonNode.Parse("""{"id":"x","backend":"cpu","device":"cpu","device_name":"CPU","available_backends":["cpu"],"cpu_threads":8,"physical_core_count":9,"logical_core_count":8,"platform":"windows","machine":"amd64"}""")!.AsObject()));
+        Assert.Throws<InvalidDataException>(() => DirectorProviderContracts.ParseHardwareProfile(JsonNode.Parse("""{"id":"x","backend":"cpu","device":"cpu","device_name":"CPU","available_backends":["cpu"],"cpu_threads":8,"platform":"windows","machine":"amd64","gpus":[{"id":"same","name":"A"},{"id":"same","name":"B"}]}""")!.AsObject()));
     }
 }

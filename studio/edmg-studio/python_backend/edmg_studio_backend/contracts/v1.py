@@ -517,6 +517,83 @@ class CapabilityContract(VersionedDocument):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class RendererReadinessContract(ContractModel):
+    state: Literal["unavailable", "installable", "installed", "adapter_ready", "validated"]
+    installed: bool = False
+    adapter_ready: bool = False
+    hardware_compatible: bool | None = None
+    validation_level: int = Field(default=0, ge=0)
+    validation_receipt_id: str | None = Field(default=None, max_length=256)
+    validated_at: datetime | None = None
+    blockers: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_state_evidence(self) -> RendererReadinessContract:
+        if self.state in {"installed", "adapter_ready", "validated"} and not self.installed:
+            raise ValueError("installed renderer states require an installed package")
+        if self.state in {"adapter_ready", "validated"} and not self.adapter_ready:
+            raise ValueError("adapter-ready renderer states require a ready adapter")
+        if self.state == "validated" and (
+            self.validation_level < 3 or not self.validation_receipt_id or self.validated_at is None
+        ):
+            raise ValueError("validated renderer state requires level-3 inference evidence")
+        return self
+
+
+class RendererContract(VersionedDocument):
+    contract_type: Literal["edmg.renderer"] = "edmg.renderer"
+    provider_id: str = Field(min_length=1, max_length=160)
+    engine: str = Field(min_length=1, max_length=160)
+    model_id: str | None = Field(default=None, max_length=200)
+    family: str | None = Field(default=None, max_length=160)
+    media: Literal["image", "video", "audio"]
+    operations: list[Literal["generate", "transform", "extend", "upscale", "interpolate", "assemble"]]
+    controls: list[
+        Literal["text", "image", "first_frame", "last_frame", "audio", "pose", "depth", "mask"]
+    ] = Field(default_factory=list)
+    render_modes: list[str] = Field(default_factory=list)
+    hardware_backends: list[Literal["cpu", "cuda", "directml", "mps", "remote"]] = Field(default_factory=list)
+    minimum_vram_gb: float | None = Field(default=None, ge=0.0)
+    readiness: RendererReadinessContract
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class HardwareGpuContract(ContractModel):
+    id: str = Field(min_length=1, max_length=160)
+    vendor: str | None = Field(default=None, max_length=160)
+    name: str = Field(min_length=1, max_length=500)
+    architecture: str | None = Field(default=None, max_length=160)
+    dedicated_vram_gb: float = Field(default=0.0, ge=0.0)
+    driver: str | None = Field(default=None, max_length=200)
+    cuda_available: bool = False
+    rocm_available: bool = False
+    directml_available: bool = False
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class HardwareDiskContract(ContractModel):
+    id: str = Field(min_length=1, max_length=160)
+    path: str = Field(min_length=1, max_length=2048)
+    free_gb: float = Field(ge=0.0)
+    total_gb: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_capacity(self) -> HardwareDiskContract:
+        if self.total_gb is not None and self.free_gb > self.total_gb:
+            raise ValueError("disk free capacity cannot exceed total capacity")
+        return self
+
+
+class HardwareAudioDeviceContract(ContractModel):
+    id: str = Field(min_length=1, max_length=160)
+    name: str = Field(min_length=1, max_length=500)
+    backend: str = Field(min_length=1, max_length=120)
+    input_channels: int = Field(default=0, ge=0)
+    output_channels: int = Field(default=0, ge=0)
+    is_default: bool = False
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+
 class HardwareProfileContract(VersionedDocument):
     contract_type: Literal["edmg.hardware_profile"] = "edmg.hardware_profile"
     backend: Literal["cpu", "cuda", "directml", "mps"]
@@ -528,6 +605,8 @@ class HardwareProfileContract(VersionedDocument):
     vram_gb: float = Field(default=0.0, ge=0.0)
     ram_gb: float = Field(default=0.0, ge=0.0)
     cpu_threads: int = Field(ge=1)
+    physical_core_count: int | None = Field(default=None, ge=1)
+    logical_core_count: int | None = Field(default=None, ge=1)
     platform: str = Field(min_length=1, max_length=120)
     machine: str = Field(min_length=1, max_length=120)
     integrated_acceleration: bool = False
@@ -535,6 +614,13 @@ class HardwareProfileContract(VersionedDocument):
     supports_directml: bool = False
     directml_runtime_ready: bool = False
     directml_device_name: str | None = Field(default=None, max_length=500)
+    gpus: list[HardwareGpuContract] = Field(default_factory=list)
+    disks: list[HardwareDiskContract] = Field(default_factory=list)
+    audio_devices: list[HardwareAudioDeviceContract] = Field(default_factory=list)
+    recommended_tier: Literal["draft", "balanced", "quality"] = "draft"
+    recommended_director: str | None = Field(default=None, max_length=200)
+    recommended_renderer: str | None = Field(default=None, max_length=200)
+    warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -543,6 +629,15 @@ class HardwareProfileContract(VersionedDocument):
             raise ValueError("selected hardware backend must be available")
         if "cpu" not in self.available_backends:
             raise ValueError("CPU must remain an available hardware backend")
+        logical_cores = self.logical_core_count or self.cpu_threads
+        if self.physical_core_count is not None and self.physical_core_count > logical_cores:
+            raise ValueError("physical core count cannot exceed logical core count")
+        for field_name, values in (
+            ("GPU", self.gpus), ("disk", self.disks), ("audio device", self.audio_devices)
+        ):
+            ids = [value.id for value in values]
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"{field_name} IDs must be unique")
         return self
 
 
@@ -587,6 +682,7 @@ CONTRACT_MODELS: dict[str, type[VersionedDocument]] = {
     "edmg.render_plan": RenderPlanContract,
     "edmg.artifact": ArtifactManifestContract,
     "edmg.capability": CapabilityContract,
+    "edmg.renderer": RendererContract,
     "edmg.hardware_profile": HardwareProfileContract,
     "edmg.job": JobContract,
     "edmg.cue": CueContract,

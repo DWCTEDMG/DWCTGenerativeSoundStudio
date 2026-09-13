@@ -89,7 +89,7 @@ public sealed class PlannerLabImportRequest
     public required PlannerLabSettings Settings { get; init; }
 
     [JsonPropertyName("apply_timeline")]
-    public bool ApplyTimeline { get; init; } = true;
+    public bool ApplyTimeline { get; init; }
 
     [JsonPropertyName("overwrite_timeline")]
     public bool OverwriteTimeline { get; init; } = true;

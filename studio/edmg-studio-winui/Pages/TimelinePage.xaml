@@ -73,13 +73,15 @@
                 Margin="20,0,20,10"
                 Padding="10"
                 Style="{StaticResource StudioCardBorderStyle}">
-            <Grid ColumnSpacing="8">
+            <StackPanel Spacing="8">
+                <Grid ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -96,22 +98,26 @@
                         Content="Play"
                         Click="PlayPause_Click" />
                 <Button Grid.Column="1"
+                        AutomationProperties.AutomationId="Timeline.Stop"
+                        Content="Stop"
+                        Click="Stop_Click" />
+                <Button Grid.Column="2"
                         AutomationProperties.AutomationId="Timeline.StepBackward"
                         Content="-1 frame"
                         Click="StepBackward_Click" />
-                <Button Grid.Column="2"
+                <Button Grid.Column="3"
                         AutomationProperties.AutomationId="Timeline.StepForward"
                         Content="+1 frame"
                         Click="StepForward_Click" />
                 <TextBlock x:Name="TimecodeText"
-                           Grid.Column="3"
+                           Grid.Column="4"
                            MinWidth="118"
                            VerticalAlignment="Center"
                            Text="00:00:00.000"
                            FontFamily="Consolas"
                            FontSize="14" />
                 <Slider x:Name="PositionSlider"
-                        Grid.Column="4"
+                        Grid.Column="5"
                         AutomationProperties.AutomationId="Timeline.Position"
                         Minimum="0"
                         Maximum="1"
@@ -119,23 +125,27 @@
                         PointerPressed="PositionSlider_PointerPressed"
                         PointerReleased="PositionSlider_PointerReleased" />
                 <ToggleButton x:Name="LoopToggle"
-                              Grid.Column="5"
+                              Grid.Column="6"
                               AutomationProperties.AutomationId="Timeline.Loop"
-                              Content="Loop" />
+                              Content="Loop"
+                              Checked="LoopControl_Changed"
+                              Unchecked="LoopControl_Changed" />
                 <NumberBox x:Name="LoopInNumberBox"
-                          Grid.Column="6"
+                          Grid.Column="7"
                           AutomationProperties.AutomationId="Timeline.LoopIn"
                           Width="76"
                           Minimum="0"
-                          PlaceholderText="In" />
+                          PlaceholderText="In"
+                          ValueChanged="LoopNumberBox_ValueChanged" />
                 <NumberBox x:Name="LoopOutNumberBox"
-                          Grid.Column="7"
+                          Grid.Column="8"
                           AutomationProperties.AutomationId="Timeline.LoopOut"
                           Width="76"
                           Minimum="0"
-                          PlaceholderText="Out" />
+                          PlaceholderText="Out"
+                          ValueChanged="LoopNumberBox_ValueChanged" />
                 <ComboBox x:Name="SnapCombo"
-                          Grid.Column="8"
+                          Grid.Column="9"
                           AutomationProperties.AutomationId="Timeline.Snap"
                           MinWidth="118"
                           SelectedIndex="1"
@@ -146,13 +156,13 @@
                     <ComboBoxItem Content="Snap: 1/4 beat" Tag="quarter" />
                 </ComboBox>
                 <ToggleButton x:Name="RippleToggle"
-                              Grid.Column="9"
+                              Grid.Column="10"
                               AutomationProperties.AutomationId="Timeline.Ripple"
                               Content="Ripple"
                               ToolTipService.ToolTip="Shift later clips on the same track after moving, trimming, quantizing, or deleting a clip."
                               Checked="RippleToggle_Changed"
                               Unchecked="RippleToggle_Changed" />
-                <StackPanel Grid.Column="10" Orientation="Horizontal" Spacing="4">
+                <StackPanel Grid.Column="11" Orientation="Horizontal" Spacing="4">
                     <ToggleButton x:Name="SelectToolButton"
                                   AutomationProperties.AutomationId="Timeline.ToolSelect"
                                   MinWidth="72"
@@ -167,16 +177,20 @@
                                   Click="BladeToolButton_Click" />
                 </StackPanel>
                 <Slider x:Name="ZoomSlider"
-                        Grid.Column="11"
+                        Grid.Column="12"
                         AutomationProperties.AutomationId="Timeline.Zoom"
                         ToolTipService.ToolTip="Timeline zoom. Hold Ctrl and use the mouse wheel over the timeline to zoom around the pointer."
                         Width="108"
                         ValueChanged="ZoomSlider_ValueChanged" />
-                <Button Grid.Column="12"
+                <Button Grid.Column="13"
                         AutomationProperties.AutomationId="Timeline.Fit"
                         Content="Fit"
                         Click="FitTimeline_Click" />
-            </Grid>
+                </Grid>
+                <TextBlock x:Name="AudioEngineStatusText"
+                           Text="Audio: not configured"
+                           Style="{StaticResource StudioCaptionTextStyle}" />
+            </StackPanel>
         </Border>
 
         <Grid Grid.Row="3" Margin="20,0,20,20" ColumnSpacing="10">

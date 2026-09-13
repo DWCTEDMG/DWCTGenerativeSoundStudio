@@ -158,6 +158,52 @@ public sealed class StudioProjectMediaClient : IDisposable
         return await StreamSignedMediaAsync(resolution.SignedUri!, callback, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<string> MaterializeProjectMediaAsync(
+        string projectId,
+        string relativePath,
+        string destinationPath,
+        CancellationToken cancellationToken = default)
+    {
+        string normalizedDestination = Path.GetFullPath(
+            string.IsNullOrWhiteSpace(destinationPath)
+                ? throw new ArgumentException("A destination path is required.", nameof(destinationPath))
+                : destinationPath);
+        string? directory = Path.GetDirectoryName(normalizedDestination);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            throw new ArgumentException("The destination path must include a directory.", nameof(destinationPath));
+        }
+
+        Directory.CreateDirectory(directory);
+        string temporaryPath = $"{normalizedDestination}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await StreamProjectMediaAsync(
+                projectId,
+                relativePath,
+                async (file, token) =>
+                {
+                    await using var destination = new FileStream(
+                        temporaryPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        81920,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    await file.Stream.CopyToAsync(destination, token).ConfigureAwait(false);
+                    await destination.FlushAsync(token).ConfigureAwait(false);
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
+            File.Move(temporaryPath, normalizedDestination, true);
+            return normalizedDestination;
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
+    }
+
     public void Dispose()
     {
         if (_ownsClient)

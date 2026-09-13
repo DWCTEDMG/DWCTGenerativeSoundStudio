@@ -38,6 +38,9 @@ if ((Split-Path -Parent $stage) -ne $toolsRoot -or (Split-Path -Parent $target) 
 New-Item -ItemType Directory -Path $stage | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+$published = $false
+$partial = $null
+try {
 foreach ($asset in $assets) {
     $archive = Join-Path $cache $asset.Name
     $url = 'https://github.com/ggml-org/llama.cpp/releases/download/b10809/' + $asset.Name
@@ -53,6 +56,7 @@ foreach ($asset in $assets) {
             throw "Runtime archive failed size/SHA-256 verification: $partial"
         }
         Move-Item -LiteralPath $partial -Destination $archive -Force
+        $partial = $null
     }
     Write-Output "Verified $($asset.Name)"
     $zip = [IO.Compression.ZipFile]::OpenRead($archive)
@@ -81,10 +85,48 @@ $server = Join-Path $stage 'llama-server.exe'
 if (-not (Test-Path -LiteralPath $server)) {
     throw "Verified archives do not contain llama-server.exe at $stage"
 }
-$version = (& $server --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0) { throw "llama-server version probe failed: $version" }
-$devices = (& $server --list-devices 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $devices -notmatch 'CUDA0:') {
+function Invoke-LlamaProbe([string[]]$Arguments) {
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = [Diagnostics.ProcessStartInfo]@{
+        FileName = $server
+        UseShellExecute = $false
+        RedirectStandardOutput = $true
+        RedirectStandardError = $true
+    }
+    $process.StartInfo.Arguments = ($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
+    }) -join ' '
+    try {
+        $process.Start() | Out-Null
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(30000)) {
+            Get-CimInstance Win32_Process -Filter "ParentProcessId = $($process.Id)" | ForEach-Object {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit()
+            $stdoutTask.GetAwaiter().GetResult() | Out-Null
+            $stderrTask.GetAwaiter().GetResult() | Out-Null
+            throw "llama-server probe timed out after 30 seconds: $($Arguments -join ' ')"
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        return @{
+            ExitCode = $process.ExitCode
+            Output = ($stdout + $stderr).Trim()
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+$versionProbe = Invoke-LlamaProbe @('--version')
+$version = $versionProbe.Output
+if ($versionProbe.ExitCode -ne 0) { throw "llama-server version probe failed: $version" }
+$devicesProbe = Invoke-LlamaProbe @('--list-devices')
+$devices = $devicesProbe.Output
+if ($devicesProbe.ExitCode -ne 0 -or $devices -notmatch 'CUDA0:') {
     throw "llama-server did not expose a CUDA device: $devices"
 }
 $receipt = @{
@@ -103,6 +145,15 @@ $receipt = @{
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stage 'runtime-install.json') -Encoding utf8
 # Both absolute paths were checked against toolsRoot above; publish only a verified runtime.
 Move-Item -LiteralPath $stage -Destination $target
+$published = $true
 Write-Output "Installed: $target"
 Write-Output $version
 Write-Output $devices
+} finally {
+    if ($partial -and (Test-Path -LiteralPath $partial)) {
+        Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $published -and (Test-Path -LiteralPath $stage)) {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

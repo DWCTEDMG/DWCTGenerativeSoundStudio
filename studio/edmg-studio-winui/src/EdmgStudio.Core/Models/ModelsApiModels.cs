@@ -109,9 +109,42 @@ public sealed class ModelPackEntry
     [JsonPropertyName("models")]
     public IReadOnlyList<string>? Models { get; set; }
 
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+
+    [JsonPropertyName("package_type")]
+    public string? PackageType { get; set; }
+
+    [JsonPropertyName("download_size_bytes")]
+    public long? DownloadSizeBytes { get; set; }
+
+    [JsonPropertyName("runtime_components")]
+    public IReadOnlyList<ModelPackRuntimeComponent>? RuntimeComponents { get; set; }
+
+    [JsonPropertyName("installed")]
+    public bool Installed { get; set; }
+
+    [JsonPropertyName("runtime_ready")]
+    public bool RuntimeReady { get; set; }
+
+    [JsonPropertyName("readiness_state")]
+    public string? ReadinessState { get; set; }
+
+    [JsonPropertyName("blockers")]
+    public IReadOnlyList<string>? Blockers { get; set; }
+
+    [JsonPropertyName("license_accepted")]
+    public bool LicenseAccepted { get; set; }
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
+
+public sealed record ModelPackRuntimeComponent(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("version")] string? Version,
+    [property: JsonPropertyName("build")] string? Build);
 
 public sealed record ModelTask(
     [property: JsonPropertyName("id")] string Id,
@@ -153,6 +186,10 @@ public sealed record ModelTaskListResponse(
 public sealed record ModelTaskActionResponse(
     [property: JsonPropertyName("task")] ModelTask Task);
 
+public sealed record ModelPackInstallResponse(
+    [property: JsonPropertyName("tasks")] IReadOnlyList<ModelTask>? Tasks,
+    [property: JsonPropertyName("task")] ModelTask? Task);
+
 public sealed record ModelBenchmarkRequest(
     [property: JsonPropertyName("model_id")] string ModelId,
     [property: JsonPropertyName("summary")] string Summary,
@@ -177,6 +214,8 @@ public sealed record ModelImportResponse(
 public sealed record TensorRtCancelImportRequest(
     [property: JsonPropertyName("task_id")] string TaskId);
 
+public sealed record ModelPackInstallRequest(
+    [property: JsonPropertyName("pack_id")] string PackId);
 public sealed record ModelIdRequest(
     [property: JsonPropertyName("model_id")] string ModelId);
 

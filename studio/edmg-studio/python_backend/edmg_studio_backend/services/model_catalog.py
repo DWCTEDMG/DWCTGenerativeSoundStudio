@@ -963,6 +963,21 @@ def built_in_packs() -> list[dict[str, Any]]:
     # Packs used by first-run wizard and Model Manager.
     return [
         {
+            "id": "qwen_director_cuda",
+            "name": "Qwen Director CUDA Pack",
+            "package_type": "dlc",
+            "description": "Installs the standard Qwen3-VL GGUF Director model and the pinned Windows llama.cpp CUDA runtime.",
+            "models": [STANDARD_GGUF_ID],
+            "platforms": ["windows"],
+            "runtime_components": [{
+                "id": "llama_cpp_cuda",
+                "name": "llama.cpp CUDA",
+                "version": "v0.4.0",
+                "build": "b10809",
+            }],
+            "download_size_bytes": 6_425_456_698,
+        },
+        {
             "id": "basic",
             "name": "Basic (Planning + Preflight)",
             "description": "Installs the default Qwen3 8B Ollama planner. Use this if you only want planning, ingest, and preflight right now.",

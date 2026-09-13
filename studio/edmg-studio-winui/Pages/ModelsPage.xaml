@@ -373,6 +373,9 @@
                                 x:Name="PackDescriptionText"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 TextWrapping="Wrap" />
+                            <TextBlock
+                                x:Name="PackStatusText"
+                                TextWrapping="Wrap" />
                             <StackPanel Orientation="Horizontal">
                                 <Button
                                     x:Name="InstallPackButton"

@@ -37,7 +37,7 @@
                 <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="AI Planner Lab" />
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Develop creative direction, compare native plan variants, and carry the selected treatment into production."
+                    Text="Optionally refine the Director-created Workspace draft using its saved audio analysis. Return to Workspace to apply scenes, prompts, and keyframes together."
                     TextWrapping="Wrap" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
@@ -215,7 +215,7 @@
                                 AccessKey="G"
                                 AutomationProperties.AutomationId="Planner.Generate"
                                 Click="GeneratePlanButton_Click"
-                                Content="Analyze and Build Plan"
+                                Content="Build variants from saved analysis"
                                 HorizontalAlignment="Stretch"
                                 Style="{StaticResource AccentButtonStyle}" />
                         </StackPanel>
@@ -241,10 +241,10 @@
                         Label="Export JSON" />
                     <AppBarSeparator />
                     <AppBarButton
-                        AutomationProperties.AutomationId="Planner.ApplyTimeline"
-                        Click="ApplyTimelineButton_Click"
-                        Icon="Accept"
-                        Label="Approve Plan and Apply Schedule" />
+                        AutomationProperties.AutomationId="Planner.SaveWorkspaceDraft"
+                        Click="SaveWorkspaceDraftButton_Click"
+                        Icon="Save"
+                        Label="Save to Workspace draft" />
                     <AppBarButton
                         AutomationProperties.AutomationId="Planner.OpenWorkspace"
                         Click="OpenWorkspaceButton_Click"

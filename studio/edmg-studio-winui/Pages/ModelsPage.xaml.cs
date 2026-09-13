@@ -457,7 +457,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         PromoteButton.IsEnabled = available;
         RefreshButton.IsEnabled = !_isCommandRunning;
         CivitaiImportButton.IsEnabled = !_isCommandRunning && !string.IsNullOrWhiteSpace(CivitaiUrlBox.Text);
-        InstallPackButton.IsEnabled = !_isCommandRunning && PackCombo.SelectedItem is ModelPackPresentation;
+        UpdatePackSelection();
         UpdateTensorRt();
     }
 
@@ -703,12 +703,16 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         if (PackCombo.SelectedItem is not ModelPackPresentation pack)
         {
             PackDescriptionText.Text = "No model packs are available.";
+            PackStatusText.Text = string.Empty;
+            InstallPackButton.Content = "Install pack";
             InstallPackButton.IsEnabled = false;
             return;
         }
 
         PackDescriptionText.Text = pack.Description;
-        InstallPackButton.IsEnabled = !_isCommandRunning;
+        PackStatusText.Text = pack.StatusDetail;
+        InstallPackButton.Content = pack.ActionLabel;
+        InstallPackButton.IsEnabled = !_isCommandRunning && !pack.Pack.RuntimeReady;
     }
 
     private async void InstallPack_Click(object sender, RoutedEventArgs e)
@@ -759,7 +763,12 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
                         entry.LicenseId ?? "unknown",
                         token);
                 }
-                await _apiClient.InstallModelPackAsync(pack.Pack.Id, token);
+                ModelPackInstallResponse response = await _apiClient.InstallModelPackAsync(pack.Pack.Id, token);
+                ModelTask? task = response.Task ?? response.Tasks?.FirstOrDefault();
+                if (task is not null)
+                {
+                    UpsertTask(task);
+                }
             },
             "Model pack installation queued.");
     }
@@ -959,7 +968,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         StatusBar.IsOpen = true;
     }
 
-    private static string FormatBytes(long bytes)
+    internal static string FormatBytes(long bytes)
     {
         string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
         double value = Math.Max(0, bytes);
@@ -1061,16 +1070,35 @@ public sealed class ModelPackPresentation
 
     public ModelPackEntry Pack { get; }
     public string DisplayName => Pack.Name ?? Pack.Id;
-    public string Description
+    public string Description => Pack.Description
+        ?? $"{Pack.Models?.Count ?? 0} models: {string.Join(", ", Pack.Models ?? [])}";
+    public string ActionLabel => Pack.RuntimeReady
+        ? "Ready"
+        : Pack.Installed ? "Repair pack" : "Install pack";
+    public string StatusDetail
     {
         get
         {
-            if (Pack.ExtensionData?.TryGetValue("description", out JsonElement value) == true
-                && value.ValueKind == JsonValueKind.String)
+            var details = new List<string>();
+            if (string.Equals(Pack.PackageType, "dlc", StringComparison.OrdinalIgnoreCase))
             {
-                return value.GetString() ?? string.Empty;
+                details.Add("Optional DLC");
             }
-            return $"{Pack.Models?.Count ?? 0} models: {string.Join(", ", Pack.Models ?? [])}";
+            if (Pack.DownloadSizeBytes is long size)
+            {
+                details.Add($"Download: {ModelsPage.FormatBytes(size)}");
+            }
+            if (Pack.RuntimeComponents is { Count: > 0 })
+            {
+                details.Add("Includes: " + string.Join(", ", Pack.RuntimeComponents.Select(component =>
+                    $"{component.Name} {component.Version} {component.Build}".Trim())));
+            }
+            details.Add(Pack.RuntimeReady ? "Status: Ready" : Pack.Installed ? "Status: Repair required" : "Status: Not installed");
+            if (Pack.Blockers is { Count: > 0 })
+            {
+                details.Add("Needs: " + string.Join(" ", Pack.Blockers));
+            }
+            return string.Join("\n", details);
         }
     }
 }

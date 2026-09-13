@@ -224,7 +224,7 @@ public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
             "Generating plan variants",
             async cancellationToken =>
             {
-                _plan = await App.Services.ApiClient.AnalyzeAndBuildPlanAsync(project.Id, request, mode, cancellationToken);
+                _plan = await App.Services.ApiClient.GeneratePlanAsync(project.Id, request, mode, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 await LoadProjectAsync(project.Id, cancellationToken);
             },
@@ -368,55 +368,20 @@ public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
         }, "Draft regenerated. Review it before approval; Timeline is unchanged.");
     }
 
-    private async void ApplyTimelineButton_Click(object sender, RoutedEventArgs e)
+    private async void SaveWorkspaceDraftButton_Click(object sender, RoutedEventArgs e)
     {
-        if (ProjectComboBox.SelectedItem is not ProjectDto project || _selectedVariantIndex < 0)
+        if (ProjectComboBox.SelectedItem is not ProjectDto || _selectedVariantIndex < 0)
         {
-            ShowStatus(InfoBarSeverity.Warning, "Select a variant", "Choose the variant to apply to Timeline.");
+            ShowStatus(InfoBarSeverity.Warning, "Select a variant", "Choose the variant to save to the Workspace draft.");
             return;
         }
 
-        if (!CommitPendingSceneEdits())
-        {
-            return;
-        }
-
-        if (_isVariantDirty)
-        {
-            if (await SaveSelectedVariantAsync())
-                ShowStatus(InfoBarSeverity.Informational, "Review the updated draft", "Your scene edits regenerated the draft. Review Schedule draft, then approve it.");
-            return;
-        }
-        var draft = SelectedVariant?.ScheduleDraft;
-        if (draft is null)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Draft required", "Regenerate and review a schedule draft before approval.");
-            return;
-        }
-
-        await RunOperationAsync(
-            "Applying approved schedule to Timeline",
-            async cancellationToken =>
-            {
-                if (_workflowDraftId is not null && _selectedVariantIndex == _workflowVariantIndex)
-                {
-                    if (_workflowStatus != "draft") throw new InvalidOperationException("Review the current Workspace draft before applying.");
-                    var applied = await App.Services.ApiClient.ApplyDirectorWorkflowAsync(project.Id,
-                        new DirectorWorkflowReviewRequest(_workflowRevision, _workflowDraftId), cancellationToken);
-                    ReadWorkflow(applied);
-                    PresentSchedule();
-                }
-                else
-                {
-                    var response = await App.Services.ApiClient.ApplyPlannerScheduleAsync(project.Id,
-                        new PlannerScheduleRequest { VariantIndex = _selectedVariantIndex, ExpectedRevision = _project?.Revision, ScheduleRevision = draft.ScheduleRevision }, cancellationToken);
-                    if (!response.Ok) throw new InvalidDataException("The backend did not apply the approved schedule.");
-                }
-            },
-            successMessage: "The selected variant is now applied to Timeline.",
-            afterSuccess: cancellationToken => RefreshProjectRevisionAsync(project.Id, cancellationToken));
+        if (!await SaveSelectedVariantAsync()) return;
+        ShowStatus(
+            InfoBarSeverity.Success,
+            "Workspace draft updated",
+            "The selected scenes and regenerated prompt/keyframe schedule are saved. Return to Workspace to apply the combined draft once.");
     }
-
     private void SceneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressSceneSelection || SceneListView.SelectedItem is not PlannerSceneItem item)
@@ -944,7 +909,7 @@ public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
             return false;
         }
 
-        if (!_isVariantDirty)
+        if (!_isVariantDirty && _workflowDraftId is not null && _selectedVariantIndex == _workflowVariantIndex)
         {
             return true;
         }

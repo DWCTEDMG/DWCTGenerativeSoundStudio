@@ -571,60 +571,27 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
         ShowStatus(InfoBarSeverity.Success, "Reactive payload exported", file.Name);
     }
 
-    private async void ApplyButton_Click(object sender, RoutedEventArgs e)
+    private async void SaveAndOpenWorkspaceButton_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(_activeProjectId))
         {
-            ShowStatus(InfoBarSeverity.Warning, "No active project", "Select a project before applying Reactive Lab results.");
+            ShowStatus(InfoBarSeverity.Warning, "No active project", "Select a project before saving Reactive Lab refinements.");
             return;
         }
 
-        if (_workflowDraftId is not null)
+        if (_workflowDraftId is null)
         {
-            await RunOperationAsync("Applying shared Workspace draft", async cancellationToken =>
-            {
-                await SaveWorkspaceDraftAsync(cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                var projectId = _activeProjectId!;
-                var response = await App.Services.ApiClient.ApplyDirectorWorkflowAsync(projectId,
-                    new DirectorWorkflowReviewRequest(_workflowRevision, _workflowDraftId!), cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!_pageLoaded || projectId != _activeProjectId) return;
-                LoadWorkflow(response);
-                await SaveLocalStateAsync();
-                await RefreshProjectRevisionAsync(projectId, cancellationToken);
-            }, "The shared scenes, camera, motion, and reactive keyframes are applied to Timeline together.");
+            ShowStatus(InfoBarSeverity.Warning, "Workspace draft required", "Analyze audio in Overview + Director before editing reactive keyframes.");
             return;
         }
 
-        if (!TryBuildRequest(out var request, out var errors))
+        await RunOperationAsync("Saving shared reactive draft", async cancellationToken =>
         {
-            ShowValidationErrors(errors);
-            return;
-        }
-
-        if (!ReactiveWorkflow.HasMeaningfulPayload(request))
-        {
-            ShowStatus(
-                InfoBarSeverity.Warning,
-                "Analyzed results required",
-                "Analyze audio in Overview + Director to prepare reactive keyframes automatically. Advanced imports remain available for existing payloads.");
-            return;
-        }
-
-        await RunOperationAsync("Applying Reactive Lab results", async cancellationToken =>
-        {
-            _draftRequest = request;
-            var response = await App.Services.ApiClient.ApplyReactiveLabAsync(_activeProjectId, request, cancellationToken);
-            TimelineSummaryTextBlock.Text = SummarizeTimeline(response.Timeline);
-            RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(
-                request,
-                StudioJsonContext.Default.ReactiveLabApplyRequest));
-            await SaveLocalStateAsync();
-            await RefreshProjectRevisionAsync(_activeProjectId, cancellationToken);
-        }, "Reactive results were persisted and merged into the project Timeline.");
+            await SaveWorkspaceDraftAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_pageLoaded) WorkspaceButton_Click(sender, e);
+        });
     }
-
     private void AddMappingButton_Click(object sender, RoutedEventArgs e)
     {
         var mapping = new ReactiveMapping { Name = $"Mapping {_mappings.Count + 1}" };
@@ -1290,7 +1257,7 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
         OperationProgressBar.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
         CancelButton.IsEnabled = isBusy;
         RefreshButton.IsEnabled = !isBusy;
-        ApplyButton.IsEnabled = !isBusy && (_workflowDraftId is null || _workflowStatus == "draft");
+        SaveAndOpenWorkspaceButton.IsEnabled = !isBusy && _workflowStatus == "draft";
         SaveWorkspaceDraftButton.IsEnabled = !isBusy && _workflowStatus == "draft";
         ReloadWorkspaceDraftButton.IsEnabled = !isBusy;
         SetKeyframeEditingEnabled(!isBusy && _workflowStatus == "draft");

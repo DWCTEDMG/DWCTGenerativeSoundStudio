@@ -487,7 +487,7 @@ class PlannerLabImportRequest(BaseModel):
     analysis: dict[str, Any] = Field(default_factory=dict)
     plan: dict[str, Any] = Field(default_factory=dict)
     settings: dict[str, Any] = Field(default_factory=dict)
-    apply_timeline: bool = True
+    apply_timeline: bool = False
     overwrite_timeline: bool = True
 
 

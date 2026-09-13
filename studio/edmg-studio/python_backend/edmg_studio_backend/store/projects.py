@@ -535,13 +535,22 @@ class ProjectStore:
     def project_dir(self, project_id: str) -> Path:
         return self._proj_dir(project_id)
 
-    def set_audio(self, project_id: str, filename: str, bytes_len: int) -> None:
+    def set_audio(
+        self, project_id: str, filename: str, bytes_len: int, *, source_hash: str | None = None
+    ) -> None:
         def _apply(proj: Project) -> None:
-            proj.meta["audio"] = {"filename": filename, "size_bytes": bytes_len}
-            if proj.meta.get("analysis"):
+            audio = dict(proj.meta.get("audio") or {})
+            previous_hash = str(audio.get("source_hash") or "")
+            source_unchanged = bool(source_hash and source_hash == previous_hash)
+            audio.update({"filename": filename, "size_bytes": bytes_len})
+            proj.meta["audio"] = audio
+            if source_hash:
+                audio["source_hash"] = source_hash
+            if not source_unchanged and proj.meta.get("analysis"):
                 proj.meta.setdefault("analysis_history", []).append(deepcopy(proj.meta["analysis"]))
                 proj.meta["analysis_history"] = proj.meta["analysis_history"][-10:]
-            proj.meta.pop("analysis", None)
+            if not source_unchanged:
+                proj.meta.pop("analysis", None)
             # Source changes invalidate workflow fingerprints. Keep the user's
             # scenes and approved edits for review after the new analysis.
 

@@ -28,6 +28,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private LiveCuesResponse? _liveCues;
     private LiveAssetsResponse? _liveAssets;
     private CreativeDirectionResponse? _creativeDirection;
+    private MediaPoolResponse? _mediaPool;
     private PlanDto? _generatedPlan;
     private string? _pendingAudioPath;
     private string? _pendingReferencePath;
@@ -55,6 +56,8 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     }
 
     public ObservableCollection<WorkspaceAssetItem> AssetItems { get; } = [];
+
+    public ObservableCollection<WorkspaceMediaPoolItem> MediaPoolItems { get; } = [];
 
     public ObservableCollection<WorkspaceVariantItem> VariantItems { get; } = [];
 
@@ -301,6 +304,132 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             SetLastOperationJson(_assets);
             ShowStatus("Assets refreshed", $"{AssetItems.Count} project assets are indexed.", InfoBarSeverity.Success);
         });
+    }
+
+    private async void ImportMediaButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetActiveProjectId(out string projectId))
+        {
+            return;
+        }
+
+        string? path = await PickFileAsync(
+            "Import project media",
+            [".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".mp4", ".mov", ".mkv", ".webm", ".avi", ".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
+        if (path is null)
+        {
+            return;
+        }
+
+        await RunBusyAsync("Importing media", async token =>
+        {
+            await using FileStream stream = File.OpenRead(path);
+            MediaPoolActionResponse result = await App.Services.ApiClient.ImportMediaAsync(
+                projectId, stream, Path.GetFileName(path), GetMediaContentType(path), token);
+            await RefreshMediaPoolAsync(projectId, token);
+            ShowStatus("Media imported", $"{result.Asset.DisplayName} is ready in the project media pool.", InfoBarSeverity.Success);
+        });
+    }
+
+    private async void RefreshMediaPoolButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetActiveProjectId(out string projectId))
+        {
+            return;
+        }
+
+        await RunBusyAsync("Refreshing media pool", async token =>
+        {
+            await RefreshMediaPoolAsync(projectId, token);
+            ShowStatus("Media pool refreshed", $"{MediaPoolItems.Count} media assets indexed.", InfoBarSeverity.Success);
+        });
+    }
+
+    private async void RelinkMediaButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetSelectedMedia(out MediaPoolAsset asset) || !TryGetActiveProjectId(out string projectId))
+        {
+            return;
+        }
+
+        string? path = await PickFileAsync($"Relink {asset.DisplayName}", asset.Kind switch
+        {
+            "audio" => [".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"],
+            "video" => [".mp4", ".mov", ".mkv", ".webm", ".avi"],
+            _ => [".png", ".jpg", ".jpeg", ".webp", ".bmp"]
+        });
+        if (path is null)
+        {
+            return;
+        }
+
+        await RunBusyAsync("Relinking media", async token =>
+        {
+            await using FileStream stream = File.OpenRead(path);
+            MediaPoolActionResponse result = await App.Services.ApiClient.RelinkMediaAsync(
+                projectId, asset.Id, stream, Path.GetFileName(path), GetMediaContentType(path), token);
+            await RefreshMediaPoolAsync(projectId, token);
+            ShowStatus("Media relinked", $"{result.Asset.DisplayName} replaced the managed source; stale derivatives were invalidated.", InfoBarSeverity.Success);
+        });
+    }
+
+    private async void GenerateWaveformButton_Click(object sender, RoutedEventArgs e) =>
+        await GenerateMediaDerivativeAsync("waveform", (projectId, assetId, token) =>
+            App.Services.ApiClient.GenerateMediaWaveformAsync(projectId, assetId, cancellationToken: token));
+
+    private async void GenerateThumbnailButton_Click(object sender, RoutedEventArgs e) =>
+        await GenerateMediaDerivativeAsync("thumbnail", (projectId, assetId, token) =>
+            App.Services.ApiClient.GenerateMediaThumbnailAsync(projectId, assetId, cancellationToken: token));
+
+    private async void GenerateProxyButton_Click(object sender, RoutedEventArgs e) =>
+        await GenerateMediaDerivativeAsync("proxy", (projectId, assetId, token) =>
+            App.Services.ApiClient.GenerateMediaProxyAsync(projectId, assetId, cancellationToken: token));
+
+    private async Task GenerateMediaDerivativeAsync(
+        string name,
+        Func<string, string, CancellationToken, Task<MediaPoolActionResponse>> generate)
+    {
+        if (!TryGetSelectedMedia(out MediaPoolAsset asset) || !TryGetActiveProjectId(out string projectId))
+        {
+            return;
+        }
+
+        await RunBusyAsync($"Generating media {name}", async token =>
+        {
+            MediaPoolActionResponse result = await generate(projectId, asset.Id, token);
+            await RefreshMediaPoolAsync(projectId, token);
+            string status = result.Derivative?.Status ?? "unknown";
+            ShowStatus(
+                $"Media {name}: {status}",
+                result.Derivative?.Error ?? (result.Cached ? "The existing deterministic cache entry was reused." : "The derivative is ready."),
+                result.Ok ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
+        });
+    }
+
+    private bool TryGetSelectedMedia(out MediaPoolAsset asset)
+    {
+        if (MediaPoolListView.SelectedItem is WorkspaceMediaPoolItem item)
+        {
+            asset = item.Asset;
+            return true;
+        }
+
+        asset = null!;
+        ShowStatus("Select media", "Select an item in the project media pool first.", InfoBarSeverity.Warning);
+        return false;
+    }
+
+    private async Task RefreshMediaPoolAsync(string projectId, CancellationToken cancellationToken)
+    {
+        _mediaPool = await App.Services.ApiClient.GetMediaPoolAsync(projectId, cancellationToken);
+        MediaPoolItems.Clear();
+        foreach (MediaPoolAsset asset in _mediaPool.Assets)
+        {
+            MediaPoolItems.Add(new WorkspaceMediaPoolItem(asset));
+        }
+
+        MediaPoolEmptyText.Visibility = MediaPoolItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        MediaPoolListView.Visibility = MediaPoolItems.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void OpenAssetButton_Click(object sender, RoutedEventArgs e)
@@ -636,6 +765,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
         _projectResponse = project;
         PopulateProject();
+        await RefreshMediaPoolAsync(projectId, cancellationToken);
         await LoadWorkflowAsync(projectId, cancellationToken);
         await LoadDirectorAsync(projectId, cancellationToken);
         await LoadOptionalWorkspaceDataAsync(projectId, cancellationToken, loadVersion);
@@ -1951,6 +2081,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _liveCues = null;
         _liveAssets = null;
         _creativeDirection = null;
+        _mediaPool = null;
         _generatedPlan = null;
         _directorDocument = null;
         _directorProjectId = null;
@@ -1978,6 +2109,9 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         ApplyWorkflowButton.IsEnabled = false;
         DiscardWorkflowEditsButton.IsEnabled = false;
         AssetItems.Clear();
+        MediaPoolItems.Clear();
+        MediaPoolEmptyText.Visibility = Visibility.Visible;
+        MediaPoolListView.Visibility = Visibility.Collapsed;
         VariantItems.Clear();
         StoryboardItems.Clear();
         ProjectStatusText.Text = message;
@@ -2220,11 +2354,36 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             ".bmp" => "image/bmp",
             _ => "application/octet-stream",
         };
+
+    private static string GetMediaContentType(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".wav" or ".mp3" or ".flac" or ".m4a" or ".ogg" or ".aac" => GetAudioContentType(path),
+            ".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp" => GetImageContentType(path),
+            ".mp4" or ".m4v" => "video/mp4",
+            ".mov" => "video/quicktime",
+            ".mkv" => "video/x-matroska",
+            ".webm" => "video/webm",
+            ".avi" => "video/x-msvideo",
+            _ => "application/octet-stream",
+        };
 }
 
 public sealed record WorkspaceAnalysisSectionItem(string Label, double StartSeconds, double EndSeconds)
 {
     public string TimeRange => $"{StartSeconds:0.0}s – {EndSeconds:0.0}s";
+}
+
+public sealed class WorkspaceMediaPoolItem
+{
+    public WorkspaceMediaPoolItem(MediaPoolAsset asset) => Asset = asset;
+
+    public MediaPoolAsset Asset { get; }
+    public string DisplayName => Asset.DisplayName;
+    public string Status => Asset.Missing ? "Missing" : Asset.Status;
+    public string Detail => $"{Asset.Kind.ToUpperInvariant()} · {Asset.SizeBytes / 1024d / 1024d:0.##} MB · SHA-256 {Asset.Sha256[..Math.Min(12, Asset.Sha256.Length)]}";
+    public string DerivativeSummary => string.Join(" · ", new[] { "waveform", "thumbnail", "proxy" }
+        .Select(name => $"{name}: {(Asset.Derivatives.TryGetValue(name, out MediaDerivative? value) ? value.Status : "not generated")}"));
 }
 
 public sealed class WorkspaceAssetItem

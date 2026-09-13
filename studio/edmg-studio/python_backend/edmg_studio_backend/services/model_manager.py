@@ -28,6 +28,7 @@ from ..domain.model_lanes import (
 from ..errors import UserFacingError
 from .engine_packages import (
     PROFILES,
+    STANDARD_GGUF_ID,
     checked_files,
     package_manifest,
     runtime_status,
@@ -36,6 +37,8 @@ from .engine_packages import (
 )
 from .hf_auth import HfTokenCandidate, hf_token_candidates
 from .model_catalog import built_in_catalog, built_in_packs
+from .launcher_environment import update_launcher_environment
+from .llama_cpp_director import probe_llama_server
 from .model_runtime_registry import DEFAULT_RUNTIME_REGISTRY, RUNTIME_RECEIPT
 from .model_weights import is_real_weight_file
 from .secrets import SecretStore
@@ -1151,7 +1154,7 @@ class ModelManager:
         return {
             "catalog": built,
             "user": user,
-            "packs": built_in_packs(),
+            "packs": [self._annotate_pack(pack, hardware) for pack in built_in_packs()],
             "accepted": accepted,
             "installed": installed,
             "cloud": cloud,
@@ -1236,6 +1239,40 @@ class ModelManager:
             data[model_id] = record
             _write_json(self._benchmarks_path, data)
         return {"ok": True, "benchmark": record}
+
+    def _annotate_pack(self, pack: dict[str, Any], hardware: dict[str, Any] | None) -> dict[str, Any]:
+        annotated = dict(pack)
+        models = [str(value) for value in pack.get("models") or []]
+        license_requirements = [
+            {
+                "model_id": model_id,
+                "license_id": str((self._find_entry(model_id) or {}).get("license_id") or ""),
+                "accepted": self._is_accepted(model_id),
+            }
+            for model_id in models
+        ]
+        annotated["license_requirements"] = license_requirements
+        annotated["license_accepted"] = all(item["accepted"] for item in license_requirements)
+        if pack.get("id") != "qwen_director_cuda":
+            return annotated
+        runtime_path = self._llama_cuda_runtime_path()
+        runtime_hardware = self._qwen_cuda_hardware(hardware, runtime_path)
+        status = self.engine_package_status(STANDARD_GGUF_ID, runtime_hardware)
+        runtime_valid, runtime_error = self._validate_llama_cuda_runtime(runtime_path)
+        blockers = list(status.get("blockers") or [])
+        if not annotated["license_accepted"]:
+            blockers.insert(0, "Accept the Qwen Director model license before installing this pack.")
+        if not runtime_valid and runtime_error:
+            blockers.append(runtime_error)
+        annotated.update(
+            installed=bool(status.get("installed")) and runtime_valid,
+            runtime_ready=bool(status.get("runtime_ready")) and runtime_valid,
+            readiness_state=("runtime_ready" if status.get("runtime_ready") and runtime_valid
+                             else "installed_runtime_unavailable" if status.get("installed") or runtime_path.parent.exists()
+                             else "not_installed"),
+            blockers=list(dict.fromkeys(blockers)),
+        )
+        return annotated
 
     # ---- acceptance ----
     def accept_license(self, model_id: str, license_id: str) -> None:
@@ -1365,6 +1402,41 @@ class ModelManager:
         )
         self.tasks.set_stage(task, "complete", progress=1.0)
 
+    _LLAMA_CUDA_RECEIPT = {
+        "release": "v0.4.0",
+        "build": "b10809",
+        "commit": "5266f24da75dc449bd56cbed7addb9c8e4a6a73e",
+        "cuda": "12.4",
+    }
+
+    def _llama_cuda_runtime_path(self) -> Path:
+        return self.studio_home / "tools" / "llama.cpp" / "llama-server.exe"
+
+    @staticmethod
+    def _qwen_cuda_hardware(hardware: dict[str, Any] | None, executable: Path) -> dict[str, Any]:
+        merged = dict(hardware or {})
+        merged.update(llama_backend="cuda", llama_server_path=str(executable.resolve()))
+        return merged
+
+    def _validate_llama_cuda_runtime(self, executable: Path) -> tuple[bool, str | None]:
+        target = executable.parent
+        if not target.exists():
+            return False, None
+        try:
+            receipt = json.loads((target / "runtime-install.json").read_text(encoding="utf-8-sig"))
+            mismatches = [key for key, value in self._LLAMA_CUDA_RECEIPT.items() if receipt.get(key) != value]
+            if mismatches:
+                raise ValueError(f"runtime receipt does not match pinned {', '.join(mismatches)}")
+            probe = probe_llama_server(executable)
+            if not probe.cuda_devices:
+                raise ValueError("llama-server does not expose a CUDA device")
+            return True, None
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, RuntimeError) as exc:
+            return False, (
+                f"Existing llama.cpp runtime at {target} is not the pinned CUDA build ({exc}). "
+                "Preserve or relocate that directory, then retry to repair the managed runtime."
+            )
+
     def install_llama_cuda_runtime(self) -> ModelTask:
         if os.name != "nt":
             raise UserFacingError(
@@ -1381,7 +1453,22 @@ class ModelManager:
             model_id="llama_cpp_cuda_runtime",
         )
 
-    def _install_llama_cuda_runtime(self, task: ModelTask, script: Path) -> None:
+    def _install_llama_cuda_runtime(self, task: ModelTask, script: Path) -> Path:
+        executable = self._llama_cuda_runtime_path()
+        valid, error = self._validate_llama_cuda_runtime(executable)
+        if valid:
+            self._raise_if_task_cancelled(task, boundary="runtime configuration")
+            update_launcher_environment({"EDMG_LLAMA_SERVER": str(executable.resolve())})
+            self.tasks.log(task, f"Reused verified pinned llama.cpp CUDA runtime: {executable}")
+            self.tasks.set_stage(task, "runtime_ready", progress=1.0)
+            return executable.resolve()
+        if executable.parent.exists():
+            raise UserFacingError(
+                "Existing llama.cpp runtime cannot be reused.",
+                hint=error,
+                code="LLAMA_RUNTIME_REPAIR_REQUIRED",
+            )
+        self._raise_if_task_cancelled(task, boundary="runtime download")
         self.tasks.set_stage(task, "installing_runtime", progress=0.1)
         result = subprocess.run(
             [
@@ -1397,7 +1484,14 @@ class ModelManager:
         self.tasks.log(task, output[-8000:])
         if result.returncode != 0:
             raise RuntimeError(f"llama.cpp CUDA runtime installation failed: {output[-2000:]}")
-        self.tasks.set_stage(task, "complete", progress=1.0)
+        self._raise_if_task_cancelled(task, boundary="runtime validation")
+        valid, error = self._validate_llama_cuda_runtime(executable)
+        if not valid:
+            raise UserFacingError("Installed llama.cpp CUDA runtime failed validation.", hint=error,
+                                  code="LLAMA_RUNTIME_INVALID")
+        update_launcher_environment({"EDMG_LLAMA_SERVER": str(executable.resolve())})
+        self.tasks.set_stage(task, "runtime_ready", progress=1.0)
+        return executable.resolve()
 
     def _validate_engine_package(self, task: ModelTask, entry: dict[str, Any]) -> None:
         manifest = package_manifest(entry["id"])
@@ -1492,15 +1586,68 @@ class ModelManager:
         self._write_cloud_models(cloud)
         self._append_task_log(task, "Removed local package and partial downloads. Remote cache objects and other models are preserved.")
 
-    def install_pack(self, pack_id: str) -> list[ModelTask]:
+    def install_pack(self, pack_id: str, hardware: dict[str, Any] | None = None) -> list[ModelTask]:
         packs = built_in_packs()
         pack = next((p for p in packs if p.get("id") == pack_id), None)
         if not pack:
             raise UserFacingError("Unknown pack", hint="Choose a valid pack.")
-        tasks: list[ModelTask] = []
-        for mid in (pack.get("models") or []):
-            tasks.append(self.install(mid))
-        return tasks
+        if pack_id != "qwen_director_cuda":
+            return [self.install(str(model_id)) for model_id in (pack.get("models") or [])]
+        if os.name != "nt":
+            raise UserFacingError("Qwen Director CUDA Pack is available on Windows only.",
+                                  code="LLAMA_RUNTIME_PLATFORM_UNSUPPORTED")
+        if not self._is_accepted(STANDARD_GGUF_ID):
+            raise UserFacingError(
+                "License not accepted",
+                hint="Open Model Manager, review and accept the Qwen Director model license, then install the pack.",
+                code="MODEL_LICENSE_NOT_ACCEPTED",
+            )
+        script = Path(__file__).resolve().parents[2] / "scripts" / "install_llama_cuda_runtime.ps1"
+        if not script.is_file():
+            raise UserFacingError("The managed llama.cpp installer is missing.", code="LLAMA_INSTALLER_MISSING")
+        task = self.tasks.start(
+            "Install Qwen Director CUDA Pack",
+            self._install_qwen_director_cuda_pack,
+            script,
+            dict(hardware or {}),
+            model_id=STANDARD_GGUF_ID,
+        )
+        task.bytes_total = int(pack["download_size_bytes"])
+        return [task]
+
+    def _install_qwen_director_cuda_pack(
+        self,
+        task: ModelTask,
+        script: Path,
+        hardware: dict[str, Any],
+    ) -> None:
+        task.bytes_total = 6_425_456_698
+        entry = self._find_entry(STANDARD_GGUF_ID)
+        if entry is None:
+            raise UserFacingError("Qwen Director package is missing from the catalog.", code="MODEL_PACKAGE_UNKNOWN")
+        self._raise_if_task_cancelled(task, boundary="runtime installation")
+        executable = self._install_llama_cuda_runtime(task, script)
+        self._raise_if_task_cancelled(task, boundary="model installation")
+        self._install_engine_package(task, entry)
+        self._raise_if_task_cancelled(task, boundary="runtime smoke test")
+        _, package_root = self._models_dest(entry)
+        validation = validate_package(package_root, package_manifest(STANDARD_GGUF_ID))
+        runtime_hardware = self._qwen_cuda_hardware(hardware, executable)
+        self.tasks.set_stage(task, "smoke_testing_runtime", progress=0.95)
+        status = DEFAULT_RUNTIME_REGISTRY.smoke_test(
+            STANDARD_GGUF_ID,
+            package_root=package_root,
+            package_validation=validation,
+            hardware=runtime_hardware,
+            cancel_check=lambda: task.cancel_requested,
+        )
+        if not status.get("runtime_ready"):
+            raise UserFacingError(
+                "Qwen Director CUDA runtime smoke test did not reach runtime-ready state.",
+                hint="; ".join(status.get("blockers") or []) or status.get("error"),
+                code="MODEL_RUNTIME_NOT_READY",
+            )
+        self.tasks.set_stage(task, "complete", progress=1.0)
 
     def restore_local(self, model_id: str) -> ModelTask:
         entry = self._find_entry(model_id)

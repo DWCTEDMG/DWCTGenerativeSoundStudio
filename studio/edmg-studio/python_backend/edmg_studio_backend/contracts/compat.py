@@ -17,11 +17,15 @@ from .v1 import (
     DirectorSceneContract,
     DirectorStoryBibleContract,
     DirectorSubjectContract,
+    HardwareGpuContract,
+    HardwareProfileContract,
     JobContract,
     PlanWarning,
     ProjectContract,
     RenderAllocation,
     RenderDependency,
+    RendererContract,
+    RendererReadinessContract,
     RenderEstimates,
     RenderPlanContract,
     RenderTaskContract,
@@ -184,6 +188,151 @@ def restore_legacy_editor_command(contract: CommandContract) -> dict[str, Any]:
         "timeline": contract.timeline,
         **extensions,
     }
+
+
+def adapt_legacy_hardware_profile(payload: Mapping[str, Any], *, profile_id: str = "local") -> HardwareProfileContract:
+    """Adapt the operational hardware endpoint without changing its public response."""
+
+    source = _mapping(payload)
+    if source.get("hardware") is not None:
+        source = _mapping(source.get("hardware"))
+    backend = str(source.get("backend") or "cpu").lower()
+    available = [str(value).lower() for value in source.get("available_backends") or ["cpu"]]
+    if "cpu" not in available:
+        available.insert(0, "cpu")
+    selected_name = str(source.get("device_name") or backend.upper())
+    selected_vram = float(source.get("vram_gb") or 0.0)
+    gpus = []
+    if backend != "cpu" or source.get("gpu_vendor") or selected_vram > 0:
+        gpus.append(HardwareGpuContract(
+            id=str(source.get("device") or backend),
+            vendor=str(source["gpu_vendor"]) if source.get("gpu_vendor") else None,
+            name=selected_name,
+            architecture=str(source["gpu_architecture"]) if source.get("gpu_architecture") else None,
+            dedicated_vram_gb=selected_vram,
+            driver=str(source["gpu_driver"]) if source.get("gpu_driver") else None,
+            cuda_available="cuda" in available,
+            rocm_available="rocm" in available,
+            directml_available="directml" in available,
+        ))
+    known = {
+        "backend", "device", "device_name", "available_backends", "vram_gb", "ram_gb",
+        "cpu_threads", "physical_core_count", "logical_core_count", "platform", "machine",
+        "integrated_acceleration", "gpu_vendor", "gpu_architecture", "gpu_driver",
+        "supports_directml", "directml_runtime_ready", "directml_device_name",
+        "recommended_tier", "recommended_director", "recommended_renderer",
+    }
+    return HardwareProfileContract(
+        id=profile_id,
+        backend=backend,
+        device=str(source.get("device") or backend),
+        device_name=selected_name,
+        available_backends=available,
+        vram_gb=selected_vram,
+        ram_gb=float(source.get("ram_gb") or 0.0),
+        cpu_threads=max(1, int(source.get("cpu_threads") or 1)),
+        physical_core_count=source.get("physical_core_count"),
+        logical_core_count=source.get("logical_core_count") or source.get("cpu_threads"),
+        platform=str(source.get("platform") or "unknown"),
+        machine=str(source.get("machine") or "unknown"),
+        integrated_acceleration=bool(source.get("integrated_acceleration")),
+        gpu_vendor=str(source["gpu_vendor"]) if source.get("gpu_vendor") else None,
+        supports_directml=bool(source.get("supports_directml")),
+        directml_runtime_ready=bool(source.get("directml_runtime_ready")),
+        directml_device_name=(str(source["directml_device_name"]) if source.get("directml_device_name") else None),
+        gpus=gpus,
+        recommended_tier=source.get("recommended_tier", "draft"),
+        recommended_director=(str(source["recommended_director"]) if source.get("recommended_director") else None),
+        recommended_renderer=(str(source.get("recommended_renderer") or source.get("preferred_internal_model")) if source.get("recommended_renderer") or source.get("preferred_internal_model") else None),
+        warnings=[str(value) for value in source.get("warnings") or []],
+        metadata={"legacy_hardware_extensions": _split_extensions(source, known)},
+    )
+
+
+def adapt_legacy_renderer(
+    entry: Mapping[str, Any],
+    runtime_status: Mapping[str, Any] | None = None,
+) -> RendererContract:
+    """Project catalog and runtime status into a renderer descriptor with evidence-based readiness."""
+
+    source = _mapping(entry)
+    status = _mapping(runtime_status or source.get("package_status") or {})
+    render = _mapping(source.get("render") or {})
+    target = _mapping(source.get("target") or {})
+    installed = bool(status.get("installed", source.get("installed", False)))
+    adapter_ready = bool(status.get("adapter_ready", False))
+    validation_level = int(status.get("validation_level") or 0)
+    receipt_id = status.get("validation_receipt_id")
+    validated_at = status.get("validated_at")
+    if validation_level >= 3 and receipt_id and validated_at:
+        state = "validated"
+    elif installed and adapter_ready:
+        state = "adapter_ready"
+    elif installed:
+        state = "installed"
+    elif bool(source.get("installable", False)):
+        state = "installable"
+    else:
+        state = "unavailable"
+    family = render.get("workflow_family") or source.get("family")
+    tags = {str(value).lower() for value in source.get("tags") or []}
+    media = "audio" if "audio" in tags else "image" if "image" in tags else "video"
+    operations = [str(value) for value in render.get("operations") or ["generate"]]
+    hardware_map = {
+        "cpu": ("cpu",),
+        "nvidia": ("cuda",),
+        "nvidia_cuda": ("cuda",),
+        "cuda": ("cuda",),
+        "directml": ("directml",),
+        "integrated_gpu": ("directml",),
+        "discrete_gpu": ("cuda", "directml"),
+        "amd": ("directml",),
+        "windows": ("directml",),
+        "apple_silicon": ("mps",),
+        "mps": ("mps",),
+        "gpu_offload": ("cuda", "directml", "mps"),
+        "remote": ("remote",),
+        "any": ("cpu", "cuda", "directml", "mps"),
+    }
+    hardware_backends = list(dict.fromkeys(
+        backend
+        for value in source.get("hardware_targets") or []
+        if str(value).lower() in hardware_map
+        for backend in hardware_map[str(value).lower()]
+    ))
+    hardware_requirements = _mapping(source.get("hardware_requirements") or {})
+    known = {
+        "id", "name", "kind", "source", "target", "render", "family", "tags",
+        "hardware_targets", "hardware_requirements", "minimum_vram_gb", "min_vram_gb", "installable", "installed",
+        "available", "package_status",
+    }
+    return RendererContract(
+        id=str(source.get("id") or render.get("engine") or "renderer"),
+        provider_id="internal" if target.get("engine") == "internal" else str(source.get("source") or "internal"),
+        engine=str(render.get("engine") or target.get("engine") or "internal"),
+        model_id=str(source["id"]) if source.get("id") else None,
+        family=str(family) if family else None,
+        media=media,
+        operations=operations,
+        controls=[str(value) for value in render.get("controls") or ["text"]],
+        render_modes=[str(value) for value in render.get("render_modes") or []],
+        hardware_backends=hardware_backends,
+        minimum_vram_gb=source.get(
+            "minimum_vram_gb",
+            source.get("min_vram_gb", hardware_requirements.get("min_vram_gb")),
+        ),
+        readiness=RendererReadinessContract(
+            state=state,
+            installed=installed,
+            adapter_ready=adapter_ready,
+            hardware_compatible=status.get("hardware_compatible"),
+            validation_level=validation_level,
+            validation_receipt_id=str(receipt_id) if receipt_id else None,
+            validated_at=validated_at,
+            blockers=[str(value) for value in status.get("blockers") or []],
+        ),
+        metadata={"legacy_renderer_extensions": _split_extensions(source, known)},
+    )
 
 
 def adapt_legacy_project(payload: Mapping[str, Any]) -> ProjectContract:

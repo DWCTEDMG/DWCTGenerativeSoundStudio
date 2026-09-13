@@ -235,6 +235,14 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
 
+    public Task<AnalysisResponse> ReanalyzeAudioAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<AnalysisResponse>(
+            HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/analyze_audio?force=true",
+            new StringContent("{}", Encoding.UTF8, "application/json"),
+            true,
+            cancellationToken);
+
     public Task<PlannerScheduleResponse> GetPlannerScheduleAsync(string projectId, int variantIndex, CancellationToken cancellationToken = default) =>
         SendJsonAsync<PlannerScheduleResponse>(HttpMethod.Get,
             $"/v1/projects/{EscapeIdentifier(projectId)}/schedule?variant_index={variantIndex}", null, true, cancellationToken);
@@ -287,6 +295,63 @@ public sealed class StudioApiClient : IDisposable
             null,
             true,
             cancellationToken);
+
+    public Task<MediaPoolResponse> GetMediaPoolAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<MediaPoolResponse>(HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/media-pool", null, true, cancellationToken);
+
+    public Task<MediaPoolActionResponse> ImportMediaAsync(
+        string projectId, Stream content, string fileName, string? contentType = null,
+        CancellationToken cancellationToken = default) =>
+        UploadMediaPoolAsync(projectId, null, content, fileName, contentType, cancellationToken);
+
+    public Task<MediaPoolActionResponse> RelinkMediaAsync(
+        string projectId, string assetId, Stream content, string fileName, string? contentType = null,
+        CancellationToken cancellationToken = default) =>
+        UploadMediaPoolAsync(projectId, RequireValue(assetId, nameof(assetId)), content, fileName, contentType, cancellationToken);
+
+    public Task<MediaPoolActionResponse> GenerateMediaWaveformAsync(
+        string projectId, string assetId, int bins = 1024, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<MediaWaveformRequest, MediaPoolActionResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/media-pool/{EscapeIdentifier(assetId)}/waveform",
+            new MediaWaveformRequest(Math.Clamp(bins, 64, 4096)), cancellationToken);
+
+    public Task<MediaPoolActionResponse> GenerateMediaThumbnailAsync(
+        string projectId, string assetId, int width = 640, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<MediaThumbnailRequest, MediaPoolActionResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/media-pool/{EscapeIdentifier(assetId)}/thumbnail",
+            new MediaThumbnailRequest(Math.Clamp(width, 64, 1920)), cancellationToken);
+
+    public Task<MediaPoolActionResponse> GenerateMediaProxyAsync(
+        string projectId, string assetId, int width = 1280, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<MediaProxyRequest, MediaPoolActionResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/media-pool/{EscapeIdentifier(assetId)}/proxy",
+            new MediaProxyRequest(Math.Clamp(width, 320, 1920)), cancellationToken);
+
+    private async Task<MediaPoolActionResponse> UploadMediaPoolAsync(
+        string projectId, string? assetId, Stream content, string fileName, string? contentType,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        if (!content.CanRead)
+        {
+            throw new ArgumentException("The selected media stream is not readable.", nameof(content));
+        }
+        string safeName = Path.GetFileName(fileName);
+        if (string.IsNullOrWhiteSpace(safeName))
+        {
+            throw new ArgumentException("The selected media must have a file name.", nameof(fileName));
+        }
+        using var multipart = new MultipartFormDataContent();
+        using var streamContent = new StreamContent(content);
+        streamContent.Headers.ContentType = new MediaTypeHeaderValue(
+            string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType);
+        multipart.Add(streamContent, "file", safeName);
+        string suffix = assetId is null ? "import" : $"{EscapeIdentifier(assetId)}/relink-import";
+        return await SendJsonAsync<MediaPoolActionResponse>(HttpMethod.Post,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/media-pool/{suffix}", multipart, true, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public Task<ProjectHealthResponse> GetProjectHealthAsync(
         string projectId,
@@ -1813,10 +1878,10 @@ public sealed class StudioApiClient : IDisposable
             new JsonObject { ["model_id"] = RequireValue(modelId, nameof(modelId)) },
             cancellationToken);
 
-    public Task<JsonElement> InstallModelPackAsync(string packId, CancellationToken cancellationToken = default) =>
-        PostJsonElementAsync(
+    public Task<ModelPackInstallResponse> InstallModelPackAsync(string packId, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<ModelPackInstallRequest, ModelPackInstallResponse>(
             "/v1/models/install_pack",
-            new JsonObject { ["pack_id"] = RequireValue(packId, nameof(packId)) },
+            new ModelPackInstallRequest(RequireValue(packId, nameof(packId))),
             cancellationToken);
 
     public Task<JsonElement> PromoteModelAsync(

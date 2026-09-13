@@ -681,8 +681,12 @@ def create_models_router(
     @router.post("/v1/models/install_pack")
     def models_install_pack(req: dict[str, Any]) -> dict[str, Any]:
         pack_id = str(req.get("pack_id") or "")
-        tasks = get_models().install_pack(pack_id)
-        return {"tasks": [t.__dict__ for t in tasks]}
+        tasks = get_models().install_pack(pack_id, runtime_hardware())
+        payload = [task.to_dict() for task in tasks]
+        response: dict[str, Any] = {"tasks": payload}
+        if len(payload) == 1 and payload[0].get("model_id") == f"pack:{pack_id}":
+            response["task"] = payload[0]
+        return response
 
     @router.post("/v1/models/import/civitai")
     def models_import_civitai(req: dict[str, Any]) -> dict[str, Any]:
