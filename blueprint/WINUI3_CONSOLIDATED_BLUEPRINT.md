@@ -41,12 +41,16 @@ The latest repository history records completion of Professional DAW Phases 5 th
 | Professional DAW Phases 5–11 | Accepted in repository history and reflected in `blueprint/planning.md` | Preserve; use acceptance records as regression requirements. |
 | Phase 12 Quick Controls and command/input work | Implemented with focused tests and x64 build evidence in `planning.md` | Preserve; keep hardware/MIDI qualification separate. |
 | Phase 13 professional post contracts | Implemented with focused tests and x64 build evidence in `planning.md` | Preserve; finish running-app qualification and real media/device checks. |
-| Current worktree hardening and qualification files | Present but uncommitted or newly introduced | Review, test, and accept individually; compilation alone is not completion. |
+| Current candidate hardening and qualification files | Committed in the current candidate (`388faaf`, `358fa49`, `0c9c6d1`, `20df73e`) | Review, test, and accept individually; compilation alone is not completion. |
 | Hunyuan/LTX runtime availability | Integration and fail-closed controls are documented; real runtime evidence remains environment-dependent | Keep unavailable until matching Level-5 smoke receipts exist. |
 | Native audio, VST3, ADR, waveform, and multichannel output | Contracts/UI boundaries exist, but several capabilities remain unavailable or stereo-only | Advance only through Gates C and D; never infer capability from simulation. |
 | Microsoft Store and signed release | Packaging/signing path is documented and code-signing is available; Store identity/certification is external | Complete Gate F with fresh x64 artifacts and Partner Center evidence. |
 
 Accepted phase history is evidence of completed increments, not permission to erase current limitations. The current worktree and this blueprint are the starting point for the next acceptance review.
+
+`blueprint/planning.md` retains a historical `Active Phase` heading for the ordered roadmap. Its
+Phase 5 entry is accepted for the managed mixer scope while advanced native audio work remains
+open; the heading must not be read as evidence that earlier accepted phases were undone.
 
 ### Implemented or documented foundations to preserve
 
