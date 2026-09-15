@@ -32,7 +32,7 @@ The backend remains authoritative for project identity, revisions, persistence, 
 
 ## 3. Current implementation state
 
-The latest repository history records completion of Professional DAW Phases 5 through 13, including managed mixer, automation/editing, Director, Hunyuan, LTX, Director Review, provider normalization, remote controls, Quick Controls, and professional post contracts. The worktree also contains newer uncommitted hardening and qualification work. These are not accepted phase gates until their tests, build, review, and commit evidence are recorded.
+The latest repository history records completion of Professional DAW Phases 5 through 13, including managed mixer, automation/editing, Director, Hunyuan, LTX, Director Review, provider normalization, remote controls, Quick Controls, and professional post contracts. The newer hardening, qualification, documentation, and render-idempotency work is now committed in `388faaf`, `358fa49`, and `0c9c6d1`. Those commits are part of the current candidate, but they do not make every qualification gate complete until the corresponding tests, build, review, and runtime evidence are recorded.
 
 ### Phase and evidence reconciliation
 
