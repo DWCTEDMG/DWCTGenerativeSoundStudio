@@ -35,6 +35,23 @@ def test_job_store_create_claim_and_idempotency(tmp_path: Path) -> None:
     store.close()
 
 
+def test_render_job_snapshot_captures_project_profile(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    project_dir = projects / "profiled"
+    project_dir.mkdir(parents=True)
+    (project_dir / "project.json").write_text(
+        '{"meta":{"render_profile":{"schema_version":"1.0","id":"delivery","name":"Delivery","revision":2,"shared":{"quality":"quality","width":1920,"height":1080,"fps":30,"renderer_id":"ltx_25"},"renderer_options":{},"extensions":{}}}}',
+        encoding="utf-8",
+    )
+    store = JobStore(projects, db_path=tmp_path / "jobs.sqlite")
+
+    job = store.create("profiled", "internal_video", {"prompt": "neon"})
+
+    snapshot = job.payload[ACCEPTED_RENDER_SNAPSHOT_KEY]
+    assert snapshot["render_profile"]["id"] == "delivery"
+    assert snapshot["render_profile"]["shared"]["renderer_id"] == "ltx_25"
+
+
 def test_job_store_idempotent_create_is_atomic_across_store_instances(tmp_path: Path) -> None:
     projects = tmp_path / "projects"
     db_path = tmp_path / "jobs.sqlite"

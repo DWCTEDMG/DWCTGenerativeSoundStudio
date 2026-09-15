@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ..render_profiles import (
+    ProjectRenderProfile,
     accept_render_payload,
+    accepted_render_request_matches,
     is_render_job_type,
     retain_accepted_render_snapshot,
 )
@@ -137,6 +139,19 @@ class JobStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    def _project_render_profile(self, project_id: str) -> ProjectRenderProfile | None:
+        try:
+            document = json.loads((self.projects_dir / project_id / "project.json").read_text(encoding="utf-8"))
+            profile = (document.get("meta") or {}).get("render_profile")
+            return ProjectRenderProfile.model_validate(profile) if isinstance(profile, dict) else None
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _accepted_payload(self, project_id: str, job_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not is_render_job_type(job_type):
+            return payload
+        return accept_render_payload(payload, render_profile=self._project_render_profile(project_id))
 
     def _migrate_schema(self) -> None:
         applied = {
@@ -350,7 +365,7 @@ class JobStore:
                         existing = self._row_to_job(row)
                         self._mirror_json(existing)
                         return existing, False
-                accepted_payload = accept_render_payload(payload) if is_render_job_type(job_type) else payload
+                accepted_payload = self._accepted_payload(project_id, job_type, payload)
                 jid = uuid.uuid4().hex
                 now = self._now()
                 job = Job(
@@ -387,7 +402,7 @@ class JobStore:
             try:
                 for job_type, payload, idempotency_key, priority in requests:
                     key = str(idempotency_key or "").strip() or None
-                    accepted_payload = accept_render_payload(payload) if is_render_job_type(job_type) else payload
+                    accepted_payload = self._accepted_payload(project_id, job_type, payload)
                     row = None
                     if key:
                         row = self._conn.execute(
@@ -400,7 +415,7 @@ class JobStore:
                         ).fetchone()
                     if row is not None:
                         existing = self._row_to_job(row)
-                        if existing.type != job_type or existing.payload != accepted_payload:
+                        if existing.type != job_type or not accepted_render_request_matches(existing.payload, payload):
                             raise ValueError("Idempotency key already used for a different job request")
                         results.append((existing, False))
                         continue

@@ -82,6 +82,18 @@ def retain_accepted_render_snapshot(original: dict[str, Any], replacement: dict[
     return retained
 
 
+def accepted_render_request_matches(accepted: dict[str, Any], requested: dict[str, Any]) -> bool:
+    snapshot = accepted.get(ACCEPTED_RENDER_SNAPSHOT_KEY)
+    digest = accepted.get(ACCEPTED_RENDER_SNAPSHOT_DIGEST_KEY)
+    if not isinstance(snapshot, dict) or not isinstance(digest, str):
+        return accepted == requested
+    try:
+        validated = AcceptedRenderSnapshot.model_validate(snapshot)
+    except ValueError:
+        return False
+    return render_snapshot_digest(snapshot) == digest and validated.payload == requested
+
+
 def is_render_job_type(job_type: str) -> bool:
     normalized = str(job_type).strip().lower()
     return normalized in {"internal_video", "provider_generation"} or any(

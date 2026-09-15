@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from ..errors import UserFacingError
-from ..render_profiles import accept_render_payload
+from ..render_profiles import accepted_render_request_matches
 from ..revisions import RevisionRoute, published_media_path, staged_media_path
 from ..schemas import (
     AutoAnimateRequest,
@@ -1233,8 +1233,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                     idempotency_key=req.idempotency_key,
                     priority=req.priority,
                 )
-                accepted_payload = accept_render_payload(payload)
-                if not created and (job.type != "provider_generation" or job.payload != accepted_payload):
+                if not created and (job.type != "provider_generation" or not accepted_render_request_matches(job.payload, payload)):
                     raise HTTPException(409, "Idempotency key already used for a different generation request")
                 preflight = {}
                 if created:
