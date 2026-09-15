@@ -984,6 +984,171 @@
                         </ScrollViewer>
                     </PivotItem>
 
+                    <PivotItem Header="Post">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Padding="14" Spacing="12">
+                                <TextBlock Text="Timeline post-production" Style="{StaticResource StudioSectionTitleTextStyle}" />
+                                <TextBlock x:Name="PostStatusText" Text="Load a project to use post-production tools."
+                                           TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                                           AutomationProperties.AutomationId="Timeline.Post.Status"
+                                           AutomationProperties.Name="Post-production status"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
+
+                                <Expander Header="Project timecode and sync" IsExpanded="True">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <TextBlock x:Name="PostTimebaseText" Text="Timebase unavailable."
+                                                   TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                                                   AutomationProperties.AutomationId="Timeline.Post.Timebase"
+                                                   AutomationProperties.Name="Project start timecode frame rate and drop-frame mode" />
+                                        <TextBlock x:Name="PostPlayheadTimecodeText" Text="Playhead: --:--:--:--"
+                                                   AutomationProperties.AutomationId="Timeline.Post.PlayheadTimecode"
+                                                   AutomationProperties.Name="Current playhead project timecode" />
+                                        <ComboBox x:Name="PostSyncMethodComboBox" Header="Alignment method" SelectedIndex="0"
+                                                  SelectionChanged="PostSyncMethod_SelectionChanged"
+                                                  AutomationProperties.AutomationId="Timeline.Post.Sync.Method">
+                                            <ComboBoxItem Content="Timecode" Tag="timecode" />
+                                            <ComboBoxItem Content="Clap onset" Tag="clap" />
+                                            <ComboBoxItem Content="Transient onset" Tag="transient" />
+                                            <ComboBoxItem Content="Waveform correlation" Tag="waveform" />
+                                        </ComboBox>
+                                        <ComboBox x:Name="PostSyncMediaComboBox" Header="Project media asset" DisplayMemberPath="Label"
+                                                  AutomationProperties.AutomationId="Timeline.Post.Sync.Media" />
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <TextBox x:Name="PostReferenceTimecodeTextBox" Grid.Column="0" Header="Reference timecode"
+                                                     AutomationProperties.AutomationId="Timeline.Post.Sync.ReferenceTimecode" />
+                                            <TextBox x:Name="PostCandidateTimecodeTextBox" Grid.Column="1" Header="Candidate timecode"
+                                                     AutomationProperties.AutomationId="Timeline.Post.Sync.CandidateTimecode" />
+                                        </Grid>
+                                        <TextBlock x:Name="PostSyncLimitationText" Text="Timecode alignment is available. Audio waveform extraction is not connected in the native app."
+                                                   TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"
+                                                   Style="{StaticResource StudioCaptionTextStyle}" />
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <Button x:Name="PlanPostSyncButton" Grid.Column="0" Content="Plan alignment" Click="PlanPostSync_Click"
+                                                    AutomationProperties.AutomationId="Timeline.Post.Sync.Plan" />
+                                            <Button x:Name="ApplyPostSyncButton" Grid.Column="1" Content="Accept and apply" Click="ApplyPostSync_Click"
+                                                    IsEnabled="False" AutomationProperties.AutomationId="Timeline.Post.Sync.Apply" />
+                                        </Grid>
+                                        <TextBlock x:Name="PostSyncPreviewText" Text="No alignment planned." TextWrapping="Wrap"
+                                                   AutomationProperties.AutomationId="Timeline.Post.Sync.Preview" />
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="ADR cues and takes" IsExpanded="True">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <ListView x:Name="PostAdrCueListView" MaxHeight="130" SelectionMode="Single" DisplayMemberPath="Label"
+                                                  SelectionChanged="PostAdrCue_SelectionChanged"
+                                                  AutomationProperties.AutomationId="Timeline.Post.Adr.Cues" />
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <TextBox x:Name="PostAdrStartTextBox" Grid.Column="0" Header="Start sample" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.Post.Adr.Start" />
+                                            <TextBox x:Name="PostAdrEndTextBox" Grid.Column="1" Header="End sample" Text="1"
+                                                     AutomationProperties.AutomationId="Timeline.Post.Adr.End" />
+                                        </Grid>
+                                        <TextBox x:Name="PostAdrTextTextBox" Header="Cue text" AutomationProperties.AutomationId="Timeline.Post.Adr.Text" />
+                                        <TextBox x:Name="PostAdrPerformerTextBox" Header="Performer (optional)" AutomationProperties.AutomationId="Timeline.Post.Adr.Performer" />
+                                        <Button x:Name="AddPostAdrCueButton" Content="Add ADR cue" Click="AddPostAdrCue_Click"
+                                                AutomationProperties.AutomationId="Timeline.Post.Adr.AddCue" />
+                                        <ComboBox x:Name="PostAdrMediaComboBox" Header="Imported / pre-recorded project media" DisplayMemberPath="Label"
+                                                  AutomationProperties.AutomationId="Timeline.Post.Adr.Media" />
+                                        <Button x:Name="RegisterPostAdrTakeButton" Content="Register selected media as take" Click="RegisterPostAdrTake_Click"
+                                                AutomationProperties.AutomationId="Timeline.Post.Adr.RegisterTake" />
+                                        <ListView x:Name="PostAdrTakeListView" MaxHeight="120" SelectionMode="Single" DisplayMemberPath="Label"
+                                                  AutomationProperties.AutomationId="Timeline.Post.Adr.Takes" />
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <ComboBox x:Name="PostAdrReviewComboBox" Grid.Column="0" Header="Review" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="Timeline.Post.Adr.Review">
+                                                <ComboBoxItem Content="Unreviewed" Tag="unreviewed" />
+                                                <ComboBoxItem Content="Approved" Tag="approved" />
+                                                <ComboBoxItem Content="Rejected" Tag="rejected" />
+                                            </ComboBox>
+                                            <ToggleSwitch x:Name="PostAdrPreferredToggle" Grid.Column="1" Header="Preferred"
+                                                          AutomationProperties.AutomationId="Timeline.Post.Adr.Preferred" />
+                                        </Grid>
+                                        <Button x:Name="ReviewPostAdrTakeButton" Content="Apply take review" Click="ReviewPostAdrTake_Click"
+                                                AutomationProperties.AutomationId="Timeline.Post.Adr.ApplyReview" />
+                                        <Button Content="Record ADR (unavailable)" IsEnabled="False"
+                                                AutomationProperties.AutomationId="Timeline.Post.Adr.Record"
+                                                AutomationProperties.HelpText="Native audio recording is not implemented. Import a recording as project media, then register it as a take." />
+                                        <TextBlock Text="Native ADR recording is unavailable. Import or pre-record audio into project media, then register it above."
+                                                   TextWrapping="Wrap" Style="{StaticResource StudioCaptionTextStyle}" />
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Reconform" IsExpanded="True">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <ComboBox x:Name="PostReconformKindComboBox" Header="Edit kind" SelectedIndex="0"
+                                                  AutomationProperties.AutomationId="Timeline.Post.Reconform.Kind">
+                                            <ComboBoxItem Content="Insert" Tag="insert" />
+                                            <ComboBoxItem Content="Delete" Tag="delete" />
+                                            <ComboBoxItem Content="Move" Tag="move" />
+                                        </ComboBox>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <TextBox x:Name="PostOldStartTextBox" Grid.Column="0" Header="Old start sample" Text="0" />
+                                            <TextBox x:Name="PostOldEndTextBox" Grid.Column="1" Header="Old end sample" Text="0" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <TextBox x:Name="PostNewStartTextBox" Grid.Column="0" Header="New start sample" Text="0" />
+                                            <TextBox x:Name="PostNewEndTextBox" Grid.Column="1" Header="New end sample" Text="0" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <Button x:Name="PreviewPostReconformButton" Grid.Column="0" Content="Preview reconform" Click="PreviewPostReconform_Click"
+                                                    AutomationProperties.AutomationId="Timeline.Post.Reconform.Preview" />
+                                            <Button x:Name="ApplyPostReconformButton" Grid.Column="1" Content="Apply reconform" Click="ApplyPostReconform_Click"
+                                                    IsEnabled="False" AutomationProperties.AutomationId="Timeline.Post.Reconform.Apply" />
+                                        </Grid>
+                                        <TextBlock x:Name="PostReconformPreviewText" Text="No reconform preview." TextWrapping="Wrap"
+                                                   IsTextSelectionEnabled="True" AutomationProperties.LiveSetting="Polite"
+                                                   AutomationProperties.AutomationId="Timeline.Post.Reconform.Conflicts" />
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Interchange" IsExpanded="True">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <Button Grid.Column="0" Content="Import canonical post JSON" Click="ImportPostJson_Click" />
+                                            <Button Grid.Column="1" Content="Export canonical post JSON" Click="ExportPostJson_Click" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <Button Grid.Column="0" Content="Import CMX3600 EDL" Click="ImportPostCmx_Click" />
+                                            <Button Grid.Column="1" Content="Export CMX3600 EDL" Click="ExportPostCmx_Click" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <Button Grid.Column="0" Content="Import ADR CSV" Click="ImportPostAdrCsv_Click" />
+                                            <Button Grid.Column="1" Content="Export ADR CSV" Click="ExportPostAdrCsv_Click" />
+                                        </Grid>
+                                        <TextBlock x:Name="PostCompatibilityText" Text="No interchange report." TextWrapping="Wrap"
+                                                   IsTextSelectionEnabled="True" AutomationProperties.LiveSetting="Polite"
+                                                   AutomationProperties.AutomationId="Timeline.Post.Interchange.Report" />
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Audio layout metadata" IsExpanded="True">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <ComboBox x:Name="PostAudioLayoutComboBox" Header="Layout" SelectedIndex="1"
+                                                  SelectionChanged="PostAudioLayout_SelectionChanged"
+                                                  AutomationProperties.AutomationId="Timeline.Post.AudioLayout.Layout">
+                                            <ComboBoxItem Content="Mono" Tag="mono" />
+                                            <ComboBoxItem Content="Stereo" Tag="stereo" />
+                                            <ComboBoxItem Content="5.1" Tag="5.1" />
+                                            <ComboBoxItem Content="7.1" Tag="7.1" />
+                                            <ComboBoxItem Content="Object" Tag="object" />
+                                        </ComboBox>
+                                        <ComboBox x:Name="PostAudioLayoutMediaComboBox" Header="Project media asset (optional)" DisplayMemberPath="Label" />
+                                        <Button x:Name="AddPostAudioLayoutButton" Content="Add layout metadata" Click="AddPostAudioLayout_Click"
+                                                AutomationProperties.AutomationId="Timeline.Post.AudioLayout.Add" />
+                                        <TextBlock x:Name="PostAudioCapabilityText" Text="Native stereo preview, render, and export are supported."
+                                                   TextWrapping="Wrap" AutomationProperties.AutomationId="Timeline.Post.AudioLayout.Capability" />
+                                        <Button Content="Add object position (unavailable)" IsEnabled="False"
+                                                AutomationProperties.AutomationId="Timeline.Post.AudioObject.Add"
+                                                AutomationProperties.HelpText="Object metadata is preserved, but native object controls and DSP are unavailable." />
+                                        <TextBlock x:Name="PostAudioLayoutsText" Text="No layout metadata." TextWrapping="Wrap"
+                                                   IsTextSelectionEnabled="True" />
+                                    </StackPanel>
+                                </Expander>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </PivotItem>
+
                     <PivotItem Header="Workflow">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel Padding="14" Spacing="14">

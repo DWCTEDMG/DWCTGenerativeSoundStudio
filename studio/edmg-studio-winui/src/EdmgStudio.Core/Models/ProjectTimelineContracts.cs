@@ -38,7 +38,11 @@ public readonly record struct TimelinePosition(long Samples);
 
 public sealed record ProjectTimebase
 {
-    public ProjectTimebase(int sampleRate = 48_000, FrameRate? frameRate = null)
+    public ProjectTimebase(
+        int sampleRate = 48_000,
+        FrameRate? frameRate = null,
+        bool dropFrame = false,
+        string startTimecode = "00:00:00:00")
     {
         if (sampleRate is < 8_000 or > 384_000)
         {
@@ -47,10 +51,24 @@ public sealed record ProjectTimebase
 
         SampleRate = sampleRate;
         FrameRate = frameRate ?? new FrameRate(30, 1);
+        if (dropFrame && FrameRate is not { Numerator: 30_000 or 60_000, Denominator: 1_001 })
+        {
+            throw new ArgumentException("Drop-frame timecode is supported only at 30000/1001 and 60000/1001.", nameof(dropFrame));
+        }
+
+        DropFrame = dropFrame;
+        StartTimecode = Timecode.Supports(FrameRate)
+            ? Timecode.Parse(startTimecode, FrameRate, dropFrame).ToString()
+            : !dropFrame && string.Equals(startTimecode, "00:00:00:00", StringComparison.Ordinal)
+                ? startTimecode
+                : throw new ArgumentException("Project start timecode requires a supported professional frame rate.", nameof(startTimecode));
     }
 
     public int SampleRate { get; }
     public FrameRate FrameRate { get; }
+    public bool DropFrame { get; }
+    public string StartTimecode { get; }
+    public long StartFrame => Timecode.Parse(StartTimecode, FrameRate, DropFrame).FrameNumber;
 
     public TimelinePosition FromSeconds(double seconds)
     {
@@ -71,6 +89,12 @@ public sealed record ProjectTimebase
     public long ToFrame(TimelinePosition position) => checked((long)Math.Round(
         (decimal)position.Samples * FrameRate.Numerator / (SampleRate * FrameRate.Denominator),
         MidpointRounding.AwayFromZero));
+
+    public Timecode ToTimecode(TimelinePosition position) =>
+        Timecode.FromFrameNumber(checked(StartFrame + ToFrame(position)), FrameRate, DropFrame);
+
+    public TimelinePosition FromTimecode(string value) =>
+        FromFrame(checked(Timecode.Parse(value, FrameRate, DropFrame).FrameNumber - StartFrame));
 }
 
 public sealed record SourcePosition
@@ -227,6 +251,7 @@ public static class ProjectTimelineContracts
             metadata,
             timeline);
         ProfessionalEditingContracts.ValidateAgainstProject(canonical, ProfessionalEditingContracts.Read(timeline));
+        PostProductionContracts.ValidateAgainstProject(canonical, PostProductionContracts.Read(timeline));
         return canonical;
     }
 
@@ -241,7 +266,9 @@ public static class ProjectTimelineContracts
             {
                 ["numerator"] = project.Timebase.FrameRate.Numerator,
                 ["denominator"] = project.Timebase.FrameRate.Denominator
-            }
+            },
+            ["drop_frame"] = project.Timebase.DropFrame,
+            ["start_timecode"] = project.Timebase.StartTimecode
         };
 
         var tracks = new JsonArray();
@@ -333,7 +360,9 @@ public static class ProjectTimelineContracts
         FrameRate frameRate = frameRateNode is JsonObject rate
             ? new FrameRate(ReadInt32(rate["numerator"], 30), ReadInt32(rate["denominator"], 1))
             : FromDecimalFrameRate(ReadDouble(frameRateNode ?? timeline["fps"], 30));
-        return new ProjectTimebase(sampleRate, frameRate);
+        bool dropFrame = ReadBoolean(timebase?["drop_frame"]);
+        string startTimecode = ReadString(timebase?["start_timecode"]) ?? (dropFrame ? "00:00:00;00" : "00:00:00:00");
+        return new ProjectTimebase(sampleRate, frameRate, dropFrame, startTimecode);
     }
 
     private static IReadOnlyList<Track> ReadTracks(JsonObject timeline, ProjectTimebase timebase)
