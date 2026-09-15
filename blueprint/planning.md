@@ -203,7 +203,7 @@ Remaining advanced audio work belongs to Phase 5 and later phases: complete bus 
 
 ### Phase 5 - Mixer / VST3
 
-**Status:** In progress. No Phase 5 implementation commit has been created yet.
+**Status:** In progress. Initial routing/PDC planning is implemented; the complete Phase 5 acceptance gate remains open.
 
 #### Prerequisite correctness work — 2026-09-15
 
@@ -219,6 +219,15 @@ The first implementation slice hardens the existing Phase 4 playback foundation 
 This is prerequisite work, not Phase 5 acceptance. Mixer routes, PDC, plugin scanning/quarantine, VST3 processing and their Studio controls remain open. Full device playback qualification remains separate from unit tests and shell launch checks.
 
 Validation for this slice: 389 Core tests passed; complete Debug WinUI solution build passed (existing analyzer and unused-meter-event warnings remain). Direct unpackaged launch with backend spawning disabled displayed "This application could not be started"; invoking the DLL through dotnet also exited unsuccessfully. No responsive Studio shell or real-device playback is claimed.
+
+#### Initial mixer graph slice — 2026-09-15
+
+- Immutable channel, insert, pre/post-fader send, route-delay and channel-latency contracts live in `Core/Audio/MixerGraph.cs`.
+- The graph builder validates IDs, destinations, values, terminal master routing and feedback cycles before producing a deterministic topological processing order.
+- The PDC planner aligns parallel incoming routes in samples, including nested buses and FX sends. Bypassed inserts retain their reported latency; disabled inserts contribute none.
+- Current audio routes adapt to the graph without changing project persistence. The existing Windows engine still rejects unsupported pan and bus processing.
+- Timeline exposes a collapsible routing/latency inspector that explicitly identifies the result as a plan, with native plugin processing and compensation buffers inactive.
+- Remaining: channel-strip editing and persistence, mute/solo propagation through buses, actual bus/send DSP and delay buffers, meters, scanner/cache/quarantine, native plugin host, selection synchronization and live acceptance.
 
 #### Goals
 

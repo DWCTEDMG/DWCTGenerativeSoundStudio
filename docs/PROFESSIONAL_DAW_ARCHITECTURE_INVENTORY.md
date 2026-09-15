@@ -69,6 +69,15 @@ FFmpeg preview decoding is a media-preview facility. It is not the DAW audio eng
 
 ## Audio backend inventory
 
+### Subsequent implementation — 2026-09-15
+
+The baseline description below is historical. `Core/Audio/TransportService.cs` and
+`Services/WindowsAudioEngine.cs` now provide the Phase 4 playback foundation.
+`Core/Audio/AudioPlaybackCursor.cs` owns loop/discontinuity tracking, while
+`Core/Audio/MixerGraph.cs` owns initial immutable routing validation and PDC planning.
+The Timeline routing inspector presents the plan; it does not certify active
+plugin DSP, compensation delay buffers, mixer persistence or hardware playback.
+
 No production real-time DAW audio backend exists at this baseline. The repository has audio upload, offline analysis, FFmpeg media decoding, and preview transport controls, but it does not have an authoritative sample clock, ASIO/WASAPI device backend, multitrack render graph, real-time callback boundary, routing, metering, or glitch-safety tests.
 
 Phase 4 must introduce narrow transport, device, and render-graph interfaces with a deterministic fake backend before native output. UI, AI, filesystem, network, allocation-heavy, and blocking work must never execute on the real-time callback.

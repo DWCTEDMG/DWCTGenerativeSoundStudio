@@ -95,6 +95,7 @@ public sealed class WindowsAudioEngine : IAudioEngine
             throw new InvalidOperationException(FailureMessage, failure);
         }
         _ = new AudioRenderGraph(configuration);
+        _ = MixerGraphBuilder.FromAudioRoutes(configuration);
         AudioTrackRoute? unsupportedRoute = configuration.Tracks.FirstOrDefault(
             route => Math.Abs(route.Pan) > float.Epsilon ||
                      !string.Equals(route.OutputBusId, "master", StringComparison.OrdinalIgnoreCase));

@@ -190,6 +190,17 @@
                 <TextBlock x:Name="AudioEngineStatusText"
                            Text="Audio: not configured"
                            Style="{StaticResource StudioCaptionTextStyle}" />
+                <Expander Header="Mixer routing and latency" HorizontalAlignment="Stretch"
+                          AutomationProperties.AutomationId="Timeline.MixerRouting">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Routing plan only. Native plugin processing and compensation delay buffers are not active."
+                                   TextWrapping="Wrap" Style="{StaticResource StudioCaptionTextStyle}" />
+                        <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto">
+                            <TextBlock x:Name="MixerRoutingText" Text="Load a project to inspect its audio routes."
+                                       TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                        </ScrollViewer>
+                    </StackPanel>
+                </Expander>
             </StackPanel>
         </Border>
 

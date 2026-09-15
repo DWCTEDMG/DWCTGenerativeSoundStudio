@@ -2941,6 +2941,7 @@ public sealed partial class TimelinePage : Page
             if (project is null || string.IsNullOrWhiteSpace(projectId))
             {
                 AudioEngineStatusText.Text = "Audio: not configured";
+                MixerRoutingText.Text = "Load a project to inspect its audio routes.";
                 return;
             }
 
@@ -2952,6 +2953,7 @@ public sealed partial class TimelinePage : Page
 
             long generation = Interlocked.Increment(ref _audioGraphGeneration);
             AudioEngineStatusText.Text = "Audio: preparing project media...";
+            MixerRoutingText.Text = "Preparing audio routes...";
             try
             {
                 await App.Services.AudioEngine.RefreshDevicesAsync(cancellationToken);
@@ -2975,6 +2977,11 @@ public sealed partial class TimelinePage : Page
                     deviceId,
                     DefaultAudioBufferFrames,
                     asset => localPaths.GetValueOrDefault(asset.Id));
+                MixerGraphPlan mixer = MixerGraphBuilder.FromAudioRoutes(graph.Configuration);
+                var trackNames = project.Tracks.ToDictionary(track => track.Id, track => track.Name);
+                MixerRoutingText.Text = $"Modeled insert latency: {mixer.TotalLatencySamples} samples\n" +
+                    string.Join("\n", mixer.Routes.Select(route =>
+                        $"{trackNames.GetValueOrDefault(route.SourceId, route.SourceId)} → Master · compensation {route.DelaySamples} samples"));
                 await App.Services.AudioEngine.ConfigureAsync(graph.Configuration, cancellationToken);
                 await App.Services.AudioEngine.EnqueueTransportStateAsync(App.Services.Transport.State, cancellationToken);
                 if (generation != Volatile.Read(ref _audioGraphGeneration) ||
@@ -3001,6 +3008,7 @@ public sealed partial class TimelinePage : Page
                 }
 
                 AudioEngineStatusText.Text = "Audio: unavailable";
+                MixerRoutingText.Text = $"Audio routing could not be activated: {exception.Message}";
                 ShowInfo($"Timeline loaded, but audio playback could not be prepared: {exception.Message}", InfoBarSeverity.Warning);
             }
         }
