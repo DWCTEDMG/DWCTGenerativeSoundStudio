@@ -5,6 +5,11 @@ This directory contains the authoritative **FastAPI** backend and the maintained
 is the native WinUI 3 client in [`../edmg-studio-winui`](../edmg-studio-winui/README.md). Both clients
 use the same backend, project format, Studio Home, and model/runtime state.
 
+This directory is not the current Windows product surface. The native WinUI 3 client is the only
+active Windows UI; the Electron/React client and its launch/build commands below are retained for
+Linux, browser development, and compatibility. See the [WinUI 3 consolidated blueprint](../../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md)
+for the current status, capability boundaries, and release gates.
+
 The shared Studio stack includes:
 
 - Local **FastAPI** backend for projects, assets, planning, rendering, outputs, and managed runtimes
@@ -117,6 +122,8 @@ manager version is pinned via `packageManager` in `package.json`.
 On Windows, use the root `RUN_ME.bat` to build and launch the current unpackaged WinUI source tree.
 `pnpm run dev` starts the Electron compatibility client; for browser-only UI work use
 `pnpm exec vite --host 127.0.0.1 --port 5173 --strictPort`.
+Neither command is a Windows release-candidate launch path; release validation uses the signed
+registered WinUI package described in the Windows packaging README.
 
 To repoint the desktop/dev frontend at a different backend target without hand-editing the bootstrap
 files, run one of these from `studio/edmg-studio/`:

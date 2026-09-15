@@ -3,6 +3,10 @@
 This repo contains one primary Studio product, two desktop clients, and several
 compatibility surfaces.
 
+The [WinUI 3 consolidated blueprint](../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md) is the current
+cross-project status and forward-gate reference. WinUI is the only active Windows product surface;
+the Electron client and other surfaces listed here remain compatibility or platform-specific paths.
+
 ## Canonical product
 
 The authoritative Studio runtime architecture is:

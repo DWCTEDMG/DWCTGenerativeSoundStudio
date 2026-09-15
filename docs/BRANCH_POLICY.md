@@ -14,10 +14,9 @@ honestly.
 | Release | `release/x.y` | Freeze lane for packaging, SBOM generation, clean-machine smoke, and release evidence when needed. |
 | Implementation | `codex/*`, `feature/*`, equivalent short-lived branches | Work-package branches that are deleted after merge and are not release channels. |
 
-The current historical default branch, `codex/Unified`, must be migrated to `main` through an
-explicit repository-admin operation after the modernization branch is reviewed. Existing temporary
-integration branches may continue during that transition, but no automation or local commit should
-silently retarget the repository default branch.
+The repository currently reports `codex/Unified` as its default branch. It may be migrated to
+`main` through an explicit repository-admin operation later, but no automation or local commit
+should silently retarget the default branch before that operation.
 
 ## Required `main` protection
 

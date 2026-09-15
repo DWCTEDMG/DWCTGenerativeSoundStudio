@@ -1,5 +1,9 @@
 # Master Blueprint implementation evidence
 
+Use the [WinUI 3 consolidated blueprint](../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md) as the
+current forward index. This file records implementation evidence and historical checkpoints; its
+older open/partial statements must not override newer source, tests, or accepted phase records.
+
 Status: partial implementation; no master-blueprint milestone is complete.
 
 ## CUDA runtime and Workspace validation checkpoint — 2026-09-09

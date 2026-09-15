@@ -13,6 +13,8 @@ The original DWCTEDMG codebase remains the engine + integrations, but Studio is 
 canonical product surface and can install the EDMG Core engine into the same workflow.
 For release/install operations, use [docs/STUDIO_RELEASE_RUNBOOK.md](docs/STUDIO_RELEASE_RUNBOOK.md) and [RELEASE.md](RELEASE.md).
 For the top-level repo surface and compatibility map, see [docs/STUDIO_REPO_MAP.md](docs/STUDIO_REPO_MAP.md).
+For the reconciled WinUI status, phase evidence, capability boundaries, and forward gates, use
+[blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md](blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md).
 
 ## Authoritative product path
 
@@ -22,8 +24,9 @@ From the repo root:
 - `./run_me.sh`
 
 On Windows, the root launcher runs the current WinUI source output directly; on Linux use the
-Electron/React Studio launcher. Installed releases continue to launch through their registered
-package identity.
+Electron/React Studio launcher. Installed Windows releases continue to launch through their
+registered WinUI package identity. Electron is a compatibility surface and is not the Windows
+release candidate.
 
 That launcher keeps the Studio product aligned with the same `Studio Home`, backend port,
 and runtime data that the in-app Setup page uses.
@@ -34,6 +37,10 @@ The primary Windows customer artifact is `EDMG-Studio-<version>-windows-x64-Setu
 signed, self-contained WinUI MSIX so package identity remains available for activation, Credential
 Locker, and Windows integrations. Electron installers are compatibility artifacts, not the default
 Windows release.
+
+Build and launch only from a fresh reviewed candidate. Do not launch generated packaged executables
+directly or reuse an output directory from another candidate; use the source x64 route for development
+and the signed registered package for release validation.
 
 ## Quick start (dev)
 

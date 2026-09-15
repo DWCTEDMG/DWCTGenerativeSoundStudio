@@ -6,6 +6,11 @@ WinUI package with the production FastAPI backend. MSIX remains the internal app
 container so package identity, Credential Locker, and Windows integrations keep
 working. Electron installers remain explicit compatibility artifacts.
 
+The consolidated status, phase evidence, and no-stale-artifact rules are in the
+[WinUI 3 consolidated blueprint](../../../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md). This
+packaging README is the Windows build procedure; Linux/Electron and legacy packaging instructions
+must not be used to select the Windows release candidate.
+
 ## Prereqs
 
 - Windows 10/11 x64
@@ -112,6 +117,10 @@ desktop version, accelerator profile, desktop executable, final backend
 manifest, and backend binary. The archive is always rebuilt from the current
 `dist/win-unpacked` tree; release packaging has no stale-payload reuse switch.
 The build machine still needs 7-Zip to create the archive.
+
+Every release build starts from a clean, reviewed candidate and produces fresh output directories.
+Inspect the package identity, signing evidence, backend manifest, checksums, and smoke results for
+that exact candidate before installation or Store submission.
 
 Outputs:
 

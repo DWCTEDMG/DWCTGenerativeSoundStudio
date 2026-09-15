@@ -1,5 +1,9 @@
 # Unified Internal Renderer Plan
 
+This renderer plan is subordinate to the current [WinUI 3 consolidated blueprint](../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md).
+It describes shared backend rendering internals; a renderer change is not a completed product feature
+until the WinUI controls, preflight state, receipts, and release evidence are updated together.
+
 ## Canonical entrypoint
 
 Studio still has one canonical video render entrypoint:

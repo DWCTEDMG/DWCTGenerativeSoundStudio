@@ -4,6 +4,11 @@
 
 This document consolidates the Professional DAW work completed in EDMG Studio, the architecture and safety decisions made during that work, and the planned implementation sequence through Phase 13.
 
+The cross-document WinUI status, current capability boundaries, release gates, and superseded-material
+list are consolidated in [`WINUI3_CONSOLIDATED_BLUEPRINT.md`](WINUI3_CONSOLIDATED_BLUEPRINT.md).
+This phase ledger remains the detailed historical and acceptance record; it does not override source
+code, tests, or the stricter fail-closed rules in the consolidated blueprint.
+
 The Professional DAW roadmap is preserved here from the available records; the external master blueprint is an optional workstation audit reference and was absent during the 2026-09-15 audit. Its Professional DAW phases 0-13 are separate from the 14-item WinUI Native Experience roadmap. The Studio desktop UI under `studio/edmg-studio-winui/` remains the primary user surface; backend capabilities are not considered complete until users can drive them from the Studio UI where applicable.
 
 ## 2. Delivery Rules

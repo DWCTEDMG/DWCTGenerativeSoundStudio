@@ -6,6 +6,9 @@ This older shell is retained for compatibility. The canonical Studio surfaces ar
 - `studio/edmg-studio/` for the shared backend and maintained Linux/compatibility client
 
 Use the root launcher (`RUN_ME.bat` / `./run_me.sh`) or see [`README_STUDIO.md`](../../README_STUDIO.md) for the current product entrypoint.
+The [WinUI 3 consolidated blueprint](../../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md) is the
+current Windows status and release-gate reference. This shell must not be used as a Windows release
+candidate.
 
 This is a **JSON-first** Electron GUI for the Enhanced Deforum Music Generator.
 It starts the FastAPI backend automatically (CPU-first) and gives you a full

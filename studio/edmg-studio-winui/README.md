@@ -4,6 +4,12 @@ This directory contains the packaged WinUI 3 primary Windows frontend for EDMG S
 The established Electron/React client remains available for Linux and compatibility. Both clients
 use the existing CUDA-capable FastAPI backend; WinUI does not duplicate inference or render logic.
 
+The current cross-project status and forward acceptance gates are in the
+[WinUI 3 consolidated blueprint](../../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md), alongside the
+[Professional DAW phase ledger](../../blueprint/planning.md). WinUI 3 is the only active Windows
+product surface. Compatibility clients and historical plans must not be used to claim native
+capability, release readiness, or Windows parity.
+
 ## Native workflow coverage
 
 The primary native workflow is implemented:
@@ -165,6 +171,10 @@ Normal source builds are unpackaged (`WindowsPackageType=None`); release packagi
 The current implementation/verification ledger is
 [`docs/WINUI_PARITY_STATUS.md`](../../docs/WINUI_PARITY_STATUS.md). Core tests and a
 successful build do not establish launched-app stability or full Electron parity.
+
+Use a fresh x64 candidate for every build or launch check. Source development is unpackaged; a
+release candidate is a signed MSIX/Setup.exe launched through registered package identity. Do not
+launch a stale generated executable or treat an old package registration as current evidence.
 
 The focused backend data-freshness tests live in the existing Python test suite and should be run with the repository's frozen backend environment.
 

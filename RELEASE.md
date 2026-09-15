@@ -4,12 +4,18 @@ This is the Windows-first release checklist for the Studio product: the primary
 WinUI frontend in `studio/edmg-studio-winui/`, the shared backend in
 `studio/edmg-studio/`, and the established Electron compatibility/release lane.
 
+The [WinUI 3 consolidated blueprint](blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md) is the current
+status and forward-gate reference. Electron/Linux material in this checklist is compatibility
+coverage and must not become the Windows release candidate.
+
 This checklist defines procedures and acceptance gates; it is not a claim that
 the current installers exist or have passed them. Release evidence is valid only
 for the exact candidate produced by a successful current run.
 
-Stable and preview promotion follows [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.md). A build from
-`next` is a preview; only a protected `main` commit that passed the release gate is a stable release.
+Stable and preview promotion follows [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.md). The repository
+default branch is currently `codex/Unified`; `main` remains a future protected-production target
+until repository administration migrates the default. Never infer release readiness from branch name
+alone; use the exact candidate's gate evidence.
 
 ## Supported build environment
 
@@ -56,7 +62,8 @@ result is structural build evidence only and must not be distributed.
 
 ## Canonical repo hygiene
 
-- `studio/edmg-studio/` is the primary product surface.
+- `studio/edmg-studio-winui/` is the primary Windows product surface.
+- `studio/edmg-studio/` is the shared backend and compatibility client surface.
 - `studio/edmg-studio/` is also the canonical JS/pnpm root. Do not add a competing root `package.json` or alternate JS lockfile elsewhere in the repo.
 - `DWCTGenerativeSoundStudio-main/` is treated as duplicate local noise and is
   ignored. Do not import it into the canonical repo.

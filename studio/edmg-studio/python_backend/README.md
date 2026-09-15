@@ -1,5 +1,10 @@
 # EDMG Studio Backend (v1.2.0)
 
+This backend supports the native WinUI 3 Windows product and the Electron/React Linux and
+compatibility client. Backend work is not a complete product feature until the native WinUI surface
+exposes the capability where applicable. The current cross-project status and qualification rules
+are in the [WinUI 3 consolidated blueprint](../../../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md).
+
 ## Run
 ```bash
 uv lock --check

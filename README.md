@@ -6,17 +6,24 @@ This repository now combines:
 - legacy A1111 / engine integration paths
 - installer and build tooling for compatibility and advanced workflows
 
-EDMG Studio is the authoritative product surface. The other repo-root entrypoints
-remain available for compatibility, migration, and engine-specific workflows,
-but they are not equal alternatives to the Studio product.
+EDMG Studio is the authoritative product surface. The native WinUI 3 client is
+the only active Windows product surface; the other repo-root entrypoints remain
+available for compatibility, migration, Linux, and engine-specific workflows.
+They are not alternative Windows release paths.
+
+The current cross-project status and forward work list are maintained in the
+[WinUI 3 consolidated blueprint](blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md).
+Use it with [`blueprint/planning.md`](blueprint/planning.md); source code, tests,
+and accepted phase evidence remain authoritative over prose.
 
 ## Canonical product
 
-The Studio product spans two desktop clients and one authoritative backend:
+The Studio product has one active Windows client, one compatibility client, and
+one authoritative backend:
 
 - `studio/edmg-studio-winui/` — primary packaged Windows frontend
 - `studio/edmg-studio/` — shared FastAPI backend plus the Electron/React client
-  retained for Linux and compatibility
+  retained for Linux and compatibility; it is not the current Windows product
 
 Both clients use the same project format and authenticated localhost API. Audio
 analysis, AI/provider integration, CUDA/TensorRT inference, rendering, jobs,
@@ -66,7 +73,8 @@ macOS/Linux:
 On Windows, `RUN_ME.bat` builds and launches the current unpackaged WinUI source tree by default.
 `RUN_ME.bat electron` (or `compat`) opens the established Electron launcher when
 that compatibility surface is required. On Linux, `run_me.sh` continues to use
-the Electron/React Studio. The clients share Studio Home, backend settings, and
+the Electron/React Studio. These compatibility paths must not be used as the
+Windows release candidate. The clients share Studio Home, backend settings, and
 runtime data.
 
 ## Studio Setup

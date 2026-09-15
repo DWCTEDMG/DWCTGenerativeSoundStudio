@@ -6,6 +6,8 @@ license: openrail
 
 - [Root repo overview](../README.md)
 - [Studio entrypoint](../README_STUDIO.md)
+- [WinUI 3 consolidated blueprint](../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md)
+- [Professional DAW phase ledger](../blueprint/planning.md)
 - [Native WinUI client](../studio/edmg-studio-winui/README.md)
 - [Windows Setup.exe packaging](../studio/edmg-studio/packaging/windows/README.md)
 - [Backend and managed model runtimes](../studio/edmg-studio/python_backend/README.md)

@@ -1,7 +1,12 @@
 # WinUI-first parity implementation ledger
 
-Baseline: `51c6b7ec86c6207de32a1e54a634a41a16c660fd` (`codex/Unified`).
-Implementation branch: `codex/winui-parity-first`. Updated: 2026-09-07.
+Baseline: current `codex/Unified` default-branch history.
+Implementation branch: `codex/Unified`. Updated: 2026-09-15.
+
+The forward status and acceptance gates are maintained in the
+[WinUI 3 consolidated blueprint](../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md). This document
+remains the control-parity inventory; its open cells are not completed merely because the native
+solution builds.
 
 WinUI is the first delivery target. Electron is the functional baseline. Neither
 screen existence nor a passing build establishes capability parity. Existing

@@ -7,6 +7,10 @@ Electron/React compatibility UI. It
 wraps the existing Studio release and diagnostics surface with a small,
 cross-platform CLI that can:
 
+Use the [WinUI 3 consolidated blueprint](../../../../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md)
+for the current Windows release gates. `edmgctl` is an operator/support tool and does not make a
+compatibility or diagnostic result equivalent to a native WinUI qualification result.
+
 - inspect repo/tool/bootstrap state
 - report supervisor state inside the doctor surface
 - validate Studio-managed storage roots
