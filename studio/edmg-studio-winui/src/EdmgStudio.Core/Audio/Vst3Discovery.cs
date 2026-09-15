@@ -286,14 +286,20 @@ public sealed class Vst3ScannerClient(
 
     public static Vst3ScanResponse ParseResponse(string json, Vst3ModuleFingerprint expectedFingerprint)
     {
+        if (string.IsNullOrWhiteSpace(json) || json.Length > 4 * 1024 * 1024)
+            throw new InvalidDataException("The VST3 scanner returned an empty or oversized response.");
         try
         {
             Vst3ScanResponse? response = JsonSerializer.Deserialize<Vst3ScanResponse>(json, new JsonSerializerOptions
             {
-                PropertyNameCaseInsensitive = true
+                PropertyNameCaseInsensitive = true,
+                UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+                MaxDepth = 32
             });
             if (response is null || response.SchemaVersion != 1 || response.Plugins.IsDefault ||
-                response.Fingerprint != expectedFingerprint || response.Plugins.Any(plugin =>
+                response.Fingerprint != expectedFingerprint ||
+                response.Plugins.Select(plugin => plugin.PluginId).Distinct(StringComparer.Ordinal).Count() != response.Plugins.Length ||
+                response.Plugins.Any(plugin =>
                     string.IsNullOrWhiteSpace(plugin.PluginId) || string.IsNullOrWhiteSpace(plugin.Name) ||
                     plugin.AudioInputs < 0 || plugin.AudioOutputs < 0 || plugin.ReportedLatencySamples < 0))
                 throw new InvalidDataException("The VST3 scanner returned an invalid or mismatched response.");

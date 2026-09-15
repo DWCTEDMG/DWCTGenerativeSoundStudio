@@ -49,7 +49,13 @@ public sealed record AudioEngineConfiguration(
     string DeviceId,
     int SampleRate,
     int BufferFrames,
-    ImmutableArray<AudioTrackRoute> Tracks);
+    ImmutableArray<AudioTrackRoute> Tracks)
+{
+    public AudioEngineConfiguration ForDirectMasterPlayback() => this with
+    {
+        Tracks = Tracks.Select(route => route with { Pan = 0, OutputBusId = "master" }).ToImmutableArray()
+    };
+}
 
 public sealed class AudioRenderGraph
 {

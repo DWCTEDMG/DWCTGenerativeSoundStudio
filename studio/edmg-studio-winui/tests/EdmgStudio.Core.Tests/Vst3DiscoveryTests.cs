@@ -63,6 +63,26 @@ public sealed class Vst3DiscoveryTests
     }
 
     [TestMethod]
+    public void ScannerResponseRejectsUnknownOversizedAndDuplicateMetadata()
+    {
+        Vst3ModuleFingerprint fingerprint = Fingerprint("module.vst3", "aa");
+        string valid = JsonSerializer.Serialize(new Vst3ScanResponse(1, fingerprint, [Plugin("duplicate"), Plugin("duplicate")]));
+        Assert.ThrowsExactly<InvalidDataException>(() => Vst3ScannerClient.ParseResponse(valid, fingerprint));
+        Assert.ThrowsExactly<InvalidDataException>(() => Vst3ScannerClient.ParseResponse(valid[..^1] + ",\"unknown\":true}", fingerprint));
+        Assert.ThrowsExactly<InvalidDataException>(() => Vst3ScannerClient.ParseResponse(new string('x', 4 * 1024 * 1024 + 1), fingerprint));
+    }
+
+    [TestMethod]
+    public void UnavailableHostNeverClaimsScannerOrProcessingReadiness()
+    {
+        var host = new UnavailableVst3HostSession();
+        Assert.AreEqual(Vst3CapabilityState.Unavailable, host.Capabilities.State);
+        Assert.IsFalse(host.Capabilities.CanInstantiate);
+        Assert.IsFalse(host.Capabilities.CanProcessAudio);
+        Assert.IsFalse(host.Capabilities.IsCrashIsolated);
+    }
+
+    [TestMethod]
     public async Task MissingScannerReportsCapabilityFailureWithoutQuarantiningModule()
     {
         string root = CreateRoot();

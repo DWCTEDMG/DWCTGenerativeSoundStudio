@@ -4,13 +4,16 @@ namespace EdmgStudio.Core.Audio;
 
 public enum MixerChannelKind { Track, Group, FxReturn, Master }
 public enum MixerTap { PreFader, PostFader }
-public sealed record MixerInsert(string Id, int LatencySamples, bool Enabled = true, bool Bypassed = false);
+public sealed record MixerInsert(
+    string Id, int LatencySamples, bool Enabled = true, bool Bypassed = false,
+    string? PluginId = null, string? PresetName = null, string? StateBase64 = null);
 public sealed record MixerSend(string Id, string DestinationId, MixerTap Tap, float Gain);
 public sealed record MixerChannel(
     string Id, string Name, MixerChannelKind Kind, string? OutputId,
     ImmutableArray<MixerInsert> Inserts, ImmutableArray<MixerSend> Sends,
     float Gain = 1, float Pan = 0, bool Muted = false, bool Solo = false,
-    bool RecordArmed = false, bool InputMonitoring = false);
+    bool RecordArmed = false, bool InputMonitoring = false,
+    string Color = "#607D8B", bool Visible = true);
 public sealed record MixerChannelLatency(string ChannelId, long InputSamples, long InsertSamples, long OutputSamples);
 public sealed record MixerRouteDelay(string Id, string SourceId, string DestinationId, MixerTap Tap, float Gain, long DelaySamples);
 public sealed record MixerGraphPlan(
@@ -97,12 +100,15 @@ public static class MixerGraphBuilder
             string id = ready.Min!;
             ready.Remove(id);
             MixerChannel channel = byId[id];
-            long input = incoming[id].Select(edge => latency[edge.SourceId].OutputSamples).DefaultIfEmpty(0).Max();
+            long SourceLatency(MixerRouteDelay edge) => edge.Tap == MixerTap.PreFader
+                ? latency[edge.SourceId].InputSamples + latency[edge.SourceId].InsertSamples
+                : latency[edge.SourceId].OutputSamples;
+            long input = incoming[id].Select(SourceLatency).DefaultIfEmpty(0).Max();
             // Bypassed inserts retain latency; disabled inserts are removed from the processing graph.
             long inserts = channel.Inserts.Where(insert => insert.Enabled).Sum(insert => (long)insert.LatencySamples);
             latency[id] = new(id, input, inserts, checked(input + inserts));
             foreach (MixerRouteDelay edge in incoming[id])
-                routes.Add(edge with { DelaySamples = input - latency[edge.SourceId].OutputSamples });
+                routes.Add(edge with { DelaySamples = input - SourceLatency(edge) });
             order.Add(channel);
             foreach (MixerRouteDelay edge in outgoing[id])
                 if (--remaining[edge.DestinationId] == 0) ready.Add(edge.DestinationId);

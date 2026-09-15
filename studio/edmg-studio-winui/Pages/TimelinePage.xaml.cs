@@ -1048,6 +1048,12 @@ public sealed partial class TimelinePage : Page
         bool isAudioTrack = track is not null && IsAudioTrack(track);
         TimelineTrackMixerState? state = track is null ? null : TimelineMixerProjection.Project(track);
         bool canEdit = isAudioTrack && !_isBusy;
+        MixerDocument? document = _timelineDocument is null || _canonicalProject is null
+            ? null
+            : MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+        MixerChannelDocument? selectedChannel = document?.Channels.FirstOrDefault(channel => channel.Id == track?.Id);
+        string masterId = document?.Channels.SingleOrDefault(channel => channel.Kind == MixerChannelKind.Master)?.Id
+            ?? TimelineMixerProjection.MasterOutputId;
 
         SelectedMixerTrackTitle.Text = track?.Name ?? "No track selected";
         SelectedMixerTrackSubtitle.Text = track is null
@@ -1055,27 +1061,46 @@ public sealed partial class TimelinePage : Page
             : isAudioTrack
                 ? $"Audio channel • Track {track.Order + 1}"
                 : $"{track.Type} track • Mixer controls apply to audio tracks only.";
-        MixerGainNumberBox.Value = state?.Gain ?? double.NaN;
-        MixerPanNumberBox.Value = state?.Pan ?? double.NaN;
-        MixerMuteToggle.IsOn = state?.Muted ?? false;
-        MixerSoloToggle.IsOn = state?.Solo ?? false;
-        MixerRecordArmToggle.IsOn = state?.RecordArmed ?? false;
-        MixerInputMonitoringToggle.IsOn = state?.InputMonitoring ?? false;
-        SelectComboByTag(MixerOutputComboBox, TimelineMixerProjection.MasterOutputId);
-
-        string outputId = state?.OutputId ?? TimelineMixerProjection.MasterOutputId;
-        MixerOutputHintText.Text = string.Equals(
-            outputId,
-            TimelineMixerProjection.MasterOutputId,
-            StringComparison.OrdinalIgnoreCase)
-            ? "The current Windows engine supports master output only."
-            : $"Persisted route '{outputId}' is not supported by the current Windows engine. Applying changes routes this channel to Master.";
+        MixerGainNumberBox.Value = selectedChannel?.Gain ?? state?.Gain ?? double.NaN;
+        MixerPanNumberBox.Value = selectedChannel?.Pan ?? state?.Pan ?? double.NaN;
+        MixerMuteToggle.IsOn = selectedChannel?.Muted ?? state?.Muted ?? false;
+        MixerSoloToggle.IsOn = selectedChannel?.Solo ?? state?.Solo ?? false;
+        MixerRecordArmToggle.IsOn = selectedChannel?.RecordArmed ?? state?.RecordArmed ?? false;
+        MixerInputMonitoringToggle.IsOn = selectedChannel?.InputMonitoring ?? state?.InputMonitoring ?? false;
+        MixerOutputComboBox.Items.Clear();
+        if (document is not null)
+        {
+            foreach (MixerChannelDocument destination in document.Channels.Where(channel => channel.Kind is MixerChannelKind.Group or MixerChannelKind.Master))
+                MixerOutputComboBox.Items.Add(new ComboBoxItem { Content = destination.Name, Tag = destination.Id });
+        }
+        string outputId = selectedChannel?.OutputId ?? masterId;
+        SelectComboByTag(MixerOutputComboBox, outputId);
+        MixerOutputHintText.Text = string.Equals(outputId, masterId, StringComparison.OrdinalIgnoreCase)
+            ? "Windows AudioGraph playback currently supports master output only."
+            : $"Persisted route '{outputId}' is modeled by Core but not active in Windows AudioGraph playback.";
         MixerStatusText.Text = isAudioTrack
-            ? "Gain, mute, solo, record arm, monitoring, and output are saved in project undo history. Pan remains centered until Windows processing is available."
+            ? "Gain, constant-power pan, mute, solo, arm, monitor, and output are persisted. Core DSP supports buses, sends, PDC, and meters; Windows AudioGraph playback remains direct-route."
             : "Select an audio track to edit channel state.";
+        if (document is null)
+        {
+            MixerSurfaceText.Text = "Load a project to inspect the mixer.";
+            MixerInsertSendText.Text = "No channel selected.";
+            MixerPdcText.Text = "PDC: unavailable";
+        }
+        else
+        {
+            MixerGraphPlan plan = MixerGraphBuilder.Build(MixerDocumentCodec.ToMixerChannels(document));
+            MixerSurfaceText.Text = string.Join("\n", document.Channels.Select(channel =>
+                $"{channel.Kind} · {channel.Name} · {(channel.Muted ? "MUTE" : channel.Solo ? "SOLO" : "active")} · → {channel.OutputId ?? "device"}"));
+            MixerInsertSendText.Text = selectedChannel is null
+                ? "Select an audio channel to inspect its slots."
+                : $"Inserts: {(selectedChannel.Inserts.Length == 0 ? "None" : string.Join(", ", selectedChannel.Inserts.Select(insert => $"{insert.PluginId} ({(insert.Bypassed ? "bypassed" : "enabled")}, {insert.ReportedLatencySamples} samples)")))}\n" +
+                  $"Sends: {(selectedChannel.Sends.Length == 0 ? "None" : string.Join(", ", selectedChannel.Sends.Select(send => $"{send.Tap} → {send.DestinationId} @ {send.Gain:0.##}")))}";
+            MixerPdcText.Text = $"PDC plan: {plan.TotalLatencySamples} samples total · {plan.Routes.Count(route => route.DelaySamples > 0)} compensated route(s). Delay buffers are active in Core processing, not Windows AudioGraph playback.";
+        }
 
         MixerGainNumberBox.IsEnabled = canEdit;
-        MixerPanNumberBox.IsEnabled = false;
+        MixerPanNumberBox.IsEnabled = canEdit;
         MixerOutputComboBox.IsEnabled = canEdit;
         MixerMuteToggle.IsEnabled = canEdit;
         MixerSoloToggle.IsEnabled = canEdit;
@@ -1135,7 +1160,7 @@ public sealed partial class TimelinePage : Page
         var updatedState = current with
         {
             Gain = checked((float)gain),
-            Pan = 0,
+            Pan = checked((float)pan),
             Muted = MixerMuteToggle.IsOn,
             Solo = MixerSoloToggle.IsOn,
             RecordArmed = MixerRecordArmToggle.IsOn,
@@ -1146,7 +1171,9 @@ public sealed partial class TimelinePage : Page
         try
         {
             JsonObject before = CloneDocument(_timelineDocument);
-            JsonObject updated = TimelineMixerProjection.UpdateTrack(_timelineDocument, track.Id, updatedState);
+            MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject!);
+            JsonObject versioned = MixerDocumentCodec.Write(_timelineDocument, document);
+            JsonObject updated = TimelineMixerProjection.UpdateTrack(versioned, track.Id, updatedState);
             await CommitDocumentAsync(
                 before,
                 updated,
@@ -3141,7 +3168,8 @@ public sealed partial class TimelinePage : Page
                         string state = mixer.AudibleChannelIds.Contains(route.SourceId) ? "audible" : "inaudible";
                         return $"{trackNames.GetValueOrDefault(route.SourceId, route.SourceId)} → Master · {state} · compensation {route.DelaySamples} samples";
                     }));
-                await App.Services.AudioEngine.ConfigureAsync(graph.Configuration, cancellationToken);
+                AudioEngineConfiguration playbackConfiguration = graph.Configuration.ForDirectMasterPlayback();
+                await App.Services.AudioEngine.ConfigureAsync(playbackConfiguration, cancellationToken);
                 await App.Services.AudioEngine.EnqueueTransportStateAsync(App.Services.Transport.State, cancellationToken);
                 if (generation != Volatile.Read(ref _audioGraphGeneration) ||
                     !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
@@ -4047,10 +4075,15 @@ public sealed partial class TimelinePage : Page
         {
             _ = TimelineProjection.Project(parsed);
             _ = TimelineCameraProjection.Project(parsed);
+            if (_project is not null)
+            {
+                CanonicalProject candidateProject = ProjectTimelineContracts.FromTimeline(_project, parsed);
+                _ = MixerDocumentCodec.ReadOrMigrate(parsed, candidateProject);
+            }
             JsonObject before = CloneDocument(_timelineDocument);
             await CommitDocumentAsync(before, parsed, "timeline raw JSON applied");
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or InvalidDataException or ArgumentException)
         {
             ShowInfo(ex.Message, InfoBarSeverity.Error);
         }

@@ -674,7 +674,7 @@
                                                    SpinButtonPlacementMode="Compact"
                                                    AutomationProperties.AutomationId="Timeline.Mixer.Gain" />
                                         <NumberBox x:Name="MixerPanNumberBox"
-                                                   Header="Pan (processing unavailable)"
+                                                   Header="Pan"
                                                    Minimum="-1"
                                                    Maximum="1"
                                                    SmallChange="0.05"
@@ -711,9 +711,23 @@
                                                           Header="Input monitor"
                                                           AutomationProperties.AutomationId="Timeline.Mixer.InputMonitoring" />
                                         </Grid>
+                                        <ProgressBar x:Name="MixerPeakMeter" Minimum="0" Maximum="1" Value="0"
+                                                     AutomationProperties.Name="Selected channel peak meter" />
+                                        <TextBlock Text="Live metering is unavailable. Core peak/RMS processing infrastructure is implemented but not connected to Windows AudioGraph playback."
+                                                   TextWrapping="Wrap" Style="{StaticResource StudioCaptionTextStyle}" />
                                     </StackPanel>
                                 </Border>
 
+                                <Expander Header="Channels, buses, FX and master" IsExpanded="True">
+                                    <TextBlock x:Name="MixerSurfaceText" Text="Load a project to inspect the mixer."
+                                               TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                </Expander>
+                                <Expander Header="Inserts and sends">
+                                    <TextBlock x:Name="MixerInsertSendText" Text="No channel selected."
+                                               TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                </Expander>
+                                <TextBlock x:Name="MixerPdcText" Text="PDC: unavailable"
+                                           TextWrapping="Wrap" Style="{StaticResource StudioCaptionTextStyle}" />
                                 <TextBlock x:Name="MixerStatusText"
                                            Text="Mixer values are persisted with the selected track."
                                            TextWrapping="Wrap"

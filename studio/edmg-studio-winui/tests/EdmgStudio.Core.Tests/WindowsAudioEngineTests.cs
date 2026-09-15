@@ -8,6 +8,33 @@ namespace EdmgStudio.Core.Tests;
 public sealed class WindowsAudioEngineTests
 {
     [TestMethod]
+    public async Task CoreProcessorBoundaryIsAvailableWithoutClaimingAudioGraphProcessing()
+    {
+        var configuration = new AudioEngineConfiguration("project", "{default}", 48_000, 256,
+            [new AudioTrackRoute("track", "master", 1, 0, false, false, [])]);
+        MixerProcessor processor = WindowsAudioEngine.CreateCoreProcessor(configuration);
+        await using var engine = new WindowsAudioEngine();
+
+        Assert.AreEqual(256, processor.MaximumFrames);
+        StringAssert.Contains(engine.MixerProcessingCapability, "does not execute bus/send/PDC DSP");
+    }
+
+    [TestMethod]
+    public void DirectPlaybackProjectionPreservesModeledConfiguration()
+    {
+        var configuration = new AudioEngineConfiguration("project", "{default}", 48_000, 256,
+            [new AudioTrackRoute("track", "group", 0.8f, 0.5f, false, false, [])]);
+
+        AudioEngineConfiguration playback = configuration.ForDirectMasterPlayback();
+
+        Assert.AreEqual("group", configuration.Tracks[0].OutputBusId);
+        Assert.AreEqual(0.5f, configuration.Tracks[0].Pan);
+        Assert.AreEqual("master", playback.Tracks[0].OutputBusId);
+        Assert.AreEqual(0f, playback.Tracks[0].Pan);
+        Assert.AreEqual(0.8f, playback.Tracks[0].Gain);
+    }
+
+    [TestMethod]
     public async Task WorkerFailureClosesTransportQueueAndRejectsReconfiguration()
     {
         var failure = new InvalidOperationException("Injected playback failure");

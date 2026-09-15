@@ -45,6 +45,11 @@ public sealed class WindowsAudioEngine : IAudioEngine
     public AudioEngineConfiguration? Configuration => Volatile.Read(ref _configuration);
     public string? FailureMessage => Volatile.Read(ref _failure) is null ? null :
         "Audio playback stopped after an engine failure. Restart Studio to reopen the audio device.";
+    public string MixerProcessingCapability =>
+        "Core offline/host DSP boundary ready; Windows AudioGraph playback remains direct-route and does not execute bus/send/PDC DSP.";
+
+    internal static MixerProcessor CreateCoreProcessor(AudioEngineConfiguration configuration) =>
+        new(MixerGraphBuilder.FromAudioRoutes(configuration), configuration.BufferFrames);
 
     public async Task RefreshDevicesAsync(CancellationToken cancellationToken = default)
     {

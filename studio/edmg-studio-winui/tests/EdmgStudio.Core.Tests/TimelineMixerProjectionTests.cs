@@ -65,6 +65,24 @@ public sealed class TimelineMixerProjectionTests
     }
 
     [TestMethod]
+    public void UpdateTrack_AllowsPersistedBusAndSynchronizesMixerChannel()
+    {
+        JsonObject timeline = JsonNode.Parse("""
+            {"tracks":[{"id":"audio","type":"audio","clips":[]}],"mixer":{"schema_version":1,"channels":[
+              {"id":"audio","kind":"Track","output_id":"master"},
+              {"id":"group","kind":"Group","output_id":"master"},
+              {"id":"master","kind":"Master"}]}}
+            """)!.AsObject();
+        var state = new TimelineTrackMixerState("audio", "Audio", 0.5f, 0.25f, true, false, false, false, "group");
+
+        JsonObject updated = TimelineMixerProjection.UpdateTrack(timeline, "audio", state);
+
+        Assert.AreEqual("group", updated["tracks"]![0]!["routing"]!["bus"]!.GetValue<string>());
+        Assert.AreEqual("group", updated["mixer"]!["channels"]![0]!["output_id"]!.GetValue<string>());
+        Assert.AreEqual(0.5f, updated["mixer"]!["channels"]![0]!["gain"]!.GetValue<float>());
+    }
+
+    [TestMethod]
     public void ToMixerChannels_ProducesGraphCompatibleAudioTracks()
     {
         CanonicalProject project = Project("""

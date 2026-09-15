@@ -63,9 +63,22 @@ public static class TimelineMixerProjection
         {
             throw new ArgumentOutOfRangeException(nameof(state), "Track pan must be between -1 and 1.");
         }
-        if (!string.Equals(state.OutputId, MasterOutputId, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(state.OutputId))
         {
-            throw new ArgumentException("Only master output routing is currently supported.", nameof(state));
+            throw new ArgumentException("A mixer output route is required.", nameof(state));
+        }
+        JsonObject? persistedMixer = timeline[MixerDocumentCodec.PropertyName] as JsonObject;
+        if (persistedMixer is null &&
+            !string.Equals(state.OutputId, MasterOutputId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Legacy mixer state can route only to the master channel.", nameof(state));
+        }
+        if (persistedMixer?["channels"] is JsonArray persistedChannels &&
+            !persistedChannels.OfType<JsonObject>().Any(candidate =>
+                string.Equals(ReadString(candidate["id"]), state.OutputId, StringComparison.Ordinal) &&
+                !string.Equals(ReadString(candidate["kind"]), MixerChannelKind.Track.ToString(), StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ArgumentException($"Mixer output '{state.OutputId}' is not a bus or master channel.", nameof(state));
         }
 
         var updated = timeline.DeepClone().AsObject();
@@ -89,8 +102,23 @@ public static class TimelineMixerProjection
         track["record_armed"] = state.RecordArmed;
         track["input_monitoring"] = state.InputMonitoring;
         JsonObject routing = track["routing"] as JsonObject ?? [];
-        routing["bus"] = MasterOutputId;
+        routing["bus"] = state.OutputId;
         track["routing"] = routing;
+        if (updated[MixerDocumentCodec.PropertyName] is JsonObject mixer && mixer["channels"] is JsonArray channels)
+        {
+            JsonObject? channel = channels.OfType<JsonObject>().SingleOrDefault(candidate =>
+                string.Equals(ReadString(candidate["id"]), trackId, StringComparison.Ordinal));
+            if (channel is not null)
+            {
+                channel["gain"] = state.Gain;
+                channel["pan"] = state.Pan;
+                channel["muted"] = state.Muted;
+                channel["solo"] = state.Solo;
+                channel["record_armed"] = state.RecordArmed;
+                channel["input_monitoring"] = state.InputMonitoring;
+                channel["output_id"] = state.OutputId;
+            }
+        }
         return updated;
     }
 

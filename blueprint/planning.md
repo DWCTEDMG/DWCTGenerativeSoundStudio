@@ -46,9 +46,8 @@ Every relevant phase must preserve and test:
 
 - Repository: `DWCTEDMG/DWCTGenerativeSoundStudio`
 - Default working branch: `codex/Unified`
-- Latest completed Phase 5 slice: `a592ff1`.
-- Local `HEAD` and `origin/codex/Unified` matched at that revision after milestone validation.
-- The worktree was clean after the implementation commit was pushed.
+- Phase 5 acceptance closure is the commit containing this record; its exact pushed hash is recorded in the delivery ledger after publication.
+- Native VST3 discovery and processing remain capability-gated as unavailable because no qualified native SDK host/scanner is present.
 
 Relevant pushed commits:
 
@@ -208,7 +207,17 @@ Remaining advanced audio work belongs to Phase 5 and later phases: complete bus 
 
 ### Phase 5 - Mixer / VST3
 
-**Status:** In progress. Initial routing/PDC planning is implemented; the complete Phase 5 acceptance gate remains open.
+**Status:** Accepted for the managed mixer, persistence, discovery-safety, and Studio UI scope. Native VST3 scanning/hosting and live Windows AudioGraph mixer execution remain explicitly unavailable rather than being reported as ready.
+
+#### Acceptance closure — 2026-09-15
+
+- A versioned, extension-preserving mixer document persists tracks, groups, FX returns, master, inserts, sends, plugin state, routing, colors, visibility, and control state. Legacy projects receive safe defaults; newly added audio tracks reconcile into an existing mixer without discarding saved channel state.
+- `MixerProcessor` provides preallocated stereo gain/balance, bus and send summing, mute/solo audibility, cross-block PDC delay buffers, and peak/RMS snapshots behind the Core processing boundary.
+- The Timeline mixer surface synchronizes track selection, exposes persisted gain, pan, mute, solo, record, monitor, and output controls, and displays all channels, insert/send metadata, PDC diagnostics, and honest runtime limitations.
+- Windows AudioGraph playback receives a centered, direct-master compatibility projection so modeled pan and bus routes remain persisted without disabling legacy playback. It does not execute the Core bus/send/PDC processor or expose live meters.
+- Scanner responses are strictly bounded and parsed; cache, fingerprint invalidation, timeout/crash isolation, and quarantine remain active. With no native scanner or VST3 SDK host installed, capability is `Unavailable`, and no native plugin processing is claimed.
+- Raw Timeline JSON validates the mixer before publication, and malformed or unsupported mixer documents are surfaced as UI errors without replacing the active document.
+- Acceptance evidence: complete Debug WinUI solution build passed with 0 errors; 40 focused mixer/runtime tests passed; complete Core suite passed with 429 tests after review fixes. Existing analyzer warnings and the intentionally unused live-meter event remain.
 
 #### Prerequisite correctness work — 2026-09-15
 
@@ -255,9 +264,9 @@ Validation for this slice: 389 Core tests passed; complete Debug WinUI solution 
 
 - `TimelineMixerProjection` provides one extension-safe persisted contract for track gain, pan, mute, solo, record arm, input monitoring and output routing; legacy projects receive unity gain, centered pan, disabled control flags and master output defaults.
 - Mixer updates clone the timeline, validate finite control values and supported output routing before publication, and preserve unrelated timeline, track, routing and clip fields.
-- The Timeline Mixer inspector edits supported audio-track controls through the existing revision-checked autosave and undo/redo path. Selecting a clip selects its track, selecting a track header opens its channel strip, and selected-track view state survives reload when the track still exists. Persisted pan is visible but editing is disabled and Apply centers it until Windows pan processing exists.
-- Playback graph construction now consumes the same mixer projection as the UI, preventing default and normalization drift between persisted state and audio configuration.
-- The editor intentionally publishes only master output routing because current Windows playback rejects pan and non-master processing. Bus/send DSP, active pan, PDC buffers, meters and plugin processing remain open.
+- The Timeline Mixer inspector edits supported audio-track controls through the existing revision-checked autosave and undo/redo path. Selecting a clip selects its track, selecting a track header opens its channel strip, and selected-track view state survives reload when the track still exists.
+- Playback graph construction consumes the same mixer projection as the UI, preventing default and normalization drift between persisted state and audio configuration.
+- Modeled pan and bus routing remain visible and persisted while the Windows AudioGraph compatibility path plays centered tracks directly to master. Core bus/send/PDC/meter processing exists behind a deterministic processor boundary but is not connected to live AudioGraph playback.
 
 #### Goals
 
