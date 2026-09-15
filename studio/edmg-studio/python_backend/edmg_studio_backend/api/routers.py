@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import ValidationError
 
 from ..domain.continuity_validation import validate_project_continuity
@@ -54,9 +55,30 @@ from ..schemas import (
 )
 from ..services import internal_video_models
 from ..services.live_publishers import publish_status, start_live_publish, stop_live_publish
+from ..services.support_bundle import DiagnosticRoot, build_support_bundle
 from ..store.autosave import AutosaveJournal
 from ..store.projects import ProjectStore
 from .media import validate_timeline_media
+
+
+def create_support_router(*, logs_dir: Path, data_dir: Path) -> APIRouter:
+    router = APIRouter(tags=["support"])
+
+    @router.post("/v1/support/bundle")
+    def create_support_bundle() -> Response:
+        payload = build_support_bundle(
+            (
+                DiagnosticRoot("logs", logs_dir),
+                DiagnosticRoot("diagnostics", data_dir / "diagnostics"),
+            )
+        )
+        return Response(
+            content=payload,
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="edmg-studio-support.zip"'},
+        )
+
+    return router
 
 
 def create_system_router(
