@@ -881,6 +881,7 @@ def test_legacy_tensorrt_deforum_job_executes_canonical_video_path(tmp_path, mon
             "video_abs": absolute_video,
         }
 
+    monkeypatch.setattr(app_module, "store", store)
     monkeypatch.setattr(app_module, "jobs", jobs)
     monkeypatch.setattr(app_module, "_run_internal_video", fake_run_internal_video)
 
@@ -923,6 +924,7 @@ def test_legacy_tensorrt_deforum_job_discards_untrusted_persisted_paths(tmp_path
         calls.append(dict(payload))
         return {"ok": True, "video": "outputs/videos/canonical.mp4", "mode": "tensorrt"}
 
+    monkeypatch.setattr(app_module, "store", store)
     monkeypatch.setattr(app_module, "jobs", jobs)
     monkeypatch.setattr(app_module, "_run_internal_video", fake_run_internal_video)
 

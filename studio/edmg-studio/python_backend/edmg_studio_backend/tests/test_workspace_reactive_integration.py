@@ -28,6 +28,9 @@ def workspace(tmp_path, monkeypatch):
         "markers": [{"id": "manual-cue", "t": 1.25, "label": "Keep this cue"}],
         "camera": {"keyframes": [{"id": "manual-camera", "t": 1.25, "zoom": 1.37}]},
     }
+    audio_path = store.project_dir(project.id) / "assets" / "audio" / "music.wav"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"workspace-audio-fixture")
     store.save(project)
     monkeypatch.setattr(backend_app, "store", store)
     monkeypatch.setattr(backend_app, "jobs", jobs)
@@ -182,6 +185,8 @@ def test_reactive_value_refinements_survive_reanalysis_and_common_apply(workspac
     assert saved["reactive"]["metadata"]["extension"] == {"keep": "metadata"}
     assert saved["reactive"]["keyframes"][0]["extension"] == {"keep": "keyframe"}
     features["bpm"] = 130
+    audio_path = store.project_dir(project.id) / "assets" / "audio" / "music.wav"
+    audio_path.write_bytes(audio_path.read_bytes() + b"-reanalyzed")
     refreshed = _analyze(workspace)
     assert refreshed["draft"]["draft_id"] != saved["draft"]["draft_id"]
     assert refreshed["reactive"]["metadata"]["analysis_revision"] == 2
@@ -371,8 +376,19 @@ def test_accepting_qwen_job_prepares_reactive_draft_without_applying_timeline(wo
     job.status = "succeeded"
     job.result = {"status": "draft", "document": proposal, "provenance": {"test_fixture": True}}
     jobs.save(job)
+    store.mutate(project.id, lambda value: value.meta.update(director_job={
+        "version": 1,
+        "job_id": job.id,
+        "status": "review_ready",
+        "reviewed": False,
+    }))
     prior = _workflow(workspace)
-    _post(workspace, f"/director/drafts/{job.id}/apply", {"expected_revision": current.revision})
+    reviewed = _post(workspace, f"/director/drafts/{job.id}/review", {
+        "expected_revision": store.get(project.id).revision,
+    })
+    _post(workspace, f"/director/drafts/{job.id}/apply", {
+        "expected_revision": reviewed["revision"],
+    })
     refreshed = _workflow(workspace)
     assert refreshed["status"] == "draft"
     assert refreshed["draft"]["draft_id"] != prior["draft"]["draft_id"]
