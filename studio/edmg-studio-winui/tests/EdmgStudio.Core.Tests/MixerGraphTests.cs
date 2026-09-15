@@ -81,4 +81,68 @@ public sealed class MixerGraphTests
         CollectionAssert.AreEqual(first.Routes.ToArray(), second.Routes.ToArray());
         Assert.AreEqual(12L, first.TotalLatencySamples);
     }
+
+    [TestMethod]
+    public void MutedBusSilencesItsSourcesWithoutSilencingParallelRoutes()
+    {
+        MixerGraphPlan plan = MixerGraphBuilder.Build([
+            Track("through-muted-bus", 0, "bus"), Track("direct", 0),
+            new("bus", "Bus", MixerChannelKind.Group, "master", [], [], Muted: true), Master]);
+
+        CollectionAssert.AreEquivalent(
+            new[] { "direct", "master" },
+            plan.AudibleChannelIds.ToArray());
+    }
+
+    [TestMethod]
+    public void SoloedBusIncludesItsSourcesAndExcludesUnrelatedTracks()
+    {
+        MixerGraphPlan plan = MixerGraphBuilder.Build([
+            Track("inside", 0, "bus"), Track("outside", 0),
+            new("bus", "Bus", MixerChannelKind.Group, "master", [], [], Solo: true), Master]);
+
+        CollectionAssert.AreEquivalent(
+            new[] { "inside", "bus", "master" },
+            plan.AudibleChannelIds.ToArray());
+    }
+
+    [TestMethod]
+    public void SoloedTrackKeepsItsFxAndOutputPathAudible()
+    {
+        MixerChannel soloed = Track("soloed", 0) with
+        {
+            Solo = true,
+            Sends = [new("verb", "fx", MixerTap.PostFader, 0.5f)]
+        };
+        MixerGraphPlan plan = MixerGraphBuilder.Build([
+            soloed, Track("other", 0),
+            new("fx", "FX", MixerChannelKind.FxReturn, "master", [], []), Master]);
+
+        CollectionAssert.AreEquivalent(
+            new[] { "soloed", "fx", "master" },
+            plan.AudibleChannelIds.ToArray());
+    }
+
+    [TestMethod]
+    public void MixerServicePublishesValidatedVersionedSnapshots()
+    {
+        var service = new MixerService();
+        MixerSnapshot initial = service.Current;
+        MixerSnapshot replacement = service.Replace([Track("track", 24), Master]);
+
+        Assert.AreEqual(initial.Revision + 1, replacement.Revision);
+        Assert.AreSame(replacement, service.Current);
+        Assert.AreEqual(24L, service.Current.Plan.TotalLatencySamples);
+        Assert.Throws<ArgumentException>(() => service.Replace([Track("bad", 0, "missing"), Master]));
+        Assert.AreSame(replacement, service.Current);
+    }
+
+    [TestMethod]
+    public void InvalidChannelGainAndPanFailBeforePublication()
+    {
+        Assert.Throws<ArgumentException>(() => MixerGraphBuilder.Build([
+            Track("gain", 0) with { Gain = float.PositiveInfinity }, Master]));
+        Assert.Throws<ArgumentException>(() => MixerGraphBuilder.Build([
+            Track("pan", 0) with { Pan = 2 }, Master]));
+    }
 }

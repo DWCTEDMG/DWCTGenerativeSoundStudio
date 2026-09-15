@@ -229,6 +229,14 @@ Validation for this slice: 389 Core tests passed; complete Debug WinUI solution 
 - Timeline exposes a collapsible routing/latency inspector that explicitly identifies the result as a plan, with native plugin processing and compensation buffers inactive.
 - Remaining: channel-strip editing and persistence, mute/solo propagation through buses, actual bus/send DSP and delay buffers, meters, scanner/cache/quarantine, native plugin host, selection synchronization and live acceptance.
 
+#### Mixer snapshot and audibility slice — 2026-09-15
+
+- `MixerService` atomically publishes validated, immutable, monotonically versioned graph snapshots from the control thread.
+- Mixer channels now carry validated gain, pan, mute, solo, record-arm and input-monitor state without changing persisted project contracts.
+- Graph planning precomputes bus-aware audible channel IDs: muted buses suppress upstream sources, soloed buses retain their input path, and soloed tracks retain downstream bus, send and master paths.
+- Legacy audio routes transfer track gain, pan, mute and solo state into the mixer plan; the Timeline routing inspector labels each route audible or inaudible.
+- This remains control-thread planning. Actual bus/send mixing, compensation delay buffers, meters, mixer editing/persistence and native plugin processing remain open.
+
 #### Goals
 
 - mixer service

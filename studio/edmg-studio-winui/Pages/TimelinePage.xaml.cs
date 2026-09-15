@@ -2981,7 +2981,10 @@ public sealed partial class TimelinePage : Page
                 var trackNames = project.Tracks.ToDictionary(track => track.Id, track => track.Name);
                 MixerRoutingText.Text = $"Modeled insert latency: {mixer.TotalLatencySamples} samples\n" +
                     string.Join("\n", mixer.Routes.Select(route =>
-                        $"{trackNames.GetValueOrDefault(route.SourceId, route.SourceId)} → Master · compensation {route.DelaySamples} samples"));
+                    {
+                        string state = mixer.AudibleChannelIds.Contains(route.SourceId) ? "audible" : "inaudible";
+                        return $"{trackNames.GetValueOrDefault(route.SourceId, route.SourceId)} → Master · {state} · compensation {route.DelaySamples} samples";
+                    }));
                 await App.Services.AudioEngine.ConfigureAsync(graph.Configuration, cancellationToken);
                 await App.Services.AudioEngine.EnqueueTransportStateAsync(App.Services.Transport.State, cancellationToken);
                 if (generation != Volatile.Read(ref _audioGraphGeneration) ||

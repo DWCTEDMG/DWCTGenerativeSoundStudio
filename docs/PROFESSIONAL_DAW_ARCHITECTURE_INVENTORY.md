@@ -75,7 +75,8 @@ The baseline description below is historical. `Core/Audio/TransportService.cs` a
 `Services/WindowsAudioEngine.cs` now provide the Phase 4 playback foundation.
 `Core/Audio/AudioPlaybackCursor.cs` owns loop/discontinuity tracking, while
 `Core/Audio/MixerGraph.cs` owns initial immutable routing validation and PDC planning.
-The Timeline routing inspector presents the plan; it does not certify active
+The same mixer module now owns atomic versioned snapshots and bus-aware mute/solo
+audibility planning. The Timeline routing inspector presents the plan; it does not certify active
 plugin DSP, compensation delay buffers, mixer persistence or hardware playback.
 
 No production real-time DAW audio backend exists at this baseline. The repository has audio upload, offline analysis, FFmpeg media decoding, and preview transport controls, but it does not have an authoritative sample clock, ASIO/WASAPI device backend, multitrack render graph, real-time callback boundary, routing, metering, or glitch-safety tests.
