@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using EdmgStudio.Core.Services;
 using EdmgStudio.Core.Media;
 using EdmgStudio.Core.Audio;
+using EdmgStudio.Core.RemoteControl;
 using EdmgStudio.WinUI.Graphics;
 
 namespace EdmgStudio.WinUI.Services;
@@ -25,7 +26,10 @@ public sealed class AppServices : IAsyncDisposable
         StudioProjectMediaClient projectMediaClient,
         StudioSessionService session,
         ITransportService transport,
-        IAudioEngine audioEngine)
+        IAudioEngine audioEngine,
+        StudioCommandDispatcher commands,
+        StudioRemoteControlService remoteControl,
+        WindowsMidiInputService midiInput)
     {
         Configuration = configuration;
         BackendSupervisor = backendSupervisor;
@@ -35,6 +39,9 @@ public sealed class AppServices : IAsyncDisposable
         Session = session;
         Transport = transport;
         AudioEngine = audioEngine;
+        Commands = commands;
+        RemoteControl = remoteControl;
+        MidiInput = midiInput;
         Transport.StateChanged += OnTransportStateChanged;
     }
 
@@ -45,6 +52,9 @@ public sealed class AppServices : IAsyncDisposable
     public StudioSessionService Session { get; }
     public ITransportService Transport { get; }
     public IAudioEngine AudioEngine { get; }
+    public StudioCommandDispatcher Commands { get; }
+    public StudioRemoteControlService RemoteControl { get; }
+    public WindowsMidiInputService MidiInput { get; }
 
     internal bool TryTrackPreviewSession(PreviewRendererSession session)
     {
@@ -119,6 +129,12 @@ public sealed class AppServices : IAsyncDisposable
 
         var transport = new TransportService();
         var audioEngine = new WindowsAudioEngine();
+        var commands = new StudioCommandDispatcher();
+        string mappingsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "EDMG Studio", "remote-control.json");
+        var remoteControl = new StudioRemoteControlService(new StudioRemoteControlStore(mappingsPath));
+        var midiInput = new WindowsMidiInputService(commands, remoteControl);
         return new AppServices(
             configuration,
             supervisor,
@@ -127,7 +143,10 @@ public sealed class AppServices : IAsyncDisposable
             projectMediaClient,
             new StudioSessionService(),
             transport,
-            audioEngine);
+            audioEngine,
+            commands,
+            remoteControl,
+            midiInput);
     }
 
     public async ValueTask DisposeAsync()
@@ -174,6 +193,15 @@ public sealed class AppServices : IAsyncDisposable
         }
 
         Transport.StateChanged -= OnTransportStateChanged;
+        try
+        {
+            await MidiInput.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
         try
         {
             await AudioEngine.DisposeAsync();

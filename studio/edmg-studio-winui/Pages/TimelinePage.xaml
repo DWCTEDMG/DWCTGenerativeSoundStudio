@@ -187,6 +187,10 @@
                         Content="Fit"
                         Click="FitTimeline_Click" />
                 </Grid>
+                <StackPanel x:Name="QuickControlsPanel"
+                            AutomationProperties.AutomationId="Timeline.QuickControls"
+                            Orientation="Horizontal"
+                            Spacing="8" />
                 <TextBlock x:Name="AudioEngineStatusText"
                            Text="Audio: not configured"
                            Style="{StaticResource StudioCaptionTextStyle}" />

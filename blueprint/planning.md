@@ -560,6 +560,20 @@ Implement:
 
 Remote inputs must dispatch the same commands used by the UI and must not mutate project state through an alternate path.
 
+Implementation status:
+
+- Core now defines eight stable transport and selected-channel mixer command IDs, context-aware registration and dispatch, normalized continuous-value validation, editable keyboard chords, device-specific or wildcard MIDI bindings, and exactly eight Quick Control assignments.
+- One application-lifetime command dispatcher and remote-control service are shared by WinUI. Timeline buttons, mapped keyboard input, native MIDI input, and Quick Controls invoke the same Timeline-owned handlers, including the existing canonical revision-safe mixer commit path.
+- Settings now provides keybinding conflict validation, native MIDI discovery/connection/learn, Quick Control assignment, JSON import/export, reset, and atomic persistence under the user's local application data.
+- Timeline now presents eight accessibility-addressable, context-aware Quick Controls. MIDI callbacks marshal command execution to the UI thread, page registrations follow load/unload lifetime, and command availability refreshes after project, selection, busy-state, and mixer changes.
+
+Acceptance evidence:
+
+- All 12 focused remote-control contract tests pass, covering stable registry entries, dispatch availability and disposal, normalized values, malformed and unsupported JSON, null import members, key/MIDI conflicts, exact Quick Control slots, failed-replacement preservation, atomic storage, damaged-file quarantine, and device-specific MIDI precedence over wildcard mappings.
+- All 463 native Core tests pass, and the WinUI Release x64 solution/XAML build succeeds with 0 errors.
+- Remote-control imports are fully validated before persistence or active-state replacement; rejected documents leave both accepted in-memory state and persisted mappings unchanged.
+- Independent review findings were closed for malformed null imports, damaged startup mappings, reset/clear persistence failures, discrete control-change activation edges, page-wide text-safe keybindings, and keyboard-accessible continuous Quick Controls.
+
 ### Phase 13 - Professional Post Features
 
 Implement incrementally:

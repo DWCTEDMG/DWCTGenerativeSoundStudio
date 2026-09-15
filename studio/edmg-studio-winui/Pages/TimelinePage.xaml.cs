@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.Core.Audio;
+using EdmgStudio.Core.RemoteControl;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
@@ -104,6 +105,7 @@ public sealed partial class TimelinePage : Page
     private bool _creatingCompRange;
     private AudioAutomationSnapshot _automationSnapshot = new([]);
     private TimelinePointerTool _pointerTool;
+    private readonly List<IDisposable> _commandRegistrations = [];
 
     public TimelinePage()
     {
@@ -122,6 +124,7 @@ public sealed partial class TimelinePage : Page
 
         _pointerTool = LoadPointerTool();
         CameraKeyframeListView.ItemsSource = _cameraKeyframeItems;
+        AddHandler(KeyDownEvent, new KeyEventHandler(TimelinePage_KeyDown), true);
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         _transportTimer.Tick += TransportTimer_Tick;
@@ -140,6 +143,10 @@ public sealed partial class TimelinePage : Page
         _isLoaded = true;
         App.Services.Session.Changed += Session_Changed;
         App.Services.Transport.StateChanged += Transport_StateChanged;
+        App.Services.Commands.StateChanged += Commands_StateChanged;
+        App.Services.RemoteControl.Changed += RemoteControl_Changed;
+        RegisterRemoteCommands();
+        RefreshQuickControls();
         await LoadActiveProjectAsync();
     }
 
@@ -153,6 +160,10 @@ public sealed partial class TimelinePage : Page
         _isLoaded = false;
         App.Services.Session.Changed -= Session_Changed;
         App.Services.Transport.StateChanged -= Transport_StateChanged;
+        App.Services.Commands.StateChanged -= Commands_StateChanged;
+        App.Services.RemoteControl.Changed -= RemoteControl_Changed;
+        foreach (IDisposable registration in _commandRegistrations) registration.Dispose();
+        _commandRegistrations.Clear();
         PersistViewState();
         _transportTimer.Stop();
         CancelPreview();
@@ -1366,16 +1377,21 @@ public sealed partial class TimelinePage : Page
 
     private async void ApplyMixer_Click(object sender, RoutedEventArgs e)
     {
+        StudioCommandResult result = await ApplyMixerAsync();
+        if (!result.Executed && !string.IsNullOrWhiteSpace(result.Message))
+            ShowInfo(result.Message, InfoBarSeverity.Warning);
+    }
+
+    private async Task<StudioCommandResult> ApplyMixerAsync()
+    {
         if (_timelineDocument is null || SelectedMixerTrack is not Track track || !IsAudioTrack(track))
         {
-            ShowInfo("Select an audio track before applying mixer changes.", InfoBarSeverity.Warning);
-            return;
+            return new(false, "Select an audio track before applying mixer changes.");
         }
         if (!TryReadFinite(MixerGainNumberBox, out double gain) ||
             !TryReadFinite(MixerPanNumberBox, out double pan))
         {
-            ShowInfo("Enter finite gain and pan values.", InfoBarSeverity.Warning);
-            return;
+            return new(false, "Enter finite gain and pan values.");
         }
 
         TimelineTrackMixerState current = TimelineMixerProjection.Project(track);
@@ -1402,10 +1418,12 @@ public sealed partial class TimelinePage : Page
                 $"timeline mixer updated for {track.Name}",
                 _selectedLaneId,
                 _selectedCameraKeyframeIdentity);
+            return new(true);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidDataException or KeyNotFoundException or OverflowException)
         {
             ShowInfo(ex.Message, InfoBarSeverity.Warning);
+            return new(false, ex.Message);
         }
     }
 
@@ -3453,16 +3471,19 @@ public sealed partial class TimelinePage : Page
         await CommitLanesAsync(before, "timeline selection quantized", quantized.StableId);
     }
 
-    private void PlayPause_Click(object sender, RoutedEventArgs e)
+    private async void PlayPause_Click(object sender, RoutedEventArgs e) =>
+        await DispatchCommandAsync(StudioCommandIds.TransportPlayPause, "button");
+
+    private StudioCommandResult ExecutePlayPause()
     {
         if (ShowAudioEngineFailure())
         {
-            return;
+            return new(false, App.Services.AudioEngine.FailureMessage);
         }
         if (App.Services.Transport.State.Mode != TransportMode.Stopped)
         {
             StopPlayback();
-            return;
+            return new(true);
         }
 
         if (_positionSeconds >= _durationSeconds)
@@ -3475,26 +3496,165 @@ public sealed partial class TimelinePage : Page
         App.Services.Transport.Play();
         _transportTimer.Start();
         UpdateTransportUi();
+        return new(true);
     }
 
-    private void Stop_Click(object sender, RoutedEventArgs e)
+    private async void Stop_Click(object sender, RoutedEventArgs e) =>
+        await DispatchCommandAsync(StudioCommandIds.TransportStop, "button");
+
+    private StudioCommandResult ExecuteStop()
     {
         _transportTimer.Stop();
         App.Services.Transport.Stop();
         SetPosition(0, requestPreview: true, updateTransport: false);
+        return new(true);
     }
 
-    private void StepBackward_Click(object sender, RoutedEventArgs e)
+    private async void StepBackward_Click(object sender, RoutedEventArgs e) =>
+        await DispatchCommandAsync(StudioCommandIds.TransportStepBackward, "button");
+
+    private StudioCommandResult ExecuteStepBackward()
     {
         StopPlayback();
         SetPosition(_positionSeconds - (1 / DefaultFps), requestPreview: true);
+        return new(true);
     }
 
-    private void StepForward_Click(object sender, RoutedEventArgs e)
+    private async void StepForward_Click(object sender, RoutedEventArgs e) =>
+        await DispatchCommandAsync(StudioCommandIds.TransportStepForward, "button");
+
+    private StudioCommandResult ExecuteStepForward()
     {
         StopPlayback();
         SetPosition(_positionSeconds + (1 / DefaultFps), requestPreview: true);
+        return new(true);
     }
+
+    private void RegisterRemoteCommands()
+    {
+        StudioCommandDispatcher commands = App.Services.Commands;
+        _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportPlayPause,
+            _ => ValueTask.FromResult(ExecutePlayPause()), TransportCommandState));
+        _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStop,
+            _ => ValueTask.FromResult(ExecuteStop()), TransportCommandState));
+        _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStepBackward,
+            _ => ValueTask.FromResult(ExecuteStepBackward()), TransportCommandState));
+        _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStepForward,
+            _ => ValueTask.FromResult(ExecuteStepForward()), TransportCommandState));
+        _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedGain,
+            invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedGain), MixerCommandState));
+        _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedPan,
+            invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedPan), MixerCommandState));
+        _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedMute,
+            invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedMute), MixerCommandState));
+        _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedSolo,
+            invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedSolo), MixerCommandState));
+    }
+
+    private StudioCommandState TransportCommandState() => _timelineDocument is null || _isBusy
+        ? new(false, "Load a timeline before using transport controls.")
+        : new(true, DisplayValue: App.Services.Transport.State.Mode.ToString());
+
+    private StudioCommandState MixerCommandState()
+    {
+        if (_timelineDocument is null || _isBusy || SelectedMixerTrack is not Track track || !IsAudioTrack(track))
+            return new(false, "Select an editable audio channel.");
+        TimelineTrackMixerState state = TimelineMixerProjection.Project(track);
+        return new(true, DisplayValue: $"Gain {state.Gain:0.00} · Pan {state.Pan:0.00}");
+    }
+
+    private async ValueTask<StudioCommandResult> ApplyRemoteMixerAsync(StudioCommandInvocation invocation, string commandId)
+    {
+        if (MixerCommandState().IsAvailable is false) return new(false, "Select an editable audio channel.");
+        switch (commandId)
+        {
+            case StudioCommandIds.MixerSelectedGain when invocation.NormalizedValue is double gain:
+                MixerGainNumberBox.Value = gain * 4;
+                break;
+            case StudioCommandIds.MixerSelectedPan when invocation.NormalizedValue is double pan:
+                MixerPanNumberBox.Value = (pan * 2) - 1;
+                break;
+            case StudioCommandIds.MixerSelectedMute:
+                MixerMuteToggle.IsOn = !MixerMuteToggle.IsOn;
+                break;
+            case StudioCommandIds.MixerSelectedSolo:
+                MixerSoloToggle.IsOn = !MixerSoloToggle.IsOn;
+                break;
+            default:
+                return new(false, "This continuous control requires a value.");
+        }
+        return await ApplyMixerAsync();
+    }
+
+    private async Task DispatchCommandAsync(string commandId, string source, double? normalizedValue = null)
+    {
+        StudioCommandResult result = await App.Services.Commands.DispatchAsync(new(commandId, source, normalizedValue));
+        if (!result.Executed && !string.IsNullOrWhiteSpace(result.Message)) ShowInfo(result.Message, InfoBarSeverity.Warning);
+    }
+
+    private void Commands_StateChanged(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(RefreshQuickControls);
+    private void RemoteControl_Changed(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(RefreshQuickControls);
+
+    private void RefreshQuickControls()
+    {
+        QuickControlsPanel.Children.Clear();
+        foreach (StudioQuickControl assignment in App.Services.RemoteControl.Document.QuickControls.OrderBy(item => item.Slot))
+        {
+            StudioCommandDescriptor descriptor = StudioCommandRegistry.Commands.Single(command => command.Id == assignment.CommandId);
+            StudioCommandState state = App.Services.Commands.GetState(assignment.CommandId);
+            if (descriptor.AcceptsContinuousValue)
+            {
+                var panel = new StackPanel { Width = 130, Spacing = 2 };
+                panel.Children.Add(new TextBlock { Text = $"{assignment.Slot}. {descriptor.Name}" });
+                var slider = new Slider
+                {
+                    Minimum = 0,
+                    Maximum = 1,
+                    StepFrequency = 0.01,
+                    IsEnabled = state.IsAvailable,
+                    Tag = assignment.CommandId
+                };
+                double value = assignment.CommandId == StudioCommandIds.MixerSelectedGain
+                    ? Math.Clamp(MixerGainNumberBox.Value / 4, 0, 1)
+                    : Math.Clamp((MixerPanNumberBox.Value + 1) / 2, 0, 1);
+                slider.Value = double.IsFinite(value) ? value : 0.5;
+                slider.AddHandler(PointerReleasedEvent, new PointerEventHandler(QuickControlSlider_PointerReleased), true);
+                slider.KeyUp += QuickControlSlider_KeyUp;
+                AutomationProperties.SetAutomationId(slider, $"Timeline.QuickControl.{assignment.Slot}");
+                panel.Children.Add(slider);
+                QuickControlsPanel.Children.Add(panel);
+            }
+            else
+            {
+                var button = new Button { Content = $"{assignment.Slot}. {descriptor.Name}", IsEnabled = state.IsAvailable, Tag = assignment.CommandId };
+                button.Click += QuickControlButton_Click;
+                AutomationProperties.SetAutomationId(button, $"Timeline.QuickControl.{assignment.Slot}");
+                QuickControlsPanel.Children.Add(button);
+            }
+        }
+    }
+
+    private async void QuickControlButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string commandId }) await DispatchCommandAsync(commandId, "quick-control");
+    }
+
+    private async void QuickControlSlider_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is Slider { Tag: string commandId } slider) await DispatchCommandAsync(commandId, "quick-control", slider.Value);
+    }
+
+    private async void QuickControlSlider_KeyUp(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key is not (VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down or VirtualKey.Home or VirtualKey.End) ||
+            sender is not Slider { Tag: string commandId } slider)
+            return;
+        await DispatchCommandAsync(commandId, "quick-control", slider.Value);
+        e.Handled = true;
+    }
+
+    private static bool IsKeyPressed(VirtualKey key) =>
+        (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key) & CoreVirtualKeyStates.Down) == CoreVirtualKeyStates.Down;
 
     private void TransportTimer_Tick(object? sender, object e)
     {
@@ -4037,31 +4197,74 @@ public sealed partial class TimelinePage : Page
         }
     }
 
+    private async void TimelinePage_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (IsTextEntrySource(e.OriginalSource) ||
+            IsSliderAdjustment(e.OriginalSource, e.Key) ||
+            IsButtonActivation(e.OriginalSource, e.Key)) return;
+        StudioKeyModifiers modifiers = StudioKeyModifiers.None;
+        if (IsKeyPressed(VirtualKey.Control)) modifiers |= StudioKeyModifiers.Control;
+        if (IsKeyPressed(VirtualKey.Menu)) modifiers |= StudioKeyModifiers.Alt;
+        if (IsKeyPressed(VirtualKey.Shift)) modifiers |= StudioKeyModifiers.Shift;
+        if (IsKeyPressed(VirtualKey.LeftWindows) || IsKeyPressed(VirtualKey.RightWindows)) modifiers |= StudioKeyModifiers.Windows;
+        string? commandId = App.Services.RemoteControl.ResolveKey(new(e.Key.ToString().ToUpperInvariant(), modifiers));
+        if (commandId is not null)
+        {
+            await DispatchCommandAsync(commandId, "keyboard");
+            e.Handled = true;
+            return;
+        }
+    }
+
     private async void TimelineCanvas_KeyDown(object sender, KeyRoutedEventArgs e)
     {
         switch (e.Key)
         {
-            case VirtualKey.Space:
-                PlayPause_Click(sender, new RoutedEventArgs());
-                e.Handled = true;
-                break;
-            case VirtualKey.Left:
-                StepBackward_Click(sender, new RoutedEventArgs());
-                e.Handled = true;
-                break;
-            case VirtualKey.Right:
-                StepForward_Click(sender, new RoutedEventArgs());
-                e.Handled = true;
-                break;
             case VirtualKey.Delete:
                 await DeleteSelectedAsync();
                 e.Handled = true;
                 break;
-            case VirtualKey.Escape:
-                SelectLane(null);
-                e.Handled = true;
-                break;
         }
+    }
+
+    private static bool IsTextEntrySource(object source)
+    {
+        DependencyObject? current = source as DependencyObject;
+        while (current is not null)
+        {
+            if (current is TextBox or PasswordBox or NumberBox or AutoSuggestBox or ComboBox) return true;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return false;
+    }
+
+    private static bool IsSliderAdjustment(object source, VirtualKey key)
+    {
+        if (key is not (VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down or VirtualKey.Home or VirtualKey.End))
+        {
+            return false;
+        }
+
+        DependencyObject? current = source as DependencyObject;
+        while (current is not null)
+        {
+            if (current is Slider) return true;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return false;
+    }
+
+    private static bool IsButtonActivation(object source, VirtualKey key)
+    {
+        if (key is not (VirtualKey.Space or VirtualKey.Enter)) return false;
+
+        DependencyObject? current = source as DependencyObject;
+        while (current is not null)
+        {
+            if (current is ButtonBase) return true;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return false;
     }
 
     private void SelectToolButton_Click(object sender, RoutedEventArgs e) =>
@@ -4855,6 +5058,7 @@ public sealed partial class TimelinePage : Page
         OpenReactiveButton.IsEnabled = !_isAutomationBusy;
         UpdateSplitCommandState();
         RefreshRecoverySummary();
+        App.Services.Commands.NotifyStateChanged();
     }
 
     private void UpdateSplitCommandState()

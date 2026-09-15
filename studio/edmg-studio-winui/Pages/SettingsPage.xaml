@@ -20,6 +20,33 @@
             <StackPanel Spacing="16">
                 <Border Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Remote control and Quick Controls" />
+                        <TextBlock Opacity="0.72" Text="Edit keyboard shortcuts, connect a MIDI input, learn mappings, and assign the eight Timeline Quick Controls." TextWrapping="Wrap" />
+                        <ItemsControl x:Name="KeyBindingItems" AutomationProperties.AutomationId="SettingsRemoteControlKeyBindings" />
+                        <Button AutomationProperties.AutomationId="SettingsSaveKeyBindings" Click="SaveKeyBindings_Click" Content="Save keybindings" HorizontalAlignment="Left" />
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                            <ComboBox x:Name="MidiDeviceComboBox" AutomationProperties.AutomationId="SettingsMidiDevice" Header="MIDI input" DisplayMemberPath="Name" />
+                            <Button Grid.Column="1" Click="RefreshMidiButton_Click" Content="Refresh MIDI" VerticalAlignment="Bottom" />
+                            <Button Grid.Column="2" Click="ConnectMidiButton_Click" Content="Connect" VerticalAlignment="Bottom" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                            <ComboBox x:Name="MidiCommandComboBox" AutomationProperties.AutomationId="SettingsMidiLearnCommand" Header="Learn command" DisplayMemberPath="Name" />
+                            <Button Grid.Column="1" Click="LearnMidiButton_Click" Content="Learn MIDI" VerticalAlignment="Bottom" />
+                            <Button Grid.Column="2" Click="ClearMidiButton_Click" Content="Clear mappings" VerticalAlignment="Bottom" />
+                        </Grid>
+                        <TextBlock x:Name="MidiStatusText" Opacity="0.72" Text="No MIDI input selected." TextWrapping="Wrap" />
+                        <ItemsControl x:Name="QuickControlItems" AutomationProperties.AutomationId="SettingsQuickControlAssignments" />
+                        <Button Click="SaveQuickControls_Click" Content="Save Quick Controls" HorizontalAlignment="Left" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Click="ImportRemoteControl_Click" Content="Import mappings" />
+                            <Button Click="ExportRemoteControl_Click" Content="Export mappings" />
+                            <Button Click="ResetRemoteControl_Click" Content="Reset defaults" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Appearance" />
                         <TextBlock
                             Opacity="0.72"

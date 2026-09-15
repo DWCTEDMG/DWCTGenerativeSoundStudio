@@ -1,11 +1,15 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EdmgStudio.Core.Audio;
+using EdmgStudio.Core.RemoteControl;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.Storage;
+using Windows.Storage.Pickers;
 
 namespace EdmgStudio.WinUI.Pages;
 
@@ -14,15 +18,38 @@ public sealed partial class SettingsPage : Page
     private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
     private JsonObject? _renderProviderSettings;
     private bool _initializingAppearance;
+    private bool _midiEventsSubscribed;
 
     public SettingsPage()
     {
         InitializeComponent();
         InitializeAppearance();
         Loaded += SettingsPage_Loaded;
+        Unloaded += SettingsPage_Unloaded;
+        LoadRemoteControlSettings();
     }
 
-    private async void SettingsPage_Loaded(object sender, RoutedEventArgs e) => await RefreshAsync();
+    private async void SettingsPage_Loaded(object sender, RoutedEventArgs e)
+    {
+        SubscribeMidiEvents();
+        await RefreshAsync();
+    }
+
+    private void SettingsPage_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (!_midiEventsSubscribed) return;
+        App.Services.MidiInput.MessageLearned -= MidiInput_MessageLearned;
+        App.Services.MidiInput.StatusChanged -= MidiInput_StatusChanged;
+        _midiEventsSubscribed = false;
+    }
+
+    private void SubscribeMidiEvents()
+    {
+        if (_midiEventsSubscribed) return;
+        App.Services.MidiInput.MessageLearned += MidiInput_MessageLearned;
+        App.Services.MidiInput.StatusChanged += MidiInput_StatusChanged;
+        _midiEventsSubscribed = true;
+    }
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
     private async Task RefreshAsync()
@@ -323,6 +350,188 @@ public sealed partial class SettingsPage : Page
         finally
         {
             SetBusy(false);
+        }
+    }
+
+    private void LoadRemoteControlSettings()
+    {
+        StudioRemoteControlDocument document = App.Services.RemoteControl.Document;
+        KeyBindingItems.Items.Clear();
+        foreach (StudioCommandDescriptor command in StudioCommandRegistry.Commands)
+        {
+            var textBox = new TextBox
+            {
+                Header = command.Name,
+                Tag = command.Id,
+                Text = document.KeyBindings.FirstOrDefault(binding => binding.CommandId == command.Id)?.Chord.DisplayText ?? string.Empty,
+                PlaceholderText = "Unassigned"
+            };
+            KeyBindingItems.Items.Add(textBox);
+        }
+        QuickControlItems.Items.Clear();
+        foreach (StudioQuickControl assignment in document.QuickControls.OrderBy(item => item.Slot))
+        {
+            var combo = new ComboBox { Header = $"Quick Control {assignment.Slot}", Tag = assignment.Slot, DisplayMemberPath = "Name" };
+            combo.ItemsSource = StudioCommandRegistry.Commands;
+            combo.SelectedItem = StudioCommandRegistry.Commands.Single(command => command.Id == assignment.CommandId);
+            QuickControlItems.Items.Add(combo);
+        }
+        MidiCommandComboBox.ItemsSource = StudioCommandRegistry.Commands;
+        MidiCommandComboBox.SelectedIndex = 0;
+        MidiStatusText.Text = document.MidiBindings.Length == 0
+            ? "No MIDI mappings configured."
+            : $"{document.MidiBindings.Length} MIDI mapping(s) configured.";
+        if (!string.IsNullOrWhiteSpace(App.Services.RemoteControl.LoadWarning))
+            ShowStatus(App.Services.RemoteControl.LoadWarning, InfoBarSeverity.Warning);
+    }
+
+    private void SaveKeyBindings_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var bindings = KeyBindingItems.Items.OfType<TextBox>()
+                .Where(textBox => !string.IsNullOrWhiteSpace(textBox.Text))
+                .Select(textBox => new StudioKeyBinding((string)textBox.Tag, StudioKeyChord.Parse(textBox.Text)))
+                .ToImmutableArray();
+            StudioRemoteControlDocument current = App.Services.RemoteControl.Document;
+            App.Services.RemoteControl.Replace(current with { KeyBindings = bindings });
+            LoadRemoteControlSettings();
+            ShowStatus("Keybindings saved.", InfoBarSeverity.Success);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            ShowStatus(exception.Message, InfoBarSeverity.Error);
+        }
+    }
+
+    private async void RefreshMidiButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            MidiDeviceComboBox.ItemsSource = await App.Services.MidiInput.DiscoverAsync();
+            MidiDeviceComboBox.SelectedIndex = MidiDeviceComboBox.Items.Count > 0 ? 0 : -1;
+            MidiStatusText.Text = MidiDeviceComboBox.Items.Count == 0 ? "No MIDI input devices found." : $"Found {MidiDeviceComboBox.Items.Count} MIDI input device(s).";
+        }
+        catch (Exception exception) { ShowStatus(exception.Message, InfoBarSeverity.Error); }
+    }
+
+    private async void ConnectMidiButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await App.Services.MidiInput.SelectDeviceAsync((MidiDeviceComboBox.SelectedItem as MidiInputDeviceDescriptor)?.Id);
+        }
+        catch (Exception exception) { ShowStatus(exception.Message, InfoBarSeverity.Error); }
+    }
+
+    private void LearnMidiButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (MidiCommandComboBox.SelectedItem is not StudioCommandDescriptor) throw new InvalidOperationException("Choose a command to learn.");
+            App.Services.MidiInput.BeginLearn();
+        }
+        catch (InvalidOperationException exception) { ShowStatus(exception.Message, InfoBarSeverity.Warning); }
+    }
+
+    private void MidiInput_MessageLearned(object? sender, StudioMidiMessage message) => DispatcherQueue.TryEnqueue(() =>
+    {
+        if (MidiCommandComboBox.SelectedItem is not StudioCommandDescriptor command) return;
+        try
+        {
+            StudioRemoteControlDocument current = App.Services.RemoteControl.Document;
+            var binding = new StudioMidiBinding(command.Id, message.DeviceId, message.MessageKind, message.Channel, message.Number);
+            App.Services.RemoteControl.Replace(current with { MidiBindings = current.MidiBindings.Add(binding) });
+            LoadRemoteControlSettings();
+            MidiStatusText.Text = $"Mapped {message.MessageKind} channel {message.Channel}, number {message.Number} to {command.Name}.";
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            ShowStatus(exception.Message, InfoBarSeverity.Error);
+        }
+    });
+
+    private void MidiInput_StatusChanged(object? sender, string status) => DispatcherQueue.TryEnqueue(() => MidiStatusText.Text = status);
+
+    private void ClearMidiButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            StudioRemoteControlDocument current = App.Services.RemoteControl.Document;
+            App.Services.RemoteControl.Replace(current with { MidiBindings = [] });
+            LoadRemoteControlSettings();
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            ShowStatus(exception.Message, InfoBarSeverity.Error);
+        }
+    }
+
+    private void SaveQuickControls_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var assignments = QuickControlItems.Items.OfType<ComboBox>()
+                .Select(combo => new StudioQuickControl((int)combo.Tag, ((StudioCommandDescriptor)combo.SelectedItem).Id))
+                .ToImmutableArray();
+            StudioRemoteControlDocument current = App.Services.RemoteControl.Document;
+            App.Services.RemoteControl.Replace(current with { QuickControls = assignments });
+            ShowStatus("Quick Controls saved.", InfoBarSeverity.Success);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            ShowStatus(exception.Message, InfoBarSeverity.Error);
+        }
+    }
+
+    private async void ImportRemoteControl_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
+            picker.FileTypeFilter.Add(".json");
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance!.WindowHandle);
+            StorageFile? file = await picker.PickSingleFileAsync();
+            if (file is null) return;
+            App.Services.RemoteControl.Replace(StudioRemoteControlCodec.Deserialize(await FileIO.ReadTextAsync(file)));
+            LoadRemoteControlSettings();
+            ShowStatus("Remote-control mappings imported.", InfoBarSeverity.Success);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            ShowStatus(exception.Message, InfoBarSeverity.Error);
+        }
+    }
+
+    private async void ExportRemoteControl_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new FileSavePicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary, SuggestedFileName = "edmg-remote-control" };
+            picker.FileTypeChoices.Add("JSON document", [".json"]);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance!.WindowHandle);
+            StorageFile? file = await picker.PickSaveFileAsync();
+            if (file is null) return;
+            await FileIO.WriteTextAsync(file, StudioRemoteControlCodec.Serialize(App.Services.RemoteControl.Document));
+            ShowStatus("Remote-control mappings exported.", InfoBarSeverity.Success);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            ShowStatus(exception.Message, InfoBarSeverity.Error);
+        }
+    }
+
+    private void ResetRemoteControl_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            App.Services.RemoteControl.Reset();
+            LoadRemoteControlSettings();
+            ShowStatus("Remote-control mappings reset to defaults.", InfoBarSeverity.Success);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            ShowStatus(exception.Message, InfoBarSeverity.Error);
         }
     }
 
