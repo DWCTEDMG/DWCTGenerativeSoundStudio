@@ -244,6 +244,7 @@ public interface IAudioEngine : IAsyncDisposable
 
     IReadOnlyList<AudioDeviceDescriptor> Devices { get; }
     AudioEngineConfiguration? Configuration { get; }
+    string? FailureMessage => null;
     Task RefreshDevicesAsync(CancellationToken cancellationToken = default);
     Task ConfigureAsync(AudioEngineConfiguration configuration, CancellationToken cancellationToken = default);
     ValueTask EnqueueTransportStateAsync(TransportState state, CancellationToken cancellationToken = default);

@@ -205,6 +205,21 @@ Remaining advanced audio work belongs to Phase 5 and later phases: complete bus 
 
 **Status:** In progress. No Phase 5 implementation commit has been created yet.
 
+#### Prerequisite correctness work — 2026-09-15
+
+The first implementation slice hardens the existing Phase 4 playback foundation before expanding mixer routing:
+
+- Explicit transport updates seek active audio even when the requested change is below the ordinary 100 ms drift threshold.
+- A shared Core playback cursor detects short loops and multiple loop crossings between worker updates.
+- Worker failure closes the command channel before draining it; future transport and configuration requests fail promptly.
+- Timeline stops playback and displays a restart instruction when the audio engine fails.
+- Graph cleanup attempts every owned resource even if stopping or disposing another resource fails.
+- Regression tests exercise cursor discontinuities and the actual Windows worker with an injected failure, without opening an audio device.
+
+This is prerequisite work, not Phase 5 acceptance. Mixer routes, PDC, plugin scanning/quarantine, VST3 processing and their Studio controls remain open. Full device playback qualification remains separate from unit tests and shell launch checks.
+
+Validation for this slice: 389 Core tests passed; complete Debug WinUI solution build passed (existing analyzer and unused-meter-event warnings remain). Direct unpackaged launch with backend spawning disabled displayed "This application could not be started"; invoking the DLL through dotnet also exited unsuccessfully. No responsive Studio shell or real-device playback is claimed.
+
 #### Goals
 
 - mixer service

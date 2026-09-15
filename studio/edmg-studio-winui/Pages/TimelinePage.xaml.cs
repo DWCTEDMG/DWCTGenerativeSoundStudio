@@ -2795,6 +2795,10 @@ public sealed partial class TimelinePage : Page
 
     private void PlayPause_Click(object sender, RoutedEventArgs e)
     {
+        if (ShowAudioEngineFailure())
+        {
+            return;
+        }
         if (App.Services.Transport.State.Mode != TransportMode.Stopped)
         {
             StopPlayback();
@@ -2834,6 +2838,10 @@ public sealed partial class TimelinePage : Page
 
     private void TransportTimer_Tick(object? sender, object e)
     {
+        if (ShowAudioEngineFailure())
+        {
+            return;
+        }
         TransportState state = App.Services.Transport.State;
         if (state.Mode == TransportMode.Stopped)
         {
@@ -2842,6 +2850,19 @@ public sealed partial class TimelinePage : Page
             return;
         }
         SetPosition(state.PositionSeconds, requestPreview: true, updateTransport: false);
+    }
+
+    private bool ShowAudioEngineFailure()
+    {
+        if (App.Services.AudioEngine.FailureMessage is not string message)
+        {
+            return false;
+        }
+        StopPlayback();
+        _configuredAudioGraphKey = null;
+        AudioEngineStatusText.Text = "Audio: engine stopped";
+        ShowInfo(message, InfoBarSeverity.Error);
+        return true;
     }
 
     private void Transport_StateChanged(object? sender, TransportState state)

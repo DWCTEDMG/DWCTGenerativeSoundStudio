@@ -20,20 +20,31 @@ public sealed class WindowsAudioEngine : IAudioEngine
             FullMode = BoundedChannelFullMode.Wait
         });
     private readonly Task _worker;
+    private readonly Func<long> _timestamp;
+    private Exception? _failure;
     private DeviceSnapshot _devices = new([]);
     private AudioEngineConfiguration? _configuration;
     private int _disposeState;
 
-    public WindowsAudioEngine()
+    public WindowsAudioEngine() : this(() => Environment.TickCount64)
     {
+    }
+
+    internal WindowsAudioEngine(Func<long> timestamp)
+    {
+        _timestamp = timestamp;
         _worker = Task.Run(ProcessOperationsAsync);
     }
+
+    internal Task WorkerCompletion => _worker;
 
     public event EventHandler<IReadOnlyList<AudioMeterSnapshot>>? MetersAvailable;
 
     public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _devices).Items;
 
     public AudioEngineConfiguration? Configuration => Volatile.Read(ref _configuration);
+    public string? FailureMessage => Volatile.Read(ref _failure) is null ? null :
+        "Audio playback stopped after an engine failure. Restart Studio to reopen the audio device.";
 
     public async Task RefreshDevicesAsync(CancellationToken cancellationToken = default)
     {
@@ -79,6 +90,10 @@ public sealed class WindowsAudioEngine : IAudioEngine
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ThrowIfDisposed();
+        if (Volatile.Read(ref _failure) is Exception failure)
+        {
+            throw new InvalidOperationException(FailureMessage, failure);
+        }
         _ = new AudioRenderGraph(configuration);
         AudioTrackRoute? unsupportedRoute = configuration.Tracks.FirstOrDefault(
             route => Math.Abs(route.Pan) > float.Epsilon ||
@@ -261,20 +276,24 @@ public sealed class WindowsAudioEngine : IAudioEngine
                             PreparedGraph? previous = active;
                             active = operation.Graph;
                             Volatile.Write(ref _configuration, active.Configuration);
-                            previous?.Dispose();
+                            DisposeGraph(previous);
                             operation.Completion?.TrySetResult();
                         }
                         else if (operation.Transport is not null)
                         {
                             transport = operation.Transport;
-                            transportTimestamp = Environment.TickCount64;
-                            ApplyTransport(active, transport, transportTimestamp);
+                            transportTimestamp = _timestamp();
+                            ApplyTransport(active, transport, transportTimestamp, transportChanged: true);
                         }
                     }
                     catch (Exception exception)
                     {
-                        operation.Graph?.Dispose();
                         operation.Completion?.TrySetException(exception);
+                        DisposeGraph(operation.Graph);
+                        if (operation.Completion is null)
+                        {
+                            throw;
+                        }
                     }
                 }
 
@@ -289,27 +308,46 @@ public sealed class WindowsAudioEngine : IAudioEngine
         }
         catch (Exception exception)
         {
+            Volatile.Write(ref _failure, exception);
+            // Close before draining so concurrent/future producers cannot enqueue into a dead worker.
+            _operations.Writer.TryComplete(exception);
             while (_operations.Reader.TryRead(out EngineOperation pending))
             {
                 pending.Completion?.TrySetException(exception);
-                pending.Graph?.Dispose();
+                DisposeGraph(pending.Graph);
             }
         }
         finally
         {
-            active?.Dispose();
+            _operations.Writer.TryComplete();
+            DisposeGraph(active);
             Volatile.Write(ref _configuration, null);
         }
     }
 
-    private static void ApplyTransport(PreparedGraph? active, TransportState state, long stateTimestamp)
+    private static void DisposeGraph(PreparedGraph? graph)
+    {
+        try
+        {
+            graph?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError($"Audio graph cleanup failed: {exception}");
+        }
+    }
+
+    private void ApplyTransport(PreparedGraph? active, TransportState state, long stateTimestamp,
+        bool transportChanged = false)
     {
         if (active is null || !string.Equals(active.Configuration.ProjectId, state.ProjectId, StringComparison.Ordinal))
         {
             return;
         }
 
-        long position = ResolvePosition(state, stateTimestamp, Environment.TickCount64);
+        AudioPlaybackPosition playback = active.Cursor.Advance(
+            state, stateTimestamp, _timestamp(), transportChanged);
+        long position = playback.Samples;
         bool running = state.Mode is TransportMode.Playing or TransportMode.Recording;
         foreach (PreparedClip clip in active.Clips)
         {
@@ -329,7 +367,7 @@ public sealed class WindowsAudioEngine : IAudioEngine
             long sourceSample = clip.Source.SourceStartSample +
                                 projectOffset * clip.Source.SourceSampleRate / active.Configuration.SampleRate;
             TimeSpan sourcePosition = TimeSpan.FromSeconds(sourceSample / (double)clip.Source.SourceSampleRate);
-            if (!clip.IsPlaying || Math.Abs((clip.Node.Position - sourcePosition).TotalMilliseconds) > 100)
+            if (playback.RequiresSeek || !clip.IsPlaying || Math.Abs((clip.Node.Position - sourcePosition).TotalMilliseconds) > 100)
             {
                 clip.Node.Seek(sourcePosition);
             }
@@ -339,23 +377,6 @@ public sealed class WindowsAudioEngine : IAudioEngine
                 clip.IsPlaying = true;
             }
         }
-    }
-
-    internal static long ResolvePosition(TransportState state, long stateTimestamp, long currentTimestamp)
-    {
-        if (state.Mode == TransportMode.Stopped)
-        {
-            return state.PositionSamples;
-        }
-
-        long elapsedMilliseconds = Math.Max(0, currentTimestamp - stateTimestamp);
-        long position = state.PositionSamples + elapsedMilliseconds * state.SampleRate / 1000;
-        if (state.Loop.Enabled && position >= state.Loop.EndSample)
-        {
-            long length = state.Loop.EndSample - state.Loop.StartSample;
-            return state.Loop.StartSample + (position - state.Loop.StartSample) % length;
-        }
-        return Math.Min(position, state.DurationSamples);
     }
 
     private void ThrowIfDisposed()
@@ -372,6 +393,7 @@ public sealed class WindowsAudioEngine : IAudioEngine
 
     private sealed class PreparedGraph : IDisposable
     {
+        private int _disposed;
         public PreparedGraph(
             AudioEngineConfiguration configuration,
             AudioGraph graph,
@@ -385,19 +407,34 @@ public sealed class WindowsAudioEngine : IAudioEngine
         }
 
         public AudioEngineConfiguration Configuration { get; }
+        public AudioPlaybackCursor Cursor { get; } = new();
         public AudioGraph Graph { get; }
         public AudioDeviceOutputNode Output { get; }
         public List<PreparedClip> Clips { get; }
 
         public void Dispose()
         {
-            Graph.Stop();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+            List<Exception>? failures = null;
+            void Release(Action action)
+            {
+                try { action(); }
+                catch (Exception exception) { (failures ??= []).Add(exception); }
+            }
+            Release(Graph.Stop);
             foreach (PreparedClip clip in Clips)
             {
-                clip.Node.Dispose();
+                Release(clip.Node.Dispose);
             }
-            Output.Dispose();
-            Graph.Dispose();
+            Release(Output.Dispose);
+            Release(Graph.Dispose);
+            if (failures is not null)
+            {
+                throw new AggregateException("Audio graph resources could not all be released cleanly.", failures);
+            }
         }
     }
 

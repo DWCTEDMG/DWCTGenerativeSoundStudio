@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EdmgStudio.Core\EdmgStudio.Core.csproj" />
+    <Compile Include="..\..\Services\WindowsAudioEngine.cs" Link="WindowsAudioEngine.cs" />
   </ItemGroup>
 
 </Project>
