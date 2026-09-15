@@ -1,4 +1,7 @@
 <Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
   <Folder Name="/src/">
     <Project Path="src/EdmgStudio.Core/EdmgStudio.Core.csproj" />
   </Folder>
@@ -6,7 +9,8 @@
     <Project Path="tests/EdmgStudio.Core.Tests/EdmgStudio.Core.Tests.csproj" />
   </Folder>
   <Project Path="EdmgStudio.WinUI.csproj">
-    <Platform Solution="Debug|*" Project="x64" />
+    <BuildDependency Project="tests/EdmgStudio.Core.Tests/EdmgStudio.Core.Tests.csproj" />
+    <Platform Project="x64" />
     <Deploy Solution="Debug|*" />
   </Project>
 </Solution>
