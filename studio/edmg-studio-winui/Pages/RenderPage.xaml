@@ -2000,7 +2000,7 @@
                                         Click="RefreshRuntimeCapabilities_Click"
                                         AutomationProperties.AutomationId="RefreshRenderRuntimeCapabilitiesButton" />
                             </Grid>
-                            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="4">
+                            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="4">
                                 <TextBlock Text="Status" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <TextBlock x:Name="ReadinessStatusText" Grid.Column="1" Text="Checking..."
                                            FontWeight="SemiBold" AutomationProperties.AutomationId="RenderReadinessStatusText" />
@@ -2014,6 +2014,14 @@
                                 <TextBlock Grid.Row="4" Text="Provider" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <TextBlock x:Name="GenerationProviderText" Grid.Row="4" Grid.Column="1"
                                            Text="EDMG Internal Renderer" AutomationProperties.AutomationId="RenderGenerationProviderText" />
+                                <TextBlock Grid.Row="5" Text="Select" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <ComboBox x:Name="GenerationProviderComboBox" Grid.Row="5" Grid.Column="1"
+                                          DisplayMemberPath="Name" SelectionChanged="GenerationProvider_SelectionChanged"
+                                          AutomationProperties.AutomationId="RenderGenerationProviderComboBox" />
+                                <TextBlock Grid.Row="6" Text="Operation" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <ComboBox x:Name="GenerationOperationComboBox" Grid.Row="6" Grid.Column="1"
+                                          SelectionChanged="GenerationOperation_SelectionChanged"
+                                          AutomationProperties.AutomationId="RenderGenerationOperationComboBox" />
                             </Grid>
                             <TextBlock x:Name="RuntimeAcceleratorText"
                                        Text="Backend hardware has not been checked."

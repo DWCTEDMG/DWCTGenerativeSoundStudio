@@ -384,12 +384,14 @@ public sealed record GenerationProviderDefinition(
     [property: JsonPropertyName("capabilities")] IReadOnlyList<string> Capabilities,
     [property: JsonPropertyName("renderer_ids")] IReadOnlyList<string> RendererIds,
     [property: JsonPropertyName("ready")] bool Ready,
-    [property: JsonPropertyName("hardware_backend")] string HardwareBackend);
+    [property: JsonPropertyName("hardware_backend")] string? HardwareBackend,
+    [property: JsonPropertyName("readiness_detail")] string? ReadinessDetail);
 
 public sealed record GenerationSubmitResponse(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("generation")] GenerationJob Generation,
-    [property: JsonPropertyName("preflight")] JsonElement Preflight);
+    [property: JsonPropertyName("preflight")] JsonElement Preflight,
+    [property: JsonPropertyName("generations")] IReadOnlyList<GenerationJob>? Generations = null);
 
 public sealed record GenerationJob(
     [property: JsonPropertyName("schema_version")] string SchemaVersion,
@@ -397,15 +399,38 @@ public sealed record GenerationJob(
     [property: JsonPropertyName("project_id")] string ProjectId,
     [property: JsonPropertyName("operation")] string Operation,
     [property: JsonPropertyName("provider_id")] string ProviderId,
-    [property: JsonPropertyName("renderer_id")] string RendererId,
+    [property: JsonPropertyName("renderer_id")] string? RendererId,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("progress")] StudioJobProgress Progress,
-    [property: JsonPropertyName("artifacts")] IReadOnlyList<JsonElement> Artifacts,
+    [property: JsonPropertyName("artifacts")] IReadOnlyList<GenerationArtifact> Artifacts,
+    [property: JsonPropertyName("failures")] IReadOnlyList<GenerationFailure> Failures,
+    [property: JsonPropertyName("partial_failure")] bool PartialFailure,
+    [property: JsonPropertyName("usage")] JsonElement? Usage,
+    [property: JsonPropertyName("cost")] JsonElement? Cost,
     [property: JsonPropertyName("error")] string? Error,
     [property: JsonPropertyName("created_at")] string? CreatedAt,
     [property: JsonPropertyName("updated_at")] string? UpdatedAt,
     [property: JsonPropertyName("attempt")] int Attempt,
     [property: JsonPropertyName("priority")] int Priority);
+
+public sealed record GenerationArtifact(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("provider_generation_id")] string? ProviderGenerationId,
+    [property: JsonPropertyName("scene_index")] int? SceneIndex,
+    [property: JsonPropertyName("model")] string? Model,
+    [property: JsonPropertyName("seed")] long? Seed,
+    [property: JsonPropertyName("width")] int? Width,
+    [property: JsonPropertyName("height")] int? Height,
+    [property: JsonPropertyName("duration_s")] double? DurationSeconds,
+    [property: JsonPropertyName("frames")] int? Frames,
+    [property: JsonPropertyName("fps")] double? Fps);
+
+public sealed record GenerationFailure(
+    [property: JsonPropertyName("message")] string Message,
+    [property: JsonPropertyName("scene_index")] int? SceneIndex,
+    [property: JsonPropertyName("code")] string? Code,
+    [property: JsonPropertyName("hint")] string? Hint);
 
 public sealed record StudioJobActionResponse(
     [property: JsonPropertyName("ok")] bool Ok,

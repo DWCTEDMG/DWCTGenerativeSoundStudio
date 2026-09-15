@@ -75,7 +75,7 @@ from .store.projects import ProjectStore
 from .version import STUDIO_VERSION
 from .store.jobs import JobStore
 from .store.artifacts import write_artifact_manifest
-from .provider_generation import generation_provider_definitions, normalized_generation_job
+from .provider_generation import generation_provider_definitions, normalize_provider_result, normalized_generation_job
 from .api import (
     CloudRouterDependencies,
     JobRouterDependencies,
@@ -197,6 +197,7 @@ from .services.imagineart_platform import (
     IMAGINEART_VIDEO_STYLES,
     ImagineArtClient,
 )
+from .services.stability_platform import StabilityPlatformClient
 from .services.cosmos_platform import CosmosClient, COSMOS_MODELS, _COSMOS3_SHAPES
 from .services.azure_foundry_platform import AzureFoundryClient
 from .services.transcription_settings import (
@@ -3407,6 +3408,23 @@ def _comfyui_capabilities_payload():
     }
 
 
+def _generation_provider_status() -> dict[str, Any]:
+    status = _render_provider_status()
+    try:
+        capabilities = _comfyui_capabilities_payload()
+        status["comfyui"] = {
+            "ready": True,
+            "detail": "ComfyUI is reachable and its capabilities were discovered.",
+            "capabilities": capabilities,
+        }
+    except Exception as exc:
+        status["comfyui"] = {
+            "ready": False,
+            "detail": f"ComfyUI is unavailable: {hint_from_exception(exc)}",
+        }
+    return status
+
+
 app.include_router(
     create_system_settings_router(
         SystemSettingsDependencies(
@@ -3479,7 +3497,7 @@ app.include_router(
             edmg_status=lambda: core_status(),
             edmg_verify=lambda: edmg_selfcheck(),
             edmg_template=lambda: edmg_deforum_template(),
-            generation_providers=lambda: generation_provider_definitions(_render_provider_status()),
+            generation_providers=lambda: generation_provider_definitions(_generation_provider_status()),
         )
     )
 )
@@ -7143,7 +7161,14 @@ def _public_render_job_error(exc: Exception) -> str:
 
 def _execute_job(job):
     from .revisions import background_context, revision_context, merge_owned_fields
-    state = {"baselines": {}, "pending": []}
+    project_root = store.project_dir(job.project_id)
+    staging_root = project_root / ".job-staging" / job.id / f"attempt-{job.attempt}"
+    state = {
+        "baselines": {},
+        "pending": [],
+        "media_project_root": project_root,
+        "media_staging_root": staging_root,
+    }
     token = background_context.set(state)
     revision_token = revision_context.set(None)
     try:
@@ -7152,25 +7177,31 @@ def _execute_job(job):
         background_context.reset(token)
         revision_context.reset(revision_token)
     try:
-        with jobs.publication_guard(job.project_id, job.id, attempt=job.attempt) as active:
-            if active and job.status == "succeeded":
-                def publish(current):
-                    for project_id, baseline, edited in state["pending"]:
-                        if project_id != current.id:
-                            raise ValueError("Job attempted to publish another project")
-                        current.meta = merge_owned_fields(current.meta, baseline, edited)
-                if state["pending"]:
-                    store.mutate(job.project_id, publish)
-                from .store.artifacts import _write_atomic as publish_artifact
-                for artifact_path, artifact_payload in state.get("artifacts", []):
-                    publish_artifact(artifact_path, artifact_payload)
-            elif not active:
-                return
-            jobs.save(job)
+        with store.validated_revision_lock(job.project_id):
+            with jobs.publication_guard(job.project_id, job.id, attempt=job.attempt) as active:
+                if active and job.status == "succeeded":
+                    from .revisions import staged_media_publication
+                    artifact_paths = [path for path, _payload in state.get("artifacts", [])]
+                    with staged_media_publication(state.get("media_artifacts", []), artifact_paths):
+                        from .store.artifacts import _write_atomic as publish_artifact
+                        for artifact_path, artifact_payload in state.get("artifacts", []):
+                            publish_artifact(artifact_path, artifact_payload)
+                        def publish(current):
+                            for project_id, baseline, edited in state["pending"]:
+                                if project_id != current.id:
+                                    raise ValueError("Job attempted to publish another project")
+                                current.meta = merge_owned_fields(current.meta, baseline, edited)
+                        if state["pending"]:
+                            store.mutate(job.project_id, publish)
+                elif not active:
+                    return
+                jobs.save(job)
     except Exception as exc:
         job.status = "failed"
         job.error = _public_render_job_error(exc)
         jobs.save(job)
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
 
 
 def _execute_job_body(job):
@@ -7220,6 +7251,10 @@ def _execute_job_body(job):
             else:
                 job.result = res
                 job.status = "succeeded"
+        elif job.type == "provider_generation":
+            res = _run_provider_generation(job.project_id, job.id, job.payload, attempt=job.attempt)
+            job.result = res
+            job.status = "succeeded"
         elif job.type == "timeline_render":
             res = _run_timeline_render(job.project_id, job.id, job.payload)
             job.result = res
@@ -7297,6 +7332,136 @@ def _execute_job_body(job):
     latest = jobs.get(job.project_id, job.id)
     if latest and isinstance(latest.progress, dict):
         job.progress = latest.progress
+
+
+def _run_provider_generation(
+    project_id: str,
+    job_id: str,
+    payload: dict[str, Any],
+    *,
+    attempt: int | None = None,
+) -> dict[str, Any]:
+    generation = payload.get("_generation") if isinstance(payload.get("_generation"), dict) else {}
+    provider_id = str(generation.get("provider_id") or "")
+    operation = str(generation.get("operation") or "")
+    parameters = {key: value for key, value in payload.items() if key != "_generation"}
+    jobs.update_progress(
+        project_id,
+        job_id,
+        stage="provider_request",
+        current=0,
+        total=1,
+        message=f"Submitting {provider_id} {operation} generation",
+        expected_attempt=attempt,
+    )
+
+    if provider_id == "stability" and operation == "image":
+        raw_result = _run_stability_generation(project_id, parameters)
+    elif provider_id == "adobe.firefly":
+        raw_result = (
+            render_firefly_scenes(project_id, RenderScenesRequest.model_validate(parameters))
+            if operation == "image"
+            else render_firefly_video(project_id, parameters)
+        )
+    elif provider_id == "imagineart":
+        raw_result = (
+            render_imagineart_scenes(project_id, RenderScenesRequest.model_validate(parameters))
+            if operation == "image"
+            else render_imagineart_video(project_id, parameters)
+        )
+    elif provider_id == "nvidia.cosmos" and operation == "video":
+        raw_result = render_cosmos_all_scenes(project_id, parameters)
+    elif provider_id == "azure.foundry.cosmos" and operation == "video":
+        raw_result = render_azure_foundry_all_scenes(project_id, parameters)
+    else:
+        raise UserFacingError(
+            f"No durable adapter is available for {provider_id} {operation} generation.",
+            hint="Refresh provider discovery and select a supported provider operation.",
+            code="GENERATION_ADAPTER_UNAVAILABLE",
+            status_code=400,
+        )
+
+    normalized = normalize_provider_result(provider_id, operation, raw_result)
+    if not normalized["artifacts"]:
+        first_failure = next(iter(normalized["failures"]), {})
+        raise UserFacingError(
+            str(first_failure.get("message") or "Provider generation produced no artifacts."),
+            hint=str(first_failure.get("hint") or "Check provider readiness and retry the generation."),
+            code=str(first_failure.get("code") or "GENERATION_ALL_FAILED"),
+            status_code=502,
+        )
+    jobs.update_progress(
+        project_id,
+        job_id,
+        stage="complete",
+        current=1,
+        total=1,
+        message=(
+            f"Generated {len(normalized['artifacts'])} artifact(s) with some failures"
+            if normalized["partial_failure"]
+            else f"Generated {len(normalized['artifacts'])} artifact(s)"
+        ),
+        expected_attempt=attempt,
+    )
+    return normalized
+
+
+def _run_stability_generation(project_id: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    proj = store.get(project_id)
+    if not proj:
+        raise UserFacingError("Project not found.", code="PROJECT_NOT_FOUND", status_code=404)
+    status = _render_provider_status().get("stability") or {}
+    if not status.get("configured") or not status.get("enabled"):
+        raise UserFacingError(
+            "Stability AI is not ready.",
+            hint="Enable Stability and save its API key in Settings.",
+            code="STABILITY_NOT_READY",
+            status_code=400,
+        )
+    plan = proj.meta.get("last_plan") or {}
+    variants = plan.get("variants") or []
+    variant_index = int(parameters.get("variant_index") or 0)
+    if variant_index < 0 or variant_index >= len(variants):
+        raise UserFacingError("No planned variant is available for Stability generation.", code="PLAN_REQUIRED", status_code=400)
+    scenes = variants[variant_index].get("scenes") or []
+    cfg = dict(render_settings.get().get("stability") or {})
+    width = int(parameters.get("width") or proj.meta.get("width") or 1024)
+    height = int(parameters.get("height") or proj.meta.get("height") or 576)
+    seed = parameters.get("seed")
+    client = StabilityPlatformClient(str(secrets.get("stability_api_key") or ""))
+    project_dir = store.project_dir(project_id)
+    output_dir = project_dir / "stills" / f"variant_{variant_index}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    for scene_index, scene in enumerate(scenes):
+        try:
+            result = client.generate_image(
+                prompt=str(scene.get("prompt") or "cinematic music video still"),
+                width=width,
+                height=height,
+                service=str(cfg.get("service") or "sd3"),
+                model=str(parameters.get("model_id") or cfg.get("model") or "sd3.5-large-turbo"),
+                style_preset=str(cfg.get("style_preset") or "none"),
+                negative_prompt=str(scene.get("negative_prompt") or parameters.get("negative_prompt") or ""),
+                seed=(int(seed) + scene_index) if seed is not None else None,
+                output_format="png",
+            )
+            from .revisions import staged_media_path, published_media_path
+            output_path = staged_media_path(output_dir / f"scene_{scene_index:04d}.png")
+            result.image.save(output_path, format="PNG")
+            results.append({
+                "ok": True,
+                "scene_index": scene_index,
+                "path": published_media_path(output_path).relative_to(project_dir).as_posix(),
+                "generation_id": result.generation_id,
+                "model": result.model or result.service,
+                "seed": result.seed,
+                "width": width,
+                "height": height,
+            })
+        except UserFacingError as error:
+            results.append({"ok": False, "scene_index": scene_index, **error.to_dict()})
+    return {"ok": True, "provider": "stability", "results": results, "width": width, "height": height}
 
 
 def _job_in_subprocess_enabled() -> bool:
@@ -8949,10 +9114,19 @@ def _enqueue_internal_video_job(
     queued_message: str | None = None,
     idempotency_key: str | None = None,
     priority: int = 0,
+    persist_project_job: bool = True,
 ) -> tuple[Any, dict[str, Any]]:
     """Apply canonical motion/preflight rules and persist one video-render job."""
 
     normalized_idempotency_key = str(idempotency_key or "").strip() or None
+    generation = payload.get("_generation") if isinstance(payload.get("_generation"), dict) else {}
+    request_fingerprint = str(generation.get("request_fingerprint") or "").strip()
+    if normalized_idempotency_key and not request_fingerprint:
+        request_fingerprint = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        payload = deepcopy(payload)
+        payload.setdefault("_generation", {})["request_fingerprint"] = request_fingerprint
     if normalized_idempotency_key:
         existing = next(
             (
@@ -8963,6 +9137,16 @@ def _enqueue_internal_video_job(
             None,
         )
         if existing is not None:
+            existing_generation = (
+                existing.payload.get("_generation")
+                if isinstance(existing.payload.get("_generation"), dict)
+                else {}
+            )
+            if (
+                existing.type != job_type
+                or existing_generation.get("request_fingerprint") != request_fingerprint
+            ):
+                raise HTTPException(409, "Idempotency key already used for a different generation request")
             return existing, {}
     resolved_payload, _parseq = _apply_active_parseq_motion(proj, payload)
     preflight = _internal_render_preflight_data(project_id, resolved_payload)
@@ -8970,13 +9154,20 @@ def _enqueue_internal_video_job(
     estimated_total = max(1, int(preflight.get("estimated_frames", 1)) + 3)
     if str(preflight.get("mode") or "").strip().lower() == "tensorrt":
         estimated_total += max(0, int(preflight.get("estimated_keyframes", 0)))
-    job = jobs.create(
+    job, created = jobs.create_with_status(
         project_id,
         job_type,
         resolved_payload,
         idempotency_key=normalized_idempotency_key,
         priority=priority,
     )
+    if not created:
+        existing_generation = (
+            job.payload.get("_generation") if isinstance(job.payload.get("_generation"), dict) else {}
+        )
+        if job.type != job_type or existing_generation.get("request_fingerprint") != request_fingerprint:
+            raise HTTPException(409, "Idempotency key already used for a different generation request")
+        return job, {}
     job.progress = {
         "stage": "queued",
         "current": 0,
@@ -8986,8 +9177,9 @@ def _enqueue_internal_video_job(
         or f"Queued internal render for model {preflight.get('model_id')}",
     }
     jobs.save(job)
-    proj.meta.setdefault("jobs", []).append(job.__dict__)
-    store.save(proj)
+    if persist_project_job:
+        proj.meta.setdefault("jobs", []).append(job.__dict__)
+        store.save(proj)
     return job, preflight
 
 

@@ -346,6 +346,62 @@ class JobStore:
             self._mirror_json(job)
             return job, True
 
+    def create_batch_with_status(
+        self,
+        project_id: str,
+        requests: list[tuple[str, dict[str, Any], str | None, int]],
+    ) -> list[tuple[Job, bool]]:
+        """Atomically validate idempotent replays and create all missing jobs."""
+        results: list[tuple[Job, bool]] = []
+        created_jobs: list[Job] = []
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                for job_type, payload, idempotency_key, priority in requests:
+                    key = str(idempotency_key or "").strip() or None
+                    row = None
+                    if key:
+                        row = self._conn.execute(
+                            """
+                            SELECT * FROM jobs
+                            WHERE project_id = ? AND idempotency_key = ?
+                            LIMIT 1
+                            """,
+                            (project_id, key),
+                        ).fetchone()
+                    if row is not None:
+                        existing = self._row_to_job(row)
+                        if existing.type != job_type or existing.payload != payload:
+                            raise ValueError("Idempotency key already used for a different job request")
+                        results.append((existing, False))
+                        continue
+
+                    jid = uuid.uuid4().hex
+                    now = self._now()
+                    job = Job(
+                        id=jid,
+                        project_id=project_id,
+                        type=job_type,
+                        status="queued",
+                        created_at=now,
+                        updated_at=now,
+                        payload=payload,
+                        priority=priority,
+                        idempotency_key=key,
+                    )
+                    self._upsert_job(job)
+                    self._record_event(project_id, jid, "created", {"type": job_type})
+                    results.append((job, True))
+                    created_jobs.append(job)
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+            for job, _created in results:
+                self._mirror_json(job)
+            return results
+
     def _mirror_json(self, job: Job) -> None:
         try:
             path = self._jobs_dir(job.project_id) / f"{job.id}.json"

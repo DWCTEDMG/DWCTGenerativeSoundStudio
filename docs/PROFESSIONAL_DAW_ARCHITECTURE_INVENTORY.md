@@ -30,16 +30,19 @@ Renderer logic stays in the Python backend. Timeline UI may submit normalized in
 
 ## Provider inventory
 
-| Provider family | Current integration | Credential rule |
+| Generation provider | Operations and queue ownership | Credential rule |
 | --- | --- | --- |
-| Rule-based planning | Built-in planner selected with `EDMG_AI_PROVIDER=rule_based` | No credential |
-| Ollama | Local provider and status/discovery through provider APIs | Local endpoint configuration only |
-| OpenAI-compatible / NVIDIA Nemotron cloud | Planner configuration documented in `docs/AI_PROVIDERS.md` | Token stored through Studio secret settings, never project JSON |
-| Optional external AI service | HTTP planning mode configured by `EDMG_AI_MODE=http` | Endpoint configuration is operational state |
-| ComfyUI | Backend status, workflow, and rendering integration | External runtime configuration; no workflow secrets in projects |
-| Internal model runtimes | Model manager, runtime registry, catalogue, setup, and validation receipts | Runtime state belongs under Studio Home, not project data |
+| `edmg.internal` | Video through the specialized `internal_video` queue and renderer preflight | No request credential; runtime state belongs under Studio Home |
+| `comfyui` | Image and video through existing `comfyui_scene` and `comfyui_motion_scene` child queues | External runtime configuration; no workflow secrets in projects |
+| `stability` | Image through durable `provider_generation` jobs | Secret settings only |
+| `adobe.firefly` | Image and video through durable `provider_generation` jobs | Secret settings only |
+| `imagineart` | Image and video through durable `provider_generation` jobs | Secret settings only |
+| `nvidia.cosmos` | Video through durable `provider_generation` jobs and the configured self-hosted adapter | Secret and endpoint settings only |
+| `azure.foundry.cosmos` | Video through durable `provider_generation` jobs and the Foundry adapter | Secret and endpoint settings only |
 
-`api/providers.py` exposes operational status, discovery, and provider-neutral generation definitions. Phase 11 adds a normalized generation envelope at `/v1/projects/{project_id}/generation` and normalized durable queue projections under `/v1/generation/jobs`; legacy render and job routes remain compatibility surfaces over the same canonical queue.
+`api/providers.py` exposes operational status, discovery, and provider-neutral generation definitions. `POST /v1/projects/{project_id}/generation` validates a versioned provider/operation envelope, rejects credential-like fields recursively before persistence, and projects durable jobs through normalized generation results. Internal video retains its specialist queue. ComfyUI reuses established scene queues with deterministic child keys and atomic batch replay/collision validation; it does not introduce a parent job that could deadlock a single worker. Hosted adapters use `provider_generation`. Legacy render endpoints retain their original plain request bodies over the same queue implementations.
+
+Planning, transcription, storage, deployment, model-download, TensorRT, and hardware services are capabilities or infrastructure, not normalized generation providers. Provider results preserve reported usage and cost, normalize artifacts into the ordinary media/provenance flow, and represent mixed batches as explicit partial failures rather than hiding successful outputs or provider errors.
 
 ## Timeline and project inventory
 
@@ -108,6 +111,7 @@ Phase 4 must introduce narrow transport, device, and render-graph interfaces wit
 | Generated artifact identity and provenance survive timeline insertion | Project timeline and render-result insertion tests |
 | FFmpeg discovery, probing, cancellation, spool limits, and cleanup | `EdmgStudio.Core.Tests/MediaPipelineTests.cs` |
 | Hunyuan and LTX runtime dispatch remain capability-gated | Focused internal-video, Hunyuan, LTX, model-runtime, and motion-quality tests |
+| Provider requests remain secret-free, idempotent, and legacy-route compatible | `python_backend/edmg_studio_backend/tests/test_provider_generation.py`; `EdmgStudio.Core.Tests/StudioApiClientTests.cs` |
 | WinUI XAML pages compile | Release build of `studio/edmg-studio-winui/EdmgStudio.WinUI.slnx` |
 
 The Director/Reactive Lab workflow rules in `studio/edmg-studio-winui/ChatLog3.md`, `ChatLog4.md`, and the workstation `ChatLog5.md` are regression requirements: applying a saved Director draft must reconnect persisted analysis/keyframes, reanalysis is exceptional rather than routine, and applying review guidance must retain draft identity/revision safeguards.

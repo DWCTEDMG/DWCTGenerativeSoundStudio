@@ -82,6 +82,21 @@ def test_project_store_save_is_atomic_and_versioned(tmp_path: Path) -> None:
     )
 
 
+def test_validated_revision_lock_allows_nested_project_mutation(tmp_path: Path) -> None:
+    store = ProjectStore(tmp_path / "data")
+    project = store.create("Nested lock")
+
+    with store.validated_revision_lock(project.id, expected_revision=project.revision):
+        updated = store.mutate(
+            project.id,
+            lambda current: current.meta.update({"nested": True}),
+            use_request_revision=False,
+        )
+
+    assert updated.meta["nested"] is True
+    assert not (store.project_dir(project.id) / ".project.lock").exists()
+
+
 def test_set_audio_archives_analysis_and_preserves_plan_and_authored_state(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path / "data")
     project = store.create("Replacement Audio")

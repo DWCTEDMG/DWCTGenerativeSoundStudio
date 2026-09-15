@@ -263,52 +263,55 @@ def create_director_router(
         if readiness_snapshot is not None:
             payload["readiness"] = readiness_snapshot
         job_store = get_jobs()
-        job, created = job_store.create_with_status(
-            project_id, "qwen_director", payload, idempotency_key="director:" + request.operation_id
-        )
-        if job.type != "qwen_director" or job.payload != payload:
-            raise HTTPException(409, "Operation ID already used for different direction")
-        def persist_generation(current, active_job):
-            if workflow:
-                current.meta["director_workflow"] = deepcopy(workflow)
-            current.meta["director_generation_context"] = {
-                "version": 1, "revision": current.revision + 1,
-                "digest": context_digest, "context": deepcopy(context),
-            }
-            current.meta["director_job"] = {
-                "version": 1,
-                "job_id": job.id,
-                "status": active_job.status,
-                "reviewed": False,
-                "instruction": request.instruction,
-                "context": deepcopy(context),
-            }
-
         generation_error: Exception | None = None
-        with job_store.registration_guard(project_id, job.id) as registration:
-            if not registration.active:
-                raise HTTPException(409, "Prior Director request conflicted; use a new operation ID")
-            try:
-                project = get_store().mutate(
-                    project_id,
-                    lambda current: persist_generation(current, registration.job),
-                    expected_revision=request.expected_revision,
-                )
-            except Exception as original_error:
-                token = revision_context.set(None)
+        project_store = get_store()
+        with project_store.validated_revision_lock(project_id, expected_revision=request.expected_revision):
+            job, created = job_store.create_with_status(
+                project_id, "qwen_director", payload, idempotency_key="director:" + request.operation_id
+            )
+            if job.type != "qwen_director" or job.payload != payload:
+                raise HTTPException(409, "Operation ID already used for different direction")
+
+            def persist_generation(current, active_job):
+                if workflow:
+                    current.meta["director_workflow"] = deepcopy(workflow)
+                current.meta["director_generation_context"] = {
+                    "version": 1, "revision": current.revision + 1,
+                    "digest": context_digest, "context": deepcopy(context),
+                }
+                current.meta["director_job"] = {
+                    "version": 1,
+                    "job_id": job.id,
+                    "status": active_job.status,
+                    "reviewed": False,
+                    "instruction": request.instruction,
+                    "context": deepcopy(context),
+                }
+
+            with job_store.registration_guard(project_id, job.id) as registration:
+                if not registration.active:
+                    raise HTTPException(409, "Prior Director request conflicted; use a new operation ID")
                 try:
-                    latest = get_store().get(project_id)
-                except Exception:
-                    latest = None
-                finally:
-                    revision_context.reset(token)
-                recovery = (latest.meta.get("director_job") or {}) if latest is not None else {}
-                if recovery.get("job_id") == job.id:
-                    return {"ok": True, "revision": latest.revision, "job_id": job.id,
-                            "status": registration.job.status, "output_policy": "draft"}
-                if created:
-                    registration.cancel()
-                generation_error = original_error
+                    project = project_store.mutate(
+                        project_id,
+                        lambda current: persist_generation(current, registration.job),
+                        expected_revision=request.expected_revision,
+                    )
+                except Exception as original_error:
+                    token = revision_context.set(None)
+                    try:
+                        latest = project_store.get(project_id)
+                    except Exception:
+                        latest = None
+                    finally:
+                        revision_context.reset(token)
+                    recovery = (latest.meta.get("director_job") or {}) if latest is not None else {}
+                    if recovery.get("job_id") == job.id:
+                        return {"ok": True, "revision": latest.revision, "job_id": job.id,
+                                "status": registration.job.status, "output_policy": "draft"}
+                    if created:
+                        registration.cancel()
+                    generation_error = original_error
         if generation_error is not None:
             raise generation_error
         return {"ok": True, "revision": project.revision, "job_id": job.id,

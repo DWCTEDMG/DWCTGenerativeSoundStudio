@@ -25,6 +25,7 @@ public sealed partial class RenderPage : Page
     private ModelCatalogueResponse? _modelCatalogue;
     private ModelRenderGuidance? _modelGuidance;
     private JsonElement? _hardwareProfile;
+    private IReadOnlyList<GenerationProviderDefinition> _generationProviders = [];
     private GenerationProviderDefinition? _generationProvider;
 
     private sealed record ModelPickerItem(
@@ -206,10 +207,12 @@ public sealed partial class RenderPage : Page
         try
         {
             GenerationProviderListResponse response = await App.Services.ApiClient.GetGenerationProvidersAsync(cancellationToken);
-            _generationProvider = response.Providers.FirstOrDefault(provider => provider.Id == "edmg.internal");
-            GenerationProviderText.Text = _generationProvider is null
-                ? "Provider unavailable"
-                : $"{_generationProvider.Name} · {_generationProvider.HardwareBackend} · {(_generationProvider.Ready ? "ready" : "blocked")}";
+            _generationProviders = response.Providers;
+            GenerationProviderComboBox.ItemsSource = _generationProviders;
+            GenerationProviderComboBox.SelectedItem =
+                _generationProviders.FirstOrDefault(provider => provider.Id == "edmg.internal")
+                ?? _generationProviders.FirstOrDefault();
+            UpdateGenerationProviderSelection();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -217,8 +220,40 @@ public sealed partial class RenderPage : Page
         catch (Exception ex)
         {
             _generationProvider = null;
+            _generationProviders = [];
             GenerationProviderText.Text = $"Provider unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
         }
+    }
+
+    private void GenerationProvider_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateGenerationProviderSelection();
+
+    private void GenerationOperation_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateGenerationProviderStatus();
+
+    private void UpdateGenerationProviderSelection()
+    {
+        _generationProvider = GenerationProviderComboBox.SelectedItem as GenerationProviderDefinition;
+        GenerationOperationComboBox.ItemsSource = _generationProvider?.Operations;
+        GenerationOperationComboBox.SelectedItem = _generationProvider?.Operations.Contains("video") == true
+            ? "video"
+            : _generationProvider?.Operations.FirstOrDefault();
+        UpdateGenerationProviderStatus();
+    }
+
+    private void UpdateGenerationProviderStatus()
+    {
+        if (_generationProvider is null)
+        {
+            GenerationProviderText.Text = "Provider unavailable";
+            return;
+        }
+
+        string runtime = string.IsNullOrWhiteSpace(_generationProvider.HardwareBackend)
+            ? _generationProvider.Kind
+            : _generationProvider.HardwareBackend;
+        GenerationProviderText.Text = $"{_generationProvider.Name} · {runtime} · "
+            + $"{(_generationProvider.Ready ? "ready" : "blocked")} · {_generationProvider.ReadinessDetail}";
     }
 
     private void UpdateRuntimeCapabilityUi()
@@ -610,6 +645,20 @@ public sealed partial class RenderPage : Page
         return InternalVideoRenderRequestBuilder.Build(settings);
     }
 
+    private JsonElement BuildHostedVideoRequest()
+    {
+        long seed = LongNumber(SeedBox, -1);
+        return JsonSerializer.SerializeToElement(new
+        {
+            variant_index = App.Services.Session.SelectedVariantIndex,
+            width = (int)Number(WidthBox, 1280),
+            height = (int)Number(HeightBox, 720),
+            fps = Number(FpsBox, 24),
+            steps = (int)Number(StepsBox, 28),
+            seed = seed < 0 ? (long?)null : seed,
+        }, StudioJson.Options);
+    }
+
     private RenderQuickSetup ResolveQuickSetup() =>
         RenderQuickSetup.Resolve(
             Selected(QuickGoalComboBox, "auto"),
@@ -937,11 +986,25 @@ public sealed partial class RenderPage : Page
             PreflightResultBox,
             async (projectId, token) =>
             {
+                GenerationProviderDefinition provider = _generationProvider
+                    ?? throw new InvalidOperationException("Select a generation provider before rendering.");
+                string operation = GenerationOperationComboBox.SelectedItem as string ?? "video";
+                if (!provider.Ready)
+                {
+                    throw new InvalidOperationException(provider.ReadinessDetail ?? $"{provider.Name} is not ready.");
+                }
+                JsonElement parameters = operation == "image"
+                    ? JsonSerializer.SerializeToElement(BuildSceneStillsRequest(), StudioJson.Options)
+                    : provider.Id == "edmg.internal"
+                        ? BuildInternalRenderRequest()
+                        : BuildHostedVideoRequest();
                 GenerationSubmitResponse response = await App.Services.ApiClient.StartGenerationAsync(
-                projectId,
-                BuildInternalRenderRequest(),
-                Selected(VideoModelEngineComboBox, "auto"),
-                token);
+                    projectId,
+                    parameters,
+                    provider.Id,
+                    operation,
+                    provider.Id == "edmg.internal" ? Selected(VideoModelEngineComboBox, "auto") : "auto",
+                    token);
                 return JsonSerializer.SerializeToElement(response, StudioJson.Options);
             },
             "Generation request was accepted by the provider-neutral render queue.");

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import time
 from collections.abc import Callable
@@ -10,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from ..errors import UserFacingError
-from ..revisions import RevisionRoute
+from ..revisions import RevisionRoute, published_media_path, staged_media_path
 from ..schemas import (
     AutoAnimateRequest,
     GenerationRequest,
@@ -34,6 +36,18 @@ class RenderRouterDependencies:
 
 def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
     router = APIRouter(route_class=RevisionRoute)
+
+    def _merge_project_job_mirror(project_id: str, queued_jobs: list[dict[str, Any]]) -> None:
+        store = deps.resolve("store")
+
+        def merge(project) -> None:
+            mirrored = list(project.meta.get("jobs") or [])
+            mirrored_ids = {str(item.get("id") or "") for item in mirrored if isinstance(item, dict)}
+            mirrored.extend(item for item in queued_jobs if str(item.get("id") or "") not in mirrored_ids)
+            project.meta["jobs"] = mirrored
+
+        store.mutate(project_id, merge, use_request_revision=False)
+
     @router.post("/v1/projects/{project_id}/render/cosmos/scene")
     def render_cosmos_scene(project_id: str, payload: dict[str, Any]):
         """Generate a single video clip for one scene using NVIDIA Cosmos.
@@ -108,7 +122,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
 
         out_dir = project_dir / "cosmos" / f"variant_{variant_index}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"scene_{scene_index:04d}.mp4"
+        out_path = staged_media_path(out_dir / f"scene_{scene_index:04d}.mp4")
 
         use_keyframe = bool((payload or {}).get("use_keyframe", False))
         init_image = None
@@ -156,7 +170,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                 model=model,
             )
 
-        rel = result.video_path.relative_to(project_dir).as_posix()
+        rel = published_media_path(result.video_path).relative_to(project_dir).as_posix()
         return {
             "ok": True,
             "provider": "nvidia-cosmos",
@@ -290,7 +304,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
 
         out_dir = project_dir / "azure_foundry" / f"variant_{variant_index}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"scene_{scene_index:04d}.mp4"
+        out_path = staged_media_path(out_dir / f"scene_{scene_index:04d}.mp4")
 
         use_keyframe = bool((payload or {}).get("use_keyframe", False))
         init_image = None
@@ -331,7 +345,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                 seed=int(seed) if seed is not None else None,
             )
 
-        rel = result.video_path.relative_to(project_dir).as_posix()
+        rel = published_media_path(result.video_path).relative_to(project_dir).as_posix()
         return {
             "ok": True,
             "provider": "azure-foundry-cosmos",
@@ -395,6 +409,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
+        store.validate_revision(project_id)
         plan = proj.meta.get("last_plan")
         if not plan or not (plan.get("variants") or []):
             raise HTTPException(400, "No plan generated — run Plan first.")
@@ -445,9 +460,9 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                     custom_model_id=custom_model_id,
                     timeout_s=180.0,
                 )
-                out_path = stills_dir / f"scene_{idx:04d}.png"
+                out_path = staged_media_path(stills_dir / f"scene_{idx:04d}.png")
                 result.image.save(str(out_path), format="PNG")
-                rel = out_path.relative_to(project_dir).as_posix()
+                rel = published_media_path(out_path).relative_to(project_dir).as_posix()
                 results.append({
                     "scene_index": idx,
                     "path": rel,
@@ -542,9 +557,9 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                     seed=seed,
                     custom_model_id=custom_model_id,
                 )
-                out_path = clips_dir / f"scene_{idx:04d}.mp4"
+                out_path = staged_media_path(clips_dir / f"scene_{idx:04d}.mp4")
                 out_path.write_bytes(result.video_bytes)
-                rel = out_path.relative_to(project_dir).as_posix()
+                rel = published_media_path(out_path).relative_to(project_dir).as_posix()
                 results.append({
                     "scene_index": idx,
                     "path": rel,
@@ -707,9 +722,9 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                     seed=seed,
                     timeout_s=float(imagineart_cfg.get("timeout_s") or 180),
                 )
-                out_path = stills_dir / f"scene_{idx:04d}.png"
+                out_path = staged_media_path(stills_dir / f"scene_{idx:04d}.png")
                 result.image.save(str(out_path), format="PNG")
-                rel = out_path.relative_to(project_dir).as_posix()
+                rel = published_media_path(out_path).relative_to(project_dir).as_posix()
                 results.append({
                     "scene_index": idx,
                     "path": rel,
@@ -796,9 +811,9 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                     timeout_s=timeout_s,
                     poll_interval_s=5.0,
                 )
-                out_path = clips_dir / f"scene_{idx:04d}.mp4"
+                out_path = staged_media_path(clips_dir / f"scene_{idx:04d}.mp4")
                 out_path.write_bytes(result.video_bytes)
-                rel = out_path.relative_to(project_dir).as_posix()
+                rel = published_media_path(out_path).relative_to(project_dir).as_posix()
                 results.append({
                     "scene_index": idx,
                     "path": rel,
@@ -894,6 +909,17 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
     @router.post("/v1/projects/{project_id}/render/stills/scenes")
     @router.post("/v1/projects/{project_id}/render/comfyui/scenes")
     def render_scenes(project_id: str, req: RenderScenesRequest):
+        return _enqueue_render_scenes(project_id, req)
+
+    def _enqueue_render_scenes(
+        project_id: str,
+        req: RenderScenesRequest,
+        *,
+        idempotency_prefix: str | None = None,
+        priority: int = 0,
+        generation_metadata: dict[str, Any] | None = None,
+        update_project_mirror: bool = True,
+    ):
         _normalize_controlnet_units = deps.resolve("_normalize_controlnet_units")
         _normalize_render_loras = deps.resolve("_normalize_render_loras")
         _request_payload = deps.resolve("_request_payload")
@@ -920,7 +946,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         if not scenes:
             raise HTTPException(400, "Selected variant has no scenes")
 
-        created = []
+        pending_jobs = []
         resolved_loras = _normalize_render_loras(getattr(req, "loras", []))
         raw_controlnet_units = _request_payload(req).get("controlnet_units") if isinstance(_request_payload(req).get("controlnet_units"), list) else list(getattr(req, "controlnet_units", []))
         if req.workflow_family == "controlnet" and not raw_controlnet_units and req.controlnet_model and req.reference_asset:
@@ -1009,11 +1035,20 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                 "out_path": str(out_path),
             }
             job_type = "internal_still_scene" if str(selection.get("engine") or "comfyui") == "internal" else "comfyui_scene"
-            job = jobs.create(project_id, job_type, p)
-            created.append(job.__dict__)
+            if generation_metadata:
+                p["_generation"] = dict(generation_metadata)
+            child_key = f"{idempotency_prefix}:scene:{idx:04d}" if idempotency_prefix else None
+            pending_jobs.append((job_type, p, child_key, priority))
 
-        proj.meta.setdefault("jobs", []).extend(created)
-        store.save(proj)
+        try:
+            batch = jobs.create_batch_with_status(project_id, pending_jobs)
+        except ValueError as exc:
+            raise HTTPException(409, "Idempotency key already used for a different generation request") from exc
+        created = [job.__dict__ for job, _was_created in batch]
+        newly_created = [job.__dict__ for job, was_created in batch if was_created]
+
+        if update_project_mirror and (newly_created or idempotency_prefix):
+            _merge_project_job_mirror(project_id, created)
 
         return {"ok": True, "enqueued": len(created), "jobs": created}
 
@@ -1133,7 +1168,8 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
 
     @router.post("/v1/projects/{project_id}/generation")
     def submit_generation(project_id: str, req: GenerationRequest):
-        """Normalize a provider request onto the existing internal render queue."""
+        """Normalize provider requests onto the durable render queue."""
+        jobs = deps.resolve("jobs")
         normalized_generation_job = deps.resolve("normalized_generation_job")
         _enqueue_internal_video_job = deps.resolve("_enqueue_internal_video_job")
         _public_render_preflight = deps.resolve("_public_render_preflight")
@@ -1142,9 +1178,10 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
+        store.validate_revision(project_id)
 
-        payload = _request_payload(req.parameters)
-        if req.renderer_id in {"hunyuan_video15", "ltx_25"}:
+        payload = dict(req.parameters) if isinstance(req.parameters, dict) else _request_payload(req.parameters)
+        if req.provider_id == "edmg.internal" and req.renderer_id in {"hunyuan_video15", "ltx_25"}:
             payload["video_model_engine"] = req.renderer_id
             payload["temporal_mode"] = "video_model"
         elif req.renderer_id in {"diffusion", "tensorrt"}:
@@ -1155,13 +1192,67 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
             "provider_id": req.provider_id,
             "renderer_id": req.renderer_id,
         }
-        job, preflight = _enqueue_internal_video_job(
-            project_id,
-            proj,
-            payload,
-            idempotency_key=req.idempotency_key,
-            priority=req.priority,
-        )
+        request_fingerprint = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        payload["_generation"]["request_fingerprint"] = request_fingerprint
+        child_jobs = []
+        with store.validated_revision_lock(project_id):
+            if req.provider_id == "edmg.internal":
+                job, preflight = _enqueue_internal_video_job(
+                    project_id,
+                    proj,
+                    payload,
+                    idempotency_key=req.idempotency_key,
+                    priority=req.priority,
+                    persist_project_job=False,
+                )
+            elif req.provider_id == "comfyui":
+                enqueue = _enqueue_render_scenes if req.operation == "image" else _enqueue_render_motion_scenes
+                request_type = RenderScenesRequest if req.operation == "image" else RenderMotionRequest
+                queued = enqueue(
+                    project_id,
+                    request_type.model_validate(payload),
+                    idempotency_prefix=req.idempotency_key,
+                    priority=req.priority,
+                    generation_metadata=payload["_generation"],
+                    update_project_mirror=False,
+                )
+                for queued_job in queued.get("jobs", []):
+                    queued_child = jobs.get(project_id, str(queued_job.get("id") or ""))
+                    if queued_child is not None:
+                        child_jobs.append(queued_child)
+                if not child_jobs:
+                    raise HTTPException(500, "ComfyUI did not create any durable generation jobs")
+            else:
+                job, created = jobs.create_with_status(
+                    project_id,
+                    "provider_generation",
+                    payload,
+                    idempotency_key=req.idempotency_key,
+                    priority=req.priority,
+                )
+                if not created and (job.type != "provider_generation" or job.payload != payload):
+                    raise HTTPException(409, "Idempotency key already used for a different generation request")
+                preflight = {}
+                if created:
+                    job.progress = {
+                        "stage": "queued",
+                        "current": 0,
+                        "total": 1,
+                        "percent": 0.0,
+                        "message": f"Queued {req.provider_id} {req.operation} generation",
+                    }
+                    jobs.save(job)
+        if child_jobs:
+            _merge_project_job_mirror(project_id, [item.__dict__ for item in child_jobs])
+            return {
+                "ok": True,
+                "generation": normalized_generation_job(child_jobs[0]),
+                "generations": [normalized_generation_job(item) for item in child_jobs],
+                "preflight": {},
+            }
+        _merge_project_job_mirror(project_id, [job.__dict__])
         return {
             "ok": True,
             "generation": normalized_generation_job(job),
@@ -1252,6 +1343,17 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
 
     @router.post("/v1/projects/{project_id}/render/comfyui/motion_scenes")
     def render_motion_scenes(project_id: str, req: RenderMotionRequest):
+        return _enqueue_render_motion_scenes(project_id, req)
+
+    def _enqueue_render_motion_scenes(
+        project_id: str,
+        req: RenderMotionRequest,
+        *,
+        idempotency_prefix: str | None = None,
+        priority: int = 0,
+        generation_metadata: dict[str, Any] | None = None,
+        update_project_mirror: bool = True,
+    ):
         _normalize_render_loras = deps.resolve("_normalize_render_loras")
         _resolve_comfy_motion_selection = deps.resolve("_resolve_comfy_motion_selection")
         _resolve_optional_comfy_asset_name = deps.resolve("_resolve_optional_comfy_asset_name")
@@ -1263,6 +1365,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
+        store.validate_revision(project_id)
         plan = proj.meta.get("last_plan")
         if not plan or not (plan.get("variants") or []):
             raise HTTPException(400, "No plan generated")
@@ -1276,7 +1379,7 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         if not scenes:
             raise HTTPException(400, "Selected variant has no scenes")
 
-        created = []
+        pending_jobs = []
         resolved_loras = _normalize_render_loras(getattr(req, "loras", []))
         vae_name = _resolve_optional_comfy_asset_name(req.vae, folder="vae", allowed_kinds={"vae"})
         motion_selection = _resolve_comfy_motion_selection(
@@ -1337,11 +1440,20 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                 "svd_decoding_t": req.svd_decoding_t,
                 "device": req.device,
             }
-            job = jobs.create(project_id, "comfyui_motion_scene", p)
-            created.append(job.__dict__)
+            if generation_metadata:
+                p["_generation"] = dict(generation_metadata)
+            child_key = f"{idempotency_prefix}:scene:{idx:04d}" if idempotency_prefix else None
+            pending_jobs.append(("comfyui_motion_scene", p, child_key, priority))
 
-        proj.meta.setdefault("jobs", []).extend(created)
-        store.save(proj)
+        try:
+            batch = jobs.create_batch_with_status(project_id, pending_jobs)
+        except ValueError as exc:
+            raise HTTPException(409, "Idempotency key already used for a different generation request") from exc
+        created = [job.__dict__ for job, _was_created in batch]
+        newly_created = [job.__dict__ for job, was_created in batch if was_created]
+
+        if update_project_mirror and (newly_created or idempotency_prefix):
+            _merge_project_job_mirror(project_id, created)
 
         return {"ok": True, "enqueued": len(created), "jobs": created}
 

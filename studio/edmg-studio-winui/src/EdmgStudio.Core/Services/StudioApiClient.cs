@@ -1071,14 +1071,16 @@ public sealed class StudioApiClient : IDisposable
     public Task<GenerationSubmitResponse> StartGenerationAsync(
         string projectId,
         JsonElement parameters,
-        string rendererId = "auto",
+        string providerId = "edmg.internal",
+        string operation = "video",
+        string? rendererId = "auto",
         CancellationToken cancellationToken = default)
     {
         var request = new JsonObject
         {
             ["schema_version"] = "1.0",
-            ["operation"] = "video",
-            ["provider_id"] = "edmg.internal",
+            ["operation"] = operation,
+            ["provider_id"] = providerId,
             ["renderer_id"] = rendererId,
             ["parameters"] = JsonNode.Parse(parameters.GetRawText())
         };

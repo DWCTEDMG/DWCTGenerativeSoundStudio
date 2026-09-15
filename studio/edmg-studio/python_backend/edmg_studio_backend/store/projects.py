@@ -9,13 +9,14 @@ import shutil
 import threading
 import time
 import uuid
-from contextlib import contextmanager
 from collections.abc import Callable
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from ..revisions import request_revision, record_revision, background_context, revision_context
-from copy import deepcopy
+
+from ..revisions import background_context, record_revision, request_revision, revision_context
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,7 @@ class ProjectStore:
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         self._locks_guard = threading.Lock()
         self._project_locks: dict[str, threading.RLock] = {}
+        self._lock_depth = threading.local()
 
     def _proj_dir(self, project_id: str) -> Path:
         d = self._resolve_project_dir(project_id)
@@ -253,28 +255,44 @@ class ProjectStore:
         while True:
             try:
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                payload = f"{os.getpid()} {time.time()}\n".encode("utf-8")
+                payload = f"{os.getpid()} {time.time()}\n".encode()
                 os.write(fd, payload)
                 try:
                     os.fsync(fd)
                 except OSError:
                     pass
                 return lock_path, fd
-            except FileExistsError:
+            except FileExistsError as exc:
                 if self._try_break_stale_lock(lock_path):
                     continue
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(f"Timed out waiting for project lock {lock_path}")
+                    raise TimeoutError(f"Timed out waiting for project lock {lock_path}") from exc
                 time.sleep(_PROJECT_LOCK_POLL_S)
 
     @contextmanager
     def _synchronized_project(self, project_id: str):
-        lock = self._project_lock(project_id)
+        safe_project_id = self._validate_project_id(project_id)
+        lock = self._project_lock(safe_project_id)
         with lock:
-            lock_path, fd = self._acquire_lock_file(project_id)
+            depths = getattr(self._lock_depth, "projects", None)
+            if depths is None:
+                depths = {}
+                self._lock_depth.projects = depths
+            depth = depths.get(safe_project_id, 0)
+            if depth:
+                depths[safe_project_id] = depth + 1
+                try:
+                    yield
+                finally:
+                    depths[safe_project_id] -= 1
+                return
+
+            lock_path, fd = self._acquire_lock_file(safe_project_id)
+            depths[safe_project_id] = 1
             try:
                 yield
             finally:
+                depths.pop(safe_project_id, None)
                 try:
                     os.close(fd)
                 except OSError:
@@ -335,7 +353,6 @@ class ProjectStore:
         except OSError as exc:
             logger.warning("Unreadable project document %s: %s", project_path, exc)
             return None
-        from_version = int((raw or {}).get("schema_version") or 0)
         migrated, changed, _applied = migrate_project_document(raw)
         if changed and persist_migrations:
             with self._synchronized_project(safe_project_id):
@@ -493,6 +510,7 @@ class ProjectStore:
         mutator: Callable[[Project], None],
         *,
         expected_revision: int | None = None,
+        use_request_revision: bool = True,
     ) -> Project:
         if background_context.get() is not None:
             project = self.get(project_id)
@@ -501,7 +519,8 @@ class ProjectStore:
             mutator(project)
             self.save(project)
             return project
-        expected_revision = request_revision(project_id, expected_revision)
+        if use_request_revision:
+            expected_revision = request_revision(project_id, expected_revision)
         safe_project_id = self._validate_project_id(project_id)
         with self._synchronized_project(safe_project_id):
             current = self._load_document(safe_project_id, persist_migrations=False)
@@ -531,6 +550,40 @@ class ProjectStore:
             proj.meta = dict(payload["meta"])
             proj.schema_version = CURRENT_SCHEMA_VERSION
             return proj
+
+    def validate_revision(self, project_id: str, *, expected_revision: int | None = None) -> None:
+        expected_revision = request_revision(project_id, expected_revision)
+        if expected_revision is None:
+            return
+        safe_project_id = self._validate_project_id(project_id)
+        with self._synchronized_project(safe_project_id):
+            current = self._load_document(safe_project_id, persist_migrations=False)
+            if current is None:
+                raise KeyError("Project not found")
+            actual_revision = int(current.get("revision") or 1)
+            if int(expected_revision) != actual_revision:
+                raise StaleProjectRevisionError(
+                    safe_project_id,
+                    int(expected_revision),
+                    actual_revision,
+                )
+
+    @contextmanager
+    def validated_revision_lock(self, project_id: str, *, expected_revision: int | None = None):
+        expected_revision = request_revision(project_id, expected_revision)
+        safe_project_id = self._validate_project_id(project_id)
+        with self._synchronized_project(safe_project_id):
+            current = self._load_document(safe_project_id, persist_migrations=False)
+            if current is None:
+                raise KeyError("Project not found")
+            actual_revision = int(current.get("revision") or 1)
+            if expected_revision is not None and int(expected_revision) != actual_revision:
+                raise StaleProjectRevisionError(
+                    safe_project_id,
+                    int(expected_revision),
+                    actual_revision,
+                )
+            yield
 
     def project_dir(self, project_id: str) -> Path:
         return self._proj_dir(project_id)

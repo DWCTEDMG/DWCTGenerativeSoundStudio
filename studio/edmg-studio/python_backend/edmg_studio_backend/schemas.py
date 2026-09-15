@@ -319,37 +319,85 @@ class GenerationRequest(BaseModel):
     """Provider-neutral generation request backed by the durable render queue."""
 
     schema_version: Literal["1.0"] = "1.0"
-    operation: Literal["video"] = "video"
-    provider_id: Literal["edmg.internal"] = "edmg.internal"
-    renderer_id: Literal["auto", "diffusion", "tensorrt", "hunyuan_video15", "ltx_25"] = "auto"
-    parameters: InternalVideoRenderRequest = Field(default_factory=InternalVideoRenderRequest)
+    operation: Literal["image", "video"] = "video"
+    provider_id: Literal[
+        "edmg.internal",
+        "comfyui",
+        "stability",
+        "adobe.firefly",
+        "imagineart",
+        "nvidia.cosmos",
+        "azure.foundry.cosmos",
+    ] = "edmg.internal"
+    renderer_id: str | None = Field(default="auto", max_length=128)
+    parameters: dict[str, Any] | InternalVideoRenderRequest = Field(default_factory=InternalVideoRenderRequest)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
     priority: int = Field(default=0, ge=-100, le=100)
 
     @model_validator(mode="before")
     @classmethod
     def normalize_renderer_engine(cls, data: Any) -> Any:
-        if not isinstance(data, dict) or data.get("renderer_id") not in {"hunyuan_video15", "ltx_25"}:
+        if not isinstance(data, dict):
             return data
         normalized = dict(data)
+        cls._reject_credentials(normalized.get("parameters"), "parameters")
+        provider_id = str(normalized.get("provider_id") or "edmg.internal")
+        operation = str(normalized.get("operation") or "video")
+        if provider_id != "edmg.internal" or operation != "video":
+            parameters = normalized.get("parameters", {})
+            if parameters is None or not isinstance(parameters, dict):
+                raise ValueError("Provider generation parameters must be an object")
+            if operation == "image":
+                normalized["parameters"] = RenderScenesRequest.model_validate(parameters).model_dump()
+            else:
+                normalized["parameters"] = dict(parameters)
+            return normalized
+        renderer_id = normalized.get("renderer_id") or "auto"
+        if renderer_id not in {"auto", "diffusion", "tensorrt", "hunyuan_video15", "ltx_25"}:
+            raise ValueError(f"Unsupported internal renderer: {renderer_id}")
+        normalized["renderer_id"] = renderer_id
+        if renderer_id not in {"hunyuan_video15", "ltx_25"}:
+            return normalized
         parameters = normalized.get("parameters")
         if isinstance(parameters, InternalVideoRenderRequest):
             normalized["parameters"] = parameters.model_copy(
-                update={"video_model_engine": normalized["renderer_id"]}
+                update={"video_model_engine": renderer_id}
             )
         elif isinstance(parameters, dict):
             normalized["parameters"] = {
                 **parameters,
-                "video_model_engine": normalized["renderer_id"],
+                "video_model_engine": renderer_id,
             }
         elif "parameters" not in normalized:
-            normalized["parameters"] = {"video_model_engine": normalized["renderer_id"]}
+            normalized["parameters"] = {"video_model_engine": renderer_id}
         return normalized
 
+    @classmethod
+    def _reject_credentials(cls, value: Any, path: str) -> None:
+        credential_keys = {"apikey", "token", "secret", "credential", "authorization", "clientsecret", "password"}
+        if isinstance(value, dict):
+            for key, item in value.items():
+                normalized_key = "".join(character for character in str(key).lower() if character.isalnum())
+                if any(marker in normalized_key for marker in credential_keys):
+                    raise ValueError(f"Credential-like field is not allowed in generation requests: {path}.{key}")
+                cls._reject_credentials(item, f"{path}.{key}")
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                cls._reject_credentials(item, f"{path}[{index}]")
+
     @model_validator(mode="after")
-    def validate_effective_hunyuan_chunk_geometry(self) -> GenerationRequest:
+    def validate_provider_contract(self) -> GenerationRequest:
+        from .provider_generation import provider_supports
+
+        if not provider_supports(self.provider_id, self.operation):
+            raise ValueError(f"Provider {self.provider_id} does not support {self.operation} generation")
+        if self.provider_id != "edmg.internal" and self.renderer_id not in {None, "", "auto"}:
+            raise ValueError("renderer_id is only supported by the EDMG internal provider")
+        if self.provider_id == "edmg.internal" and isinstance(self.parameters, dict):
+            self.parameters = InternalVideoRenderRequest.model_validate(self.parameters)
         if (
             self.renderer_id == "hunyuan_video15"
+            and isinstance(self.parameters, InternalVideoRenderRequest)
             and self.parameters.hunyuan_chunk_overlap >= self.parameters.hunyuan_chunk_frames
         ):
             raise ValueError("Hunyuan chunk overlap must be smaller than the chunk size")

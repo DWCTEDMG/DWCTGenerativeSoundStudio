@@ -10,6 +10,38 @@ namespace EdmgStudio.Core.Tests;
 public sealed class StudioApiClientTests
 {
     [TestMethod]
+    public async Task StartGenerationAsync_SerializesSelectedProviderOperationAndParameters()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, token) =>
+        {
+            captured = new CapturedRequest(request.Method, request.RequestUri!, null,
+                request.Content?.Headers.ContentType?.MediaType,
+                await request.Content!.ReadAsStringAsync(token));
+            return JsonResponse("""
+                {"ok":true,"generation":{"schema_version":"1.0","job_id":"job-1","project_id":"p1","operation":"image","provider_id":"stability","renderer_id":"auto","status":"queued","progress":{"percent":0,"stage":"queued","message":"","current":0,"total":1},"artifacts":[],"failures":[],"partial_failure":false,"usage":null,"cost":null,"error":null,"created_at":null,"updated_at":null,"attempt":0,"priority":0},"preflight":{}}
+                """);
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")), new StaticTokenProvider("token"), httpClient);
+
+        GenerationSubmitResponse response = await client.StartGenerationAsync(
+            "p1",
+            JsonSerializer.SerializeToElement(new { variant_index = 2, width = 1024 }),
+            "stability",
+            "image",
+            null);
+
+        Assert.AreEqual("stability", response.Generation.ProviderId);
+        Assert.AreEqual("/v1/projects/p1/generation", captured!.Uri.AbsolutePath);
+        using JsonDocument body = JsonDocument.Parse(captured.Body);
+        Assert.AreEqual("stability", body.RootElement.GetProperty("provider_id").GetString());
+        Assert.AreEqual("image", body.RootElement.GetProperty("operation").GetString());
+        Assert.AreEqual(2, body.RootElement.GetProperty("parameters").GetProperty("variant_index").GetInt32());
+        Assert.AreEqual(JsonValueKind.Null, body.RootElement.GetProperty("renderer_id").ValueKind);
+    }
+
+    [TestMethod]
     public async Task InsertRenderResult_UsesTypedRevisionAwareContract()
     {
         CapturedRequest? captured = null;

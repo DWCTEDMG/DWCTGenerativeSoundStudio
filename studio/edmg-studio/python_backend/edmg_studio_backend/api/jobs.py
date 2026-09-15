@@ -30,6 +30,10 @@ class JobRouterDependencies:
 def create_jobs_router(deps: JobRouterDependencies) -> APIRouter:
     router = APIRouter(tags=["jobs"])
 
+    def is_generation_job(job: Any) -> bool:
+        generation = job.payload.get("_generation") if isinstance(job.payload, dict) else None
+        return job.type == "internal_video" or isinstance(generation, dict)
+
     def project_or_404(project_id: str) -> Any:
         project = deps.get_store().get(project_id)
         if not project:
@@ -48,7 +52,7 @@ def create_jobs_router(deps: JobRouterDependencies) -> APIRouter:
 
     @router.get("/v1/generation/jobs")
     def list_generation_jobs():
-        jobs = [job for job in deps.get_jobs().list_all() if job.type == "internal_video"]
+        jobs = [job for job in deps.get_jobs().list_all() if is_generation_job(job)]
         return {"schema_version": "1.0", "jobs": [deps.normalize_generation_job(job) for job in jobs]}
 
     @router.get("/v1/projects/{project_id}/jobs")
@@ -60,7 +64,7 @@ def create_jobs_router(deps: JobRouterDependencies) -> APIRouter:
     def list_project_generation_jobs(project_id: str):
         project_or_404(project_id)
         jobs = [
-            job for job in deps.get_jobs().list_for_project(project_id) if job.type == "internal_video"
+            job for job in deps.get_jobs().list_for_project(project_id) if is_generation_job(job)
         ]
         return {
             "schema_version": "1.0",

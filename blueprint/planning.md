@@ -7,6 +7,7 @@ This document consolidates the Professional DAW work completed in EDMG Studio, t
 The Professional DAW roadmap is preserved here from the available records; the external master blueprint is an optional workstation audit reference and was absent during the 2026-09-15 audit. Its Professional DAW phases 0-13 are separate from the 14-item WinUI Native Experience roadmap. The Studio desktop UI under `studio/edmg-studio-winui/` remains the primary user surface; backend capabilities are not considered complete until users can drive them from the Studio UI where applicable.
 
 ## 2. Delivery Rules
+-use studio-engineer and creative-engineering as well as any and all SKILLS.
 
 1. Work on phases in dependency order.
 2. Preserve working behavior and compatibility unless an explicit migration replaces it.
@@ -504,7 +505,7 @@ Acceptance evidence:
 
 ### Phase 10 - Director Review
 
-Status: implemented, hardened, validated, and independently reviewed; pending commit/push gate.
+Status: implemented, hardened, validated, independently reviewed, and remotely verified at commit `d4b08b7a7c743af81806999c7acf049baae02aee`.
 
 The Phase 10 audit confirms the Director Review workflow provides:
 
@@ -524,18 +525,25 @@ Acceptance evidence:
 
 ### Phase 11 - Provider Refactor
 
-Commit `ce1b52b` provides a strong implementation foundation. The ordered phase audit will verify:
+Status: implemented, hardened, validated, and independently reviewed; accepted for publication in the revision containing this evidence.
 
-- all current providers are represented by definitions and capabilities
-- provider requests and outputs use normalized contracts
-- queue status and failures map consistently
-- credentials stay in secure settings and out of projects
-- costs are retained when reported
-- provider outputs become normal media/artifacts
-- cloud failure does not break local rendering
-- existing provider behavior remains available
+The Phase 11 provider boundary now provides:
 
-Any acceptance gaps will be corrected in a dedicated Phase 11 commit and push. If no code changes are necessary, the validation evidence and exact accepted commit will be recorded without creating an empty commit.
+- canonical definitions and readiness for `edmg.internal`, ComfyUI, Stability, Adobe Firefly, ImagineArt, NVIDIA Cosmos, and Azure Foundry Cosmos
+- one versioned request envelope and normalized durable-job projection across image and video providers, including provider generation IDs, artifacts, dimensions, duration, frames, FPS, usage, cost, and structured partial failures
+- strict provider/operation compatibility and recursive rejection of credential-like request fields before project or queue persistence
+- specialized internal-video execution, direct reuse of established ComfyUI scene queues, and durable hosted-provider jobs without making cloud availability a prerequisite for local rendering
+- deterministic request fingerprints, atomic internal idempotency, and atomic multi-scene ComfyUI replay/collision handling so a rejected batch cannot leave partial work queued
+- attempt-local hosted-media staging with cancellation and retry fencing, rollback-capable batch promotion, canonical result paths, and deferred metadata publication so rejected or failed attempts cannot overwrite accepted artifacts
+- unchanged plain-body contracts for legacy still and motion endpoints while normalized requests propagate priority and deterministic per-scene idempotency keys internally
+- native WinUI provider/readiness and operation controls, provider-appropriate request construction, and complete normalized response models
+
+Acceptance evidence:
+
+- The focused Phase 11 lifecycle suite passes with 62 tests, including stale-revision rejection before queue commit, legacy route compatibility, atomic ComfyUI collision behavior, project-mirror repair on replay, internal and hosted collision handling, secret rejection, normalized failures, mixed provider-worker results, successful staged promotion, cancellation and obsolete-attempt fencing, partial-batch acceptance, and promotion rollback.
+- The full pinned Python 3.12 backend suite passes with 161 passed and 4 opt-in live-model skips; all changed Phase 11 Python files pass Ruff.
+- All 451 native Core tests pass, the WinUI Release x64 solution/XAML build succeeds with 0 errors, and `git diff --check` reports no whitespace errors.
+- Independent review passes identified and closed provider failure-message loss, internal and ComfyUI idempotency defects, legacy FastAPI body-contract drift, partial ComfyUI batch creation, pre-fence artifact writes, partial-batch registration, promotion rollback, and stale-attempt progress updates.
 
 ### Phase 12 - Remote Control / Quick Controls
 

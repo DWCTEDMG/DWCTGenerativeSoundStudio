@@ -1,12 +1,96 @@
 """Bind interactive requests to the store's compare-and-set contract."""
-from contextvars import ContextVar
 import json
+import os
+import shutil
+from contextlib import contextmanager
+from contextvars import ContextVar
+from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 revision_context: ContextVar[dict | None] = ContextVar("project_revision", default=None)
 background_context: ContextVar[dict | None] = ContextVar("background_project_updates", default=None)
+
+
+def staged_media_path(path: Path) -> Path:
+    """Redirect worker media writes to attempt-local staging until publication."""
+    background = background_context.get()
+    if background is None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+    staging_root = background.get("media_staging_root")
+    project_root = background.get("media_project_root")
+    if not isinstance(staging_root, Path) or not isinstance(project_root, Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+    relative = path.resolve().relative_to(project_root.resolve())
+    staged = staging_root / relative
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    return staged
+
+
+def published_media_path(path: Path) -> Path:
+    background = background_context.get()
+    if background is None:
+        return path
+    staging_root = background.get("media_staging_root")
+    project_root = background.get("media_project_root")
+    if not isinstance(staging_root, Path) or not isinstance(project_root, Path):
+        return path
+    try:
+        published = project_root / path.resolve().relative_to(staging_root.resolve())
+    except ValueError:
+        return path
+    artifact = (path, published)
+    if artifact not in background.setdefault("media_artifacts", []):
+        background["media_artifacts"].append(artifact)
+    return published
+
+
+@contextmanager
+def staged_media_publication(
+    artifacts: list[tuple[Path, Path]],
+    associated_paths: list[Path] | None = None,
+):
+    missing = [staged for staged, _published in artifacts if not staged.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Staged media artifact is missing: {missing[0]}")
+    backups: list[tuple[Path, Path | None]] = []
+    try:
+        backup_root = artifacts[0][0].parent if artifacts else None
+        for index, published in enumerate(associated_paths or []):
+            backup = backup_root / f".metadata-backup-{index}-{published.name}" if backup_root else None
+            if published.exists() and backup is not None:
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(published, backup)
+            else:
+                backup = None
+            backups.append((published, backup))
+        offset = len(backups)
+        for index, (staged, published) in enumerate(artifacts, start=offset):
+            published.parent.mkdir(parents=True, exist_ok=True)
+            backup = staged.parent / f".publish-backup-{index}-{published.name}"
+            if published.exists():
+                os.replace(published, backup)
+            else:
+                backup = None
+            backups.append((published, backup))
+            os.replace(staged, published)
+        yield
+    except BaseException:
+        for published, backup in reversed(backups):
+            if published.exists():
+                published.unlink()
+            if backup is not None and backup.exists():
+                os.replace(backup, published)
+        raise
+    finally:
+        for _published, backup in backups:
+            if backup is not None:
+                backup.unlink(missing_ok=True)
+        for staged, _published in artifacts:
+            shutil.rmtree(staged.parent, ignore_errors=True)
 
 
 def merge_owned_fields(current: dict, baseline: dict, edited: dict) -> dict:
