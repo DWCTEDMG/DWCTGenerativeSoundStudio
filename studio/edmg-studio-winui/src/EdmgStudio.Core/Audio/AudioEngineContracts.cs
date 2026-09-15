@@ -148,14 +148,14 @@ public static class AudioRenderGraphBuilder
                     timelineEvent.Source?.Start.SampleRate ?? project.Timebase.SampleRate));
             }
 
-            JsonObject? routing = track.Metadata["routing"] as JsonObject;
+            TimelineTrackMixerState mixer = TimelineMixerProjection.Project(track);
             routes.Add(new AudioTrackRoute(
                 track.Id,
-                ReadString(routing?["bus"]) ?? "master",
-                ReadSingle(track.Metadata["gain"], 1),
-                Math.Clamp(ReadSingle(track.Metadata["pan"], 0), -1, 1),
-                track.Muted,
-                track.Solo,
+                mixer.OutputId,
+                mixer.Gain,
+                mixer.Pan,
+                mixer.Muted,
+                mixer.Solo,
                 clips.ToImmutable()));
         }
 
@@ -171,15 +171,6 @@ public static class AudioRenderGraphBuilder
         string.Equals(track.Type, "audio", StringComparison.OrdinalIgnoreCase) ||
         track.Events.Any(item => string.Equals(item.Type, "audio", StringComparison.OrdinalIgnoreCase));
 
-    private static string? ReadString(JsonNode? node) =>
-        node is JsonValue value && value.TryGetValue(out string? result) && !string.IsNullOrWhiteSpace(result)
-            ? result.Trim()
-            : null;
-
-    private static float ReadSingle(JsonNode? node, float fallback) =>
-        node is JsonValue value && value.TryGetValue(out float result) && float.IsFinite(result)
-            ? result
-            : fallback;
 }
 
 public enum AudioEngineCommandKind

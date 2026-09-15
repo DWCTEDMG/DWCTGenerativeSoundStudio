@@ -71,4 +71,26 @@ public sealed class AudioEngineContractsTests
         Assert.AreEqual(25, clip.SourceStartSample);
         Assert.AreEqual(44_100, clip.SourceSampleRate);
     }
+
+    [TestMethod]
+    public void GraphBuilderUsesSafeMixerDefaultsForMalformedLegacyValues()
+    {
+        var track = new Track(
+            "track", "Audio", "audio", 0, false, false, false, false, false, [],
+            new JsonObject
+            {
+                ["gain"] = -1,
+                ["pan"] = 4,
+                ["routing"] = new JsonObject { ["bus"] = " " }
+            });
+        var project = new CanonicalProject(
+            "project", "Project", 1, 1, new ProjectTimebase(), [track], [], [], [], []);
+
+        AudioRenderGraph graph = AudioRenderGraphBuilder.Build(project, "device", 128, _ => null);
+
+        Assert.IsTrue(graph.TryGetAudibleRoute("track", out AudioTrackRoute? route));
+        Assert.AreEqual("master", route!.OutputBusId);
+        Assert.AreEqual(1f, route.Gain);
+        Assert.AreEqual(0f, route.Pan);
+    }
 }

@@ -82,6 +82,13 @@ plugin DSP, compensation delay buffers, mixer persistence or hardware playback.
 metadata cache and persistent crash/timeout quarantine. Settings reports scanner capability
 separately from host and processing readiness; no native scanner or VST3 processing host is
 claimed by this managed boundary.
+`Core/Audio/TimelineMixerProjection.cs` now owns extension-safe per-track mixer defaults,
+validation and updates. The Timeline Mixer inspector synchronizes clip and track-header selection
+and sends gain, mute, solo, arm, monitor and master-route edits through the existing revisioned
+editor history. Persisted pan is visible but cannot be published as active state until Windows pan
+processing exists. Playback configuration consumes the same projection. This is persisted control
+state only: current Windows playback still rejects active pan and non-master routing, and no bus DSP,
+delay buffers, meters or plugin processing are claimed.
 
 No production real-time DAW audio backend exists at this baseline. The repository has audio upload, offline analysis, FFmpeg media decoding, and preview transport controls, but it does not have an authoritative sample clock, ASIO/WASAPI device backend, multitrack render graph, real-time callback boundary, routing, metering, or glitch-safety tests.
 

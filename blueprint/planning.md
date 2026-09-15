@@ -246,6 +246,14 @@ Validation for this slice: 389 Core tests passed; complete Debug WinUI solution 
 - Settings displays the actual scanner capability, cache and quarantine counts, and provides an explicit quarantine-clear action with confirmation.
 - The external native scanner executable and VST3 host/processing implementation remain open; this slice does not claim active plugin support.
 
+#### Mixer persistence and Timeline channel strip slice — 2026-09-15
+
+- `TimelineMixerProjection` provides one extension-safe persisted contract for track gain, pan, mute, solo, record arm, input monitoring and output routing; legacy projects receive unity gain, centered pan, disabled control flags and master output defaults.
+- Mixer updates clone the timeline, validate finite control values and supported output routing before publication, and preserve unrelated timeline, track, routing and clip fields.
+- The Timeline Mixer inspector edits supported audio-track controls through the existing revision-checked autosave and undo/redo path. Selecting a clip selects its track, selecting a track header opens its channel strip, and selected-track view state survives reload when the track still exists. Persisted pan is visible but editing is disabled and Apply centers it until Windows pan processing exists.
+- Playback graph construction now consumes the same mixer projection as the UI, preventing default and normalization drift between persisted state and audio configuration.
+- The editor intentionally publishes only master output routing because current Windows playback rejects pan and non-master processing. Bus/send DSP, active pan, PDC buffers, meters and plugin processing remain open.
+
 #### Goals
 
 - mixer service

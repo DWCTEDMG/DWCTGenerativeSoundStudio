@@ -6,7 +6,8 @@ public sealed record TimelineEditorViewState(
     double PixelsPerSecond,
     double HorizontalOffset,
     double VerticalOffset,
-    string? SelectedLaneId)
+    string? SelectedLaneId,
+    string? SelectedTrackId = null)
 {
     public TimelineEditorViewState Normalize(
         double durationSeconds,
@@ -15,7 +16,8 @@ public sealed record TimelineEditorViewState(
         double viewportWidth,
         double contentHeight,
         double viewportHeight,
-        IEnumerable<string> laneIds)
+        IEnumerable<string> laneIds,
+        IEnumerable<string>? trackIds = null)
     {
         double duration = double.IsFinite(durationSeconds) ? Math.Max(0, durationSeconds) : 0;
         double minimumZoom = double.IsFinite(minimumPixelsPerSecond) && minimumPixelsPerSecond > 0
@@ -33,6 +35,9 @@ public sealed record TimelineEditorViewState(
         double maximumVerticalOffset = Math.Max(0,
             (double.IsFinite(contentHeight) ? Math.Max(0, contentHeight) : 0) - height);
         HashSet<string> availableLaneIds = laneIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+        HashSet<string> availableTrackIds = (trackIds ?? [])
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToHashSet(StringComparer.Ordinal);
 
@@ -53,6 +58,9 @@ public sealed record TimelineEditorViewState(
                 maximumVerticalOffset),
             SelectedLaneId = SelectedLaneId is not null && availableLaneIds.Contains(SelectedLaneId)
                 ? SelectedLaneId
+                : null,
+            SelectedTrackId = SelectedTrackId is not null && availableTrackIds.Contains(SelectedTrackId)
+                ? SelectedTrackId
                 : null,
         };
     }

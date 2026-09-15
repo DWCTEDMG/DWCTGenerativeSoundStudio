@@ -58,6 +58,7 @@ public sealed partial class TimelinePage : Page
     private ProjectDto? _project;
     private string? _loadedProjectId;
     private string? _selectedLaneId;
+    private string? _selectedTrackId;
     private string? _selectedCameraKeyframeIdentity;
     private string? _selectedMarkerId;
     private string _selectedSourcePath = string.Empty;
@@ -251,6 +252,7 @@ public sealed partial class TimelinePage : Page
             ApplyEditorState(timelineTask.Result);
             _recoveryDocument = JsonNode.Parse(recoveryTask.Result.GetRawText()) as JsonObject;
             _lanes = TimelineProjection.Project(_timelineDocument);
+            _canonicalProject = ProjectTimelineContracts.FromTimeline(_project, _timelineDocument);
             _cameraKeyframes = TimelineCameraProjection.Project(_timelineDocument);
             _durationSeconds = ResolveDuration(_project, _lanes);
             RestoreViewState(projectId);
@@ -339,6 +341,7 @@ public sealed partial class TimelinePage : Page
         _lanes = [];
         _cameraKeyframes = [];
         _selectedLaneId = null;
+        _selectedTrackId = null;
         _selectedCameraKeyframeIdentity = null;
         _selectedMarkerId = null;
         _selectedSourcePath = string.Empty;
@@ -361,6 +364,8 @@ public sealed partial class TimelinePage : Page
         MarkerComboBox.SelectedItem = null;
         SelectedClipTitle.Text = "No clip selected";
         SelectedClipSubtitle.Text = "Select a clip to inspect its timing and media properties.";
+        SelectedMixerTrackTitle.Text = "No track selected";
+        SelectedMixerTrackSubtitle.Text = "Select a track header or a clip to edit its channel.";
         PreviewSurface.ShowEmpty(message);
         PreviewHintText.Text = message;
         SourceAssetComboBox.ItemsSource = null;
@@ -402,6 +407,16 @@ public sealed partial class TimelinePage : Page
         {
             _selectedMarkerId = null;
         }
+        if (_selectedTrackId is not null &&
+            _canonicalProject?.Tracks.All(track => track.Id != _selectedTrackId) != false)
+        {
+            _selectedTrackId = null;
+        }
+        if (_selectedTrackId is null && SelectedLane is { IsLayer: false } selectedLane)
+        {
+            _selectedTrackId = _canonicalProject?.Tracks.ElementAtOrDefault(selectedLane.TrackIndex)?.Id;
+        }
+        _selectedTrackId ??= _canonicalProject?.Tracks.FirstOrDefault()?.Id;
 
         ProjectText.Text = _project?.Name ?? _loadedProjectId ?? "Timeline";
         int clipCount = _lanes.Count(lane => !lane.IsLayer);
@@ -431,6 +446,7 @@ public sealed partial class TimelinePage : Page
         RenderRuler();
         RenderTimeline();
         PopulateInspector();
+        RefreshMixerEditor();
         RefreshMarkers();
         RefreshCameraEditor();
         UpdateTransportUi();
@@ -440,11 +456,13 @@ public sealed partial class TimelinePage : Page
     private int TrackCount =>
         Math.Max(
             1,
-            _lanes
+            Math.Max(
+                _canonicalProject?.Tracks.Count ?? 0,
+                _lanes
                 .Where(lane => !lane.IsLayer)
                 .Select(lane => lane.TrackIndex + 1)
                 .DefaultIfEmpty(1)
-                .Max());
+                .Max()));
 
     private int OverlayVisualTrackIndex => TrackCount;
 
@@ -461,13 +479,21 @@ public sealed partial class TimelinePage : Page
         JsonObject? timelineDocument = _timelineDocument;
         for (int trackIndex = 0; trackIndex < TrackCount; trackIndex++)
         {
+            Track? track = _canonicalProject?.Tracks.ElementAtOrDefault(trackIndex);
+            string? trackId = track?.Id;
+            bool selected = trackId is not null && string.Equals(trackId, _selectedTrackId, StringComparison.Ordinal);
             var panel = new Grid
             {
+                Tag = trackId,
                 Height = TrackHeight,
                 Padding = new Thickness(12, 7, 10, 6),
                 BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-                BorderThickness = new Thickness(0, 0, 0, 1)
+                BorderThickness = new Thickness(selected ? 3 : 0, 0, 0, 1),
+                Background = selected
+                    ? (Brush)Application.Current.Resources["AccentFillColorTertiaryBrush"]
+                    : null
             };
+            panel.PointerPressed += TrackHeader_PointerPressed;
             panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             panel.ColumnDefinitions.Add(new ColumnDefinition());
@@ -475,7 +501,7 @@ public sealed partial class TimelinePage : Page
 
             var title = new TextBlock
             {
-                Text = $"Track {trackIndex + 1}",
+                Text = track?.Name ?? $"Track {trackIndex + 1}",
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
@@ -847,14 +873,21 @@ public sealed partial class TimelinePage : Page
     {
         _selectedLaneId = stableId;
         _selectedCameraKeyframeIdentity = null;
+        TimelineLaneDocument? selectedLane = SelectedLane;
+        if (selectedLane is { IsLayer: false })
+        {
+            _selectedTrackId = _canonicalProject?.Tracks.ElementAtOrDefault(selectedLane.TrackIndex)?.Id;
+        }
         PersistViewState();
         if (stableId is not null)
         {
             InspectorPivot.SelectedIndex = 0;
         }
 
+        RenderTrackHeaders();
         RenderTimeline();
         PopulateInspector();
+        RefreshMixerEditor();
         RefreshCameraEditor();
         UpdateCommandState();
     }
@@ -865,7 +898,7 @@ public sealed partial class TimelinePage : Page
         _selectedLaneId = null;
         if (stableId is not null)
         {
-            InspectorPivot.SelectedIndex = 4;
+            InspectorPivot.SelectedIndex = 5;
         }
 
         RenderTimeline();
@@ -892,6 +925,11 @@ public sealed partial class TimelinePage : Page
             ? null
             : _cameraKeyframes.FirstOrDefault(
                 keyframe => keyframe.StableId == _selectedCameraKeyframeIdentity);
+
+    private Track? SelectedMixerTrack =>
+        _selectedTrackId is null
+            ? null
+            : _canonicalProject?.Tracks.FirstOrDefault(track => track.Id == _selectedTrackId);
 
     private TimelinePointerTool LoadPointerTool()
     {
@@ -1002,6 +1040,124 @@ public sealed partial class TimelinePage : Page
         DeleteClipButton.Content = lane?.IsLayer == true
             ? "Delete selected overlay"
             : "Delete selected clip";
+    }
+
+    private void RefreshMixerEditor()
+    {
+        Track? track = SelectedMixerTrack;
+        bool isAudioTrack = track is not null && IsAudioTrack(track);
+        TimelineTrackMixerState? state = track is null ? null : TimelineMixerProjection.Project(track);
+        bool canEdit = isAudioTrack && !_isBusy;
+
+        SelectedMixerTrackTitle.Text = track?.Name ?? "No track selected";
+        SelectedMixerTrackSubtitle.Text = track is null
+            ? "Select a track header or a clip to edit its channel."
+            : isAudioTrack
+                ? $"Audio channel • Track {track.Order + 1}"
+                : $"{track.Type} track • Mixer controls apply to audio tracks only.";
+        MixerGainNumberBox.Value = state?.Gain ?? double.NaN;
+        MixerPanNumberBox.Value = state?.Pan ?? double.NaN;
+        MixerMuteToggle.IsOn = state?.Muted ?? false;
+        MixerSoloToggle.IsOn = state?.Solo ?? false;
+        MixerRecordArmToggle.IsOn = state?.RecordArmed ?? false;
+        MixerInputMonitoringToggle.IsOn = state?.InputMonitoring ?? false;
+        SelectComboByTag(MixerOutputComboBox, TimelineMixerProjection.MasterOutputId);
+
+        string outputId = state?.OutputId ?? TimelineMixerProjection.MasterOutputId;
+        MixerOutputHintText.Text = string.Equals(
+            outputId,
+            TimelineMixerProjection.MasterOutputId,
+            StringComparison.OrdinalIgnoreCase)
+            ? "The current Windows engine supports master output only."
+            : $"Persisted route '{outputId}' is not supported by the current Windows engine. Applying changes routes this channel to Master.";
+        MixerStatusText.Text = isAudioTrack
+            ? "Gain, mute, solo, record arm, monitoring, and output are saved in project undo history. Pan remains centered until Windows processing is available."
+            : "Select an audio track to edit channel state.";
+
+        MixerGainNumberBox.IsEnabled = canEdit;
+        MixerPanNumberBox.IsEnabled = false;
+        MixerOutputComboBox.IsEnabled = canEdit;
+        MixerMuteToggle.IsEnabled = canEdit;
+        MixerSoloToggle.IsEnabled = canEdit;
+        MixerRecordArmToggle.IsEnabled = canEdit;
+        MixerInputMonitoringToggle.IsEnabled = canEdit;
+        ApplyMixerButton.IsEnabled = canEdit;
+    }
+
+    private static bool IsAudioTrack(Track track) =>
+        string.Equals(track.Type, "audio", StringComparison.OrdinalIgnoreCase) ||
+        track.Events.Any(timelineEvent => string.Equals(timelineEvent.Type, "audio", StringComparison.OrdinalIgnoreCase));
+
+    private void TrackHeader_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not Grid { Tag: string trackId } header ||
+            IsInteractiveHeaderSource(e.OriginalSource as DependencyObject, header))
+        {
+            return;
+        }
+
+        _selectedTrackId = trackId;
+        PersistViewState();
+        InspectorPivot.SelectedIndex = 1;
+        RenderTrackHeaders();
+        RefreshMixerEditor();
+        UpdateCommandState();
+    }
+
+    private static bool IsInteractiveHeaderSource(DependencyObject? source, DependencyObject header)
+    {
+        for (DependencyObject? current = source; current is not null && current != header; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is ButtonBase)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async void ApplyMixer_Click(object sender, RoutedEventArgs e)
+    {
+        if (_timelineDocument is null || SelectedMixerTrack is not Track track || !IsAudioTrack(track))
+        {
+            ShowInfo("Select an audio track before applying mixer changes.", InfoBarSeverity.Warning);
+            return;
+        }
+        if (!TryReadFinite(MixerGainNumberBox, out double gain) ||
+            !TryReadFinite(MixerPanNumberBox, out double pan))
+        {
+            ShowInfo("Enter finite gain and pan values.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        TimelineTrackMixerState current = TimelineMixerProjection.Project(track);
+        var updatedState = current with
+        {
+            Gain = checked((float)gain),
+            Pan = 0,
+            Muted = MixerMuteToggle.IsOn,
+            Solo = MixerSoloToggle.IsOn,
+            RecordArmed = MixerRecordArmToggle.IsOn,
+            InputMonitoring = MixerInputMonitoringToggle.IsOn,
+            OutputId = GetSelectedTag(MixerOutputComboBox) ?? TimelineMixerProjection.MasterOutputId
+        };
+
+        try
+        {
+            JsonObject before = CloneDocument(_timelineDocument);
+            JsonObject updated = TimelineMixerProjection.UpdateTrack(_timelineDocument, track.Id, updatedState);
+            await CommitDocumentAsync(
+                before,
+                updated,
+                $"timeline mixer updated for {track.Name}",
+                _selectedLaneId,
+                _selectedCameraKeyframeIdentity);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidDataException or KeyNotFoundException or OverflowException)
+        {
+            ShowInfo(ex.Message, InfoBarSeverity.Warning);
+        }
     }
 
     private void RefreshCameraEditor()
@@ -4166,6 +4322,7 @@ public sealed partial class TimelinePage : Page
         RenderMasterButton.IsEnabled = hasTimeline;
         ApplyRawButton.IsEnabled = hasTimeline;
         RevertRawButton.IsEnabled = hasTimeline;
+        RefreshMixerEditor();
         RefreshWorkflowButton.IsEnabled = hasProject && !_isAutomationBusy;
         AppendPlanButton.IsEnabled = canRunAutomation && hasProject;
         OverwritePlanButton.IsEnabled = canRunAutomation && hasProject;
@@ -4258,7 +4415,7 @@ public sealed partial class TimelinePage : Page
 
     private void RestoreViewState(string projectId)
     {
-        TimelineEditorViewState fallback = new(0, 80, 0, 0, null);
+        TimelineEditorViewState fallback = new(0, 80, 0, 0, null, null);
         TimelineEditorViewState restored = fallback;
         if (_settings?.Values[$"{ViewStateSettingPrefix}{projectId}"] is string json)
         {
@@ -4279,10 +4436,12 @@ public sealed partial class TimelinePage : Page
             TimelineScroll.ViewportWidth,
             VisualTrackCount * TrackHeight,
             TimelineScroll.ViewportHeight,
-            _lanes.Select(lane => lane.StableId));
+            _lanes.Select(lane => lane.StableId),
+            _canonicalProject?.Tracks.Select(track => track.Id));
         _positionSeconds = restored.PositionSeconds;
         _pixelsPerSecond = restored.PixelsPerSecond;
         _selectedLaneId = restored.SelectedLaneId;
+        _selectedTrackId = restored.SelectedTrackId;
         _restoredHorizontalOffset = restored.HorizontalOffset;
         _restoredVerticalOffset = restored.VerticalOffset;
     }
@@ -4312,7 +4471,8 @@ public sealed partial class TimelinePage : Page
             _pixelsPerSecond,
             horizontalOffset ?? TimelineScroll.HorizontalOffset,
             TimelineScroll.VerticalOffset,
-            _selectedLaneId);
+            _selectedLaneId,
+            _selectedTrackId);
         try
         {
             _settings.Values[$"{ViewStateSettingPrefix}{_loadedProjectId}"] = JsonSerializer.Serialize(state);

@@ -641,6 +641,93 @@
                         </ScrollViewer>
                     </PivotItem>
 
+                    <PivotItem Header="Mixer">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Padding="14" Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock x:Name="SelectedMixerTrackTitle"
+                                               Text="No track selected"
+                                               FontSize="18"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock x:Name="SelectedMixerTrackSubtitle"
+                                               Text="Select a track header or a clip to edit its channel."
+                                               TextWrapping="Wrap"
+                                               Style="{StaticResource StudioCaptionTextStyle}" />
+                                </StackPanel>
+
+                                <Border Padding="12"
+                                        CornerRadius="8"
+                                        BorderThickness="1"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="CHANNEL STRIP"
+                                                   FontSize="11"
+                                                   FontWeight="SemiBold"
+                                                   CharacterSpacing="90"
+                                                   Style="{StaticResource StudioSecondaryTextStyle}" />
+                                        <NumberBox x:Name="MixerGainNumberBox"
+                                                   Header="Gain"
+                                                   Minimum="0"
+                                                   Maximum="4"
+                                                   SmallChange="0.05"
+                                                   SpinButtonPlacementMode="Compact"
+                                                   AutomationProperties.AutomationId="Timeline.Mixer.Gain" />
+                                        <NumberBox x:Name="MixerPanNumberBox"
+                                                   Header="Pan (processing unavailable)"
+                                                   Minimum="-1"
+                                                   Maximum="1"
+                                                   SmallChange="0.05"
+                                                   SpinButtonPlacementMode="Compact"
+                                                   AutomationProperties.AutomationId="Timeline.Mixer.Pan" />
+                                        <ComboBox x:Name="MixerOutputComboBox"
+                                                  Header="Output"
+                                                  AutomationProperties.AutomationId="Timeline.Mixer.Output">
+                                            <ComboBoxItem Content="Master" Tag="master" />
+                                        </ComboBox>
+                                        <TextBlock x:Name="MixerOutputHintText"
+                                                   Text="The current Windows engine supports master output only."
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource StudioCaptionTextStyle}" />
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8" RowSpacing="8">
+                                            <ToggleSwitch x:Name="MixerMuteToggle"
+                                                          Grid.Row="0"
+                                                          Grid.Column="0"
+                                                          Header="Mute"
+                                                          AutomationProperties.AutomationId="Timeline.Mixer.Mute" />
+                                            <ToggleSwitch x:Name="MixerSoloToggle"
+                                                          Grid.Row="0"
+                                                          Grid.Column="1"
+                                                          Header="Solo"
+                                                          AutomationProperties.AutomationId="Timeline.Mixer.Solo" />
+                                            <ToggleSwitch x:Name="MixerRecordArmToggle"
+                                                          Grid.Row="1"
+                                                          Grid.Column="0"
+                                                          Header="Record arm"
+                                                          AutomationProperties.AutomationId="Timeline.Mixer.RecordArm" />
+                                            <ToggleSwitch x:Name="MixerInputMonitoringToggle"
+                                                          Grid.Row="1"
+                                                          Grid.Column="1"
+                                                          Header="Input monitor"
+                                                          AutomationProperties.AutomationId="Timeline.Mixer.InputMonitoring" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock x:Name="MixerStatusText"
+                                           Text="Mixer values are persisted with the selected track."
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
+                                <Button x:Name="ApplyMixerButton"
+                                        AutomationProperties.AutomationId="Timeline.Mixer.Apply"
+                                        Style="{StaticResource StudioPrimaryButtonStyle}"
+                                        HorizontalAlignment="Stretch"
+                                        Content="Apply channel changes"
+                                        Click="ApplyMixer_Click" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </PivotItem>
+
                     <PivotItem Header="Workflow">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel Padding="14" Spacing="14">
