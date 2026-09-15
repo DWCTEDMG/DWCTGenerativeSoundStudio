@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
 from collections.abc import Callable
 from copy import deepcopy
@@ -29,6 +30,7 @@ from ..domain.director_scene import DirectorDocument
 from .ffmpeg import _probe_duration_seconds, ensure_ffmpeg
 
 VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}
+FRAME_EXTRACTION_TIMEOUT_SECONDS = 60
 
 
 def sha256_file(path: Path) -> str:
@@ -65,20 +67,33 @@ def extract_samples(ffmpeg_path: str, project_dir: Path, video: Path, report_id:
     root = project_dir.resolve()
     output_dir = (root / "reviews" / "director" / "samples" / report_id).resolve()
     output_dir.relative_to(root)
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     samples: list[FrameEvidence] = []
-    for index, timestamp in enumerate(sample_timestamps(duration, count)):
-        output = output_dir / f"frame-{index + 1:02d}.jpg"
-        proc = subprocess.run(
-            [executable, "-hide_banner", "-loglevel", "error", "-ss", f"{timestamp:.6f}",
-             "-i", str(video), "-frames:v", "1", "-q:v", "2", "-y", str(output)],
-            capture_output=True, text=True,
-        )
-        if proc.returncode != 0 or not output.is_file():
-            raise RuntimeError(f"FFmpeg frame extraction failed at {timestamp:.6f}s: {(proc.stderr or '').strip()}")
-        samples.append(FrameEvidence(timestamp_seconds=timestamp,
-                                     path=str(output.relative_to(root)).replace("\\", "/"),
-                                     sha256=sha256_file(output), bytes=output.stat().st_size))
+    try:
+        for index, timestamp in enumerate(sample_timestamps(duration, count)):
+            output = output_dir / f"frame-{index + 1:02d}.jpg"
+            try:
+                proc = subprocess.run(
+                    [executable, "-hide_banner", "-loglevel", "error", "-ss", f"{timestamp:.6f}",
+                     "-i", str(video), "-frames:v", "1", "-q:v", "2", "-y", str(output)],
+                    capture_output=True, text=True, timeout=FRAME_EXTRACTION_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"FFmpeg frame extraction timed out at {timestamp:.6f}s after "
+                    f"{FRAME_EXTRACTION_TIMEOUT_SECONDS} seconds"
+                ) from exc
+            if proc.returncode != 0 or not output.is_file():
+                detail = (proc.stderr or "").strip()[-2000:]
+                raise RuntimeError(f"FFmpeg frame extraction failed at {timestamp:.6f}s: {detail}")
+            samples.append(FrameEvidence(timestamp_seconds=timestamp,
+                                         path=str(output.relative_to(root)).replace("\\", "/"),
+                                         sha256=sha256_file(output), bytes=output.stat().st_size))
+    except Exception:
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
     return samples
 
 

@@ -47,10 +47,18 @@ def create_director_review_router(get_store, ffmpeg_path: str, understanding=Non
                         raise ValueError("The referenced review is not eligible for another attempt")
                     if prior.retry.threshold != request.threshold or prior.retry.max_attempts != request.max_attempts:
                         raise ValueError("Retry threshold and maximum attempts must match the referenced review")
+                    expected_attempts = list(range(1, prior.retry.attempt + 1))
+                    history_attempts = [item.attempt for item in prior.retry.history]
+                    if (history_attempts != expected_attempts or not prior.retry.history or
+                            prior.retry.history[-1].report_id != prior.report_id):
+                        raise ValueError("Referenced Director review retry history is invalid")
                     try:
                         prior_reports = [reports.get(directory, item.report_id) for item in prior.retry.history]
                     except KeyError as exc:
                         raise HTTPException(409, "Referenced Director review history is incomplete") from exc
+                    if any(item.retry_chain_id != prior.retry_chain_id or item.retry.attempt != attempt
+                           for attempt, item in enumerate(prior_reports, start=1)):
+                        raise ValueError("Referenced Director review retry chain is invalid")
                 fingerprint_data = {"project_id": current.id, "project_revision": current.revision,
                                     "artifact_path": relative, "artifact_sha256": sha256_file(video),
                                     **request.model_dump(mode="json", exclude={"expected_revision", "artifact_path"})}

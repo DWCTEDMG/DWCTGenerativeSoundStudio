@@ -504,16 +504,23 @@ Acceptance evidence:
 
 ### Phase 10 - Director Review
 
-Existing Director Review work will be audited and completed for:
+Status: implemented, hardened, validated, and independently reviewed; pending commit/push gate.
 
-- generated frame sampling
-- optional clip-understanding path
-- versioned persisted `ReviewReport`
-- continuity scoring
-- correction instructions for subsequent scenes
-- bounded retry policy with explicit stop conditions
-- retention of reviewed camera and motion keyframes
-- visible review state, evidence, and retry history in WinUI
+The Phase 10 audit confirms the Director Review workflow provides:
+
+- deterministic bounded frame sampling with content hashes, a per-frame FFmpeg timeout, bounded diagnostics, and cleanup of partial evidence after extraction failure
+- an explicit optional clip-understanding capability path; when no capability is configured, semantic dimensions remain unassessed and the report cannot fabricate approval
+- project-scoped, atomically persisted, schema-versioned `ReviewReport` records and sample evidence
+- deterministic pre-render continuity scoring alongside semantic dimensions supplied only by an explicit understanding capability
+- correction instructions attached to the following unlocked Director scene without regenerating video
+- a bounded retry policy with explicit approved, recommended, and exhausted states plus validation of persisted retry-chain continuity
+- preservation of reviewed camera and motion overrides, Reactive Lab extension metadata, scene timing, locked subject appearance, and Director draft identity while correction guidance is applied
+- native WinUI controls for review configuration, optional understanding requests, report history, dimension scores, sampled evidence, findings, correction guidance, retry history, and explicit correction application
+
+Acceptance evidence:
+
+- The full pinned Python 3.12 backend suite passes with 161 passed and 4 opt-in live-model skips; focused Director Review and workflow coverage passes with 27 tests.
+- Changed Phase 10 Python files pass Ruff, all 450 native Core tests pass, the WinUI Release x64 solution/XAML build succeeds with 0 errors, and `git diff --check` reports no whitespace errors.
 
 ### Phase 11 - Provider Refactor
 

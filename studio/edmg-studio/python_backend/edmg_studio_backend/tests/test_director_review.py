@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from edmg_studio_backend.domain.director_review import (
     sample_timestamps,
 )
 from edmg_studio_backend.domain.director_workflow import prepare_workflow
+from edmg_studio_backend.domain.workspace_reactive import apply_overrides
 from edmg_studio_backend.services import director_review as service
 from edmg_studio_backend.store.projects import ProjectStore
 
@@ -52,6 +54,26 @@ def _fake_media(monkeypatch):
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr(service.subprocess, "run", run)
+
+
+def test_sample_failure_removes_partial_evidence_and_has_a_timeout(project_state, monkeypatch):
+    store, project, video = project_state
+    monkeypatch.setattr(service, "ensure_ffmpeg", lambda _path: "ffmpeg")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(kwargs)
+        Path(command[-1]).write_bytes(b"partial")
+        if len(calls) == 2:
+            raise service.subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(service.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="timed out"):
+        service.extract_samples("ffmpeg", store.project_dir(project.id), video, "a" * 64, 10, 3)
+
+    assert all(call["timeout"] == service.FRAME_EXTRACTION_TIMEOUT_SECONDS for call in calls)
+    assert not (store.project_dir(project.id) / "reviews" / "director" / "samples" / ("a" * 64)).exists()
 
 
 def test_sampling_is_deterministic_bounded_and_persists_hashes(project_state, monkeypatch):
@@ -130,6 +152,17 @@ def test_artifact_path_is_confined(project_state, artifact):
 def test_review_api_persistence_idempotency_retry_and_correction_apply(project_state, monkeypatch):
     store, project, _ = project_state
     _fake_media(monkeypatch)
+    workflow = project.meta["director_workflow"]
+    motion = workflow["schedule"]["motion_keys"][0]
+    camera = workflow["schedule"]["camera_keys"][0]
+    workflow["reactive_overrides"] = {
+        motion["id"]: {"strength": 0.37},
+        camera["id"]: {"zoom": 1.23},
+    }
+    workflow["reactive_extensions"] = {"payload": {"review_marker": "retained"}}
+    workflow["schedule"] = apply_overrides(workflow["schedule"], workflow["reactive_overrides"])
+    store.save(project)
+    project = store.get(project.id)
     app = FastAPI()
     app.include_router(create_director_review_router(
         lambda: store,
@@ -172,6 +205,16 @@ def test_review_api_persistence_idempotency_retry_and_correction_apply(project_s
     assert document["scenes"][1]["renderer_hints"]["director_review_guidance"]
     assert document["scenes"][1]["subjects"][0]["appearance_lock"] is True
     assert document["scenes"][1]["subjects"][0]["appearance_notes"] == ["blue coat"]
+    workflow = saved.meta["director_workflow"]
+    retained_motion = next(item for item in workflow["schedule"]["motion_keys"] if item["id"] == motion["id"])
+    retained_camera = next(item for item in workflow["schedule"]["camera_keys"] if item["id"] == camera["id"])
+    assert retained_motion["strength"] == 0.37 and retained_motion["manually_edited"] is True
+    assert retained_camera["zoom"] == 1.23 and retained_camera["manually_edited"] is True
+    assert workflow["reactive_overrides"] == {
+        motion["id"]: {"strength": 0.37},
+        camera["id"]: {"zoom": 1.23},
+    }
+    assert workflow["reactive_extensions"]["payload"]["review_marker"] == "retained"
 
 
 def test_review_api_rejects_stale_revision_before_sampling(project_state, monkeypatch):
@@ -230,6 +273,28 @@ def test_review_api_requires_explicit_eligible_retry_chain(project_state, monkey
 
         missing = client.post(path, json={**body, "retry_of_report_id": "0" * 64})
         assert missing.status_code == 404
+
+
+def test_review_api_rejects_malformed_persisted_retry_history(project_state, monkeypatch):
+    store, project, _ = project_state
+    _fake_media(monkeypatch)
+    app = FastAPI()
+    app.include_router(create_director_review_router(lambda: store, "ffmpeg"))
+    path = f"/v1/projects/{project.id}/director/reviews"
+    body = {"expected_revision": project.revision, "artifact_path": "outputs/videos/render.mp4",
+            "sample_count": 2, "threshold": 1.0, "max_attempts": 2, "target_scene_id": "first"}
+
+    with TestClient(app) as client:
+        first = client.post(path, json=body).json()["report"]
+        report_path = store.project_dir(project.id) / "reviews" / "director" / f"{first['report_id']}.json"
+        persisted = json.loads(report_path.read_text(encoding="utf-8"))
+        persisted["retry"]["history"][0]["attempt"] = 2
+        report_path.write_text(json.dumps(persisted), encoding="utf-8")
+        response = client.post(path, json={**body, "sample_count": 3,
+                                           "retry_of_report_id": first["report_id"]})
+
+    assert response.status_code == 400
+    assert "retry history is invalid" in response.json()["detail"]
 
 
 def test_retry_attempts_are_bounded_and_never_loop(project_state, monkeypatch):
