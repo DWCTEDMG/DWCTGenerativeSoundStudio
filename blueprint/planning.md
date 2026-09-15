@@ -46,9 +46,9 @@ Every relevant phase must preserve and test:
 
 - Repository: `DWCTEDMG/DWCTGenerativeSoundStudio`
 - Default working branch: `codex/Unified`
-- Current synchronized head when this plan was written: `ce1b52b`
-- Local `HEAD`, `origin/codex/Unified`, and `origin/HEAD` matched at that revision.
-- The worktree was clean when this plan was created.
+- Latest completed Phase 5 slice: `a592ff1`.
+- Local `HEAD` and `origin/codex/Unified` matched at that revision after milestone validation.
+- The worktree was clean after the implementation commit was pushed.
 
 Relevant pushed commits:
 
@@ -61,6 +61,11 @@ Relevant pushed commits:
 | `63eee21` | Harden Hunyuan render completion | Phase 8 foundation |
 | `0997efc` | Complete LTX renderer integration | Phase 9 foundation |
 | `4e0bdca` | Complete Director Review workflow | Phase 10 foundation |
+| `34bea29` | Fix audio transport discontinuities and failed worker handling | Phase 5 prerequisite transport correctness |
+| `bddf9c9` | Add mixer routing and PDC planning foundation | Phase 5 mixer graph foundation |
+| `2fe075f` | Add versioned mixer snapshots and audibility planning | Phase 5 control-state and mute/solo foundation |
+| `418f5a4` | Add isolated VST3 discovery and quarantine | Phase 5 plugin discovery safety foundation |
+| `a592ff1` | Add timeline mixer persistence and channel controls | Phase 5 persistence and synchronized Timeline UI slice |
 
 The user requested one commit and push per phase. Phase 3 and Phase 4 were combined in the already-pushed `936f3aa` commit by concurrent work. The shared default branch will not be rewritten to manufacture separate historical commits. Both phase gates must instead be recorded against that immutable commit and its validation evidence. Future phases must return to one phase per commit.
 
