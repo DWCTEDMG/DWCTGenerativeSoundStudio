@@ -78,6 +78,10 @@ The baseline description below is historical. `Core/Audio/TransportService.cs` a
 The same mixer module now owns atomic versioned snapshots and bus-aware mute/solo
 audibility planning. The Timeline routing inspector presents the plan; it does not certify active
 plugin DSP, compensation delay buffers, mixer persistence or hardware playback.
+`Core/Audio/Vst3Discovery.cs` defines the isolated scanner protocol, fingerprint-aware
+metadata cache and persistent crash/timeout quarantine. Settings reports scanner capability
+separately from host and processing readiness; no native scanner or VST3 processing host is
+claimed by this managed boundary.
 
 No production real-time DAW audio backend exists at this baseline. The repository has audio upload, offline analysis, FFmpeg media decoding, and preview transport controls, but it does not have an authoritative sample clock, ASIO/WASAPI device backend, multitrack render graph, real-time callback boundary, routing, metering, or glitch-safety tests.
 

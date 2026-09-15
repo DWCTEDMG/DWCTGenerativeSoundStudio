@@ -144,6 +144,26 @@
                 </Border>
 
                 <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="VST3 plugins" />
+                        <TextBlock x:Name="Vst3CapabilityText"
+                                   AutomationProperties.AutomationId="SettingsVst3CapabilityText"
+                                   Text="Checking scanner capability..."
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="Vst3CatalogText" Opacity="0.72" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button AutomationProperties.AutomationId="SettingsRefreshVst3Button"
+                                    Click="RefreshVst3Button_Click" Content="Refresh plugin status" />
+                            <Button AutomationProperties.AutomationId="SettingsClearVst3QuarantineButton"
+                                    Click="ClearVst3QuarantineButton_Click" Content="Clear quarantine" />
+                        </StackPanel>
+                        <TextBlock Opacity="0.68"
+                                   Text="Discovery runs only in the external native scanner. Scanner readiness does not mean plugins can process audio."
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="8">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Backend readiness and hardware" />
                         <TextBox

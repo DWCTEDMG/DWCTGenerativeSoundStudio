@@ -237,6 +237,15 @@ Validation for this slice: 389 Core tests passed; complete Debug WinUI solution 
 - Legacy audio routes transfer track gain, pan, mute and solo state into the mixer plan; the Timeline routing inspector labels each route audible or inaudible.
 - This remains control-thread planning. Actual bus/send mixing, compensation delay buffers, meters, mixer editing/persistence and native plugin processing remain open.
 
+#### VST3 discovery safety slice — 2026-09-15
+
+- Core defines explicit `Unavailable`, `ScannerReady`, `HostReady` and `ProcessingReady` capability states; the Studio reports only scanner readiness until native hosting and processing are implemented.
+- Module metadata is keyed by path, size, write time and SHA-256 fingerprint, so changed modules cannot reuse stale cache or quarantine entries.
+- Catalog and quarantine state persist atomically outside project files. Failed, timed-out and malformed scans quarantine the exact module fingerprint; missing scanner installation does not blame or quarantine a module.
+- The scanner client invokes one module per external process with redirected structured output, cancellation and a hard timeout. Unknown plugin code is never loaded into the Studio UI process for discovery.
+- Settings displays the actual scanner capability, cache and quarantine counts, and provides an explicit quarantine-clear action with confirmation.
+- The external native scanner executable and VST3 host/processing implementation remain open; this slice does not claim active plugin support.
+
 #### Goals
 
 - mixer service

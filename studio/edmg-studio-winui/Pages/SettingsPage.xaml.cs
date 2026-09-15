@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using EdmgStudio.Core.Audio;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
@@ -57,6 +58,7 @@ public sealed partial class SettingsPage : Page
                 $"{hardwareTask.Result.Text}{Environment.NewLine}{Environment.NewLine}" +
                 metricsTask.Result.Text;
             LoadFoundrySettings();
+            LoadVst3Status();
 
             string?[] failures =
             [
@@ -149,6 +151,56 @@ public sealed partial class SettingsPage : Page
         }
         catch (Exception exception) when (
             exception is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            ShowStatus(exception.Message, InfoBarSeverity.Error);
+        }
+    }
+
+    private void LoadVst3Status()
+    {
+        try
+        {
+            string scannerPath = Path.Combine(AppContext.BaseDirectory, "EdmgStudio.Vst3Scanner.exe");
+            var store = new Vst3CatalogStore();
+            var scanner = new Vst3ScannerClient(scannerPath, store);
+            Vst3Catalog catalog = store.Load();
+            Vst3CapabilityText.Text = scanner.CapabilityState == Vst3CapabilityState.ScannerReady
+                ? "Scanner ready. Native hosting and audio processing are not yet available."
+                : "Unavailable: the isolated native VST3 scanner is not installed. Plugin processing is disabled.";
+            Vst3CatalogText.Text = $"Cached modules: {catalog.Cache.Length} · Quarantined modules: {catalog.Quarantine.Length}";
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Vst3CapabilityText.Text = "VST3 discovery unavailable.";
+            Vst3CatalogText.Text = exception.Message;
+        }
+    }
+
+    private void RefreshVst3Button_Click(object sender, RoutedEventArgs e)
+    {
+        LoadVst3Status();
+        ShowStatus("VST3 capability and catalog status refreshed.", InfoBarSeverity.Success);
+    }
+
+    private async void ClearVst3QuarantineButton_Click(object sender, RoutedEventArgs e)
+    {
+        var confirmation = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Clear VST3 quarantine?",
+            Content = "All quarantined modules will be eligible for the next explicit scan. Unsafe plugins are not loaded by this action.",
+            PrimaryButtonText = "Clear",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close
+        };
+        if (await confirmation.ShowAsync() != ContentDialogResult.Primary) return;
+        try
+        {
+            new Vst3CatalogStore().ClearQuarantine();
+            LoadVst3Status();
+            ShowStatus("VST3 quarantine cleared.", InfoBarSeverity.Success);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
         {
             ShowStatus(exception.Message, InfoBarSeverity.Error);
         }
