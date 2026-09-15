@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -215,7 +215,7 @@ public static class ProjectTimelineContracts
     {
         ProjectTimebase timebase = ReadTimebase(timeline);
         IReadOnlyList<Track> tracks = ReadTracks(timeline, timebase);
-        return new CanonicalProject(
+        var canonical = new CanonicalProject(
             project.Id,
             project.Name,
             project.Revision,
@@ -226,6 +226,8 @@ public static class ProjectTimelineContracts
             ReadMarkers(timeline, timebase, tracks),
             metadata,
             timeline);
+        ProfessionalEditingContracts.ValidateAgainstProject(canonical, ProfessionalEditingContracts.Read(timeline));
+        return canonical;
     }
 
     public static JsonObject RebuildTimeline(CanonicalProject project)

@@ -94,6 +94,15 @@ public sealed partial class TimelinePage : Page
     private bool _suppressCameraSelectionChange;
     private bool _suppressMarkerSelectionChange;
     private bool _revisionConflictInterruptedOperation;
+    private bool _suppressProfessionalSelectionChange;
+    private string? _selectedAutomationLaneId;
+    private string? _selectedAutomationPointId;
+    private string? _selectedTakeId;
+    private string? _selectedCompRangeId;
+    private string? _selectedCrossfadeId;
+    private bool _creatingAutomationPoint;
+    private bool _creatingCompRange;
+    private AudioAutomationSnapshot _automationSnapshot = new([]);
     private TimelinePointerTool _pointerTool;
 
     public TimelinePage()
@@ -344,6 +353,14 @@ public sealed partial class TimelinePage : Page
         _selectedTrackId = null;
         _selectedCameraKeyframeIdentity = null;
         _selectedMarkerId = null;
+        _selectedAutomationLaneId = null;
+        _selectedAutomationPointId = null;
+        _selectedTakeId = null;
+        _selectedCompRangeId = null;
+        _selectedCrossfadeId = null;
+        _creatingAutomationPoint = false;
+        _creatingCompRange = false;
+        _automationSnapshot = new([]);
         _selectedSourcePath = string.Empty;
         _editorHistory = new();
         _editorRevision = 0;
@@ -366,6 +383,14 @@ public sealed partial class TimelinePage : Page
         SelectedClipSubtitle.Text = "Select a clip to inspect its timing and media properties.";
         SelectedMixerTrackTitle.Text = "No track selected";
         SelectedMixerTrackSubtitle.Text = "Select a track header or a clip to edit its channel.";
+        ProfessionalSelectionText.Text = "Select a native track or clip to begin.";
+        ProfessionalEditStatusText.Text = "No advanced edit has run.";
+        AutomationLaneListView.ItemsSource = null;
+        AutomationPointListView.ItemsSource = null;
+        TakeListView.ItemsSource = null;
+        CompRangeListView.ItemsSource = null;
+        CrossfadePartnerComboBox.ItemsSource = null;
+        SetProfessionalEditingEnabled(false, false, false, false);
         PreviewSurface.ShowEmpty(message);
         PreviewHintText.Text = message;
         SourceAssetComboBox.ItemsSource = null;
@@ -447,6 +472,7 @@ public sealed partial class TimelinePage : Page
         RenderTimeline();
         PopulateInspector();
         RefreshMixerEditor();
+        RefreshProfessionalEditingEditor();
         RefreshMarkers();
         RefreshCameraEditor();
         UpdateTransportUi();
@@ -888,6 +914,7 @@ public sealed partial class TimelinePage : Page
         RenderTimeline();
         PopulateInspector();
         RefreshMixerEditor();
+        RefreshProfessionalEditingEditor();
         RefreshCameraEditor();
         UpdateCommandState();
     }
@@ -898,7 +925,7 @@ public sealed partial class TimelinePage : Page
         _selectedLaneId = null;
         if (stableId is not null)
         {
-            InspectorPivot.SelectedIndex = 5;
+            InspectorPivot.SelectedIndex = 6;
         }
 
         RenderTimeline();
@@ -1109,6 +1136,200 @@ public sealed partial class TimelinePage : Page
         ApplyMixerButton.IsEnabled = canEdit;
     }
 
+    private TimelineEvent? SelectedNativeClip =>
+            SelectedLane is { IsLayer: false } lane && SelectedMixerTrack is { } track
+                ? track.Events.FirstOrDefault(clip => clip.Id == lane.Source["id"]?.GetValue<string>())
+                : null;
+
+        private void RefreshProfessionalEditingEditor()
+        {
+            CanonicalProject? project = _canonicalProject;
+            Track? track = SelectedMixerTrack;
+            TimelineEvent? clip = SelectedNativeClip;
+            ProfessionalSelectionText.Text = track is null
+                ? "Select a native track or clip to begin."
+                : clip is null ? $"Track: {track.Name}" : $"Track: {track.Name}  •  Clip: {clip.Name}";
+
+            if (project is null)
+            {
+                SetProfessionalEditingEnabled(false, false, false, false);
+                return;
+            }
+
+            ProfessionalEditingDocument editing;
+            try
+            {
+                editing = ProfessionalEditingContracts.Read(project.Timeline);
+                ProfessionalEditingContracts.ValidateAgainstProject(project, editing);
+                _automationSnapshot = AudioAutomationSnapshot.Build(project);
+            }
+            catch (InvalidDataException exception)
+            {
+                SetProfessionalEditingEnabled(false, false, false, false);
+                ShowInfo(exception.Message, InfoBarSeverity.Error);
+                return;
+            }
+
+            _suppressProfessionalSelectionChange = true;
+            try
+            {
+                List<ProfessionalListItem> lanes = editing.AutomationLanes
+                    .Where(lane => lane.TrackId == track?.Id)
+                    .Select(lane => new ProfessionalListItem(lane.Id, lane.Target, $"{lane.Mode} • {lane.Minimum:g} to {lane.Maximum:g} • {lane.Points.Length} points"))
+                    .ToList();
+                if (_selectedAutomationLaneId is null || lanes.All(item => item.Id != _selectedAutomationLaneId))
+                    _selectedAutomationLaneId = lanes.FirstOrDefault()?.Id;
+                AutomationLaneListView.ItemsSource = lanes;
+                AutomationLaneListView.SelectedItem = lanes.FirstOrDefault(item => item.Id == _selectedAutomationLaneId);
+
+                AutomationLane? selectedLane = editing.AutomationLanes.FirstOrDefault(lane => lane.Id == _selectedAutomationLaneId);
+                if (selectedLane is not null)
+                {
+                    AutomationTargetTextBox.Text = selectedLane.Target;
+                    AutomationMinimumNumberBox.Value = selectedLane.Minimum;
+                    AutomationMaximumNumberBox.Value = selectedLane.Maximum;
+                    SelectComboByTag(AutomationModeComboBox, selectedLane.Mode.ToString().ToLowerInvariant());
+                }
+                List<ProfessionalListItem> points = selectedLane?.Points
+                    .Select(point => new ProfessionalListItem(point.Id, $"{point.Sample}: {point.Value:g} ({point.Curve})"))
+                    .ToList() ?? [];
+                if (!_creatingAutomationPoint && (_selectedAutomationPointId is null || points.All(item => item.Id != _selectedAutomationPointId)))
+                    _selectedAutomationPointId = points.FirstOrDefault()?.Id;
+                AutomationPointListView.ItemsSource = points;
+                AutomationPointListView.SelectedItem = points.FirstOrDefault(item => item.Id == _selectedAutomationPointId);
+                AutomationPoint? selectedPoint = selectedLane?.Points.FirstOrDefault(point => point.Id == _selectedAutomationPointId);
+                if (selectedPoint is not null)
+                {
+                    AutomationPointSampleTextBox.Text = selectedPoint.Sample.ToString(CultureInfo.InvariantCulture);
+                    AutomationPointValueNumberBox.Value = selectedPoint.Value;
+                    AutomationTensionNumberBox.Value = selectedPoint.Tension;
+                    SelectComboByTag(AutomationCurveComboBox, selectedPoint.Curve.ToString().ToLowerInvariant());
+                }
+
+                ClipEditingDescriptor? descriptor = editing.Clips.FirstOrDefault(item => item.ClipId == clip?.Id);
+                ProfessionalFadeInTextBox.Text = (descriptor?.Fades?.InSamples ?? 0).ToString(CultureInfo.InvariantCulture);
+                ProfessionalFadeOutTextBox.Text = (descriptor?.Fades?.OutSamples ?? 0).ToString(CultureInfo.InvariantCulture);
+                SelectComboByTag(FadeCurveComboBox, FadeCurveTag(descriptor?.Fades?.Curve ?? FadeCurve.EqualPower));
+                PlaybackRateNumberBox.Value = descriptor?.Process?.PlaybackRate ?? 1;
+                StretchRatioNumberBox.Value = descriptor?.Process?.StretchRatio ?? 1;
+                SelectComboByTag(ProcessAlgorithmComboBox, descriptor?.Process?.Algorithm == ProcessAlgorithm.PhaseVocoder ? "phase_vocoder" : "resample");
+
+                List<ProfessionalListItem> assets = project.MediaAssets.Select(asset => new ProfessionalListItem(asset.Id, System.IO.Path.GetFileName(asset.Path), asset.Kind)).ToList();
+                TakeMediaAssetComboBox.ItemsSource = assets;
+                TakeMediaAssetComboBox.SelectedIndex = assets.Count > 0 ? Math.Max(0, TakeMediaAssetComboBox.SelectedIndex) : -1;
+                List<ProfessionalListItem> takes = editing.Takes.Where(take => take.ClipId == clip?.Id)
+                    .Select(take => new ProfessionalListItem(take.Id, $"{take.Id} • {take.MediaAssetId}", take.Id == descriptor?.ActiveTakeId ? "Active" : string.Empty)).ToList();
+                if (_selectedTakeId is null || takes.All(item => item.Id != _selectedTakeId))
+                    _selectedTakeId = takes.FirstOrDefault(item => item.Id == descriptor?.ActiveTakeId)?.Id ?? takes.FirstOrDefault()?.Id;
+                TakeListView.ItemsSource = takes;
+                TakeListView.SelectedItem = takes.FirstOrDefault(item => item.Id == _selectedTakeId);
+                List<ProfessionalListItem> comps = editing.CompRanges.Where(comp => comp.ClipId == clip?.Id)
+                    .Select(comp => new ProfessionalListItem(comp.Id, $"[{comp.StartSample}, {comp.EndSample}) • {comp.TakeId}")).ToList();
+                if (!_creatingCompRange && (_selectedCompRangeId is null || comps.All(item => item.Id != _selectedCompRangeId)))
+                    _selectedCompRangeId = comps.FirstOrDefault()?.Id;
+                CompRangeListView.ItemsSource = comps;
+                CompRangeListView.SelectedItem = comps.FirstOrDefault(item => item.Id == _selectedCompRangeId);
+                CompRange? selectedComp = editing.CompRanges.FirstOrDefault(comp => comp.Id == _selectedCompRangeId);
+                if (selectedComp is not null)
+                {
+                    CompStartTextBox.Text = selectedComp.StartSample.ToString(CultureInfo.InvariantCulture);
+                    CompEndTextBox.Text = selectedComp.EndSample.ToString(CultureInfo.InvariantCulture);
+                    _selectedTakeId = selectedComp.TakeId;
+                    TakeListView.SelectedItem = takes.FirstOrDefault(item => item.Id == _selectedTakeId);
+                }
+
+                List<ProfessionalListItem> partners = track is null || clip is null ? [] : track.Events
+                    .Where(item => item.Id != clip.Id && item.Start.Samples < clip.End.Samples && item.End.Samples > clip.Start.Samples)
+                    .Select(item => new ProfessionalListItem(item.Id, item.Name, $"[{Math.Max(item.Start.Samples, clip.Start.Samples)}, {Math.Min(item.End.Samples, clip.End.Samples)})"))
+                    .ToList();
+                CrossfadePartnerComboBox.ItemsSource = partners;
+                CrossfadePartnerComboBox.SelectedIndex = partners.Count > 0 ? 0 : -1;
+                RefreshCrossfadeFields(editing, track, clip);
+
+                bool editableTrack = track is { Locked: false };
+                bool editableClip = editableTrack && clip is not null && clip.Data["locked"]?.GetValue<bool>() != true;
+                SetProfessionalEditingEnabled(editableTrack, selectedLane is not null, selectedPoint is not null, editableClip);
+                SelectTakeButton.IsEnabled = editableClip && _selectedTakeId is not null;
+                SetCompRangeButton.IsEnabled = editableClip && _selectedTakeId is not null;
+                AddTakeButton.IsEnabled = editableClip && assets.Count > 0;
+                ApplyCrossfadeButton.IsEnabled = editableClip && partners.Count > 0;
+            }
+            finally
+            {
+                _suppressProfessionalSelectionChange = false;
+            }
+        }
+
+        private void SetProfessionalEditingEnabled(bool track, bool lane, bool point, bool clip)
+        {
+            CreateAutomationLaneButton.IsEnabled = track;
+            ApplyAutomationModeButton.IsEnabled = track && lane;
+            DeleteAutomationLaneButton.IsEnabled = track && lane;
+            UpsertAutomationPointButton.IsEnabled = track && lane;
+            NewAutomationPointButton.IsEnabled = track && lane;
+            DeleteAutomationPointButton.IsEnabled = track && lane && point;
+            ApplyFadesButton.IsEnabled = clip;
+            ApplyProcessButton.IsEnabled = clip;
+            AddTakeButton.IsEnabled = clip;
+            SelectTakeButton.IsEnabled = clip;
+            SetCompRangeButton.IsEnabled = clip;
+            NewCompRangeButton.IsEnabled = clip;
+            NudgeButton.IsEnabled = clip;
+            SlipButton.IsEnabled = clip;
+            SlideButton.IsEnabled = clip;
+            ApplyRangeEditButton.IsEnabled = track;
+            ApplyCrossfadeButton.IsEnabled = false;
+        }
+
+        private void RefreshCrossfadeFields(ProfessionalEditingDocument editing, Track? track, TimelineEvent? clip)
+        {
+            if (track is null || clip is null || CrossfadePartnerComboBox.SelectedItem is not ProfessionalListItem partner) return;
+            TimelineEvent other = track.Events.First(item => item.Id == partner.Id);
+            Crossfade? crossfade = editing.Crossfades.FirstOrDefault(item => item.TrackId == track.Id &&
+                ((item.LeftClipId == clip.Id && item.RightClipId == other.Id) || (item.LeftClipId == other.Id && item.RightClipId == clip.Id)));
+            _selectedCrossfadeId = crossfade?.Id;
+            CrossfadeStartTextBox.Text = (crossfade?.StartSample ?? Math.Max(clip.Start.Samples, other.Start.Samples)).ToString(CultureInfo.InvariantCulture);
+            CrossfadeEndTextBox.Text = (crossfade?.EndSample ?? Math.Min(clip.End.Samples, other.End.Samples)).ToString(CultureInfo.InvariantCulture);
+            SelectComboByTag(CrossfadeCurveComboBox, FadeCurveTag(crossfade?.Curve ?? FadeCurve.EqualPower));
+        }
+
+        private void AutomationLaneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressProfessionalSelectionChange) return;
+            _selectedAutomationLaneId = (AutomationLaneListView.SelectedItem as ProfessionalListItem)?.Id;
+            _selectedAutomationPointId = null;
+            _creatingAutomationPoint = false;
+            RefreshProfessionalEditingEditor();
+        }
+
+        private void AutomationPointListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressProfessionalSelectionChange) return;
+            _selectedAutomationPointId = (AutomationPointListView.SelectedItem as ProfessionalListItem)?.Id;
+            if (_selectedAutomationPointId is not null) _creatingAutomationPoint = false;
+            RefreshProfessionalEditingEditor();
+        }
+
+        private void TakeListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!_suppressProfessionalSelectionChange)
+                _selectedTakeId = (TakeListView.SelectedItem as ProfessionalListItem)?.Id;
+        }
+
+        private void CompRangeListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressProfessionalSelectionChange) return;
+            _selectedCompRangeId = (CompRangeListView.SelectedItem as ProfessionalListItem)?.Id;
+            if (_selectedCompRangeId is not null) _creatingCompRange = false;
+            RefreshProfessionalEditingEditor();
+        }
+
+        private void CrossfadePartnerComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressProfessionalSelectionChange || _canonicalProject is null) return;
+            RefreshCrossfadeFields(ProfessionalEditingContracts.Read(_canonicalProject.Timeline), SelectedMixerTrack, SelectedNativeClip);
+            ApplyCrossfadeButton.IsEnabled = SelectedNativeClip is not null && CrossfadePartnerComboBox.SelectedItem is ProfessionalListItem;
+        }
     private static bool IsAudioTrack(Track track) =>
         string.Equals(track.Type, "audio", StringComparison.OrdinalIgnoreCase) ||
         track.Events.Any(timelineEvent => string.Equals(timelineEvent.Type, "audio", StringComparison.OrdinalIgnoreCase));
@@ -1126,6 +1347,7 @@ public sealed partial class TimelinePage : Page
         InspectorPivot.SelectedIndex = 1;
         RenderTrackHeaders();
         RefreshMixerEditor();
+        RefreshProfessionalEditingEditor();
         UpdateCommandState();
     }
 
@@ -1875,7 +2097,6 @@ public sealed partial class TimelinePage : Page
             ["position"] = CurrentSampleText(),
             ["snap"] = "sample",
         }, "Add timeline marker");
-        _selectedMarkerId = id;
     }
 
     private async void MoveMarker_Click(object sender, RoutedEventArgs e)
@@ -1898,7 +2119,6 @@ public sealed partial class TimelinePage : Page
             ["kind"] = "delete_marker",
             ["marker_id"] = _selectedMarkerId,
         }, "Delete timeline marker");
-        _selectedMarkerId = null;
     }
 
     private void MarkerComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1948,14 +2168,16 @@ public sealed partial class TimelinePage : Page
             ShowInfo("Enter a nonnegative whole sample position within the 64-bit range.", InfoBarSeverity.Warning);
             return;
         }
-        await ExecuteNativeEditAsync(new JsonObject
+        JsonObject operation = new()
         {
             ["kind"] = kind,
             ["track_id"] = tracks[lane.TrackIndex]?["id"]?.GetValue<string>(),
             ["clip_id"] = lane.Source["id"]?.GetValue<string>(),
             ["position"] = position.ToString(CultureInfo.InvariantCulture),
             ["snap"] = "sample"
-        }, kind == "move" ? "Move clip to exact sample" : "Split clip at exact sample");
+        };
+        if (kind == "split") operation = CreateNativeSplitOperation(operation, position);
+        await ExecuteNativeEditAsync(operation, kind == "move" ? "Move clip to exact sample" : "Split clip at exact sample");
     }
 
     private bool TryCreateNativeEventOperation(
@@ -2003,11 +2225,237 @@ public sealed partial class TimelinePage : Page
         return ProjectTimelineOperations.Snap(timebase, position, snapMode, bpm).Samples;
     }
 
-    private async Task ExecuteNativeEditAsync(JsonObject operation, string label, JsonObject? precedingOperation = null)
+    private async void CreateAutomationLane_Click(object sender, RoutedEventArgs e)
+    {
+        string id = $"automation-{Guid.NewGuid():N}";
+        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.AddAutomationLane(
+            RequiredProject(), id, RequiredTrack().Id, AutomationTargetTextBox.Text.Trim(),
+            ParseAutomationMode(), ReadFiniteOrDefault(AutomationMinimumNumberBox, 0),
+            ReadFiniteOrDefault(AutomationMaximumNumberBox, 1)), "Create automation lane", "track",
+            () => _selectedAutomationLaneId = id);
+    }
+
+    private async void DeleteAutomationLane_Click(object sender, RoutedEventArgs e) =>
+        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.DeleteAutomationLane(
+            RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane.")),
+            "Delete automation lane", "track");
+
+    private async void ApplyAutomationMode_Click(object sender, RoutedEventArgs e) =>
+        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.SetAutomationMode(
+            RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."), ParseAutomationMode()),
+            "Set automation mode", "track");
+
+    private async void UpsertAutomationPoint_Click(object sender, RoutedEventArgs e)
+    {
+        string id = _selectedAutomationPointId ?? $"automation-point-{Guid.NewGuid():N}";
+        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.UpsertAutomationPoint(
+            RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."), id,
+            ParseSample(AutomationPointSampleTextBox.Text, "Automation point sample"),
+            ReadFiniteOrDefault(AutomationPointValueNumberBox, 0), ParseAutomationCurve(),
+            ReadFiniteOrDefault(AutomationTensionNumberBox, 0)),
+            _selectedAutomationPointId is null ? "Add automation point" : "Update automation point",
+            $"sample {AutomationPointSampleTextBox.Text.Trim()}", () =>
+            {
+                _selectedAutomationPointId = id;
+                _creatingAutomationPoint = false;
+            });
+    }
+
+    private void NewAutomationPoint_Click(object sender, RoutedEventArgs e)
+    {
+        _selectedAutomationPointId = null;
+        _creatingAutomationPoint = true;
+        AutomationPointListView.SelectedItem = null;
+        AutomationPointSampleTextBox.Text = CurrentSampleText();
+        AutomationPointValueNumberBox.Value = 0;
+        AutomationTensionNumberBox.Value = 0;
+        SelectComboByTag(AutomationCurveComboBox, "linear");
+        DeleteAutomationPointButton.IsEnabled = false;
+    }
+
+    private async void DeleteAutomationPoint_Click(object sender, RoutedEventArgs e)
+    {
+        string? pointId = _selectedAutomationPointId;
+        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.DeleteAutomationPoint(
+            RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."),
+            RequiredId(pointId, "Select an automation point.")), "Delete automation point", "selected sample");
+    }
+
+    private async void ApplyFades_Click(object sender, RoutedEventArgs e)
+    {
+        await ExecuteProfessionalEditAsync(() =>
+        {
+            (Track track, TimelineEvent clip) = RequiredClip();
+            return ProfessionalEditingOperations.SetFades(RequiredProject(), track.Id, clip.Id,
+                ParseSample(ProfessionalFadeInTextBox.Text, "Fade-in samples"), ParseSample(ProfessionalFadeOutTextBox.Text, "Fade-out samples"),
+                ParseFadeCurve(FadeCurveComboBox));
+        }, "Set clip fades", "selected clip");
+    }
+
+    private async void ApplyProcess_Click(object sender, RoutedEventArgs e)
+    {
+        await ExecuteProfessionalEditAsync(() =>
+        {
+            (Track track, TimelineEvent clip) = RequiredClip();
+            return ProfessionalEditingOperations.SetProcess(RequiredProject(), track.Id, clip.Id,
+                ReadFiniteOrDefault(PlaybackRateNumberBox, 1), ReadFiniteOrDefault(StretchRatioNumberBox, 1), ParseProcessAlgorithm());
+        }, "Set clip process", "selected clip");
+    }
+
+    private async void AddTake_Click(object sender, RoutedEventArgs e)
+    {
+        string takeId = $"take-{Guid.NewGuid():N}";
+        await ExecuteProfessionalEditAsync(() =>
+        {
+            (Track track, TimelineEvent clip) = RequiredClip();
+            string assetId = (TakeMediaAssetComboBox.SelectedItem as ProfessionalListItem)?.Id
+                ?? throw new InvalidOperationException("Select a project media asset.");
+            int rate = checked((int)ReadWholeNumber(TakeSourceRateNumberBox, "Source sample rate"));
+            long start = ParseSample(TakeSourceStartTextBox.Text, "Source start");
+            SourcePosition? end = string.IsNullOrWhiteSpace(TakeSourceEndTextBox.Text) ? null
+                : new SourcePosition(rate, ParseSample(TakeSourceEndTextBox.Text, "Source end"), "0");
+            return ProfessionalEditingOperations.AddTake(RequiredProject(), track.Id, clip.Id, takeId, assetId,
+                new SourceRange(new SourcePosition(rate, start, "0"), end));
+        }, "Add take", "selected clip", () => _selectedTakeId = takeId);
+    }
+
+    private async void SelectTake_Click(object sender, RoutedEventArgs e)
+    {
+        await ExecuteProfessionalEditAsync(() =>
+        {
+            (Track track, TimelineEvent clip) = RequiredClip();
+            return ProfessionalEditingOperations.SelectTake(RequiredProject(), track.Id, clip.Id,
+                RequiredId(_selectedTakeId, "Select a take."));
+        }, "Select take", "selected clip");
+    }
+
+    private async void SetCompRange_Click(object sender, RoutedEventArgs e)
+    {
+        string id = _selectedCompRangeId ?? $"comp-{Guid.NewGuid():N}";
+        await ExecuteProfessionalEditAsync(() =>
+        {
+            (Track track, TimelineEvent clip) = RequiredClip();
+            return ProfessionalEditingOperations.SetCompRange(RequiredProject(), track.Id, clip.Id,
+                id, RequiredId(_selectedTakeId, "Select a take."), ParseSample(CompStartTextBox.Text, "Comp start"),
+                ParseSample(CompEndTextBox.Text, "Comp end"));
+        }, "Set comp range",
+            $"range [{CompStartTextBox.Text.Trim()}, {CompEndTextBox.Text.Trim()})", () =>
+            {
+                _selectedCompRangeId = id;
+                _creatingCompRange = false;
+            });
+    }
+
+    private void NewCompRange_Click(object sender, RoutedEventArgs e)
+    {
+        _selectedCompRangeId = null;
+        _creatingCompRange = true;
+        CompRangeListView.SelectedItem = null;
+        string sample = CurrentSampleText();
+        CompStartTextBox.Text = sample;
+        CompEndTextBox.Text = sample;
+    }
+
+    private async void Nudge_Click(object sender, RoutedEventArgs e) => await ExecuteClipDeltaAsync("Nudge clip", ProfessionalEditingOperations.Nudge);
+    private async void Slip_Click(object sender, RoutedEventArgs e) => await ExecuteClipDeltaAsync("Slip clip source", ProfessionalEditingOperations.Slip);
+    private async void Slide_Click(object sender, RoutedEventArgs e) => await ExecuteClipDeltaAsync("Slide clip", ProfessionalEditingOperations.Slide);
+
+    private async Task ExecuteClipDeltaAsync(string label, Func<CanonicalProject, string, string, long, JsonObject> builder)
+    {
+        await ExecuteProfessionalEditAsync(() =>
+        {
+            (Track track, TimelineEvent clip) = RequiredClip();
+            return builder(RequiredProject(), track.Id, clip.Id,
+                ParseSignedSample(EditDeltaTextBox.Text, "Delta samples"));
+        }, label, $"selected clip, delta {EditDeltaTextBox.Text.Trim()}");
+    }
+
+    private async void ApplyRangeEdit_Click(object sender, RoutedEventArgs e)
+    {
+        string action = GetSelectedTag(RangeActionComboBox) ?? "delete";
+        await ExecuteProfessionalEditAsync(() =>
+        {
+            CanonicalProject project = RequiredProject();
+            Track track = RequiredTrack();
+            long start = ParseSample(RangeStartTextBox.Text, "Range start");
+            long end = ParseSample(RangeEndTextBox.Text, "Range end");
+            TimelineEvent[] selected = track.Events.Where(clip => clip.Start.Samples >= start && clip.End.Samples <= end).ToArray();
+            ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(project.Timeline);
+            string[] clipIds = action == "duplicate" ? selected.Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
+            string[] takeIds = action == "duplicate" ? selected.SelectMany(clip => editing.Takes.Where(take => take.ClipId == clip.Id))
+                .Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
+            string[] compIds = action == "duplicate" ? selected.SelectMany(clip => editing.CompRanges.Where(comp => comp.ClipId == clip.Id))
+                .Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
+            return ProfessionalEditingOperations.RangeEdit(project, track.Id, start, end, action,
+                ParseSignedSample(RangeDeltaTextBox.Text, "Range delta"), clipIds, takeIds, compIds);
+        }, $"{char.ToUpperInvariant(action[0])}{action[1..]} range",
+            $"range [{RangeStartTextBox.Text.Trim()}, {RangeEndTextBox.Text.Trim()}), delta {RangeDeltaTextBox.Text.Trim()}");
+    }
+
+    private async void ApplyCrossfade_Click(object sender, RoutedEventArgs e)
+    {
+        await ExecuteProfessionalEditAsync(() =>
+        {
+            (Track track, TimelineEvent clip) = RequiredClip();
+            string partnerId = (CrossfadePartnerComboBox.SelectedItem as ProfessionalListItem)?.Id
+                ?? throw new InvalidOperationException("Select an overlapping clip.");
+            TimelineEvent partner = track.Events.First(item => item.Id == partnerId);
+            TimelineEvent left = clip.Start.Samples <= partner.Start.Samples ? clip : partner;
+            TimelineEvent right = ReferenceEquals(left, clip) ? partner : clip;
+            return ProfessionalEditingOperations.SetCrossfade(RequiredProject(), track.Id,
+                left.Id, right.Id, ParseSample(CrossfadeStartTextBox.Text, "Crossfade start"),
+                ParseSample(CrossfadeEndTextBox.Text, "Crossfade end"), ParseFadeCurve(CrossfadeCurveComboBox), _selectedCrossfadeId);
+        },
+            "Set crossfade", $"range [{CrossfadeStartTextBox.Text.Trim()}, {CrossfadeEndTextBox.Text.Trim()})");
+    }
+
+    private async Task<bool> ExecuteProfessionalEditAsync(
+        Func<JsonObject> operationFactory, string label, string affected, Action? beforeRefresh = null)
+    {
+        try
+        {
+            JsonObject operation = operationFactory();
+            return await ExecuteNativeEditAsync(operation, label, affectedSamples: affected, beforeRefresh: beforeRefresh);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or InvalidDataException or OverflowException)
+        {
+            ShowInfo(exception.Message, InfoBarSeverity.Error);
+            return false;
+        }
+    }
+
+    private CanonicalProject RequiredProject() => _canonicalProject ?? throw new InvalidOperationException("Load a project first.");
+    private Track RequiredTrack() => SelectedMixerTrack ?? throw new InvalidOperationException("Select a native track.");
+    private (Track Track, TimelineEvent Clip) RequiredClip() =>
+        (SelectedMixerTrack, SelectedNativeClip) is ({ } track, { } clip) ? (track, clip) : throw new InvalidOperationException("Select a native clip.");
+    private static string RequiredId(string? id, string message) => !string.IsNullOrWhiteSpace(id) ? id : throw new InvalidOperationException(message);
+    private static long ParseSample(string text, string label) =>
+        long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out long value) && value >= 0
+            ? value : throw new InvalidDataException($"{label} must be a nonnegative whole sample.");
+    private static long ParseSignedSample(string text, string label) =>
+        long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value)
+            ? value : throw new InvalidDataException($"{label} must be a signed whole sample.");
+    private static long ReadWholeNumber(NumberBox box, string label) =>
+        double.IsFinite(box.Value) && box.Value == Math.Truncate(box.Value) ? checked((long)box.Value)
+            : throw new InvalidDataException($"{label} must be a whole number.");
+    private AutomationMode ParseAutomationMode() => GetSelectedTag(AutomationModeComboBox) switch
+    { "write" => AutomationMode.Write, "touch" => AutomationMode.Touch, _ => AutomationMode.Read };
+    private AutomationCurve ParseAutomationCurve() => GetSelectedTag(AutomationCurveComboBox) switch
+    { "step" => AutomationCurve.Step, "smooth" => AutomationCurve.Smooth, _ => AutomationCurve.Linear };
+    private static FadeCurve ParseFadeCurve(ComboBox box) => GetSelectedTag(box) switch
+    { "linear" => FadeCurve.Linear, "s_curve" => FadeCurve.SCurve, _ => FadeCurve.EqualPower };
+    private ProcessAlgorithm ParseProcessAlgorithm() => GetSelectedTag(ProcessAlgorithmComboBox) == "phase_vocoder"
+        ? ProcessAlgorithm.PhaseVocoder : ProcessAlgorithm.Resample;
+    private static string FadeCurveTag(FadeCurve curve) => curve switch
+    { FadeCurve.Linear => "linear", FadeCurve.SCurve => "s_curve", _ => "equal_power" };
+
+    private async Task<bool> ExecuteNativeEditAsync(
+        JsonObject operation, string label, JsonObject? precedingOperation = null,
+        string? affectedSamples = null, Action? beforeRefresh = null)
     {
         if (_isBusy || _isDirty || _editorRevision < 1 || _loadedProjectId is not string projectId)
         {
-            return;
+            return false;
         }
         SetBusy(true);
         CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
@@ -2017,7 +2465,7 @@ public sealed partial class TimelinePage : Page
                 Operations: precedingOperation is null ? [ToJsonElement(operation)] : [ToJsonElement(precedingOperation), ToJsonElement(operation)]);
             EditorState result = await App.Services.ApiClient.ExecuteEditorCommandAsync(projectId, request, token);
             token.ThrowIfCancellationRequested();
-            if (projectId != _loadedProjectId) return;
+            if (projectId != _loadedProjectId) return false;
             ApplyEditorState(result);
             if (operation["kind"]?.GetValue<string>() == "add_clip")
             {
@@ -2037,15 +2485,19 @@ public sealed partial class TimelinePage : Page
             {
                 _selectedMarkerId = null;
             }
+            beforeRefresh?.Invoke();
             RefreshEditor(updateRawText: true);
             await RefreshProjectRevisionAsync(projectId, token);
             await ConfigureAudioEngineAsync(token);
             await RefreshPreviewAsync(force: false);
-            StatusText.Text = $"{label} saved.";
+            string status = $"{label} • {affectedSamples ?? "project"} • revision {_editorRevision} • undo {(_editorHistory.CanUndo ? "available" : "unavailable")}";
+            StatusText.Text = status;
+            ProfessionalEditStatusText.Text = status;
+            return true;
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (ProjectRevisionConflictException conflict) { await HandleProjectRevisionConflictAsync(conflict); }
-        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { return false; }
+        catch (ProjectRevisionConflictException conflict) { await HandleProjectRevisionConflictAsync(conflict); return false; }
+        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); return false; }
         finally { SetBusy(false); }
     }
 
@@ -2763,7 +3215,7 @@ public sealed partial class TimelinePage : Page
 
         if (!lane.IsLayer && TryCreateNativeEventOperation(lane, "split", SnapSample(splitSeconds), out JsonObject operation))
         {
-            operation["new_id"] = Guid.NewGuid().ToString("N");
+            operation = CreateNativeSplitOperation(operation, SnapSample(splitSeconds));
             await ExecuteNativeEditAsync(operation, "Split timeline clip");
             return;
         }
@@ -2784,6 +3236,23 @@ public sealed partial class TimelinePage : Page
             before,
             lane.IsLayer ? "timeline overlay split" : "timeline clip split",
             right.StableId);
+    }
+
+    private JsonObject CreateNativeSplitOperation(JsonObject operation, long position)
+    {
+        string trackId = operation["track_id"]?.GetValue<string>()
+            ?? throw new InvalidOperationException("Split track ID is required.");
+        string clipId = operation["clip_id"]?.GetValue<string>()
+            ?? throw new InvalidOperationException("Split clip ID is required.");
+        ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(RequiredProject().Timeline);
+        string[] rightTakeIds = editing.Takes.Where(take => take.ClipId == clipId)
+            .Select(_ => $"take-{Guid.NewGuid():N}").ToArray();
+        string[] rightCompIds = editing.CompRanges
+            .Where(comp => comp.ClipId == clipId && comp.EndSample > position)
+            .Select(_ => $"comp-{Guid.NewGuid():N}").ToArray();
+        return ProjectTimelineOperations.SplitEvent(
+            RequiredProject(), trackId, clipId, new TimelinePosition(position),
+            $"clip-{Guid.NewGuid():N}", rightTakeIds, rightCompIds).Operation;
     }
 
     private async void SplitClip_Click(object sender, RoutedEventArgs e) =>
@@ -2831,6 +3300,11 @@ public sealed partial class TimelinePage : Page
             operation.Remove("position");
             operation.Remove("snap");
             operation["new_id"] = Guid.NewGuid().ToString("N");
+            CanonicalProject project = RequiredProject();
+            ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(project.Timeline);
+            ProfessionalEditingOperations.AddDuplicateEditingIds(project, lane.StableId, operation,
+                editing.Takes.Where(take => take.ClipId == lane.StableId).Select(_ => Guid.NewGuid().ToString("N")).ToArray(),
+                editing.CompRanges.Where(comp => comp.ClipId == lane.StableId).Select(_ => Guid.NewGuid().ToString("N")).ToArray());
             await ExecuteNativeEditAsync(operation, "Duplicate timeline clip");
             return;
         }
@@ -2878,8 +3352,11 @@ public sealed partial class TimelinePage : Page
         {
             operation.Remove("position");
             operation.Remove("snap");
-            _selectedLaneId = null;
-            await ExecuteNativeEditAsync(operation, "Delete timeline clip");
+            await ExecuteNativeEditAsync(operation, "Delete timeline clip", beforeRefresh: () =>
+            {
+                _selectedLaneId = null;
+                _selectedCameraKeyframeIdentity = null;
+            });
             return;
         }
 
@@ -4572,6 +5049,7 @@ public sealed partial class TimelinePage : Page
     }
 
     private sealed record ClipMenuAction(string Action, string StableId);
+    private sealed record ProfessionalListItem(string Id, string Label, string Detail = "");
 }
 
 public sealed class CameraKeyframeListItem

@@ -742,6 +742,244 @@
                         </ScrollViewer>
                     </PivotItem>
 
+                    <PivotItem Header="DAW editing">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Padding="14" Spacing="12">
+                                <TextBlock Text="DAW automation and advanced editing"
+                                           Style="{StaticResource StudioSectionTitleTextStyle}" />
+                                <TextBlock x:Name="ProfessionalSelectionText"
+                                           Text="Select a native track or clip to begin."
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
+                                <InfoBar x:Name="AutomationPlaybackInfoBar"
+                                         AutomationProperties.AutomationId="Timeline.DawAutomation.PlaybackStatus"
+                                         IsOpen="True"
+                                         IsClosable="False"
+                                         Severity="Informational"
+                                         Title="Automation playback"
+                                         Message="Automation is persisted and preview-evaluable. Live device automation is unavailable in Windows AudioGraph playback." />
+                                <TextBlock x:Name="ProfessionalEditStatusText"
+                                           AutomationProperties.AutomationId="Timeline.DawAutomation.CommandStatus"
+                                           Text="No advanced edit has run."
+                                           TextWrapping="Wrap"
+                                           IsTextSelectionEnabled="True"
+                                           Style="{StaticResource StudioCaptionTextStyle}" />
+
+                                <Expander Header="Automation lanes" IsExpanded="True">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <ListView x:Name="AutomationLaneListView"
+                                                  AutomationProperties.AutomationId="Timeline.DawAutomation.Lanes"
+                                                  MaxHeight="150"
+                                                  SelectionMode="Single"
+                                                  SelectionChanged="AutomationLaneListView_SelectionChanged">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Padding="2" Spacing="2">
+                                                        <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                                                        <TextBlock Text="{Binding Detail}" TextTrimming="CharacterEllipsis"
+                                                                   Style="{StaticResource StudioCaptionTextStyle}" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
+                                        <TextBox x:Name="AutomationTargetTextBox" Header="Target"
+                                                 PlaceholderText="volume, pan, mute, send:track, plugin:id:param, render:param"
+                                                 AutomationProperties.AutomationId="Timeline.DawAutomation.Target"
+                                                 AutomationProperties.HelpText="Use volume, pan, mute, send followed by a track ID, plugin followed by plugin and parameter IDs, or render followed by a parameter." />
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <ComboBox x:Name="AutomationModeComboBox" Grid.Column="0" Header="Mode" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="Timeline.DawAutomation.Mode">
+                                                <ComboBoxItem Content="Read" Tag="read" />
+                                                <ComboBoxItem Content="Write" Tag="write" />
+                                                <ComboBoxItem Content="Touch" Tag="touch" />
+                                            </ComboBox>
+                                            <NumberBox x:Name="AutomationMinimumNumberBox" Grid.Column="1" Header="Minimum" Value="0"
+                                                       SpinButtonPlacementMode="Compact" AutomationProperties.AutomationId="Timeline.DawAutomation.Minimum" />
+                                            <NumberBox x:Name="AutomationMaximumNumberBox" Grid.Column="2" Header="Maximum" Value="1"
+                                                       SpinButtonPlacementMode="Compact" AutomationProperties.AutomationId="Timeline.DawAutomation.Maximum" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <Button x:Name="CreateAutomationLaneButton" Grid.Column="0" Content="Create lane"
+                                                    Click="CreateAutomationLane_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.CreateLane" />
+                                            <Button x:Name="ApplyAutomationModeButton" Grid.Column="1" Content="Apply mode"
+                                                    Click="ApplyAutomationMode_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.ApplyMode" />
+                                            <Button x:Name="DeleteAutomationLaneButton" Grid.Column="2" Content="Delete lane"
+                                                    Click="DeleteAutomationLane_Click" Style="{StaticResource StudioDangerButtonStyle}"
+                                                    AutomationProperties.AutomationId="Timeline.DawAutomation.DeleteLane" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Automation points" IsExpanded="True">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <ListView x:Name="AutomationPointListView"
+                                                  AutomationProperties.AutomationId="Timeline.DawAutomation.Points"
+                                                  MaxHeight="140" SelectionMode="Single"
+                                                  SelectionChanged="AutomationPointListView_SelectionChanged">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
+                                        <TextBox x:Name="AutomationPointSampleTextBox" Header="Exact project sample" Text="0"
+                                                 AutomationProperties.AutomationId="Timeline.DawAutomation.PointSample" />
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <NumberBox x:Name="AutomationPointValueNumberBox" Grid.Column="0" Header="Value" Value="0"
+                                                       AutomationProperties.AutomationId="Timeline.DawAutomation.PointValue" />
+                                            <ComboBox x:Name="AutomationCurveComboBox" Grid.Column="1" Header="Curve" SelectedIndex="1"
+                                                      AutomationProperties.AutomationId="Timeline.DawAutomation.PointCurve">
+                                                <ComboBoxItem Content="Step" Tag="step" />
+                                                <ComboBoxItem Content="Linear" Tag="linear" />
+                                                <ComboBoxItem Content="Smooth" Tag="smooth" />
+                                            </ComboBox>
+                                            <NumberBox x:Name="AutomationTensionNumberBox" Grid.Column="2" Header="Tension" Minimum="-1" Maximum="1" Value="0"
+                                                       SmallChange="0.1" SpinButtonPlacementMode="Compact"
+                                                       AutomationProperties.AutomationId="Timeline.DawAutomation.PointTension" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <Button x:Name="NewAutomationPointButton" Grid.Column="0" Content="New point"
+                                                    Click="NewAutomationPoint_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.NewPoint" />
+                                            <Button x:Name="UpsertAutomationPointButton" Grid.Column="1" Content="Add / update point"
+                                                    Click="UpsertAutomationPoint_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.UpsertPoint" />
+                                            <Button x:Name="DeleteAutomationPointButton" Grid.Column="2" Content="Delete point"
+                                                    Click="DeleteAutomationPoint_Click" Style="{StaticResource StudioDangerButtonStyle}"
+                                                    AutomationProperties.AutomationId="Timeline.DawAutomation.DeletePoint" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Clip fades and processing">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <TextBox x:Name="ProfessionalFadeInTextBox" Grid.Column="0" Header="Fade in samples" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.FadeIn" />
+                                            <TextBox x:Name="ProfessionalFadeOutTextBox" Grid.Column="1" Header="Fade out samples" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.FadeOut" />
+                                            <ComboBox x:Name="FadeCurveComboBox" Grid.Column="2" Header="Curve" SelectedIndex="1"
+                                                      AutomationProperties.AutomationId="Timeline.DawAutomation.FadeCurve">
+                                                <ComboBoxItem Content="Linear" Tag="linear" />
+                                                <ComboBoxItem Content="Equal power" Tag="equal_power" />
+                                                <ComboBoxItem Content="S-curve" Tag="s_curve" />
+                                            </ComboBox>
+                                        </Grid>
+                                        <Button x:Name="ApplyFadesButton" Content="Apply fades" HorizontalAlignment="Stretch"
+                                                Click="ApplyFades_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.ApplyFades" />
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <NumberBox x:Name="PlaybackRateNumberBox" Grid.Column="0" Header="Playback rate" Minimum="0.25" Maximum="4" Value="1"
+                                                       SmallChange="0.05" AutomationProperties.AutomationId="Timeline.DawAutomation.PlaybackRate" />
+                                            <NumberBox x:Name="StretchRatioNumberBox" Grid.Column="1" Header="Stretch ratio" Minimum="0.25" Maximum="4" Value="1"
+                                                       SmallChange="0.05" AutomationProperties.AutomationId="Timeline.DawAutomation.StretchRatio" />
+                                            <ComboBox x:Name="ProcessAlgorithmComboBox" Grid.Column="2" Header="Algorithm" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="Timeline.DawAutomation.ProcessAlgorithm">
+                                                <ComboBoxItem Content="Resample" Tag="resample" />
+                                                <ComboBoxItem Content="Phase vocoder" Tag="phase_vocoder" />
+                                            </ComboBox>
+                                        </Grid>
+                                        <Button x:Name="ApplyProcessButton" Content="Apply clip process" HorizontalAlignment="Stretch"
+                                                Click="ApplyProcess_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.ApplyProcess" />
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Takes and comping">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <ComboBox x:Name="TakeMediaAssetComboBox" Header="Project media asset" DisplayMemberPath="Label"
+                                                  AutomationProperties.AutomationId="Timeline.DawAutomation.TakeAsset" />
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <NumberBox x:Name="TakeSourceRateNumberBox" Grid.Column="0" Header="Source rate" Minimum="1" Value="48000"
+                                                       AutomationProperties.AutomationId="Timeline.DawAutomation.TakeSourceRate" />
+                                            <TextBox x:Name="TakeSourceStartTextBox" Grid.Column="1" Header="Source start" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.TakeSourceStart" />
+                                            <TextBox x:Name="TakeSourceEndTextBox" Grid.Column="2" Header="Source end (optional)"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.TakeSourceEnd" />
+                                        </Grid>
+                                        <Button x:Name="AddTakeButton" Content="Add take" HorizontalAlignment="Stretch"
+                                                Click="AddTake_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.AddTake" />
+                                        <ListView x:Name="TakeListView" MaxHeight="130" SelectionMode="Single"
+                                                  AutomationProperties.AutomationId="Timeline.DawAutomation.Takes"
+                                                  SelectionChanged="TakeListView_SelectionChanged">
+                                            <ListView.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ListView.ItemTemplate>
+                                        </ListView>
+                                        <Button x:Name="SelectTakeButton" Content="Make selected take active" HorizontalAlignment="Stretch"
+                                                Click="SelectTake_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.SelectTake" />
+                                        <ListView x:Name="CompRangeListView" MaxHeight="110" SelectionMode="Single"
+                                                  AutomationProperties.AutomationId="Timeline.DawAutomation.CompRanges"
+                                                  SelectionChanged="CompRangeListView_SelectionChanged">
+                                            <ListView.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ListView.ItemTemplate>
+                                        </ListView>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <TextBox x:Name="CompStartTextBox" Grid.Column="0" Header="Comp start sample" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.CompStart" />
+                                            <TextBox x:Name="CompEndTextBox" Grid.Column="1" Header="Comp end sample" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.CompEnd" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <Button x:Name="NewCompRangeButton" Grid.Column="0" Content="New comp" HorizontalAlignment="Stretch"
+                                                    Click="NewCompRange_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.NewCompRange" />
+                                            <Button x:Name="SetCompRangeButton" Grid.Column="1" Content="Add / update comp range" HorizontalAlignment="Stretch"
+                                                    Click="SetCompRange_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.SetCompRange" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Nudge, slip, slide, and range edits">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <TextBox x:Name="EditDeltaTextBox" Header="Signed delta samples" Text="0"
+                                                 AutomationProperties.AutomationId="Timeline.DawAutomation.EditDelta" />
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                            <Button x:Name="NudgeButton" Grid.Column="0" Content="Nudge" Click="Nudge_Click"
+                                                    AutomationProperties.AutomationId="Timeline.DawAutomation.Nudge" />
+                                            <Button x:Name="SlipButton" Grid.Column="1" Content="Slip" Click="Slip_Click"
+                                                    AutomationProperties.AutomationId="Timeline.DawAutomation.Slip" />
+                                            <Button x:Name="SlideButton" Grid.Column="2" Content="Slide" Click="Slide_Click"
+                                                    AutomationProperties.AutomationId="Timeline.DawAutomation.Slide" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <TextBox x:Name="RangeStartTextBox" Grid.Column="0" Header="Range start sample" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.RangeStart" />
+                                            <TextBox x:Name="RangeEndTextBox" Grid.Column="1" Header="Range end sample" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.RangeEnd" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <ComboBox x:Name="RangeActionComboBox" Grid.Column="0" Header="Action" SelectedIndex="0"
+                                                      AutomationProperties.AutomationId="Timeline.DawAutomation.RangeAction">
+                                                <ComboBoxItem Content="Delete" Tag="delete" />
+                                                <ComboBoxItem Content="Move" Tag="move" />
+                                                <ComboBoxItem Content="Duplicate" Tag="duplicate" />
+                                            </ComboBox>
+                                            <TextBox x:Name="RangeDeltaTextBox" Grid.Column="1" Header="Move / duplicate delta" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.RangeDelta" />
+                                        </Grid>
+                                        <Button x:Name="ApplyRangeEditButton" Content="Apply range edit" HorizontalAlignment="Stretch"
+                                                Click="ApplyRangeEdit_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.ApplyRangeEdit" />
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Header="Crossfade">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <ComboBox x:Name="CrossfadePartnerComboBox" Header="Overlapping clip" DisplayMemberPath="Label"
+                                                  AutomationProperties.AutomationId="Timeline.DawAutomation.CrossfadePartner"
+                                                  SelectionChanged="CrossfadePartnerComboBox_SelectionChanged" />
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <TextBox x:Name="CrossfadeStartTextBox" Grid.Column="0" Header="Start sample" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.CrossfadeStart" />
+                                            <TextBox x:Name="CrossfadeEndTextBox" Grid.Column="1" Header="End sample" Text="0"
+                                                     AutomationProperties.AutomationId="Timeline.DawAutomation.CrossfadeEnd" />
+                                        </Grid>
+                                        <ComboBox x:Name="CrossfadeCurveComboBox" Header="Curve" SelectedIndex="1"
+                                                  AutomationProperties.AutomationId="Timeline.DawAutomation.CrossfadeCurve">
+                                            <ComboBoxItem Content="Linear" Tag="linear" />
+                                            <ComboBoxItem Content="Equal power" Tag="equal_power" />
+                                            <ComboBoxItem Content="S-curve" Tag="s_curve" />
+                                        </ComboBox>
+                                        <Button x:Name="ApplyCrossfadeButton" Content="Add / update crossfade" HorizontalAlignment="Stretch"
+                                                Click="ApplyCrossfade_Click" AutomationProperties.AutomationId="Timeline.DawAutomation.ApplyCrossfade" />
+                                    </StackPanel>
+                                </Expander>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </PivotItem>
+
                     <PivotItem Header="Workflow">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel Padding="14" Spacing="14">

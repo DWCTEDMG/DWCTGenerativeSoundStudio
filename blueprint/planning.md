@@ -4,7 +4,7 @@
 
 This document consolidates the Professional DAW work completed in EDMG Studio, the architecture and safety decisions made during that work, and the planned implementation sequence through Phase 13.
 
-The authoritative roadmap is `C:\Scripts\EDMG_Studio_Master_Blueprint_AI_DAW_Timeline.md`. Its Professional DAW phases 0-13 are separate from the 14-item WinUI Native Experience roadmap. The Studio desktop UI under `studio/edmg-studio-winui/` remains the primary user surface; backend capabilities are not considered complete until users can drive them from the Studio UI where applicable.
+The Professional DAW roadmap is preserved here from the available records; the external master blueprint is an optional workstation audit reference and was absent during the 2026-09-15 audit. Its Professional DAW phases 0-13 are separate from the 14-item WinUI Native Experience roadmap. The Studio desktop UI under `studio/edmg-studio-winui/` remains the primary user surface; backend capabilities are not considered complete until users can drive them from the Studio UI where applicable.
 
 ## 2. Delivery Rules
 
@@ -30,7 +30,7 @@ Architecture changes must retain the behavior documented in:
 - `C:\Users\user\Downloads\ChatLog5.md`
 - `C:\Scripts\EDMG_Studio_Master_Blueprint_AI_DAW_Timeline.md`
 
-The two external records are workstation references and must not become build-time dependencies.
+The two external records are optional workstation audit references and were absent during the 2026-09-15 audit; they must never become build, test, launch, packaging, or runtime dependencies.
 
 Every relevant phase must preserve and test:
 
@@ -356,31 +356,56 @@ Validation for this slice: 389 Core tests passed; complete Debug WinUI solution 
 - Commit as a Phase 5-only change with the required Copilot co-author trailer.
 - Push to `origin/codex/Unified` and confirm local and remote hashes match before Phase 6 begins.
 
-## 8. Planned Remaining Phases
-
 ### Phase 6 - Automation and Advanced Editing
 
-Implement:
+**Status:** Accepted for the versioned editing contract, revision-safe backend operations, native Timeline controls, immutable off-thread automation snapshots, and mandatory Windows Release x64 CI scope. Live Windows audio callback consumption remains explicitly unavailable until a safe atomic engine hook and device qualification exist. This phase is complete when the acceptance commit containing this ledger is pushed to `origin/codex/Unified`.
 
-- automation lanes for volume, pan, mute, sends, plugin parameters, and selected render parameters
-- Read, Write, and Touch modes
-- efficient point and curve storage
-- fades and crossfades
-- track lanes and take versions
-- comping and active-version selection
-- non-destructive time stretch and playback-rate descriptors
-- nudge, ripple, slip, slide, and advanced range operations
-- logical action engine using the existing command/undo transaction architecture
+#### Implementation and acceptance ledger
 
-Plan:
+Delivered in the working tree:
 
-1. Extend canonical contracts with versioned automation, lane, fade, and process descriptors.
-2. Add backward-compatible migration and extension-preserving persistence.
-3. Implement operations in Core and backend command handlers, not page code-behind.
-4. Add timeline lane rendering and automation editing controls.
-5. Route audio automation to precomputed engine data without UI-thread access in processing.
-6. Add exact-time, undo/redo, overlap, comp, and migration tests.
-7. Commit and push Phase 6 before Director acceptance work.
+- versioned, extension-preserving automation, fades/crossfades, takes, comp ranges, and non-destructive process descriptors with exact int64 sample strings
+- revision-aware backend operations for automation and advanced editing through the existing command/undo transaction boundary
+- matching Core operations and a structured native Timeline surface for automation modes and points, fades/crossfades, takes/comping, and nudge/ripple/slip/slide/range actions
+- immutable automation lookup snapshots prepared away from the real-time path
+- a mandatory Windows Release x64 CI job that restores and builds the complete WinUI solution (including XAML) and runs `EdmgStudio.Core.Tests` with `--no-build`
+
+Capability boundary:
+
+- Live Windows audio callback consumption of automation is **unavailable**, not merely unverified. It requires a bounded, allocation-safe atomic snapshot handoff plus seek, loop, graph-swap, underrun, device-loss, and real-device tests before readiness can be claimed.
+- C# and Python tests exercise equivalent Phase 6 contract behavior, but there is no authoritative shared cross-language golden fixture in the current tree. This documentation/CI-only closure cannot create one without changing source/test files, so CI must not claim that coverage.
+- Frontend API schema generation currently covers Project Health only; it is not proof of generated contracts for Timeline, editing, automation, render, or provider APIs.
+- Raw JSON remains diagnostic material; normal Timeline use must communicate operation status, affected ranges, resulting revision, and undo availability through structured UI.
+- Final local acceptance on 2026-09-15 passed the frozen lock check, Ruff, all 88 focused backend editor tests, all 161 backend tests with 4 expected live-smoke skips, the complete WinUI Release x64 solution/XAML build, all 441 Core tests, and `git diff --check`. The aggregate runner passed 161 repository-scope tests with 4 skips and reported 888 backend-scope passes, 4 skips, and exactly 16 known `test_workspace_reactive_integration.py` failures caused by absent uploaded-audio fixtures returning HTTP 404; no additional failures occurred. The final narrow read-only review found no high-confidence defect.
+
+#### Whole-project audit recommendations
+
+These recommendations are consolidated here as Phase 6 closure context or explicitly deferred modernization work; they do not collapse Professional DAW Phases 0-13 into the separate post-13 track.
+
+1. **Native UX/design system backlog (post-13):** create shared `StatusCard`, `ModelPicker`, `ReadinessPanel`, `EmptyState`, `JobProgressCard`, and `PropertySection` controls; support Compact/Comfortable density, accessible focus/high-contrast behavior, and consistent spacing; add sticky Render commands, model/readiness cards and structured preflight, timeline interaction polish, and Direct3D preview comparison plus resolution/GPU diagnostics.
+2. **Direct3D qualification (post-13):** qualify the launched packaged and unpackaged app—not compilation alone—through navigation, per-monitor DPI/scaling, resize, fit/fill/fullscreen and exit, frame stepping/comparison, device loss and recreation, repeated page entry, and long-duration preview/render soak tests.
+3. **Architecture qualification:** only x64 is qualified. Do not build, publish, or claim x86 or ARM64 support until the native preview, backend payload, installer, launch, upgrade, and soak gates pass on that architecture.
+4. **Terminology:** call envelope/parameter playback **DAW parameter automation**. Reserve **AI workflow automation** for orchestration, agents, planning, queue, or render workflows so product UI, contracts, and documentation cannot confuse the two.
+5. **Electron hardening (post-13):** move production windows from `sandbox: false` to a qualified sandboxed design, disable production DevTools, retain context isolation and disabled Node integration, minimize/validate filesystem IPC with explicit path and capability allowlists, and regression-test the preload boundary before retiring compatibility behavior.
+6. **CI and release supply chain (post-13):** pin every GitHub Action to a reviewed full commit SHA; set explicit artifact retention; generate and retain attestations, SBOM/license output, checksums, signed-package provenance, test logs, and release evidence. Existing action tags are not yet full-SHA pinned and are intentionally not repinned as part of this narrow Phase 6 change.
+7. **Platform wording:** describe macOS only as unqualified or aspirational unless a macOS build, package, launch, rendering, and support matrix is actually maintained. Current Windows x64 and Linux claims must remain scoped to their tested surfaces.
+8. **Dependency and client governance (post-13):** consolidate root Python dependency authority around the pinned backend `pyproject.toml`/`uv.lock`; document and freeze compatibility-only root, legacy desktop, and Electron entrypoints except for security/parity work; retire an entrypoint only after project-open, render, migration, packaging, and rollback parity.
+9. **Generated-state hygiene:** `.test-master-editor-*` directories are generated backend test state and must be ignored or cleaned by the owning test fixture, never treated as source or release evidence. Cleanup implementation is outside this two-file ownership scope.
+10. **Python test authority:** `scripts\run_pytest_scopes.py`, executed through the frozen backend `uv` project, is the authoritative aggregate Python runner; focused suites are development evidence, not a substitute for the aggregate gate.
+11. **Configuration hygiene:** machine-specific root paths/configuration belong in ignored local overrides, environment variables, or checked-in templates with portable defaults; workstation paths must never become schema, build, test, or runtime requirements.
+12. **Contract authority:** expand mechanical schema/golden-fixture validation beyond Project Health. Until a shared C#/Python/TypeScript fixture exists, equivalent per-language tests are useful but are not cross-language fixture CI.
+
+Audit context: `studio\edmg-studio-winui\ChatLog3.md` and `ChatLog4.md` were available and reviewed. `C:\Users\user\Downloads\ChatLog5.md` and `C:\Scripts\EDMG_Studio_Master_Blueprint_AI_DAW_Timeline.md` were absent on this workstation. Their absence is context only and must never fail a build, test, launch, packaging, or runtime path.
+
+#### Phase 6 acceptance gate
+
+1. Build `studio\edmg-studio-winui\EdmgStudio.WinUI.slnx` in Release x64 and run the complete Core test project against that build.
+2. Run focused backend editor coverage, then the authoritative aggregate Python runner in the frozen environment.
+3. Verify schema migration/reload, extension preservation, stale revisions, locks, exact sample values, transaction atomicity, undo/redo, and native Timeline operation feedback.
+4. Keep live automation unavailable until the safe atomic engine hook and required runtime/device qualification are complete; acceptance may record that capability gate honestly rather than implying callback consumption.
+5. Review the complete diff and CI results, record exact evidence, commit only Phase 6 files, push, and confirm local/remote hashes before Phase 7 begins.
+
+## 8. Planned Remaining Phases
 
 ### Phase 7 - Director
 
@@ -481,6 +506,45 @@ Implement incrementally:
 
 Each subfeature must use canonical timeline, media, command, mixer, and provenance contracts. Unsupported interchange fields or audio layouts must be reported rather than silently discarded.
 
+## 8.1 Whole-Project Upgrade Roadmap
+
+The 2026-09-15 whole-project audit reviewed the WinUI client, Core contracts, Python backend, maintained React/Electron client, legacy compatibility shell, persistence, rendering, providers, audio boundaries, security, CI, packaging, and tests. Upgrades are assigned to existing phases where they are required for acceptance; cross-cutting modernization follows Phase 13 so it cannot destabilize the ordered DAW gates.
+
+### Phase-mapped upgrades
+
+| Priority | Upgrade | Delivery phase | Acceptance boundary |
+| --- | --- | --- | --- |
+| Critical | Complete automation and advanced editing vertically across schema, backend, Core, WinUI, persistence, undo/redo, and qualified audio consumption | Phase 6 | Full WinUI build, Core suite, backend editor suite, migration fixtures, exact-time reload/undo tests, and explicit live-audio capability status |
+| Critical | Add mandatory WinUI build, Core tests, and XAML compilation to CI | Phase 6 | Changes under `studio/edmg-studio-winui/` trigger a required Windows validation job; cross-language fixture CI remains open |
+| Critical | Establish authoritative versioned schemas or mechanically validated golden fixtures across C#, Python, and TypeScript | Phases 6-7 | Exact sample strings, enum values, bounds, and extension preservation agree in all maintained runtimes; current API generation covers Project Health only |
+| High | Add monotonic, atomic, backup-aware project and SQLite migration ledgers | Phases 6-7 | Every supported prior schema migrates repeatably; future or unsupported versions fail non-destructively |
+| High | Persist Director/Reactive Lab handoff revisions and protect reviewed camera/motion keyframes from re-analysis | Phases 7 and 10 | Restart, stale-revision, unavailable-model, merge, and explicit replacement tests pass |
+| High | Add request, project, job, provider, renderer, attempt, and artifact correlation with redacted structured diagnostics | Phases 7-11 | Support bundles and UI diagnostics contain useful correlation without credentials or private media |
+| High | Promote render presets to versioned project render profiles with immutable job snapshots | Phases 8-9 | Shared and renderer-specific options round-trip and unavailable settings fail visibly |
+| High | Run one provider/renderer conformance suite for capability probes, queue transitions, cancellation, retries, costs, artifacts, and explicit insertion | Phases 8-11 | Hunyuan, LTX, cloud providers, and local providers satisfy the same normalized lifecycle contract |
+| High | Persist read, reviewed, approved, rejected, evidence, and retry state instead of using shell-only badge state | Phase 10 | Review state survives restart and opening the page does not mark unseen work reviewed |
+| High | Require OS-protected credential storage for production and migrate the base64 file fallback behind explicit development-only consent | Phase 11 | Secret redaction, migration, remote binding, authentication, and CORS tests pass |
+| High | Use one stable command registry for UI, keyboard, MIDI, Quick Controls, and accessibility actions | Phase 12 | No remote or shortcut path mutates project state outside the revision-safe command envelope |
+| High | Add compatibility reports and golden fixtures for reconform, interchange, surround, and alignment | Phase 13 | Unsupported fields and layouts are reported rather than silently discarded |
+
+### Post-Phase-13 WinUI Native Experience and modernization track
+
+1. Replace synchronous application construction with an asynchronous, cancelable bootstrap that paints a lightweight accessible shell before credentials and backend initialization.
+2. Extract `TimelinePage`, `WorkspacePage`, `RenderPage`, `ReviewPage`, and `StudioApiClient` workflow logic into testable coordinators and application services while preserving XAML names, routes, and compatibility façades.
+3. Consolidate shell/page polling into one lifecycle-aware observable activity service with bounded cancellation, backoff, immutable snapshots, and no duplicate endpoint polling.
+4. Add packaged and unpackaged WinUI UI automation covering launch, navigation, keyboard-only use, screen readers, high contrast, 200% scaling, focus restoration, offline startup, Director-to-Reactive handoff, timeline recovery, render preflight, and review decisions.
+5. Establish deterministic signed MSIX production packaging, clean-install, upgrade, repair, rollback, uninstall, backend payload integrity, and supported-architecture qualification. Do not publish x86 or ARM64 artifacts until native preview and backend payloads pass the same gates as x64.
+6. Decompose the Python composition root and large clients one bounded area at a time behind characterization-tested façades; do not perform a big-bang rewrite.
+7. Consolidate supported product entrypoints and machine-specific configuration. Freeze compatibility-only shells except for security fixes, and retire them only after project-open, render, upgrade, and rollback parity tests pass.
+8. Add local, opt-in OpenTelemetry-compatible tracing, support bundles, long-duration audio/render soak tests, failure injection, dependency governance, SBOM/license reporting, and release provenance.
+
+### Audit controls
+
+- Existing working paths remain until replacements pass equivalent source, packaged, migration, and rollback tests.
+- Native VST3, realtime mixer automation, model, renderer, architecture, and installer readiness remain independently capability-gated.
+- Machine-specific paths move to templates or runtime configuration and never become schema or build dependencies.
+- The maintained WinUI client is the primary Windows surface; the maintained React/Electron client remains the Linux and compatibility surface until an explicit parity decision is validated.
+
 ## 9. Validation Strategy
 
 ### WinUI
@@ -488,8 +552,8 @@ Each subfeature must use canonical timeline, media, command, mixer, and provenan
 From the repository root:
 
 ```powershell
-dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.slnx --no-restore --nologo
-dotnet test studio\edmg-studio-winui\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj --no-build --no-restore --nologo
+dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo
+dotnet test studio\edmg-studio-winui\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj --no-build --no-restore --configuration Release -p:PlatformTarget=x64 --nologo
 ```
 
 The complete solution build is mandatory because Core tests do not compile all WinUI XAML pages.

@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "studio/edmg-studio/**"
+      - "studio/edmg-studio-winui/**"
+      - "blueprint/planning.md"
       - ".python-version"
       - "deployment/**"
       - "scripts/run_pytest_scopes.py"
@@ -14,6 +16,8 @@ on:
   pull_request:
     paths:
       - "studio/edmg-studio/**"
+      - "studio/edmg-studio-winui/**"
+      - "blueprint/planning.md"
       - ".python-version"
       - "deployment/**"
       - "scripts/run_pytest_scopes.py"
@@ -240,3 +244,31 @@ jobs:
           test -n "${app_image}"
           test -x "${app_image}"
           file "${app_image}"
+  winui:
+    name: WinUI Release x64
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: studio/edmg-studio-winui
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: studio/edmg-studio-winui/global.json
+
+      - name: Restore WinUI solution
+        run: dotnet restore .\EdmgStudio.WinUI.slnx -p:Configuration=Release -p:PlatformTarget=x64
+
+      - name: Build WinUI solution and XAML
+        run: dotnet build .\EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo
+
+      - name: Run Core tests
+        run: >-
+          dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj
+          --no-build --no-restore --configuration Release -p:PlatformTarget=x64 --nologo

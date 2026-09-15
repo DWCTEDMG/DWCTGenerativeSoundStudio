@@ -62,7 +62,9 @@ def create_editor_router(
         return {
             "ok": True,
             "revision": project.revision,
-            "timeline": normalize_timeline(project.meta.get("timeline") or {}),
+            "timeline": normalize_timeline(
+                project.meta.get("timeline") or {}, project_media_pool=project.meta.get("media_pool")
+            ),
             "history": history_state(project.meta),
         }
 
@@ -179,7 +181,9 @@ def create_editor_router(
             if receipt != fingerprint:
                 raise HTTPException(409, {"code": "EDITOR_OPERATION_CONFLICT", "message": "Operation ID already used for different content"})
             record_revision(project_id, project.revision)
-            timeline = normalize_timeline(project.meta.get("timeline") or {})
+            timeline = normalize_timeline(
+                project.meta.get("timeline") or {}, project_media_pool=project.meta.get("media_pool")
+            )
             inserted_track = next(
                 (
                     track
@@ -200,7 +204,9 @@ def create_editor_router(
         project = current_project()
         if project is None:
             raise HTTPException(404, "Project not found")
-        timeline = normalize_timeline(project.meta.get("timeline") or {})
+        timeline = normalize_timeline(
+            project.meta.get("timeline") or {}, project_media_pool=project.meta.get("media_pool")
+        )
         video_tracks = [
             track
             for track in timeline["tracks"]
