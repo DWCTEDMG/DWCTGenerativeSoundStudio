@@ -14,6 +14,7 @@ from .deforum_prompt_timeline import normalize_prompt_map
 @dataclass(frozen=True)
 class UnifiedDeforumRenderContext:
     prompts: tuple[tuple[int, str], ...] = ()
+    prompt_source: str = "none"
     negative_prompts: tuple[tuple[int, str], ...] = ()
     motion: DeforumMotionScheduleBundle = field(default_factory=DeforumMotionScheduleBundle)
 
@@ -559,6 +560,17 @@ def build_deforum_render_context(
     negative_override = _request_override_prompts(overrides, "deforum_negative_prompts")
 
     prompt_pairs = prompt_override or timeline_prompts or variant_prompts or scene_prompts
+    prompt_source = (
+        "request"
+        if prompt_override
+        else "timeline"
+        if timeline_prompts
+        else "variant"
+        if variant_prompts
+        else "scene"
+        if scene_prompts
+        else "none"
+    )
     negative_pairs = negative_override or timeline_negative or variant_negative or scene_negative
     if not negative_pairs and default_negative_prompt:
         negative_pairs = [(0, default_negative_prompt)]
@@ -572,6 +584,7 @@ def build_deforum_render_context(
 
     return UnifiedDeforumRenderContext(
         prompts=tuple(prompt_pairs),
+        prompt_source=prompt_source,
         negative_prompts=tuple(negative_pairs),
         motion=motion,
     )

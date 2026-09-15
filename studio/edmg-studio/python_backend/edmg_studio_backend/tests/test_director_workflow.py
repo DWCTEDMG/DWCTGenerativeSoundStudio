@@ -54,6 +54,7 @@ def test_prepare_is_automatic_draft_only_and_uses_project_clock(state):
 def test_review_apply_preserves_user_content_alternates_and_undo(state):
     store, project = state
     project.meta["last_plan"] = {"variants": [local_plan(project)["variants"][0], {"name": "alternate", "scenes": []}]}
+    project.meta["last_plan"]["variants"][0]["scenes"][0]["render_prompt"] = "Stale derived prompt"
     before = deepcopy(project.meta["timeline"])
     draft = prepare_workflow(project, local_plan, resulting_revision=project.revision + 1)
     document = draft.document.model_copy(deep=True)
@@ -68,6 +69,14 @@ def test_review_apply_preserves_user_content_alternates_and_undo(state):
     assert loaded.meta["last_plan"]["variants"][1]["name"] == "alternate"
     assert loaded.meta["last_plan"]["variants"][0]["scenes"][0]["extension"] == {"kept": True}
     assert "walks toward the river" in loaded.meta["last_plan"]["variants"][0]["scenes"][0]["prompt"]
+    reviewed_scene = loaded.meta["last_plan"]["variants"][0]["scenes"][0]
+    assert "render_prompt" not in reviewed_scene
+    prompt_packages = reviewed_scene["director_prompt_packages"]
+    assert prompt_packages["hunyuan_video15"]["prompt"] != prompt_packages["ltx_25"]["prompt"]
+    assert prompt_packages["ltx_25"]["engine"] == "ltx_25"
+    assert prompt_packages["hunyuan_video15"]["source_hash"] == prompt_packages["ltx_25"]["source_hash"]
+    assert prompt_packages["ltx_25"]["start_sample"] == "0"
+    assert prompt_packages["ltx_25"]["end_sample"] == "176400"
     execute(loaded.meta, {"operation_id": "undo-apply", "action": "undo"})
     assert loaded.meta["timeline"] == before
 

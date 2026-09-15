@@ -20,6 +20,162 @@ from edmg_studio_backend.services.deforum_normalize import (
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 
 
+def test_ltx_uses_compiled_director_prompt_without_overriding_user_edits() -> None:
+    scene = {
+        "prompt": "Hunyuan source prompt",
+        "director_source_prompt": "Hunyuan source prompt",
+        "start_s": 0.0,
+        "end_s": 2.0,
+        "action": "walks toward river",
+        "camera": "slow pan",
+        "setting": "forest",
+        "director_scene": {
+            "scene_id": "scene-1",
+            "start_sample": "0",
+            "end_sample": "96000",
+            "intent": "Hunyuan source prompt",
+        },
+        "director_prompt_packages": {
+            "hunyuan_video15": {
+                "engine": "hunyuan_video15",
+                "prompt": "Hunyuan source prompt",
+                "start_sample": "0",
+                "end_sample": "96000",
+            },
+            "ltx_25": {
+                "engine": "ltx_25",
+                "prompt": "LTX chronological action prompt",
+                "start_sample": "0",
+                "end_sample": "96000",
+            },
+        },
+    }
+    scene_hash = internal_video.variant_prompt_source_hash(scene)
+    for package in scene["director_prompt_packages"].values():
+        package["scene_source_hash"] = scene_hash
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - renderer prompt contract
+        scene, prompt="Hunyuan source prompt", engine="ltx_25", allow_director_package=True
+    ) == "LTX chronological action prompt"
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - renderer prompt contract
+        scene, prompt="User-authored render prompt", engine="ltx_25"
+    ) == "User-authored render prompt"
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - renderer prompt contract
+        scene, prompt="Hunyuan source prompt", engine="hunyuan_video15", allow_director_package=True
+    ) == "Hunyuan source prompt"
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - renderer prompt contract
+        {"prompt": "Legacy prompt"}, prompt="Legacy prompt", engine="ltx_25"
+    ) == "Legacy prompt"
+
+    context = internal_video._build_unified_deforum_context(  # noqa: SLF001 - renderer prompt contract
+        scenes=[scene],
+        timeline=None,
+        variant=None,
+        settings=InternalVideoSettings(video_model_engine="ltx_25"),
+        fps=24,
+    )
+    scheduled = internal_video.resolve_prompt_frame(context.prompts, 0, default="")
+    assert scheduled != "Hunyuan source prompt"
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - renderer prompt contract
+        scene,
+        prompt=scheduled,
+        engine="ltx_25",
+        allow_director_package=context.prompt_source == "scene",
+    ) == "LTX chronological action prompt"
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - renderer prompt contract
+        scene, prompt="Hunyuan source prompt", engine="ltx_25", allow_director_package=False
+    ) == "Hunyuan source prompt"
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - renderer prompt contract
+        scene, prompt="Timeline override", engine="ltx_25", allow_director_package=False
+    ) == "Timeline override"
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - renderer prompt contract
+        {**scene, "prompt": "Edited scene prompt"},
+        prompt="Edited scene prompt",
+        engine="ltx_25",
+        allow_director_package=True,
+    ) == "Edited scene prompt"
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - structured-edit contract
+        {**scene, "action": "User-edited action"},
+        prompt="User-edited action",
+        engine="ltx_25",
+        allow_director_package=True,
+    ) == "User-edited action"
+    aliased_edit = {**scene, "storyboard": {"camera_hint": "User-edited orbit"}}
+    assert internal_video._video_model_prompt_for_engine(  # noqa: SLF001 - structured-edit contract
+        aliased_edit,
+        prompt="User-edited orbit",
+        engine="ltx_25",
+        allow_director_package=True,
+    ) == "User-edited orbit"
+
+    storyboard_settings = InternalVideoSettings(
+        motion_strategy="storyboard_full_motion",
+        video_model_engine="ltx_25",
+        fps_output=24,
+    )
+    scene_plan = internal_video.describe_storyboard_motion_plan(
+        scenes=[scene],
+        timeline=None,
+        settings=storyboard_settings,
+        duration_s=2.0,
+    )
+    assert scene_plan is not None
+    assert scene_plan["shots"][0]["prompt"] == "LTX chronological action prompt"
+
+    split_end_s = 7.0 + (1.0 / 44_100.0)
+    split_scene = {**scene, "end_s": split_end_s}
+    split_scene["director_prompt_packages"] = {
+        engine: {**package}
+        for engine, package in scene["director_prompt_packages"].items()
+    }
+    split_scene_hash = internal_video.variant_prompt_source_hash(split_scene)
+    for package in split_scene["director_prompt_packages"].values():
+        package["scene_source_hash"] = split_scene_hash
+    split_plan = internal_video.describe_storyboard_motion_plan(
+        scenes=[split_scene],
+        timeline=None,
+        settings=storyboard_settings,
+        duration_s=split_end_s,
+    )
+    assert split_plan is not None
+    assert split_plan["shot_count"] == 2
+    assert all(shot["prompt"] == "LTX chronological action prompt" for shot in split_plan["shots"])
+
+    timeline = {
+        "tracks": [
+            {
+                "type": "prompt",
+                "clips": [{"start_s": 0, "data": {"prompt": "Hunyuan source prompt"}}],
+            }
+        ]
+    }
+    timeline_context = internal_video._build_unified_deforum_context(  # noqa: SLF001 - provenance contract
+        scenes=[scene],
+        timeline=timeline,
+        variant=None,
+        settings=storyboard_settings,
+        fps=24,
+    )
+    assert timeline_context.prompt_source == "timeline"
+    timeline_plan = internal_video.describe_storyboard_motion_plan(
+        scenes=[scene],
+        timeline=timeline,
+        settings=storyboard_settings,
+        duration_s=2.0,
+    )
+    assert timeline_plan is not None
+    assert timeline_plan["shots"][0]["prompt"] == "Hunyuan source prompt"
+
+    long_prompt = " ".join(f"word-{index}" for index in range(120))
+    refined = internal_video._refine_video_model_prompt(  # noqa: SLF001 - renderer prompt contract
+        long_prompt,
+        score_info={"motion_score": 4},
+        settings=InternalVideoSettings(video_model_engine="ltx_25"),
+        scene=scene,
+        engine="ltx_25",
+    )
+    assert refined == long_prompt
+
+
 def test_variant_save_reload_and_reorder_preserve_authored_contract(tmp_path, monkeypatch):
     from edmg_studio_backend.store.projects import ProjectStore
 

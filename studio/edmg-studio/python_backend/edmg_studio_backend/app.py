@@ -10325,6 +10325,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         video_model_preflight = describe_internal_video_model_preflight(
             scenes=scenes,
             timeline=(proj.meta.get("timeline") if isinstance(proj.meta.get("timeline"), dict) else None),
+            variant=variant,
             settings=settings_obj,
             duration_s=duration_s,
             total_frames=total_frames,

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..domain.director_scene import variant_prompt_source_hash
 from ..errors import UserFacingError
 from .deforum_motion import DeforumMotionScheduleBundle, evaluate_motion_state
 from .deforum_normalize import (
@@ -3272,6 +3273,12 @@ def render_internal_video_variant(
                 deforum_context=deforum_context,
                 fps=fps_schedule,
             ) or render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
+            prompt = _video_model_prompt_for_engine(
+                scene,
+                prompt=prompt,
+                engine=engine,
+                allow_director_package=deforum_context.prompt_source == "scene",
+            )
             negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
             start_anchor_img: Image.Image | None = None
             end_anchor_img: Image.Image | None = None
@@ -3344,6 +3351,7 @@ def render_internal_video_variant(
                 score_info=score_info,
                 settings=settings,
                 scene=scene,
+                engine=engine,
             )
             motion_bucket_id = _video_model_motion_bucket_for_score(settings, score_info)
             seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt_for_model, motion_bucket_id, anchor_mode, work_tag)
@@ -4587,8 +4595,8 @@ def _storyboard_scene_windows(
             shot["_storyboard_source_scene_index"] = scene_index
             shot["_storyboard_shot_index"] = shot_index
             shot["_storyboard_shot_count"] = shot_count
-            shot["_storyboard_original_start_s"] = round(float(start_s), 3)
-            shot["_storyboard_original_end_s"] = round(float(end_s), 3)
+            shot["_storyboard_original_start_s"] = float(start_s)
+            shot["_storyboard_original_end_s"] = float(end_s)
             shot["_storyboard_motion_strategy"] = strategy
             shot["_storyboard_transition"] = (
                 "technical_continue"
@@ -4700,6 +4708,7 @@ def describe_storyboard_motion_plan(
     timeline: dict[str, Any] | None,
     settings: InternalVideoSettings,
     duration_s: float,
+    variant: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     strategy = normalize_internal_motion_strategy(settings.motion_strategy)
     if strategy != "storyboard_full_motion":
@@ -4712,6 +4721,14 @@ def describe_storyboard_motion_plan(
     )
 
     windows = _storyboard_scene_windows(scenes=scenes, duration_s=duration_s, settings=settings)
+    fps_schedule = max(1, int(settings.fps_output))
+    deforum_context = _build_unified_deforum_context(
+        scenes=scenes,
+        timeline=timeline,
+        variant=variant,
+        settings=settings,
+        fps=fps_schedule,
+    )
     shots: list[dict[str, Any]] = []
     for shot in windows:
         start_s = float(shot.get("start_s") or 0.0)
@@ -4724,13 +4741,28 @@ def describe_storyboard_motion_plan(
             duration_s=duration_s,
             settings=settings,
         )
-        prompt = render_prompt_from_scene(shot, fallback=DEFAULT_RENDER_PROMPT)
+        schedule_frame = int(round(start_s * float(fps_schedule)))
+        prompt = _prompt_text_for_frame(
+            frame_idx=schedule_frame,
+            scenes=scenes,
+            timeline=timeline,
+            deforum_context=deforum_context,
+            fps=fps_schedule,
+        ) or render_prompt_from_scene(shot, fallback=DEFAULT_RENDER_PROMPT)
+        engine = str(settings.video_model_engine or "").strip().lower()
+        prompt = _video_model_prompt_for_engine(
+            shot,
+            prompt=prompt,
+            engine=engine,
+            allow_director_package=deforum_context.prompt_source == "scene",
+        )
         intent = _motion_intent_for_score(score_info.get("motion_score"))
         refined_prompt = _refine_video_model_prompt(
             prompt,
             score_info=score_info,
             settings=settings,
             scene=shot,
+            engine=engine,
         )
         source_scene_index = int(shot.get("_storyboard_source_scene_index", 0) or 0)
         shot_index = int(shot.get("_storyboard_shot_index", 0) or 0)
@@ -4842,14 +4874,39 @@ def _video_model_motion_bucket_for_score(settings: InternalVideoSettings, score_
     return max(1, min(255, int(round((mapped * 0.75) + (base_bucket * 0.25)))))
 
 
+def _video_model_prompt_for_engine(
+    scene: dict[str, Any],
+    *,
+    prompt: str,
+    engine: str,
+    allow_director_package: bool = False,
+) -> str:
+    current = str(prompt or "").strip()
+    source = str(scene.get("director_source_prompt") or "").strip()
+    authored = str(scene.get("render_prompt") or scene.get("prompt") or "").strip()
+    if not allow_director_package or not source or authored != source:
+        return current
+    packages = scene.get("director_prompt_packages")
+    package = packages.get(engine) if isinstance(packages, dict) else None
+    if not isinstance(package, dict) or package.get("engine") != engine:
+        return current
+    if variant_prompt_source_hash(scene) != package.get("scene_source_hash"):
+        return current
+    compiled = str(package.get("prompt") or "").strip()
+    return compiled or current
+
+
 def _refine_video_model_prompt(
     prompt: str,
     *,
     score_info: dict[str, Any],
     settings: InternalVideoSettings,
     scene: dict[str, Any] | None = None,
+    engine: str | None = None,
 ) -> str:
     fallback = prompt or DEFAULT_RENDER_PROMPT
+    if str(engine or settings.video_model_engine or "").strip().lower() == "ltx_25":
+        return fallback.strip()
     if not bool(settings.video_model_prompt_refine):
         return limit_prompt_words(
             fallback,
@@ -4916,6 +4973,7 @@ def describe_internal_video_model_preflight(
     duration_s: float,
     total_frames: int,
     hardware: dict[str, Any] | None = None,
+    variant: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     hw = hardware or {}
     engine = str(settings.video_model_engine or "svd").strip().lower()
@@ -5082,6 +5140,7 @@ def describe_internal_video_model_preflight(
     storyboard_motion_plan = describe_storyboard_motion_plan(
         scenes=scenes,
         timeline=timeline,
+        variant=variant,
         settings=settings,
         duration_s=duration_s,
     )

@@ -485,6 +485,23 @@ Existing LTX 2.5 integration will be audited and completed for:
 - media-pool registration and timeline insertion
 - clear fallback behavior that does not conceal failures
 
+Phase 9 accepted implementation (2026-09-15):
+
+- LTX-2.5 runs through its isolated CUDA-only `ltx-pipelines==1.3.0` environment and the exact `Lightricks/LTX-2.5` revision recorded by the managed package manifest. Installation validates every required component by size and SHA-256, requires explicit license acceptance, and never treats a partial, corrupt, changed, cloud-only, or merely downloaded package as runtime-ready.
+- Runtime qualification is separate from package validation and requires a real nine-frame generation smoke test. Its receipt fingerprints validated package state, dependency/runtime identity, and hardware, so replacement, corruption, dependency changes, or hardware changes invalidate stale readiness evidence.
+- Native Models controls configure and probe the isolated runtime, install, validate, smoke-test, and safely uninstall the package. Uninstall is idempotent and removes only the package-owned directory (including its runtime receipt), preserving sibling model directories.
+- Native Render controls expose explicit LTX selection, source-image/T2V operation, CPU offload, FP8, queue progress, cancellation, artifacts, and user-approved timeline insertion. Explicit LTX selection fails visibly when qualification or execution fails and does not silently substitute another renderer.
+- The renderer normalizes inference dimensions to multiples of 64 and frame counts to `8*k+1`, then restores the exact requested dimensions and trims to the requested frame count. Conditioning images are resized to working dimensions, child-process cancellation and timeouts terminate the runtime tree, bounded diagnostics are surfaced, and temporary inputs and outputs are removed in `finally`.
+- Reviewed Director scenes now persist versioned Hunyuan, LTX, and external prompt packages with a shared source hash, exact sample range, compiler version, constraints, and provenance. Rendering selects the package for the explicitly chosen engine only while the scene still carries its Director-generated source prompt; user-authored prompt changes and legacy plans without packages remain authoritative.
+- The LTX package is generated for its Gemma text encoder and is no longer rewritten through the legacy CLIP 77-token refinement path. Storyboard subdivision preserves the package metadata and both preflight and execution select the same engine-specific prompt.
+- Compatibility qualification and automatic tier selection are intentionally different gates: explicit LTX compatibility starts at CUDA with 5 GB VRAM and 36 GB system RAM plus a passing smoke test, while automatic High/Ultra selection remains restricted to qualified systems with at least 24 GB VRAM.
+- LTX jobs use the shared durable queue lease, attempt fencing, artifact manifest, project video history, media-pool normalization, and revision-checked idempotent timeline insertion established for the internal renderer path.
+
+Acceptance evidence:
+
+- Focused Director, prompt, LTX runtime, package lifecycle, renderer, cancellation, normalization, and storyboard tests pass in the pinned Python 3.12 uv environment; focused changed files pass Ruff, and the edited legacy renderer file introduces no new Ruff findings.
+- Native Core tests pass, the complete WinUI Release x64 solution/XAML build succeeds, and `git diff --check` reports no whitespace errors.
+
 ### Phase 10 - Director Review
 
 Existing Director Review work will be audited and completed for:

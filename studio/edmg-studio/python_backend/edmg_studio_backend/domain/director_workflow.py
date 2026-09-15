@@ -11,7 +11,13 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from .director_scene import DirectorDocument, ExtensibleModel, SceneSpec, compile_scene
+from .director_scene import (
+    DirectorDocument,
+    ExtensibleModel,
+    SceneSpec,
+    compile_scene,
+    variant_prompt_source_hash,
+)
 from .editor_commands import digest, execute
 from .planner_schedule import apply_schedule, compile_schedule
 from .project_time import ProjectClock, int64
@@ -191,16 +197,25 @@ def variant_from_document(document: DirectorDocument, source_variant: dict, cloc
             original.setdefault("id", scene.scene_id)
             scenes.append(original)
             continue
+        original.pop("render_prompt", None)
+        prompt_packages = {
+            engine: compile_scene(scene, document.story_bible, engine)
+            for engine in ("hunyuan_video15", "ltx_25", "external")
+        }
         original.update({
             "id": scene.scene_id, "start_s": float(clock.seconds(scene.start_sample)),
             "end_s": float(clock.seconds(scene.end_sample)),
-            "prompt": compile_scene(scene, document.story_bible, "hunyuan_video15")["prompt"],
+            "prompt": prompt_packages["hunyuan_video15"]["prompt"],
             "action": "; ".join(scene.actions), "camera": scene.camera.movement,
             "setting": scene.environment.location, "shot_type": scene.camera.shot_type,
             "environment_motion": "; ".join(scene.environment.secondary_motion),
         })
+        scene_source_hash = variant_prompt_source_hash(original)
+        for package in prompt_packages.values():
+            package["scene_source_hash"] = scene_source_hash
         original["director_scene"] = scene.model_dump(mode="json")
         original["director_source_prompt"] = original["prompt"]
+        original["director_prompt_packages"] = prompt_packages
         scenes.append(original)
     return {**deepcopy(source_variant), "name": "Reviewed audio direction", "source": "director_workflow",
             "scenes": scenes}

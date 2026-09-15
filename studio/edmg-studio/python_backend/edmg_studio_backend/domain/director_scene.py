@@ -87,6 +87,18 @@ class DirectorDocument(ExtensibleModel):
         return self
 
 
+def variant_prompt_source_hash(scene: dict) -> str:
+    source = {
+        key: value
+        for key, value in scene.items()
+        if key not in {"director_scene", "director_source_prompt", "director_prompt_packages"}
+        and not key.startswith("_storyboard_")
+    }
+    source["start_s"] = float(scene.get("_storyboard_original_start_s", scene.get("start_s", 0.0)))
+    source["end_s"] = float(scene.get("_storyboard_original_end_s", scene.get("end_s", 0.0)))
+    return hashlib.sha256(json.dumps(source, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 def compile_scene(scene: SceneSpec, bible: StoryBible, engine: str) -> dict:
     if engine not in {"hunyuan_video15", "ltx_25", "external"}:
         raise ValueError("Unsupported prompt compiler")
