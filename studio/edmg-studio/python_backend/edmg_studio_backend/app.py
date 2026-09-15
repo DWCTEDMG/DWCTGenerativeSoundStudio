@@ -28,7 +28,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi import Request
 
 try:
@@ -176,6 +176,8 @@ from .integrations import azure as azure_integration
 from .integrations import hf_bucket as hf_bucket_integration
 from .integrations import lightning as lightning_integration
 from .utils.path import safe_join
+from .correlation import CorrelationMiddleware, correlation_enabled
+from .services.support_bundle import DiagnosticRoot, build_support_bundle
 from .errors import UserFacingError, hint_from_exception
 from .security import BackendSecurityMiddleware, BackendSecuritySettings
 from .services.model_manager import ModelManager
@@ -427,6 +429,7 @@ app.include_router(
 )
 
 app.add_middleware(BackendSecurityMiddleware, settings=backend_security)
+app.add_middleware(CorrelationMiddleware, enabled=correlation_enabled())
 
 app.add_middleware(
     CORSMiddleware,
@@ -435,7 +438,14 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Accept-Ranges", "Content-Length", "Content-Range"],
+    expose_headers=[
+        "Accept-Ranges",
+        "Content-Length",
+        "Content-Range",
+        "Traceparent",
+        "Tracestate",
+        "X-Request-ID",
+    ],
 )
 
 
@@ -457,6 +467,7 @@ async def _http_exception(_req: Request, exc: HTTPException):
 async def _unhandled_exception(_req: Request, exc: Exception):
     logger.error(
         "Unhandled backend request error",
+        extra={"correlation": current_correlation()},
         exc_info=(type(exc), exc, exc.__traceback__),
     )
     return JSONResponse(
@@ -3124,6 +3135,8 @@ def _secrets_status_payload():
         "has_openai_compat_api_key": st.has_openai_compat_api_key,
         "has_stability_api_key": st.has_stability_api_key,
         "has_nvidia_api_key": st.has_nvidia_api_key,
+        "migration_status": st.migration_status,
+        "legacy_file_present": st.legacy_file_present,
         "note": st.note,
     }
 
@@ -6521,6 +6534,23 @@ app.include_router(create_system_router(
     readiness_report=_system_readiness_report,
     baseline_metrics=_baseline_metrics_report,
 ))
+
+
+@app.post("/v1/support/bundle")
+def create_support_bundle() -> Response:
+    payload = build_support_bundle(
+        (
+            DiagnosticRoot("logs", settings.logs_dir),
+            DiagnosticRoot("diagnostics", settings.data_dir / "diagnostics"),
+        )
+    )
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="edmg-studio-support.zip"'},
+    )
+
+
 app.include_router(
     create_project_router(
         get_store=lambda: store,

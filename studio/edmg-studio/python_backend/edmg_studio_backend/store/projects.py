@@ -214,6 +214,41 @@ class ProjectStore:
         shutil.copy2(project_path, backup)
         return backup
 
+    def _with_migration_ledger(
+        self,
+        payload: dict[str, Any],
+        *,
+        from_version: int,
+        applied_versions: list[int],
+        backup: Path,
+    ) -> dict[str, Any]:
+        result = deepcopy(payload)
+        ledger = result.get("migration_ledger")
+        if ledger is None:
+            ledger = {"format_version": 1, "migrations": []}
+        if not isinstance(ledger, dict) or not isinstance(ledger.get("migrations"), list):
+            raise ValueError("Invalid project migration ledger")
+        entries = list(ledger["migrations"])
+        recorded = {int(entry.get("to_version", -1)) for entry in entries if isinstance(entry, dict)}
+        previous = from_version
+        for target in applied_versions:
+            if target not in recorded:
+                entries.append(
+                    {
+                        "from_version": previous,
+                        "to_version": target,
+                        "applied_at": self._now(),
+                        "backup": backup.name,
+                    }
+                )
+            previous = target
+        result["migration_ledger"] = {
+            "format_version": 1,
+            "current_schema_version": applied_versions[-1],
+            "migrations": entries,
+        }
+        return result
+
     def _now(self) -> str:
         return time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -360,9 +395,15 @@ class ProjectStore:
                     return migrated
                 current_on_disk = json.loads(project_path.read_text(encoding="utf-8"))
                 current_from_version = int((current_on_disk or {}).get("schema_version") or 0)
-                current_migrated, current_changed, _ = migrate_project_document(current_on_disk)
+                current_migrated, current_changed, applied = migrate_project_document(current_on_disk)
                 if current_changed:
-                    self._backup_before_migration(project_path, current_from_version)
+                    backup = self._backup_before_migration(project_path, current_from_version)
+                    current_migrated = self._with_migration_ledger(
+                        current_migrated,
+                        from_version=current_from_version,
+                        applied_versions=applied,
+                        backup=backup,
+                    )
                     self._write_atomic(project_path, current_migrated)
                 migrated = current_migrated
         return migrated

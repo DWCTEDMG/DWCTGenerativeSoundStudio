@@ -1,4 +1,5 @@
 using EdmgStudio.Core.Models;
+using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Pages;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -10,20 +11,16 @@ namespace EdmgStudio.WinUI;
 
 public sealed partial class MainPage : Page
 {
-    private readonly DispatcherQueueTimer _activityTimer;
     private readonly HashSet<string> _reviewedJobIds = new(StringComparer.OrdinalIgnoreCase);
     private bool _started;
     private bool _isBackendStatusSubscribed;
-    private bool _isRefreshingActivity;
+    private IDisposable? _jobsActivityLease;
     private ModelCatalogueResponse? _modelCatalogue;
     private DateTimeOffset _modelCatalogueUpdatedAt;
 
     public MainPage()
     {
         InitializeComponent();
-        _activityTimer = DispatcherQueue.CreateTimer();
-        _activityTimer.Interval = TimeSpan.FromSeconds(2);
-        _activityTimer.Tick += ActivityTimer_Tick;
         if (StudioNavigation.SettingsItem is NavigationViewItem settingsItem)
         {
             AutomationProperties.SetAutomationId(settingsItem, "SettingsNavigationItem");
@@ -55,6 +52,8 @@ public sealed partial class MainPage : Page
         if (!_isBackendStatusSubscribed)
         {
             App.Services.BackendSupervisor.StatusChanged += BackendSupervisor_StatusChanged;
+            App.Services.JobsActivity.SnapshotChanged += JobsActivity_SnapshotChanged;
+            _jobsActivityLease = App.Services.JobsActivity.Activate();
             _isBackendStatusSubscribed = true;
         }
 
@@ -105,13 +104,13 @@ public sealed partial class MainPage : Page
                     ?? StudioNavigationDestination.NormalizeRestorableOrDefault(
                         App.Services.Session.LastWorkflowDestination));
             await RefreshActivityAsync();
-            _activityTimer.Start();
         }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        _activityTimer.Stop();
+        _jobsActivityLease?.Dispose();
+        _jobsActivityLease = null;
         if (App.Shell == this)
         {
             App.Shell = null;
@@ -120,6 +119,7 @@ public sealed partial class MainPage : Page
         if (_isBackendStatusSubscribed)
         {
             App.Services.BackendSupervisor.StatusChanged -= BackendSupervisor_StatusChanged;
+            App.Services.JobsActivity.SnapshotChanged -= JobsActivity_SnapshotChanged;
             _isBackendStatusSubscribed = false;
         }
     }
@@ -273,35 +273,48 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private async void ActivityTimer_Tick(DispatcherQueueTimer sender, object args) => await RefreshActivityAsync();
+    private void JobsActivity_SnapshotChanged(object? sender, StudioJobsActivitySnapshot snapshot)
+    {
+        DispatcherQueue.TryEnqueue(
+            DispatcherQueuePriority.Normal,
+            async () => await ApplyActivitySnapshotAsync(snapshot));
+    }
 
     private async Task RefreshActivityAsync()
     {
-        if (_isRefreshingActivity)
-        {
-            return;
-        }
-
         if (!App.Services.BackendSupervisor.Status.IsReady)
         {
             App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.None);
             return;
         }
 
-        _isRefreshingActivity = true;
+        await App.Services.JobsActivity.RefreshAsync();
+        await ApplyActivitySnapshotAsync(App.Services.JobsActivity.Snapshot);
+    }
+
+    private async Task ApplyActivitySnapshotAsync(StudioJobsActivitySnapshot snapshot)
+    {
+        if (snapshot.Error is not null)
+        {
+            App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.None);
+            BackendInfoBar.Severity = InfoBarSeverity.Warning;
+            BackendInfoBar.Title = "Studio activity could not be refreshed";
+            BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(snapshot.Error);
+            BackendInfoBar.IsOpen = true;
+            return;
+        }
+
         try
         {
-            StudioJobListResponse jobs = await App.Services.ApiClient.GetJobsAsync();
             if (_modelCatalogue is null || DateTimeOffset.UtcNow - _modelCatalogueUpdatedAt >= TimeSpan.FromSeconds(30))
             {
                 _modelCatalogue = await App.Services.ApiClient.GetTypedModelCatalogueAsync();
                 _modelCatalogueUpdatedAt = DateTimeOffset.UtcNow;
             }
 
-            StudioShellActivity activity = StudioShellActivity.Create(jobs.Jobs, _modelCatalogue, _reviewedJobIds);
-            _activityTimer.Interval = TimeSpan.FromSeconds(2);
+            StudioShellActivity activity = StudioShellActivity.Create(snapshot.Jobs, _modelCatalogue, _reviewedJobIds);
             GlobalRenderPlayer.UpdateJob(activity.FeaturedJob);
-            App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.Create(jobs.Jobs));
+            App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.Create(snapshot.Jobs));
             SetBadge(QueueBadge, activity.ActiveJobCount + activity.FailedJobCount);
             SetBadge(ReviewBadge, activity.ReviewItemCount);
             SetBadge(ModelsBadge, activity.ModelAttentionCount);
@@ -311,16 +324,10 @@ public sealed partial class MainPage : Page
         }
         catch (Exception ex)
         {
-            _activityTimer.Interval = TimeSpan.FromSeconds(10);
-            App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.None);
             BackendInfoBar.Severity = InfoBarSeverity.Warning;
             BackendInfoBar.Title = "Studio activity could not be refreshed";
             BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
             BackendInfoBar.IsOpen = true;
-        }
-        finally
-        {
-            _isRefreshingActivity = false;
         }
     }
 
@@ -333,8 +340,8 @@ public sealed partial class MainPage : Page
     {
         try
         {
-            StudioJobListResponse response = await App.Services.ApiClient.GetJobsAsync();
-            foreach (StudioJob job in response.Jobs.Where(job =>
+            await App.Services.JobsActivity.RefreshAsync();
+            foreach (StudioJob job in App.Services.JobsActivity.Snapshot.Jobs.Where(job =>
                          job.Status.Equals("succeeded", StringComparison.OrdinalIgnoreCase)
                          && (job.Type.Contains("render", StringComparison.OrdinalIgnoreCase)
                              || job.Type.Contains("video", StringComparison.OrdinalIgnoreCase))))

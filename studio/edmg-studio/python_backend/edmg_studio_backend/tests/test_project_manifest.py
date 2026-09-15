@@ -57,6 +57,13 @@ def test_project_store_migrates_on_load_with_backup(tmp_path: Path) -> None:
     assert saved["schema_version"] == CURRENT_SCHEMA_VERSION
     backups = list(project_dir.glob("project.v0.*.bak.json"))
     assert len(backups) == 1
+    ledger = saved["migration_ledger"]
+    assert [entry["to_version"] for entry in ledger["migrations"]] == [1, 2, 3]
+    assert {entry["backup"] for entry in ledger["migrations"]} == {backups[0].name}
+
+    assert store.get(project_id) is not None
+    assert json.loads(project_path.read_text(encoding="utf-8"))["migration_ledger"] == ledger
+    assert len(list(project_dir.glob("project.v0.*.bak.json"))) == 1
 
 
 def test_project_store_save_is_atomic_and_versioned(tmp_path: Path) -> None:

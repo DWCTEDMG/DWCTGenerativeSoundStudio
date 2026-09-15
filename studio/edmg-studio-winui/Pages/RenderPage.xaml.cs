@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
+using EdmgStudio.Core.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -19,8 +20,7 @@ public sealed partial class RenderPage : Page
     private bool _isBusy;
     private bool _modelGuidanceUiReady;
     private bool _isApplyingVariant;
-    private bool _isRefreshingQueueSummary;
-    private readonly DispatcherQueueTimer _queueSummaryTimer;
+    private IDisposable? _jobsActivityLease;
     private CancellationTokenSource? _pageCancellation;
     private ModelCatalogueResponse? _modelCatalogue;
     private ModelRenderGuidance? _modelGuidance;
@@ -37,9 +37,6 @@ public sealed partial class RenderPage : Page
     public RenderPage()
     {
         InitializeComponent();
-        _queueSummaryTimer = DispatcherQueue.CreateTimer();
-        _queueSummaryTimer.Interval = TimeSpan.FromSeconds(3);
-        _queueSummaryTimer.Tick += QueueSummaryTimer_Tick;
         _modelGuidanceUiReady = true;
         HeaderVariantBox.ValueChanged += HeaderVariantBox_ValueChanged;
         ApplyAdvancedMode();
@@ -79,32 +76,29 @@ public sealed partial class RenderPage : Page
         _ = LoadModelGuidanceAsync(_pageCancellation.Token);
         _ = LoadHardwareCapabilitiesAsync(_pageCancellation.Token);
         _ = LoadGenerationProviderAsync(_pageCancellation.Token);
+        App.Services.JobsActivity.SnapshotChanged += JobsActivity_SnapshotChanged;
+        _jobsActivityLease = App.Services.JobsActivity.Activate();
         _ = LoadQueueSummaryAsync(_pageCancellation.Token);
-        _queueSummaryTimer.Start();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
-        _queueSummaryTimer.Stop();
+        App.Services.JobsActivity.SnapshotChanged -= JobsActivity_SnapshotChanged;
+        _jobsActivityLease?.Dispose();
+        _jobsActivityLease = null;
         _pageCancellation?.Cancel();
         base.OnNavigatedFrom(e);
     }
 
-    private async void QueueSummaryTimer_Tick(DispatcherQueueTimer sender, object args)
+    private void JobsActivity_SnapshotChanged(object? sender, StudioJobsActivitySnapshot snapshot)
     {
-        if (_pageCancellation is { IsCancellationRequested: false } cancellation)
-        {
-            await LoadQueueSummaryAsync(cancellation.Token);
-        }
+        DispatcherQueue.TryEnqueue(
+            DispatcherQueuePriority.Normal,
+            () => ApplyQueueSnapshot(snapshot));
     }
 
     private async Task LoadQueueSummaryAsync(CancellationToken cancellationToken)
     {
-        if (_isRefreshingQueueSummary)
-        {
-            return;
-        }
-
         if (_projectId is null)
         {
             RenderQueueSummaryText.Text = "Choose a project to view its render queue.";
@@ -112,25 +106,30 @@ public sealed partial class RenderPage : Page
             return;
         }
 
-        _isRefreshingQueueSummary = true;
         try
         {
-            StudioJobListResponse response = await App.Services.ApiClient.GetProjectJobsAsync(_projectId, cancellationToken);
-            RenderQueueSnapshot snapshot = RenderQueueSnapshot.Create(response.Jobs);
-            RenderQueueSummaryText.Text = snapshot.Summary;
-            RenderQueueProgressBar.Value = snapshot.ActiveProgress;
+            await App.Services.JobsActivity.RefreshAsync(cancellationToken);
+            ApplyQueueSnapshot(App.Services.JobsActivity.Snapshot);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
-        catch (Exception ex)
+    }
+
+    private void ApplyQueueSnapshot(StudioJobsActivitySnapshot activity)
+    {
+        if (activity.Error is not null)
         {
-            RenderQueueSummaryText.Text = $"Queue status unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
+            RenderQueueSummaryText.Text = $"Queue status unavailable: {StudioPageHelpers.GetUserFacingError(activity.Error)}";
+            return;
         }
-        finally
-        {
-            _isRefreshingQueueSummary = false;
-        }
+
+        IReadOnlyList<StudioJob> projectJobs = _projectId is null
+            ? []
+            : activity.Jobs.Where(job => string.Equals(job.ProjectId, _projectId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        RenderQueueSnapshot snapshot = RenderQueueSnapshot.Create(projectJobs);
+        RenderQueueSummaryText.Text = snapshot.Summary;
+        RenderQueueProgressBar.Value = snapshot.ActiveProgress;
     }
 
     private async Task LoadModelGuidanceAsync(CancellationToken cancellationToken)
@@ -1530,11 +1529,21 @@ public sealed partial class RenderPage : Page
 
         await RunBusyAsync("Refreshing project jobs", async token =>
         {
-            StudioJobListResponse response = await App.Services.ApiClient.GetProjectJobsAsync(projectId, token);
+            await App.Services.JobsActivity.RefreshAsync(token);
+            StudioJobsActivitySnapshot snapshot = App.Services.JobsActivity.Snapshot;
+            if (snapshot.Error is not null)
+            {
+                throw snapshot.Error;
+            }
+
+            StudioJobListResponse response = new(snapshot.Jobs
+                .Where(job => string.Equals(job.ProjectId, projectId, StringComparison.OrdinalIgnoreCase))
+                .ToArray());
             JsonElement result = JsonSerializer.SerializeToElement(
                 response,
                 StudioJson.GetTypeInfo<StudioJobListResponse>());
             DisplayResult(JobFeedbackBox, result);
+            ApplyQueueSnapshot(snapshot);
             ShowStatus($"Loaded {response.Jobs.Count} project job(s).", InfoBarSeverity.Success);
             AppendLog($"Loaded {response.Jobs.Count} project job(s).");
         });

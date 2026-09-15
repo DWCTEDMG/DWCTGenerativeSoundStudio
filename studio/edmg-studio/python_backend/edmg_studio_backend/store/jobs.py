@@ -12,6 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from ..render_profiles import (
+    accept_render_payload,
+    is_render_job_type,
+    retain_accepted_render_snapshot,
+)
+
 logger = logging.getLogger(__name__)
 
 Status = Literal["queued", "paused", "running", "succeeded", "failed", "canceled"]
@@ -71,7 +77,14 @@ CREATE TABLE IF NOT EXISTS job_events (
     detail_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(project_id, job_id, event_id);
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    migration_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    applied_at TEXT NOT NULL
+);
 """
+
+_JOB_SCHEMA_MIGRATIONS = ((1, "jobs-priority-and-queue-order"),)
 
 
 @dataclass
@@ -116,9 +129,9 @@ class JobStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=FULL")
-        self._conn.executescript(_SCHEMA)
-        self._migrate_schema()
-        self._conn.commit()
+        with self._conn:
+            self._conn.executescript(_SCHEMA)
+            self._migrate_schema()
         self._migrate_json_jobs()
 
     def close(self) -> None:
@@ -126,18 +139,32 @@ class JobStore:
             self._conn.close()
 
     def _migrate_schema(self) -> None:
-        columns = {
-            str(row["name"])
-            for row in self._conn.execute("PRAGMA table_info(jobs)").fetchall()
+        applied = {
+            int(row[0])
+            for row in self._conn.execute("SELECT migration_id FROM schema_migrations").fetchall()
         }
-        if "priority" not in columns:
-            self._conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_jobs_queue_order
-            ON jobs(status, priority DESC, created_at ASC, id ASC)
-            """
-        )
+        for migration_id, name in _JOB_SCHEMA_MIGRATIONS:
+            if migration_id in applied:
+                continue
+            if migration_id == 1:
+                columns = {
+                    str(row["name"])
+                    for row in self._conn.execute("PRAGMA table_info(jobs)").fetchall()
+                }
+                if "priority" not in columns:
+                    self._conn.execute(
+                        "ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
+                    )
+                self._conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_jobs_queue_order
+                    ON jobs(status, priority DESC, created_at ASC, id ASC)
+                    """
+                )
+            self._conn.execute(
+                "INSERT INTO schema_migrations(migration_id, name, applied_at) VALUES (?, ?, ?)",
+                (migration_id, name, self._now()),
+            )
 
     def _jobs_dir(self, project_id: str) -> Path:
         d = self.projects_dir / project_id / "jobs"
@@ -323,6 +350,7 @@ class JobStore:
                         existing = self._row_to_job(row)
                         self._mirror_json(existing)
                         return existing, False
+                accepted_payload = accept_render_payload(payload) if is_render_job_type(job_type) else payload
                 jid = uuid.uuid4().hex
                 now = self._now()
                 job = Job(
@@ -332,7 +360,7 @@ class JobStore:
                     status="queued",
                     created_at=now,
                     updated_at=now,
-                    payload=payload,
+                    payload=accepted_payload,
                     priority=priority,
                     idempotency_key=key,
                 )
@@ -359,6 +387,7 @@ class JobStore:
             try:
                 for job_type, payload, idempotency_key, priority in requests:
                     key = str(idempotency_key or "").strip() or None
+                    accepted_payload = accept_render_payload(payload) if is_render_job_type(job_type) else payload
                     row = None
                     if key:
                         row = self._conn.execute(
@@ -371,7 +400,7 @@ class JobStore:
                         ).fetchone()
                     if row is not None:
                         existing = self._row_to_job(row)
-                        if existing.type != job_type or existing.payload != payload:
+                        if existing.type != job_type or existing.payload != accepted_payload:
                             raise ValueError("Idempotency key already used for a different job request")
                         results.append((existing, False))
                         continue
@@ -385,7 +414,7 @@ class JobStore:
                         status="queued",
                         created_at=now,
                         updated_at=now,
-                        payload=payload,
+                        payload=accepted_payload,
                         priority=priority,
                         idempotency_key=key,
                     )
@@ -632,10 +661,19 @@ class JobStore:
         *,
         payload: dict[str, Any] | None = None,
     ) -> Job | None:
-        """Atomically requeue a terminal job, optionally replacing its payload."""
+        """Atomically requeue a terminal job while retaining its accepted render snapshot."""
 
-        payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
         with self._lock:
+            existing_row = self._conn.execute(
+                "SELECT * FROM jobs WHERE project_id = ? AND id = ?",
+                (project_id, job_id),
+            ).fetchone()
+            if existing_row is None:
+                return None
+            existing = self._row_to_job(existing_row)
+            replacement = payload if payload is not None else existing.payload
+            retained_payload = retain_accepted_render_snapshot(existing.payload, replacement)
+            payload_json = json.dumps(retained_payload, ensure_ascii=False) if payload is not None else None
             cursor = self._conn.execute(
                 """
                 UPDATE jobs

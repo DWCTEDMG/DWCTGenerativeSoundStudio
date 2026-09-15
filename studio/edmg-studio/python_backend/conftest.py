@@ -2,8 +2,13 @@ import os
 import pathlib
 import tempfile
 
-
 _BACKEND = pathlib.Path(__file__).resolve().parent
+
+# Secret file storage is never implicit. Tests that import the application opt in
+# explicitly to the development-only backend and isolate it under their test home.
+os.environ.setdefault("EDMG_ENVIRONMENT", "test")
+os.environ.setdefault("EDMG_SECRETS_STORE", "file")
+os.environ.setdefault("EDMG_SECRETS_ALLOW_FILE", "1")
 
 
 def _configure_pytest_temproot() -> None:

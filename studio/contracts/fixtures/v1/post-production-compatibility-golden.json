@@ -1,0 +1,45 @@
+{
+  "fixture_version": "1.0",
+  "native_audio_layouts": [
+    {
+      "layout": "mono",
+      "preview": false,
+      "render": false,
+      "export": false,
+      "detail": "Native engine currently supports stereo only.",
+      "compatibility_issue_code": "unsupported_audio_layout"
+    },
+    {
+      "layout": "stereo",
+      "preview": true,
+      "render": true,
+      "export": true,
+      "detail": "Native stereo preview, render, and export are supported.",
+      "compatibility_issue_code": null
+    },
+    {
+      "layout": "5.1",
+      "preview": false,
+      "render": false,
+      "export": false,
+      "detail": "5.1 metadata is preserved; native DSP is unsupported.",
+      "compatibility_issue_code": "unsupported_audio_layout"
+    },
+    {
+      "layout": "7.1",
+      "preview": false,
+      "render": false,
+      "export": false,
+      "detail": "7.1 metadata is preserved; native DSP is unsupported.",
+      "compatibility_issue_code": "unsupported_audio_layout"
+    },
+    {
+      "layout": "object",
+      "preview": false,
+      "render": false,
+      "export": false,
+      "detail": "Object metadata is preserved; native object DSP is unsupported.",
+      "compatibility_issue_code": "unsupported_audio_layout"
+    }
+  ]
+}

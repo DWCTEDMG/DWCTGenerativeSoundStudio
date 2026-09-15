@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Storage;
 using Windows.Storage.Pickers;
+using Windows.System;
 
 namespace EdmgStudio.WinUI.Pages;
 
@@ -532,6 +533,43 @@ public sealed partial class SettingsPage : Page
         catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
         {
             ShowStatus(exception.Message, InfoBarSeverity.Error);
+        }
+    }
+
+    private async void CreateSupportBundleButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SetBusy(true);
+            byte[] bundle = await _apiClient.CreateSupportBundleAsync();
+            var picker = new FileSavePicker
+            {
+                SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+                SuggestedFileName = $"edmg-studio-support-{DateTimeOffset.Now:yyyyMMdd-HHmmss}"
+            };
+            picker.FileTypeChoices.Add("ZIP archive", [".zip"]);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance!.WindowHandle);
+            StorageFile? file = await picker.PickSaveFileAsync();
+            if (file is null)
+            {
+                return;
+            }
+
+            await FileIO.WriteBytesAsync(file, bundle);
+            ShowStatus("Support bundle saved. Review the ZIP before sharing it.", InfoBarSeverity.Success);
+            StorageFolder? folder = await file.GetParentAsync();
+            if (folder is not null)
+            {
+                await Launcher.LaunchFolderAsync(folder, new FolderLauncherOptions { ItemsToSelect = { file } });
+            }
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or UnauthorizedAccessException)
+        {
+            ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
+        }
+        finally
+        {
+            SetBusy(false);
         }
     }
 

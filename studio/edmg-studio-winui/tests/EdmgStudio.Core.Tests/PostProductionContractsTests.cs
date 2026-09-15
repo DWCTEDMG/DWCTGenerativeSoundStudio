@@ -188,8 +188,24 @@ public sealed class PostProductionContractsTests
         Assert.IsFalse(PostProductionInterchange.ExportCmx3600(project, document, true).Compatibility.IsLossless);
         InterchangeResult<string> csv = PostProductionInterchange.ExportAdrCsv(document);
         Assert.IsFalse(csv.Compatibility.IsLossless);
-        Assert.IsTrue(PostProductionCapabilities.Native.Single(value => value.Layout == AudioChannelLayout.Stereo).Render);
-        Assert.IsTrue(PostProductionCapabilities.Native.Where(value => value.Layout != AudioChannelLayout.Stereo).All(value => !value.Preview && !value.Render && !value.Export));
+        using JsonDocument fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "post-production-compatibility-golden.json")));
+        JsonElement expectedLayouts = fixture.RootElement.GetProperty("native_audio_layouts");
+        Assert.HasCount(expectedLayouts.GetArrayLength(), PostProductionCapabilities.Native);
+        foreach (JsonElement expected in expectedLayouts.EnumerateArray())
+        {
+            AudioLayoutCapability actual = PostProductionCapabilities.Native.Single(value =>
+                PostProductionContracts.LayoutText(value.Layout) == expected.GetProperty("layout").GetString());
+            Assert.AreEqual(expected.GetProperty("preview").GetBoolean(), actual.Preview);
+            Assert.AreEqual(expected.GetProperty("render").GetBoolean(), actual.Render);
+            Assert.AreEqual(expected.GetProperty("export").GetBoolean(), actual.Export);
+            Assert.AreEqual(expected.GetProperty("detail").GetString(), actual.Detail);
+            string? issueCode = expected.GetProperty("compatibility_issue_code").GetString();
+            PostProductionDocument capabilityDocument = PostProductionContracts.Empty() with
+            {
+                AudioLayouts = [new("fixture", actual.Layout, 2, null, [], new JsonObject())]
+            };
+            Assert.AreEqual(issueCode, PostProductionCapabilities.Report(capabilityDocument).Issues.SingleOrDefault()?.Code);
+        }
         PostProductionDocument csvDocument = PostProductionContracts.Empty() with
         {
             AdrCues = [new("multiline", null, 0, 10, "First line\r\nSecond, line", "Actor", [], new JsonObject())]

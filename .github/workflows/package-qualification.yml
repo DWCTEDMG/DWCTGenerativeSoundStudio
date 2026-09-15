@@ -1,0 +1,71 @@
+name: Package qualification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "studio/edmg-studio/packaging/windows/**"
+      - "studio/edmg-studio/scripts/*release-evidence*"
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-qualification:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.12.0
+      - name: Static packaging qualification
+        shell: pwsh
+        run: .\studio\edmg-studio\packaging\windows\test_packaging_foundations.ps1
+      - name: Release evidence tests
+        working-directory: studio/edmg-studio
+        run: node --test scripts/release-evidence.node-test.mjs
+      - name: Record UI automation capability status
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force qualification-evidence | Out-Null
+          Copy-Item studio\edmg-studio\packaging\windows\ui-automation-capabilities.json qualification-evidence\
+          @{ schemaVersion=1; status='not-run-capability-missing'; reason='GitHub-hosted CI has no approved interactive desktop/UI Automation driver.' } | ConvertTo-Json | Set-Content qualification-evidence\ui-automation-result.json
+      - name: Upload source qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-source-qualification-${{ github.run_id }}
+          path: qualification-evidence
+          retention-days: 30
+          if-no-files-found: error
+
+  signed-release-qualification:
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    environment: production-signing
+    env:
+      EDMG_CODE_SIGN_CERT: ${{ secrets.EDMG_CODE_SIGN_CERT }}
+      EDMG_CODE_SIGN_PASSWORD: ${{ secrets.EDMG_CODE_SIGN_PASSWORD }}
+      EDMG_REQUIRE_CODE_SIGNING: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Gate protected signing credentials
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EDMG_CODE_SIGN_CERT)) {
+            throw 'Production signing credential is unavailable. No package was produced or represented as signed.'
+          }
+      - name: Qualification contract
+        shell: pwsh
+        run: .\studio\edmg-studio\packaging\windows\test_packaging_foundations.ps1
+      - name: Upload signed qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-package-qualification-${{ github.run_id }}
+          path: studio/edmg-studio/release/evidence
+          retention-days: 90
+          if-no-files-found: warn

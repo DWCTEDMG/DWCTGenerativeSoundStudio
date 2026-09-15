@@ -118,6 +118,85 @@ export function collectReleaseArtifactPaths(root, phase = "bundle", artifactSet 
   return files.sort((left, right) => repoRelative(root, left).localeCompare(repoRelative(root, right)));
 }
 
+function dependencyRecord(ecosystem, name, version, provenance, checksum = "", license = "unavailable-from-lockfile") {
+  return { ecosystem, name, version, provenance, checksum: checksum || "unavailable-from-lockfile", license };
+}
+
+function readIfPresent(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+}
+
+export async function collectDependencyInventory(root) {
+  const records = [];
+  const sources = [];
+  const addSource = async (ecosystem, relativePath, status = "available") => {
+    const absolutePath = path.join(root, relativePath.split("/").join(path.sep));
+    if (!fs.existsSync(absolutePath)) {
+      sources.push({ ecosystem, path: relativePath, status: "unavailable" });
+      return "";
+    }
+    sources.push({ ecosystem, path: relativePath, status, sha256: await sha256File(absolutePath) });
+    return readIfPresent(absolutePath);
+  };
+
+  const uv = await addSource("python", "python_backend/uv.lock");
+  for (const block of uv.split(/\r?\n\[\[package\]\]\r?\n/).slice(1)) {
+    const name = block.match(/^name = "([^"]+)"/m)?.[1];
+    const version = block.match(/^version = "([^"]+)"/m)?.[1];
+    if (!name || !version) continue;
+    const provenance = block.match(/^source = \{ (?:registry|url|git) = "([^"]+)"/m)?.[1] || "local-or-unavailable-from-lockfile";
+    const checksum = block.match(/hash = "(sha256:[a-f0-9]{64})"/i)?.[1] || "";
+    records.push(dependencyRecord("python", name, version, provenance, checksum));
+  }
+
+  const pnpm = await addSource("node", "pnpm-lock.yaml");
+  const snapshotsAt = pnpm.indexOf("\nsnapshots:");
+  const packagesText = snapshotsAt >= 0 ? pnpm.slice(0, snapshotsAt) : pnpm;
+  for (const match of packagesText.matchAll(/^  ['"]?((?:@[^/\s]+\/)?[^@'":\s]+)@([^:'"]+)['"]?:\r?$/gm)) {
+    const following = packagesText.slice(match.index, match.index + 600);
+    const integrity = following.match(/integrity:\s*([^,}\s]+)/)?.[1] || "";
+    records.push(dependencyRecord("node", match[1], match[2], "npm-registry-via-pnpm-lock", integrity));
+  }
+
+  const projectPaths = ["../edmg-studio-winui/EdmgStudio.WinUI.csproj", "../edmg-studio-winui/src/EdmgStudio.Core/EdmgStudio.Core.csproj"];
+  let dotnetFound = false;
+  for (const relativePath of projectPaths) {
+    const project = await addSource("dotnet", relativePath);
+    for (const match of project.matchAll(/<PackageReference\s+Include="([^"]+)"\s+Version="([^"]+)"/g)) {
+      dotnetFound = true;
+      records.push(dependencyRecord("dotnet", match[1], match[2], "nuget-package-reference"));
+    }
+  }
+  if (!dotnetFound) sources.push({ ecosystem: "dotnet-lock", path: "packages.lock.json", status: "unavailable" });
+
+  const goMod = await addSource("go", "tools/edmgctl/go.mod");
+  const goSum = await addSource("go-checksums", "tools/edmgctl/go.sum");
+  for (const match of goMod.matchAll(/^\s*([^\s()]+)\s+v([^\s]+)(?:\s+\/\/ indirect)?$/gm)) {
+    if (match[1] === "module" || match[1] === "go") continue;
+    const sum = goSum.match(new RegExp(`^${match[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} v${match[2].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} (h1:[^\\s]+)$`, "m"))?.[1] || "";
+    records.push(dependencyRecord("go", match[1], match[2], "go-module-proxy-or-declared-source", sum));
+  }
+
+  const nativeManifest = await addSource("native", "packaging/media-tools-assets.json");
+  if (nativeManifest) {
+    const parsed = JSON.parse(nativeManifest);
+    for (const [platform, asset] of Object.entries(parsed.assets || {})) {
+      records.push(dependencyRecord(
+        "native",
+        `ffmpeg-${platform}`,
+        String(parsed.ffmpegVersion || parsed.releaseTag || "pinned-artifact"),
+        String(asset.url || parsed.sourceRepository || "repository-manifest"),
+        asset.sha256 ? `sha256:${asset.sha256}` : "",
+        String(parsed.distributionNotice?.licenseName || "see-packaged-license"),
+      ));
+    }
+  }
+  sources.push({ ecosystem: "native-package-manager", path: "vcpkg-lock.json/conan.lock", status: "unavailable" });
+
+  records.sort((a, b) => `${a.ecosystem}:${a.name}:${a.version}`.localeCompare(`${b.ecosystem}:${b.name}:${b.version}`));
+  return { schemaVersion: 1, generatedAt: new Date().toISOString(), records, sources };
+}
+
 export function resolveCodeSigningConfig(env = process.env) {
   const certificate = String(env.EDMG_CODE_SIGN_CERT ?? "").trim();
   const password = String(env.EDMG_CODE_SIGN_PASSWORD ?? "").trim();
@@ -443,6 +522,12 @@ export async function writeReleaseEvidence({
     artifactPaths.sort((left, right) => repoRelative(root, left).localeCompare(repoRelative(root, right)));
   }
 
+  const inventory = await collectDependencyInventory(root);
+  const inventoryPath = path.join(evidenceDir, "dependency-inventory.json");
+  await fsp.writeFile(inventoryPath, JSON.stringify(inventory, null, 2) + "\n", "utf8");
+  if (!artifactPaths.includes(inventoryPath)) artifactPaths.push(inventoryPath);
+  artifactPaths.sort((left, right) => repoRelative(root, left).localeCompare(repoRelative(root, right)));
+
   const signing = resolveCodeSigningConfig(env);
   const signingPlan = planCodeSigning(signing, artifactPaths, root);
   const windowsSignatures = readWindowsSignatureEvidence(root, artifactPaths);
@@ -463,7 +548,13 @@ export async function writeReleaseEvidence({
         path: repoRelative(root, sbomPath),
         componentCount: sbom.componentCount,
       },
+      dependencyInventory: {
+        path: repoRelative(root, inventoryPath),
+        componentCount: inventory.records.length,
+        sources: inventory.sources,
+      },
       codeSigning: {
+        status: windowsSignatures.valid.length > 0 ? "verified" : "unavailable",
         enabled: signing.enabled || windowsSignatures.valid.length > 0,
         attempted: signingPlan.attempted || windowsSignatures.attempted,
         tool: signing.tool,
@@ -472,6 +563,10 @@ export async function writeReleaseEvidence({
         signedCount: windowsSignatures.valid.length,
         skippedCount: windowsSignatures.exists ? windowsSignatures.skipped.length : signingPlan.skipped.length,
         failedCount: windowsSignatures.failed.length,
+      },
+      attestation: {
+        status: "unavailable",
+        reason: "No repository attestation credential or platform attestor was available to this evidence generator.",
       },
     },
   });
@@ -490,7 +585,9 @@ export async function writeReleaseEvidence({
     sbomPath: repoRelative(root, sbomPath),
     checksumManifestPath: repoRelative(root, checksumPath),
     artifactCount: checksumManifest.artifacts.length,
+    dependencyInventory: checksumManifest.dependencyInventory,
     codeSigning: checksumManifest.codeSigning,
+    attestation: checksumManifest.attestation,
   };
   await fsp.writeFile(indexPath, JSON.stringify(index, null, 2) + "\n", "utf8");
 

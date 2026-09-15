@@ -125,8 +125,9 @@ studio/edmg-studio/electron-resources/director/
 deployment/nvidia/.env.local
 starlift-data/
 
-# Root developer credentials (copy .env.example; never commit .env)
+# Root developer credentials and workstation-specific configuration
 /.env
+/config.local.json
 
 # The release-authoritative Python lock lives under the canonical Studio backend.
 # The repo-root Python project is a legacy compatibility path and must not become

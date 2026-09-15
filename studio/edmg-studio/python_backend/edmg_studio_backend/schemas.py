@@ -97,6 +97,12 @@ class ProjectHealthResponse(BaseModel):
 class ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
+
+class ProjectRenderProfileRequest(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=1)
+    profile: dict[str, Any]
+
+
 class PlanRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=1)
     title: str | None = None

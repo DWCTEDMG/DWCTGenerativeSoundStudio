@@ -1,0 +1,46 @@
+{
+  "fixture_version": "1.0",
+  "contract_schema_version": "1.0",
+  "contract_types": [
+    "edmg.project",
+    "edmg.music_graph",
+    "edmg.creative_intent",
+    "edmg.director_document",
+    "edmg.command",
+    "edmg.render_plan",
+    "edmg.artifact",
+    "edmg.capability",
+    "edmg.renderer",
+    "edmg.hardware_profile",
+    "edmg.job",
+    "edmg.cue"
+  ],
+  "exact_samples": {
+    "valid": ["0", "9007199254740993", "9223372036854775807"],
+    "invalid": ["", "01", "-1", "1.0", "9223372036854775808"]
+  },
+  "enums": {
+    "job_status": ["queued", "running", "succeeded", "failed", "canceled", "paused", "blocked"],
+    "media_kind": ["image", "video", "audio", "mask", "depth", "scene"],
+    "capability_operation": ["generate", "transform", "extend", "upscale", "interpolate", "assemble"],
+    "renderer_readiness": ["unavailable", "installable", "installed", "adapter_ready", "validated"]
+  },
+  "director_scene": {
+    "scene_id": "scene-fixture",
+    "start_sample": "9007199254740993",
+    "end_sample": "9007199254788993",
+    "intent": "Preserve exact timeline coordinates",
+    "continuity_mode": "continuous",
+    "renderer_hints": {
+      "provider_id": "edmg.internal",
+      "future_renderer_option": {
+        "keep": true
+      }
+    },
+    "extensions": {
+      "vendor.example": {
+        "nested": [1, "two", true]
+      }
+    }
+  }
+}

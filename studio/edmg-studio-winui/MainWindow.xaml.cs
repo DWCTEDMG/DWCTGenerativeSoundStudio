@@ -44,12 +44,19 @@ public sealed partial class MainWindow : Window
         }
 
         RestoreWindowPlacement(scale);
-        RootFrame.Navigate(typeof(MainPage));
         AppWindow.Changed += OnAppWindowChanged;
         AppWindow.Closing += OnClosing;
     }
 
     public nint WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+    public void InitializeShell()
+    {
+        if (RootFrame.Content is null)
+        {
+            RootFrame.Navigate(typeof(MainPage));
+        }
+    }
 
     public void UpdateTaskbarProgress(StudioTaskbarProgress progress) => _taskbarProgress.Update(progress);
 
@@ -207,6 +214,7 @@ public sealed partial class MainWindow : Window
         }
 
         _closing = true;
+        App.CancelBootstrap();
         if (sender.Presenter is OverlappedPresenter presenter)
         {
             WriteSetting(WindowMaximizedKey, presenter.State == OverlappedPresenterState.Maximized);
@@ -218,7 +226,10 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            await App.Services.DisposeAsync();
+            if (App.IsInitialized)
+            {
+                await App.Services.DisposeAsync();
+            }
         }
         catch (Exception exception)
         {

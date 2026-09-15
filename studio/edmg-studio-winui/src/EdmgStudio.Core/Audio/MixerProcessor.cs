@@ -55,9 +55,15 @@ public sealed class MixerProcessor
         Array.Clear(_meters);
     }
 
-    public void ProcessBlock(ReadOnlySpan<MixerInputBlock> inputs, Span<float> interleavedStereoOutput, int frames)
+    public void ProcessBlock(ReadOnlySpan<MixerInputBlock> inputs, Span<float> interleavedStereoOutput, int frames) =>
+        ProcessBlock(inputs, interleavedStereoOutput, frames, 0, AudioAutomationSnapshot.Empty);
+
+    public void ProcessBlock(ReadOnlySpan<MixerInputBlock> inputs, Span<float> interleavedStereoOutput, int frames,
+        long startSample, AudioAutomationSnapshot automation)
     {
+        ArgumentNullException.ThrowIfNull(automation);
         if (frames < 0 || frames > _maximumFrames) throw new ArgumentOutOfRangeException(nameof(frames));
+        ArgumentOutOfRangeException.ThrowIfNegative(startSample);
         int samples = checked(frames * 2);
         if (interleavedStereoOutput.Length < samples) throw new ArgumentException("The output buffer is too small.", nameof(interleavedStereoOutput));
         for (int index = 0; index < _buffers.Length; index++)
@@ -74,7 +80,7 @@ public sealed class MixerProcessor
             input.InterleavedStereo.AsSpan(0, samples).CopyTo(_buffers[index]);
         }
 
-        for (int index = 0; index < _buffers.Length; index++) ProcessChannel(index, frames);
+        for (int index = 0; index < _buffers.Length; index++) ProcessChannel(index, frames, startSample, automation);
         _buffers[_masterIndex].AsSpan(0, samples).CopyTo(interleavedStereoOutput);
     }
 
@@ -85,7 +91,7 @@ public sealed class MixerProcessor
         return count;
     }
 
-    private void ProcessChannel(int index, int frames)
+    private void ProcessChannel(int index, int frames, long startSample, AudioAutomationSnapshot automation)
     {
         MixerChannel channel = _plan.ProcessingOrder[index];
         float[] buffer = _buffers[index];
@@ -98,16 +104,22 @@ public sealed class MixerProcessor
 
         _insertDelays[index].ProcessInPlace(buffer, frames * 2);
         foreach (RouteState route in _outgoing[index])
-            if (route.Plan.Tap == MixerTap.PreFader) route.Add(buffer, _buffers[route.DestinationIndex], frames);
+            if (route.Plan.Tap == MixerTap.PreFader)
+                route.Add(buffer, _buffers[route.DestinationIndex], frames, startSample,
+                    route.Plan.Id.StartsWith("send:", StringComparison.Ordinal)
+                        ? automation.FindSendLane(channel.Id, route.Plan.DestinationId) : null);
 
-        float leftBalance = channel.Pan <= 0 ? 1 : MathF.Sqrt(1 - channel.Pan);
-        float rightBalance = channel.Pan >= 0 ? 1 : MathF.Sqrt(1 + channel.Pan);
-        float leftGain = channel.Gain * leftBalance;
-        float rightGain = channel.Gain * rightBalance;
+        AutomationLaneSnapshot? volumeLane = automation.FindLane(channel.Id, "volume");
+        AutomationLaneSnapshot? panLane = automation.FindLane(channel.Id, "pan");
         float peakLeft = 0, peakRight = 0;
         double squareLeft = 0, squareRight = 0;
         for (int frame = 0; frame < frames; frame++)
         {
+            long timelineSample = checked(startSample + frame);
+            float gain = volumeLane is null ? channel.Gain : (float)volumeLane.Evaluate(timelineSample);
+            float pan = panLane is null ? channel.Pan : Math.Clamp((float)panLane.Evaluate(timelineSample), -1, 1);
+            float leftGain = gain * (pan <= 0 ? 1 : MathF.Sqrt(1 - pan));
+            float rightGain = gain * (pan >= 0 ? 1 : MathF.Sqrt(1 + pan));
             int sample = frame * 2;
             float left = buffer[sample] *= leftGain;
             float right = buffer[sample + 1] *= rightGain;
@@ -121,7 +133,10 @@ public sealed class MixerProcessor
             frames == 0 ? 0 : (float)Math.Sqrt(squareRight / frames));
 
         foreach (RouteState route in _outgoing[index])
-            if (route.Plan.Tap == MixerTap.PostFader) route.Add(buffer, _buffers[route.DestinationIndex], frames);
+            if (route.Plan.Tap == MixerTap.PostFader)
+                route.Add(buffer, _buffers[route.DestinationIndex], frames, startSample,
+                    route.Plan.Id.StartsWith("send:", StringComparison.Ordinal)
+                        ? automation.FindSendLane(channel.Id, route.Plan.DestinationId) : null);
         if (index == _masterIndex)
         {
             peakLeft = peakRight = 0;
@@ -153,8 +168,8 @@ public sealed class MixerProcessor
         public MixerRouteDelay Plan { get; }
         public int DestinationIndex { get; }
 
-        public void Add(float[] source, float[] destination, int frames) =>
-            _delay.AddDelayed(source, destination, frames * 2, Plan.Gain);
+        public void Add(float[] source, float[] destination, int frames, long startSample, AutomationLaneSnapshot? automation) =>
+            _delay.AddDelayed(source, destination, frames, Plan.Gain, startSample, automation);
         public void Reset() => _delay.Reset();
     }
 
@@ -177,19 +192,25 @@ public sealed class MixerProcessor
             }
         }
 
-        public void AddDelayed(float[] source, float[] destination, int count, float gain)
+        public void AddDelayed(float[] source, float[] destination, int frames, float gain,
+            long startSample, AutomationLaneSnapshot? automation)
         {
-            if (_samples.Length == 0)
+            for (int frame = 0; frame < frames; frame++)
             {
-                for (int sample = 0; sample < count; sample++) destination[sample] += source[sample] * gain;
-                return;
-            }
-            for (int sample = 0; sample < count; sample++)
-            {
-                float delayed = _samples[_position];
-                _samples[_position] = source[sample] * gain;
-                destination[sample] += delayed;
-                if (++_position == _samples.Length) _position = 0;
+                float frameGain = automation is null ? gain : (float)automation.Evaluate(checked(startSample + frame));
+                for (int channel = 0; channel < 2; channel++)
+                {
+                    int sample = frame * 2 + channel;
+                    if (_samples.Length == 0)
+                    {
+                        destination[sample] += source[sample] * frameGain;
+                        continue;
+                    }
+                    float delayed = _samples[_position];
+                    _samples[_position] = source[sample] * frameGain;
+                    destination[sample] += delayed;
+                    if (++_position == _samples.Length) _position = 0;
+                }
             }
         }
 

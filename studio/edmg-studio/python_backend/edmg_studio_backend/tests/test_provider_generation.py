@@ -1,15 +1,52 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from edmg_studio_backend import app as backend_app
 from edmg_studio_backend.provider_generation import (
+    PROVIDER_OPERATIONS,
     generation_provider_definitions,
     normalize_provider_result,
     normalized_generation_job,
+    provider_supports,
 )
 from edmg_studio_backend.schemas import GenerationRequest
 from edmg_studio_backend.store.jobs import Job, JobStore
 from edmg_studio_backend.store.projects import ProjectStore
 from edmg_studio_backend.tests.revision_client import TestClient
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "operation"),
+    [(provider_id, operation) for provider_id in PROVIDER_OPERATIONS for operation in ("image", "video")],
+)
+def test_provider_operation_conformance_matrix(provider_id: str, operation: str) -> None:
+    assert provider_supports(provider_id, operation) is (operation in PROVIDER_OPERATIONS[provider_id])
+
+
+@pytest.mark.parametrize("status", ["queued", "paused", "running", "succeeded", "failed", "canceled", "blocked"])
+def test_provider_lifecycle_conformance(status: str) -> None:
+    job = SimpleNamespace(
+        id="job", project_id="project", status=status, payload={"_generation": {}}, result={},
+        progress={}, error=None, created_at="now", updated_at="now", attempt=0, priority=0,
+    )
+    assert normalized_generation_job(job)["status"] == status
+    job.status = "provider-specific-unknown"
+    assert normalized_generation_job(job)["status"] == "blocked"
+
+
+def test_provider_result_conformance_preserves_partial_failure_usage_and_cost() -> None:
+    normalized = normalize_provider_result("comfyui", "image", {
+        "results": [{"ok": True, "path": "outputs\\image.png"}, {"ok": False, "code": "unsupported", "error": "unsupported state"}],
+        "usage": {"seconds": 2}, "cost": {"usd": 0},
+    })
+    assert normalized["artifacts"] == [{"kind": "image", "path": "outputs/image.png"}]
+    assert normalized["failures"] == [{"message": "unsupported state", "code": "unsupported"}]
+    assert normalized["partial_failure"] is True
+    assert normalized["usage"] == {"seconds": 2}
+    assert normalized["cost"] == {"usd": 0}
 
 
 def test_generation_request_preserves_internal_render_parameters() -> None:

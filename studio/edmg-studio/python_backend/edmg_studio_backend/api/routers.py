@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
+from pydantic import ValidationError
 
 from ..domain.continuity_validation import validate_project_continuity
 from ..domain.editor_commands import execute as execute_editor_command
@@ -31,6 +32,7 @@ from ..project_metadata import (
     recoverable_metadata_from_patch,
     validate_metadata_patch,
 )
+from ..render_profiles import ProjectRenderProfile
 from ..revisions import RevisionRoute
 from ..schemas import (
     AutosaveRequest,
@@ -40,6 +42,7 @@ from ..schemas import (
     MusicGraphCorrectionsRequest,
     ProjectCreateRequest,
     ProjectHealthResponse,
+    ProjectRenderProfileRequest,
     RecoveryApplyRequest,
     RenderPlan,
     StemModulationUpdateRequest,
@@ -116,6 +119,35 @@ def create_project_router(
             raise HTTPException(404, "Project not found")
         report = assess_health(store().project_dir(project_id), proj.meta)
         return {"ok": True, "health": report}
+
+    @router.get("/v1/projects/{project_id}/render-profile")
+    def get_project_render_profile(project_id: str) -> dict[str, Any]:
+        proj = store().get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        raw_profile = (proj.meta or {}).get("render_profile")
+        try:
+            profile = ProjectRenderProfile.model_validate(raw_profile) if isinstance(raw_profile, dict) else None
+        except ValidationError as exc:
+            raise HTTPException(422, detail=exc.errors(include_url=False)) from exc
+        return {"ok": True, "profile": profile.model_dump(mode="json") if profile else None, "revision": proj.revision}
+
+    @router.put("/v1/projects/{project_id}/render-profile")
+    def put_project_render_profile(project_id: str, req: ProjectRenderProfileRequest) -> dict[str, Any]:
+        try:
+            profile = ProjectRenderProfile.model_validate(req.profile)
+        except ValidationError as exc:
+            raise HTTPException(422, detail=exc.errors(include_url=False)) from exc
+
+        def update(proj: Any) -> None:
+            meta = dict(proj.meta or {})
+            meta["render_profile"] = profile.model_dump(mode="json")
+            proj.meta = meta
+        try:
+            proj = store().mutate(project_id, update, expected_revision=req.expected_revision)
+        except KeyError as exc:
+            raise HTTPException(404, "Project not found") from exc
+        return {"ok": True, "profile": profile.model_dump(mode="json"), "project": project_response(proj), "revision": proj.revision}
 
     @router.get("/v1/projects/{project_id}/music_graph")
     def get_project_music_graph(project_id: str) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using EdmgStudio.Core.Models;
 
 namespace EdmgStudio.Core.Audio;
@@ -53,11 +53,73 @@ public sealed class AutomationLaneSnapshot
 
 public sealed record AudioAutomationSnapshot(ImmutableArray<AutomationLaneSnapshot> Lanes)
 {
+    public static AudioAutomationSnapshot Empty { get; } = new([]);
+
+    public AutomationLaneSnapshot? FindLane(string trackId, string target)
+    {
+        foreach (AutomationLaneSnapshot lane in Lanes)
+            if (string.Equals(lane.TrackId, trackId, StringComparison.Ordinal) &&
+                string.Equals(lane.Target, target, StringComparison.Ordinal))
+                return lane;
+        return null;
+    }
+
+    public AutomationLaneSnapshot? FindSendLane(string trackId, string destinationId)
+    {
+        foreach (AutomationLaneSnapshot lane in Lanes)
+            if (string.Equals(lane.TrackId, trackId, StringComparison.Ordinal) &&
+                lane.Target.StartsWith("send:", StringComparison.Ordinal) &&
+                lane.Target.AsSpan(5).SequenceEqual(destinationId))
+                return lane;
+        return null;
+    }
+
     public static AudioAutomationSnapshot Build(CanonicalProject project)
     {
-        ProfessionalEditingDocument document=ProfessionalEditingContracts.Read(project.Timeline);
-        ProfessionalEditingContracts.ValidateAgainstProject(project,document);
-        return new(document.AutomationLanes.Select(lane=>new AutomationLaneSnapshot(lane.Id,lane.TrackId,lane.Target,lane.Mode,
-            lane.Target=="volume"?1:0,lane.Points.Select(p=>new AutomationSamplePoint(p.Sample,p.Value,p.Curve,p.Tension)).ToImmutableArray())).ToImmutableArray());
+        ProfessionalEditingDocument document = ProfessionalEditingContracts.Read(project.Timeline);
+        ProfessionalEditingContracts.ValidateAgainstProject(project, document);
+        MixerDocument mixer = MixerDocumentCodec.ReadOrMigrate(project.Timeline, project);
+        IReadOnlyDictionary<string, MixerChannelDocument> channels = mixer.Channels
+            .ToDictionary(channel => channel.Id, StringComparer.Ordinal);
+        return new(document.AutomationLanes.Select(lane => new AutomationLaneSnapshot(
+            lane.Id,
+            lane.TrackId,
+            lane.Target,
+            lane.Mode,
+            DefaultValue(lane, channels),
+            lane.Points.Select(point => new AutomationSamplePoint(
+                point.Sample,
+                point.Value,
+                point.Curve,
+                point.Tension)).ToImmutableArray())).ToImmutableArray());
+    }
+
+    private static double DefaultValue(
+        AutomationLane lane,
+        IReadOnlyDictionary<string, MixerChannelDocument> channels)
+    {
+        if (!channels.TryGetValue(lane.TrackId, out MixerChannelDocument? channel))
+        {
+            return lane.Target == "volume" ? 1 : 0;
+        }
+
+        if (lane.Target == "volume")
+        {
+            return channel.Gain;
+        }
+
+        if (lane.Target == "pan")
+        {
+            return channel.Pan;
+        }
+
+        if (lane.Target.StartsWith("send:", StringComparison.Ordinal))
+        {
+            string destinationId = lane.Target[5..];
+            return channel.Sends.FirstOrDefault(send =>
+                send.Enabled && string.Equals(send.DestinationId, destinationId, StringComparison.Ordinal))?.Gain ?? 0;
+        }
+
+        return 0;
     }
 }

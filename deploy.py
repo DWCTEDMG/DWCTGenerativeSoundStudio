@@ -56,15 +56,31 @@ class DeploymentManager:
         }
 
     def _load_config(self) -> Dict[str, Any]:
-        """Load deployment configuration."""
-        config_file = self.project_root / "config.json"
-        if config_file.exists():
-            with open(config_file, "r", encoding="utf-8") as f:
-                try:
-                    return json.load(f)
-                except json.JSONDecodeError:
-                    logger.warning("config.json exists but is invalid JSON; regenerating defaults.")
-        return self._get_default_config()
+        """Load tracked defaults, then overlay the ignored workstation config."""
+        config = self._get_default_config()
+        for filename in ("config.json", "config.local.json"):
+            config_file = self.project_root / filename
+            if not config_file.exists():
+                continue
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+            except json.JSONDecodeError:
+                logger.warning("%s exists but is invalid JSON; ignoring it.", filename)
+                continue
+            if isinstance(loaded, dict):
+                config = self._merge_config(config, loaded)
+        return config
+
+    @classmethod
+    def _merge_config(cls, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(base)
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = cls._merge_config(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
 
     def _get_default_config(self) -> Dict[str, Any]:
         """Get default configuration."""

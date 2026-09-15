@@ -1,24 +1,21 @@
 import { describe, expect, it } from "vitest";
+import golden from "../../../contracts/fixtures/v1/shared-contract-golden.json";
 import {
   CONTRACT_SCHEMA_VERSION,
   CONTRACT_TYPES,
+  isExactSampleString,
   isV1Contract,
   type ProjectContract,
 } from "../contracts/v1";
 
 describe("v1 Studio contracts", () => {
-  it("freezes all eight cross-domain contract names", () => {
-    expect(CONTRACT_SCHEMA_VERSION).toBe("1.0");
-    expect(CONTRACT_TYPES).toEqual([
-      "edmg.project",
-      "edmg.music_graph",
-      "edmg.creative_intent",
-      "edmg.render_plan",
-      "edmg.artifact",
-      "edmg.capability",
-      "edmg.job",
-      "edmg.cue",
-    ]);
+  it("matches the authoritative cross-runtime fixture", () => {
+    expect(CONTRACT_SCHEMA_VERSION).toBe(golden.contract_schema_version);
+    expect(CONTRACT_TYPES).toEqual(golden.contract_types);
+    expect(golden.exact_samples.valid.every(isExactSampleString)).toBe(true);
+    expect(golden.exact_samples.invalid.some(isExactSampleString)).toBe(false);
+    expect(golden.enums.job_status).toEqual(["queued", "running", "succeeded", "failed", "canceled", "paused", "blocked"]);
+    expect(golden.director_scene.extensions["vendor.example"].nested).toEqual([1, "two", true]);
   });
 
   it("recognizes versioned payloads and rejects drifted versions", () => {

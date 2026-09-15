@@ -4,11 +4,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
+from edmg_studio_backend.correlation import CorrelationMiddleware, current_correlation
 from edmg_studio_backend.security import (
-    BackendSecurityMiddleware,
-    BackendSecuritySettings,
     _DEFAULT_CORS_ORIGINS,
     _LOCAL_DEV_CORS_ORIGIN_REGEX,
+    BackendSecurityMiddleware,
+    BackendSecuritySettings,
     validate_remote_bind_security,
 )
 
@@ -193,3 +194,61 @@ def test_cors_middleware_allows_any_loopback_studio_origin():
         )
         assert options_res.status_code == 200
         assert options_res.headers.get("access-control-allow-origin") == "http://127.0.0.1:5173"
+
+
+def test_correlation_middleware_is_disabled_by_default():
+    app = FastAPI()
+    app.add_middleware(CorrelationMiddleware)
+
+    @app.get("/")
+    def root():
+        return {"context": current_correlation()}
+
+    with TestClient(app) as client:
+        response = client.get("/")
+    assert response.json() == {"context": {}}
+    assert "x-request-id" not in response.headers
+    assert "traceparent" not in response.headers
+
+
+def test_correlation_accepts_valid_traceparent_and_emits_child_context():
+    app = FastAPI()
+    app.add_middleware(CorrelationMiddleware, enabled=True)
+
+    @app.get("/")
+    def root():
+        return current_correlation()
+
+    trace_id = "1234567890abcdef1234567890abcdef"
+    incoming = f"00-{trace_id}-1234567890abcdef-01"
+    with TestClient(app) as client:
+        response = client.get(
+            "/",
+            headers={"traceparent": incoming, "tracestate": "vendor=value", "x-request-id": "req-42"},
+        )
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "req-42"
+    assert response.headers["traceparent"].startswith(f"00-{trace_id}-")
+    assert response.headers["traceparent"] != incoming
+    assert response.headers["tracestate"] == "vendor=value"
+    assert response.json()["request_id"] == "req-42"
+    assert response.json()["trace_id"] == trace_id
+
+
+def test_correlation_replaces_invalid_traceparent_without_forwarding_tracestate():
+    app = FastAPI()
+    app.add_middleware(CorrelationMiddleware, enabled=True)
+
+    @app.get("/")
+    def root():
+        return current_correlation()
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/",
+            headers={"traceparent": "00-00000000000000000000000000000000-0000000000000000-01", "tracestate": "bad=value"},
+        )
+    assert response.status_code == 200
+    assert len(response.headers["traceparent"]) == 55
+    assert "tracestate" not in response.headers
+    assert response.json()["trace_id"] != "0" * 32

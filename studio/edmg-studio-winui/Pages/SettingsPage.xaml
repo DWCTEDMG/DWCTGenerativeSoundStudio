@@ -192,6 +192,21 @@
 
                 <Border Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="8">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Support bundle" />
+                        <TextBlock
+                            Opacity="0.72"
+                            Text="Exports allowlisted text diagnostics only. Credentials and local absolute paths are redacted; private audio, video, and images are excluded. Review the ZIP before sharing it."
+                            TextWrapping="Wrap" />
+                        <Button
+                            AutomationProperties.AutomationId="SettingsCreateSupportBundleButton"
+                            Click="CreateSupportBundleButton_Click"
+                            Content="Create support bundle"
+                            HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="8">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Backend readiness and hardware" />
                         <TextBox
                             x:Name="DiagnosticsTextBox"

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "policy": "Studio is authoritative. Compatibility entrypoints are frozen except for security and parity fixes; retirement requires project-open, render, migration, packaging, and rollback parity evidence.",
+  "entrypoints": [
+    {
+      "path": "RUN_ME.bat",
+      "classification": "supported",
+      "platforms": ["windows"],
+      "surface": "winui"
+    },
+    {
+      "path": "run_me.sh",
+      "classification": "supported",
+      "platforms": ["linux", "macos"],
+      "surface": "electron"
+    },
+    {
+      "path": "start.bat",
+      "classification": "compatibility-frozen",
+      "platforms": ["windows"],
+      "surface": "legacy-engine"
+    },
+    {
+      "path": "start.sh",
+      "classification": "compatibility-frozen",
+      "platforms": ["linux", "macos"],
+      "surface": "legacy-engine"
+    },
+    {
+      "path": "LAUNCH_EDMG_STUDIO_GUI.bat",
+      "classification": "compatibility-frozen",
+      "platforms": ["windows"],
+      "surface": "legacy-gui"
+    },
+    {
+      "path": "studio/edmg-studio/RUN_ME.bat",
+      "classification": "compatibility-frozen",
+      "platforms": ["windows"],
+      "surface": "electron"
+    },
+    {
+      "path": "studio/edmg-studio/run_me.sh",
+      "classification": "compatibility-frozen",
+      "platforms": ["linux", "macos"],
+      "surface": "electron"
+    }
+  ],
+  "retirement_gates": [
+    "project-open-parity",
+    "render-parity",
+    "migration-parity",
+    "package-upgrade-parity",
+    "package-rollback-parity"
+  ]
+}

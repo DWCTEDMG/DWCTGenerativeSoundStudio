@@ -24,6 +24,7 @@ public sealed class AppServices : IAsyncDisposable
         StudioApiClient apiClient,
         HttpClient apiHttpClient,
         StudioProjectMediaClient projectMediaClient,
+        StudioJobsActivityService jobsActivity,
         StudioSessionService session,
         ITransportService transport,
         IAudioEngine audioEngine,
@@ -36,6 +37,7 @@ public sealed class AppServices : IAsyncDisposable
         ApiClient = apiClient;
         _apiHttpClient = apiHttpClient;
         ProjectMediaClient = projectMediaClient;
+        JobsActivity = jobsActivity;
         Session = session;
         Transport = transport;
         AudioEngine = audioEngine;
@@ -49,6 +51,7 @@ public sealed class AppServices : IAsyncDisposable
     public BackendSupervisor BackendSupervisor { get; }
     public StudioApiClient ApiClient { get; }
     public StudioProjectMediaClient ProjectMediaClient { get; }
+    public StudioJobsActivityService JobsActivity { get; }
     public StudioSessionService Session { get; }
     public ITransportService Transport { get; }
     public IAudioEngine AudioEngine { get; }
@@ -100,11 +103,11 @@ public sealed class AppServices : IAsyncDisposable
         }
     }
 
-    public static AppServices Create()
+    public static async Task<AppServices> CreateAsync(CancellationToken cancellationToken = default)
     {
         var configuration = BackendConfiguration.Load();
         var tokenProvider = new WindowsBackendTokenProvider(new EnvironmentBackendTokenProvider());
-        var launchToken = tokenProvider.GetTokenAsync().AsTask().GetAwaiter().GetResult();
+        var launchToken = await tokenProvider.GetTokenAsync(cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(launchToken))
         {
             var managedEnvironment = new Dictionary<string, string>(configuration.ManagedEnvironment, StringComparer.OrdinalIgnoreCase)
@@ -114,6 +117,7 @@ public sealed class AppServices : IAsyncDisposable
             configuration = configuration with { ManagedEnvironment = managedEnvironment };
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var supervisor = new BackendSupervisor(configuration);
 
         // Convert transport-level connection failures into a normal HTTP 503 response.
@@ -126,6 +130,7 @@ public sealed class AppServices : IAsyncDisposable
         };
         var apiClient = new StudioApiClient(supervisor, tokenProvider, apiHttpClient);
         var projectMediaClient = new StudioProjectMediaClient(apiClient, new StudioApiSignedMediaUrlResolver(apiClient));
+        var jobsActivity = new StudioJobsActivityService(apiClient);
 
         var transport = new TransportService();
         var audioEngine = new WindowsAudioEngine();
@@ -141,6 +146,7 @@ public sealed class AppServices : IAsyncDisposable
             apiClient,
             apiHttpClient,
             projectMediaClient,
+            jobsActivity,
             new StudioSessionService(),
             transport,
             audioEngine,
@@ -193,6 +199,15 @@ public sealed class AppServices : IAsyncDisposable
         }
 
         Transport.StateChanged -= OnTransportStateChanged;
+        try
+        {
+            await JobsActivity.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
         try
         {
             await MidiInput.DisposeAsync();

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "harness": "Windows Application Driver or an equivalent UI Automation driver supplied by the operator",
+  "modes": {
+    "unpackaged": {
+      "executableRequired": true,
+      "packageIdentityRequired": false,
+      "capabilities": ["windows", "interactiveDesktop", "uiAutomationDriver", "builtWinUiExecutable"]
+    },
+    "packaged": {
+      "executableRequired": false,
+      "packageIdentityRequired": true,
+      "capabilities": ["windows", "interactiveDesktop", "uiAutomationDriver", "installedSignedMsix"]
+    }
+  },
+  "ciDefault": "capability-check-only",
+  "resultStates": ["passed", "failed", "not-run-capability-missing"],
+  "requiredSmokeCases": ["launch", "main-window-visible", "workspace-navigation", "clean-exit"]
+}

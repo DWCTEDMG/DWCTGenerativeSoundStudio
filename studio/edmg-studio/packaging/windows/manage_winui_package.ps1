@@ -1,9 +1,10 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("Install", "Launch", "Uninstall")]
+  [ValidateSet("Install", "Launch", "Repair", "Rollback", "Uninstall")]
   [string]$Action,
   [string]$InstallRoot = "",
-  [string]$MsixPath = ""
+  [string]$MsixPath = "",
+  [string]$PreviousMsixPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -215,6 +216,29 @@ switch ($Action) {
     }
     $applicationTarget = "shell:AppsFolder\$($package.PackageFamilyName)!$applicationId"
     Start-Process -FilePath "explorer.exe" -ArgumentList $applicationTarget
+  }
+
+  "Repair" {
+    $package = Get-InstalledPackage
+    if (-not $package) {
+      throw "EDMG Studio WinUI is not installed for the current user."
+    }
+    $manifestPath = Join-Path $package.InstallLocation "AppxManifest.xml"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+      throw "Installed package manifest is missing: $manifestPath"
+    }
+    Add-AppxPackage -Register $manifestPath -DisableDevelopmentMode -ForceApplicationShutdown
+    Write-Host "EDMG Studio WinUI package registration repaired."
+  }
+
+  "Rollback" {
+    if ([string]::IsNullOrWhiteSpace($PreviousMsixPath)) {
+      throw "Rollback requires PreviousMsixPath to an explicitly retained, trusted MSIX."
+    }
+    $normalizedPreviousMsixPath = [IO.Path]::GetFullPath($PreviousMsixPath)
+    Assert-WinUiMsix $normalizedPreviousMsixPath
+    Add-AppxPackage -Path $normalizedPreviousMsixPath -ForceUpdateFromAnyVersion -ForceApplicationShutdown
+    Write-Host "EDMG Studio WinUI package rolled back to the supplied package."
   }
 
   "Uninstall" {

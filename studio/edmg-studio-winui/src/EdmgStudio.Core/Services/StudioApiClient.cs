@@ -58,7 +58,7 @@ public sealed class StudioFileStream
     public HttpStatusCode StatusCode { get; }
 }
 
-public sealed class StudioApiClient : IDisposable
+public sealed class StudioApiClient : IStudioJobsClient, IDisposable
 {
     private const string DefaultProjectMediaUrlsRelativePathTemplate = "/v1/projects/{0}/media-urls";
     private readonly IBackendEndpointProvider _endpointProvider;
@@ -1951,6 +1951,9 @@ public sealed class StudioApiClient : IDisposable
     public Task<JsonElement> GetBaselineMetricsAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/metrics/baseline", null, true, cancellationToken);
 
+    public Task<byte[]> CreateSupportBundleAsync(CancellationToken cancellationToken = default) =>
+        SendBytesAsync(HttpMethod.Post, "/v1/support/bundle", null, true, cancellationToken);
+
     public Task<JsonElement> GetRenderProfilesAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/settings/render_profiles", null, true, cancellationToken);
 
@@ -2268,6 +2271,23 @@ public sealed class StudioApiClient : IDisposable
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         RememberRevision(request.RequestUri!, document.RootElement);
         return document.RootElement.Clone();
+    }
+
+    private async Task<byte[]> SendBytesAsync(
+        HttpMethod method,
+        string relativePath,
+        HttpContent? content,
+        bool includeCredentials,
+        CancellationToken cancellationToken)
+    {
+        using var request = await CreateRequestAsync(method, relativePath, content, includeCredentials, cancellationToken)
+            .ConfigureAwait(false);
+        request.Headers.Accept.Clear();
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/zip"));
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<JsonElement> UploadProjectAssetAsync(

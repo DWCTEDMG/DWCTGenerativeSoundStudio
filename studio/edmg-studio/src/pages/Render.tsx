@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   apiGet,
   apiPost,
+  apiPut,
   apiUpload,
   getBackendUrl,
   type ApiError,
@@ -24,6 +25,7 @@ import { useUiMode } from "../components/uiMode";
 import { resolveProjectId } from "../components/projectSelection";
 import { useStudioSession } from "../components/studioSession";
 import { readRenderDefaults, writeRenderDefaults } from "../components/renderDefaults";
+import type { ProjectRenderProfile } from "../contracts/v1";
 import {
   RenderControlCenter,
   type RenderQuickGoal,
@@ -441,6 +443,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [err, setErr] = useState<string | null>(null);
   const [latestVideoMissing, setLatestVideoMissing] = useState<boolean>(false);
   const [revisionConflict, setRevisionConflict] = useState<ApiError | null>(null);
+  const [renderProfileStatus, setRenderProfileStatus] = useState<string>("");
   const projectRevisionRef = useRef<number | null>(null);
 
   const latestInternalVideoPath = String(project?.meta?.last_internal_render?.video || "");
@@ -909,6 +912,17 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setPlan(d.project?.meta?.last_plan || null);
     setTimeline(d.project?.meta?.timeline || { layers: [], camera: { keyframes: [] } });
     setTimelineDirty(false);
+    const profile = d.project?.meta?.render_profile as ProjectRenderProfile | undefined;
+    if (profile?.schema_version === "1.0") {
+      setRenderPreset(profile.shared.quality);
+      setRenderWidth(profile.shared.width);
+      setRenderHeight(profile.shared.height);
+      setQuickOutputFps(profile.shared.fps);
+      setInternalVideoModelEngine(normalizeInternalVideoModelEngine(profile.shared.renderer_id));
+      setRenderProfileStatus(`Project profile “${profile.name}” loaded.`);
+    } else {
+      setRenderProfileStatus("No project profile saved; using local defaults.");
+    }
     const storedPlan = d.project?.meta?.last_conductor_plan;
     if (storedPlan && typeof storedPlan === "object") {
       setConductorPlan(storedPlan);
@@ -2254,6 +2268,40 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         conflict={revisionConflict}
         onReload={() => refreshProject(projectId)}
       />
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontWeight: 800 }}>Project render profile</div>
+            <div className="small">{renderProfileStatus || "Loading project profile…"}</div>
+          </div>
+          <button type="button" disabled={!projectId} onClick={async () => {
+            const existing = project?.meta?.render_profile as ProjectRenderProfile | undefined;
+            const profile: ProjectRenderProfile = {
+              schema_version: "1.0",
+              id: existing?.id || "default",
+              name: existing?.name || "Project render profile",
+              revision: (existing?.revision || 0) + 1,
+              shared: { quality: renderPreset, width: renderWidth, height: renderHeight, fps: quickOutputFps, renderer_id: internalVideoModelEngine },
+              renderer_options: existing?.renderer_options || {},
+              extensions: existing?.extensions || {},
+            };
+            try {
+              const response = await apiPut(
+                `/v1/projects/${projectId}/render-profile`,
+                expectedRevisionBody({ profile }, { revision: projectRevisionRef.current }),
+                { expectedRevision: projectRevisionRef.current ?? undefined },
+              );
+              recordMutationResponse(response);
+              setProject((current: any) => ({ ...current, meta: { ...(current?.meta || {}), render_profile: response.profile } }));
+              setRenderProfileStatus(`Saved revision ${response.profile.revision}.`);
+            } catch (error) {
+              const conflict = revisionConflictFrom(error);
+              if (conflict) setRevisionConflict(conflict);
+              setRenderProfileStatus(error instanceof Error ? error.message : "Profile save failed.");
+            }
+          }}>Save project profile</button>
+        </div>
+      </div>
       <RenderControlCenter
         goal={quickRenderGoal}
         onGoalChange={applyQuickRenderGoal}

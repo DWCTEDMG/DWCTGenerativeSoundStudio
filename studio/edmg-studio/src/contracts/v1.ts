@@ -10,9 +10,13 @@ export const CONTRACT_TYPES = [
   "edmg.project",
   "edmg.music_graph",
   "edmg.creative_intent",
+  "edmg.director_document",
+  "edmg.command",
   "edmg.render_plan",
   "edmg.artifact",
   "edmg.capability",
+  "edmg.renderer",
+  "edmg.hardware_profile",
   "edmg.job",
   "edmg.cue",
 ] as const;
@@ -250,6 +254,37 @@ export interface CueContract extends VersionedDocument {
   payload: Record<string, JsonValue>;
 }
 
+export interface ExtensionContract extends VersionedDocument {
+  contract_type: "edmg.director_document" | "edmg.command" | "edmg.renderer" | "edmg.hardware_profile";
+  [key: string]: JsonValue | ContractType | typeof CONTRACT_SCHEMA_VERSION;
+}
+
+export interface ProjectRenderProfile {
+  schema_version: "1.0";
+  id: string;
+  name: string;
+  revision: number;
+  shared: {
+    quality: "fast" | "balanced" | "quality" | "ultra";
+    width: number;
+    height: number;
+    fps: number;
+    renderer_id: string;
+  };
+  renderer_options: Record<string, Record<string, JsonValue>>;
+  extensions: Record<string, JsonValue>;
+}
+
+export interface AcceptedRenderSnapshot {
+  schema_version: "1.0";
+  payload: Record<string, JsonValue>;
+  render_profile?: ProjectRenderProfile | null;
+}
+
+export function isExactSampleString(value: unknown): value is string {
+  return typeof value === "string" && /^(0|[1-9]\d*)$/.test(value) && BigInt(value) <= 9223372036854775807n;
+}
+
 export type V1Contract =
   | ProjectContract
   | MusicGraphContract
@@ -258,7 +293,8 @@ export type V1Contract =
   | ArtifactManifestContract
   | CapabilityContract
   | JobContract
-  | CueContract;
+  | CueContract
+  | ExtensionContract;
 
 export function isV1Contract(value: unknown): value is V1Contract {
   if (!value || typeof value !== "object") return false;

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
 
+from edmg_studio_backend.render_profiles import (
+    ACCEPTED_RENDER_SNAPSHOT_DIGEST_KEY,
+    ACCEPTED_RENDER_SNAPSHOT_KEY,
+)
 from edmg_studio_backend.store.jobs import _CORRUPTED_QUARANTINE_SUFFIX, JobStore
 
 
@@ -132,8 +137,6 @@ def test_job_store_priority_controls_claim_order_and_persists(tmp_path: Path) ->
 
 def test_job_store_migrates_existing_database_priority_column(tmp_path: Path) -> None:
     db_path = tmp_path / "jobs.sqlite"
-    import sqlite3
-
     connection = sqlite3.connect(db_path)
     connection.execute(
         """
@@ -154,8 +157,19 @@ def test_job_store_migrates_existing_database_priority_column(tmp_path: Path) ->
         created = store.create("migrated", "render", {})
         assert created.priority == 0
         assert store.get("migrated", created.id).priority == 0
+        ledger = store._conn.execute(
+            "SELECT migration_id, name FROM schema_migrations ORDER BY migration_id"
+        ).fetchall()
+        assert [tuple(row) for row in ledger] == [(1, "jobs-priority-and-queue-order")]
     finally:
         store.close()
+
+    reopened = JobStore(tmp_path / "projects", db_path=db_path)
+    try:
+        count = reopened._conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+        assert count == 1
+    finally:
+        reopened.close()
 
 
 def test_job_store_migrates_json_and_recovers_expired_lease(tmp_path: Path) -> None:
@@ -211,7 +225,9 @@ def test_job_store_retry_is_atomic_and_does_not_reset_active_work(tmp_path: Path
     )
     assert retried is not None
     assert retried.status == "queued"
-    assert retried.payload == {"selection": "normalized"}
+    assert retried.payload["selection"] == "normalized"
+    assert retried.payload[ACCEPTED_RENDER_SNAPSHOT_KEY] == job.payload[ACCEPTED_RENDER_SNAPSHOT_KEY]
+    assert retried.payload[ACCEPTED_RENDER_SNAPSHOT_DIGEST_KEY] == job.payload[ACCEPTED_RENDER_SNAPSHOT_DIGEST_KEY]
 
     claimed = store.claim_next_queued(owner="worker-retry")
     assert claimed is not None
@@ -228,7 +244,8 @@ def test_job_store_retry_is_atomic_and_does_not_reset_active_work(tmp_path: Path
     current = store.get("proj-retry", job.id)
     assert current is not None
     assert current.status == "running"
-    assert current.payload == {"selection": "normalized"}
+    assert current.payload["selection"] == "normalized"
+    assert current.payload[ACCEPTED_RENDER_SNAPSHOT_KEY]["payload"] == {"selection": "legacy"}
     assert current.progress == {"stage": "frames", "current": 1, "total": 2}
     assert current.attempt == active_attempt
     store.close()

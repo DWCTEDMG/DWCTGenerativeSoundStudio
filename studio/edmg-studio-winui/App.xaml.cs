@@ -9,6 +9,7 @@ namespace EdmgStudio.WinUI;
 public partial class App : Application
 {
     private MainWindow? _window;
+    private static readonly CancellationTokenSource BootstrapCancellation = new();
     private static StudioLaunchRequest? _pendingLaunchRequest;
 
     public App()
@@ -20,7 +21,6 @@ public partial class App : Application
         try
         {
             InitializeComponent();
-            Services = AppServices.Create();
         }
         catch (Exception exception)
         {
@@ -30,10 +30,11 @@ public partial class App : Application
     }
 
     public static AppServices Services { get; private set; } = null!;
+    public static bool IsInitialized { get; private set; }
     public static MainWindow? MainWindowInstance { get; private set; }
     public static MainPage? Shell { get; internal set; }
 
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         try
         {
@@ -41,6 +42,20 @@ public partial class App : Application
             _window = new MainWindow();
             MainWindowInstance = _window;
             _window.Activate();
+
+            AppServices services = await AppServices.CreateAsync(BootstrapCancellation.Token);
+            if (BootstrapCancellation.IsCancellationRequested)
+            {
+                await services.DisposeAsync();
+                return;
+            }
+
+            Services = services;
+            IsInitialized = true;
+            _window.InitializeShell();
+        }
+        catch (OperationCanceledException) when (BootstrapCancellation.IsCancellationRequested)
+        {
         }
         catch (Exception exception)
         {
@@ -48,6 +63,8 @@ public partial class App : Application
             throw;
         }
     }
+
+    internal static void CancelBootstrap() => BootstrapCancellation.Cancel();
 
     public static void Navigate(string destination) => Shell?.NavigateTo(destination);
 

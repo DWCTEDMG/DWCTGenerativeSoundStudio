@@ -247,3 +247,11 @@ The build script auto-detects both backend layouts used in this repo:
 
 - `studio/edmg-studio/python_backend/edmg_studio_backend`
 - `studio/edmg-studio/python_backend/src/edmg_studio_backend`
+
+## Repository-controlled qualification
+
+`invoke_msix_lifecycle.ps1` covers clean install, launch/integrity, upgrade, repair/re-register, explicit rollback, uninstall, and residue checks. See `LIFECYCLE.md` for safe invocation and external prerequisites. `test_packaging_foundations.ps1` validates the logic without changing package registration. UI automation capabilities and honest not-run states are defined in `ui-automation-capabilities.json` and `UI_AUTOMATION.md`.
+
+`.github/workflows/package-qualification.yml` builds an unsigned structural MSIX on pull requests and retains qualification evidence for 30 days. The protected non-PR lane requires production signing credentials, fails closed when absent, and retains signed package/evidence artifacts for 90 days. An unsigned artifact is never described as production signed.
+
+Release evidence also includes `dependency-inventory.json`, normalizing available Python, Node, .NET, Go, and pinned native provenance/checksums. Lockfile omissions are represented explicitly as `unavailable`; signature and attestation status are likewise explicit.

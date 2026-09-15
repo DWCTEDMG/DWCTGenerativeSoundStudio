@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EdmgStudio.Core.Audio;
@@ -80,6 +80,18 @@ public sealed class ProfessionalEditingTests
     }
 
     [TestMethod]
+    public void AutomationSnapshot_UsesPersistedMixerValuesBeforeFirstPoint()
+    {
+        CanonicalProject project = Project("\"editing\":{\"schema_version\":1,\"automation_lanes\":[{\"id\":\"gain\",\"track_id\":\"track\",\"target\":\"volume\",\"mode\":\"read\",\"min_value\":0,\"max_value\":2,\"points\":[{\"id\":\"gain-point\",\"sample\":\"100\",\"value\":1,\"curve\":\"linear\",\"tension\":0}]},{\"id\":\"pan\",\"track_id\":\"track\",\"target\":\"pan\",\"mode\":\"read\",\"min_value\":-1,\"max_value\":1,\"points\":[{\"id\":\"pan-point\",\"sample\":\"100\",\"value\":0,\"curve\":\"linear\",\"tension\":0}]},{\"id\":\"send\",\"track_id\":\"track\",\"target\":\"send:fx\",\"mode\":\"read\",\"min_value\":0,\"max_value\":1,\"points\":[{\"id\":\"send-point\",\"sample\":\"100\",\"value\":1,\"curve\":\"linear\",\"tension\":0}]}],\"takes\":[],\"comp_ranges\":[]},\"mixer\":{\"schema_version\":1,\"channels\":[{\"id\":\"track\",\"name\":\"Track\",\"kind\":\"Track\",\"output_id\":\"master\",\"gain\":0.4,\"pan\":-0.25,\"inserts\":[],\"sends\":[{\"id\":\"fx-send\",\"destination_id\":\"fx\",\"tap\":\"PostFader\",\"gain\":0.3,\"enabled\":true}]},{\"id\":\"fx\",\"name\":\"FX\",\"kind\":\"FxReturn\",\"output_id\":\"master\",\"inserts\":[],\"sends\":[]},{\"id\":\"master\",\"name\":\"Master\",\"kind\":\"Master\",\"output_id\":null,\"inserts\":[],\"sends\":[]}]}");
+
+        AudioAutomationSnapshot snapshot = AudioAutomationSnapshot.Build(project);
+
+        Assert.AreEqual(0.4, snapshot.FindLane("track", "volume")!.Evaluate(0), 1e-6);
+        Assert.AreEqual(-0.25, snapshot.FindLane("track", "pan")!.Evaluate(0), 1e-6);
+        Assert.AreEqual(0.3, snapshot.FindSendLane("track", "fx")!.Evaluate(0), 1e-6);
+    }
+
+    [TestMethod]
     public void Operations_RejectLockedTrackAndClip()
     {
         CanonicalProject trackLocked=Project("", "true", "false");
@@ -129,7 +141,7 @@ public sealed class ProfessionalEditingTests
     private static CanonicalProject Project(string extra,string trackLocked="false",string clipLocked="false")
     {
         string comma=string.IsNullOrEmpty(extra)?"":extra+",";
-        ProjectDto dto=JsonSerializer.Deserialize<ProjectDto>("{\"id\":\"p\",\"name\":\"P\",\"revision\":1,\"schema_version\":1,\"meta\":{\"timeline\":{"+comma+"\"timebase\":{\"sample_rate\":48000},\"tracks\":[{\"id\":\"track\",\"type\":\"audio\",\"locked\":"+trackLocked+",\"clips\":[{\"id\":\"left\",\"start_sample\":\"0\",\"end_sample\":\"48000\"},{\"id\":\"clip\",\"locked\":"+clipLocked+",\"start_sample\":\"48000\",\"end_sample\":\"96000\"},{\"id\":\"right\",\"start_sample\":\"96000\",\"end_sample\":\"144000\"}]}]}}}",StudioJson.Options)!;
+        ProjectDto dto=JsonSerializer.Deserialize<ProjectDto>("{\"id\":\"p\",\"name\":\"P\",\"revision\":1,\"schema_version\":1,\"meta\":{\"timeline\":{"+comma+"\"timebase\":{\"sample_rate\":48000},\"tracks\":[{\"id\":\"track\",\"type\":\"audio\",\"locked\":"+trackLocked+",\"clips\":[{\"id\":\"left\",\"start_sample\":\"0\",\"end_sample\":\"48000\"},{\"id\":\"clip\",\"locked\":"+clipLocked+",\"start_sample\":\"48000\",\"end_sample\":\"96000\"},{\"id\":\"right\",\"start_sample\":\"96000\",\"end_sample\":\"144000\"}]},{\"id\":\"fx\",\"type\":\"audio\",\"clips\":[]}]}}}",StudioJson.Options)!;
         return dto.CanonicalProject;
     }
 }

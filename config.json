@@ -11,9 +11,9 @@
     "web_api": false
   },
   "paths": {
-    "temp_dir": "C:\\Users\\Administrator\\tmp\\deforum_music",
-    "cache_dir": "C:\\Users\\Administrator\\.deforum_music_cache",
-    "output_dir": "C:\\Users\\Administrator\\DeforumMusic\\output"
+    "temp_dir": "./tmp/deforum_music",
+    "cache_dir": "./cache",
+    "output_dir": "./output"
   },
   "performance": {
     "max_audio_duration": 600,

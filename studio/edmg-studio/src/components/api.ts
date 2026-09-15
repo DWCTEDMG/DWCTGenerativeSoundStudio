@@ -446,6 +446,17 @@ export async function apiPost(path: string, body: any, options: ApiRequestOption
   return d;
 }
 
+export async function apiPut(path: string, body: any, options: ApiRequestOptions = {}) {
+  const r = await apiFetch(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, options);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw backendError(r, d, `PUT ${path} failed`);
+  return d;
+}
+
 export async function apiPatch(path: string, body: any, options: ApiRequestOptions = {}) {
   const r = await apiFetch(path, {
     method: "PATCH",
