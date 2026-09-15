@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Any
 
-from ..store.jobs import JobStore, Job
+from ..store.jobs import Job, JobStore
+
 
 @dataclass
 class WorkerStatus:
@@ -76,7 +77,8 @@ class WorkerManager:
 
             self._bump_inflight(+1)
             try:
-                self._run_job(job)
+                with self.jobs.maintain_lease(job):
+                    self._run_job(job)
             except Exception as e:
                 self._set_error(str(e))
             finally:

@@ -134,6 +134,22 @@ def test_internal_video_request_validates_keyframe_continuity_mode() -> None:
         InternalVideoRenderRequest(keyframe_continuity_mode="sequence")  # type: ignore[arg-type]
 
 
+def test_internal_video_request_rejects_invalid_hunyuan_chunk_overlap() -> None:
+    with pytest.raises(ValueError, match="chunk overlap must be smaller"):
+        InternalVideoRenderRequest(
+            video_model_engine="hunyuan_video15",
+            hunyuan_chunk_frames=8,
+            hunyuan_chunk_overlap=8,
+        )
+
+    request = InternalVideoRenderRequest(
+        video_model_engine="ltx_25",
+        hunyuan_chunk_frames=2,
+        hunyuan_chunk_overlap=2,
+    )
+    assert request.video_model_engine == "ltx_25"
+
+
 def test_internal_settings_parse_keyframe_continuity_mode() -> None:
     default_settings = app_module._internal_settings_from_payload(
         {}, model_id="hf_sd15_internal", render_tier="balanced", device_preference="cuda"

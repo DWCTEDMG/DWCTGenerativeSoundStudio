@@ -305,6 +305,15 @@ class InternalVideoRenderRequest(BaseModel):
     deforum_steps_schedule: str | dict[str, float] | None = None
     deforum_denoise_schedule: str | dict[str, float] | None = None
 
+    @model_validator(mode="after")
+    def validate_hunyuan_chunk_geometry(self) -> InternalVideoRenderRequest:
+        if (
+            self.video_model_engine == "hunyuan_video15"
+            and self.hunyuan_chunk_overlap >= self.hunyuan_chunk_frames
+        ):
+            raise ValueError("Hunyuan chunk overlap must be smaller than the chunk size")
+        return self
+
 
 class GenerationRequest(BaseModel):
     """Provider-neutral generation request backed by the durable render queue."""
@@ -316,6 +325,35 @@ class GenerationRequest(BaseModel):
     parameters: InternalVideoRenderRequest = Field(default_factory=InternalVideoRenderRequest)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
     priority: int = Field(default=0, ge=-100, le=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_renderer_engine(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("renderer_id") not in {"hunyuan_video15", "ltx_25"}:
+            return data
+        normalized = dict(data)
+        parameters = normalized.get("parameters")
+        if isinstance(parameters, InternalVideoRenderRequest):
+            normalized["parameters"] = parameters.model_copy(
+                update={"video_model_engine": normalized["renderer_id"]}
+            )
+        elif isinstance(parameters, dict):
+            normalized["parameters"] = {
+                **parameters,
+                "video_model_engine": normalized["renderer_id"],
+            }
+        elif "parameters" not in normalized:
+            normalized["parameters"] = {"video_model_engine": normalized["renderer_id"]}
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_effective_hunyuan_chunk_geometry(self) -> GenerationRequest:
+        if (
+            self.renderer_id == "hunyuan_video15"
+            and self.parameters.hunyuan_chunk_overlap >= self.parameters.hunyuan_chunk_frames
+        ):
+            raise ValueError("Hunyuan chunk overlap must be smaller than the chunk size")
+        return self
 
 class AutoAnimateRequest(BaseModel):
     """AI auto-configure (and optionally run) an animation render.

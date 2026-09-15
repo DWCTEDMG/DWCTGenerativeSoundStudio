@@ -40,6 +40,44 @@ def test_generation_request_rejects_unadvertised_renderer() -> None:
         raise AssertionError("unadvertised renderers must be rejected")
 
 
+def test_generation_request_validates_effective_hunyuan_chunk_geometry() -> None:
+    try:
+        GenerationRequest.model_validate(
+            {
+                "renderer_id": "hunyuan_video15",
+                "parameters": {
+                    "hunyuan_chunk_frames": 2,
+                    "hunyuan_chunk_overlap": 2,
+                },
+            }
+        )
+    except ValueError as error:
+        assert "chunk overlap must be smaller" in str(error)
+    else:
+        raise AssertionError("renderer-level Hunyuan selection must validate chunk geometry")
+
+    ltx_request = GenerationRequest.model_validate(
+        {
+            "renderer_id": "ltx_25",
+            "parameters": {
+                "video_model_engine": "hunyuan_video15",
+                "hunyuan_chunk_frames": 2,
+                "hunyuan_chunk_overlap": 2,
+            },
+        }
+    )
+    assert ltx_request.parameters.video_model_engine == "ltx_25"
+
+    try:
+        GenerationRequest.model_validate(
+            {"renderer_id": "hunyuan_video15", "parameters": None}
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("explicit malformed generation parameters must be rejected")
+
+
 def test_normalized_generation_job_maps_provider_state_and_artifact() -> None:
     job = Job(
         id="job-1",

@@ -457,6 +457,21 @@ Existing Hunyuan work will be audited and completed for:
 
 No installation or model manifest alone counts as runtime readiness.
 
+Phase 8 accepted implementation (2026-09-15):
+
+- The native Render Studio exposes HunyuanVideo-1.5 selection, T2V/I2V/auto modes, source assets, low-VRAM mode, generation chunk size and overlap, model readiness, queue progress, cancellation, and completed-result insertion without requiring API-only operation.
+- The isolated Linux/WSL worker uses the official HunyuanVideo-1.5 pipeline with explicit companion-model and repository paths, CUDA-device isolation, exact frame-count validation, deterministic per-chunk seeds, previous-frame anchoring, overlap blending, progress callbacks, and cancellation between chunks.
+- Low-VRAM mode applies bounded 768x432 resolution, eight-frame scene and generation chunks, one-frame decode chunks, float16, CPU offload, and bounded overlap. Explicit I2V fails closed without a resolvable project source asset.
+- Hunyuan request validation is consistent across WinUI and FastAPI: overlap must be smaller than the generation chunk size. Other engines retain their independent settings and compatibility behavior.
+- Every claimed background job now maintains its attempt-scoped SQLite lease throughout execution. Long Hunyuan GPU jobs cannot be reclaimed concurrently after the five-minute base lease, while an actually interrupted worker remains recoverable after its renewed lease expires. Existing attempt fencing prevents an obsolete execution from publishing over a retry.
+- Successful internal-video publication writes an artifact manifest, records the output in project video history, and returns normalized artifact provenance in the durable job result. Timeline insertion remains a separate user-approved, revision-checked and idempotent command that resolves only succeeded `internal_video` artifacts.
+- Runtime readiness remains capability-derived and fails closed when the worker mode, official upstream layout, companion models, CUDA environment, or explicit runner configuration is unavailable.
+
+Acceptance evidence:
+
+- Focused backend renderer, request, artifact-insertion, job-store, worker-lease, cancellation, and recovery tests pass in the pinned Python 3.12 uv environment; changed backend files pass Ruff and `git diff --check`.
+- Native Core request-builder and render-result insertion tests pass, and the complete WinUI Release x64 solution/XAML build succeeds.
+
 ### Phase 9 - LTX Renderer
 
 Existing LTX 2.5 integration will be audited and completed for:
