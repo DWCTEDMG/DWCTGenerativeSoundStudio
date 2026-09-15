@@ -409,6 +409,8 @@ Audit context: `studio\edmg-studio-winui\ChatLog3.md` and `ChatLog4.md` were ava
 
 ### Phase 7 - Director
 
+**Status:** Accepted for versioned Director workflow and Reactive handoff contracts, exact selected-range context, durable review recovery, revision-safe review/apply, model-readiness remediation, and native/React Studio parity. Generation registration is serialized with worker publication through a job-first SQLite transaction so concurrent retries cannot orphan, cancel, or attach the wrong job. This phase is complete when the acceptance commit containing this ledger is pushed to `origin/codex/Unified`.
+
 Existing Director infrastructure is substantial, so this phase is an acceptance-gap closure rather than a rewrite.
 
 Audit and complete:
@@ -421,6 +423,24 @@ Audit and complete:
 - shared Workspace, AI Planner, Director, and Reactive Lab draft behavior
 
 Acceptance must prove draft recovery, reviewed keyframe persistence, timeline-context prompts, version compatibility, and graceful operation when the preferred model is unavailable.
+
+#### Implementation and acceptance ledger
+
+Delivered in the working tree:
+
+- version 2 Director workflow and version 1 Reactive handoff contracts, with legacy migration, extension preservation, and explicit rejection of unsupported future versions
+- exact decimal-string sample ranges and bounded timeline context covering neighboring scenes, markers, lyrics/transcripts, clips, active takes, and analysis, with persisted context digest and revision linkage
+- project-owned Director job, review, and apply metadata that survives restart; queue reconciliation is read-only and reviewed application requires the matching persisted job identity
+- shared React and native WinUI generation, review, recovery, and non-destructive Reactive apply behavior, including recovery that requires the exact draft to be displayed by Review before Apply is re-enabled
+- structured preferred-model unavailability responses that preserve user instructions and provide actionable remediation
+- cross-instance atomic idempotent job creation, job-first registration/publication locking, creator-owned compensation, duplicate-winner reconciliation, and best-effort compatibility mirrors that retries can repair
+
+Capability and validation boundary:
+
+- Qwen runtime readiness is capability-derived; model installation alone is not reported as usable generation readiness.
+- Final local acceptance on 2026-09-15 passed the frozen lock check, changed-file Ruff, all 37 Director/workflow/job-store lifecycle tests, all 180 React tests plus lint and typecheck, the complete WinUI Release x64 solution/XAML build with 2 warnings and 0 errors, all 450 Core tests, and `git diff --check`.
+- The authoritative aggregate runner passed 161 repository-scope tests with 4 skips and reported 898 backend-scope passes with 4 skips. Its only failures were the same 16 `test_workspace_reactive_integration.py` cases whose absent uploaded-audio fixtures return HTTP 404 `Uploaded audio file is missing`; no Phase 7 or additional failure class occurred.
+- `app.py` retains its unchanged 64-diagnostic Ruff baseline; Phase 7 changed files introduce no new Ruff diagnostics. The final narrow read-only concurrency and lifecycle review found no significant issue.
 
 ### Phase 8 - Hunyuan Renderer
 

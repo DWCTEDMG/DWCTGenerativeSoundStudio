@@ -1,7 +1,7 @@
 """Project-owned Director state; preparing prompts never submits generation."""
 
-from typing import Literal
 from copy import deepcopy
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,8 +14,16 @@ from ..domain.director_readiness import (
     resolve_director_readiness,
 )
 from ..domain.director_scene import DirectorDocument, compile_scene
-from ..domain.director_workflow import DirectionDraft, prepare_workflow, source_fingerprint
-from ..revisions import RevisionRoute
+from ..domain.director_workflow import (
+    DirectionDraft,
+    prepare_workflow,
+    set_timeline_context,
+    source_fingerprint,
+    timeline_context,
+    workflow_state,
+)
+from ..domain.editor_commands import digest
+from ..revisions import RevisionRoute, revision_context
 from ..services.engine_packages import HIGH_GGUF_ID, STANDARD_GGUF_ID
 from ..services.qwen_director import validate_proposal
 
@@ -34,6 +42,8 @@ class DirectorGenerationRequest(BaseModel):
     mode: Literal["automatic", "fast", "quality", "maximum"] = "automatic"
     renderer_engine: str = Field(default="automatic", min_length=1, max_length=80)
     allow_external: bool = False
+    start_sample: str | None = None
+    end_sample: str | None = None
 
 
 class DirectorApplyRequest(BaseModel):
@@ -141,6 +151,21 @@ def create_director_router(
         project = get_store().get(project_id)
         if project is None:
             raise HTTPException(404, "Project not found")
+        signature = digest(request.model_dump(mode="json", exclude={"expected_revision"}))
+        existing = next((job for job in get_jobs().list_for_project(project_id)
+                         if job.type == "qwen_director"
+                         and job.idempotency_key == "director:" + request.operation_id), None)
+        if existing is not None:
+            if existing.payload.get("request_signature") != signature:
+                raise HTTPException(409, "Operation ID already used for different direction")
+            recovery = project.meta.get("director_job") or {}
+            if recovery.get("job_id") != existing.id:
+                raise HTTPException(
+                    409, "The prior Director request conflicted with a project change; refresh and retry"
+                )
+            return {"ok": True, "revision": project.revision,
+                    "job_id": existing.id, "status": existing.status,
+                    "output_policy": "draft"}
         if project.revision != request.expected_revision:
             raise HTTPException(409, "Project changed; refresh direction before generating")
         model_id = STANDARD_DIRECTOR_MODEL_ID
@@ -177,15 +202,36 @@ def create_director_router(
             }
         if get_models().installed_path(model_id) is None:
             raise HTTPException(
-                422, f"Install the resolved Director model ({model_id}) in Models before generating direction"
+                422, {"message": f"Director model {model_id} is not installed",
+                      "hint": "Install the resolved model in Models, then retry. The current draft was not changed.",
+                      "code": "DIRECTOR_MODEL_NOT_INSTALLED", "model_id": model_id,
+                      "draft_unchanged": True}
             )
         workflow = project.meta.get("director_workflow") or {}
         document = DirectorDocument.model_validate(workflow.get("document") or project.meta.get("director_document") or {})
         if not document.scenes:
             raise HTTPException(422, "Save at least one scene range before generating direction")
+        if (request.start_sample is None) != (request.end_sample is None):
+            raise HTTPException(422, "Provide both start_sample and end_sample")
+        start_sample = request.start_sample or min(document.scenes, key=lambda scene: int(scene.start_sample)).start_sample
+        end_sample = request.end_sample or max(document.scenes, key=lambda scene: int(scene.end_sample)).end_sample
+        try:
+            context = timeline_context(project, start_sample, end_sample)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        context_digest = digest(context)
+
+        if workflow:
+            current_draft = DirectionDraft.model_validate(workflow)
+            if current_draft.source_fingerprint != source_fingerprint(project):
+                raise HTTPException(409, "Workspace draft changed; prepare a current draft before generating")
+            set_timeline_context(current_draft, context, project.revision + 1)
+            current_draft.source_revision = project.revision + 1
+            workflow = current_draft.model_dump(mode="json")
         payload = {
             "document": document.model_dump(mode="json"),
             "instruction": request.instruction,
+            "request_signature": signature,
             "source_revision": project.revision,
             "workflow_draft_id": workflow.get("draft_id"),
             "workflow_source_fingerprint": workflow.get("source_fingerprint"),
@@ -196,6 +242,9 @@ def create_director_router(
             "reactive_overrides": deepcopy(workflow.get("reactive_overrides") or {}),
             "reactive_extensions": deepcopy(workflow.get("reactive_extensions") or {}),
             "workflow_variant_index": workflow.get("variant_index", 0),
+            "timeline_context": context,
+            "context_digest": context_digest,
+            "context_revision": int(workflow.get("context_revision") or project.revision),
             "model_id": model_id,
             "mode": request.mode,
             "renderer_engine": request.renderer_engine,
@@ -213,20 +262,80 @@ def create_director_router(
             payload["runtime_path"] = runtime_path
         if readiness_snapshot is not None:
             payload["readiness"] = readiness_snapshot
-        job = get_jobs().create(
+        job_store = get_jobs()
+        job, created = job_store.create_with_status(
             project_id, "qwen_director", payload, idempotency_key="director:" + request.operation_id
         )
         if job.type != "qwen_director" or job.payload != payload:
             raise HTTPException(409, "Operation ID already used for different direction")
-        return {"ok": True, "job_id": job.id, "status": job.status, "output_policy": "draft"}
+        def persist_generation(current, active_job):
+            if workflow:
+                current.meta["director_workflow"] = deepcopy(workflow)
+            current.meta["director_generation_context"] = {
+                "version": 1, "revision": current.revision + 1,
+                "digest": context_digest, "context": deepcopy(context),
+            }
+            current.meta["director_job"] = {
+                "version": 1,
+                "job_id": job.id,
+                "status": active_job.status,
+                "reviewed": False,
+                "instruction": request.instruction,
+                "context": deepcopy(context),
+            }
+
+        generation_error: Exception | None = None
+        with job_store.registration_guard(project_id, job.id) as registration:
+            if not registration.active:
+                raise HTTPException(409, "Prior Director request conflicted; use a new operation ID")
+            try:
+                project = get_store().mutate(
+                    project_id,
+                    lambda current: persist_generation(current, registration.job),
+                    expected_revision=request.expected_revision,
+                )
+            except Exception as original_error:
+                token = revision_context.set(None)
+                try:
+                    latest = get_store().get(project_id)
+                except Exception:
+                    latest = None
+                finally:
+                    revision_context.reset(token)
+                recovery = (latest.meta.get("director_job") or {}) if latest is not None else {}
+                if recovery.get("job_id") == job.id:
+                    return {"ok": True, "revision": latest.revision, "job_id": job.id,
+                            "status": registration.job.status, "output_policy": "draft"}
+                if created:
+                    registration.cancel()
+                generation_error = original_error
+        if generation_error is not None:
+            raise generation_error
+        return {"ok": True, "revision": project.revision, "job_id": job.id,
+                "status": registration.job.status, "output_policy": "draft"}
 
     def response(project):
         document = DirectorDocument.model_validate(project.meta.get("director_document") or {})
+        jobs = [] if get_jobs is None else [
+            {"job_id": job.id,
+             "status": ("reviewed" if (project.meta.get("director_applied_job") or {}).get("job_id") == job.id
+                        else "review_ready" if job.status == "succeeded" else job.status),
+             "updated_at": job.updated_at, "error": job.error}
+            for job in get_jobs().list_for_project(project.id) if job.type == "qwen_director"
+        ]
         return {
             "ok": True,
             "revision": project.revision,
             "document": document.model_dump(mode="json"),
+            "director_jobs": jobs,
         }
+
+    @router.get("/v1/projects/{project_id}/director/drafts")
+    def drafts(project_id: str):
+        project = get_store().get(project_id)
+        if project is None:
+            raise HTTPException(404, "Project not found")
+        return response(project)
 
     def director_job(project_id, job_id):
         if get_jobs is None:
@@ -248,6 +357,30 @@ def create_director_router(
             "result": job.result if job.status == "succeeded" else None,
         }
 
+    @router.post("/v1/projects/{project_id}/director/drafts/{job_id}/review")
+    def review_draft(project_id: str, job_id: str, request: DirectorApplyRequest):
+        job = director_job(project_id, job_id)
+        if job.status != "succeeded" or not job.result or job.result.get("status") != "draft":
+            raise HTTPException(409, "Director draft is not ready for review")
+
+        def review(project):
+            recovery = project.meta.get("director_job") or {}
+            if recovery.get("job_id") != job.id:
+                raise HTTPException(409, "A newer Director job replaced this draft")
+            project.meta["director_job"] = {
+                **recovery,
+                "status": "reviewed",
+                "reviewed": True,
+                "reviewed_job_id": job.id,
+            }
+
+        try:
+            current = get_store().mutate(project_id, review, expected_revision=request.expected_revision)
+        except KeyError as exc:
+            raise HTTPException(404, "Project not found") from exc
+        return {**workflow_state(current), "job_id": job.id, "job_status": "reviewed",
+                "document": job.result["document"]}
+
     @router.post("/v1/projects/{project_id}/director/drafts/{job_id}/apply")
     def apply_draft(project_id: str, job_id: str, request: DirectorApplyRequest):
         job = director_job(project_id, job_id)
@@ -265,12 +398,17 @@ def create_director_router(
             ) from exc
 
         def apply(project):
+            recovery = project.meta.get("director_job") or {}
+            if recovery.get("job_id") != job.id or recovery.get("reviewed_job_id") != job.id:
+                raise HTTPException(409, "Director draft must be reviewed before application")
             if workflow_draft_id:
                 workflow = DirectionDraft.model_validate(project.meta.get("director_workflow") or {})
                 if (
                     workflow.draft_id != workflow_draft_id
                     or workflow.source_fingerprint != job.payload.get("workflow_source_fingerprint")
                     or workflow.source_fingerprint != source_fingerprint(project)
+                    or workflow.context_digest != job.payload.get("context_digest")
+                    or workflow.context_revision != job.payload.get("context_revision")
                 ):
                     raise HTTPException(
                         409, "Workspace draft changed during generation; retain this result for review"
@@ -289,6 +427,8 @@ def create_director_router(
                 "source_revision": job.payload["source_revision"],
                 "provenance": job.result.get("provenance", {}),
             }
+            project.meta["director_job"] = {**recovery, "status": "applied", "reviewed": True,
+                                            "reviewed_job_id": job.id}
             prepare_workflow(
                 project, lambda _: project.meta.get("last_plan") or {},
                 resulting_revision=project.revision + 1, source="director",

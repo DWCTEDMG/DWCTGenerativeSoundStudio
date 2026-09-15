@@ -1,4 +1,5 @@
 using EdmgStudio.Core.Models;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
@@ -93,13 +94,18 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
         ProjectResponse response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
         ProjectDto project = response.Project;
 
-        JsonElement director = await App.Services.ApiClient.GetDirectorDocumentAsync(projectId, cancellationToken);
+        Task<JsonElement> directorTask = App.Services.ApiClient.GetDirectorDocumentAsync(projectId, cancellationToken);
+        Task<JsonElement> workflowTask = App.Services.ApiClient.GetDirectorWorkflowAsync(projectId, cancellationToken);
+        await Task.WhenAll(directorTask, workflowTask);
+        JsonElement director = await directorTask;
+        JsonElement workflow = await workflowTask;
         cancellationToken.ThrowIfCancellationRequested();
         _directorProjectId = projectId;
         _reviewedDirectorJobId = null;
         _pendingDirectorRequest = null;
         DirectorDraftBox.Text = "";
         ApplyDirectorDocument(director);
+        RecoverWorkflowContext(projectId, workflow);
 
         ProjectIdText.Text = project.Id;
         AnalysisText.Text = project.HasAnalysis
@@ -256,9 +262,12 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
         SourceAssetText.Text = DisplayPath(App.Services.Session.SourceAssetPath, "None selected");
         ArtifactText.Text = DisplayPath(App.Services.Session.SelectedArtifactPath, "None selected");
         JobText.Text = App.Services.Session.SelectedJobId ?? "None selected";
-        TimelineFocusText.Text = App.Services.Session.TimelineFocusSeconds is double focus
-            ? $"{focus:0.###} seconds"
-            : "No focused time";
+        TimelineFocusText.Text = App.Services.Session.TimelineSelectionStartSample is long start &&
+                                 App.Services.Session.TimelineSelectionEndSample is long end
+            ? $"Samples [{start}, {end}) · context revision {App.Services.Session.ContextRevision}"
+            : App.Services.Session.TimelineFocusSeconds is double focus
+                ? $"{focus:0.###} seconds"
+                : "No focused time or sample range";
         RenderContextText.Text = DisplayPath(App.Services.Session.RenderContext, "Default");
     }
 
@@ -287,6 +296,33 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
         PromptPreviewBox.Text = "";
         _reviewedDirectorJobId = null;
         ApplyDirectorDraftButton.IsEnabled = false;
+    }
+
+    private void RecoverWorkflowContext(string projectId, JsonElement workflow)
+    {
+        DirectorWorkflowRecovery recovery = DirectorWorkflowRecovery.FromResponse(
+            workflow,
+            string.Equals(App.Services.Session.SelectedJobProjectId, projectId, StringComparison.Ordinal)
+                ? App.Services.Session.SelectedJobId : null);
+        if (recovery.JobId is not null)
+        {
+            App.Services.Session.SetSelectedJob(projectId, recovery.JobId);
+        }
+        _reviewedDirectorJobId = null;
+        if (recovery.SelectionStartSample is not null)
+        {
+            App.Services.Session.SetTimelineSelection(
+                recovery.SelectionStartSample,
+                recovery.SelectionEndSample,
+                recovery.ContextRevision);
+        }
+        if (recovery.JobId is not null && recovery.JobStatus is not null)
+        {
+            DirectorDraftBox.Text = recovery.ReviewedJobId is not null
+                ? $"Recovered reviewed Director job {recovery.JobId}. Review it again to reload the exact draft before applying."
+                : $"Recovered Director job {recovery.JobId} ({recovery.JobStatus}). Review it when generation finishes.";
+        }
+        UpdateSessionContext();
     }
 
     private async Task RunDirectorActionAsync(Func<string, CancellationToken, Task> action)
@@ -326,10 +362,14 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
             string instruction = DirectorInstructionBox.Text.Trim();
             if (instruction.Length == 0) throw new InvalidOperationException("Enter direction for Qwen3-VL first.");
             string rendererEngine = (PromptEngineBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "hunyuan_video15";
+            string? startSample = App.Services.Session.TimelineSelectionStartSample?.ToString(CultureInfo.InvariantCulture);
+            string? endSample = App.Services.Session.TimelineSelectionEndSample?.ToString(CultureInfo.InvariantCulture);
             if (_pendingDirectorRequest is null ||
                 _pendingDirectorRequest.Instruction != instruction ||
                 _pendingDirectorRequest.ExpectedRevision != _directorRevision ||
-                !string.Equals(_pendingDirectorRequest.RendererEngine, rendererEngine, StringComparison.Ordinal))
+                !string.Equals(_pendingDirectorRequest.RendererEngine, rendererEngine, StringComparison.Ordinal) ||
+                !string.Equals(_pendingDirectorRequest.StartSample, startSample, StringComparison.Ordinal) ||
+                !string.Equals(_pendingDirectorRequest.EndSample, endSample, StringComparison.Ordinal))
             {
                 _pendingDirectorRequest = new(
                     _directorRevision,
@@ -337,10 +377,13 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
                     instruction,
                     "automatic",
                     rendererEngine,
-                    false);
+                    false,
+                    startSample,
+                    endSample);
             }
             JsonElement response = await App.Services.ApiClient.GenerateDirectorAsync(projectId, _pendingDirectorRequest, token);
             token.ThrowIfCancellationRequested();
+            _directorRevision = response.GetProperty("revision").GetInt64();
             App.Services.Session.SetSelectedJob(projectId, response.GetProperty("job_id").GetString());
             _pendingDirectorRequest = null;
             _reviewedDirectorJobId = null;
@@ -352,17 +395,11 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
     private async void ReviewDirector_Click(object sender, RoutedEventArgs e) =>
         await RunDirectorActionAsync(async (projectId, token) =>
         {
-            _reviewedDirectorJobId = null;
             string jobId = App.Services.Session.SelectedJobId ?? throw new InvalidOperationException("Select a Director job in Queue first.");
-            JsonElement draft = await App.Services.ApiClient.GetDirectorDraftAsync(projectId, jobId, token);
+            JsonElement draft = await App.Services.ApiClient.ReviewDirectorDraftAsync(projectId, jobId, new(_directorRevision), token);
             token.ThrowIfCancellationRequested();
-            string? status = draft.GetProperty("status").GetString();
-            if (status != "succeeded")
-            {
-                DirectorDraftBox.Text = $"Job {status}: {draft.GetProperty("error")}";
-                return;
-            }
-            DirectorDraftBox.Text = JsonNode.Parse(draft.GetProperty("result").GetProperty("document").GetRawText())!.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            _directorRevision = draft.GetProperty("revision").GetInt64();
+            DirectorDraftBox.Text = JsonNode.Parse(draft.GetProperty("document").GetRawText())!.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
             _reviewedDirectorJobId = jobId;
             ShowStatus("Review the draft before applying it to saved direction.", InfoBarSeverity.Informational);
         });

@@ -42,6 +42,7 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
     private string _workflowStatus = "not_prepared";
     private long _workflowRevision;
     private PlanDto? _workflowPlan;
+    private bool _localStateWriteAllowed = true;
 
     public ObservableCollection<ReactiveMapping> Mappings => _mappings;
     public ObservableCollection<ReactiveKeyframeEditor> Keyframes => _keyframes;
@@ -243,6 +244,11 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
         var timeline = await timelineTask;
         var localState = await localStateTask;
         var workflow = await workflowTask;
+        if (!ReactiveWorkflow.SupportsRecovery(workflow))
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Newer Workspace recovery retained", "This server draft uses a newer recovery format. Existing Reactive Lab state was left unchanged; update Studio before applying it.");
+            return;
+        }
         string workflowStatus = workflow.TryGetProperty("status", out var status)
             ? status.GetString() ?? "not_prepared"
             : "not_prepared";
@@ -261,6 +267,13 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
         LoadBackendDraft(project.Project);
         LoadWorkflow(workflow);
         // Saved presets remain available, but cannot replace generated Workspace data.
+        _localStateWriteAllowed = true;
+        if (localState is not null && !localState.TryNormalizeForRecovery(out localState))
+        {
+            _localStateWriteAllowed = false;
+            localState = null;
+            ShowStatus(InfoBarSeverity.Warning, "Newer recovery data retained", "Reactive Lab did not load or overwrite local recovery data created by a newer Studio version.");
+        }
         LoadLocalState(_workflowDraftId is null ? localState : null);
         if (_workflowDraftId is not null && localState is not null)
         {
@@ -1011,12 +1024,15 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
         }
 
         var json = await FileIO.ReadTextAsync(file);
-        return JsonSerializer.Deserialize(json, StudioJsonContext.Default.ReactiveLabLocalState);
+        ReactiveLabLocalState? state = JsonSerializer.Deserialize(json, StudioJsonContext.Default.ReactiveLabLocalState);
+        return state is not null && state.TryNormalizeForRecovery(out ReactiveLabLocalState normalized)
+            ? normalized
+            : state;
     }
 
     private async Task SaveLocalStateAsync()
     {
-        if (string.IsNullOrWhiteSpace(_activeProjectId))
+        if (string.IsNullOrWhiteSpace(_activeProjectId) || !_localStateWriteAllowed)
         {
             return;
         }

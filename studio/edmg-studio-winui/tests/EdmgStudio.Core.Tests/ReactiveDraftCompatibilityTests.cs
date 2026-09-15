@@ -78,4 +78,67 @@ public sealed class ReactiveDraftCompatibilityTests
         Assert.IsNotNull(request.RepairSuggestions);
         Assert.IsFalse(ReactiveWorkflow.HasMeaningfulPayload(request));
     }
+
+    [TestMethod]
+    public void LegacyLocalStateMigratesToCurrentRecoveryVersion()
+    {
+        var state = JsonSerializer.Deserialize("""{"current":{"name":"legacy"},"presets":[]}""",
+            StudioJsonContext.Default.ReactiveLabLocalState)!;
+
+        Assert.IsTrue(state.TryNormalizeForRecovery(out ReactiveLabLocalState normalized));
+        Assert.AreEqual(ReactiveLabLocalState.CurrentVersion, normalized.Version);
+        Assert.AreEqual("legacy", normalized.Current.Name);
+    }
+
+    [TestMethod]
+    public void FutureLocalStateIsRejectedWithoutMutation()
+    {
+        var state = JsonSerializer.Deserialize("""{"version":99,"current":{"name":"future"},"workspace_draft_id":" draft "}""",
+            StudioJsonContext.Default.ReactiveLabLocalState)!;
+
+        Assert.IsFalse(state.TryNormalizeForRecovery(out ReactiveLabLocalState rejected));
+        Assert.AreSame(state, rejected);
+        Assert.AreEqual(" draft ", state.WorkspaceDraftId);
+        Assert.AreEqual("future", state.Current.Name);
+    }
+
+    [TestMethod]
+    public void DirectorWorkflowRecoveryUsesOptionalJobAndExactTimelineContext()
+    {
+        using JsonDocument document = JsonDocument.Parse("""
+            {"director_job":{"version":1,"job_id":"job-8","status":"reviewed","reviewed":true,"reviewed_job_id":"job-8"},
+             "context_revision":12,
+             "timeline_context":{"version":1,"selected_range":{"start_sample":"9007199254740993",
+             "end_sample":"9007199254741993"}}}
+            """);
+
+        DirectorWorkflowRecovery recovery = DirectorWorkflowRecovery.FromResponse(document.RootElement, "fallback");
+
+        Assert.AreEqual("job-8", recovery.JobId);
+        Assert.AreEqual("reviewed", recovery.JobStatus);
+        Assert.AreEqual("job-8", recovery.ReviewedJobId);
+        Assert.AreEqual(9_007_199_254_740_993, recovery.SelectionStartSample);
+        Assert.AreEqual(9_007_199_254_741_993, recovery.SelectionEndSample);
+        Assert.AreEqual(12, recovery.ContextRevision);
+    }
+
+    [TestMethod]
+    public void DirectorWorkflowRecoveryFallsBackToSelectedSessionJob()
+    {
+        using JsonDocument document = JsonDocument.Parse("{}" );
+
+        DirectorWorkflowRecovery recovery = DirectorWorkflowRecovery.FromResponse(document.RootElement, " selected-job ");
+
+        Assert.AreEqual("selected-job", recovery.JobId);
+    }
+
+    [TestMethod]
+    public void FutureServerRecoveryVersionIsRejected()
+    {
+        using JsonDocument future = JsonDocument.Parse("{\"recovery_version\":2}");
+        using JsonDocument legacy = JsonDocument.Parse("{}");
+
+        Assert.IsFalse(ReactiveWorkflow.SupportsRecovery(future.RootElement));
+        Assert.IsTrue(ReactiveWorkflow.SupportsRecovery(legacy.RootElement));
+    }
 }

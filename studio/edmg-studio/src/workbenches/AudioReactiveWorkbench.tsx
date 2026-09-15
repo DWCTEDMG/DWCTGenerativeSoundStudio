@@ -51,7 +51,7 @@ type ReactiveParams = {
 };
 
 type AudioMetrics = { energy: number; bass: number; mid: number; treble: number };
-type Keyframe = { frame: number; time: number; metrics: AudioMetrics; params: ReactiveParams };
+type Keyframe = { frame: number; time: number; metrics: AudioMetrics; params: ReactiveParams; [key: string]: any };
 type BeatMarker = { frame: number; time: number; intensity: number };
 type CueEvent = { id: number; frame: number; time: number; cueType: 'cut' | 'push' | 'orbit' | 'hold'; instruction: string };
 type SectionSummary = { id: number; startTime: number; endTime: number; label: string; avgEnergy: number; approved: boolean; renderMode: RenderMode };
@@ -119,6 +119,8 @@ type AudioReactiveWorkbenchProps = {
   studioProjectName?: string;
   studioProject?: any;
   studioSelectedVariant?: number;
+  studioReactiveDraft?: any;
+  studioWorkflowDraftId?: string;
   onSyncToStudio?: (payload: ReactiveLabSyncPayload) => Promise<string | void>;
   compact?: boolean;
 };
@@ -521,6 +523,8 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   studioProjectName,
   studioProject,
   studioSelectedVariant = 0,
+  studioReactiveDraft,
+  studioWorkflowDraftId,
   onSyncToStudio,
   compact = false,
 }) => {
@@ -556,6 +560,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   const [studioSyncMessage, setStudioSyncMessage] = useState<string | null>(null);
   const [studioSyncError, setStudioSyncError] = useState<string | null>(null);
   const [studioSeedStatus, setStudioSeedStatus] = useState<string | null>(null);
+  const [hydratedDraftIdentity, setHydratedDraftIdentity] = useState('');
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -563,6 +568,8 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const historyRef = useRef<Keyframe[]>([]);
   const studioAudioName = String(studioProject?.meta?.audio?.filename || '').trim();
+  const localDraftKey = studioProjectId ? `edmg-reactive-draft-v1:${studioProjectId}` : '';
+  const localDraftIdentity = `${studioProjectId || ''}:${studioWorkflowDraftId || ''}`;
   const studioAudioRequest = useMemo<SignedProjectMediaRequest | null>(
     () => studioProjectId && studioAudioName
       ? { purpose: 'audio', path: studioAudioName }
@@ -602,8 +609,9 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
       studioAudioName,
       String(studioProject?.meta?.analysis?.timestamp || ''),
       String(studioProject?.meta?.last_reactive_lab?.applied_at || ''),
+      studioWorkflowDraftId || '',
     ].join(':');
-    if (!studioProjectId || !studioProject || hydrationKey === studioHydrationKeyRef.current) return;
+    if (!studioProjectId || hydrationKey === studioHydrationKeyRef.current) return;
     studioHydrationKeyRef.current = hydrationKey;
     setAudioFile(null);
     setAudioUrl((current) => {
@@ -612,11 +620,38 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
     });
 
     const hydrate = async () => {
-      const savedReactive = studioProject?.meta?.last_reactive_lab || {};
+      const serverReactive = studioReactiveDraft || studioProject?.meta?.last_reactive_lab || {};
+      let savedReactive = serverReactive;
+      if (localDraftKey) {
+        try {
+          const local = JSON.parse(window.localStorage.getItem(localDraftKey) || 'null');
+          if (local?.schema_version === 1 && local?.project_id === studioProjectId
+            && local?.draft_id === (studioWorkflowDraftId || null)) savedReactive = local.payload;
+        } catch { /* Ignore malformed local draft state. */ }
+      }
       const metadata = savedReactive?.metadata || {};
 
       if (Array.isArray(savedReactive?.keyframes) && savedReactive.keyframes.length) {
-        setOfflineKeyframes(savedReactive.keyframes);
+        setOfflineKeyframes(savedReactive.keyframes.map((point: any) => ({
+          ...point,
+          frame: Number(point.frame || 0),
+          time: Number(point.time ?? point.t ?? 0),
+          metrics: point.metrics || {
+            energy: Number(point.energy_level ?? point.motion_score ?? 0),
+            bass: Number(point.bass_intensity ?? 0),
+            mid: Number(point.mid_intensity ?? 0),
+            treble: Number(point.treble_intensity ?? 0),
+          },
+          params: point.params || {
+            ...DEFAULT_PARAMS,
+            zoom: Number(point.zoom ?? DEFAULT_PARAMS.zoom),
+            translation_x: Number(point.pan_x ?? DEFAULT_PARAMS.translation_x),
+            translation_y: Number(point.pan_y ?? DEFAULT_PARAMS.translation_y),
+            rotation_z: Number(point.rotation_deg ?? DEFAULT_PARAMS.rotation_z),
+            strength: Number(point.strength ?? DEFAULT_PARAMS.strength),
+            cfg_scale: Number(point.cfg ?? DEFAULT_PARAMS.cfg_scale),
+          },
+        })));
         setSectionApproval(
           Array.isArray(savedReactive?.sections)
             ? Object.fromEntries(savedReactive.sections.map((section: any) => [section.id, Boolean(section.approved)]))
@@ -640,16 +675,27 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
         setStudioSeedStatus(
           `Loaded the saved reactive pass from ${studioProjectName || 'the shared Studio project'} — the session audio is reused automatically, so there is no need to re-upload. Keep refining it here or replace it with a new audio run.`,
         );
+        if (localDraftKey) {
+          window.localStorage.setItem(localDraftKey, JSON.stringify({
+            schema_version: 1,
+            project_id: studioProjectId,
+            draft_id: studioWorkflowDraftId || null,
+            payload: savedReactive,
+          }));
+        }
       } else {
+        setOfflineKeyframes([]);
+        setSectionApproval({});
         setStudioSeedStatus(
           `Using the analyzed Overview track from ${studioProjectName || 'the shared Studio project'} — the session audio is reused automatically, so there is no need to re-upload. Build a reactive pass here when you want motion schedules, or skip it and keep the core creative direction only.`,
         );
       }
+      setHydratedDraftIdentity(localDraftIdentity);
 
     };
 
     void hydrate();
-  }, [studioAudioName, studioProject, studioProjectId, studioProjectName, studioSelectedVariant]);
+  }, [localDraftIdentity, localDraftKey, studioAudioName, studioProject, studioProjectId, studioProjectName, studioReactiveDraft, studioSelectedVariant, studioWorkflowDraftId]);
 
   const buildStudioPayload = (): ReactiveLabSyncPayload | null => {
     if (!activeKeyframes.length) return null;
@@ -669,7 +715,16 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
         renderMode,
         scheduleStride,
       },
-      keyframes: activeKeyframes,
+      keyframes: activeKeyframes.map((point) => ({
+        ...point,
+        t: point.t ?? point.time,
+        zoom: point.params.zoom,
+        pan_x: point.params.translation_x,
+        pan_y: point.params.translation_y,
+        rotation_deg: point.params.rotation_z,
+        strength: point.params.strength,
+        cfg: point.params.cfg_scale,
+      })),
       beat_markers: beatMarkers,
       cue_events: cueEvents,
       sections,
@@ -678,6 +733,18 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
       handoff_manifest: handoffManifest,
     };
   };
+
+  useEffect(() => {
+    if (!localDraftKey || !studioProjectId || hydratedDraftIdentity !== localDraftIdentity) return;
+      const payload = buildStudioPayload();
+      if (!payload) return;
+      window.localStorage.setItem(localDraftKey, JSON.stringify({
+        schema_version: 1,
+        project_id: studioProjectId,
+        draft_id: studioWorkflowDraftId || null,
+        payload,
+      }));
+  }, [activeKeyframes, fps, hydratedDraftIdentity, localDraftIdentity, localDraftKey, mappingPreset, minCutFrames, parameterScaling, renderMode, scheduleStride, sectionApproval, sensitivity, smoothing, studioProjectId, studioWorkflowDraftId]);
 
   const summaryStats = useMemo(() => {
     if (!activeKeyframes.length) return null;

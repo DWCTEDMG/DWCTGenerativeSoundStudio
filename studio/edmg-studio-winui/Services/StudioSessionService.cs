@@ -18,6 +18,9 @@ public sealed class StudioSessionService
     private const string TimelineFocusKey = "StudioSession.TimelineFocusSeconds";
     private const string RenderContextKey = "StudioSession.RenderContext";
     private const string LastDestinationKey = "StudioSession.LastWorkflowDestination";
+    private const string TimelineSelectionStartKey = "StudioSession.TimelineSelectionStartSample";
+    private const string TimelineSelectionEndKey = "StudioSession.TimelineSelectionEndSample";
+    private const string ContextRevisionKey = "StudioSession.ContextRevision";
     private readonly ApplicationDataContainer? _settings;
     private StudioWorkflowContext _context;
 
@@ -41,7 +44,10 @@ public sealed class StudioSessionService
             SourceAssetPath: ReadString(SourceAssetKey),
             TimelineFocusSeconds: ReadDouble(TimelineFocusKey),
             RenderContext: ReadString(RenderContextKey),
-            LastWorkflowDestination: ReadString(LastDestinationKey)).Normalize();
+            LastWorkflowDestination: ReadString(LastDestinationKey),
+            TimelineSelectionStartSample: ReadLong(TimelineSelectionStartKey),
+            TimelineSelectionEndSample: ReadLong(TimelineSelectionEndKey),
+            ContextRevision: ReadLong(ContextRevisionKey) ?? 0).Normalize();
     }
 
     public event EventHandler? Changed;
@@ -111,6 +117,12 @@ public sealed class StudioSessionService
 
     public string? LastWorkflowDestination => _context.LastWorkflowDestination;
 
+    public long? TimelineSelectionStartSample => _context.TimelineSelectionStartSample;
+
+    public long? TimelineSelectionEndSample => _context.TimelineSelectionEndSample;
+
+    public long ContextRevision => _context.ContextRevision;
+
     public void SetSelectedArtifact(string? artifactPath) =>
         SetContext(_context with { SelectedArtifactPath = artifactPath });
 
@@ -137,6 +149,9 @@ public sealed class StudioSessionService
     public void SetTimelineFocus(double? timelineFocusSeconds) =>
         SetContext(_context with { TimelineFocusSeconds = timelineFocusSeconds });
 
+    public void SetTimelineSelection(long? startSample, long? endSample, long contextRevision) =>
+        SetContext(_context.WithTimelineSelection(startSample, endSample, contextRevision));
+
     public void SetRenderContext(string? renderContext) =>
         SetContext(_context with { RenderContext = renderContext });
 
@@ -148,6 +163,8 @@ public sealed class StudioSessionService
     private int ReadInt(string key) => _settings?.Values[key] is int value ? value : 0;
 
     private double? ReadDouble(string key) => _settings?.Values[key] is double value ? value : null;
+
+    private long? ReadLong(string key) => _settings?.Values[key] is long value ? value : null;
 
     private void SetContext(StudioWorkflowContext context)
     {
@@ -178,6 +195,9 @@ public sealed class StudioSessionService
         PersistDouble(TimelineFocusKey, _context.TimelineFocusSeconds);
         PersistString(RenderContextKey, _context.RenderContext);
         PersistString(LastDestinationKey, _context.LastWorkflowDestination);
+        PersistLong(TimelineSelectionStartKey, _context.TimelineSelectionStartSample);
+        PersistLong(TimelineSelectionEndKey, _context.TimelineSelectionEndSample);
+        PersistLong(ContextRevisionKey, _context.ContextRevision);
     }
 
     private void PersistString(string key, string? value)
@@ -207,5 +227,11 @@ public sealed class StudioSessionService
         {
             _settings!.Values[key] = value.Value;
         }
+    }
+
+    private void PersistLong(string key, long? value)
+    {
+        if (value is null) _settings!.Values.Remove(key);
+        else _settings!.Values[key] = value.Value;
     }
 }

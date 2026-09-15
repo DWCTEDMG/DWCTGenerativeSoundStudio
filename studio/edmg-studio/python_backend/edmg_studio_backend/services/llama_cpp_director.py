@@ -342,6 +342,7 @@ class LlamaCppDirectorBackend:
         document: DirectorDocument,
         instruction: str,
         *,
+        timeline_context: dict | None = None,
         image_paths: list[str] | None = None,
         max_tokens: int = 4096,
         cancel_check: CancelCheck | None = None,
@@ -351,7 +352,7 @@ class LlamaCppDirectorBackend:
         _check_cancelled(cancel_check)
         if self.process is None:
             raise RuntimeError("llama.cpp Director backend is not initialized.")
-        messages = planning_messages(document, instruction)
+        messages = planning_messages(document, instruction, timeline_context)
         messages[-1]["content"] = _image_content(image_paths) + messages[-1]["content"]
         payload = {"model": self.model_path.name, "messages": messages, "max_tokens": max_tokens, "stream": True, "temperature": 0}
         plans = self._fallback_plans()

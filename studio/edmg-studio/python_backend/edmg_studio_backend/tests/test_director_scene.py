@@ -4,12 +4,15 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from edmg_studio_backend.api.director import create_director_router
+from edmg_studio_backend.api.director_workflow import create_workflow_router
 from edmg_studio_backend.domain.director_scene import (
     DirectorDocument,
     SceneSpec,
     StoryBible,
     compile_scene,
 )
+from edmg_studio_backend.domain.director_workflow import prepare_workflow
+from edmg_studio_backend.revisions import revision_context
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
 
@@ -127,17 +130,117 @@ def test_director_queue_is_idempotent_and_never_applies_draft(tmp_path):
         }
         first = client.post(path, json=body)
         assert first.status_code == 200, first.text
+        assert first.json()["revision"] == body["expected_revision"] + 1
+        body["expected_revision"] = first.json()["revision"]
         assert client.post(path, json=body).json()["job_id"] == first.json()["job_id"]
         assert (
             client.post(path, json={**body, "instruction": "Different direction"}).status_code
             == 409
         )
         assert store.get(project.id).revision == body["expected_revision"]
+        assert store.get(project.id).meta["director_job"]["job_id"] == first.json()["job_id"]
         job = jobs.get(project.id, first.json()["job_id"])
         assert job.type == "qwen_director"
         assert job.payload["document"] == project.meta["director_document"]
         models.available = False
-        assert client.post(path, json={**body, "operation_id": "direction-2"}).status_code == 422
+        before = store.get(project.id).meta
+        unavailable = client.post(path, json={**body, "operation_id": "direction-2"})
+        assert unavailable.status_code == 422
+        assert unavailable.json()["detail"]["code"] == "DIRECTOR_MODEL_NOT_INSTALLED"
+        assert store.get(project.id).meta == before
+
+
+def test_director_generation_cancels_job_when_project_changes_during_queueing(tmp_path, monkeypatch):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Concurrent Director")
+    project.meta["director_document"] = DirectorDocument(scenes=[scene()]).model_dump(mode="json")
+    store.save(project)
+    jobs = JobStore(tmp_path / "projects")
+
+    class Models:
+        def installed_path(self, _model_id):
+            return tmp_path
+
+    original_mutate = store.mutate
+    raced = False
+
+    def mutate_after_concurrent_change(project_id, mutator, *, expected_revision=None):
+        nonlocal raced
+        if not raced:
+            raced = True
+            token = revision_context.set(None)
+            try:
+                original_mutate(project_id, lambda value: value.meta.update(concurrent_edit=True))
+            finally:
+                revision_context.reset(token)
+        return original_mutate(project_id, mutator, expected_revision=expected_revision)
+
+    monkeypatch.setattr(store, "mutate", mutate_after_concurrent_change)
+    app = FastAPI()
+    app.include_router(create_director_router(lambda: store, lambda: jobs, lambda: Models()))
+    body = {
+        "expected_revision": project.revision,
+        "operation_id": "raced-direction",
+        "instruction": "Add a slow orbit",
+    }
+    with TestClient(app) as client:
+        path = f"/v1/projects/{project.id}/director/generate"
+        conflicted = client.post(path, json=body)
+        assert conflicted.status_code == 409
+        job = jobs.list_for_project(project.id)[0]
+        assert job.status == "canceled"
+        assert "director_job" not in store.get(project.id).meta
+
+        body["expected_revision"] = store.get(project.id).revision
+        retry = client.post(path, json=body)
+        assert retry.status_code == 409
+        assert "prior Director request conflicted" in retry.json()["detail"]
+
+
+def test_director_generation_preserves_job_persisted_by_concurrent_retry(tmp_path, monkeypatch):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Concurrent duplicate Director")
+    project.meta["director_document"] = DirectorDocument(scenes=[scene()]).model_dump(mode="json")
+    store.save(project)
+    jobs = JobStore(tmp_path / "projects")
+
+    class Models:
+        def installed_path(self, _model_id):
+            return tmp_path
+
+    original_mutate = store.mutate
+    raced = False
+
+    def mutate_after_duplicate_persists(project_id, mutator, *, expected_revision=None):
+        nonlocal raced
+        if not raced:
+            raced = True
+            job = jobs.list_for_project(project_id)[0]
+            token = revision_context.set(None)
+            try:
+                original_mutate(
+                    project_id,
+                    lambda value: value.meta.update(director_job={"job_id": job.id}),
+                )
+            finally:
+                revision_context.reset(token)
+        return original_mutate(project_id, mutator, expected_revision=expected_revision)
+
+    monkeypatch.setattr(store, "mutate", mutate_after_duplicate_persists)
+    app = FastAPI()
+    app.include_router(create_director_router(lambda: store, lambda: jobs, lambda: Models()))
+    body = {
+        "expected_revision": project.revision,
+        "operation_id": "duplicate-direction",
+        "instruction": "Add a slow orbit",
+    }
+    with TestClient(app) as client:
+        response = client.post(f"/v1/projects/{project.id}/director/generate", json=body)
+        assert response.status_code == 200
+        job = jobs.list_for_project(project.id)[0]
+        assert response.json()["job_id"] == job.id
+        assert job.status == "queued"
+        assert store.get(project.id).meta["director_job"]["job_id"] == job.id
 
 
 def test_workspace_draft_reports_waiting_progress_and_hides_canceled_output(tmp_path):
@@ -254,13 +357,24 @@ def test_reviewed_draft_apply_checks_baseline_and_preserves_job(tmp_path):
     }
     job.status = "succeeded"
     jobs.save(job)
+    store.mutate(project.id, lambda value: value.meta.update(director_job={
+        "version": 1,
+        "job_id": job.id,
+        "status": "review_ready",
+        "reviewed": False,
+        "instruction": "Add a slow walk",
+    }))
     app = FastAPI()
     app.include_router(create_director_router(lambda: store, lambda: jobs))
     with TestClient(app) as client:
         path = f"/v1/projects/{project.id}/director/drafts/{job.id}"
         assert client.get(path).json()["result"]["status"] == "draft"
         revision = store.get(project.id).revision
-        result = client.post(path + "/apply", json={"expected_revision": revision})
+        unreviewed = client.post(path + "/apply", json={"expected_revision": revision})
+        assert unreviewed.status_code == 409
+        reviewed = client.post(path + "/review", json={"expected_revision": revision})
+        assert reviewed.status_code == 200, reviewed.text
+        result = client.post(path + "/apply", json={"expected_revision": reviewed.json()["revision"]})
         assert result.status_code == 200, result.text
         assert result.json()["document"]["scenes"][0]["actions"] == proposal.scenes[0].actions
         workflow = store.get(project.id).meta["director_workflow"]
@@ -276,3 +390,98 @@ def test_reviewed_draft_apply_checks_baseline_and_preserves_job(tmp_path):
         )
         assert jobs.get(project.id, job.id).result == job.result
         assert store.get(project.id).meta["director_applied_job"]["job_id"] == job.id
+
+
+def test_director_jobs_recover_pending_review_ready_and_reviewed_after_restart(tmp_path):
+    root = tmp_path / "projects"
+    store = ProjectStore(root)
+    project = store.create("Recover Director jobs")
+    document = DirectorDocument(scenes=[scene()]).model_dump(mode="json")
+    project.meta["director_document"] = document
+    store.save(project)
+    jobs = JobStore(root)
+    pending = jobs.create(project.id, "qwen_director", {"document": document})
+    ready = jobs.create(project.id, "qwen_director", {"document": document})
+    ready.result = {"status": "draft", "document": document}
+    ready.status = "succeeded"
+    jobs.save(ready)
+    reviewed = jobs.create(project.id, "qwen_director", {"document": document})
+    reviewed.result = {"status": "draft", "document": document}
+    reviewed.status = "succeeded"
+    jobs.save(reviewed)
+    project = store.get(project.id)
+    project.meta["director_applied_job"] = {"job_id": reviewed.id}
+    store.save(project)
+    jobs.close()
+
+    restarted_jobs = JobStore(root)
+    app = FastAPI()
+    app.include_router(create_director_router(lambda: store, lambda: restarted_jobs))
+    with TestClient(app) as client:
+        response = client.get(f"/v1/projects/{project.id}/director/drafts")
+        assert response.status_code == 200, response.text
+        statuses = {item["job_id"]: item["status"] for item in response.json()["director_jobs"]}
+
+    assert statuses[pending.id] == "queued"
+    assert statuses[ready.id] == "review_ready"
+    assert statuses[reviewed.id] == "reviewed"
+    restarted_jobs.close()
+
+
+def test_workflow_recovers_exact_context_and_reviewed_job_after_restart(tmp_path):
+    root = tmp_path / "projects"
+    store = ProjectStore(root)
+    project = store.create("Recover workflow job")
+    project.meta["analysis"] = {"revision": 1, "duration_s": 2, "features": {"bpm": 120}}
+    project.meta["timeline"] = {"timebase": {"sample_rate": 48000}, "tracks": [], "markers": []}
+    prepare_workflow(
+        project,
+        lambda _: {"variants": [{"scenes": [{"id": "scene-1", "start_s": 0, "end_s": 2,
+                                                "prompt": "A dancer crosses a neon room"}]}]},
+        resulting_revision=project.revision + 1,
+    )
+    store.save(project)
+    jobs = JobStore(root)
+
+    class Models:
+        def installed_path(self, _model_id):
+            return tmp_path
+
+    app = FastAPI()
+    app.include_router(create_director_router(lambda: store, lambda: jobs, lambda: Models()))
+    with TestClient(app) as client:
+        generated = client.post(
+            f"/v1/projects/{project.id}/director/generate",
+            json={"expected_revision": store.get(project.id).revision, "operation_id": "recover-1",
+                  "instruction": "Keep the dancer centered", "start_sample": "0", "end_sample": "48000"},
+        )
+        assert generated.status_code == 200, generated.text
+        job = jobs.get(project.id, generated.json()["job_id"])
+        job.status = "succeeded"
+        job.result = {"status": "draft", "document": job.payload["document"]}
+        jobs.save(job)
+    jobs.close()
+
+    restarted_jobs = JobStore(root)
+    restarted = FastAPI()
+    restarted.include_router(create_workflow_router(lambda: store, lambda _: {}, lambda: restarted_jobs))
+    restarted.include_router(create_director_router(lambda: store, lambda: restarted_jobs, lambda: Models()))
+    with TestClient(restarted) as client:
+        workflow_path = f"/v1/projects/{project.id}/director/workflow"
+        recovered = client.get(workflow_path)
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["director_job"]["status"] == "review_ready"
+        assert recovered.json()["timeline_context"]["selected_range"] == {
+            "start_sample": "0", "end_sample": "48000"
+        }
+        assert recovered.json()["context_revision"] == generated.json()["revision"]
+
+        reviewed = client.post(
+            f"/v1/projects/{project.id}/director/drafts/{job.id}/review",
+            json={"expected_revision": recovered.json()["revision"]},
+        )
+        assert reviewed.status_code == 200, reviewed.text
+        assert reviewed.json()["director_job"]["reviewed_job_id"] == job.id
+        assert reviewed.json()["director_job"]["status"] == "reviewed"
+        assert client.get(workflow_path).json()["director_job"]["status"] == "reviewed"
+    restarted_jobs.close()

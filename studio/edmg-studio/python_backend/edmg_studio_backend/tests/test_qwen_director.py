@@ -71,6 +71,18 @@ def test_planning_messages_exclude_renderer_source_metadata():
     assert '"locked":false' in prompt
 
 
+def test_planning_messages_include_captured_timeline_context_compactly():
+    context = {
+        "version": 1,
+        "selected_range": {"start_sample": "10", "end_sample": "20"},
+        "markers": [{"id": "chorus"}],
+        "clips": [{"clip_id": "vocal", "active_take_id": "take-2"}],
+    }
+    prompt = planning_messages(document(), "Add motion", context)[1]["content"][0]["text"]
+    assert '"active_take_id":"take-2"' in prompt
+    assert '"start_sample":"10"' in prompt
+
+
 @pytest.mark.parametrize("change", ["timing", "bible", "identity", "analysis", "scene_set"])
 def test_model_cannot_override_approved_project_constraints(change):
     original = document()

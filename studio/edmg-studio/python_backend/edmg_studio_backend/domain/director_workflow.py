@@ -9,17 +9,18 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .director_scene import DirectorDocument, ExtensibleModel, SceneSpec, compile_scene
 from .editor_commands import digest, execute
 from .planner_schedule import apply_schedule, compile_schedule
-from .project_time import ProjectClock
+from .project_time import ProjectClock, int64
 from .workspace_reactive import apply_overrides, reactive_projection
 
 
 class DirectionDraft(ExtensibleModel):
-    version: Literal[1] = 1
+    version: Literal[2] = 2
+    handoff_version: Literal[1] = 1
     draft_id: str
     status: Literal["draft", "applied"] = "draft"
     source_revision: int
@@ -32,6 +33,99 @@ class DirectionDraft(ExtensibleModel):
     variant_index: int = Field(default=0, ge=0)
     reactive_overrides: dict = Field(default_factory=dict)
     reactive_extensions: dict = Field(default_factory=dict)
+    timeline_context: dict = Field(default_factory=dict)
+    context_digest: str = ""
+    context_revision: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_handoff(cls, value):
+        if isinstance(value, dict):
+            version = value.get("version", 1)
+            if version == 1:
+                value = {**value, "version": 2, "handoff_version": 1}
+            elif version != 2:
+                raise ValueError(f"Unsupported Director workflow version {version}; this server supports versions 1-2")
+            if value.get("handoff_version", 1) != 1:
+                raise ValueError("Unsupported Director/Reactive handoff version")
+        return value
+
+
+def timeline_context(project, start_sample: str, end_sample: str) -> dict:
+    """Build bounded, server-authoritative context for an exact timeline range."""
+    start, end = int64(start_sample), int64(end_sample)
+    if start < 0 or end <= start or str(start) != start_sample or str(end) != end_sample:
+        raise ValueError("Selected range must use canonical sample strings with end after start")
+    timeline = project.meta.get("timeline") or {}
+    clock = ProjectClock.from_timeline(timeline)
+    scenes = DirectorDocument.model_validate(
+        (project.meta.get("director_workflow") or {}).get("document")
+        or project.meta.get("director_document") or {}
+    ).scenes
+    ordered = sorted(scenes, key=lambda scene: int(scene.start_sample))
+    selected = [scene for scene in ordered if int(scene.end_sample) > start and int(scene.start_sample) < end]
+    selected_ids = {scene.scene_id for scene in selected}
+    indices = [index for index, scene in enumerate(ordered) if scene.scene_id in selected_ids]
+    neighbors = []
+    if indices:
+        neighbor_indices = {max(0, min(indices) - 1), min(len(ordered) - 1, max(indices) + 1)} - set(indices)
+        neighbors = [ordered[index].model_dump(mode="json") for index in sorted(neighbor_indices)]
+
+    def position(item):
+        if "position_sample" in item:
+            return int(item["position_sample"])
+        return clock.samples(item.get("time_s", item.get("t", 0)))
+
+    markers = [deepcopy(item) for item in timeline.get("markers", [])
+               if isinstance(item, dict) and start <= position(item) < end]
+    clips = []
+    for track in timeline.get("tracks", []):
+        if not isinstance(track, dict):
+            continue
+        for clip in track.get("clips", []):
+            if not isinstance(clip, dict):
+                continue
+            clip_start = int(clip.get("start_sample", clock.samples(clip.get("start_s", 0))))
+            clip_end = int(clip.get("end_sample", clock.samples(clip.get("end_s", 0))))
+            if clip_end <= start or clip_start >= end:
+                continue
+            data = clip.get("data") if isinstance(clip.get("data"), dict) else {}
+            clips.append({
+                "track_id": track.get("id"), "track_type": track.get("type"),
+                "clip_id": clip.get("id"), "name": clip.get("name"),
+                "start_sample": str(clip_start), "end_sample": str(clip_end),
+                "media_asset_id": data.get("media_asset_id", clip.get("media_asset_id")),
+                "active_take_id": data.get("active_take_id"),
+                "takes": deepcopy(data.get("takes") or []),
+            })
+    analysis = project.meta.get("analysis") or {}
+    transcript = analysis.get("transcript") or {}
+    segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+    selected_segments = [deepcopy(segment) for segment in segments if isinstance(segment, dict)
+                         and clock.samples(segment.get("end", segment.get("end_s", 0))) > start
+                         and clock.samples(segment.get("start", segment.get("start_s", 0))) < end]
+    context = {
+        "version": 1,
+        "selected_range": {"start_sample": start_sample, "end_sample": end_sample},
+        "selected_scenes": [scene.model_dump(mode="json") for scene in selected],
+        "neighbor_scenes": neighbors,
+        "markers": markers,
+        "transcript": {"text": str(transcript.get("text", ""))[:8000], "segments": selected_segments[:200]}
+        if isinstance(transcript, dict) else {"text": str(transcript)[:8000], "segments": []},
+        "lyrics": deepcopy(analysis.get("lyrics") or []),
+        "analysis_excerpt": {key: deepcopy(analysis.get(key)) for key in
+                             ("revision", "summary", "tags", "features") if key in analysis},
+        "clips": clips,
+    }
+    return context
+
+
+def set_timeline_context(draft: DirectionDraft, context: dict, revision: int) -> None:
+    if context.get("version") != 1:
+        raise ValueError("Unsupported timeline context version")
+    draft.timeline_context = deepcopy(context)
+    draft.context_digest = digest(context)
+    draft.context_revision = revision
 
 
 def source_fingerprint(project) -> str:
@@ -42,7 +136,8 @@ def source_fingerprint(project) -> str:
 def workflow_state(project) -> dict:
     raw = project.meta.get("director_workflow")
     if not raw:
-        return {"ok": True, "revision": project.revision, "status": "not_prepared", "draft": None}
+        return {"ok": True, "revision": project.revision, "status": "not_prepared", "draft": None,
+                "director_job": deepcopy(project.meta.get("director_job"))}
     draft = DirectionDraft.model_validate(raw)
     stale = draft.status == "draft" and draft.source_fingerprint != source_fingerprint(project)
     clock = ProjectClock.from_timeline(project.meta.get("timeline") or {})
@@ -57,7 +152,10 @@ def workflow_state(project) -> dict:
     plan["duration_s"] = draft.schedule["transport"]["duration_s"]
     return {"ok": True, "revision": project.revision,
             "status": "stale" if stale else draft.status, "draft": draft.model_dump(mode="json"),
-            "reactive": reactive_projection(draft, clock), "plan": plan}
+            "reactive": reactive_projection(draft, clock), "plan": plan,
+            "timeline_context": deepcopy(draft.timeline_context),
+            "context_revision": draft.context_revision,
+            "director_job": deepcopy(project.meta.get("director_job"))}
 
 
 def scene_from_plan(scene: dict, index: int, clock: ProjectClock) -> SceneSpec:
@@ -176,6 +274,9 @@ def prepare_workflow(project, plan_builder, *, resulting_revision: int,
         source_revision=resulting_revision, source_fingerprint=fingerprint, document=document,
         schedule=schedule, source_variant=source_variant, variant_index=variant_index, reactive_overrides=overrides,
         reactive_extensions=deepcopy(previous.get("reactive_extensions") or {}),
+        timeline_context=deepcopy(previous.get("timeline_context") or {}),
+        context_digest=str(previous.get("context_digest") or ""),
+        context_revision=previous.get("context_revision"),
         provenance={"planner": "studio_local_audio_planner" if source == "analysis" and not variants else str(plan.get("source") or source), "analysis_revision": analysis_revision,
                     "inference": False, "output_policy": "draft", "sample_rate": clock.sample_rate,
                     "frame_rate": clock.to_dict()["frame_rate"]},
@@ -200,6 +301,11 @@ def reviewed_draft(project, draft_id: str, document: DirectorDocument | None) ->
         raise ValueError("This draft was replaced or already applied. Refresh the Workspace draft.")
     if draft.source_fingerprint != source_fingerprint(project):
         raise ValueError("The project sources changed. Prepare and review an updated draft before applying.")
+    if draft.timeline_context and (
+        draft.context_revision != draft.source_revision
+        or draft.context_digest != digest(draft.timeline_context)
+    ):
+        raise ValueError("The captured timeline context changed. Generate and review a current draft before applying.")
     document = (document or draft.document).model_copy(deep=True)
     if document.analysis_revision != draft.document.analysis_revision:
         raise ValueError("Keep the draft linked to its source analysis revision")

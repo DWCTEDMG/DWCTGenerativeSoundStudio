@@ -983,6 +983,27 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _workflowProjectId = projectId;
         _workflowRevision = response.GetProperty("revision").GetInt64();
         _workflowStatus = response.GetProperty("status").GetString() ?? "not_prepared";
+        DirectorWorkflowRecovery recovery = DirectorWorkflowRecovery.FromResponse(
+            response,
+            string.Equals(_session.SelectedJobProjectId, projectId, StringComparison.Ordinal)
+                ? _session.SelectedJobId : null);
+        _directorDraftJobId = recovery.JobId;
+        _directorDraftJobStatus = recovery.JobStatus;
+        _directorReviewedJobId = null;
+        if (recovery.JobId is not null)
+        {
+            _session.SetSelectedJob(projectId, recovery.JobId);
+            WorkspaceDirectorDraftTextBox.Text = recovery.ReviewedJobId is not null
+                ? $"Recovered reviewed Director job {recovery.JobId}. Review it again to reload the exact draft before applying."
+                : $"Recovered Director job {recovery.JobId} ({recovery.JobStatus}). Review it when generation finishes.";
+        }
+        if (recovery.SelectionStartSample is not null)
+        {
+            _session.SetTimelineSelection(
+                recovery.SelectionStartSample,
+                recovery.SelectionEndSample,
+                recovery.ContextRevision);
+        }
         if (response.TryGetProperty("plan", out JsonElement plan) && plan.ValueKind == JsonValueKind.Object)
         {
             _generatedPlan = JsonSerializer.Deserialize(plan.GetRawText(), StudioJson.GetTypeInfo<PlanDto>());
@@ -1202,15 +1223,14 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _directorProjectId = projectId;
         _directorPendingRequest = null;
         _directorReviewedJobId = null;
-        _directorDraftJobId = null;
-        _directorDraftJobStatus = null;
-        WorkspaceDirectorDraftTextBox.Text = string.Empty;
         ApplyDirectorWorkspaceDocument(response);
         DirectorSessionText.Text =
             $"{_projectResponse?.Project.Name ?? projectId} · " +
             $"{CurrentVariants.ElementAtOrDefault(_session.SelectedVariantIndex)?.Scenes.Count ?? 0} selected storyboard scene(s) · " +
             "analysis and timeline data remain shared with this Workspace session.";
-        WorkspaceDirectorStatusText.Text = "Save direction before preparing prompts or generating a draft.";
+        WorkspaceDirectorStatusText.Text = _directorDraftJobId is null
+            ? "Save direction before preparing prompts or generating a draft."
+            : "Recovered Director job state. Review the draft before applying it.";
         await LoadDirectorReadinessAsync(projectId, cancellationToken);
         UpdateDirectorWorkspaceAvailability();
     }
@@ -1571,11 +1591,15 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             string mode = SelectedDirectorMode();
             string rendererEngine = SelectedDirectorReadinessEngine();
+            string? startSample = App.Services.Session.TimelineSelectionStartSample?.ToString(CultureInfo.InvariantCulture);
+            string? endSample = App.Services.Session.TimelineSelectionEndSample?.ToString(CultureInfo.InvariantCulture);
             if (_directorPendingRequest is null ||
                 !string.Equals(_directorPendingRequest.Instruction, instruction, StringComparison.Ordinal) ||
                 _directorPendingRequest.ExpectedRevision != _directorRevision ||
                 !string.Equals(_directorPendingRequest.Mode, mode, StringComparison.Ordinal) ||
-                !string.Equals(_directorPendingRequest.RendererEngine, rendererEngine, StringComparison.Ordinal))
+                !string.Equals(_directorPendingRequest.RendererEngine, rendererEngine, StringComparison.Ordinal) ||
+                !string.Equals(_directorPendingRequest.StartSample, startSample, StringComparison.Ordinal) ||
+                !string.Equals(_directorPendingRequest.EndSample, endSample, StringComparison.Ordinal))
             {
                 _directorPendingRequest = new DirectorGenerationRequest(
                     _directorRevision,
@@ -1583,7 +1607,9 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                     instruction,
                     mode,
                     rendererEngine,
-                    false);
+                    false,
+                    startSample,
+                    endSample);
             }
             JsonElement response = await App.Services.ApiClient.GenerateDirectorAsync(projectId, _directorPendingRequest, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -1592,6 +1618,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                 return;
             }
             string jobId = response.GetProperty("job_id").GetString() ?? string.Empty;
+            _directorRevision = response.GetProperty("revision").GetInt64();
             App.Services.Session.SetSelectedJob(projectId, jobId);
             _directorDraftJobId = jobId;
             _directorDraftJobStatus = response.GetProperty("status").GetString();
@@ -1615,40 +1642,21 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         string jobId = _session.SelectedJobId!;
         await RunBusyAsync("Reviewing Director draft", async cancellationToken =>
         {
-            JsonElement response = await App.Services.ApiClient.GetDirectorDraftAsync(projectId, jobId, cancellationToken);
+            JsonElement response = await App.Services.ApiClient.ReviewDirectorDraftAsync(
+                projectId,
+                jobId,
+                new DirectorApplyRequest(_directorRevision),
+                cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (_directorProjectId != projectId || _session.ActiveProjectId != projectId)
             {
                 return;
             }
-            string status = response.GetProperty("status").GetString() ?? "unknown";
             _directorDraftJobId = jobId;
-            _directorDraftJobStatus = status;
-            if (!string.Equals(status, "succeeded", StringComparison.OrdinalIgnoreCase))
-            {
-                _directorReviewedJobId = null;
-                string message = response.TryGetProperty("error", out JsonElement error) && error.ValueKind == JsonValueKind.String
-                    ? error.GetString() ?? string.Empty
-                    : string.Empty;
-                if (message.Length == 0 &&
-                    response.TryGetProperty("progress", out JsonElement progress) && progress.ValueKind == JsonValueKind.Object &&
-                    progress.TryGetProperty("message", out JsonElement progressMessage) && progressMessage.ValueKind == JsonValueKind.String)
-                {
-                    message = progressMessage.GetString() ?? string.Empty;
-                }
-                WorkspaceDirectorDraftTextBox.Text = $"Job {status}: {message}";
-                WorkspaceDirectorStatusText.Text = status switch
-                {
-                    "canceled" => "Director generation canceled. Saved direction is unchanged.",
-                    "failed" => "Director generation failed. Review the details before retrying.",
-                    _ => "The Director is still working. Review again for progress, or cancel the draft here."
-                };
-                UpdateDirectorWorkspaceAvailability();
-                return;
-            }
-
+            _directorDraftJobStatus = "reviewed";
+            _directorRevision = response.GetProperty("revision").GetInt64();
             _directorReviewedJobId = jobId;
-            WorkspaceDirectorDraftTextBox.Text = response.GetProperty("result").GetProperty("document").ToString();
+            WorkspaceDirectorDraftTextBox.Text = response.GetProperty("document").ToString();
             WorkspaceDirectorStatusText.Text = "Draft loaded for review. Apply it only after checking the Story Bible and scene constraints.";
             UpdateDirectorWorkspaceAvailability();
             ShowStatus("Draft ready", "Review the draft, then apply it to the saved Workspace direction when approved.", InfoBarSeverity.Informational);

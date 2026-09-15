@@ -82,11 +82,15 @@ public sealed class StudioApiClientTests
                 "Keep the approved identity.",
                 "quality",
                 "hunyuan_video15",
-                false));
+                false,
+                "9007199254740993",
+                "9007199254741993"));
         using JsonDocument body = JsonDocument.Parse(json);
         Assert.AreEqual("quality", body.RootElement.GetProperty("mode").GetString());
         Assert.AreEqual("hunyuan_video15", body.RootElement.GetProperty("renderer_engine").GetString());
         Assert.IsFalse(body.RootElement.GetProperty("allow_external").GetBoolean());
+        Assert.AreEqual("9007199254740993", body.RootElement.GetProperty("start_sample").GetString());
+        Assert.AreEqual("9007199254741993", body.RootElement.GetProperty("end_sample").GetString());
     }
 
     [TestMethod]

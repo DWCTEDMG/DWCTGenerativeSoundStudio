@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .version import STUDIO_VERSION
 
@@ -504,6 +504,10 @@ class PlannerLabImportRequest(BaseModel):
 
 
 class ReactiveLabApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int | None = Field(default=None, ge=1, strict=True)
+    apply_mode: Literal["merge_generated", "replace_all"] = "merge_generated"
+    confirm_destructive_replace: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
     keyframes: list[dict[str, Any]] = Field(default_factory=list)
     beat_markers: list[dict[str, Any]] = Field(default_factory=list)
@@ -512,8 +516,8 @@ class ReactiveLabApplyRequest(BaseModel):
     repair_suggestions: list[dict[str, Any]] = Field(default_factory=list)
     schedules: dict[str, Any] = Field(default_factory=dict)
     handoff_manifest: dict[str, Any] = Field(default_factory=dict)
-    overwrite_motion_track: bool = True
-    overwrite_camera: bool = True
+    overwrite_motion_track: bool = False
+    overwrite_camera: bool = False
 
 class ExportDeforumRequest(BaseModel):
     variant_index: int = 0

@@ -30,6 +30,77 @@ def test_job_store_create_claim_and_idempotency(tmp_path: Path) -> None:
     store.close()
 
 
+def test_job_store_idempotent_create_is_atomic_across_store_instances(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    db_path = tmp_path / "jobs.sqlite"
+    store_a = JobStore(projects, db_path=db_path)
+    store_b = JobStore(projects, db_path=db_path)
+    try:
+        barrier = threading.Barrier(2)
+        results: list[tuple[object, bool]] = []
+        errors: list[BaseException] = []
+
+        def worker(store: JobStore) -> None:
+            try:
+                barrier.wait(timeout=5)
+                results.append(
+                    store.create_with_status(
+                        "proj1",
+                        "qwen_director",
+                        {"instruction": "shared"},
+                        idempotency_key="director-shared",
+                    )
+                )
+            except BaseException as exc:  # pragma: no cover - surfaced by assertions
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(store,)) for store in (store_a, store_b)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert not errors
+        assert all(not thread.is_alive() for thread in threads)
+        assert len(results) == 2
+        assert len({job.id for job, _ in results}) == 1
+        assert sorted(created for _, created in results) == [False, True]
+    finally:
+        store_b.close()
+        store_a.close()
+
+
+def test_job_store_idempotent_retry_repairs_failed_compatibility_mirror(
+    tmp_path: Path, caplog,
+) -> None:
+    projects = tmp_path / "projects"
+    store = JobStore(projects, db_path=tmp_path / "jobs.sqlite")
+    try:
+        with patch.object(Path, "mkdir", side_effect=OSError("disk unavailable")):
+            job, created = store.create_with_status(
+                "proj1",
+                "qwen_director",
+                {},
+                idempotency_key="director-mirror",
+            )
+
+        assert created
+        assert store.get("proj1", job.id) is not None
+        assert "Could not update compatibility job mirror" in caplog.text
+
+        retry, retry_created = store.create_with_status(
+            "proj1",
+            "qwen_director",
+            {},
+            idempotency_key="director-mirror",
+        )
+        assert not retry_created
+        assert retry.id == job.id
+        assert (projects / "proj1" / "jobs" / f"{job.id}.json").is_file()
+    finally:
+        store.close()
+
+
 def test_job_store_priority_controls_claim_order_and_persists(tmp_path: Path) -> None:
     projects = tmp_path / "projects"
     db_path = tmp_path / "jobs.sqlite"

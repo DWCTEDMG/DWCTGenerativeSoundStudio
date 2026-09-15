@@ -1,7 +1,7 @@
 import React from "react";
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithStudio } from "./testUtils";
+import { installFetchMock, renderWithStudio } from "./testUtils";
 
 const setProjectId = vi.fn();
 const refreshProject = vi.fn();
@@ -39,6 +39,14 @@ describe("Reactive Lab page", () => {
     setProjectId.mockReset();
     refreshProject.mockReset();
     lastReactiveProps = null;
+    installFetchMock({
+      "GET /v1/projects/p9/director/workflow": {
+        revision: 7,
+        status: "draft",
+        draft: { draft_id: "draft-a" },
+        reactive: { metadata: { workflow_draft_id: "draft-a" }, keyframes: [] },
+      },
+    });
   });
 
   it("supports local layout customization while keeping reactive navigation intact", async () => {
@@ -76,5 +84,42 @@ describe("Reactive Lab page", () => {
 
     fireEvent.change(profileSelect, { target: { value: "presentation" } });
     expect(localStorage.getItem("edmg_layout_reactive_lab_active_profile_v1")).toBe("presentation");
+  });
+
+  it("reviews then explicitly applies the canonical revision-aware workflow", async () => {
+    const requests: Array<{ path: string; body: any }> = [];
+    const fetchMock = installFetchMock({
+      "GET /v1/projects/p9/director/workflow": {
+        revision: 7, status: "draft", draft: { draft_id: "draft-a" }, reactive: { keyframes: [] },
+      },
+      "POST /v1/projects/p9/director/workflow/reactive/review": (_path, init) => {
+        requests.push({ path: "review", body: JSON.parse(String(init?.body)) });
+        return { revision: 8, status: "draft", draft: { draft_id: "draft-b" } };
+      },
+      "POST /v1/projects/p9/director/workflow/apply": (_path, init) => {
+        requests.push({ path: "apply", body: JSON.parse(String(init?.body)) });
+        return { revision: 9, status: "applied", draft: { draft_id: "draft-b" } };
+      },
+    });
+    renderWithStudio(<ReactiveLab backendUrl="http://127.0.0.1:7863" config={null} />);
+    await waitFor(() => expect(lastReactiveProps?.studioWorkflowDraftId).toBe("draft-a"));
+    await lastReactiveProps.onSyncToStudio({ metadata: {}, keyframes: [] });
+    expect(requests).toEqual([
+      { path: "review", body: { draft_id: "draft-a", expected_revision: 7, payload: { metadata: {}, keyframes: [] } } },
+      { path: "apply", body: { draft_id: "draft-b", expected_revision: 8 } },
+    ]);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("reactive_lab/apply"))).toBe(false);
+  });
+
+  it("blocks stale drafts without touching the Timeline", async () => {
+    const fetchMock = installFetchMock({
+      "GET /v1/projects/p9/director/workflow": {
+        revision: 9, status: "stale", draft: { draft_id: "old-draft" }, reactive: { keyframes: [] },
+      },
+    });
+    renderWithStudio(<ReactiveLab backendUrl="http://127.0.0.1:7863" config={null} />);
+    await screen.findByText(/prepared Workspace draft is stale/i);
+    await expect(lastReactiveProps.onSyncToStudio({ keyframes: [] })).rejects.toThrow(/stale/i);
+    expect(fetchMock.mock.calls.every(([, init]) => !init || String(init.method || "GET") === "GET")).toBe(true);
   });
 });

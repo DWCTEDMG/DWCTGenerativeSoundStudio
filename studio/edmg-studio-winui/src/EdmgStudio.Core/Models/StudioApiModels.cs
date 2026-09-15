@@ -831,6 +831,7 @@ public static class StudioJson
 [JsonSerializable(typeof(List<ReactivePreset>))]
 [JsonSerializable(typeof(ReactiveLabLocalState))]
 [JsonSerializable(typeof(ReactiveLabMetadata))]
+[JsonSerializable(typeof(StudioWorkflowContext))]
 [JsonSerializable(typeof(StudioJobListResponse))]
 [JsonSerializable(typeof(GenerationProviderListResponse))]
 [JsonSerializable(typeof(GenerationSubmitResponse))]

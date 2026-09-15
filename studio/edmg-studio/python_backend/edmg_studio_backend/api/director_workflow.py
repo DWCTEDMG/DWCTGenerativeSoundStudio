@@ -25,6 +25,7 @@ class PrepareDirectionRequest(BaseModel):
 class ReviewDirectionRequest(PrepareDirectionRequest):
     draft_id: str = Field(min_length=1, max_length=128)
     document: DirectorDocument | None = None
+    apply_mode: str = "merge_generated"
 
 
 class ReviewReactiveRequest(PrepareDirectionRequest):
@@ -32,7 +33,7 @@ class ReviewReactiveRequest(PrepareDirectionRequest):
     payload: dict
 
 
-def create_workflow_router(get_store, plan_builder):
+def create_workflow_router(get_store, plan_builder, get_jobs=None):
     router = APIRouter(route_class=RevisionRoute, tags=["director workflow"])
 
     def project(project_id):
@@ -55,7 +56,14 @@ def create_workflow_router(get_store, plan_builder):
     @router.get("/v1/projects/{project_id}/director/workflow")
     def read(project_id: str):
         current = project(project_id)
-        return {**workflow_state(current), "preparation_error": current.meta.get("director_workflow_error")}
+        state = workflow_state(current)
+        recovery = state.get("director_job")
+        if get_jobs is not None and recovery:
+            job = get_jobs().get(project_id, recovery.get("job_id", ""))
+            if job is not None and recovery.get("status") not in {"reviewed", "applied"}:
+                recovery["status"] = "review_ready" if job.status == "succeeded" else job.status
+                recovery["error"] = job.error
+        return {**state, "preparation_error": current.meta.get("director_workflow_error")}
 
     @router.post("/v1/projects/{project_id}/director/workflow/prepare")
     def prepare(project_id: str, request: PrepareDirectionRequest):
@@ -70,6 +78,8 @@ def create_workflow_router(get_store, plan_builder):
         def action(current):
             draft = reviewed_draft(current, request.draft_id, request.document)
             draft.source_revision = current.revision + 1
+            if draft.timeline_context:
+                draft.context_revision = current.revision + 1
             draft.draft_id = digest({"source": draft.source_fingerprint,
                                      "document": draft.document.model_dump(mode="json"), "schedule": draft.schedule})
             current.meta["director_workflow"] = draft.model_dump(mode="json")
@@ -78,6 +88,8 @@ def create_workflow_router(get_store, plan_builder):
 
     @router.post("/v1/projects/{project_id}/director/workflow/apply")
     def apply(project_id: str, request: ReviewDirectionRequest):
+        if request.apply_mode != "merge_generated":
+            raise HTTPException(422, "Only merge_generated is supported; destructive replacement is not available")
         fingerprint = digest(request.model_dump(mode="json", exclude={"expected_revision"}))
 
         def latest():
@@ -129,6 +141,8 @@ def create_workflow_router(get_store, plan_builder):
             draft.reactive_overrides = review_reactive(draft, request.payload, ProjectClock.from_timeline(current.meta.get("timeline") or {}))
             draft.schedule = apply_overrides(draft.schedule, draft.reactive_overrides)
             draft.source_revision = current.revision + 1
+            if draft.timeline_context:
+                draft.context_revision = current.revision + 1
             draft.draft_id = digest({"source": draft.source_fingerprint,
                                      "document": draft.document.model_dump(mode="json"), "schedule": draft.schedule})
             current.meta["director_workflow"] = draft.model_dump(mode="json")

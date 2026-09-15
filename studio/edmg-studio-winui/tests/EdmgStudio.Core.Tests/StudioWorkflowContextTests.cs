@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EdmgStudio.Core.Models;
 
 namespace EdmgStudio.Core.Tests;
@@ -93,5 +94,38 @@ public sealed class StudioWorkflowContextTests
         StudioWorkflowContext normalized = new StudioWorkflowContext(TimelineFocusSeconds: value).Normalize();
 
         Assert.IsNull(normalized.TimelineFocusSeconds);
+    }
+
+    [TestMethod]
+    public void Normalize_PreservesExactTimelineRangeAndRevision()
+    {
+        StudioWorkflowContext normalized = new StudioWorkflowContext(
+            TimelineSelectionStartSample: 9_007_199_254_740_993,
+            TimelineSelectionEndSample: 9_007_199_254_741_993,
+            ContextRevision: 17).Normalize();
+
+        Assert.AreEqual(9_007_199_254_740_993, normalized.TimelineSelectionStartSample);
+        Assert.AreEqual(9_007_199_254_741_993, normalized.TimelineSelectionEndSample);
+        Assert.AreEqual(17, normalized.ContextRevision);
+
+        string json = JsonSerializer.Serialize(normalized, StudioJsonContext.Default.StudioWorkflowContext);
+        StudioWorkflowContext restored = JsonSerializer.Deserialize(json, StudioJsonContext.Default.StudioWorkflowContext)!;
+        Assert.AreEqual(normalized, restored);
+    }
+
+    [TestMethod]
+    [DataRow(-1L, 5L)]
+    [DataRow(5L, 5L)]
+    [DataRow(6L, 5L)]
+    public void Normalize_ClearsIncompleteOrInvalidTimelineRange(long start, long end)
+    {
+        StudioWorkflowContext normalized = new StudioWorkflowContext(
+            TimelineSelectionStartSample: start,
+            TimelineSelectionEndSample: end,
+            ContextRevision: -2).Normalize();
+
+        Assert.IsNull(normalized.TimelineSelectionStartSample);
+        Assert.IsNull(normalized.TimelineSelectionEndSample);
+        Assert.AreEqual(0, normalized.ContextRevision);
     }
 }

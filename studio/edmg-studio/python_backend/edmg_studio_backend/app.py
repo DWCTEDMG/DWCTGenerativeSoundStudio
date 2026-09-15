@@ -406,7 +406,11 @@ from .api.director import create_director_router
 from .api.director_workflow import create_workflow_router
 from .api.director_review import create_director_review_router
 
-app.include_router(create_workflow_router(lambda: store, lambda project: _workspace_audio_plan(project)))
+app.include_router(create_workflow_router(
+    lambda: store,
+    lambda project: _workspace_audio_plan(project),
+    lambda: jobs,
+))
 app.include_router(create_director_review_router(lambda: store, settings.ffmpeg_path))
 app.include_router(
     create_director_router(
@@ -7050,23 +7054,44 @@ def apply_reactive_lab(project_id: str, req: ReactiveLabApplyRequest):
         "schedules": deepcopy(req.schedules),
         "handoff_manifest": deepcopy(req.handoff_manifest),
     }
-    timeline = merge_reactive_lab_into_timeline(
-        proj.meta.get("timeline"),
-        payload,
-        overwrite_motion_track=bool(req.overwrite_motion_track),
-        overwrite_camera=bool(req.overwrite_camera),
-    )
-    proj.meta["timeline"] = timeline
-    proj.meta["last_reactive_lab"] = {**payload, "applied_at": time.time()}
-    visual_dna = _load_project_visual_dna(proj)
-    visual_dna = ingest_visual_dna_reactive_payload(
-        visual_dna,
-        payload=payload,
-    )
-    saved_dna = _save_project_visual_dna(proj, visual_dna)
-    store.save(proj)
+    if req.expected_revision is None:
+        raise HTTPException(428, "expected_revision is required to apply Reactive Lab state safely")
+    if req.apply_mode == "replace_all" and not req.confirm_destructive_replace:
+        raise HTTPException(422, "replace_all requires confirm_destructive_replace=true")
+
+    def apply(current):
+        nonlocal payload
+        workflow = current.meta.get("director_workflow") or {}
+        manifest = payload.get("handoff_manifest") or {}
+        if workflow:
+            from .domain.director_workflow import apply_workflow, reviewed_draft
+            from .domain.project_time import ProjectClock
+            from .domain.workspace_reactive import apply_overrides, review_reactive
+            draft = reviewed_draft(current, str(manifest.get("workflow_draft_id") or ""), None)
+            draft.reactive_overrides = review_reactive(
+                draft, payload, ProjectClock.from_timeline(current.meta.get("timeline") or {})
+            )
+            draft.schedule = apply_overrides(draft.schedule, draft.reactive_overrides)
+            apply_workflow(current, draft)
+        else:
+            current.meta["timeline"] = merge_reactive_lab_into_timeline(
+                current.meta.get("timeline"), payload,
+                overwrite_motion_track=req.apply_mode == "replace_all" and bool(req.overwrite_motion_track),
+                overwrite_camera=req.apply_mode == "replace_all" and bool(req.overwrite_camera),
+            )
+            current.meta["last_reactive_lab"] = {**payload, "applied_at": time.time()}
+        visual_dna = ingest_visual_dna_reactive_payload(_load_project_visual_dna(current), payload=payload)
+        _save_project_visual_dna(current, visual_dna)
+
+    try:
+        proj = store.mutate(project_id, apply, expected_revision=req.expected_revision)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    timeline = proj.meta.get("timeline") or {}
+    saved_dna = _load_project_visual_dna(proj)
     return {
         "ok": True,
+        "revision": proj.revision,
         "timeline": timeline,
         "visual_dna": saved_dna.model_dump(mode="json"),
         "visual_dna_hints": build_visual_dna_prompt_hints(saved_dna),

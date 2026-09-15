@@ -6,9 +6,12 @@ from fastapi.testclient import TestClient
 
 from edmg_studio_backend.api.director_workflow import create_workflow_router
 from edmg_studio_backend.domain.director_workflow import (
+    DirectionDraft,
     apply_workflow,
     prepare_workflow,
     reviewed_draft,
+    set_timeline_context,
+    timeline_context,
     workflow_state,
 )
 from edmg_studio_backend.domain.editor_commands import execute
@@ -131,3 +134,43 @@ def test_source_changes_and_stale_client_cannot_apply(state):
         body["expected_revision"] = store.get(project.id).revision
         assert client.post(path + "/apply", json=body).status_code == 409
         assert store.get(project.id).meta["timeline"]["tracks"][0]["id"] == "user-track"
+
+
+def test_exact_range_context_is_versioned_persisted_and_stale_safe(state):
+    store, project = state
+    project.meta["timeline"]["tracks"][0]["clips"] = [{
+        "id": "voice", "start_sample": "0", "end_sample": "176400",
+        "data": {"active_take_id": "take-2", "takes": [{"id": "take-2"}]},
+    }]
+    project.meta["analysis"]["transcript"]["segments"] = [
+        {"start": 0.5, "end": 1.5, "text": "selected lyric"}
+    ]
+    draft = prepare_workflow(project, local_plan, resulting_revision=project.revision + 1)
+    context = timeline_context(project, "22050", "88200")
+    set_timeline_context(draft, context, project.revision + 1)
+    project.meta["director_workflow"] = draft.model_dump(mode="json")
+    store.save(project)
+
+    loaded = DirectionDraft.model_validate(store.get(project.id).meta["director_workflow"])
+    assert loaded.version == 2 and loaded.handoff_version == 1
+    assert loaded.timeline_context["selected_range"]["start_sample"] == "22050"
+    assert loaded.timeline_context["transcript"]["segments"][0]["text"] == "selected lyric"
+    assert loaded.timeline_context["clips"][0]["active_take_id"] == "take-2"
+    assert loaded.context_digest
+    loaded.timeline_context["clips"][0]["active_take_id"] = "tampered"
+    project.meta["director_workflow"] = loaded.model_dump(mode="json")
+    with pytest.raises(ValueError, match="context changed"):
+        reviewed_draft(project, loaded.draft_id, None)
+
+
+def test_handoff_upgrades_legacy_and_rejects_future_version(state):
+    _, project = state
+    draft = prepare_workflow(project, local_plan, resulting_revision=project.revision + 1)
+    legacy = draft.model_dump(mode="json")
+    legacy["version"] = 1
+    legacy.pop("handoff_version")
+    assert DirectionDraft.model_validate(legacy).version == 2
+    with pytest.raises(ValueError, match="Unsupported Director workflow version"):
+        DirectionDraft.model_validate({**legacy, "version": 99})
+    with pytest.raises(ValueError, match="handoff version"):
+        DirectionDraft.model_validate({**legacy, "version": 2, "handoff_version": 99})

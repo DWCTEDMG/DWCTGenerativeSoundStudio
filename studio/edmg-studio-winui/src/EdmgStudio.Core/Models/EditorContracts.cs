@@ -13,7 +13,13 @@ public sealed record DirectorGenerationRequest(
     [property: JsonPropertyName("instruction")] string Instruction,
     [property: JsonPropertyName("mode")] string Mode = "automatic",
     [property: JsonPropertyName("renderer_engine")] string RendererEngine = "automatic",
-    [property: JsonPropertyName("allow_external")] bool AllowExternal = false);
+    [property: JsonPropertyName("allow_external")] bool AllowExternal = false,
+    [property: JsonPropertyName("start_sample")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? StartSample = null,
+    [property: JsonPropertyName("end_sample")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? EndSample = null);
 
 public sealed record DirectorApplyRequest(
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision);

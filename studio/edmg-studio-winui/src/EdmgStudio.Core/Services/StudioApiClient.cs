@@ -901,6 +901,9 @@ public sealed class StudioApiClient : IDisposable
     public Task<JsonElement> GetDirectorDraftAsync(string projectId, string jobId, CancellationToken cancellationToken = default) =>
         SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/drafts/{EscapeIdentifier(jobId)}", null, true, cancellationToken);
 
+    public Task<JsonElement> ReviewDirectorDraftAsync(string projectId, string jobId, DirectorApplyRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorApplyRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/drafts/{EscapeIdentifier(jobId)}/review", request, cancellationToken);
+
     public Task<JsonElement> ApplyDirectorDraftAsync(string projectId, string jobId, DirectorApplyRequest request, CancellationToken cancellationToken = default) =>
         PostJsonAsync<DirectorApplyRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/drafts/{EscapeIdentifier(jobId)}/apply", request, cancellationToken);
 

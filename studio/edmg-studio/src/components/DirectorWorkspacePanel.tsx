@@ -86,6 +86,15 @@ function projectRevision(project: any): number | null {
   return Number.isInteger(revision) && revision >= 1 ? revision : null;
 }
 
+function workflowJobState(workflow: any) {
+  const nested = workflow?.director_job || {};
+  const jobId = String(workflow?.director_job_id || workflow?.pending_director_job_id || nested.job_id || nested.id || "");
+  const jobStatus = String(workflow?.director_job_status || workflow?.pending_director_job_status || nested.status || "");
+  const reviewedJobId = String(workflow?.reviewed_director_job_id || nested.reviewed_job_id
+    || (nested.reviewed && jobId ? jobId : ""));
+  return { jobId, jobStatus, reviewedJobId, context: workflow?.timeline_context || nested.context || null };
+}
+
 export default function DirectorWorkspacePanel({
   backendUrl,
   projectId,
@@ -185,6 +194,20 @@ export default function DirectorWorkspacePanel({
           onMutationError?.(reason);
         }
       })
+      .then(async () => {
+        if (cancelled) return;
+        try {
+          const workflow = await apiGet(`/v1/projects/${encodeURIComponent(projectId)}/director/workflow`, { backendUrl });
+          if (cancelled) return;
+          const recovered = workflowJobState(workflow);
+          setJobId(recovered.jobId);
+          setReviewedJobId(recovered.reviewedJobId);
+          if (recovered.jobStatus) setStatus(`Recovered Director job ${recovered.jobId || "state"}: ${recovered.jobStatus}.`);
+          if (recovered.context) setDraftText(`Captured context\n${pretty(recovered.context)}`);
+        } catch {
+          // Older backends need not expose workflow recovery fields.
+        }
+      })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -278,6 +301,7 @@ export default function DirectorWorkspacePanel({
       setError("Enter a direction instruction before generating a draft.");
       return;
     }
+    const requestedInstruction = instruction.trim();
     setBusy(true); setError(""); setStatus("");
     try {
       const response = await apiPost(
@@ -285,7 +309,7 @@ export default function DirectorWorkspacePanel({
         expectedRevisionBody(
           {
             operation_id: `workspace-director-${Date.now()}`,
-            instruction: instruction.trim(),
+            instruction: requestedInstruction,
             mode: rendererMode,
             renderer_engine: readinessEngine,
             allow_external: false,
@@ -296,11 +320,13 @@ export default function DirectorWorkspacePanel({
       );
       const nextJobId = String(response?.job_id || "");
       setJobId(nextJobId);
+      setDocumentRevision(responseRevision(response, revision));
       setReviewedJobId("");
       setDraftText("Draft queued. Use Review draft after the Director job finishes.");
       setStatus(nextJobId ? `Director draft queued in the shared project queue (${nextJobId}).` : "Director draft queued in the shared project queue.");
     } catch (reason) {
       setError(String(reason));
+      setStatus(`Direction preserved: “${requestedInstruction}”. Adjust model readiness and retry without re-entering it.`);
       onMutationError?.(reason);
     } finally { setBusy(false); }
   };
@@ -312,18 +338,14 @@ export default function DirectorWorkspacePanel({
     }
     setBusy(true); setError(""); setStatus("");
     try {
-      const response = await apiGet(
-        `/v1/projects/${encodeURIComponent(projectId)}/director/drafts/${encodeURIComponent(jobId)}`,
+      const response = await apiPost(
+        `/v1/projects/${encodeURIComponent(projectId)}/director/drafts/${encodeURIComponent(jobId)}/review`,
+        expectedRevisionBody({}, { revision }),
         { backendUrl },
       );
-      if (response?.status !== "succeeded") {
-        setDraftText(`Job status: ${response?.status || "unknown"}${response?.error ? `\n${response.error}` : ""}`);
-        setStatus("The draft is not ready yet. Review again after the queue reports completion.");
-        setReviewedJobId("");
-        return;
-      }
-      const draft = response?.result?.document || response?.result;
+      const draft = response?.document;
       setDraftText(pretty(draft));
+      setDocumentRevision(responseRevision(response, revision));
       setReviewedJobId(jobId);
       setStatus("Draft loaded for review. Apply it only after checking the Story Bible and scene constraints.");
     } catch (reason) {

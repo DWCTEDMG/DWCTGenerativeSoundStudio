@@ -42,10 +42,10 @@ public sealed class ReactiveLabApplyRequest
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 
     [JsonPropertyName("overwrite_motion_track")]
-    public bool OverwriteMotionTrack { get; set; } = true;
+    public bool OverwriteMotionTrack { get; set; }
 
     [JsonPropertyName("overwrite_camera")]
-    public bool OverwriteCamera { get; set; } = true;
+    public bool OverwriteCamera { get; set; }
 
     [JsonPropertyName("expected_revision")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -165,8 +165,13 @@ public sealed class ReactivePreset
 
 public sealed class ReactiveLabLocalState
 {
+    public const int CurrentVersion = 1;
+
     private ReactivePreset _current = new();
     private List<ReactivePreset> _presets = [];
+
+    [JsonPropertyName("version")]
+    public int? Version { get; set; } = CurrentVersion;
 
     [JsonPropertyName("current")]
     public ReactivePreset Current { get => _current; set => _current = value ?? new(); }
@@ -182,6 +187,84 @@ public sealed class ReactiveLabLocalState
 
     [JsonPropertyName("workspace_draft")]
     public JsonElement? WorkspaceDraft { get; set; }
+
+    public bool TryNormalizeForRecovery(out ReactiveLabLocalState normalized)
+    {
+        if (Version is > CurrentVersion or < 1)
+        {
+            normalized = this;
+            return false;
+        }
+
+        Version = CurrentVersion;
+        WorkspaceDraftId = StudioWorkflowContext.NormalizeText(WorkspaceDraftId);
+        if (WorkspaceDraftRevision < 0)
+        {
+            WorkspaceDraftRevision = null;
+        }
+
+        normalized = this;
+        return true;
+    }
+}
+
+public sealed record DirectorWorkflowRecovery(
+    string? JobId,
+    string? JobStatus,
+    string? ReviewedJobId,
+    long? SelectionStartSample,
+    long? SelectionEndSample,
+    long ContextRevision)
+{
+    public static DirectorWorkflowRecovery FromResponse(JsonElement workflow, string? fallbackJobId = null)
+    {
+        string? jobId = Text(workflow, "director_job_id") ?? Text(workflow, "pending_director_job_id");
+        string? status = Text(workflow, "director_job_status") ?? Text(workflow, "pending_director_job_status");
+        string? reviewed = Text(workflow, "reviewed_director_job_id");
+        if (workflow.TryGetProperty("director_job", out JsonElement job) && job.ValueKind == JsonValueKind.Object)
+        {
+            jobId ??= Text(job, "job_id") ?? Text(job, "id");
+            status ??= Text(job, "status");
+            reviewed ??= Text(job, "reviewed_job_id");
+            if (reviewed is null && jobId is not null && Bool(job, "reviewed")) reviewed = jobId;
+        }
+
+        jobId ??= StudioWorkflowContext.NormalizeText(fallbackJobId);
+        JsonElement context = workflow.TryGetProperty("timeline_context", out JsonElement value) && value.ValueKind == JsonValueKind.Object
+            ? value : default;
+        JsonElement range = context.ValueKind == JsonValueKind.Object &&
+                            context.TryGetProperty("selected_range", out JsonElement selectedRange) &&
+                            selectedRange.ValueKind == JsonValueKind.Object
+            ? selectedRange : context;
+        long? start = ExactLong(range, "selection_start_sample") ?? ExactLong(range, "start_sample");
+        long? end = ExactLong(range, "selection_end_sample") ?? ExactLong(range, "end_sample");
+        long revision = ExactLong(workflow, "context_revision") ?? ExactLong(context, "revision") ?? 0;
+        var normalized = new StudioWorkflowContext(
+            TimelineSelectionStartSample: start,
+            TimelineSelectionEndSample: end,
+            ContextRevision: revision).Normalize();
+        return new(
+            StudioWorkflowContext.NormalizeText(jobId),
+            StudioWorkflowContext.NormalizeText(status),
+            StudioWorkflowContext.NormalizeText(reviewed),
+            normalized.TimelineSelectionStartSample,
+            normalized.TimelineSelectionEndSample,
+            normalized.ContextRevision);
+    }
+
+    private static string? Text(JsonElement value, string name) =>
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString() : null;
+
+    private static bool Bool(JsonElement value, string name) =>
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.True;
+
+    private static long? ExactLong(JsonElement value, string name)
+    {
+        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(name, out JsonElement property)) return null;
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out long number)) return number;
+        return property.ValueKind == JsonValueKind.String && long.TryParse(property.GetString(), out long text) ? text : null;
+    }
 }
 
 public sealed class ReactiveLabMetadata
@@ -208,6 +291,17 @@ public sealed class ReactiveLabMetadata
 
 public static class ReactiveWorkflow
 {
+    public const int CurrentRecoveryVersion = 1;
+
+    public static bool SupportsRecovery(JsonElement workflow)
+    {
+        if (workflow.ValueKind != JsonValueKind.Object) return false;
+        if (!workflow.TryGetProperty("recovery_version", out JsonElement version) &&
+            !workflow.TryGetProperty("version", out version)) return true;
+        return version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out int value) &&
+               value is >= 1 and <= CurrentRecoveryVersion;
+    }
+
     public static IReadOnlyList<string> ValidateMapping(ReactiveMapping mapping)
     {
         ArgumentNullException.ThrowIfNull(mapping);

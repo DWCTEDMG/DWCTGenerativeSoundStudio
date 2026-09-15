@@ -68,6 +68,7 @@ def run_director_job(
             text = backend.generate(
                 document,
                 str(payload["instruction"]),
+                timeline_context=payload.get("timeline_context"),
                 image_paths=[str(value) for value in payload.get("image_paths", [])],
                 max_tokens=int(payload.get("max_new_tokens") or 4096),
                 cancel_check=cancel_check,
@@ -134,6 +135,7 @@ def run_director_job(
         directory,
         document,
         payload["instruction"],
+        timeline_context=payload.get("timeline_context"),
         max_memory=budgets,
         cancel_check=cancel_check,
         progress_fn=progress_fn,
@@ -163,7 +165,7 @@ def _planning_document(document: DirectorDocument) -> dict:
     }
 
 
-def planning_messages(document: DirectorDocument, instruction: str) -> list[dict]:
+def planning_messages(document: DirectorDocument, instruction: str, timeline_context: dict | None = None) -> list[dict]:
     if not instruction.strip():
         raise ValueError("A Director instruction is required")
     return [
@@ -189,7 +191,8 @@ def planning_messages(document: DirectorDocument, instruction: str) -> list[dict
                 {
                     "type": "text",
                     "text": json.dumps(
-                        {"direction": instruction, "document": _planning_document(document)},
+                        {"direction": instruction, "document": _planning_document(document),
+                         "timeline_context": timeline_context or {}},
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ),
@@ -274,6 +277,7 @@ def generate_proposal(
     document: DirectorDocument,
     instruction: str,
     *,
+    timeline_context: dict | None = None,
     max_memory: dict,
     max_new_tokens: int = 4096,
     cancel_check: CancelCheck | None = None,
@@ -289,7 +293,7 @@ def generate_proposal(
     config = json.loads((model_directory / "config.json").read_text(encoding="utf-8"))
     if config.get("model_type") != "qwen3_vl":
         raise ValueError("This adapter requires the dense Qwen3-VL model")
-    messages = planning_messages(document, instruction)
+    messages = planning_messages(document, instruction, timeline_context)
     # Optional dependencies are imported only inside the model worker.
     import torch
     import transformers

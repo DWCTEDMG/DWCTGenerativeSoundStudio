@@ -91,6 +91,19 @@ class Job:
     idempotency_key: str | None = None
 
 
+@dataclass
+class JobRegistration:
+    job: Job | None
+    cancel_requested: bool = False
+
+    @property
+    def active(self) -> bool:
+        return self.job is not None and self.job.status in ("queued", "running")
+
+    def cancel(self) -> None:
+        self.cancel_requested = True
+
+
 class JobStore:
     """SQLite-backed job/event store with JSON compatibility migration."""
 
@@ -274,42 +287,76 @@ class JobStore:
         idempotency_key: str | None = None,
         priority: int = 0,
     ) -> Job:
+        job, _ = self.create_with_status(
+            project_id,
+            job_type,
+            payload,
+            idempotency_key=idempotency_key,
+            priority=priority,
+        )
+        return job
+
+    def create_with_status(
+        self,
+        project_id: str,
+        job_type: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+        priority: int = 0,
+    ) -> tuple[Job, bool]:
         key = str(idempotency_key or "").strip() or None
         with self._lock:
-            if key:
-                row = self._conn.execute(
-                    """
-                    SELECT * FROM jobs
-                    WHERE project_id = ? AND idempotency_key = ?
-                    LIMIT 1
-                    """,
-                    (project_id, key),
-                ).fetchone()
-                if row is not None:
-                    return self._row_to_job(row)
-            jid = uuid.uuid4().hex
-            now = self._now()
-            job = Job(
-                id=jid,
-                project_id=project_id,
-                type=job_type,
-                status="queued",
-                created_at=now,
-                updated_at=now,
-                payload=payload,
-                priority=priority,
-                idempotency_key=key,
-            )
-            self._upsert_job(job)
-            self._record_event(project_id, jid, "created", {"type": job_type})
-            self._conn.commit()
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if key:
+                    row = self._conn.execute(
+                        """
+                        SELECT * FROM jobs
+                        WHERE project_id = ? AND idempotency_key = ?
+                        LIMIT 1
+                        """,
+                        (project_id, key),
+                    ).fetchone()
+                    if row is not None:
+                        self._conn.commit()
+                        existing = self._row_to_job(row)
+                        self._mirror_json(existing)
+                        return existing, False
+                jid = uuid.uuid4().hex
+                now = self._now()
+                job = Job(
+                    id=jid,
+                    project_id=project_id,
+                    type=job_type,
+                    status="queued",
+                    created_at=now,
+                    updated_at=now,
+                    payload=payload,
+                    priority=priority,
+                    idempotency_key=key,
+                )
+                self._upsert_job(job)
+                self._record_event(project_id, jid, "created", {"type": job_type})
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
             # Keep a JSON mirror for older tooling that reads jobs/*.json.
             self._mirror_json(job)
-            return job
+            return job, True
 
     def _mirror_json(self, job: Job) -> None:
-        path = self._jobs_dir(job.project_id) / f"{job.id}.json"
-        path.write_text(json.dumps(job.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            path = self._jobs_dir(job.project_id) / f"{job.id}.json"
+            path.write_text(json.dumps(job.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "Could not update compatibility job mirror for %s/%s: %s",
+                job.project_id,
+                job.id,
+                exc,
+            )
 
     def save(self, job: Job) -> None:
         with self._lock:
@@ -331,6 +378,32 @@ class JobStore:
             )
             self._conn.commit()
             self._mirror_json(job)
+
+    @contextmanager
+    def registration_guard(self, project_id: str, job_id: str):
+        """Serialize project registration and cancellation with worker publication."""
+        mirrored: Job | None = None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM jobs WHERE project_id = ? AND id = ?",
+                    (project_id, job_id),
+                ).fetchone()
+                registration = JobRegistration(self._row_to_job(row) if row else None)
+                yield registration
+                if registration.cancel_requested and registration.active:
+                    registration.job.status = "canceled"
+                    registration.job.updated_at = self._now()
+                    self._upsert_job(registration.job)
+                    self._record_event(project_id, job_id, "canceled", {})
+                    mirrored = registration.job
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+        if mirrored is not None:
+            self._mirror_json(mirrored)
 
     @contextmanager
     def publication_guard(self, project_id: str, job_id: str, *, attempt: int | None = None):

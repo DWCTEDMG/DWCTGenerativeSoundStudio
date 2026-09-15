@@ -68,8 +68,12 @@ def reactive_projection(draft, clock: ProjectClock) -> dict:
                       "start_sample": scene.start_sample, "end_sample": scene.end_sample}
                      for scene in draft.document.scenes],
         "repair_suggestions": [], "schedules": schedules,
-        "handoff_manifest": {"workflow_draft_id": draft.draft_id, "output_policy": "draft",
-                             "schedule_revision": schedule["schedule_revision"]},
+        "handoff_manifest": {"version": 1, "workflow_version": draft.version,
+                             "workflow_draft_id": draft.draft_id, "output_policy": "draft",
+                             "apply_mode": "merge_generated",
+                             "schedule_revision": schedule["schedule_revision"],
+                             "context_revision": draft.context_revision,
+                             "context_digest": draft.context_digest},
         "overwrite_motion_track": False, "overwrite_camera": False,
     }
 
@@ -77,6 +81,15 @@ def reactive_projection(draft, clock: ProjectClock) -> dict:
 def review_reactive(draft, payload: dict, clock: ProjectClock) -> dict:
     """Accept value edits; source IDs and timing remain tied to reviewed scenes."""
     expected = reactive_projection(draft, clock)
+    manifest = payload.get("handoff_manifest") or {}
+    if manifest.get("version", 1) != 1:
+        raise ValueError("Unsupported Director/Reactive handoff version; update Studio before saving")
+    if manifest.get("apply_mode", "merge_generated") != "merge_generated":
+        raise ValueError("Reactive review supports only the safe merge_generated apply mode")
+    if manifest.get("schedule_revision") not in (None, draft.schedule["schedule_revision"]):
+        raise ValueError("Reactive schedule changed; reload before saving")
+    if manifest.get("context_digest") not in (None, draft.context_digest):
+        raise ValueError("Director timeline context changed; reload before saving")
     if (payload.get("metadata") or {}).get("workflow_draft_id") != draft.draft_id:
         raise ValueError("Reactive Lab belongs to a different Workspace draft; reload before saving")
     supplied = payload.get("keyframes")

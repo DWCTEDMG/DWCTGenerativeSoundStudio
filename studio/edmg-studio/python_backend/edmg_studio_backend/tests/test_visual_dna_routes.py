@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from edmg_studio_backend.tests.revision_client import TestClient
-
 from edmg_studio_backend import app as backend_app
 from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
+from edmg_studio_backend.tests.revision_client import TestClient
 
 
 def _make_project(tmp_path: Path):
@@ -111,6 +110,7 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
     )
 
     reactive_payload = {
+        "expected_revision": store.get(proj.id).revision,
         "metadata": {"renderMode": "performance-led"},
         "keyframes": [],
         "beat_markers": [],
@@ -211,3 +211,54 @@ def test_reactive_apply_and_conductor_plan_routes_use_visual_dna(tmp_path, monke
         assert outputs_payload["unreal_returns"][0]["source_dir"].endswith("/returned")
         assert len(outputs_payload["unreal_returns"][0]["media"]) == 2
         assert any(item["kind"] == "unreal_bridge_return" for item in outputs_payload["videos"])
+
+
+def test_reactive_apply_requires_revision_and_explicit_replacement(tmp_path, monkeypatch):
+    store, jobs, proj = _make_project(tmp_path)
+    proj.meta["timeline"] = {
+        "tracks": [{"id": "reviewed-motion", "type": "motion", "clips": [{"id": "reviewed-clip"}]}],
+        "camera": {"keyframes": [{"id": "reviewed-camera", "t": 0.0, "zoom": 1.1}]},
+    }
+    store.save(proj)
+    monkeypatch.setattr(backend_app, "store", store)
+    monkeypatch.setattr(backend_app, "jobs", jobs)
+    payload = {
+        "schedules": {"zoom": "0:(1.0), 24:(1.2)"},
+        "metadata": {"fps": 24, "totalFrames": 25},
+    }
+
+    with TestClient(backend_app.app) as client:
+        path = f"/v1/projects/{proj.id}/reactive_lab/apply"
+        assert client.post(path, json=payload).status_code == 428
+
+        revision = store.get(proj.id).revision
+        merged = client.post(path, json={**payload, "expected_revision": revision})
+        assert merged.status_code == 200, merged.text
+        assert merged.json()["revision"] == revision + 1
+        assert merged.json()["timeline"]["tracks"][0]["clips"] == [{"id": "reviewed-clip"}]
+        assert merged.json()["timeline"]["camera"]["keyframes"][0]["id"] == "reviewed-camera"
+        assert client.post(path, json={**payload, "expected_revision": revision}).status_code == 409
+
+        current_revision = merged.json()["revision"]
+        rejected = client.post(
+            path,
+            json={**payload, "expected_revision": current_revision, "apply_mode": "replace_all"},
+        )
+        assert rejected.status_code == 422
+        replaced = client.post(
+            path,
+            json={
+                **payload,
+                "expected_revision": current_revision,
+                "apply_mode": "replace_all",
+                "confirm_destructive_replace": True,
+                "overwrite_motion_track": True,
+                "overwrite_camera": True,
+            },
+        )
+        assert replaced.status_code == 200, replaced.text
+        assert replaced.json()["timeline"]["tracks"][0]["clips"][0]["id"] == "edmg_reactive_motion_0"
+        assert all(
+            frame.get("id") != "reviewed-camera"
+            for frame in replaced.json()["timeline"]["camera"]["keyframes"]
+        )

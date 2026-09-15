@@ -9,7 +9,10 @@ public sealed record StudioWorkflowContext(
     string? SourceAssetPath = null,
     double? TimelineFocusSeconds = null,
     string? RenderContext = null,
-    string? LastWorkflowDestination = null)
+    string? LastWorkflowDestination = null,
+    long? TimelineSelectionStartSample = null,
+    long? TimelineSelectionEndSample = null,
+    long ContextRevision = 0)
 {
     public StudioWorkflowContext Normalize()
     {
@@ -22,6 +25,14 @@ public sealed record StudioWorkflowContext(
             jobProjectId = null;
         }
 
+        long? selectionStart = TimelineSelectionStartSample;
+        long? selectionEnd = TimelineSelectionEndSample;
+        if (selectionStart is null || selectionEnd is null || selectionStart < 0 || selectionEnd <= selectionStart)
+        {
+            selectionStart = null;
+            selectionEnd = null;
+        }
+
         return this with
         {
             ActiveProjectId = projectId,
@@ -32,7 +43,10 @@ public sealed record StudioWorkflowContext(
             SourceAssetPath = NormalizeText(SourceAssetPath),
             TimelineFocusSeconds = NormalizeTimelineFocus(TimelineFocusSeconds),
             RenderContext = NormalizeText(RenderContext),
-            LastWorkflowDestination = NormalizeText(LastWorkflowDestination)
+            LastWorkflowDestination = NormalizeText(LastWorkflowDestination),
+            TimelineSelectionStartSample = selectionStart,
+            TimelineSelectionEndSample = selectionEnd,
+            ContextRevision = Math.Max(0, ContextRevision)
         };
     }
 
@@ -54,7 +68,10 @@ public sealed record StudioWorkflowContext(
             SelectedJobProjectId = null,
             SourceAssetPath = null,
             TimelineFocusSeconds = null,
-            RenderContext = null
+            RenderContext = null,
+            TimelineSelectionStartSample = null,
+            TimelineSelectionEndSample = null,
+            ContextRevision = 0
         };
     }
 
@@ -67,6 +84,14 @@ public sealed record StudioWorkflowContext(
             SelectedJobProjectId = normalizedJobId is null ? null : NormalizeText(projectId)
         };
     }
+
+    public StudioWorkflowContext WithTimelineSelection(long? startSample, long? endSample, long contextRevision) =>
+        (Normalize() with
+        {
+            TimelineSelectionStartSample = startSample,
+            TimelineSelectionEndSample = endSample,
+            ContextRevision = contextRevision
+        }).Normalize();
 
     public static string? NormalizeText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
